@@ -43,7 +43,7 @@ use super::hooks::Cpu;
 use crate::timing::Price;
 
 /// How a build treats a multiply by a constant.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Mode {
     /// The decomposition stands, as the pin's M68k has it.
     Pin,

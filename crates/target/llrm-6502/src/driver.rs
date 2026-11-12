@@ -184,16 +184,22 @@ fn whole_program(request: &Request) -> bool {
     }) == Some(true)
 }
 
-/// What a linker's `--gc-sections` does for a whole program, as LTO does it:
-/// everything but `main` becomes internal (`Internalize`), then what nothing
-/// live names is deleted (`GlobalDCE`). Run after the mid-end, so nothing
-/// else about the code changes.
-fn whole_program_swept(
+/// What LTO does to a whole program before its optimizer runs:
+/// everything but `main` becomes internal (`Internalize`), so `GlobalOpt` can
+/// make a global nothing stores to a constant and fold its loads.
+fn whole_program_internalized(
     program: &mut Program,
     main: &str,
 ) -> Result<(), String> {
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add_program(llrm_transforms::internalize::Internalize::new([main.to_owned()]));
+    manager.run(program).map(|_| ())
+}
+
+/// What a linker's `--gc-sections` does for a whole program: what nothing
+/// live names is deleted (`GlobalDCE`), after the mid-end.
+fn whole_program_swept(program: &mut Program) -> Result<(), String> {
+    let mut manager = llrm_mir::passes::PassManager::default();
     manager.add_program(llrm_transforms::globaldce::GlobalDce);
     manager.run(program).map(|_| ())
 }
@@ -215,6 +221,10 @@ fn program(
         None => return Err(format!("the module states no datalayout; the 6502's is `{layout}`")),
     }
     let mut program = Program::new(vec![module], machine())?;
+    let main = format!("{}main", request.platform.c_symbol_prefix);
+    if whole_program(request) {
+        whole_program_internalized(&mut program, &main)?;
+    }
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
@@ -238,7 +248,7 @@ fn program(
     // The pin lowers `llvm.is.constant` and `llvm.objectsize` at every level.
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     if whole_program(request) {
-        whole_program_swept(&mut program, &format!("{}main", request.platform.c_symbol_prefix))?;
+        whole_program_swept(&mut program)?;
     }
     Ok(program)
 }

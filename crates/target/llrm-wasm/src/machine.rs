@@ -237,6 +237,11 @@ impl Tti for Wasm {
         true
     }
 
+    /// `foldICmpWithConstant` of a constant phi (function_table -Os +4 B).
+    fn folds_icmp_of_constant_phi(&self) -> bool {
+        true
+    }
+
     /// The pin's `sinkUnusedInvariants` (grep -O2, stft_fixed -O1).
     fn folds_select_to_cmp(&self) -> bool {
         true

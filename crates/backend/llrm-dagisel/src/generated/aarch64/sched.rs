@@ -1615,7 +1615,7 @@ static OPCODE_CLASS: [(u16, u16); 1596] = [
 
 /// Opcodes only a pattern of a live type or under a dynamic atom (`[types] live`, `[dynamic]` in the record) emits: a target that has the atom
 /// false (the vector flag off) leaves them unmodeled, as when the pattern was pruned.
-static DYNAMIC_ONLY: [u16; 650] = [
+static DYNAMIC_ONLY: [u16; 653] = [
     534,
     1774,
     1777,
@@ -1751,6 +1751,8 @@ static DYNAMIC_ONLY: [u16; 650] = [
     4711,
     4713,
     4715,
+    5155,
+    5156,
     5583,
     5586,
     5587,
@@ -1760,6 +1762,7 @@ static DYNAMIC_ONLY: [u16; 650] = [
     5643,
     5644,
     5645,
+    5647,
     5650,
     5651,
     5652,

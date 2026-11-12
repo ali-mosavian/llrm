@@ -149,6 +149,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // is +1601 B and stays rolled.
         unroll_trial_at_o1: Some(150),
         unroll_trial_nests_only: true,
+        // DEVIATE UNROLL-OS-TRIAL (owner x86-m32, exit 2026-11-24): see `Tuning::unroll_trial_at_size`. gcc
+        // completely peels a small loop at -Os when the code does not grow (x_life: the 3x3 window, 360 -> 347 B).
+        unroll_trial_at_size: Some(30),
         // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1):
         // the -O1 rule analyses the folds of up to 16 trips,
         // gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop

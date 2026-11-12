@@ -87,6 +87,11 @@ pub struct Tuning {
     /// did not pay on x86-m32: 1 of 46 programs). False: any refused loop under the threshold, which
     /// is what the 6502 and m68k trials were fit on (float_in_place_update: 9441 B at -O1 against 19 B).
     pub unroll_trial_nests_only: bool,
+    /// DEVIATE UNROLL-OS-TRIAL (owner x86-m32, exit 2026-11-24): the unrolled size, in the unroll
+    /// units, up to which a loop the -Os threshold refused is unrolled on trial; kept where the
+    /// finished object is smaller, or grows by a few bytes a function and runs less
+    /// (`Tti::unroll_trial_at_size`). `None`: no trial.
+    pub unroll_trial_at_size: Option<u32>,
     /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
     /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
     /// carries more bytes than its units where an argument is several words (x86-m16:
@@ -199,9 +204,10 @@ pub struct Tuning {
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
     /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
-    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`). DEVIATE
-    /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
-    /// against the `mov`'s one; the level is bytes-strict.
+    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`), in blocks
+    /// that run at most once per call. DEVIATE PUSH-IMM-OS (owner x86-m32,
+    /// exit 2026-11-30): 5 clocks on the 486 against the `mov`'s 1, so never in
+    /// a loop.
     pub push_imm_at_size: bool,
     /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
     /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
@@ -521,6 +527,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
+        unroll_trial_at_size: None,
         inline_dying_credit_at_os: true,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
