@@ -5626,6 +5626,19 @@ fn a_counted_loop_that_runs_less_rotated_stays_rotated_at_m32_os() {
     assert!(!back, "a loop is unrotated, a jmp back to its guard: {listing}");
 }
 
+/// COMBINED-TRIAL: the -Os trials were nested wrappers, each re-running the mid-end and the backend over the whole
+/// module (2 x 2 x 2): recchop, with two noted dimensions, selected its two functions in four compiles, 8 selections
+/// (compile time x4.4 against none). The base compile notes the dimensions, each is compiled against the base alone and priced
+/// on the functions that differ, and a final compile is made only where two or more stay.
+#[test]
+fn the_os_trials_compile_each_dimension_against_the_base_once() {
+    let text = include_str!("tests_data/recchop_trials.ll");
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+    compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_recchop").unwrap();
+    let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
+    assert!(selections <= 6, "{selections} selections of two functions: more than three compiles");
+}
+
 /// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an object file and 2 B
 /// longer in code (the padding between functions moved). The trial compares the bytes without
 /// padding, so the rotated loops stay.
