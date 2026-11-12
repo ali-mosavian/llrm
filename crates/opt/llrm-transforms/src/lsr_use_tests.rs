@@ -857,3 +857,21 @@ fn the_loop_as_written_keeps_the_exit_bound_live() {
         assert_eq!(regs(true, true, to_const, se), 1, "a constant bound is no register");
     });
 }
+
+/// A static alloca in an address is the frame register: a formula with one
+/// register beside it is `[frame + reg]`, and one with a base and a scaled
+/// register is three registers, which no mode names. Bench matmul's fill nest
+/// paid two `lea` for reading the alloca as a register.
+#[test]
+fn a_frame_slot_takes_the_base_register_and_leaves_one_for_an_index() {
+    use crate::lsr_formula::{Mode, Symbol};
+    let frame = Some(Symbol::Frame(llrm_mir::module::ValueId(0)));
+    let alone = Formula { symbol: frame, ..Formula::default() };
+    assert_eq!(alone.mode(), Some(Mode { global: false, has_base_reg: true, scale: 0 }));
+    let indexed = Formula { symbol: frame, has_base_reg: true, ..Formula::default() };
+    assert_eq!(indexed.mode(), Some(Mode { global: false, has_base_reg: true, scale: 1 }));
+    let three = Formula { symbol: frame, has_base_reg: true, scale: 2, ..Formula::default() };
+    assert_eq!(three.mode(), None);
+    let global = Formula { has_base_reg: true, scale: 2, ..Formula::default() };
+    assert_eq!(global.mode(), Some(Mode { global: false, has_base_reg: true, scale: 2 }));
+}

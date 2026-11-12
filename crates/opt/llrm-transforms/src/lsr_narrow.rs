@@ -28,7 +28,7 @@ use llrm_mir::tti::AddressingMode;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::Collection;
-use crate::lsr_formula::{Formula, Immediate};
+use crate::lsr_formula::{Formula, Immediate, Symbol};
 use crate::lsr_use::{Cost, Kind, is_legal_use};
 
 /// `ComplexityLimit` (`-lsr-complexity-limit`).
@@ -78,10 +78,10 @@ impl Collection<'_, '_> {
                         // Formulas do not carry their width (PR41034).
                         new_f.base_offset = Immediate(new_f.base_offset.0.wrapping_add(c.sext_value() as i64));
                     } else if let Some(global) = self.global_of(se, reg) {
-                        if f.base_gv.is_some() {
+                        if f.symbol.is_some() {
                             continue;
                         }
-                        new_f.base_gv = Some(global);
+                        new_f.symbol = Some(Symbol::Global(global));
                     } else {
                         continue;
                     }
@@ -140,17 +140,19 @@ impl Collection<'_, '_> {
                 let mut i = 0;
                 while i < self.uses[that].formulae.len() {
                     let lu = &self.uses[that];
-                    if is_legal_use(
-                        self.tti,
-                        lu.min_offset,
-                        lu.max_offset,
-                        lu.kind,
-                        lu.access_ty,
-                        lu.formulae[i].base_gv.is_some(),
-                        lu.formulae[i].base_offset,
-                        lu.formulae[i].has_base_reg,
-                        lu.formulae[i].scale,
-                    ) {
+                    if lu.formulae[i].mode().is_some_and(|mode| {
+                        is_legal_use(
+                            self.tti,
+                            lu.min_offset,
+                            lu.max_offset,
+                            lu.kind,
+                            lu.access_ty,
+                            mode.global,
+                            lu.formulae[i].base_offset,
+                            mode.has_base_reg,
+                            mode.scale,
+                        )
+                    }) {
                         i += 1;
                     } else {
                         self.uses[that].delete_formula(i);
@@ -264,17 +266,19 @@ impl Collection<'_, '_> {
                         // This use's offsets must be legal for all the other's
                         // formulae.
                         if other.formulae.iter().any(|f| {
-                            !is_legal_use(
-                                self.tti,
-                                min,
-                                max,
-                                other.kind,
-                                other.access_ty,
-                                f.base_gv.is_some(),
-                                f.base_offset,
-                                f.has_base_reg,
-                                f.scale,
-                            )
+                            !f.mode().is_some_and(|mode| {
+                                is_legal_use(
+                                    self.tti,
+                                    min,
+                                    max,
+                                    other.kind,
+                                    other.access_ty,
+                                    mode.global,
+                                    f.base_offset,
+                                    mode.has_base_reg,
+                                    mode.scale,
+                                )
+                            })
                         }) {
                             return false;
                         }
@@ -285,7 +289,7 @@ impl Collection<'_, '_> {
                         let other_f = &other.formulae[0];
                         this_f.base_regs == other_f.base_regs
                             && this_f.scaled_reg == other_f.scaled_reg
-                            && this_f.base_gv == other_f.base_gv
+                            && this_f.symbol == other_f.symbol
                             && this_f.scale == other_f.scale
                             && this_f.unfolded_offset == other_f.unfolded_offset
                             && this_f.base_offset == other_f.base_offset
@@ -397,7 +401,12 @@ impl Collection<'_, '_> {
         &mut self,
         se: &mut ScalarEvolution,
     ) {
-        if self.tti.preferred_addressing_mode() != AddressingMode::PostIndexed || !self.too_complex() {
+        // DEVIATE LU31: a register-starved target
+        // (`Tti::lsr_address_fewest_registers`) takes the same filter
+        // for every address use, post-indexed or not.
+        let post_indexed = self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed;
+        let starved = self.tti.lsr_address_fewest_registers();
+        if !(post_indexed || starved) || !self.too_complex() {
             return;
         }
         for lu_idx in 0..self.uses.len() {
@@ -407,10 +416,17 @@ impl Collection<'_, '_> {
             }
             let Some(ty) = lu.access_ty.mem_ty.and_then(|ty| se.ty_of(self.cx, ty)) else { continue };
             let ty = crate::lsr_generate::tti_ty(ty);
-            if !self.tti.is_post_inc_load_legal(ty) && !self.tti.is_post_inc_store_legal(ty) {
+            if !starved && !self.tti.is_post_inc_load_legal(ty) && !self.tti.is_post_inc_store_legal(ty) {
                 continue;
             }
             let min_regs = lu.formulae.iter().map(Formula::num_regs).min().unwrap_or(usize::MAX);
+            // Not post-indexed: only where a frame slot is what saves the
+            // register.
+            if !post_indexed
+                && !lu.formulae.iter().any(|f| f.num_regs() == min_regs && matches!(f.symbol, Some(Symbol::Frame(_))))
+            {
+                continue;
+            }
             let mut any = false;
             let mut at = 0;
             while at < self.uses[lu_idx].formulae.len() {

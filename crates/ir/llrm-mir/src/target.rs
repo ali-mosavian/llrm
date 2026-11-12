@@ -383,6 +383,13 @@ pub struct Tuning {
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE LU30: a static alloca is the frame register and a
+    /// displacement, not a register: LSR leaves it out of a formula's
+    /// registers where an address takes `[frame + index + displacement]`
+    /// (x86-m16: `[bp+si+disp]`). false: the pin's.
+    pub frame_slot_is_free_base: bool,
+    /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
+    pub lsr_address_fewest_registers: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
     pub keep_constant_arith_operands: bool,
@@ -453,6 +460,10 @@ pub struct Tuning {
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
     /// all the way into the callee.
     pub ipsccp_widen_keeps_sign: bool,
+    /// REC5-1 also at -Os. m32 leaves it off (bytes-strict): the unsigned
+    /// remainder is `xor edx, edx; div`, a byte over `cdq; idiv` (recgcd,
+    /// frames, recmany, switch: 2..5 B).
+    pub ipsccp_widen_keeps_sign_at_size: bool,
 }
 
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
@@ -564,6 +575,8 @@ impl Tuning {
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
         keep_constant_displacements: false,
+        frame_slot_is_free_base: false,
+        lsr_address_fewest_registers: false,
         keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
@@ -580,6 +593,7 @@ impl Tuning {
         inline_variable_memcpy: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
+        ipsccp_widen_keeps_sign_at_size: false,
     };
 }
 
