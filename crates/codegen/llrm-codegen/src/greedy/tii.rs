@@ -202,6 +202,18 @@ pub trait TargetInstrInfo {
         0
     }
 
+    /// Whether writing `written` bytes of a `register`-byte register zeroes
+    /// the rest of it (x86-64: a dword write zeroes bits 32..64). DEVIATE
+    /// SPILL-ZEXT: such a value spills in a `written`-byte cell; the pin spills
+    /// the whole register.
+    fn write_zero_extends(
+        &self,
+        _written: u32,
+        _register: u32,
+    ) -> bool {
+        false
+    }
+
     /// `foldMemoryOperand`.
     fn fold_memory_operand(
         &self,
@@ -382,6 +394,14 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
             loads.extend(x87_stable_loads(body));
         }
         loads
+    }
+
+    fn write_zero_extends(
+        &self,
+        written: u32,
+        register: u32,
+    ) -> bool {
+        self.bits == 64 && written == 4 && register == 8
     }
 
     fn fold_memory_operand(

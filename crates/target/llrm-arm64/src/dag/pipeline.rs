@@ -36,17 +36,25 @@ pub struct Aarch64Lowering {
     /// AAPCS64 of Linux rather than Darwin's: where a library call's
     /// arguments go.
     linux: bool,
+    /// `optsize`: `performMulCombine` leaves a multiply a `madd` takes
+    /// (DEVIATE MUL-MADD-OS, see `combine::combine_mul`).
+    opt_for_size: bool,
 }
 
 impl CombineHooks for Aarch64Lowering {
     /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)`
-    /// (AArch64ISelLowering.cpp#L18949 at d1106deb71cc): any narrower scalar integer.
+    /// (AArch64ISelLowering.cpp#L18949 at d1106deb71cc): any narrower scalar
+    /// integer.
     fn is_truncate_free(
         &self,
         from: EVT,
         to: EVT,
     ) -> bool {
-        !from.is_vector() && !to.is_vector() && from.is_integer() && to.is_integer() && from.size_in_bits() > to.size_in_bits()
+        !from.is_vector()
+            && !to.is_vector()
+            && from.is_integer()
+            && to.is_integer()
+            && from.size_in_bits() > to.size_in_bits()
     }
 
     fn has_and_not(
@@ -302,7 +310,7 @@ impl CombineHooks for Aarch64Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => super::combine::combine_mul(dag, node, level),
+            ISD::Mul => super::combine::combine_mul(dag, node, level, self.opt_for_size),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
             ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
@@ -623,7 +631,7 @@ pub fn select_block(
     linux: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
-    let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
+    let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux, opt_for_size };
     // The scratch objects the legalizer asks for (a float's sign byte through
     // memory) are frame objects numbered after the function's.
     dag.first_temporary = info.next_stack_object();
