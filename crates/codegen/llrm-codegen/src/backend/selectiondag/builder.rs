@@ -3500,7 +3500,48 @@ impl Builder<'_> {
             return self.copy_aggregate_to_registers(operand, reg);
         }
         let value = self.non_register_value(operand)?;
+        let extend = match operand {
+            Operand::Value(result) if extend == ISD::AnyExtend => self.preferred_extend(result),
+            _ => extend,
+        };
         self.copy_leaf_to_register(value, reg, extend)
+    }
+
+    /// `PreferredExtendType[V]` (`getPreferredExtendForValue`, FunctionLoweringInfo.cpp#L59), which
+    /// `CopyValueToVirtualRegister` takes over `ANY_EXTEND`: a value its other blocks compare or
+    /// pass signed more often than unsigned is exported sign-extended. Set for instructions only
+    /// and not at -O0.
+    fn preferred_extend(
+        &self,
+        result: ValueId,
+    ) -> ISD {
+        if !self.target.switch_optimize || !matches!(self.function.value(result).def, ValueDef::Instruction(_)) {
+            return ISD::AnyExtend;
+        }
+        let (mut signed, mut unsigned) = (0usize, 0usize);
+        for one in self.function.users(result).iter() {
+            let user = self.function.instruction(one.user);
+            match &user.opcode {
+                Opcode::ICmp(predicate) => {
+                    signed += usize::from(predicate.is_signed());
+                    unsigned += usize::from(predicate.is_unsigned());
+                }
+                Opcode::Call(info) | Opcode::Invoke(info) if (one.index as usize) + 1 < user.operands.len() => {
+                    let site = info.argument_attrs.get(one.index as usize);
+                    let callee = llrm_mir::memory::callee(&self.module.context, self.function, one.user)
+                        .and_then(|global| self.module.global(global).function())
+                        .and_then(|callee| callee.parameter_attrs.get(one.index as usize));
+                    let has = |name| {
+                        site.is_some_and(|attrs| llrm_mir::memory::has(attrs, name))
+                            || callee.is_some_and(|attrs| llrm_mir::memory::has(attrs, name))
+                    };
+                    unsigned += usize::from(has("zeroext"));
+                    signed += usize::from(has("signext"));
+                }
+                _ => {}
+            }
+        }
+        if signed > unsigned { ISD::SignExtend } else { ISD::AnyExtend }
     }
 
     /// `copy_value_to_register` of one scalar value.
