@@ -206,6 +206,38 @@ fn a_reloaded_byte_stepped_and_spilled_back_is_stepped_in_the_frame() {
     assert!(!insts.iter().any(|text| text.starts_with("ld b")), "{insts:?}");
 }
 
+/// A spilled word stepped when the carry says so (`add hl, bc; jr nc, 1$; inc de`) was reloaded, stepped and stored
+/// back (`ld e, -8(ix)` / `ld d, -7(ix)` / `inc de` / two stores: 15 B, 88 T, div_constants_short's carry steps); the
+/// carry runs through the frame cell (`inc -8(ix)` / `jr nz` / `inc -7(ix)`: 10 B).
+#[test]
+fn a_reloaded_word_stepped_on_a_carry_and_spilled_back_is_stepped_in_the_frame() {
+    use llrm_spike_mf::regalloc::Assignment;
+    use llrm_z80::expand::{Line, finish, reads};
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::regalloc::Class;
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr16, Class::Gr16];
+    let (loaded, stepped) = (Reg::Virt(0), Reg::Virt(1));
+    let insts = vec![
+        Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(loaded), Operand::Frame(0)]),
+        Inst::new(Kind::Op("INC16c"), vec![Operand::Def(stepped), Operand::Use(loaded), Operand::Imm(3)]),
+        Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(0), Operand::Use(stepped)]),
+        Inst::new(Kind::Op("RET"), vec![]),
+    ];
+    function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+    let assignment = Assignment(vec![llrm_z80::reg::DE, llrm_z80::reg::DE]);
+    let lines = finish(&function, &assignment, 0, &[(0, 2)], reads(&function)).unwrap_or_else(|why| panic!("{why}"));
+    let insts: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(insts.iter().filter(|text| text.starts_with("inc ") && text.ends_with("(ix)")).count(), 2, "{insts:?}");
+    assert!(!insts.iter().any(|text| text.starts_with("ld e") || text.starts_with("ld d")), "{insts:?}");
+}
+
 /// The divisor 10 was kept in `de` across the call, so it was spilled to the
 /// frame and loaded back for the compare (`ld -3(ix), e` / `ld c, -3(ix)`); a
 /// constant is loaded again where it is wanted.
@@ -1036,8 +1068,8 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
 fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
     let ir = include_str!("kernels/ir/stackargs.ll");
     let out = text(ir, "stackargs", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("push bc") && out.contains("(ix), "), "{out}");
-    assert!(out.contains("pop bc") || out.contains("ld sp, ix"), "{out}");
+    assert!(out.contains("push bc") && (out.contains("(ix), ") || out.contains("(iy), ")), "{out}");
+    assert!(out.contains("pop bc") || out.contains("ld sp, ix") || out.contains("pop iy"), "{out}");
 }
 
 /// A frame object out of the byte displacement of IX was refused: "frame object
@@ -1749,12 +1781,37 @@ fn a_counted_loop_counts_its_trips_in_a_byte() {
 
 /// A function tuned for size called the long long divide made for speed: the
 /// routine is 179 B more to link (data_int64 and int64_division, -Os). It
-/// calls the size routine; any other function the speed one.
+/// calls the size routine where the module's clocks are another loop's (the
+/// size routine is 99k T a divide: `size_divide.rs` has it called in a module
+/// where the divide is the clocks); any other function the speed one.
 #[test]
 fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
     let body = |attr: &str| {
         format!(
-            "define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
+            "@a = global [200 x i8] zeroinitializer
+define void @g() {attr} {{
+entry:
+  br label %outer
+outer:
+  %j = phi i16 [ 0, %entry ], [ %j.next, %inner.end ]
+  br label %inner
+inner:
+  %i = phi i16 [ 0, %outer ], [ %i.next, %inner ]
+  %p = getelementptr i8, ptr @a, i16 %i
+  %v = load i8, ptr %p
+  %w = add i8 %v, 1
+  store i8 %w, ptr %p
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 200
+  br i1 %c, label %inner, label %inner.end
+inner.end:
+  %j.next = add nuw i16 %j, 1
+  %d = icmp ne i16 %j.next, 200
+  br i1 %d, label %outer, label %exit
+exit:
+  ret void
+}}
+define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
         )
     };
     for attr in ["optsize", "minsize"] {
@@ -2051,9 +2108,10 @@ fn a_slot_that_is_a_stack_is_not_refused() {
 
 /// copy_runs and loop_versioning at -Os gave wrong sums (164226 for 929463):
 /// `sum` kept its loop count in a byte slot stored from `e` and reloaded into
-/// `d`, and `push de` / `pop de` restores `e` into `e`. A byte slot whose
-/// stores and loads use different halves of a pair stays in the frame; a word
-/// may come back in another pair.
+/// `d`, and `push de` / `pop de` restores `e` into `e`. `sum` has stores from
+/// both halves of a pair: such a byte slot stays in the frame (a load into the
+/// other half than the one stored from is a pop and a copy,
+/// `tests/stack_slots.rs`); a word may come back in another pair.
 #[test]
 fn a_byte_stored_from_one_half_of_a_pair_and_loaded_into_the_other_stays_in_the_frame() {
     let ir = include_str!("kernels/ir/stack_slot_other_register.ll");
@@ -2341,7 +2399,12 @@ fn va_start_names_the_first_unnamed_argument_on_the_stack() {
     let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
     for level in [Level::O0, Level::O2, Level::Os] {
         let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(callee.contains("ld e, 4(ix)") && callee.contains("ld d, 5(ix)"), "{level:?}: {callee}");
+        // the word is read from 4(ix), 5(ix), into whichever pair the allocation gives it (the list pointer is a
+        // register since the va_list promotion, no longer a frame slot read through de)
+        // (an SP-addressed frame reaches the word through a base it sets: `0(iy)`, `1(iy)` from `ld iy, #2; add iy, sp`)
+        let from_ix = callee.contains(", 4(ix)") && callee.contains(", 5(ix)");
+        let from_sp = callee.contains("add iy, sp") && callee.contains("(iy)");
+        assert!(from_ix || from_sp, "{level:?}: {callee}");
     }
 }
 

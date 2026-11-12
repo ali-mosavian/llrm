@@ -114,3 +114,35 @@ fn a_shift_run_whose_low_byte_is_loaded_next_shifts_in_a() {
     chain_ends_in_a(&mut a);
     assert_eq!(a.text(), "  lda rc2\n  lsr rc3\n  ror a\n  lsr rc3\n  ror a\n  ldx rc3\n  rts\n");
 }
+
+/// A call clobbers the scratch cells and reads none of them: `sta rc16; ...; jsr f` kept the store
+/// (rep_count -O1 inlined into main: two dead splat copies a trip, +1,703 instructions, 2026-11-12).
+#[test]
+fn a_store_to_a_scratch_cell_before_a_call_is_dropped() {
+    let mut a = asm("  sta rc16\n  lda rc3\n  jsr f\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  lda rc3\n  jsr f\n  rts\n");
+}
+
+/// `rc6` is an argument cell: the call reads it.
+#[test]
+fn a_store_to_an_argument_cell_before_a_call_stays() {
+    let text = "  sta rc6\n  jsr f\n  rts\n";
+    let mut a = asm(text, &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), text);
+}
+
+/// `__mulsi3` works in `__sa`/`__sb` and names no `rcN`: a constant's high bytes stored to `rc2`/`rc3`
+/// before it were kept as arguments (mul_constants -Os: 249 lines, 478 B of dead stores, 2026-11-12).
+/// `__udivhi3` reads `rc4`: that store stays.
+#[test]
+fn a_store_before_a_routine_that_names_no_cell_is_dropped() {
+    let mut a = asm("  sta rc3\n  sta __sb\n  jsr __mulsi3\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  sta __sb\n  jsr __mulsi3\n  rts\n");
+    let text = "  sta rc4\n  jsr __udivhi3\n  rts\n";
+    let mut a = asm(text, &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), text);
+}

@@ -55,7 +55,7 @@ use llrm_mir::tti::{AddressingMode, Ty as TtiTy};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::{Collection, extract_immediate, extract_symbol, get_exact_sdiv, is_always_foldable_scev};
-use crate::lsr_formula::{Formula, Immediate};
+use crate::lsr_formula::{Formula, Immediate, Symbol};
 use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use, may_use_post_inc_mode};
 
 /// Which register of a formula a generator works on.
@@ -176,16 +176,17 @@ impl Collection<'_, '_> {
         f: &Formula,
     ) -> bool {
         let lu = &self.uses[lu_idx];
+        let Some(mode) = f.mode() else { return false };
         is_legal_use(
             self.tti,
             lu.min_offset,
             lu.max_offset,
             lu.kind,
             lu.access_ty,
-            f.base_gv.is_some(),
+            mode.global,
             f.base_offset,
-            f.has_base_reg,
-            f.scale,
+            mode.has_base_reg,
+            mode.scale,
         )
     }
 
@@ -388,13 +389,25 @@ impl Collection<'_, '_> {
         base: &Formula,
         slot: Slot,
     ) {
-        let (gv, g) = extract_symbol(se, self.cx, Self::reg_at(base, slot));
+        let (gv, g) = extract_symbol(se, self.cx, Self::reg_at(base, slot), self.tti.frame_slot_is_free_base());
         let Some(gv) = gv else { return };
         if se.match_zero(g) {
+            // DEVIATE LU30: a frame slot that was a register of its own is
+            // the frame register and a displacement; the register goes.
+            if let (Symbol::Frame(_), Slot::Base(at)) = (gv, slot) {
+                let mut f = base.clone();
+                f.symbol = Some(gv);
+                f.delete_base_reg(at);
+                f.has_base_reg = !f.base_regs.is_empty();
+                f.canonicalize(se, self.l);
+                if self.legal(lu_idx, &f) {
+                    let _ = self.insert_formula(se, lu_idx, &f);
+                }
+            }
             return;
         }
         let mut f = base.clone();
-        f.base_gv = Some(gv);
+        f.symbol = Some(gv);
         if !self.legal(lu_idx, &f) {
             return;
         }
@@ -413,7 +426,7 @@ impl Collection<'_, '_> {
         base: Formula,
     ) {
         // An address with a global has no room for another.
-        if base.base_gv.is_some() {
+        if base.symbol.is_some() {
             return;
         }
         for i in 0..base.base_regs.len() {
@@ -535,7 +548,7 @@ impl Collection<'_, '_> {
         {
             return;
         }
-        assert!(base.base_gv.is_none(), "ICmpZero use is not legal!");
+        assert!(base.symbol.is_none(), "ICmpZero use is not legal!");
 
         'factor: for factor in self.factors.clone() {
             if !valid_for_bits(bits, factor) {
@@ -571,16 +584,17 @@ impl Collection<'_, '_> {
             // This scale must be legal.
             {
                 let lu = &self.uses[lu_idx];
+                let Some(mode) = f.mode() else { continue };
                 if !is_legal_use(
                     self.tti,
                     offset,
                     offset,
                     lu.kind,
                     lu.access_ty,
-                    f.base_gv.is_some(),
+                    mode.global,
                     f.base_offset,
-                    f.has_base_reg,
-                    f.scale,
+                    mode.has_base_reg,
+                    mode.scale,
                 ) {
                     continue;
                 }
@@ -696,17 +710,19 @@ impl Collection<'_, '_> {
                 (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty)
             };
             let legal = |kind| {
-                is_legal_use(
-                    self.tti,
-                    min,
-                    max,
-                    kind,
-                    space,
-                    base.base_gv.is_some(),
-                    base.base_offset,
-                    base.has_base_reg,
-                    base.scale,
-                )
+                base.mode().is_some_and(|mode| {
+                    is_legal_use(
+                        self.tti,
+                        min,
+                        max,
+                        kind,
+                        space,
+                        mode.global,
+                        base.base_offset,
+                        mode.has_base_reg,
+                        mode.scale,
+                    )
+                })
             };
             if !legal(kind) {
                 // An out-of-loop basic use is special, and takes a -1 scale.
@@ -718,7 +734,7 @@ impl Collection<'_, '_> {
             }
             let kind = self.uses[lu_idx].kind;
             // Negating a solitary base register of a compare gives nothing new.
-            if kind == Kind::ICmpZero && !base.has_base_reg && base.base_offset.is_zero() && base.base_gv.is_none() {
+            if kind == Kind::ICmpZero && !base.has_base_reg && base.base_offset.is_zero() && base.symbol.is_none() {
                 continue;
             }
             // Each addrec base register of this loop is scaled.
@@ -789,7 +805,7 @@ impl Collection<'_, '_> {
     ) {
         let cx = self.cx;
         // Symbolic values are not truncated.
-        if base.base_gv.is_some() {
+        if base.symbol.is_some() {
             return;
         }
         let Some(dst) = base.ty(se, cx) else { return };
@@ -1049,6 +1065,11 @@ impl Collection<'_, '_> {
     /// pin nor gcc builds it: the pin's address uses never name the exit
     /// test's register, and gcc compares against the end instead.
     ///
+    /// The biased bases are new registers the pin's solution does not hold;
+    /// where a base names a global's address each costs the target's setup
+    /// (`Tti::lsr_symbol_base_setup_insns`), which the solution's cost ignores:
+    /// `plan_loop` prices it in the keep rule.
+    ///
     /// Work: one formula for each (zero-ending register, address formula
     /// holding an addrec of this loop), the registers capped at four.
     pub fn generate_end_biased(
@@ -1294,5 +1315,7 @@ fn legal_scale(
     f: &Formula,
     scale: i64,
 ) -> bool {
-    is_legal_use(tti, min, max, kind, access, f.base_gv.is_some(), f.base_offset, true, scale)
+    // The end-biased form is not made for a frame slot.
+    !matches!(f.symbol, Some(Symbol::Frame(_)))
+        && is_legal_use(tti, min, max, kind, access, f.has_global(), f.base_offset, true, scale)
 }

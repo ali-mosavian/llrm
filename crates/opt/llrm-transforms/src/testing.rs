@@ -164,6 +164,8 @@ pub struct Tuned {
     pub exit_ne: bool,
     /// `Tti::narrows_counters`.
     pub narrows_counters: bool,
+    /// `Tti::narrows_counters_at_speed` answers no.
+    pub narrows_counters_for_size_only: bool,
     /// `Tti::sinks_unused_invariants`.
     pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
@@ -190,6 +192,7 @@ use llrm_mir::tti;
 pub struct Flagged {
     pub exit_ne: bool,
     pub narrows_counters: bool,
+    pub narrows_counters_for_size_only: bool,
     pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
@@ -231,6 +234,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn narrows_counters(&self) -> bool {
         self.narrows_counters
+    }
+
+    fn narrows_counters_at_speed(&self) -> bool {
+        !self.narrows_counters_for_size_only
     }
 
     fn sinks_unused_invariants(&self) -> bool {
@@ -376,6 +383,7 @@ impl llrm_mir::target::Machine for Tuned {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
                 narrows_counters: self.narrows_counters,
+                narrows_counters_for_size_only: self.narrows_counters_for_size_only,
                 sinks_invariants: self.sinks_invariants,
                 no_cmov: false,
                 no_global_base: self.no_global_base,

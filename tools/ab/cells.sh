@@ -38,11 +38,14 @@ while read -r _ tg lvl f; do
   pf=$(python3 "$(dirname "$0")/cell_flags.py" "$f")
   for v in base new; do
     LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>"$w/$v.err" || { why[$v]=$(first_error "$w/$v.err"); continue; }
-    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>"$w/$v.err" || { why[$v]=$(first_error "$w/$v.err"); continue; }
+    # wasm has no text output (`-S` writes the binary): its instructions are counted from the object's disassembly.
+    case $tg in wasm*) cp "$w/$v.o" "$w/$v.s";; *)
+      LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>"$w/$v.err" || { why[$v]=$(first_error "$w/$v.err"); continue; };; esac
     [ -s "$w/$v.o" ] && [ -s "$w/$v.s" ] || continue
     # Code bytes of the object (object_bytes.py: per target; z80/6502 assemble their .s). Never the file's size: a failure is an EMPTY cell.
     read -r text[$v] dat[$v] _ < <(uv run -q --project "$(dirname "$0")/.." python "$(dirname "$0")/object_bytes.py" "$tg" "$w/$v.o" 2>>"$w/err") || { unset "text[$v]" "dat[$v]"; }
-    ins[$v]=$(grep -cE '^[[:space:]]+[a-z][a-z0-9.]*([[:space:]]|$)' "$w/$v.s")
+    case $tg in wasm*) ins[$v]=$(wasm-objdump -d "$w/$v.o" 2>/dev/null | grep -cE '^ [0-9a-f]+: ');;
+      *) ins[$v]=$(grep -cE '^[[:space:]]+[a-z][a-z0-9.]*([[:space:]]|$)' "$w/$v.s");; esac
   done
   if [ -z "${text[base]:-}" ] || [ -z "${text[new]:-}" ] || [ "${ins[base]:-0}" -eq 0 ] || [ "${ins[new]:-0}" -eq 0 ]; then
     reason=${why[base]:-${why[new]:-}}; [ -n "$reason" ] || reason=$(head -1 "$w/err" 2>/dev/null)

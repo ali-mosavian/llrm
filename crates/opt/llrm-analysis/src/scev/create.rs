@@ -9,10 +9,10 @@
 //!
 //! # DEVIATE 9 (MIR lacks the construct)
 //! * `llvm.annotation`, `llvm.ptr.annotation` and `llvm.vscale` are not MIR
-//!   intrinsics (`Intrinsic::named` is none for them, tested), so a call to
-//!   one is an unknown, as any call is. (`llvm.start.loop.iterations` and
-//!   `llvm.loop.decrement.reg` are, and are translated.) (`llvm.usub.sat` and `llvm.uadd.sat` are, and are
-//!   translated.)
+//!   intrinsics (`Intrinsic::named` is none for them, tested), so a call to one
+//!   is an unknown, as any call is. (`llvm.start.loop.iterations` and
+//!   `llvm.loop.decrement.reg` are, and are translated.) (`llvm.usub.sat` and
+//!   `llvm.uadd.sat` are, and are translated.)
 //! * No separate `ptrtoaddr`: MIR's `ptrtoint` is modelled as one.
 //! * Only a constant `getelementptr` expression has a SCEV; any other constant
 //!   expression is an unknown.
@@ -608,6 +608,9 @@ impl ScalarEvolution {
         v: Operand,
     ) -> Scev {
         if !self.is_value_scevable(cx, v) {
+            return self.get_unknown(cx, v);
+        }
+        if matches!(v, Operand::Value(value) if self.opaque.contains(&value)) {
             return self.get_unknown(cx, v);
         }
 

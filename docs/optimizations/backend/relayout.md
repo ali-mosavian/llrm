@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/relayout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/relayout.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/relayout.rs sha256:a48fa5d98595dceb12bff37e753293e5150966db3ba503b4c991e9d423d9d6f5 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/relayout.rs sha256:9864379d10ed4e96dc44acf97595350e56b5468fb55e5c2071edf9157278a409 -->
 
 # relayout
 
@@ -41,7 +41,8 @@ them differ).
 `PrologEpilogInserter` asks for at every optimisation level), applied to the
 first layout when it has far operands and the order reaches fewer of them.
 Objects sort by uses per byte, highest first, ties by alignment and then by
-later creation, and are laid from BP downward; a BASIC frame reorders the
+later creation, and are laid from BP downward, a spill slot aligned as its
+size (`getSpillAlignment`), not as its old home; a BASIC frame reorders the
 selector's slots only, since the runtime zero-fills them and the spill slots
 lie outside what it fills.
 

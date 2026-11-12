@@ -483,8 +483,9 @@ pub fn loop_simplify_cfg(
     function: &mut Function,
 ) -> bool {
     let mut loops = loops_of(function);
-    let headers: Vec<BlockId> =
+    let mut headers: Vec<BlockId> =
         loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut headers);
     let mut changed = false;
     // The loops are made again only after a loop changed the function.
     let mut stale = false;

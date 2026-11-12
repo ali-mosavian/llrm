@@ -81,11 +81,14 @@ pub struct Request {
     /// Cost: -Oz compiles twice (median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The real fix is the
     /// rotation/LSR interplay; the exit date is the revisit.
     pub oz_best_of: bool,
+    /// DEVIATE Z80-SP-FRAME (owner z80, exit 2026-11-24): a function whose frame is addressed from SP is no larger and no
+    /// slower than with IX (`sp_frame.rs`). Off, every framed function keeps IX.
+    pub sp_frame: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true }
     }
 }
 
@@ -139,6 +142,11 @@ pub fn program(
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
         program.modules.iter_mut().for_each(crate::prepare::mark_constant_fills);
+        program.modules.iter_mut().for_each(crate::prepare::mark_wide_shifts);
+        program.modules.iter_mut().for_each(crate::prepare::mark_wide_divides);
+        if matches!(request.level, Level::O1 | Level::Os | Level::Oz) {
+            program.modules.iter_mut().for_each(crate::prepare::mark_word_chains);
+        }
     }
     // The pin lowers `llvm.is.constant` at every level; -O0 reaches here with the call.
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
@@ -230,6 +238,26 @@ pub fn selections_with_alternatives(
             })
         })
     };
+    // A function with a variable 64-bit shift (`prepare::mark_wide_shifts`) is
+    // also selected with each such shift an in-place loop
+    // (`INLINE_SHIFTS`); the caller prices the two with the routine linked
+    // once.
+    let has_shifts = |name: &str| -> bool {
+        module.globals.iter().any(|global| {
+            global.function().is_some_and(|one| {
+                global.name.as_deref() == Some(name) && llrm_mir::memory::has(&one.attrs, crate::prepare::WIDE_SHIFT)
+            })
+        })
+    };
+    // A function with a long divide (`prepare::mark_wide_divides`) is also selected with the speed routines in a
+    // function tuned for size (`SPEED_ROUTINES`).
+    let has_divides = |name: &str| -> bool {
+        module.globals.iter().any(|global| {
+            global.function().is_some_and(|one| {
+                global.name.as_deref() == Some(name) && llrm_mir::memory::has(&one.attrs, crate::prepare::WIDE_DIVIDE)
+            })
+        })
+    };
     let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
     let alternatives: Vec<Selected> = names
         .iter()
@@ -239,7 +267,9 @@ pub fn selections_with_alternatives(
             // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
             let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
             let fills = has_fills(name);
-            if muls.is_none() && !fills {
+            let shifts = has_shifts(name);
+            let divides = has_divides(name);
+            if muls.is_none() && !fills && !shifts && !divides {
                 return None;
             }
             let switch = muls.map(|sized| {
@@ -249,8 +279,14 @@ pub fn selections_with_alternatives(
                 switch.with(|one| one.set(true));
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
+            crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(shifts));
+            // the alternative is one switch for every reason a function has one: the speed routines ride along only where
+            // nothing else is switched, or the form that decomposes a multiply would also carry the divide's price
+            crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(divides && muls.is_none() && !fills && !shifts));
             let selected = (name.clone(), select(name, false), select(name, true));
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
+            crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(false));
+            crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
             }

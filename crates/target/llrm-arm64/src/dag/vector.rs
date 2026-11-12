@@ -216,3 +216,52 @@ pub fn lower_vector_shuffle(
     // DEVIATE VEC1: `constructDup` (a lane of a vector) is not translated.
     None
 }
+
+/// The constant every lane of `operand` is, at the lane's width
+/// (`isConstantSplatVector`): a `BUILD_VECTOR` of equal constants.
+fn splat_constant(
+    dag: &SelectionDAG,
+    operand: SDValue,
+) -> Option<u64> {
+    if dag.opcode(operand) != ISD::BuildVector {
+        return None;
+    }
+    let bits = dag.value_type(operand).element().size_in_bits();
+    let lanes = dag.node(operand).ops.clone();
+    let first = lane_constant(dag, *lanes.first()?, bits)?;
+    lanes.iter().all(|&lane| lane_constant(dag, lane, bits) == Some(first)).then_some(first)
+}
+
+/// `LowerVectorSRA_SRL_SHL`
+/// ([L18181](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18181)):
+/// a shift by a constant splat is `VSHL`, `VLSHR` or `VASHR` of the immediate
+/// (`isVShiftLImm`: `0 <= n < esize`; `isVShiftRImm`: `1 <= n <= esize`).
+///
+/// DEVIATE VEC4: a shift by a vector that is no constant splat is the pin's
+/// `ushl`/`sshl` intrinsic (and, to the right, of the negated amount), which
+/// the DAG here has no node for; it is declined and the block refused. The
+/// loop vectorizer widens only shifts by a constant. Exit: LV-X3, 2026-11-20.
+pub fn lower_vector_shift(
+    dag: &mut SelectionDAG,
+    op: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(op);
+    if !dag.value_type(dag.operand(op, 1)).is_vector() {
+        return Some(op);
+    }
+    let esize = u64::from(vt.element().size_in_bits());
+    let amount = splat_constant(dag, dag.operand(op, 1))?;
+    let value = dag.operand(op, 0);
+    let (opcode, valid) = match dag.opcode(op) {
+        ISD::Shl => (aarch64_isd::VSHL, amount < esize),
+        ISD::Srl => (aarch64_isd::VLSHR, (1..=esize).contains(&amount)),
+        ISD::Sra => (aarch64_isd::VASHR, (1..=esize).contains(&amount)),
+        _ => return None,
+    };
+    if !valid {
+        return None;
+    }
+    let count = dag.get_constant_with(u128::from(amount), EVT::I32, true, false);
+    let flags = dag.node(op).flags;
+    Some(dag.get_node_flags(ISD::Target(opcode), vt, &[value, count], flags))
+}

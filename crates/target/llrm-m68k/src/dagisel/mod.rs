@@ -23,6 +23,7 @@ pub mod indexed;
 pub mod local;
 pub mod lowering;
 pub mod mulprice;
+pub mod synth;
 pub mod pea;
 pub mod pipeline;
 pub mod predicates;

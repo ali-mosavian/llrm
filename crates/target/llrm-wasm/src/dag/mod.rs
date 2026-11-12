@@ -209,6 +209,8 @@ pub fn compile_function_with(
         crate::machine_licm::machine_licm(&mut f);
         crate::machine_cse::machine_cse(&mut f);
         crate::machine_sink::machine_sink(&mut f);
+        crate::peephole_opt::peephole_opt(&mut f);
+        crate::dead_mi::dead_machine_instruction_elim(&mut f);
         f.edge_probs.clear();
     }
     if options.level != crate::driver::Level::O0 {

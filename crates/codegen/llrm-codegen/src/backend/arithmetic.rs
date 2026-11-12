@@ -473,6 +473,26 @@ fn positive_chains_ranked<'a>(
     Ok(best)
 }
 
+/// One step of a multiply chain: `shl m`, `add` / `sub` of the source,
+/// `fadd m` (`cur + (cur << m)`), `fsub m` (`(cur << m) - cur`).
+pub type ChainStep = (&'static str, i64);
+
+/// The cheapest shift, add and subtract chain for `x * number` with a target's
+/// own scalar prices: `shift(m)` for a shift by `m`, `alu` for an add or
+/// subtract of the source, `mov` for a copy (a factor step copies the running
+/// value; a chain that adds the source seeds with one). `None` when no chain
+/// costs less than `limit`.
+pub fn synthesize_chain(
+    number: i64,
+    limit: i64,
+    shift: &dyn Fn(i64) -> i64,
+    alu: i64,
+    mov: i64,
+) -> Option<(Vec<ChainStep>, i64)> {
+    let ops = Ops { shift, alu, mov, lea: &|_| None, seeded: true };
+    chain_search::synth(number, limit, &mut chain_search::Memo::default(), &ops)
+}
+
 type Chain = Vec<(&'static str, i64)>;
 
 #[cfg(test)]

@@ -37,7 +37,19 @@ fn with_users(
     text: &str,
     body: impl FnOnce(&Cx, &mut ScalarEvolution, &IvUsers, BlockId, usize),
 ) {
-    let module = llrm_mir::parse::module(text).expect("a module");
+    with_edited_users(text, false, |_| {}, body);
+}
+
+/// As `with_users`, with `edit` run on the parsed module first and the users
+/// met in use-list order when `use_list_order`.
+fn with_edited_users(
+    text: &str,
+    use_list_order: bool,
+    edit: impl FnOnce(&mut llrm_mir::module::Module),
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &IvUsers, BlockId, usize),
+) {
+    let mut module = llrm_mir::parse::module(text).expect("a module");
+    edit(&mut module);
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
     let tree = DomTree::of(function);
@@ -60,7 +72,7 @@ fn with_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[] };
+    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order };
     let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
     GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
@@ -188,7 +200,7 @@ fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
         assumptions: &assumptions,
     };
     let mut se = ScalarEvolution::new();
-    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[] };
+    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false };
     let before = llrm_mir::module::block_places_built();
     let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
     assert_eq!(headers.len(), 6);
@@ -263,7 +275,7 @@ fn users_on_a_16_bit_native_target(text: &str) -> Vec<String> {
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16] };
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false };
     let users = IvUsers::of(&mut se, &cx, header, &env);
     users.uses.iter().map(|u| format!("{:?}", function.instruction(u.user).opcode)).collect()
 }
@@ -297,4 +309,49 @@ fn a_native_width_is_not_for_a_narrow_counter_an_extension_widens() {
         native.iter().any(|op| !op.starts_with("Cast")),
         "a 16-bit counter reaches the gep and the compare: {native:?}"
     );
+}
+
+/// Two address computations on one induction variable, the earlier one's use
+/// of it made last (an edit re-adds a use at the head of the list). Descending
+/// program order meets the later computation first; the pin walks the use
+/// list, newest first. wasm32 memcpy_runtime -O2 started the variable at 0
+/// where the pin's started at 3, and memory_expansion was 1307 B over the pin.
+#[test]
+fn test_the_users_are_met_in_use_list_order_when_the_target_asks() {
+    let text = "define i32 @f(ptr %p, ptr %q, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %a = getelementptr i32, ptr %p, i32 %i
+  %b = getelementptr i32, ptr %q, i32 %i
+  %v = load i32, ptr %a
+  %w = load i32, ptr %b
+  %next = add i32 %i, 1
+  %c = icmp slt i32 %next, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %r = add i32 %v, %w
+  ret i32 %r
+}
+";
+    let edit = |module: &mut llrm_mir::module::Module| {
+        let (_, function) = module.function_mut("f").expect("@f");
+        // The loop is the second block; its first gep is `%a`.
+        let a = function
+            .iter_block(function.layout()[1])
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::GetElementPtr { .. }))
+            .expect("the gep of %a");
+        let index = function.instruction(a).operands[1];
+        function.set_operand(a, 1, index);
+    };
+    let first = |use_list_order| {
+        let mut found = Vec::new();
+        with_edited_users(text, use_list_order, edit, |cx, _, users, _, _| {
+            found = users.uses.iter().map(|u| named(cx, u)).collect();
+        });
+        found
+    };
+    assert_eq!(first(true).first().map(|(_, v)| v.as_str()), Some("a"), "the newest use is met first");
+    assert_eq!(first(false).first().map(|(_, v)| v.as_str()), Some("next"), "the default is program order");
 }

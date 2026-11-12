@@ -85,7 +85,7 @@ use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_bl
 mod price;
 mod throughput;
 mod recurrence;
-pub mod trial;
+pub use crate::trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
@@ -1088,7 +1088,9 @@ fn should_full_unroll(
         // programs with such a loop paid), nor did a nest too large (matmul +1601 B), and the trial
         // compiles the module again.
         if !unroll
-            && run.tti.unroll_trial_threshold().is_some_and(|limit| price::nest_unroll_fits(run, se, analyzed, lp, up, limit))
+            && run.tti.unroll_trial_threshold().is_some_and(|limit| {
+                !run.tti.unroll_trial_nests_only() || price::nest_unroll_fits(run, se, analyzed, lp, up, limit)
+            })
         {
             note_for_trial(run, unrolled_size);
         }
@@ -1169,8 +1171,14 @@ fn note_for_trial(
     run: &Run,
     unrolled_size: u64,
 ) {
+    // At -Os the size trial's bar (UNROLL-OS-TRIAL) where the target states one, else the -O1 trial's.
+    let threshold = if run.options.opt_size {
+        run.tti.unroll_trial_at_size().or_else(|| run.tti.unroll_trial_threshold())
+    } else {
+        run.tti.unroll_trial_threshold()
+    };
     if trial::active().is_none()
-        && let (Some(limit), Some(this)) = (run.tti.unroll_trial_threshold(), run.this)
+        && let (Some(limit), Some(this)) = (threshold, run.this)
         && unrolled_size < u64::from(limit)
         && let Some(name) = run.globals[this.0 as usize].name.as_deref()
     {

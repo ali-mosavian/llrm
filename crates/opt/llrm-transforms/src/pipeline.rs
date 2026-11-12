@@ -295,6 +295,9 @@ pub struct Options {
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
     /// `LLRM_NO_LICM` turns it off.
     pub licm: bool,
+    /// The `mergeicmps` slot (the pin's `-enable-mergeicmps`, on by default);
+    /// `LLRM_NO_MERGEICMPS` turns it off.
+    pub merge_icmps: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -360,6 +363,7 @@ impl Default for Options {
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
+            merge_icmps: !llrm_support::env_flag!("LLRM_NO_MERGEICMPS"),
             copy_headers: true,
             for_size: false,
             speed_rate: true,
@@ -412,10 +416,11 @@ impl Options {
         Self::default()
     }
 
-    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the copy budget is LLVM's -O3
-    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
-    /// clones: the pin makes none, and they grew recchop 1541 lines against
-    /// 171.
+    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the
+    /// copy budget is LLVM's -O3 (`UnrollThresholdAggressive`, twice the
+    /// target's), not gcc's. No ipa-cp clones by default: the pin makes
+    /// none. A target that states `Tti::ipa_cp_clones_at_speed` takes gcc's
+    /// `-fipa-cp-clone` here (DEVIATE IPACP-O3, resolved in `recorded`).
     pub fn speed() -> Self {
         Self {
             inline: inline::Threshold::new(250),
@@ -431,7 +436,7 @@ impl Options {
     pub fn aggressive() -> Self {
         Self {
             limits: Limits { target_percent: 200, ..Limits::default() },
-            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            inline: inline::Threshold { cp_clone: Some(true), ..inline::Threshold::new(250) },
             unswitch: true,
             unroll_and_jam: true,
             search: true,
@@ -788,6 +793,85 @@ impl FunctionPass for PerLoop {
     }
 }
 
+/// The unswitch slot of LPM1 at -O3, where the pin's `SimpleLoopUnswitchPass`
+/// is non-trivial. A non-trivial unswitch hands the loop pass manager the
+/// sibling loops it cloned (`LPMUpdater::addSiblingLoops`) and asks for the
+/// loop again (`revisitCurrentLoop`); the manager then runs the whole of LPM1
+/// on each of them: instsimplify, simplifycfg, licm, rotate, licm, unswitch.
+/// The first visit of each loop is the flat slots before this one (`preamble`
+/// ran on every loop already), so only the revisits and the clones run the
+/// preamble again, then the unswitch.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L270>
+struct UnswitchRevisit {
+    preamble: Vec<Box<dyn FunctionPass>>,
+    unswitch: Box<dyn FunctionPass>,
+}
+
+impl FunctionPass for UnswitchRevisit {
+    fn name(&self) -> &'static str {
+        self.unswitch.name()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.unswitch.translations()
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.unswitch.adds_memory_operations() || self.preamble.iter().any(|part| part.adds_memory_operations())
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.preamble.iter().fold(self.unswitch.reads(), |all, part| all.with(part.reads()))
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let headers: Vec<llrm_mir::module::BlockId> = analyses
+            .get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function)
+            .get_loops_in_reverse_sibling_preorder()
+            .iter()
+            .rev()
+            .map(|one| one.get_header())
+            .collect();
+        // (loop, whether LPM1's preamble has run on it since it was made or revisited)
+        let mut work: std::collections::VecDeque<(llrm_mir::module::BlockId, bool)> =
+            headers.into_iter().map(|header| (header, true)).collect();
+        let mut changed = false;
+        let _ = crate::loopfilter::take_unswitched();
+        while let Some((header, preamble_ran)) = work.pop_front() {
+            let found = analyses.get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function);
+            if !unit.function.is_placed(header) || !found.is_loop_header(header) {
+                continue;
+            }
+            {
+                let _scope = crate::loopfilter::only(&[header]);
+                let preamble = if preamble_ran { &mut self.preamble[..0] } else { &mut self.preamble[..] };
+                for part in preamble.iter_mut().chain(std::iter::once(&mut self.unswitch)) {
+                    let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
+                    if !preserved.are_all_preserved() {
+                        changed = true;
+                        analyses.invalidate(unit.function, &preserved);
+                    }
+                }
+            }
+            // The loop itself is popped first, then its siblings in order.
+            let (revisit, mut siblings) = crate::loopfilter::take_unswitched();
+            siblings.reverse();
+            for one in siblings {
+                work.push_front((one, false));
+            }
+            if revisit {
+                work.push_front((header, false));
+            }
+        }
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
 /// A slot after the head of a [`PerLoop`]: run by the group already, it is
 /// skipped while the function is as the group left it, and runs as itself
 /// otherwise (alone, or after something else changed the function).
@@ -1066,10 +1150,14 @@ pub(crate) fn llvm_order(
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
-            slot(
-                "mergeicmps@1672",
-                Box::new(crate::mergeicmps::MergeICmps::with_routines(applied.options.library.clone())),
-            ),
+            if applied.options.merge_icmps {
+                slot(
+                    "mergeicmps@1672",
+                    Box::new(crate::mergeicmps::MergeICmps::with_routines(applied.options.library.clone())),
+                )
+            } else {
+                Box::new(Together { name: "mergeicmps@1672", parts: Vec::new() })
+            },
             slot("expandmemcmp@1673", Box::new(crate::expandmemcmp::ExpandMemCmp)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
@@ -1102,6 +1190,35 @@ pub(crate) fn llvm_order(
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
             let rotating = applied.options.rotate_slot;
+            // Non-trivial unswitching (-O3) revisits the loops it made and the
+            // loop it unswitched (`UnswitchRevisit`); the trivial one, at every
+            // other level, never does.
+            let unswitch_slot = || -> Box<dyn FunctionPass> {
+                let unswitch = Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch });
+                if !applied.options.unswitch {
+                    return unswitch;
+                }
+                let mut preamble: Vec<Box<dyn FunctionPass>> = vec![
+                    Box::new(crate::loopinstsimplify::LoopInstSimplify),
+                    Box::new(crate::loopsimplifycfg::LoopSimplifyCfg),
+                    Box::new(floatloop::FloatLoop),
+                ];
+                if applied.options.licm {
+                    preamble.push(Box::new(crate::licm::Licm { apply: true, speculate: !rotating }));
+                }
+                if rotating {
+                    preamble.push(Box::new(looprotate::LoopRotate {
+                        duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                        size: applied.options.prefers_size(),
+                        check_exit_count: false,
+                        free_guard: false,
+                    }));
+                }
+                if applied.options.licm {
+                    preamble.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
+                }
+                Box::new(UnswitchRevisit { preamble, unswitch })
+            };
             list.extend([
                 // LPM1's first pass, PassBuilderPipelines.cpp#L715.
                 slot("loop-instsimplify@715", Box::new(crate::loopinstsimplify::LoopInstSimplify)),
@@ -1133,10 +1250,7 @@ pub(crate) fn llvm_order(
                 licm("licm@730", true),
                 // The pin's `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`:
                 // the options say -O3 and -Omax.
-                slot(
-                    "trivialunswitch@732",
-                    Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch }),
-                ),
+                slot("trivialunswitch@732", unswitch_slot()),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
@@ -1481,7 +1595,26 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
-    // The clones of the step before the walk and of the one after it share a bound.
+    // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): gcc's
+    // `-fipa-cp-clone` is on at -O3, the pin has no such pass; the target
+    // states whether it copies at -O3. A flag given wins.
+    let resolved = Applied {
+        options: Options {
+            inline: inline::Threshold {
+                cp_clone: Some(applied.options.inline.cp_clone.unwrap_or_else(|| {
+                    unroll_level(&applied.options) == 3
+                        && !applied.options.prefers_size()
+                        && program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_speed())
+                })),
+                ..applied.options.inline
+            },
+            ..applied.options.clone()
+        },
+        ..applied.clone()
+    };
+    let applied = &resolved;
+    // The clones of the step before the walk and of the one after it share a
+    // bound.
     let cloning = crate::ipacp::Shared::default();
     // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
     // `RecomputeGlobalsAAPass` alone, read cached in between.
@@ -1762,6 +1895,9 @@ pub fn recorded(
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
     if applied.options.optimize {
+        // `GlobalDCEPass` then `ConstantMergePass` after the function passes:
+        // what a late unroll or fold left unnamed goes before merging.
+        manager.add_program(globaldce::GlobalDce);
         manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
@@ -1814,7 +1950,10 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
-        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce {
+            size: applied.options.prefers_size(),
+            bytes_strict: applied.options.prefers_size() || applied.options.at_o1(),
+        }));
         // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
         // LSR; it does nothing for a target whose TTI does not enable it.
         if applied.options.wanted("looptermfold") {

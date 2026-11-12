@@ -198,6 +198,16 @@ fn iteration_cost(
 ) -> Option<i64> {
     let kind = CostKind::RecipThroughput;
     let mut total = if vf == 1 { SCALAR_CONTROL_COST } else { CONTROL_COST_PER_ITERATION };
+    // DEVIATE LV-SPLIT: the pin prices a vector wider than one register as the
+    // parts the type legalizer splits it into (`SplitVectorResult`) and one
+    // narrower as its widened register (`WidenVectorResult`, the D-register
+    // types); the backends here do neither yet, so a VF is taken only when
+    // every recipe's vector fills one register exactly. Owner llrm-arm64-vec,
+    // exit LV-X4.
+    let register_bits = u64::from(tti.vector_register_bits());
+    if vf > 1 && recipes.iter().any(|recipe| u64::from(lane_bits(recipe_lane(recipe))) * u64::from(vf) != register_bits) {
+        return None;
+    }
     for recipe in recipes {
         let cost = match *recipe {
             Recipe::Load { lane, align } | Recipe::Store { lane, align } => {

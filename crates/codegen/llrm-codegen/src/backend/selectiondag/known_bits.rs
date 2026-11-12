@@ -198,6 +198,16 @@ fn walk(
             let zero = inner.zero | (all & !mask(asserted.min(width)));
             KnownBits { zero, one: inner.one & !zero, width }
         }
+        // `computeKnownBits`, `BUILD_PAIR`: the low half's bits below the high half's.
+        ISD::BuildPair if dag.config().known_bits_of_build_pair && width % 2 == 0 => {
+            let (low, high) = (operand(0), operand(1));
+            let half = width / 2;
+            KnownBits {
+                zero: (low.zero & mask(half)) | ((high.zero & mask(half)) << half),
+                one: (low.one & mask(half)) | ((high.one & mask(half)) << half),
+                width,
+            }
+        }
         ISD::ZeroExtend => {
             let inner = operand(0);
             // The new high bits are zero.
@@ -352,16 +362,103 @@ pub fn num_sign_bits(
             _ => {}
         }
     }
+    let signs = |index| num_sign_bits(dag, dag.operand(value, index));
+    let mut first = 1;
+    match dag.opcode(value) {
+        // Logical operations keep the operands' sign bits at the worst; the
+        // known bits below may do better.
+        ISD::And | ISD::Or | ISD::Xor => {
+            let left = signs(0);
+            if left != 1 {
+                first = left.min(signs(1));
+            }
+        }
+        ISD::Select => {
+            let (left, right) = (signs(1), signs(2));
+            return if left == 1 { 1 } else { left.min(right) };
+        }
+        ISD::SelectCC => {
+            let (left, right) = (signs(2), signs(3));
+            return if left == 1 { 1 } else { left.min(right) };
+        }
+        ISD::UMin | ISD::UMax => {
+            let left = signs(0);
+            return if left == 1 { 1 } else { left.min(signs(1)) };
+        }
+        // The remainder is no larger than the dividend, and has its sign.
+        ISD::SRem => return signs(0),
+        ISD::Add => {
+            let left = signs(0);
+            if left == 1 {
+                return 1;
+            }
+            // Decrementing: a 0/1 input gives 0/-1, a positive one no borrow.
+            if dag.constant(dag.operand(value, 1)) == Some(mask(width)) {
+                let known = known_bits(dag, dag.operand(value, 0));
+                if (known.zero | 1) == mask(width) {
+                    return width;
+                }
+                if known.zero & (1u128 << (width - 1)) != 0 {
+                    return left;
+                }
+            }
+            let right = signs(1);
+            if right == 1 {
+                return 1;
+            }
+            // One carry bit at most.
+            return left.min(right) - 1;
+        }
+        ISD::Sub => {
+            let right = signs(1);
+            if right == 1 {
+                return 1;
+            }
+            if dag.constant(dag.operand(value, 0)) == Some(0) {
+                let known = known_bits(dag, dag.operand(value, 1));
+                if (known.zero | 1) == mask(width) {
+                    return width;
+                }
+                if known.zero & (1u128 << (width - 1)) != 0 {
+                    return right;
+                }
+            }
+            let left = signs(0);
+            if left == 1 {
+                return 1;
+            }
+            return left.min(right) - 1;
+        }
+        // The product has at most twice the operands' valid bits.
+        ISD::Mul => {
+            let left = signs(0);
+            let right = if left == 1 { 1 } else { signs(1) };
+            if left != 1 && right != 1 {
+                let valid = (width - left + 1) + (width - right + 1);
+                return if valid > width { 1 } else { width - valid + 1 };
+            }
+        }
+        ISD::Truncate => {
+            let source = dag.value_type(dag.operand(value, 0)).size_in_bits();
+            let source_signs = signs(0);
+            if source_signs > source - width {
+                return source_signs - (source - width);
+            }
+        }
+        _ => {}
+    }
+    // Finally what the known bits prove about the top bits.
     let known = known_bits(dag, value);
     let sign = 1u128 << (width - 1);
     let run = |bits: u128| (0..width).take_while(|i| bits & (sign >> i) != 0).count() as u32;
-    if known.zero & sign != 0 {
+    let proven = if known.zero & sign != 0 {
         run(known.zero)
     } else if known.one & sign != 0 {
         run(known.one)
     } else {
         1
-    }
+    };
+    first.max(proven)
 }
 
 /// `ComputeMaxSignificantBits`.

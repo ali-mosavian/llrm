@@ -48,7 +48,7 @@ impl llrm_mir::target::Machine for Flat {
 fn reduced(text: &str) -> String {
     let mut module = llrm_mir::parse::module(text).unwrap_or_else(|why| panic!("{why:?}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopStrengthReduce { size: false });
+    manager.add(LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, Rc::new(Flat("i486"))).expect("runs");
     llrm_mir::print::module(&module)
 }

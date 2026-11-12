@@ -23,7 +23,7 @@
 //! `performLoadPRE`), and `performScalarPRE` of a load's GEP indices is not
 //! called.
 
-use llrm_analysis::basicaa::BasicAA;
+use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::memdep::{Env as MdEnv, MemDepResult, NonLocalDepResult, SelectAddr};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ssaupdater::SsaUpdater;
@@ -193,7 +193,7 @@ impl GvnPass<'_> {
         inst: InstId,
     ) -> MemDepResult {
         let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
-        let mut aa = BasicAA::new(&unit);
+        let mut aa = AggregateAA::default_pipeline(&unit);
         self.md.get_dependency(MdEnv { unit: &unit, dt: &self.dt }, &mut aa, inst)
     }
 
@@ -370,7 +370,7 @@ impl GvnPass<'_> {
     ) -> Option<Operand> {
         let function = &*self.function;
         let unit = exposing(Unit::within(&*self.context, self.layout, function, self.outer), self.exposed);
-        let mut aa = BasicAA::new(&unit);
+        let mut aa = AggregateAA::default_pipeline(&unit);
         let mut batch = llrm_analysis::aa::BatchAAResults::new(&mut aa);
         let mut visited = 0u32;
         let from_bb = function.parent(from).expect("a placed instruction");
@@ -615,7 +615,7 @@ impl GvnPass<'_> {
         let mut deps: Vec<NonLocalDepResult> = Vec::new();
         {
             let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
-            let mut aa = BasicAA::new(&unit);
+            let mut aa = AggregateAA::default_pipeline(&unit);
             self.md.get_non_local_pointer_dependency(MdEnv { unit: &unit, dt: &self.dt }, &mut aa, load, &mut deps);
         }
         // If we had to process more than one hundred blocks to find the
@@ -700,11 +700,19 @@ impl GvnPass<'_> {
             return true;
         }
         // Step 4: Eliminate partial redundancy (`enable-load-pre`).
-        if !self.pre {
+        if !self.pre || self.load_pre_off_for_size() {
             return changed;
         }
         self.perform_loop_load_pre(load, &mut values_per_block, &unavailable_blocks)
             || self.perform_load_pre(load, &mut values_per_block, &unavailable_blocks)
             || changed
+    }
+
+    /// DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01): `optsize`/`minsize` on a target
+    /// that says so (`Tti::load_pre_off_at_size`).
+    fn load_pre_off_for_size(&self) -> bool {
+        self.function.attrs.iter().any(|attr| {
+            matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize")
+        }) && crate::looprotate::target_tti(self.outer.target()).load_pre_off_at_size()
     }
 }

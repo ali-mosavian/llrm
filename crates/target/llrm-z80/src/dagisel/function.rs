@@ -73,6 +73,7 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             dso_local_symbols: true,
             sext_bool_add_max_bits: u32::MAX,
+            known_bits_of_build_pair: true,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
         // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
@@ -129,8 +130,14 @@ pub struct Selection {
     pub local: bool,
     /// The function carries `optsize` or `minsize`: tuned for size at any level.
     pub sized: bool,
-    /// The same function selected with its long adds as the generic expansion, not carry ops
-    /// (`pipeline::GENERIC_CARRY`); none where it has no carry ops.
+    /// Selected the second time for the module price with the speed routines or
+    /// the shift loops (`pipeline::SPEED_ROUTINES`, `INLINE_SHIFTS`): a
+    /// function tuned for size chooses between its two by the
+    /// smaller relative regret, not by bytes first.
+    pub wide_alternative: bool,
+    /// The same function selected with its long adds as the generic expansion,
+    /// not carry ops (`pipeline::GENERIC_CARRY`); none where it has no
+    /// carry ops.
     pub generic: Option<Box<Selection>>,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
@@ -178,8 +185,10 @@ pub fn select_function_with(
     let target = builder_target();
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
     let tuned_for_size = sized;
+    let chain_credit = llrm_mir::memory::has(&function.attrs, crate::prepare::WORD_CHAINS);
     let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
         && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
+    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -211,7 +220,8 @@ pub fn select_function_with(
             block,
             built,
             cpu,
-            (optimize, sized, long_multiply),
+            (optimize, sized, long_multiply, chain_credit),
+            frequencies.iter().any(|&(one, frequency)| one == block.0 && frequency <= 1.0),
             &mut info,
             &mut selected,
         )?;
@@ -253,8 +263,22 @@ pub fn select_function_with(
             llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
         );
     let tables = info.jump_tables.clone();
-    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, generic: None, unreachable, frequencies, tables })
+    Ok(Selection {
+        blocks: selected,
+        locals,
+        cpu,
+        widths,
+        variables,
+        returns_twice,
+        local,
+        sized: tuned_for_size,
+        wide_alternative: super::pipeline::SPEED_ROUTINES.with(std::cell::Cell::get)
+            || super::pipeline::INLINE_SHIFTS.with(std::cell::Cell::get),
+        generic: None,
+        unreachable,
+        frequencies,
+        tables,
+    })
 }
 
 /// The variables of `function` (after the debug import): parameters in the
@@ -341,7 +365,8 @@ fn select_built(
     block: BlockId,
     mut built: BlockDag,
     cpu: Cpu,
-    (optimize, sized, long_multiply): (bool, bool, bool),
+    (optimize, sized, long_multiply, chain_credit): (bool, bool, bool, bool),
+    cold: bool,
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
@@ -349,7 +374,7 @@ fn select_built(
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
     let units =
-        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply)).map_err(|why| format!("{why:?}"))?;
+        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply, cold, chain_credit)).map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -387,7 +412,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, (optimize, sized, long_multiply), info, selected)?;
+        select_built(None, extra, made, cpu, (optimize, sized, long_multiply, chain_credit), cold, info, selected)?;
     }
     Ok(())
 }

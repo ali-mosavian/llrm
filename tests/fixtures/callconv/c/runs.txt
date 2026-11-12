@@ -1,1 +1,2 @@
 # Programs expected to fail, and where: see tests/callconv.rs.
+# Recorded 2026-11-12 with tools/callconv/c.sh; each fix removes its rows. near functions: fork clang 507f2c7a70b9.

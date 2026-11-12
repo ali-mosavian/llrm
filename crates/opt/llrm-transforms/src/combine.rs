@@ -337,6 +337,8 @@ pub struct TargetHooks {
     pub fixed_shift_count: bool,
     /// `Tti::folds_select_to_cmp`.
     pub select_to_cmp: bool,
+    /// `Tti::folds_icmp_of_constant_phi`.
+    pub icmp_of_constant_phi: bool,
     /// DEVIATE PHICONST (`combine_phi.rs`): fold a phi of constants into all
     /// its users. Off where bytes are strict: a phi of constants costs a move
     /// per edge.
@@ -576,6 +578,14 @@ pub fn visit(
                 Operand::Value(value) if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one))
             )
         }))
+    {
+        return Visit::None;
+    }
+    // DEVIATE COMBINE-VEC: the arithmetic visitors read integer widths (MIR had
+    // no vectors), so an operation on vectors, which the loop vectorizer makes,
+    // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
+    if matches!(c.function.instruction(inst).opcode, Opcode::Binary(_))
+        && matches!(c.context.types.get(c.function.instruction(inst).ty), llrm_mir::types::Type::Vector { .. })
     {
         return Visit::None;
     }

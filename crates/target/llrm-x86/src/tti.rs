@@ -733,6 +733,18 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        self.tuning.unroll_trial_at_size
+    }
+
+    fn unroll_trial_nests_only(&self) -> bool {
+        self.tuning.unroll_trial_nests_only
+    }
+
+    fn inline_dying_credit_at_os(&self) -> bool {
+        self.tuning.inline_dying_credit_at_os
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
@@ -918,6 +930,10 @@ impl Tti for X86 {
         self.tuning.lftr_any_stride
     }
 
+    fn mul_chains_hot_at_size(&self) -> bool {
+        self.tuning.mul_chains_hot_at_size
+    }
+
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
     }
@@ -1032,6 +1048,10 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_depth
     }
 
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        self.tuning.ipa_cp_clones_at_speed
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }
@@ -1048,6 +1068,17 @@ impl Tti for X86 {
         self.tuning.sink_select_arms
     }
 
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        self.tuning.prefixed_16_bit_counters
+    }
+
+    fn narrow_counter_is_taxed(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits == 16 && self.tuning.prefixed_16_bit_counters
+    }
+
     fn inlines_variable_memcpy(&self) -> bool {
         self.tuning.inline_variable_memcpy
     }
@@ -1058,6 +1089,10 @@ impl Tti for X86 {
 
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         self.tuning.ipsccp_widen_keeps_sign
+    }
+
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign_at_size
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
@@ -1108,12 +1143,28 @@ impl Tti for X86 {
         self.tuning.lsr_size_order
     }
 
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        self.tuning.lsr_users_in_use_list_order
+    }
+
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
     }
 
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn load_pre_off_at_size(&self) -> bool {
+        self.tuning.load_pre_off_at_size
+    }
+
+    fn rotation_trial_at_size(&self) -> bool {
+        self.tuning.rotation_trial_at_size
+    }
+
+    fn rotation_hot_at_size(&self) -> bool {
+        self.tuning.rotation_hot_at_size
     }
 
     fn size_rotation_header_limit(&self) -> Option<u32> {
@@ -1126,6 +1177,14 @@ impl Tti for X86 {
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
+    }
+
+    fn frame_slot_is_free_base(&self) -> bool {
+        self.tuning.frame_slot_is_free_base
+    }
+
+    fn lsr_address_fewest_registers(&self) -> bool {
+        self.tuning.lsr_address_fewest_registers
     }
 
     fn constant_arith_phi_is_cheap(
@@ -1268,6 +1327,16 @@ impl Tti for X86 {
     ) -> Option<Cost> {
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L5818
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
+    }
+
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, .. } = self.tuning;
+        // a shift-and-add chain is a shift and an add for each term past the first
+        let chain = multiplier.map_or(i64::MAX, |m| 2 * (signed_digits(m) as i64 - 1).max(1));
+        multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
     }
 
     fn splits_merged_conditions(&self) -> bool {
@@ -1895,4 +1964,19 @@ impl Tti for X86 {
         }
         generic_arithmetic(op, ty, kind, first, second, self)
     }
+}
+
+/// The nonzero digits of `n` in signed-digit (non-adjacent) form: a multiply by
+/// `n` is that many shifted terms added or subtracted.
+fn signed_digits(n: u128) -> u32 {
+    let (mut n, mut count) = (n, 0);
+    while n > 0 {
+        if n & 1 == 1 {
+            // 1 mod 4 takes the digit +1, 3 mod 4 takes -1
+            n = if n & 3 == 1 { n - 1 } else { n + 1 };
+            count += 1;
+        }
+        n >>= 1;
+    }
+    count
 }
