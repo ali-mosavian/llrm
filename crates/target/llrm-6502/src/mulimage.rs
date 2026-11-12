@@ -16,6 +16,26 @@ use crate::dagisel::hooks::Cpu;
 use crate::driver::{Level, Request};
 use crate::timing::estimate;
 
+/// The text of `routine` in `mos_rt.s`: from its label to the next line that
+/// starts something at the margin that is not a local label or a comment (an
+/// `.export`, a macro, another routine).
+fn routine_code(routine: &str) -> &'static str {
+    let marker = format!("\n{routine}:");
+    let start = crate::RUNTIME.find(&marker).unwrap_or_else(|| panic!("no `{routine}` in mos_rt.s")) + 1;
+    let body = &crate::RUNTIME[start..];
+    let mut end = body.len();
+    let mut offset = 0;
+    for (at, line) in body.split_inclusive('\n').enumerate() {
+        let margin = line.chars().next().is_some_and(|first| !first.is_whitespace() && first != ';' && first != '@');
+        if at > 0 && margin {
+            end = offset;
+            break;
+        }
+        offset += line.len();
+    }
+    &body[..end]
+}
+
 /// Bytes `routine` adds to an image (`mos_rt.s`): its code up to the next
 /// `.export`, and the tail it ends in with a `jmp`.
 pub fn library_bytes(routine: &str) -> u32 {
@@ -31,20 +51,19 @@ pub fn library_bytes(routine: &str) -> u32 {
         }
         inside &= !word.starts_with(".endmacro");
     }
-    let priced = |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
-    fn code<'a>(routine: &str) -> &'a str {
-        let marker = format!("\n{routine}:");
-        let start = crate::RUNTIME.find(&marker).unwrap_or_else(|| panic!("no `{routine}` in mos_rt.s")) + 1;
-        let body = &crate::RUNTIME[start..];
-        let end = body.find("\n.export").unwrap_or(body.len());
-        &body[..end]
-    }
-    let text = code(routine);
+    let priced =
+        |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
+    let text = routine_code(routine);
     let own = priced(text);
-    let tail = text.lines().map(|line| line.split(';').next().unwrap_or("").trim()).filter(|line| !line.is_empty()).next_back();
+    let tail = text
+        .lines()
+        .map(|line| line.split(';').next().unwrap_or("").trim())
+        .filter(|line| !line.is_empty())
+        .next_back();
     match tail.and_then(|line| line.strip_prefix("jmp ")) {
         Some(label) if !label.starts_with('@') => {
-            let from = crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
+            let from =
+                crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
             let body = &crate::RUNTIME[from..];
             let end = body.find("\n  rts").unwrap_or_else(|| panic!("`{label}` has no rts")) + "\n  rts".len();
             own + priced(&body[..end])
@@ -115,6 +134,112 @@ pub fn expand_when_unshared(
     let net = growth - i64::from(library_bytes("__mulsi3"));
     let pays = net < 0 || (!at_size && request.level != Level::O1 && removed * CALL_CLOCKS >= CLOCKS_PER_BYTE * net);
     if pays {
+        for (at, other) in again {
+            selections[at] = other;
+        }
+    }
+    Ok(())
+}
+
+/// The `mos_rt.s` routines the functions' text calls, each once.
+fn linked(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    selections: &[&Selection],
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut found = std::collections::BTreeSet::new();
+    for (name, selection) in names.iter().zip(selections) {
+        let text = crate::select::function_text(module, name, selection)?;
+        for target in text.lines().filter_map(|line| line.trim().strip_prefix("jsr ")).map(str::trim) {
+            if names.iter().all(|one| one != target) && crate::RUNTIME.contains(&format!("\n{target}:")) {
+                found.insert(target.to_owned());
+            }
+        }
+    }
+    // a routine links the ones it calls
+    let mut pending: Vec<String> = found.iter().cloned().collect();
+    while let Some(routine) = pending.pop() {
+        for line in routine_code(&routine).lines() {
+            let callee = line.split(';').next().unwrap_or("").trim().strip_prefix("jsr ").map(str::trim);
+            if let Some(callee) = callee.filter(|one| crate::RUNTIME.contains(&format!("\n{one}:"))) {
+                if found.insert(callee.to_owned()) {
+                    pending.push(callee.to_owned());
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// A product of two words widened to 32 bits is one `__umulhisi3` (16 x 16)
+/// where `__mulsi3` is 32 x 32: shorter arguments, a third of the clocks, and a
+/// second routine in the image. At -Os the routine is paid for by the call
+/// sites or it is not linked: the module is selected again with every such
+/// product widened, and kept when its bytes, the routines linked and the
+/// routines no longer called counted, do not rise (idioms and int64_division
+/// each grew with a per-product rule: +93 B and +49 B for a routine four sites
+/// do not pay).
+///
+/// DEVIATE 6502-WIDEN-IMAGE (owner llrm-target-6502, exit 2026-12-05): the pin
+/// decides each product alone and links no routine by count. Exit: with the
+/// shared inline-or-call cost model.
+///
+/// `from_module[i]` is whether `selections[i]` was selected from `module`
+/// itself.
+pub fn widen_when_it_pays(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    selections: &mut [Selection],
+    from_module: &[bool],
+    request: &Request,
+) -> Result<(), String> {
+    use crate::dagisel::function::{Widen, set_widen_products};
+    if !matches!(request.level, Level::Os | Level::Oz) {
+        return Ok(());
+    }
+    set_widen_products(Widen::Always);
+    let mut again = Vec::new();
+    for (at, (name, selection)) in names.iter().zip(selections.iter()).enumerate() {
+        if selection.mul_calls() == 0 || !from_module[at] {
+            continue;
+        }
+        let mut other = select_function_with(module, name, request.cpu, false);
+        if let Ok(other) = other.as_mut() {
+            other.zero_page = request.platform.zero_page;
+            other.tuning = request.level.tuning();
+        }
+        match other {
+            Ok(other) if other.mul_calls() < selection.mul_calls() => again.push((at, other)),
+            Ok(_) => {}
+            Err(why) => {
+                set_widen_products(Widen::Off);
+                return Err(why);
+            }
+        }
+    }
+    set_widen_products(Widen::Off);
+    if again.is_empty() {
+        return Ok(());
+    }
+    let bytes = |name: &str, selection: &Selection| -> Result<i64, String> {
+        let text = crate::select::function_text(module, name, selection)?;
+        Ok(i64::from(estimate(request.cpu, &text)?.bytes))
+    };
+    let mut growth = 0;
+    for (at, other) in &again {
+        growth += bytes(&names[*at], other)? - bytes(&names[*at], &selections[*at])?;
+    }
+    let current: Vec<&Selection> = selections.iter().collect();
+    let widened: Vec<&Selection> = current
+        .iter()
+        .enumerate()
+        .map(|(at, one)| again.iter().find(|(to, _)| *to == at).map_or(*one, |(_, other)| other))
+        .collect();
+    let library = |routines: &std::collections::BTreeSet<String>| -> i64 {
+        routines.iter().map(|one| i64::from(library_bytes(one))).sum()
+    };
+    let net = growth + library(&linked(module, names, &widened)?) - library(&linked(module, names, &current)?);
+    if net <= 0 {
         for (at, other) in again {
             selections[at] = other;
         }
