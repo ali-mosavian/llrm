@@ -155,6 +155,10 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        true
+    }
+
     /// `i32.clz`, `i32.ctz` and their `i64` forms are one instruction.
     fn shift_loop_counts(&self) -> bool {
         true

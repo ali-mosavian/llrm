@@ -277,6 +277,7 @@ fn plan_loop(
         // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
         // wide loop grew tail_calls by 354 bytes.
         native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+        use_list_order: tti.lsr_users_in_use_list_order(),
     };
     let mut users = match carried {
         Some(users) => {

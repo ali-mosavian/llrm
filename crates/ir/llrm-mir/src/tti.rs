@@ -2234,6 +2234,15 @@ pub trait Tti {
         &[]
     }
 
+    /// DEVIATE IU1: whether `IVUsers` meets the users of a value in use-list
+    /// order, as the pin does, where the default is descending program order.
+    /// LSR's ties follow it: wasm32 memory_expansion -O2 was 1307 B over the
+    /// pin and is 367 B under. Other targets state it when their cells agree.
+    /// Owner llrm-target-wasm; exit: every target judged, 2026-11-24.
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
