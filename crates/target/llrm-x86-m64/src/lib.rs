@@ -420,6 +420,9 @@ impl llrm_target::Target for M64 {
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
+                            // DEVIATE SD-DIVMAG (owner llrm-target-x86-m64, exit 2026-11-24): the m32
+                            // entry at m64; see `Tuning::sdiv_by_magnitude`.
+                            sdiv_by_magnitude: true,
                             // DEVIATE GVN-PRE-OPTSIZE, MERGEFUNC-OS, REP-MOVS-OS (owner llrm-target-x86-m64,
                             // exit 2026-11-24): m32's -Os entries, see their `Tuning` fields. 20 -Os cells
                             // of the corpus shrink, none grows.
