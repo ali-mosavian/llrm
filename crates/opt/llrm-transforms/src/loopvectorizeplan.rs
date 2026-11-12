@@ -29,9 +29,9 @@
 //!   the loop unplannable (the pin widens or replicates it). Exit: one recipe
 //!   kind per row of the card (reductions, floating point, select, compare).
 //! - VP3 the remainder is a scalar loop only (`CM_EpilogueAllowed` with a
-//!   scalar epilogue): the pin also vectorizes it (`vec.epilog.*`, the
-//!   epilogue VF of `EpilogueVectorizationMinVF`), which the plan does not
-//!   price. Exit: epilogue vectorization (VEC3).
+//!   scalar epilogue): the pin also vectorizes it (`vec.epilog.*`, the epilogue
+//!   VF of `EpilogueVectorizationMinVF`), which the plan does not price. Exit:
+//!   epilogue vectorization (VEC3).
 //! - VP4 the scalar cost is the recipe prices at VF 1, not the legacy
 //!   `CM->expectedCost`; the two agree for this recipe set (the loop-control
 //!   instructions are priced alike).
@@ -46,16 +46,19 @@
 //!   divisibility test against the largest VF before any smaller one are not
 //!   translated: the divisibility is tested on the chosen VF x IC. Exit: VEC3
 //!   (LV-X3, 2026-11-20).
-//! - VP8 the loop-control prices (`CONTROL_COST_PER_ITERATION`,
-//!   `SCALAR_CONTROL_COST`) are the count of the loop's phi/add/compare/branch,
-//!   not quantities of the pin's cost model; they feed the small-loop rule.
-//!   Exit: the VPlan cost model (VP1).
+//! - VP8 closed: the loop-control prices are the pin's. The scalar loop pays
+//!   its `add` and exit `icmp` (the phis, the branch and the address
+//!   computations are free at throughput), the vector loop its
+//!   `branch-on-count` compare, its canonical `add` and, where an access is
+//!   scalarized, one `SCALAR-STEPS` add (`LV: Found an estimated cost of N for
+//!   VF 1` and `Cost of N for VF k` of the pin's `-debug-only=loop-vectorize`).
 //! - VP7 no hints (LV-D7 of the legality translation), no scalable VFs (NEON
 //!   only). No tail folding: `preferTailFoldingOverEpilogue` is false without
-//!   SVE ([L7378](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7378)),
+//!   SVE
+//!   ([L7378](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7378)),
 //!   so the pin's NEON loops end in an epilogue, as here.
 
-use llrm_mir::tti::{ArithOp, CostKind, MemoryOp, RegisterClass, Tti, Ty, VectorTy};
+use llrm_mir::tti::{ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, Predicate, RegisterClass, Tti, Ty, VectorTy};
 
 /// One widenable instruction of the loop, by what its cost and widening need.
 #[derive(Clone, Debug, PartialEq)]
@@ -65,19 +68,48 @@ pub enum Recipe {
     Load { lane: Ty, align: u64 },
     /// A store, as above.
     Store { lane: Ty, align: u64 },
-    /// An integer binary operation of `lane`.
+    /// A binary operation of `lane`, integer or floating point.
     Binary { op: ArithOp, lane: Ty },
+    /// An access whose addresses are not consecutive and not a pattern the
+    /// pin widens (an interleave group, a reversal, a uniform address): one
+    /// scalar access per lane (`CM_Scalarize`), a load's lanes put together
+    /// by inserts, a store's taken apart by extracts.
+    Scalarized { op: MemoryOp, lane: Ty },
+    /// A cast; `folded`: the scalar one is part of the load it extends (LVI1).
+    Cast { kind: CastKind, dst: Ty, src: Ty, folded: bool },
+    /// A compare of `lane` operands.
+    Compare { op: CmpSel, lane: Ty, predicate: Predicate },
+    /// A select of `lane` values by the compare of `predicate`, if the loop
+    /// makes the condition.
+    Select { lane: Ty, predicate: Option<Predicate> },
+    /// An instruction the pin prices as a vector and this port does not (a
+    /// uniform, reversed or grouped access, a cast without a table row): its
+    /// scalar price is known, a vector factor cannot be weighed.
+    Unpriced { scalar_cost: i64 },
 }
 
-/// What a recipe list is priced against: the loop-control instructions that
-/// run once per vector iteration (the induction's add, the exit compare and the
-/// branch).
-const CONTROL_COST_PER_ITERATION: i64 = 3;
+/// The scalar loop's control: the `add` that steps the induction and the
+/// `icmp` that tests it; the phis and the branch are free at throughput.
+pub(crate) fn scalar_control_cost(tti: &dyn Tti) -> i64 {
+    let kind = CostKind::RecipThroughput;
+    tti.arithmetic_cost(ArithOp::Add, Ty::Int(64), kind, Default::default(), Default::default()).value
+        + tti.cmp_sel_cost(CmpSel::ICmp, Ty::Int(64), kind).value
+        + tti.cf_instr_cost(true, kind).value
+        + tti.cf_instr_cost(false, kind).value
+}
 
-/// The scalar loop-control cost: the `phi`, the add, the compare and the branch
-/// each cost 1 (`LV: Found an estimated cost of 1 for VF 1` on them, as the pin
-/// prints), and the address computations 0.
-pub(crate) const SCALAR_CONTROL_COST: i64 = 4;
+/// The vector loop's control per iteration: `branch-on-count` (a compare and a
+/// branch), the canonical induction's `add`, and, when an access is
+/// scalarized, the `SCALAR-STEPS` add that numbers its lanes.
+fn vector_control_cost(
+    tti: &dyn Tti,
+    scalarized: bool,
+) -> i64 {
+    let kind = CostKind::RecipThroughput;
+    let add = tti.arithmetic_cost(ArithOp::Add, Ty::Int(64), kind, Default::default(), Default::default()).value;
+    let steps = if scalarized { add } else { 0 };
+    tti.cmp_sel_cost(CmpSel::ICmp, Ty::Int(64), kind).value + tti.cf_instr_cost(false, kind).value + add + steps
+}
 
 /// `LoopVectorizationCostModel::SmallLoopCost`: interleave until the loop
 /// overhead is about 5 %.
@@ -125,9 +157,16 @@ fn lane_bits(ty: Ty) -> u32 {
     }
 }
 
-fn recipe_lane(recipe: &Recipe) -> Ty {
+fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
     match *recipe {
-        Recipe::Load { lane, .. } | Recipe::Store { lane, .. } | Recipe::Binary { lane, .. } => lane,
+        Recipe::Load { lane, .. }
+        | Recipe::Store { lane, .. }
+        | Recipe::Binary { lane, .. }
+        | Recipe::Scalarized { lane, .. }
+        | Recipe::Compare { lane, .. }
+        | Recipe::Select { lane, .. } => Some(lane),
+        Recipe::Cast { dst, .. } => Some(dst),
+        Recipe::Unpriced { .. } => None,
     }
 }
 
@@ -136,8 +175,11 @@ fn recipe_lane(recipe: &Recipe) -> Ty {
 fn smallest_and_widest(recipes: &[Recipe]) -> (u32, u32) {
     let (mut smallest, mut widest) = (u32::MAX, 8);
     for recipe in recipes {
-        if matches!(recipe, Recipe::Load { .. } | Recipe::Store { .. }) {
-            let bits = lane_bits(recipe_lane(recipe));
+        if matches!(
+            recipe,
+            Recipe::Load { .. } | Recipe::Store { .. } | Recipe::Scalarized { .. }
+        ) {
+            let bits = lane_bits(recipe_lane(recipe).expect("an access has a lane"));
             smallest = smallest.min(bits);
             widest = widest.max(bits);
         }
@@ -188,17 +230,25 @@ fn maximized_vf_for_target(
     max_vf
 }
 
+/// Why a vector factor has no price: the target prices no vector for a recipe
+/// the pin would scalarize, so the factor is not taken.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NotTaken;
+
 /// The price of one iteration of the loop at `vf`, the recipes plus the loop
-/// control; `None` if the target does not price one of them (so that VF is not
-/// taken).
+/// control. A recipe the pin prices as a vector and this port does not counts
+/// nothing when `optimistic`: the sum is then a lower bound of the pin's, so a
+/// loop whose bound is not beneficial is one the pin does not vectorize.
 fn iteration_cost(
     tti: &dyn Tti,
     recipes: &[Recipe],
     vf: u32,
     backend_limits: bool,
-) -> Option<i64> {
+    optimistic: bool,
+) -> Result<i64, NotTaken> {
     let kind = CostKind::RecipThroughput;
-    let mut total = if vf == 1 { SCALAR_CONTROL_COST } else { CONTROL_COST_PER_ITERATION };
+    let scalarized = recipes.iter().any(|recipe| matches!(recipe, Recipe::Scalarized { .. }));
+    let mut total = if vf == 1 { scalar_control_cost(tti) } else { vector_control_cost(tti, scalarized) };
     // DEVIATE LV-SPLIT: the pin prices a vector wider than one register as the
     // parts the type legalizer splits it into (`SplitVectorResult`) and one
     // narrower as its widened register (`WidenVectorResult`, the D-register
@@ -208,34 +258,118 @@ fn iteration_cost(
     let register_bits = u64::from(tti.vector_register_bits());
     if backend_limits
         && vf > 1
-        && recipes.iter().any(|recipe| u64::from(lane_bits(recipe_lane(recipe))) * u64::from(vf) != register_bits)
+        && recipes
+            .iter()
+            .filter_map(recipe_lane)
+            .any(|lane| u64::from(lane_bits(lane)) * u64::from(vf) != register_bits)
     {
-        return None;
+        return Err(NotTaken);
     }
+    let vector = |ty: Ty| VectorTy { lane: ty, count: vf };
+    let address = tti.address_computation_cost(kind).value;
+    // A vector price this port lacks: nothing in a lower bound, else the factor
+    // has no price.
+    let unknown = |priced: Option<Cost>| priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken);
     for recipe in recipes {
         let cost = match *recipe {
             Recipe::Load { lane, align } | Recipe::Store { lane, align } => {
                 let op = if matches!(recipe, Recipe::Load { .. }) { MemoryOp::Load } else { MemoryOp::Store };
                 if vf == 1 {
-                    tti.memory_op_cost(op, lane, kind, false)
+                    let access = tti.memory_op_cost(op, lane, kind, false);
+                    Cost { value: access.value + address, valid: access.valid }
                 } else {
-                    tti.vector_memory_op_cost(op, VectorTy { lane, count: vf }, align, kind)?
+                    tti.vector_memory_op_cost(op, vector(lane), align, kind).ok_or(NotTaken)?
                 }
             }
             Recipe::Binary { op, lane } => {
                 if vf == 1 {
                     tti.arithmetic_cost(op, lane, kind, Default::default(), Default::default())
+                } else if lane.is_float() {
+                    // The pin may price a floating-point operation some other
+                    // way.
+                    unknown(tti.vector_arithmetic_cost(op, vector(lane), kind))?
                 } else {
-                    tti.vector_arithmetic_cost(op, VectorTy { lane, count: vf }, kind)?
+                    // An integer operation the target does not price is the
+                    // pin's scalarized one (a multiply of
+                    // `<2 x i64>`).
+                    tti.vector_arithmetic_cost(op, vector(lane), kind).ok_or(NotTaken)?
+                }
+            }
+            Recipe::Scalarized { op, lane } => {
+                let access = tti.memory_op_cost(op, lane, kind, false);
+                if vf == 1 {
+                    Cost { value: access.value + address, valid: access.valid }
+                } else {
+                    let overhead = unknown(tti.scalarization_overhead(
+                        vector(lane),
+                        op == MemoryOp::Load,
+                        op == MemoryOp::Store,
+                        kind,
+                    ))?;
+                    Cost { value: i64::from(vf) * (access.value + address) + overhead.value, valid: access.valid }
+                }
+            }
+            Recipe::Cast { kind: cast, dst, src, folded } => {
+                if vf == 1 {
+                    if folded { Cost::FREE } else { tti.cast_cost(cast, dst, src, kind) }
+                } else {
+                    unknown(tti.vector_cast_cost(cast, vector(dst), vector(src), kind))?
+                }
+            }
+            Recipe::Compare { op, lane, predicate } => {
+                if vf == 1 {
+                    tti.cmp_sel_cost_for(op, lane, kind, Some(predicate))
+                } else {
+                    unknown(tti.vector_cmp_sel_cost(op, vector(lane), Some(predicate), kind))?
+                }
+            }
+            Recipe::Select { lane, predicate } => {
+                if vf == 1 {
+                    tti.cmp_sel_cost(CmpSel::Select, lane, kind)
+                } else {
+                    unknown(tti.vector_cmp_sel_cost(CmpSel::Select, vector(lane), predicate, kind))?
+                }
+            }
+            Recipe::Unpriced { scalar_cost } => {
+                if vf == 1 {
+                    Cost::of(scalar_cost)
+                } else {
+                    unknown(None)?
                 }
             }
         };
         if !cost.valid {
-            return None;
+            return Err(NotTaken);
         }
         total += cost.value;
     }
-    Some(total)
+    Ok(total)
+}
+
+/// What `-debug-only=loop-vectorize` prints of the factors tried: the scalar
+/// loop's price and each vector factor's lower bound (`-` for one not taken).
+pub fn describe_costs(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+) -> String {
+    let mut text = format!("scalar {}", iteration_cost(tti, &facts.recipes, 1, false, false).unwrap_or(-1));
+    let mut vf = 2u64;
+    while vf <= max_vf_of(tti, facts) {
+        match iteration_cost(tti, &facts.recipes, vf as u32, false, true) {
+            Ok(cost) => text += &format!(", VF {vf} >= {cost}"),
+            Err(NotTaken) => text += &format!(", VF {vf} -"),
+        }
+        vf *= 2;
+    }
+    text
+}
+
+/// `expectedCost(VF=1)`: the scalar loop's price.
+pub(crate) fn scalar_loop_cost(
+    tti: &dyn Tti,
+    recipes: &[Recipe],
+) -> i64 {
+    iteration_cost(tti, recipes, 1, false, false).expect("the scalar loop is priced")
 }
 
 /// `isMoreProfitable` (L709) for fixed VFs, the throughput kind: `a` against
@@ -268,12 +402,13 @@ fn best_vf(
     facts: &LoopFacts,
     max_vf: u64,
     backend_limits: bool,
+    optimistic: bool,
 ) -> (u32, i64) {
-    let scalar = iteration_cost(tti, &facts.recipes, 1, backend_limits).expect("the scalar loop is priced");
+    let scalar = iteration_cost(tti, &facts.recipes, 1, backend_limits, false).expect("the scalar loop is priced");
     let mut best = (scalar, 1u64, scalar);
     let mut vf = 2u64;
     while vf <= max_vf {
-        if let Some(cost) = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits) {
+        if let Ok(cost) = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic) {
             let candidate = (cost, vf, scalar);
             if is_more_profitable(candidate, best, facts.trip_count, true) {
                 best = candidate;
@@ -339,9 +474,10 @@ fn interleave_count(
     vf: u32,
     loop_cost: i64,
 ) -> u32 {
-    // Do not interleave where no epilogue is allowed (optsize or a tiny trip count, VP6), where the distance
-    // already bounded the VF ("We used the distance for the interleave
-    // count"), and a loop that is free needs none.
+    // Do not interleave where no epilogue is allowed (optsize or a tiny trip
+    // count, VP6), where the distance already bounded the VF ("We used the
+    // distance for the interleave count"), and a loop that is free needs
+    // none.
     if !facts.epilogue_allowed || !facts.safe_for_any_vector_width || loop_cost == 0 {
         return 1;
     }
@@ -466,7 +602,7 @@ pub fn choose(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> Result<Plan, NotPlanned> {
-    choose_with(tti, facts, true)
+    choose_with(tti, facts, true, false)
 }
 
 /// [`choose`] as the pin would, with no limit of the backend's vector types
@@ -479,20 +615,30 @@ pub fn pin_may_vectorize(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> bool {
-    if choose_with(tti, facts, false).is_ok() {
+    if choose_with(tti, facts, false, true).is_ok() {
         return true;
     }
     if tti.vector_register_bits() == 0 || facts.trip_count == 1 {
         return false;
     }
     let register_bits = tti.vector_register_bits();
-    facts.recipes.iter().any(|recipe| match *recipe {
-        Recipe::Binary { op, lane } => {
-            let count = register_bits / lane_bits(lane).max(1);
-            matches!(op, ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem) && count >= 2 && tti.vector_arithmetic_cost(op, VectorTy { lane, count }, CostKind::RecipThroughput).is_none()
-        }
-        _ => false,
-    })
+    facts
+        .recipes
+        .iter()
+        .any(
+            |recipe| match *recipe {
+                Recipe::Binary { op, lane } => {
+                    let count = register_bits / lane_bits(lane).max(1);
+                    matches!(
+                        op,
+                        ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
+                    )
+                        && count >= 2
+                        && tti.vector_arithmetic_cost(op, VectorTy { lane, count }, CostKind::RecipThroughput).is_none()
+                }
+                _ => false,
+            },
+        )
 }
 
 /// `getMaximizedVFForTarget` of the widest and smallest types and the safe
@@ -515,6 +661,7 @@ fn choose_with(
     tti: &dyn Tti,
     facts: &LoopFacts,
     backend_limits: bool,
+    optimistic: bool,
 ) -> Result<Plan, NotPlanned> {
     if tti.vector_register_bits() == 0 {
         return Err(NotPlanned("The target has no vector registers"));
@@ -523,7 +670,7 @@ fn choose_with(
         return Err(NotPlanned("Single iteration (non) loop"));
     }
     let max_vf = max_vf_of(tti, facts);
-    let (vf, cost) = best_vf(tti, facts, max_vf, backend_limits);
+    let (vf, cost) = best_vf(tti, facts, max_vf, backend_limits, optimistic);
     if vf == 1 {
         return Err(NotPlanned("Vectorization is possible but not beneficial"));
     }
@@ -535,8 +682,8 @@ fn choose_with(
 const TINY_TRIP_COUNT: u64 = 16;
 
 /// `getEpilogueLowering`'s `CM_EpilogueAllowed` against
-/// `CM_EpilogueNotAllowedOptSize` (L7076) and `CM_EpilogueNotAllowedLowTripLoop`
-/// (L7809).
+/// `CM_EpilogueNotAllowedOptSize` (L7076) and
+/// `CM_EpilogueNotAllowedLowTripLoop` (L7809).
 fn epilogue_allowed(facts: &LoopFacts) -> bool {
     !facts.opt_size && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
 }
