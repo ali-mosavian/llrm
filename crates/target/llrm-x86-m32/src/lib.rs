@@ -587,6 +587,10 @@ impl llrm_target::Target for M32 {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
     }
 
+    fn fast_divide_in_loops_at_size(&self) -> bool {
+        true
+    }
+
     fn divide_routine_small(
         &self,
         signed: bool,
