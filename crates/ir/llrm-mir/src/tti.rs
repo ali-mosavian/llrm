@@ -1210,6 +1210,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UP1-CALL at -O1: the size-neutral rule above prices a call the
+    /// copies keep as one instruction with its operands, where the pin's
+    /// analysis gives up on a call (gcc's `estimate_num_insns` prices it).
+    fn unroll_o1_prices_calls(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_o1_analyzed_trips`.
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         None

@@ -1078,7 +1078,7 @@ fn should_full_unroll(
                 rolled.min(u64::from(u32::MAX)) as u32,
                 run.tti.unroll_o1_analyzed_trips().map_or(up.max_iterations_count_to_analyze, |trips| trips.max(up.max_iterations_count_to_analyze)),
                 None,
-                false,
+                run.tti.unroll_o1_prices_calls(),
             )
             .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
         let unroll = fits && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up);
