@@ -86,16 +86,23 @@ pub fn machine_sink(f: &mut Function) -> bool {
         // their numbers.
         let mut edges = std::mem::take(&mut sink.to_split);
         edges.sort_unstable_by(|a, b| b.cmp(a));
+        let mut split = false;
         for at in 0..edges.len() {
             let (pred, block) = edges[at];
+            // `SplitCriticalEdge` returns null where `canSplitCriticalEdge` says no
+            // ("Not legal to break critical edge"): a `BR_TABLE` block keeps its edges.
+            if f.is_eh_pad(block) || !crate::phi_elimination::can_split_critical_edge(f, pred) {
+                continue;
+            }
             crate::phi_elimination::split_edge(f, pred, block);
+            split = true;
             for later in &mut edges[at + 1..] {
                 if later.1 > pred {
                     later.1 += 1;
                 }
             }
         }
-        changed |= !edges.is_empty();
+        changed |= split;
         if !changed {
             return ever;
         }

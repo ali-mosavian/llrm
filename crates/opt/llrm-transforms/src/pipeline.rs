@@ -1895,6 +1895,9 @@ pub fn recorded(
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
     if applied.options.optimize {
+        // `GlobalDCEPass` then `ConstantMergePass` after the function passes:
+        // what a late unroll or fold left unnamed goes before merging.
+        manager.add_program(globaldce::GlobalDce);
         manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
@@ -1947,7 +1950,10 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
-        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce {
+            size: applied.options.prefers_size(),
+            bytes_strict: applied.options.prefers_size() || applied.options.at_o1(),
+        }));
         // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
         // LSR; it does nothing for a target whose TTI does not enable it.
         if applied.options.wanted("looptermfold") {

@@ -2391,6 +2391,28 @@ pub fn build_with_places(
                     b.copy(to, acc);
                 }
             }
+            // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
+            // words in `__sa` and `__sb`, the product in `__sa`
+            code @ (op::UMULW16 | op::SMULW16) => {
+                let routine = if code == op::UMULW16 { "__umulhisi3" } else { "__mulhisi3" };
+                let acc = Reg::Phys(reg::A);
+                for (to, source) in [("__sa", name(&o[2])?), ("__sb", name(&o[3])?)] {
+                    let (low, high) = b.read_word(source)?;
+                    for (symbol, value) in [(to.to_owned(), low), (format!("{to}+1"), high)] {
+                        b.copy(acc, value);
+                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                    }
+                }
+                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine.to_owned(), 0)]);
+                jsr.call = true;
+                b.push(jsr);
+                let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
+                for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
+                    let symbol = if n == 0 { "__sa".to_owned() } else { format!("__sa+{n}") };
+                    b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
+                    b.copy(to, acc);
+                }
+            }
             op::CMP32 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
                 let (a1, c1) = (name(&o[3])?, name(&o[4])?);
@@ -2891,7 +2913,10 @@ pub fn compare_before_step(
         let mut moved = false;
         'blocks: for (b, block) in function.blocks.iter_mut().enumerate() {
             for s in 1..block.insts.len() {
-                if !matches!(block.insts[s].kind, Kind::Op("INC16" | "DEC16")) {
+                if !matches!(
+                    block.insts[s].kind,
+                    Kind::Op("INC16" | "DEC16" | "INC" | "DEC")
+                ) {
                     continue;
                 }
                 let (step_writes, step_reads) = (regs(&block.insts[s], true), regs(&block.insts[s], false));
@@ -2989,8 +3014,9 @@ fn forward_old_copies(
         };
         let (to_at, from_at) = (at(to), at(from));
         // a copy into a register may be free (a reload through x leaves the
-        // value there): only a copy into a cell is a store to save
-        if !is_cell(to_at)
+        // value there): forward it only to save a store, or to read the
+        // register the step leaves (`cpx`)
+        if !(is_cell(to_at) || !is_cell(from_at))
             || !step_writes.contains(&from_at)
             || step_writes.contains(&to_at)
             || after[b][step].contains(&to_at)
@@ -3005,14 +3031,16 @@ fn forward_old_copies(
             .all(
                 |i| {
                     let w = written(i);
-                    !w.contains(&to_at) && !w.contains(&from_at) && (!reads_to(i) || i.kind == Kind::Copy)
+                    !w.contains(&to_at)
+                        && !w.contains(&from_at)
+                        && (!reads_to(i) || i.kind == Kind::Copy || i.kind == Kind::Op("CMP"))
                 },
             );
         if !untouched {
             continue;
         }
         for inst in &mut block.insts[between] {
-            if inst.kind != Kind::Copy {
+            if inst.kind != Kind::Copy && inst.kind != Kind::Op("CMP") {
                 continue;
             }
             for o in &mut inst.operands {

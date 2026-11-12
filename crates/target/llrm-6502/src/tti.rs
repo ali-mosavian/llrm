@@ -278,6 +278,12 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    /// `narrowiv`: a counter of a width the datalayout does not hold (`n8`
+    /// only) whose range fits a byte is a byte counter.
+    fn narrows_counters(&self) -> bool {
+        true
+    }
+
     /// `shouldDropLSRSolutionIfLessProfitable`: a loop keeps its code where
     /// LSR's own model rates the rewrite worse, as on the z80 (DEVIATE LU15):
     /// with 16-bit widths on, switch_empty_cases, switch_jump_table and
@@ -307,6 +313,11 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// DEVIATE LU22: the inner loop's byte counter, extended, is the counter.
+    fn lsr_extension_of_phi_exists(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.

@@ -929,6 +929,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 an
+    /// innermost loop directly inside a loop of known trips is unrolled by the
+    /// pin's threshold alone, unpriced (see `full_unroll_pays`). False: it is
+    /// priced like any other loop.
+    fn unroll_pin_decides_inner_of_known_trips(&self) -> bool {
+        false
+    }
+
     /// DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): a phi of constants is
     /// folded into the users that fold, in a loop, and through a phi of
     /// constants behind a diamond. A move per edge the fold adds is paid by
@@ -1338,6 +1346,11 @@ pub trait Tti {
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::ipsccp_widen_keeps_sign_at_size`.
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
         false
     }
 
@@ -1974,6 +1987,15 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin: whether [`Tti::narrows_counters`] also applies when the
+    /// function is not sized for bytes. A narrower counter is fewer bytes of
+    /// code but can cost clocks (a scaled byte index is a shift chain the
+    /// pointer recurrence did not need); a target that has not priced that
+    /// says no and narrows at `-Os` only.
+    fn narrows_counters_at_speed(&self) -> bool {
+        true
+    }
+
     /// Beyond the pin: whether a cycle through a phi whose values only matter
     /// at a narrower native width (read through `and` masks, `trunc`s and
     /// values known zero above it) is carried at that width (`narrowcycle`),
@@ -2217,6 +2239,15 @@ pub trait Tti {
         &[]
     }
 
+    /// DEVIATE IU1: whether `IVUsers` meets the users of a value in use-list
+    /// order, as the pin does, where the default is descending program order.
+    /// LSR's ties follow it: wasm32 memory_expansion -O2 was 1307 B over the
+    /// pin and is 367 B under. Other targets state it when their cells agree.
+    /// Owner llrm-target-wasm; exit: every target judged, 2026-11-24.
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
@@ -2290,6 +2321,14 @@ pub trait Tti {
         _bits: u32,
     ) -> u32 {
         0
+    }
+
+    /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the
+    /// extension of a phi of that loop (`zext i8 j`) is as free as the phi
+    /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
+    /// formula naming the inner loop's narrowed counter a loser.
+    fn lsr_extension_of_phi_exists(&self) -> bool {
+        false
     }
 
     /// Whether an offset LSR leaves unfolded in an address that has one base

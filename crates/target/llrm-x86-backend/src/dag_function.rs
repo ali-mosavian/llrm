@@ -586,6 +586,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_x86_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_x86_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
                         (llrm_x86_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_x86_dagisel::x86_llrm::PUSHF_OPCODE, "PUSH_FLAGS"),
                         (llrm_x86_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
                         (llrm_x86_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
                         (llrm_x86_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
@@ -1077,6 +1078,7 @@ fn selected_in(
     };
     tli.set_small_divide(cpu.bytes_strict() && (cpu.size || arch.small_divide_at_o1()));
     tli.set_size_only(cpu.size);
+    tli.set_fast_divide_in_loops(arch.fast_divide_in_loops_at_size());
     // The soft-float routines are spelled as the C compiler spelled their
     // definitions.
     for (name, number, symbol) in libcalls {
@@ -1449,8 +1451,9 @@ fn selected_in(
     // DEVIATE SELB: a select of two constants is a branch where the block runs
     // often enough to pay its bytes.
     let select_branch = if cpu.speed_rate && !cpu.size { cpu.branch_constant_selects } else { 0 };
+    let fast_divide = tli.small_divide() && tli.fast_divide_in_loops();
     let frequencies =
-        (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0).then(|| {
+        (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0 || fast_divide).then(|| {
             let bpi = info
                 .bpi
                 .get_or_insert_with(

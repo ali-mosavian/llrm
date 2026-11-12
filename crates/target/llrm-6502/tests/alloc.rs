@@ -3325,6 +3325,20 @@ mod post_ra {
         assert!(at(&f, "CMP") < at(&f, "INC16"), "the compare moved above the step");
     }
 
+    /// A byte counter at -Os (narrowed, 2026-11-12) steps with `inx`: the
+    /// compare of the old value moved only above a 16-bit step, and kept
+    /// `txa; tay; ...; cpy #63`. Above the byte step too, it reads `x`.
+    #[test]
+    fn a_byte_step_gets_the_compare_above_it_and_reads_the_register() {
+        let mut cmp = Inst::new(Kind::Op("CMP"), vec![def(reg::FLAGS), used(reg::Y), Operand::Imm(63)]);
+        cmp.sets_flags = true;
+        let step = Inst::new(Kind::Op("INC"), vec![def(reg::X), used(reg::X)]);
+        let mut f = function(vec![copy(reg::Y, reg::X), step, cmp]);
+        run(&mut f);
+        assert!(at(&f, "CMP") < at(&f, "INC"), "the compare moved above the step");
+        assert!(copies(&f).is_empty(), "the copy into y goes: {:?}", copies(&f));
+    }
+
     /// A copy into a cell is a real store (`stx rc3`): the compare moves above
     /// the step, the readers take `x`, the copy goes.
     #[test]

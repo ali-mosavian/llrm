@@ -495,12 +495,19 @@ impl Printer<'_> {
                 let source = name_of(self, 3)?;
                 self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
             }
-            // a long doubled: the low word in its pair, the high word in hl
+            // a long doubled in the pairs of its words: the carry runs from the low word's bytes into the high's;
+            // `hl` doubles in one instruction
             "SHL32" => {
-                let (lo, hi) = lanes(self.register(inst, 0)?)?;
-                self.push(format!("sla {}", name(lo)));
-                self.push(format!("rl {}", name(hi)));
-                self.push("adc hl, hl");
+                for (word, first) in [(0, true), (1, false)] {
+                    let pair = self.register(inst, word)?;
+                    if pair == reg::HL {
+                        self.push(if first { "add hl, hl" } else { "adc hl, hl" });
+                    } else {
+                        let (low, high) = lanes(pair)?;
+                        self.push(format!("{} {}", if first { "sla" } else { "rl" }, name(low)));
+                        self.push(format!("rl {}", name(high)));
+                    }
+                }
             }
             "SUB16F" => {
                 let source = name_of(self, 3)?;
@@ -562,6 +569,15 @@ impl Printer<'_> {
             }
             // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
             // h`'s 4 B / 16 T
+            // the low bit of the second word through the carry into the top of the first: `a` is read, not kept
+            "FSHR1" => {
+                let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                let (from, _) = lanes(self.register(inst, 2)?)?;
+                self.push(format!("ld a, {}", name(from)));
+                self.push("rra");
+                self.push(format!("rr {}", name(hi)));
+                self.push(format!("rr {}", name(lo)));
+            }
             "SHL16" if self.register(inst, 0)? == reg::HL => {
                 for _ in 0..shift_count(inst)? {
                     self.push("add hl, hl");
@@ -2197,9 +2213,37 @@ pub fn finish(
 /// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
 /// `ld R1, S1` the former needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_overwritten_byte_stores(
+    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_reloaded_accumulator(drop_overwritten_byte_stores(
         forward_byte_copies(forward_high_bytes(cancel_steps(lines))),
-    ))))
+    )))))
+}
+
+/// `ld r, a` then `ld a, r` (or the reverse) leaves both holding one value: the second load is nothing, and neither
+/// touches the flags. `push` drops the pair when it prints it; a dead load between them that
+/// `drop_overwritten_byte_stores` removes later brings the two together (`xor a, b; ld b, a; ld a, b; rrca`, 42 sites in
+/// div_constants_long -O2). Registers only: a memory cell may be volatile. Not while pricing, as in `push`.
+fn drop_reloaded_accumulator(lines: Vec<Line>) -> Vec<Line> {
+    if PRICING.with(|one| one.get()) {
+        return lines;
+    }
+    // `ld r, a` as `r`, or `ld a, r` as `r`: the byte register the accumulator is copied to or from
+    let with_a = |line: Option<&Line>, into_a: bool| -> Option<String> {
+        let Some(Line::Inst(text)) = line else { return None };
+        let (to, from) = text.strip_prefix("ld ")?.split_once(", ")?;
+        let (r, a) = if into_a { (from, to) } else { (to, from) };
+        (a == "a" && r.len() == 1 && "bcdehl".contains(r)).then(|| r.to_owned())
+    };
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let again = [false, true].into_iter().any(|into_a| {
+            let first = with_a(out.last(), into_a);
+            first.is_some() && first == with_a(Some(&line), !into_a)
+        });
+        if !again {
+            out.push(line);
+        }
+    }
+    out
 }
 
 /// The symbol of a `jp SYMBOL` that leaves the function: not a condition, an indirect jump or a block of ours.
@@ -3360,6 +3404,19 @@ mod tests {
                   store volatile i16 %t, ptr @g\n  %r = add i8 %a, 1\n  ret i8 %r\n}\n";
         let out = crate::compile::text(ir, "f", 0, &crate::driver::Request::new(crate::driver::Level::Oz)).unwrap();
         assert!(out.contains("srl c") && !out.contains("ld c, b\n\tsrl"), "{out}");
+    }
+
+    /// `xor a, b; ld b, a; ld c, l; ld a, b; rrca; ld c, e` lost its dead middle load and kept `ld b, a; ld a, b` (div_constants_long -O2: 42
+    /// bytes of `ld a, r` after `ld r, a`; the copy through `a` of a byte just stored from it).
+    #[test]
+    fn a_byte_loaded_back_into_the_accumulator_it_came_from_is_not_loaded() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = ["xor a, b", "ld b, a", "ld c, l", "ld a, b", "rrca", "ld c, e"].map(inst).to_vec();
+        assert_eq!(tidy(lines), ["xor a, b", "ld b, a", "rrca", "ld c, e"].map(inst).to_vec());
+        let lines = ["ld a, d", "ld d, a", "ld (hl), a"].map(inst).to_vec();
+        assert_eq!(tidy(lines), ["ld a, d", "ld (hl), a"].map(inst).to_vec());
+        let lines = ["ld b, a", "ld a, (hl)", "ld a, b"].map(inst).to_vec();
+        assert_eq!(tidy(lines.clone()), lines, "a memory cell may be volatile");
     }
 
     /// `ld l, e; ld h, d; ld a, h; ...; ld l, a; ld h, #0` (a word's high byte shifted through `a`) read the copy

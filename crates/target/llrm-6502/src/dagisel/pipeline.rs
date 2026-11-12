@@ -126,7 +126,7 @@ pub fn select_block(
     synthesize: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering();
-    let mut lowering = MosLowering;
+    let mut lowering = MosLowering { widen_products: !sized && super::function::widen_products() };
     let arch = Mos;
     DagCombiner::new(dag, &mut MosCombines { sized, synthesize }, CombineLevel::BeforeLegalizeTypes)
         .with_tli(&tli)
