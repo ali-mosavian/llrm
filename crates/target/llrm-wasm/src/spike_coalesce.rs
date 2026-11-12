@@ -157,9 +157,11 @@ pub fn coalesce(f: &mut Function) -> usize {
         }
     };
     converted.coalesce(registers, false);
-    // The coalescer erases an `IMPLICIT_DEF` whose value a join overlaps; the
-    // instruction must go too, or its zero is written into the register the
-    // join gave to the live value.
+    // The coalescer erases an `IMPLICIT_DEF` whose value a join overlaps, and
+    // a copy the join made redundant (`CR_Erase`: the register already holds
+    // the value, or the copy is dead); the instruction must go too, or its
+    // zero is written into the register the join gave to the live value, or
+    // the redundant copy is kept as a store nothing reads.
     let kept: std::collections::HashSet<(usize, usize)> = converted
         .body
         .blocks
@@ -173,7 +175,7 @@ pub fn coalesce(f: &mut Function) -> usize {
         block.retain(|inst| {
             let here = (at, position);
             position += 1;
-            !(inst.opcode == crate::mir::IMPLICIT_DEF && converted_all.contains(&here) && !kept.contains(&here))
+            !((inst.opcode == crate::mir::IMPLICIT_DEF || is_copy(inst.opcode)) && converted_all.contains(&here) && !kept.contains(&here))
         });
     }
     let map = converted.joined();
