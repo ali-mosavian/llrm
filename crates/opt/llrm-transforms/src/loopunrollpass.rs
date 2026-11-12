@@ -1171,8 +1171,12 @@ fn note_for_trial(
     run: &Run,
     unrolled_size: u64,
 ) {
-    // At -Os the size trial's bar (UNROLL-OS-TRIAL), else the -O1 trial's.
-    let threshold = if run.options.opt_size { run.tti.unroll_trial_at_size() } else { run.tti.unroll_trial_threshold() };
+    // At -Os the size trial's bar (UNROLL-OS-TRIAL) where the target states one, else the -O1 trial's.
+    let threshold = if run.options.opt_size {
+        run.tti.unroll_trial_at_size().or_else(|| run.tti.unroll_trial_threshold())
+    } else {
+        run.tti.unroll_trial_threshold()
+    };
     if trial::active().is_none()
         && let (Some(limit), Some(this)) = (threshold, run.this)
         && unrolled_size < u64::from(limit)
