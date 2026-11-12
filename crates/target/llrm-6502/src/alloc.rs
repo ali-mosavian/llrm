@@ -577,6 +577,10 @@ struct Builder {
     /// Compares are redone where the flags are read: nothing keeps `P` alive.
     /// The block instructions go to.
     current: usize,
+    /// Where the sign splat of a byte cell (all ones or all zeros) is held,
+    /// by cell, version and block, with the version of the holder. The splat
+    /// of a splat is the cell itself.
+    splats: HashMap<(String, u32, usize), (String, u32)>,
 }
 
 /// A compare not yet emitted: the operands and the version of each when it
@@ -718,7 +722,11 @@ impl Builder {
             None => self.byte(s)?,
         };
         let Some((word, high)) = half(self, d) else {
+            let splat = self.splat_of(s).is_some_and(|held| held == s);
             self.define(d);
+            if splat {
+                self.note_splat(d, d);
+            }
             let d = self.byte(d)?;
             self.copy(d, source);
             return Ok(());
@@ -843,6 +851,25 @@ impl Builder {
         name: &str,
     ) -> u32 {
         self.versions.get(name).copied().unwrap_or(0)
+    }
+
+    /// `held` (just written) holds the sign splat of `of`.
+    fn note_splat(
+        &mut self,
+        of: &str,
+        held: &str,
+    ) {
+        let value = (held.to_owned(), self.version(held));
+        self.splats.insert((of.to_owned(), self.version(of), self.current), value);
+    }
+
+    /// The cell that still holds the sign splat of `of`, if one does.
+    fn splat_of(
+        &self,
+        of: &str,
+    ) -> Option<String> {
+        let (held, version) = self.splats.get(&(of.to_owned(), self.version(of), self.current))?;
+        (self.version(held) == *version).then(|| held.clone())
     }
 
     /// The fixed register an incoming argument's value arrived in, followed
@@ -1925,6 +1952,7 @@ pub fn build_with_places(
         compared: false,
         saved: HashMap::default(),
         current: 0,
+        splats: HashMap::default(),
     };
     for id in 0..labels.len() {
         b.function.blocks.push(Block { id: id as u32, ..Block::default() });
@@ -2101,11 +2129,26 @@ pub fn build_with_places(
                     _ => "ASR",
                 };
                 let acc = Reg::Phys(reg::A);
+                let count = immediate(&o[2])?;
+                // the sign of a sign is itself
+                let splat = step == "ASR" && count == 7;
+                let held = if splat { b.splat_of(name(&o[1])?) } else { None };
+                let held = held.filter(|held| held != name(&o[0]).unwrap_or(""));
+                let held = held.map(|held| b.byte(&held)).transpose()?;
                 b.define(name(&o[0])?);
                 let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
-                b.copy(acc, a);
-                b.shift_a(step, immediate(&o[2])?);
+                match held {
+                    Some(held) => b.copy(acc, held),
+                    None => {
+                        b.copy(acc, a);
+                        b.shift_a(step, count);
+                    }
+                }
                 b.copy(d, acc);
+                if splat {
+                    b.note_splat(name(&o[1])?, name(&o[0])?);
+                    b.note_splat(name(&o[0])?, name(&o[0])?);
+                }
             }
             // `lsr a` leaves the bit that left in the carry; the operands
             // are `d`, `co`, `a`
@@ -2250,6 +2293,15 @@ pub fn build_with_places(
             // count
             code @ (op::SHL16 | op::SRL16 | op::SRA16) if (8..16).contains(&immediate(&o[2])?) => {
                 let rest = immediate(&o[2])? - 8;
+                let (source, word) = (name(&o[1])?, name(&o[0])?);
+                let source = source.strip_suffix("+1").unwrap_or(source);
+                let top = format!("{source}+1");
+                // the sign of the high byte, if some cell holds it already
+                let held = (!b.pointers.contains(source) && !b.pointers.contains(word))
+                    .then(|| b.splat_of(&top))
+                    .flatten()
+                    .filter(|held| held != word && *held != format!("{word}+1"));
+                let held = held.map(|held| b.byte(&held)).transpose()?;
                 let (al, ah) = b.read_word(name(&o[1])?)?;
                 let (dl, dh) = b.write_word(name(&o[0])?)?;
                 let acc = Reg::Phys(reg::A);
@@ -2267,9 +2319,30 @@ pub fn build_with_places(
                         shift(&mut b, ah, dl, "LSR", rest);
                         b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(dh), Operand::Imm(0)]));
                     }
+                    // the high byte is the sign of `ah`; by 15 the low byte is too,
+                    // and one splat is stored twice
                     _ => {
-                        shift(&mut b, ah, dl, "ASR", rest);
-                        shift(&mut b, ah, dh, "ASR", 7);
+                        if rest != 7 {
+                            shift(&mut b, ah, dl, "ASR", rest);
+                        }
+                        match held {
+                            Some(held) => b.copy(acc, held),
+                            None => {
+                                b.copy(acc, ah);
+                                b.shift_a("ASR", 7);
+                            }
+                        }
+                        if rest == 7 {
+                            b.copy(dl, acc);
+                        }
+                        b.copy(dh, acc);
+                        if !b.pointers.contains(word) {
+                            b.note_splat(&top, &format!("{word}+1"));
+                            b.note_splat(&format!("{word}+1"), &format!("{word}+1"));
+                            if rest == 7 {
+                                b.note_splat(word, word);
+                            }
+                        }
                     }
                 }
             }

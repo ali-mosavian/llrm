@@ -1343,6 +1343,25 @@ fn load_pre_is_off_at_m32_os() {
     assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
 }
 
+/// RS1 leaves a loop whose copied guard does not fold and whose trips are not counted unrotated at -Os, and each trip pays the taken
+/// `jmp` back to the guard (3 clocks on the 486). A walk of a list is that loop; rotated it is one branch back at 4 B.
+/// ROTATION-HOT compiles it rotated too and keeps that where the finished code runs less for a few bytes a loop.
+/// DEVIATE ROTATION-HOT.
+#[test]
+fn a_hot_loop_of_an_unfolded_guard_is_rotated_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(ptr %p, i32 %k) {\n\
+                entry:\n  br label %head\n\
+                head:\n  %q = phi ptr [ %p, %entry ], [ %n, %body ]\n  %s = phi i32 [ 0, %entry ], [ %s2, %body ]\n\
+                \x20 %v = load i32, ptr %q, align 4\n  %z = icmp eq i32 %v, %k\n  br i1 %z, label %out, label %body\n\
+                body:\n  %m = mul i32 %v, 3\n  %s2 = add i32 %s, %m\n  %n = getelementptr i32, ptr %q, i32 1\n  br label %head\n\
+                out:\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("jmp"), "the loop is rotated, no jmp back to its guard: {listing}");
+}
+
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
 /// `sar; shr; add; sar` sequence. The tip kept `idiv` at -Os: stft_fixed -Os ran 188.9M clk against main's 96.8M (+95%).
 #[test]
