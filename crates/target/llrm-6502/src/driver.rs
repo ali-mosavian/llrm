@@ -447,7 +447,11 @@ fn tail(
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
     let data = data_text(module, &program.layout)?;
-    crate::dagisel::function::set_widen_products(matches!(request.level, Level::O2 | Level::O3 | Level::Omax));
+    crate::dagisel::function::set_widen_products(if matches!(request.level, Level::O2 | Level::O3 | Level::Omax) {
+        crate::dagisel::function::Widen::Unsized
+    } else {
+        crate::dagisel::function::Widen::Off
+    });
     let mut selections = Vec::new();
     let mut from_module = Vec::new();
     // The module each function was selected from: its blocks are the text's.
@@ -484,6 +488,7 @@ fn tail(
         sources.push(source);
         from_module.push(as_called && !paged_chosen);
     }
+    crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
