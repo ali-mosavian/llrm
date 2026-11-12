@@ -2273,6 +2273,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IND-PREFIX (beyond the pin; exit 2026-11-30): an integer
+    /// width `indvars_widens_narrow_counter_through_masks` also covers
+    /// although it is legal, because every operation on it pays more than the
+    /// register's width (the 486's operand-size prefix on 16 bits).
+    fn narrow_counter_is_taxed(
+        &self,
+        _bits: u32,
+    ) -> bool {
+        false
+    }
+
     /// DEVIATE LSR-N: integer widths LSR takes as native induction variables
     /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
     /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit

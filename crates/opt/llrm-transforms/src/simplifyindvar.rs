@@ -1162,7 +1162,10 @@ fn visit_masked_extensions(
     let Some(result) = one.result else { return };
     let narrow_ty = e.function.instruction(wi.narrow_iv).ty;
     let Some(width) = e.context.types.int_bits(narrow_ty) else { return };
-    if e.layout.legal_integer(width) || !e.outer.target().tti().is_some_and(|tti| tti.indvars_widens_narrow_counter_through_masks()) {
+    let taxed = e.outer.target().tti().is_some_and(|tti| tti.narrow_counter_is_taxed(width));
+    if (e.layout.legal_integer(width) && !taxed)
+        || !e.outer.target().tti().is_some_and(|tti| tti.indvars_widens_narrow_counter_through_masks())
+    {
         return;
     }
     let casts: Vec<InstId> = e
