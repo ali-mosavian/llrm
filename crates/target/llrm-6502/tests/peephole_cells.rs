@@ -132,3 +132,17 @@ fn a_store_to_an_argument_cell_before_a_call_stays() {
     drop_dead_stores(&mut a);
     assert_eq!(a.text(), text);
 }
+
+/// `__mulsi3` works in `__sa`/`__sb` and names no `rcN`: a constant's high bytes stored to `rc2`/`rc3`
+/// before it were kept as arguments (mul_constants -Os: 249 lines, 478 B of dead stores, 2026-11-12).
+/// `__udivhi3` reads `rc4`: that store stays.
+#[test]
+fn a_store_before_a_routine_that_names_no_cell_is_dropped() {
+    let mut a = asm("  sta rc3\n  sta __sb\n  jsr __mulsi3\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  sta __sb\n  jsr __mulsi3\n  rts\n");
+    let text = "  sta rc4\n  jsr __udivhi3\n  rts\n";
+    let mut a = asm(text, &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), text);
+}
