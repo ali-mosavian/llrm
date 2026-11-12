@@ -479,8 +479,9 @@ pub fn select_block(
     // the product of two zero-extended words is a call in a block that runs
     // once (`block_frequencies` at most 1): 15 B against 216 B of partial
     // products for a few hundred T-states more; in a loop the products stay
-    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
-    if cold && !sized {
+    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only). Above -O1, where the module links
+    // `__mulsi3` for its long products, the call is `__umulhisi3` for two words too: the same call, half the steps.
+    if (cold || (long_multiply && !STRICT_LEVEL.with(std::cell::Cell::get))) && !sized {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized };
