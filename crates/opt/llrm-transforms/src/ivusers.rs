@@ -36,7 +36,8 @@ use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{CastOp, Opcode};
+use llrm_mir::context::ConstantKind;
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::valuetracking::pattern::phi_incoming;
 
 #[cfg(test)]
@@ -249,13 +250,13 @@ impl IvUsers {
         // DEVIATE LU19: a width the target declares native (and the layout does
         // not) is for induction variables of that width, not for a narrower
         // one an extension widens: `arr[zext i8 i]` stays an index (`adc
-        // arr,x`), not a 16-bit pointer walk. Unless an address scales the
-        // extended index (`v[zext i8 j]` of 4-byte elements): that index is a
-        // shift chain per trip, and the pointer walk (`{v,+,4}`) is the form
-        // the pin's LSR reduces it to.
+        // arr,x`), not a 16-bit pointer walk. Unless a user scales the
+        // extension (`v[zext i8 j]` of 4-byte elements, `3 * zext j`): that is
+        // a shift chain per trip, and the stepped value (`{v,+,4}`) is the
+        // form the pin's LSR reduces it to.
         if !cx.layout.legal_integer(width)
             && matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt))
-            && !scaled_by_an_address(cx, result)
+            && !scaled_by_a_user(cx, result)
         {
             return false;
         }
@@ -471,17 +472,27 @@ fn find_add_rec_for_loop(
     }
 }
 
-/// Whether a `getelementptr` takes `value` as an index it scales by more than
-/// one byte.
-fn scaled_by_an_address(
+/// Whether a user scales `value` (an address by more than one byte, or a
+/// multiply or left shift by a constant): rebuilt each trip, the scale is a
+/// shift chain, and stepping the scaled value is one add.
+fn scaled_by_a_user(
     cx: &Cx,
     value: llrm_mir::module::ValueId,
 ) -> bool {
     cx.function.users(value).iter().any(|one| {
-        let gep = cx.function.instruction(one.user);
-        let Opcode::GetElementPtr { source } = gep.opcode else { return false };
-        let indices = vec![None; gep.operands.len() - 1];
-        let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
-        variable.iter().any(|&(at, scale)| scale > 1 && gep.operands[1 + at] == Operand::Value(value))
+        let user = cx.function.instruction(one.user);
+        match user.opcode {
+            Opcode::GetElementPtr { source } => {
+                let indices = vec![None; user.operands.len() - 1];
+                let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
+                variable.iter().any(|&(at, scale)| scale > 1 && user.operands[1 + at] == Operand::Value(value))
+            }
+            Opcode::Binary(op @ (BinaryOp::Mul | BinaryOp::Shl)) => {
+                let [Operand::Value(a), Operand::Constant(c)] = user.operands[..] else { return false };
+                let ConstantKind::Int(by) = cx.context.get(c).kind else { return false };
+                a == value && (op == BinaryOp::Shl || by > 1)
+            }
+            _ => false,
+        }
     })
 }
