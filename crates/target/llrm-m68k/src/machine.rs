@@ -350,6 +350,22 @@ impl Tti for M68k {
         llrm_mir::tti::Saving { clocks: zero + copy, bytes: 4 }
     }
 
+    /// DEVIATE UNROLL-O1 (owner m68k, exit 2026-12-04, with `unroll_at_o1` in
+    /// `targets.toml`): clang marks every loop `unroll.disable` at -O1, so a
+    /// two-trip float loop stayed rolled at 170 B where gcc's complete unroll
+    /// folds it to 16 (float_in_place_update). At -O1 a loop is unrolled where
+    /// the copies cost no more than the rolled loop after the folding the
+    /// analysis simulates (gcc's size-neutral complete unroll); a call the
+    /// copies keep is priced as one instruction, where the pin's analysis gives
+    /// up on it.
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        true
+    }
+
+    fn unroll_o1_prices_calls(&self) -> bool {
+        true
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the

@@ -266,6 +266,14 @@ impl Tti for Wasm {
         Some(llrm_mir::tti::LsrBytes { constant: 1, local_get: 2, local_set: 2, op: 1 })
     }
 
+    /// The pin's `GenerateICmpZeroScales`: an exit compare is scaled only where
+    /// `getExactSDiv` proves the product does not wrap. With LG1 and LG2 the
+    /// exit test of an unrolled `countdown` moved to a 39-scaled counter and
+    /// cost `i32.const; i32.ne` (tail_calls -O2 +9 B).
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        false
+    }
+
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as
     /// unsigned without wrapping, so a negative one is refused; no register is
     /// scaled; every other form is legal.

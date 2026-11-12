@@ -48,6 +48,17 @@ fn with_edited_users(
     edit: impl FnOnce(&mut llrm_mir::module::Module),
     body: impl FnOnce(&Cx, &mut ScalarEvolution, &IvUsers, BlockId, usize),
 ) {
+    with_flagged_users(text, use_list_order, false, edit, body);
+}
+
+/// As `with_edited_users`, with `phi_operand_uses` (DEVIATE LSR-PHI) as asked.
+fn with_flagged_users(
+    text: &str,
+    use_list_order: bool,
+    phi_operand_uses: bool,
+    edit: impl FnOnce(&mut llrm_mir::module::Module),
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &IvUsers, BlockId, usize),
+) {
     let mut module = llrm_mir::parse::module(text).expect("a module");
     edit(&mut module);
     let (_, _, function) = module.functions().next().expect("a function");
@@ -72,7 +83,7 @@ fn with_edited_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order };
+    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order, phi_operand_uses };
     let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
     GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
@@ -200,7 +211,7 @@ fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
         assumptions: &assumptions,
     };
     let mut se = ScalarEvolution::new();
-    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false };
+    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false };
     let before = llrm_mir::module::block_places_built();
     let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
     assert_eq!(headers.len(), 6);
@@ -275,7 +286,7 @@ fn users_on_a_16_bit_native_target(text: &str) -> Vec<String> {
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false };
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false, phi_operand_uses: false };
     let users = IvUsers::of(&mut se, &cx, header, &env);
     users.uses.iter().map(|u| format!("{:?}", function.instruction(u.user).opcode)).collect()
 }
@@ -354,4 +365,48 @@ exit:
     };
     assert_eq!(first(true).first().map(|(_, v)| v.as_str()), Some("a"), "the newest use is met first");
     assert_eq!(first(false).first().map(|(_, v)| v.as_str()), Some("next"), "the default is program order");
+}
+
+/// DEVIATE LSR-PHI. x_cordic m32 -O3 merges `i*300+21472` and `i*300-81472` in
+/// one phi: the pin's "do not recurse into a phi twice" keeps the first
+/// operand as a use and drops the second, which stays a multiply chain (100
+/// trips of 5 instructions that gcc does not run). Where the target asks, each
+/// incoming value of the phi is a use.
+#[test]
+fn a_phi_of_two_affine_values_has_a_use_per_operand_where_the_target_asks() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %m = mul nuw nsw i32 %i, 300
+  %c = icmp ult i32 %i, 100
+  br i1 %c, label %a, label %b
+a:
+  %pa = add nuw nsw i32 %m, 21472
+  br label %latch
+b:
+  %pb = add nsw i32 %m, -81472
+  br label %latch
+latch:
+  %p = phi i32 [ %pa, %a ], [ %pb, %b ]
+  store volatile i32 %p, ptr null
+  %next = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %next, %n
+  br i1 %e, label %exit, label %loop
+exit:
+  ret i32 0
+}
+";
+    let phi_operands = |asked: bool| {
+        let mut found = Vec::new();
+        with_flagged_users(text, false, asked, |_| {}, |cx, _, users, _, _| {
+            found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
+        });
+        found.sort();
+        found
+    };
+    assert_eq!(phi_operands(false).len(), 1, "the pin keeps one operand: {:?}", phi_operands(false));
+    let both = phi_operands(true);
+    assert_eq!(both.iter().map(|(_, v)| v.trim_start_matches('%')).collect::<Vec<_>>(), ["pa", "pb"], "{both:?}");
 }
