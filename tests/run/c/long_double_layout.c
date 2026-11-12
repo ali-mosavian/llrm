@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -O0 -m32 | -O2 -m32
+// bar: not comparable (SDCC double is 32 bits: it computes a different program)
 // sizeof, arrays and struct members of long double agree with each other and with __SIZEOF_LONG_DOUBLE__, the initialised ones
 // holding their values (long_double_stride.c pins the 12 at m32).
 extern void report(long value);

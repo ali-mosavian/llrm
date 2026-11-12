@@ -1,4 +1,5 @@
 // flags: -O3 | -O3 -march=i486 -m32 -mabi=sysv
+// bar: not comparable (SDCC double is 32 bits); twin float_in_memory_loop_f32
 extern void report(long value);
 
 /* A two-block counted loop whose float state lives in memory: a float accumulated in memory over a counted loop. */
