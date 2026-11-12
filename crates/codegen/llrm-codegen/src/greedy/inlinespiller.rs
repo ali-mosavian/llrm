@@ -514,7 +514,8 @@ impl<'a> InlineSpiller<'a> {
             // which asks for no register.
             if let ([key], [Loc::Mem(cell)]) = (members.as_slice(), what.sources.as_slice())
                 && self.tii.is_plain_move(&what)
-                && let Some(mut folded) = self.tii.fold_memory_operand(&Arc::clone(lis.instr(*key)), reg, cell)
+                && let Some(mut folded) =
+                    self.tii.fold_memory_operand_classed(&Arc::clone(lis.instr(*key)), reg, cell, &|value| self.is_xmm(value))
             {
                 let reads = Arc::make_mut(&mut folded);
                 for read in &def.uses {
@@ -710,9 +711,14 @@ impl<'a> InlineSpiller<'a> {
                         .ok()
                         .flatten()
                 } else if cell_width < width {
-                    self.tii.fold_memory_operand(&copy_at_width(self.tii, one, reg, cell_width), reg, &cell)
+                    self.tii.fold_memory_operand_classed(
+                        &copy_at_width(self.tii, one, reg, cell_width),
+                        reg,
+                        &cell,
+                        &|value| self.is_xmm(value),
+                    )
                 } else {
-                    self.tii.fold_memory_operand(one, reg, &cell)
+                    self.tii.fold_memory_operand_classed(one, reg, &cell, &|value| self.is_xmm(value))
                 }
             })
             .collect();
@@ -1211,6 +1217,14 @@ impl InlineSpiller<'_> {
                 )
         };
         meets(a, b) || meets(b, a)
+    }
+
+    /// Whether `reg` lives in an xmm register, from its class.
+    fn is_xmm(
+        &self,
+        reg: u32,
+    ) -> bool {
+        self.tables.orders.borrow().get(&reg).and_then(|order| order.first()).is_some_and(|first| first.is_xmm())
     }
 
     /// Whether `reg` is an x87 value, from its class or, for a piece made by
@@ -2133,6 +2147,16 @@ mod tests {
             cell: &Mem,
         ) -> Option<Arc<Insn>> {
             self.0.fold_memory_operand(one, reg, cell)
+        }
+
+        fn fold_memory_operand_classed(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &Mem,
+            xmm: &dyn Fn(u32) -> bool,
+        ) -> Option<Arc<Insn>> {
+            self.0.fold_memory_operand_classed(one, reg, cell, xmm)
         }
 
         fn fold_copy_member(
