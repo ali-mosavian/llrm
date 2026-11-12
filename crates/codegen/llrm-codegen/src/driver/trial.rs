@@ -36,8 +36,9 @@ use crate::backend::{executed, masm};
 enum Trial {
     /// Unroll the loops under this size that the -O1 rule refused.
     Unroll(u32),
-    /// Leave unrotated the counted loops RS1 rotated.
-    Rotation,
+    /// Leave unrotated the counted loops RS1 rotated; the flag: a rotation that executes less for a few bytes a
+    /// loop stays (DEVIATE ROTATION-HOT, `Tti::rotation_hot_at_size`).
+    Rotation(bool),
 }
 
 impl Trial {
@@ -48,14 +49,14 @@ impl Trial {
             return tti.unroll_trial_threshold().map(Trial::Unroll);
         }
         (options.pipeline.for_size && tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size())
-            .then_some(Trial::Rotation)
+            .then_some(Trial::Rotation(tti.rotation_hot_at_size()))
     }
 
     /// Whether the compile just made noted a decision to reverse.
     fn noted(&self) -> bool {
         match self {
             Trial::Unroll(_) => !trial::take().0.is_empty(),
-            Trial::Rotation => !trial::take_rotated().is_empty(),
+            Trial::Rotation(_) => !trial::take_rotated().is_empty(),
         }
     }
 
@@ -63,6 +64,7 @@ impl Trial {
     fn clear(&self) {
         let _ = trial::take();
         let _ = trial::take_rotated();
+        trial::clear_rotated_loops();
     }
 
     /// Compiles with the decision reversed.
@@ -72,7 +74,7 @@ impl Trial {
     ) -> T {
         match self {
             Trial::Unroll(limit) => trial::with(*limit, body),
-            Trial::Rotation => trial::with_unrotated(body),
+            Trial::Rotation(_) => trial::with_unrotated(body),
         }
     }
 
@@ -87,7 +89,11 @@ impl Trial {
         let saved = (kept_work - other_work).round() as i64;
         let pays = match self {
             Trial::Unroll(_) => trial::keeps_at_o1(saved, added),
-            Trial::Rotation => trial::keeps_at_size(added),
+            // The unrotated object is smaller; the rotated one stays if it executes less for a few bytes a loop.
+            Trial::Rotation(hot) => {
+                trial::keeps_at_size(added)
+                    && !(*hot && trial::keeps_rotation_hot(-saved, -added, trial::rotated_loops()))
+            }
         };
         if llrm_support::debug::enabled("trial") {
             let what = if matches!(self, Trial::Unroll(_)) { "unroll" } else { "unrotated" };
@@ -98,6 +104,26 @@ impl Trial {
         }
         pays
     }
+}
+
+/// What a finished module is expected to execute, for the rotation trial: instructions and memory operands as
+/// `executed::work`, the branches and jumps at their clocks on the CPU (a rotation trades a taken `jmp` for a
+/// copied guard, which the work alone does not see). `0.0` where the model has no answer: no work saved.
+fn rotation_work(
+    built: &masm::Module,
+    options: &Options,
+) -> f64 {
+    let Ok(cpu) = options.cpu() else { return 0.0 };
+    built
+        .procedures
+        .iter()
+        .map(|one| {
+            let done = executed::executed(&one.body)?;
+            let jumps = done.jump_cycles(cpu).ok()?;
+            Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
+        })
+        .sum::<Option<f64>>()
+        .unwrap_or(0.0)
 }
 
 /// `module` compiled as `compiled_module` does, then, on a target with a trial
@@ -150,7 +176,7 @@ fn compiled_module_trying_once(
     let mut again = options.clone();
     again.dump = None;
     let other = kind.compile(|| optimized_program(module, &again))?;
-    if matches!(kind, Trial::Rotation) {
+    if matches!(kind, Trial::Rotation(_)) {
         let (one, two) = (&kept.modules[0], &other.modules[0]);
         let cut = differing(one, two);
         if llrm_support::debug::enabled("trial") {
@@ -177,7 +203,7 @@ fn compiled_module_trying_once(
             let second = build(&other, &again)?;
             let pays = matches!(
                 (unpadded(&first), unpadded(&second)),
-                (Some(a), Some(b)) if kind.keeps((a, 0.0), (b, 0.0))
+                (Some(a), Some(b)) if kind.keeps((a, rotation_work(&first, options)), (b, rotation_work(&second, options)))
             );
             if !pays {
                 return Ok(first);
@@ -192,7 +218,7 @@ fn compiled_module_trying_once(
         };
         let pays = matches!(
             (unpadded(&first), unpadded(&second)),
-            (Some(a), Some(b)) if kind.keeps((a, 0.0), (b, 0.0))
+            (Some(a), Some(b)) if kind.keeps((a, rotation_work(&first, options)), (b, rotation_work(&second, options)))
         );
         // Where every function differs, the cut module is the module: its masm
         // is the answer.
@@ -236,7 +262,7 @@ fn compiled_module_with_rotation(
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
     unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
 ) -> Result<masm::Module, String> {
-    let hot = matches!(Trial::of(options), Some(Trial::Rotation))
+    let hot = matches!(Trial::of(options), Some(Trial::Rotation(_)))
         && options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.rotation_hot_at_size());
     let _ = trial::take_left();
     let first = compiled_module_trying_once(module.clone(), name, options, bytes, unpadded)?;
