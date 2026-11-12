@@ -115,6 +115,8 @@ struct Maps {
     /// The `size_libcall_names` whose routine takes a variable amount only: a constant amount keeps the inline
     /// expansion (and, below the type, the shift routine of its halves).
     size_variable_only: HashMap<(ISD, MVT), ()>,
+    /// The `size_libcall_names` called only in a function tuned for size: at speed the expansion stays inline.
+    size_only: HashMap<(ISD, MVT), ()>,
 }
 
 #[derive(Clone)]
@@ -304,6 +306,18 @@ impl TargetLowering {
         std::sync::Arc::make_mut(&mut self.maps).size_libcall_names.insert((op, vt), name);
     }
 
+    /// [`Self::set_size_libcall_name`] for a call made in a function tuned for size only: the legalizer's
+    /// [`Self::has_size_libcall_name`] is false at speed.
+    pub fn set_size_only_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.set_size_libcall_name(op, vt, name);
+        std::sync::Arc::make_mut(&mut self.maps).size_only.insert((op, vt), ());
+    }
+
     /// [`Self::set_size_libcall_name`] for a shift by a variable amount only.
     pub fn set_size_variable_libcall_name(
         &mut self,
@@ -380,6 +394,7 @@ impl TargetLowering {
             vt,
             EVT::Simple(vt) if self.maps.size_libcall_names.contains_key(&(op, vt))
                 && !self.maps.size_variable_only.contains_key(&(op, vt))
+                && (self.opt_for_size || !self.maps.size_only.contains_key(&(op, vt)))
         )
     }
 

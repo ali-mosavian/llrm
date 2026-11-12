@@ -263,7 +263,31 @@ impl ProgramPass for MergeFunctions {
     fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let mut changed = false;
         for module in &mut program.modules {
-            while merge_functions(module) {
+            while merge_functions(module, true) {
+                changed = true;
+            }
+        }
+        if changed {
+            analyses.invalidate();
+        }
+        Ok(())
+    }
+}
+
+/// `MergeFunctions` at a level that allows no trade (-O1): the local functions nothing takes the address of are
+/// dropped, the rest stay. A thunk saves bytes and costs a `jmp` a call, so only a drop is a win on both axes.
+/// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): the pin runs no `MergeFunctions` at all.
+pub struct MergeLocalFunctions;
+
+impl ProgramPass for MergeLocalFunctions {
+    fn name(&self) -> &'static str {
+        "mergefunc-local"
+    }
+
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+        let mut changed = false;
+        for module in &mut program.modules {
+            while merge_functions(module, false) {
                 changed = true;
             }
         }
@@ -323,7 +347,7 @@ fn address_taken(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// One round: whether any function was dropped or turned into a thunk.
-fn merge_functions(module: &mut Module) -> bool {
+fn merge_functions(module: &mut Module, thunks_allowed: bool) -> bool {
     let mut buckets: HashMap<u64, Vec<GlobalId>> = HashMap::new();
     for index in 0..module.globals.len() as u32 {
         let id = GlobalId(index);
@@ -358,7 +382,11 @@ fn merge_functions(module: &mut Module) -> bool {
             let global = module.global(id);
             if local(global.linkage) && (!taken.contains(&id) || global.unnamed_addr == UnnamedAddr::Global) {
                 gone.insert(id, keep);
-            } else if !is_variadic(module, id) && !is_thunk_to(module, id, keep) && outweighs_thunk(module, id) {
+            } else if thunks_allowed
+                && !is_variadic(module, id)
+                && !is_thunk_to(module, id, keep)
+                && outweighs_thunk(module, id)
+            {
                 thunks.push((id, keep));
             }
         }
