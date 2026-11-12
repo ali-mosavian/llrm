@@ -902,6 +902,22 @@ impl Cost {
                 let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
                 self.c.num_iv_muls += r.tti.lsr_written_step_multiplies(c.sext_value() as i64, bits);
             }
+            // DEVIATE LU23: `gep p, n` where only `n` is a phi forms the
+            // pointer addrec by an add each trip it is used, not a recurrence
+            // of its own: LSR's baseline counted it as one and so kept the
+            // index and the add.
+            if r.as_written
+                && lu.kind == Kind::Address
+                && lu.all_fixups_unconditional
+                && r.tti.lsr_written_pointer_add_is_base_add()
+                && !is_existing_phi(r.se, r.cx, reg)
+                && r.se.type_of(reg).is_pointer()
+                && let Some((start, _, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(start).is_none()
+            {
+                self.c.add_rec_cost = self.c.add_rec_cost.saturating_sub(loop_cost);
+                self.c.num_base_adds += 1;
+            }
             // DEVIATE LU20: the loop as written keeps the bound of its exit
             // test next to the counter; the folded `{-bound,+,1}` counts one.
             if r.as_written
