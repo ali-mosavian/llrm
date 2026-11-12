@@ -77,7 +77,7 @@ const CONTROL_COST_PER_ITERATION: i64 = 3;
 /// The scalar loop-control cost: the `phi`, the add, the compare and the branch
 /// each cost 1 (`LV: Found an estimated cost of 1 for VF 1` on them, as the pin
 /// prints), and the address computations 0.
-const SCALAR_CONTROL_COST: i64 = 4;
+pub(crate) const SCALAR_CONTROL_COST: i64 = 4;
 
 /// `LoopVectorizationCostModel::SmallLoopCost`: interleave until the loop
 /// overhead is about 5 %.
@@ -195,6 +195,7 @@ fn iteration_cost(
     tti: &dyn Tti,
     recipes: &[Recipe],
     vf: u32,
+    backend_limits: bool,
 ) -> Option<i64> {
     let kind = CostKind::RecipThroughput;
     let mut total = if vf == 1 { SCALAR_CONTROL_COST } else { CONTROL_COST_PER_ITERATION };
@@ -205,7 +206,10 @@ fn iteration_cost(
     // every recipe's vector fills one register exactly. Owner llrm-arm64-vec,
     // exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
-    if vf > 1 && recipes.iter().any(|recipe| u64::from(lane_bits(recipe_lane(recipe))) * u64::from(vf) != register_bits) {
+    if backend_limits
+        && vf > 1
+        && recipes.iter().any(|recipe| u64::from(lane_bits(recipe_lane(recipe))) * u64::from(vf) != register_bits)
+    {
         return None;
     }
     for recipe in recipes {
@@ -263,12 +267,13 @@ fn best_vf(
     tti: &dyn Tti,
     facts: &LoopFacts,
     max_vf: u64,
+    backend_limits: bool,
 ) -> (u32, i64) {
-    let scalar = iteration_cost(tti, &facts.recipes, 1).expect("the scalar loop is priced");
+    let scalar = iteration_cost(tti, &facts.recipes, 1, backend_limits).expect("the scalar loop is priced");
     let mut best = (scalar, 1u64, scalar);
     let mut vf = 2u64;
     while vf <= max_vf {
-        if let Some(cost) = iteration_cost(tti, &facts.recipes, vf as u32) {
+        if let Some(cost) = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits) {
             let candidate = (cost, vf, scalar);
             if is_more_profitable(candidate, best, facts.trip_count, true) {
                 best = candidate;
@@ -287,25 +292,64 @@ fn max_local_users(recipes: &[Recipe]) -> u32 {
     values.max(1)
 }
 
-/// `selectInterleaveCount` (LoopVectorize.cpp#L3705), the part that applies
-/// without reductions.
+/// What `selectInterleaveCount` reads of the loop and its plan.
+#[derive(Clone, Copy, Debug)]
+struct IcInputs {
+    epilogue_allowed: bool,
+    safe_for_any_vector_width: bool,
+    trip_count: u64,
+    /// `MaxLocalUsers` of the register class the loop's values live in.
+    users: u32,
+    /// `LoopInvariantRegs`: values defined outside the loop and read in it.
+    invariants: u32,
+    loads: u32,
+    stores: u32,
+    has_reductions: bool,
+    /// The loop is inside another (`OrigLoop->getLoopDepth() > 1`).
+    nested: bool,
+}
+
+/// `selectInterleaveCount` (LoopVectorize.cpp#L3705) of the vector plan, which
+/// has no reductions (VP5 prices its register pressure by the values).
 fn select_interleave_count(
     tti: &dyn Tti,
     facts: &LoopFacts,
     vf: u32,
     loop_cost: i64,
 ) -> u32 {
+    let values = max_local_users(&facts.recipes);
+    let inputs = IcInputs {
+        epilogue_allowed: epilogue_allowed(facts),
+        safe_for_any_vector_width: facts.safe_for_any_vector_width,
+        trip_count: facts.trip_count,
+        users: values,
+        invariants: 0,
+        loads: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Load { .. })).count() as u32,
+        stores: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Store { .. })).count() as u32,
+        has_reductions: false,
+        nested: false,
+    };
+    interleave_count(tti, &inputs, vf, loop_cost)
+}
+
+/// `selectInterleaveCount` (LoopVectorize.cpp#L3705).
+fn interleave_count(
+    tti: &dyn Tti,
+    facts: &IcInputs,
+    vf: u32,
+    loop_cost: i64,
+) -> u32 {
     // Do not interleave where no epilogue is allowed (optsize or a tiny trip count, VP6), where the distance
     // already bounded the VF ("We used the distance for the interleave
     // count"), and a loop that is free needs none.
-    if !epilogue_allowed(facts) || !facts.safe_for_any_vector_width || loop_cost == 0 {
+    if !facts.epilogue_allowed || !facts.safe_for_any_vector_width || loop_cost == 0 {
         return 1;
     }
     let registers = tti.number_of_registers(if vf == 1 { RegisterClass::Scalar } else { RegisterClass::Vector });
-    let users = max_local_users(&facts.recipes);
-    let mut ic = bit_floor(u64::from(registers / users)).max(1) as u32;
+    let users = facts.users.max(1);
+    let mut ic = bit_floor(u64::from(registers.saturating_sub(facts.invariants) / users)).max(1) as u32;
 
-    let mut max_interleave = tti.max_interleave_factor(vf, false);
+    let mut max_interleave = tti.max_interleave_factor(vf, facts.has_reductions);
     // The exact trip count bounds the interleave count (the pin's
     // `InterleaveCountLB` and `UB`).
     if facts.trip_count != 0 {
@@ -323,24 +367,38 @@ fn select_interleave_count(
     }
     ic = ic.min(max_interleave).max(1);
 
+    // Interleave if we vectorized this loop and there is a reduction that
+    // could benefit from interleaving.
+    if vf > 1 && facts.has_reductions {
+        return ic;
+    }
+
     // We want to interleave small loops in order to reduce the loop overhead
     // and expose ILP.
     if loop_cost < SMALL_LOOP_COST {
         // Interleave until the loop overhead is about 5 % of the cost of the
         // loop.
-        let small_ic = ic.min(bit_floor((SMALL_LOOP_COST / loop_cost) as u64) as u32);
+        let mut small_ic = ic.min(bit_floor((SMALL_LOOP_COST / loop_cost) as u64) as u32);
         // Interleave until the store and load ports (estimated by the max
         // interleave count) are saturated.
-        let stores = facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Store { .. })).count() as u32;
-        let loads = facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Load { .. })).count() as u32;
-        let saturated = (ic / stores.max(1)).max(ic / loads.max(1));
-        // `EnableLoadStoreRuntimeInterleave` is on by default.
-        if saturated > small_ic {
-            return saturated;
+        let mut stores_ic = ic / facts.stores.max(1);
+        let mut loads_ic = ic / facts.loads.max(1);
+        // A scalar reduction inside another loop lengthens the critical path:
+        // tree-wise reductions are capped (`MaxNestedScalarReductionIC`).
+        if facts.has_reductions && facts.nested {
+            small_ic = small_ic.min(MAX_NESTED_SCALAR_REDUCTION_IC);
+            stores_ic = stores_ic.min(MAX_NESTED_SCALAR_REDUCTION_IC);
+            loads_ic = loads_ic.min(MAX_NESTED_SCALAR_REDUCTION_IC);
         }
-        // "Interleaving to reduce branch cost". (A scalar VF with aggressive
-        // interleaving returns `max(IC / 2, SmallIC)`: VF is a vector
-        // here.)
+        // `EnableLoadStoreRuntimeInterleave` is on by default.
+        if stores_ic.max(loads_ic) > small_ic {
+            return stores_ic.max(loads_ic);
+        }
+        // A scalar VF with aggressive interleaving: "to expose ILP".
+        if vf == 1 && tti.enable_aggressive_interleaving() {
+            return (ic / 2).max(small_ic);
+        }
+        // "Interleaving to reduce branch cost."
         return small_ic;
     }
     // A large loop that could benefit from interleaving.
@@ -350,18 +408,99 @@ fn select_interleave_count(
     1
 }
 
+/// `MaxNestedScalarReductionIC`.
+const MAX_NESTED_SCALAR_REDUCTION_IC: u32 = 2;
+
+/// A loop that is interleaved and not vectorized: `computeBestVF` chose VF 1.
+#[derive(Clone, Copy, Debug)]
+pub struct ScalarFacts {
+    /// `expectedCost(VF=1)`: the body's instructions and the loop control.
+    pub cost: i64,
+    pub loads: u32,
+    pub stores: u32,
+    /// `MaxLocalUsers` and `LoopInvariantRegs` of `calculateRegisterUsage`.
+    pub users: u32,
+    pub invariants: u32,
+    pub has_reductions: bool,
+    pub nested: bool,
+    pub trip_count: u64,
+    pub safe_for_any_vector_width: bool,
+    pub opt_size: bool,
+}
+
+/// The interleave count of a loop kept scalar (`InterleaveLoop` without
+/// `VectorizeLoop` in `processLoop`, L7882), or why not. Where no epilogue is
+/// allowed the count must divide the trip count.
+pub fn choose_interleave(
+    tti: &dyn Tti,
+    facts: &ScalarFacts,
+) -> Result<u32, NotPlanned> {
+    if facts.trip_count == 1 {
+        return Err(NotPlanned("Single iteration (non) loop"));
+    }
+    let allowed = !facts.opt_size && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT);
+    let inputs = IcInputs {
+        epilogue_allowed: allowed,
+        safe_for_any_vector_width: facts.safe_for_any_vector_width,
+        trip_count: facts.trip_count,
+        users: facts.users,
+        invariants: facts.invariants,
+        loads: facts.loads,
+        stores: facts.stores,
+        has_reductions: facts.has_reductions,
+        nested: facts.nested,
+    };
+    let ic = interleave_count(tti, &inputs, 1, facts.cost);
+    if ic <= 1 {
+        return Err(NotPlanned("The cost-model indicates that interleaving is not beneficial"));
+    }
+    if !allowed && (facts.trip_count == 0 || facts.trip_count % u64::from(ic) != 0) {
+        return Err(NotPlanned("A scalar epilogue would remain"));
+    }
+    Ok(ic)
+}
+
 /// The factors the pin chooses for `facts` on `tti` (`computeBestVF`,
 /// `selectInterleaveCount`), or why not, before the epilogue is considered.
 pub fn choose(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> Result<Plan, NotPlanned> {
-    if tti.vector_register_bits() == 0 {
-        return Err(NotPlanned("The target has no vector registers"));
+    choose_with(tti, facts, true)
+}
+
+/// [`choose`] as the pin would, with no limit of the backend's vector types
+/// (LV-SPLIT): whether the pin may vectorize a loop of these recipes. A
+/// division the target does not price as a vector counts as a possible one
+/// (LVI4): the recipe carries no divisor, and the pin takes a vector divided by
+/// a constant at a few multiplies. A multiply the target does not price is the
+/// pin's scalarized one, which keeps the loop scalar.
+pub fn pin_may_vectorize(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+) -> bool {
+    if choose_with(tti, facts, false).is_ok() {
+        return true;
     }
-    if facts.trip_count == 1 {
-        return Err(NotPlanned("Single iteration (non) loop"));
+    if tti.vector_register_bits() == 0 || facts.trip_count == 1 {
+        return false;
     }
+    let register_bits = tti.vector_register_bits();
+    facts.recipes.iter().any(|recipe| match *recipe {
+        Recipe::Binary { op, lane } => {
+            let count = register_bits / lane_bits(lane).max(1);
+            matches!(op, ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem) && count >= 2 && tti.vector_arithmetic_cost(op, VectorTy { lane, count }, CostKind::RecipThroughput).is_none()
+        }
+        _ => false,
+    })
+}
+
+/// `getMaximizedVFForTarget` of the widest and smallest types and the safe
+/// width.
+fn max_vf_of(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+) -> u64 {
     let (smallest, widest) = smallest_and_widest(&facts.recipes);
     // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits /
     // WidestType).
@@ -369,8 +508,22 @@ pub fn choose(
     if let Some(distance) = facts.store_load_forward_bits {
         max_safe = max_safe.min(distance / u64::from(widest));
     }
-    let max_vf = maximized_vf_for_target(tti, facts.trip_count, smallest, widest, max_safe);
-    let (vf, cost) = best_vf(tti, facts, max_vf);
+    maximized_vf_for_target(tti, facts.trip_count, smallest, widest, max_safe)
+}
+
+fn choose_with(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    backend_limits: bool,
+) -> Result<Plan, NotPlanned> {
+    if tti.vector_register_bits() == 0 {
+        return Err(NotPlanned("The target has no vector registers"));
+    }
+    if facts.trip_count == 1 {
+        return Err(NotPlanned("Single iteration (non) loop"));
+    }
+    let max_vf = max_vf_of(tti, facts);
+    let (vf, cost) = best_vf(tti, facts, max_vf, backend_limits);
     if vf == 1 {
         return Err(NotPlanned("Vectorization is possible but not beneficial"));
     }

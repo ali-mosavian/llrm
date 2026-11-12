@@ -5860,6 +5860,31 @@ fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
     assert!(!listing(&looped).contains("imul"), "a multiply in a loop is the chain:\n{}", listing(&looped));
 }
 
+/// MUL-HOT (m32 -Os): a block runs often when its function does, not only when its loop does. x_dct -Os called `dct8`
+/// (`x * 7`, `x * 5`, `x * 3` in straight-line code) from two nested loops and kept every `imul`: 314,722 clk against
+/// clang's 211,103. A function called from a loop is hot in all its blocks; one called once keeps its `imul`.
+#[test]
+fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
+    let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
+    let callee = "define internal i32 @g(i32 %x) noinline {\n  %m = mul i32 %x, 45\n  ret i32 %m\n}\n";
+    let once = format!("{head}{callee}define i32 @f(i32 %x) {{\n  %r = call i32 @g(i32 %x)\n  ret i32 %r\n}}\n");
+    let looped = format!(
+        "{head}{callee}define i32 @f(i32 %n) {{\nentry:\n  br label %body\n\
+         body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %s = phi i32 [ 0, %entry ], [ %t, %body ]\n  \
+         %r = call i32 @g(i32 %i)\n  %t = add i32 %s, %r\n  %j = add i32 %i, 1\n  \
+         %c = icmp slt i32 %j, %n\n  br i1 %c, label %body, label %done\n\
+         done:\n  ret i32 %s\n}}\n"
+    );
+    let callee_listing = |text: &str| {
+        let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let start = listing.find("g proc").unwrap_or_else(|| panic!("no g:\n{listing}"));
+        listing[start..].split("g endp").next().unwrap().to_owned()
+    };
+    assert!(callee_listing(&once).contains("imul"), "a function called once keeps its imul:\n{}", callee_listing(&once));
+    assert!(!callee_listing(&looped).contains("imul"), "a function called from a loop is the chain:\n{}", callee_listing(&looped));
+}
+
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
 /// the same bytes, a third to a quarter of the clocks. scroll -Os copied 4000 bytes of two-byte-aligned shorts a byte at a
 /// time: 958,326 clk against clang's 536,067.

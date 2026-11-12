@@ -3,7 +3,7 @@
 use llrm_mir::passes::PassManager;
 use llrm_mir::program::Program;
 
-use super::{equivalent, function_hash, MergeFunctions};
+use super::{equivalent, function_hash, MergeFunctions, MergeLocalFunctions};
 use crate::testing::{parsed, printed};
 
 const HEAD: &str = "target datalayout = \"e-p:32:32-i32:32-i64:32-n8:16:32\"\n\n";
@@ -262,4 +262,26 @@ b0:
 ",
     );
     assert!(after.contains("tail call i32 @a(i32 %0)"), "@b is a thunk of @a:\n{after}");
+}
+
+/// shl_long_by_one -O1 (z80) kept two local copies; the -O1 pass drops them, and writes no thunk for an exported copy
+/// (a thunk is a `jmp` more per call).
+#[test]
+fn test_the_o1_pass_drops_a_local_copy_and_thunks_no_external_one() {
+    let run = |text: &str| {
+        let mut program =
+            Program::new(vec![parsed(&format!("{HEAD}{text}"))], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let mut manager = PassManager::default();
+        manager.add_program(MergeLocalFunctions);
+        manager.run(&mut program).unwrap();
+        printed(&program.modules[0])
+    };
+    let body = |linkage: &str, name: &str| {
+        format!("define {linkage} i32 @{name}(i32 %x) {{\nb0:\n  %t = add i32 %x, 1\n  %r = mul i32 %t, 3\n  ret i32 %r\n}}\n\n")
+    };
+    let local = run(&format!("{}{}", body("internal", "a"), body("internal", "b")));
+    assert_eq!(defined(&local), 1, "one local copy stays:\n{local}");
+    let external = run(&format!("{}{}", body("", "a"), body("", "b")));
+    assert_eq!(defined(&external), 2, "an exported copy stays whole:\n{external}");
+    assert!(!external.contains("tail call"), "no thunk at -O1:\n{external}");
 }
