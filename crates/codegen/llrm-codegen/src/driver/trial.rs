@@ -118,11 +118,34 @@ pub fn compiled_module_trying(
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
     unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
 ) -> Result<masm::Module, String> {
-    let Some(kind) = Trial::of(options) else { return compiled_module(module, name, options) };
+    let leaf = leaf_fold_trial(options);
+    // DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the branching block, the module is
+    // assembled again without the fold and the smaller one kept.
+    let build = |program: &Program, with: &Options| -> Result<masm::Module, String> {
+        let _ = crate::backend::leaffold::take_folded();
+        let first = assembled(program, name, with)?;
+        if !leaf || !crate::backend::leaffold::take_folded() {
+            return Ok(first);
+        }
+        let second = crate::backend::leaffold::without(|| assembled(program, name, with))?;
+        let smaller = matches!((unpadded(&first), unpadded(&second)), (Some(a), Some(b)) if b < a);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!("trial leaffold: {}", if smaller { "put back" } else { "kept" });
+        }
+        let chosen = if smaller { second } else { first };
+        stage_files(with, "", &chosen)?;
+        Ok(chosen)
+    };
+    let Some(kind) = Trial::of(options) else {
+        if !leaf {
+            return compiled_module(module, name, options);
+        }
+        return build(&optimized_program(module, options)?, options);
+    };
     kind.clear();
     let kept = optimized_program(module.clone(), options)?;
     if !kind.noted() {
-        return assembled(&kept, name, options);
+        return build(&kept, options);
     }
     let mut again = options.clone();
     again.dump = None;
@@ -150,8 +173,8 @@ pub fn compiled_module_trying(
                 .sum()
         };
         if 2 * size(one, Some(&cut)) >= size(one, None) {
-            let first = assembled(&kept, name, options)?;
-            let second = assembled(&other, name, &again)?;
+            let first = build(&kept, options)?;
+            let second = build(&other, &again)?;
             let pays = matches!(
                 (unpadded(&first), unpadded(&second)),
                 (Some(a), Some(b)) if kind.keeps((a, 0.0), (b, 0.0))
@@ -165,7 +188,7 @@ pub fn compiled_module_trying(
         let each =
             |module: &Module, program: &Program| assembled_module(&only(module, &cut), program, name, &again).ok();
         let (Some(first), Some(second)) = (each(one, &kept), each(two, &other)) else {
-            return assembled(&kept, name, options);
+            return build(&kept, options);
         };
         let pays = matches!(
             (unpadded(&first), unpadded(&second)),
@@ -184,14 +207,19 @@ pub fn compiled_module_trying(
             stage_files(options, "", &chosen.2)?;
             return Ok(chosen.2);
         }
-        return assembled(chosen.1, name, options);
+        return build(chosen.1, options);
     }
-    let kept = assembled(&kept, name, options)?;
-    let other = assembled(&other, name, &again)?;
+    let kept = build(&kept, options)?;
+    let other = build(&other, &again)?;
     let price = |built: &masm::Module| -> Option<(i64, f64)> {
         let work = built.procedures.iter().map(|one| executed::work(&one.body)).sum::<Option<f64>>()?;
         Some((bytes(built)?, work))
     };
     let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
     Ok(if kind.keeps(kept_price, other_price) { other } else { kept })
+}
+
+/// Whether the module is assembled with and without LEAF-FOLD-OS: a size build on a target that folds.
+fn leaf_fold_trial(options: &Options) -> bool {
+    options.cpu().is_ok_and(|cpu| cpu.size) && options.arch.leaf_fold_at_size()
 }
