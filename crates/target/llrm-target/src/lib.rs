@@ -503,6 +503,18 @@ pub fn x86_cheap_move_immediate(
     !(bytes == 8 && !(i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(&value))
 }
 
+/// A constant a build for size selects as a pseudo that is rematerializable
+/// but not `isAsCheapAsAMove`: outside 64-bit mode x86 makes +1 and -1 with
+/// `xor` and `inc`/`dec` (`MOV32r1`, `MOV32r_1`, X86InstrCompiler.td, under
+/// `OptForSize, Not64BitMode`), so `RegisterCoalescer::reMaterializeDef`
+/// leaves a copy of one where it is.
+pub fn x86_uncheap_move_immediate_at_size(
+    bytes: u8,
+    value: i64,
+) -> bool {
+    matches!(bytes, 2 | 4) && matches!(value, 1 | -1)
+}
+
 pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
@@ -645,6 +657,13 @@ pub trait Target {
     /// (`AArch64InstrInfo.cpp#L1385`).
     fn cheap_move_immediate(&self) -> fn(u8, i64) -> bool {
         x86_cheap_move_immediate
+    }
+
+    /// A constant that, in a build for size, is not `isAsCheapAsAMove` though
+    /// `cheap_move_immediate` says it is (see
+    /// [`x86_uncheap_move_immediate_at_size`]). The default has none.
+    fn uncheap_move_immediate_at_size(&self) -> fn(u8, i64) -> bool {
+        |_, _| false
     }
 
     /// Whether `MachineLICM` refuses a hoist by the register pressure of the

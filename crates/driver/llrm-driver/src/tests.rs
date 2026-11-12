@@ -1442,6 +1442,22 @@ fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_minsize_only() {
     assert!(!at_speed.contains("idiv") && at_speed.contains("sar"), "-O2: {at_speed}");
 }
 
+/// An unsigned 64-bit integer to `f32` or `f64` at m64 was `mov [rsp-16], rdi; fild; fadd [fudge + 4*sign]; fstp; movsd`: through the
+/// x87 and the stack, 38 B and a store-forward stall for `f64`, where the pin has an SSE convert of the halved value. DEVIATE
+/// UITOFP-F64: `cvtsi2sd` of the value, or of the halved one doubled.
+#[test]
+fn an_unsigned_64_bit_integer_to_float_is_an_sse_convert_at_m64() {
+    for (ty, convert) in [("double", "cvtsi2sd"), ("float", "cvtsi2ss")] {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+             define {ty} @f(i64 %x) {{\n  %r = uitofp i64 %x to {ty}\n  ret {ty} %r\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O1"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains("fild") && listing.contains(convert), "{ty}: {listing}");
+    }
+}
+
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
 /// llrm-llc refused the module with "calling convention 232", so no QCport
 /// module that calls qgl compiled.
@@ -5867,6 +5883,39 @@ fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
     };
     assert!(callee_listing(&once).contains("imul"), "a function called once keeps its imul:\n{}", callee_listing(&once));
     assert!(!callee_listing(&looped).contains("imul"), "a function called from a loop is the chain:\n{}", callee_listing(&looped));
+}
+
+/// `RegisterCoalescer::reMaterializeDef` refuses a constant that is not
+/// `isAsCheapAsAMove`: at -Os outside 64-bit mode +1 and -1 are
+/// `MOV32r1`/`MOV32r_1` (xor and inc), so the pin makes one once before a loop
+/// and copies it into the argument register each trip (`mov edx, edi`); every
+/// other constant is made again in the loop. We made +1 again each trip (`xor
+/// edx, edx; inc edx`): x_dct -Os 211,298 clk against clang's 211,103.
+#[test]
+fn a_hoisted_one_passed_to_a_call_in_a_loop_stays_in_a_register_at_m32_os() {
+    let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
+    let loop_of = |level: &str, constant: i32| {
+        let text = format!(
+            "{head}declare void @g(ptr, i32)\ndefine void @f(i32 %n, ptr %p) {{\nentry:\n  br label %body\n\
+             body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  \
+             call void @g(ptr %a, i32 {constant})\n  %j = add i32 %i, 1\n  \
+             %c = icmp ne i32 %j, 8\n  br i1 %c, label %body, label %done\n\
+             done:\n  ret void\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m32", level]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let call = listing.find("call g_").unwrap_or_else(|| panic!("no call:\n{listing}"));
+        let from = listing[..call].rfind("\nL0_").unwrap_or_else(|| panic!("no loop:\n{listing}"));
+        let body = listing[from..call].to_owned();
+        (body, listing)
+    };
+    let (body, listing) = loop_of("-Os", 1);
+    assert!(!body.contains("inc ") && !body.contains("xor "), "+1 is made once, outside the loop:\n{listing}");
+    assert!(body.contains("mov edx, e"), "the loop copies it into the argument register:\n{listing}");
+    // What the pin makes again in the loop, and still does.
+    assert!(loop_of("-Os", 7).0.contains("mov edx, 7"), "{}", loop_of("-Os", 7).1);
+    assert!(loop_of("-Os", 0).0.contains("xor edx, edx"), "{}", loop_of("-Os", 0).1);
+    assert!(loop_of("-O1", 1).0.contains("mov edx, 1"), "{}", loop_of("-O1", 1).1);
 }
 
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:

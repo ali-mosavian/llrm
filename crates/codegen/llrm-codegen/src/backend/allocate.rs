@@ -577,7 +577,7 @@ impl RegAlloc {
         }
         let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
-        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
+        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes, self.size);
         body = constrain::hoisted(&constrained_body, &fixed);
         // A copy of an undefined value the constraints made is undefined too.
         if body.insns().iter().any(|one| crate::processimpdefs::implicit_def_of(one).is_some()) {
@@ -1726,6 +1726,7 @@ mod tests {
             &body_of("dead result", 0, vec![call]),
             Some(&pins(&[(1, RegId::EAX)])),
             &crate::backend::classes::RegisterClasses::m16(),
+            false,
         );
         let insns = lowered.insns();
         assert_eq!(insns.len(), 1, "a copy was made of a result nothing reads");

@@ -165,6 +165,7 @@ pub fn constrained(
     body: &LirBody,
     pinned: Option<&IndexMap<u32, RegId>>,
     classes: &RegisterClasses,
+    size: bool,
 ) -> (LirBody, IndexMap<u32, RegId>) {
     let regs = body.regs();
     // A pin the caller released is not merged back from `body.pins`.
@@ -185,8 +186,16 @@ pub fn constrained(
             // Not a qword symbol address: the pin rematerialises a copy to a
             // fixed register only from a def as cheap as a move
             // (`RegisterCoalescer::reMaterializeDef`, L1323), and `LEA64r` is
-            // not.
-            Some(constant) if constant.width == width && !(constant.address.is_some() && width == 8) => {
+            // not. Nor a constant a build for size selects as a pseudo that is
+            // not `isAsCheapAsAMove` (+1 and -1 at m32): the copy of a hoisted
+            // one stays a copy.
+            Some(constant)
+                if constant.width == width
+                    && !(constant.address.is_some() && width == 8)
+                    && !(size
+                        && constant.address.is_none()
+                        && (classes.uncheap_move_immediate_at_size)(width as u8, constant.value)) =>
+            {
                 Loc::Imm(constant.clone())
             }
             _ => Loc::Held(Held { value, width, offset: 0 }),
@@ -982,11 +991,20 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{constrained, hoisted};
+    use super::hoisted;
     use crate::backend::{allocresult, select, target};
     use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// Built for speed: what these tests are about.
+    fn constrained(
+        body: &LirBody,
+        pinned: Option<&IndexMap<u32, RegId>>,
+        classes: &crate::backend::classes::RegisterClasses,
+    ) -> (LirBody, IndexMap<u32, RegId>) {
+        super::constrained(body, pinned, classes, false)
+    }
 
     fn semantics(
         op: Operation,
