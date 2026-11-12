@@ -2308,6 +2308,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): whether `IVUsers` makes a
+    /// use of each incoming value of a phi that is a user, where the pin's
+    /// `Processed` check (`IVUsers.cpp` `AddUsersImpl`, "do not recurse into a
+    /// phi twice") keeps the first and drops the rest, so `i*300+21472` and
+    /// `i*300-81472` merging in one phi leave one of the two a multiply chain.
+    /// x_cordic m32 -O3: 100 trips of a 5-instruction chain gcc does not pay.
+    fn lsr_phi_operand_uses(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {

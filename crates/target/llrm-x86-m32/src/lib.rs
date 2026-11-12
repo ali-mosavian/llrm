@@ -195,6 +195,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
         lsr_size_order: true,
+        // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
+        lsr_phi_operand_uses: true,
         narrow_divide_live_limit: 4,
         sink_spares_ranges: true,
         promote_va_list: true,
