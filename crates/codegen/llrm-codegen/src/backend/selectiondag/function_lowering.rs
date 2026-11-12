@@ -325,7 +325,7 @@ pub fn argument_copy_candidates(
     let Some(entry) = function.entry() else { return Vec::new() };
     let types = &module.context.types;
     let parameters = function.parameters();
-    let mut states: std::collections::HashMap<ValueId, State> = Default::default();
+    let mut states: IdMap<ValueId, State> = IdMap::new();
     let mut found: Vec<ArgumentCopy> = Vec::new();
     let static_alloca = |operand: &Operand| match operand {
         Operand::Value(value) if is_static_alloca(*value) => Some(*value),
@@ -349,7 +349,7 @@ pub fn argument_copy_candidates(
             states.insert(alloca, State::Clobbered);
         }
         let Some(alloca) = static_alloca(&destination) else { continue };
-        if *states.entry(alloca).or_insert(State::Unknown) != State::Unknown {
+        if *states.get_or_insert_with(alloca, || State::Unknown) != State::Unknown {
             continue;
         }
         let ValueDef::Instruction(def) = function.value(alloca).def else { continue };
