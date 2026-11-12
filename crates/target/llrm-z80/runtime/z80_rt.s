@@ -1403,6 +1403,7 @@ d64_st:	add	hl,hl
 	exx
 	rl	c
 	rl	b
+	jr	c,d64_ov
 	push	bc
 	exx
 	push	bc
@@ -1444,6 +1445,23 @@ d64_fn:	ld	-16(ix),l
 	ld	-8(ix),c
 	ld	-7(ix),b
 	jp	fin64
+; the remainder passed 32 bits (a divisor over 2^31): it is the larger, so the divisor comes off whatever the borrow
+d64_ov:	exx
+	ld	a,c
+	sub	a,8(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,9(ix)
+	ld	b,a
+	exx
+	ld	a,c
+	sbc	a,10(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,11(ix)
+	ld	b,a
+	inc	l
+	jr	d64_nx
 ; a divisor of more than 32 bits: over a dividend of 32 bits or less the quotient is zero and the remainder the
 ; dividend; otherwise the restoring loop, one step per dividend bit
 d64_big:
