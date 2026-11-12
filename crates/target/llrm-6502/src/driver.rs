@@ -489,14 +489,6 @@ fn tail(
         sources.push(source);
         from_module.push(as_called && !paged_chosen);
     }
-    crate::routines::set_aligned_divides(crate::mulimage::aligned_divides_pay(
-        module,
-        &names,
-        &selections,
-        &from_module,
-        &program.layout,
-        request,
-    ));
     crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
