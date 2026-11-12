@@ -74,7 +74,7 @@ pub fn magic_is_wider(
     // SD444 widened to the unsigned case, flat targets only (m16 unmeasured).
     let sign = u32::from(zeros == 0 && (signed || flat));
     let longest = width - zeros.min(width);
-    // DEVIATE SD444-HALF (owner x86-m32, exit 2026-11-30), flat targets: a variable whose
+    // DEVIATE SD444-HALF (owner x86-m32, exit 2026-11-24), flat targets: a variable whose
     // length is not known is priced at half its width, the mean of a log-uniform length,
     // so a constant of that many bits goes to EAX. One bit short of the full width left
     // `x % 7`'s 30-bit magic the r/m operand, 40 clocks where the variable costs 10 + its
