@@ -67,7 +67,7 @@ use llrm_mir::tti::{Cost as TtiCost, LsrBytes, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
-use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
+use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
 
 /// `SetupCostDepthLimit`.
 const SETUP_COST_DEPTH_LIMIT: u32 = 7;
@@ -355,16 +355,17 @@ pub fn is_am_completely_folded_formula(
     // Either a canonical formula or a scale is right; a non-canonical one with
     // no scale is not.
     debug_assert!(f.is_canonical(se, l) || f.scale != 0);
+    let Some(mode) = f.mode() else { return false };
     is_am_completely_folded_between(
         tti,
         min_offset,
         max_offset,
         kind,
         access,
-        f.base_gv.is_some(),
+        mode.global,
         f.base_offset,
-        f.has_base_reg,
-        f.scale,
+        mode.has_base_reg,
+        mode.scale,
     )
 }
 
@@ -376,16 +377,17 @@ pub fn is_am_completely_folded(
     lu: &Use,
     f: &Formula,
 ) -> bool {
+    let Some(mode) = f.mode() else { return false };
     is_am_completely_folded_between(
         tti,
         lu.min_offset,
         lu.max_offset,
         lu.kind,
         lu.access_ty,
-        f.base_gv.is_some(),
+        mode.global,
         f.base_offset,
-        f.has_base_reg,
-        f.scale,
+        mode.has_base_reg,
+        mode.scale,
     )
 }
 
@@ -426,7 +428,8 @@ pub fn is_legal_use_formula(
     access: MemAccessTy,
     f: &Formula,
 ) -> bool {
-    is_legal_use(tti, min_offset, max_offset, kind, access, f.base_gv.is_some(), f.base_offset, f.has_base_reg, f.scale)
+    let Some(mode) = f.mode() else { return false };
+    is_legal_use(tti, min_offset, max_offset, kind, access, mode.global, f.base_offset, mode.has_base_reg, mode.scale)
 }
 
 /// `isLegalAddImmediate`.
@@ -456,13 +459,15 @@ pub fn scaling_factor_cost(
     match lu.kind {
         Kind::Address => {
             // The price at both ends of the offsets.
+            // Folded above, so the formula has a mode.
+            let mode = f.mode().expect("a folded formula has a mode");
             let at = |offset: Immediate| {
                 tti.scaling_factor_cost_at(
                     lu.access_ty.bytes,
-                    f.base_gv.is_some(),
+                    mode.global,
                     f.base_offset.add_unsigned(offset).0,
-                    f.has_base_reg,
-                    f.scale,
+                    mode.has_base_reg,
+                    mode.scale,
                 )
             };
             let (min, max) = (at(lu.min_offset), at(lu.max_offset));
@@ -665,7 +670,7 @@ impl Cost {
             && lu.kind != Kind::Address
             && parts >= 2
             && r.tti.address_form_adds_offsets(narrowest_bits(r, lu, f))
-            && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
+            && r.tti.is_legal_addressing_mode(f.has_global(), f.unfolded_offset.0, true, f.scale);
         // DEVIATE LU16: where the target says so, the unfolded offset of an
         // address use that the target takes beside its one base register
         // (no scale) is the address's own immediate once the offset is folded
@@ -675,7 +680,7 @@ impl Cost {
                 && lu.kind == Kind::Address
                 && f.scale == 0
                 && r.tti.unfolded_address_offsets_fold()
-                && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, 0));
+                && r.tti.is_legal_addressing_mode(f.has_global(), f.unfolded_offset.0, true, 0));
         if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
         }
@@ -702,8 +707,11 @@ impl Cost {
             if lu.kind == Kind::Address {
                 for fixup in &lu.fixups {
                     let offset = fixup.offset.add_unsigned(f.base_offset).0;
-                    self.size_bytes += if f.base_gv.is_some() {
+                    self.size_bytes += if f.has_global() {
                         4
+                    } else if matches!(f.symbol, Some(Symbol::Frame(_))) {
+                        // The frame displacement is laid out after this pass.
+                        2
                     } else if offset == 0 {
                         0
                     } else if i8::try_from(offset).is_ok() {
@@ -734,7 +742,7 @@ impl Cost {
         // The non-zero immediates.
         for fixup in &lu.fixups {
             let offset = fixup.offset.add_unsigned(f.base_offset);
-            if f.base_gv.is_some() {
+            if f.has_global() {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
             } else if offset.is_non_zero() {
@@ -744,15 +752,17 @@ impl Cost {
             if lu.kind == Kind::Address
                 && inside
                 && offset.is_non_zero()
-                && !is_am_completely_folded_at(
-                    r.tti,
-                    Kind::Address,
-                    lu.access_ty,
-                    f.base_gv.is_some(),
-                    offset,
-                    f.has_base_reg,
-                    f.scale,
-                )
+                && !f.mode().is_some_and(|mode| {
+                    is_am_completely_folded_at(
+                        r.tti,
+                        Kind::Address,
+                        lu.access_ty,
+                        mode.global,
+                        offset,
+                        mode.has_base_reg,
+                        mode.scale,
+                    )
+                })
             {
                 self.c.num_base_adds += 1;
             }

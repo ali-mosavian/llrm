@@ -485,6 +485,7 @@ impl llrm_target::Target for M64 {
                             // trial copy priced by the sheet's latencies.
                             // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
                             ipsccp_widen_keeps_sign: true,
+                            ipsccp_widen_keeps_sign_at_size: true,
                             // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
                             // 28-micro-op loop buffer gave the jam of an outer loop
                             // of that size a count of 0 (particle -O3: 15850 cycles,
