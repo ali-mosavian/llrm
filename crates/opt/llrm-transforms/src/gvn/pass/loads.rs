@@ -23,7 +23,7 @@
 //! `performLoadPRE`), and `performScalarPRE` of a load's GEP indices is not
 //! called.
 
-use llrm_analysis::basicaa::BasicAA;
+use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::memdep::{Env as MdEnv, MemDepResult, NonLocalDepResult, SelectAddr};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ssaupdater::SsaUpdater;
@@ -193,7 +193,7 @@ impl GvnPass<'_> {
         inst: InstId,
     ) -> MemDepResult {
         let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
-        let mut aa = BasicAA::new(&unit);
+        let mut aa = AggregateAA::default_pipeline(&unit);
         self.md.get_dependency(MdEnv { unit: &unit, dt: &self.dt }, &mut aa, inst)
     }
 
@@ -370,7 +370,7 @@ impl GvnPass<'_> {
     ) -> Option<Operand> {
         let function = &*self.function;
         let unit = exposing(Unit::within(&*self.context, self.layout, function, self.outer), self.exposed);
-        let mut aa = BasicAA::new(&unit);
+        let mut aa = AggregateAA::default_pipeline(&unit);
         let mut batch = llrm_analysis::aa::BatchAAResults::new(&mut aa);
         let mut visited = 0u32;
         let from_bb = function.parent(from).expect("a placed instruction");
@@ -615,7 +615,7 @@ impl GvnPass<'_> {
         let mut deps: Vec<NonLocalDepResult> = Vec::new();
         {
             let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
-            let mut aa = BasicAA::new(&unit);
+            let mut aa = AggregateAA::default_pipeline(&unit);
             self.md.get_non_local_pointer_dependency(MdEnv { unit: &unit, dt: &self.dt }, &mut aa, load, &mut deps);
         }
         // If we had to process more than one hundred blocks to find the
