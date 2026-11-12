@@ -1872,9 +1872,11 @@ define i1 @uge(double %a, double %b) addrspace(1) {
             .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':') && !compares(line))
             .collect::<Vec<_>>()
     };
-    // DEVIATE X87-FCMP-AH: at a 486 the status word's carry bit is `test ah, 1`; "below or equal" is the mask 65 (C0 | C3).
-    assert_eq!(answered("ult"), ["test ah, 1", "setne al"]);
-    assert_eq!(answered("uge"), ["test ah, 65", "setne al"]);
+    // DEVIATE X87-FCMP-AH: the status word's carry bit is `test ah, 1` only where the clock it saves pays for its two
+    // bytes at the speed rate; m16's 500 milliclocks a byte make it a tie, which keeps `sahf` (#9259).
+    let (ult, uge) = (answered("ult"), answered("uge"));
+    assert_eq!(ult, ["setb al"]);
+    assert_eq!(uge, ["setbe al"]);
 }
 
 /// A port below 256 is an immediate, any other is in dx; the byte is in al.

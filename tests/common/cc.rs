@@ -48,6 +48,20 @@ pub fn missing_env(
     wanted
 }
 
+/// `missing_env` for a compile with `arguments` (`-m32` is wide, `-m64` flat).
+pub fn missing_env_for<S: AsRef<std::ffi::OsStr>>(
+    arguments: &[S],
+    value: impl Fn(&str) -> Option<OsString>,
+) -> Vec<&'static str> {
+    let has = |flag: &str| arguments.iter().any(|one| one.as_ref() == std::ffi::OsStr::new(flag));
+    missing_env(value, has("-m32"), has("-m64"))
+}
+
+/// The process environment, with the Open Watcom tree where this machine keeps it.
+pub fn toolchain_env(name: &str) -> Option<OsString> {
+    if name == "OW_TREE" { Some(llrm_cc::ow_tree().into()) } else { std::env::var_os(name) }
+}
+
 /// Once per process: the clang `llrm-cc` will use, by path and md5, so a run's
 /// log says which toolchain it had.
 fn announce_toolchain() {
@@ -139,11 +153,7 @@ impl LlrmC {
     fn command(&mut self) -> Command {
         let wide = self.arguments.iter().any(|one| one == "-m32");
         let flat64 = self.arguments.iter().any(|one| one == "-m64");
-        let missing = missing_env(
-            |name| if name == "OW_TREE" { Some(llrm_cc::ow_tree().into()) } else { std::env::var_os(name) },
-            wide,
-            flat64,
-        );
+        let missing = missing_env_for(&self.arguments, toolchain_env);
         assert!(
             missing.is_empty(),
             "llrm-cc needs {missing:?} set to existing paths (the pinned clang, Open Watcom headers, the m16 clang); without them it falls back to the system clang"

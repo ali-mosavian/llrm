@@ -1402,6 +1402,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE LG1, LG2: `GenerateICmpZeroScales` scales a compare against zero
+    /// by a factor whose product may wrap, where it is still a zero test
+    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as the
+    /// pin has it (wasm). owner: wasm, exit: 2026-12-04.
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        true
+    }
+
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         false
