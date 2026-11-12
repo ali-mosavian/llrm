@@ -2922,6 +2922,22 @@ pub fn set_frequencies(frequencies: &[(u32, f64)]) {
     FREQUENCIES.with(|one| *one.borrow_mut() = frequencies.iter().copied().collect());
 }
 
+/// The block frequencies now in force.
+pub fn frequencies() -> llrm_support::hash::HashMap<u32, f64> {
+    FREQUENCIES.with(|one| one.borrow().clone())
+}
+
+/// Puts `with` in force, and returns what was.
+pub fn replace_frequencies(with: llrm_support::hash::HashMap<u32, f64>) -> llrm_support::hash::HashMap<u32, f64> {
+    FREQUENCIES.with(|one| std::mem::replace(&mut *one.borrow_mut(), with))
+}
+
+/// The frequency of block `id` relative to the function's entry, if the
+/// selection gave one.
+pub fn frequency_of(id: u32) -> Option<f64> {
+    FREQUENCIES.with(|one| one.borrow().get(&id).copied())
+}
+
 /// The block a label names (`L<function>_<block>`).
 fn block_of(label: &str) -> Option<u32> {
     label.strip_prefix('L')?.rsplit_once('_')?.1.parse().ok()
