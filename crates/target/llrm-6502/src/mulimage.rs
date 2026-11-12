@@ -156,7 +156,12 @@ fn linked(
             }
         }
     }
-    // a routine links the ones it calls
+    links_callees(&mut found);
+    Ok(found)
+}
+
+/// `found` and the routines they call, in turn.
+fn links_callees(found: &mut std::collections::BTreeSet<String>) {
     let mut pending: Vec<String> = found.iter().cloned().collect();
     while let Some(routine) = pending.pop() {
         for line in routine_code(&routine).lines() {
@@ -168,7 +173,6 @@ fn linked(
             }
         }
     }
-    Ok(found)
 }
 
 /// A product of two words widened to 32 bits is one `__umulhisi3` (16 x 16)
@@ -245,4 +249,60 @@ pub fn widen_when_it_pays(
         }
     }
     Ok(())
+}
+
+/// The compact word divides loop 16 times whatever the quotient; the aligned ones loop for its bits (one or
+/// two for Euclid's gcd) and are 16 B larger. They are the module's choice, as the routine is linked once
+/// for all its calls: kept when the clocks they save, each call weighted by its block's trips, are worth
+/// the bytes at the -Os price of a byte (`[copy] byte_clocks_size`), the one policy that prices a size
+/// against a clock at size.
+///
+/// DEVIATE 6502-ALIGNED-DIVIDE (owner llrm-target-6502, exit 2026-11-24): llvm-mos's `__umodhi3` aligns
+/// the divisor too; the pin has no divide routine to price. Exit: with the shared inline-or-call cost model.
+///
+/// `from_module[i]` is whether `selections[i]` was selected from `module` itself.
+pub fn aligned_divides_pay(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    selections: &[Selection],
+    from_module: &[bool],
+    layout: &llrm_mir::datalayout::DataLayout,
+    request: &Request,
+) -> bool {
+    use crate::dagisel::generated::ids::opcode as op;
+    use llrm_codegen::backend::selectiondag::isd::ISD;
+    if !matches!(request.level, Level::Os | Level::Oz) {
+        return false;
+    }
+    let (mut weighted, mut used) = (0u64, std::collections::BTreeSet::new());
+    for (at, (name, selection)) in names.iter().zip(selections).enumerate() {
+        let function = module.named(name).and_then(|id| module.global(id).function());
+        let weights = function.filter(|_| from_module[at]).map(|function| crate::weights::block_weights(module, function, layout));
+        for one in &selection.blocks {
+            for &node in one.units.iter().flat_map(|unit| &unit.nodes) {
+                let routine = match one.dag.nodes()[node as usize].opcode {
+                    ISD::Machine(code) if code as u16 == op::SDIV16 => "__divhi3c",
+                    ISD::Machine(code) if code as u16 == op::SREM16 => "__modhi3c",
+                    ISD::Machine(code) if code as u16 == op::UDIVREM16 => "__udivhi3c",
+                    _ => continue,
+                };
+                used.insert(routine.to_owned());
+                let weight = weights.as_ref().and_then(|all| all.get(one.block.0 as usize)).copied().unwrap_or(1);
+                weighted = weighted.saturating_add(weight);
+            }
+        }
+    }
+    if used.is_empty() {
+        return false;
+    }
+    let image = |routines: std::collections::BTreeSet<String>| -> i64 {
+        let mut all = routines;
+        links_callees(&mut all);
+        all.iter().map(|one| i64::from(library_bytes(one))).sum()
+    };
+    let aligned = used.iter().filter_map(|one| crate::routines::aligned_variant(one)).map(str::to_owned).collect();
+    let growth = image(aligned) - image(used);
+    let price = i64::try_from(crate::routines::copy_prices().byte_clocks.1).unwrap_or(i64::MAX);
+    let saved = i64::try_from(weighted.saturating_mul(crate::routines::aligned_divide_saving())).unwrap_or(i64::MAX);
+    growth <= 0 || saved >= price.saturating_mul(growth)
 }

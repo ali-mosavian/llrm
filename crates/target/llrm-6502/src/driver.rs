@@ -409,6 +409,7 @@ fn tail(
     price: bool,
     audit: bool,
 ) -> Result<Assembled, String> {
+    crate::routines::set_aligned_divides(false);
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
     let copies = if request.level == Level::O0 {
@@ -488,6 +489,14 @@ fn tail(
         sources.push(source);
         from_module.push(as_called && !paged_chosen);
     }
+    crate::routines::set_aligned_divides(crate::mulimage::aligned_divides_pay(
+        module,
+        &names,
+        &selections,
+        &from_module,
+        &program.layout,
+        request,
+    ));
     crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
