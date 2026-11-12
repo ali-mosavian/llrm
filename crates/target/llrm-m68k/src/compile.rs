@@ -188,6 +188,8 @@ pub struct Options {
     /// that saved a callee-saved register is also built with it, and the
     /// cheaper kept.
     pub relax_classes: bool,
+    /// Make a `moveq` constant again where it is read ([`crate::moveqremat`]).
+    pub remat_constants: bool,
     /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
     /// [`crate::dagisel::mulprice`]).
     pub mul: crate::dagisel::mulprice::Mode,
@@ -234,6 +236,7 @@ impl Options {
         carry_chain: true,
         global_copies: true,
         relax_classes: false,
+        remat_constants: false,
         mul: crate::dagisel::mulprice::Mode::Pin,
         loop_carried_first: false,
         debug: false,
@@ -274,6 +277,7 @@ impl Default for Options {
             carry_chain: true,
             global_copies: true,
             relax_classes: true,
+            remat_constants: true,
             mul: crate::dagisel::mulprice::Mode::Trial,
             loop_carried_first: true,
             debug: false,
@@ -350,14 +354,15 @@ fn items_trials(
     let saved = touched.global_copies;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {}",
             touched.tail_dup,
             touched.return_dup,
             touched.class_split,
             touched.compare_destinations,
             touched.carry_chain,
             touched.global_copies,
-            touched.mul_trial
+            touched.mul_trial,
+            touched.remat_constants
         );
     }
     if !touched.any() {
@@ -426,6 +431,14 @@ fn items_trials(
         if crate::trial::keeps(&items, &kept, cpu, price) {
             kept = items;
             options = other;
+        }
+    }
+    if touched.remat_constants {
+        let without = Options { remat_constants: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
         }
     }
     // last: the two builds compared are final, the other choices made
@@ -509,6 +522,9 @@ struct Touched {
     mul_trial: bool,
     /// The build widened the class of a pass-through copy temp.
     relax_classes: bool,
+    /// The build marked a `moveq` constant rematerializable
+    /// ([`crate::moveqremat`]).
+    remat_constants: bool,
     /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
     /// trial credits clocks only inside loops, since a straight-line multiply
     /// may never run.
@@ -524,6 +540,7 @@ impl Touched {
             || self.carry_chain
             || self.global_copies
             || self.mul_trial
+            || self.remat_constants
     }
 }
 
@@ -678,6 +695,9 @@ fn items_once(
     }
     if options.indexed && options.relax_classes && !options.shared_prelude {
         touched.relax_classes = crate::regalloc::relax_copy_only_classes(&mut function);
+    }
+    if options.remat_constants {
+        touched.remat_constants = crate::moveqremat::rematerializable_constants(&mut function) > 0;
     }
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
