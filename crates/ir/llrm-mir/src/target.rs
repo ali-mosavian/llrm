@@ -97,6 +97,12 @@ pub struct Tuning {
     /// finished object is smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
+    /// DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): a function that binds
+    /// locally (external linkage, hidden or protected, or default visibility in code that is not
+    /// shared-library code) takes part in the callee-written-registers facts, as GCC's `-fipa-ra`
+    /// uses every definition no other definition can replace; the pin's `RegUsageInfoCollector`
+    /// takes local linkage only (`isSafeForNoCSROpt`) and is off by default.
+    pub ipra_binds_local: bool,
     /// DEVIATE UNROLL-OS-TRIAL-STRICT (owner llrm-target-x86-m64, exit 2026-11-24): the -Os unroll trial is kept
     /// only where the object is smaller, never for a few bytes a function that the code runs less
     /// (`trial::keeps_unroll_at_size`): bytes are the one strict axis at -Os. False: m32's rule.
@@ -556,6 +562,7 @@ impl Tuning {
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
+        ipra_binds_local: false,
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
