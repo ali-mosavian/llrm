@@ -416,7 +416,7 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
-                            // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
+                            // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass after
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,

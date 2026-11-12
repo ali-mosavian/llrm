@@ -136,8 +136,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
         unroll_o1_analyzed_trips: Some(16),
-        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after inlining, as gcc's
-        // IPA-CP): a function called directly only after inlining keeps its address-taken
+        // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass after inlining, as
+        // gcc's IPA-CP): a function called directly only after inlining keeps its address-taken
         // parameters through the pin's one IPSCCP; a second one after promotion folds them.
         // m32 memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
@@ -224,7 +224,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
         inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
-        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w9, exit
+        // 2026-11-24.
         recursive_inlining: Some((8, 450)),
         // DEVIATE REC-2 bar: gcc's 15/30 size units in our `gcc_insns`, fitted
         // to the 10 corpus recursions (insns = 1.6 x gcc size less 5.5; queens
