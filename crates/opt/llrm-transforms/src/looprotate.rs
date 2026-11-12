@@ -38,8 +38,9 @@
 //!   `llvm.coro` check: MIR has no local noalias scope declarations, and no
 //!   coroutines. Debug records stand before an instruction and move with it, so
 //!   only the preheader's old terminator needs `flushTerminatorDbgRecords`.
-//! - R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
-//!   sits in a preheader whose analyses the rotation is changing.
+//! - R5 The dominator tree and assumptions `simplifyInstruction` is given are
+//!   built from the function when first asked and dropped when a loop rotates
+//!   (the pin keeps its own up to date).
 //! - R6 A target with no cost model (`Machine::tti`) is priced by the generic
 //!   profile, `llrm_mir::tti::Basic`: a pass names no target crate.
 //!
@@ -167,6 +168,8 @@ pub struct Run<'a> {
     /// The expressions `profitable_to_rotate_loop_exiting_latch` asks about,
     /// kept while no loop has changed (R7); a rotation drops them.
     scev: std::cell::RefCell<Option<llrm_analysis::scev::analysis::ScevSession>>,
+    /// `SQ`'s dominator tree and assumptions (R5), kept like `scev`.
+    dom: std::cell::RefCell<Option<llrm_mir::valuetracking::FunctionAnalyses>>,
 }
 
 impl Run<'_> {
@@ -544,6 +547,26 @@ fn profitable_to_rotate_loop_exiting_latch(
     se.is_could_not_compute(latch_count) && !se.is_could_not_compute(header_count)
 }
 
+/// `simplifyInstruction(copy, SQ)`: with the dominator tree, which finds the
+/// guard a dominating test implies (R5).
+fn simplified_copy(
+    run: &mut Run,
+    copy: InstId,
+) -> Option<Operand> {
+    let mut held = run.dom.borrow_mut();
+    let analyses = held.get_or_insert_with(|| {
+        llrm_mir::valuetracking::FunctionAnalyses::of(run.context, run.globals, run.metadata, run.layout, run.function)
+    });
+    llrm_mir::simplify::simplify_instruction_in(
+        run.context,
+        run.globals,
+        run.layout,
+        Some(&*analyses),
+        run.function,
+        copy,
+    )
+}
+
 /// `LoopInfo::replacementPreservesLCSSAForm`.
 pub(crate) fn replacement_preserves_lcssa_form(
     info: &LoopInfo,
@@ -677,7 +700,7 @@ fn guard_folds(
                 run.function.set_operand(copy, index, mapped);
             }
         }
-        match llrm_mir::simplify::simplify_instruction(run.context, run.layout, run.function, copy) {
+        match simplified_copy(run, copy) {
             Some(value) => {
                 map.insert(result, value);
             }
@@ -947,7 +970,7 @@ fn rotate_loop(
         // With the operands remapped, see if the instruction constant folds or
         // is otherwise simplifiable. This commonly occurs because the entry
         // from phis allows compares and other instructions to fold.
-        let simplified = llrm_mir::simplify::simplify_instruction(run.context, run.layout, run.function, copy);
+        let simplified = simplified_copy(run, copy);
         let original = run.function.instruction(inst).result;
         match simplified {
             Some(value) if replacement_preserves_lcssa_form(info, run.function, copy, value) => {
@@ -1167,6 +1190,7 @@ pub fn process_loop(
     let changed = rotated_latch.is_some() || simplified_latch.is_some();
     if changed {
         run.scev.take();
+        run.dom.take();
     }
     changed
 }
@@ -1286,6 +1310,7 @@ impl FunctionPass for LoopRotate {
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
             scev: Default::default(),
+            dom: Default::default(),
         };
         if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -1348,6 +1373,7 @@ pub fn rotate_function_knowing(
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
             scev: Default::default(),
+            dom: Default::default(),
         };
         rotate_loops(&mut run)
     };
