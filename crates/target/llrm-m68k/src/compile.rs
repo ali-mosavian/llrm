@@ -123,8 +123,10 @@ pub struct Options {
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
-    /// phi elimination ([`crate::regalloc::shared_cse`]). Off until its corpus
-    /// A/B has no cell worse than main (11-09: O2 68000 +542 B, 27 worse).
+    /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
+    /// changed is also built without it and the cheaper kept
+    /// ([`crate::trial`]): shared values live longer, and across calls they
+    /// spill (11-12 corpus: 222 cells larger, 136 smaller, without the trial).
     pub shared_cse: bool,
     /// A value read in a block after an earlier one defines it is read from its
     /// register, as in the pin's MIR: what the hosted stages (MachineLICM) need
@@ -261,7 +263,7 @@ impl Default for Options {
             reuse_shift_flags: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
-            shared_cse: false,
+            shared_cse: true,
             direct_copies: false,
             shared_licm: false,
             shared_prelude: false,
@@ -323,21 +325,31 @@ pub fn items_with(
         module
     };
     let options = Options { mid_end: false, global_copies: options.global_copies, ..options };
-    let (plain, saved, chosen) = items_trials(module, name, cpu, Options { relax_classes: false, ..options })?;
-    if !options.relax_classes || !saved {
-        return Ok(plain);
-    }
-    let (relaxed, touched) = items_once(module, name, cpu, Options { relax_classes: true, ..chosen })?;
-    if !touched.relax_classes {
-        return Ok(plain);
-    }
-    let wants_size = options.size
-        || module
-            .named(name)
-            .and_then(|id| module.global(id).function())
-            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    let wants_size = size_build(module, name, options);
     let price = crate::timing::Price::of(wants_size, options.strict);
-    Ok(if crate::trial::keeps(&relaxed, &plain, cpu, price) { relaxed } else { plain })
+    // The relaxation is the last choice of a build, so it is made before the
+    // two builds of the shared `MachineCSE` are compared.
+    let finished = |options: Options| -> Result<(Vec<Item>, bool), String> {
+        let (plain, saved, chosen, shared) =
+            items_trials(module, name, cpu, Options { relax_classes: false, ..options })?;
+        if !options.relax_classes || !saved {
+            return Ok((plain, shared));
+        }
+        let (relaxed, touched) = items_once(module, name, cpu, Options { relax_classes: true, ..chosen })?;
+        let relax = touched.relax_classes && crate::trial::keeps(&relaxed, &plain, cpu, price);
+        Ok((if relax { relaxed } else { plain }, shared))
+    };
+    let (with, shared) = finished(options)?;
+    // The shared `MachineCSE` lengthens live ranges, and across calls they
+    // spill. A function it changed is built through the whole sequence both
+    // ways (the other trials' choices depend on the shape), the cheaper kept.
+    if shared {
+        let (without, _) = finished(Options { shared_cse: false, ..options })?;
+        if !crate::trial::keeps(&with, &without, cpu, price) {
+            return Ok(without);
+        }
+    }
+    Ok(with)
 }
 
 /// The trials of [`items_with`] on a module the mid-end has run on: the items,
@@ -348,13 +360,13 @@ fn items_trials(
     name: &str,
     cpu: Cpu,
     options: Options,
-) -> Result<(Vec<Item>, bool, Options), String> {
+) -> Result<(Vec<Item>, bool, Options, bool), String> {
     let mut options = options;
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
     let saved = touched.global_copies;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {}",
+            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {} shared_cse {}",
             touched.tail_dup,
             touched.return_dup,
             touched.class_split,
@@ -362,17 +374,14 @@ fn items_trials(
             touched.carry_chain,
             touched.global_copies,
             touched.mul_trial,
-            touched.remat_constants
+            touched.remat_constants,
+            touched.shared_cse
         );
     }
     if !touched.any() {
-        return Ok((kept, saved, options));
+        return Ok((kept, saved, options, touched.shared_cse));
     }
-    let wants_size = options.size
-        || module
-            .named(name)
-            .and_then(|id| module.global(id).function())
-            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    let wants_size = size_build(module, name, options);
     let price = crate::timing::Price::of(wants_size, options.strict);
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
@@ -457,7 +466,7 @@ fn items_trials(
             kept = plain;
         }
     }
-    Ok((kept, saved, options))
+    Ok((kept, saved, options, touched.shared_cse))
 }
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
@@ -525,6 +534,8 @@ struct Touched {
     /// The build marked a `moveq` constant rematerializable
     /// ([`crate::moveqremat`]).
     remat_constants: bool,
+    /// The shared `MachineCSE` changed the function.
+    shared_cse: bool,
     /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
     /// trial credits clocks only inside loops, since a straight-line multiply
     /// may never run.
@@ -542,6 +553,27 @@ impl Touched {
             || self.mul_trial
             || self.remat_constants
     }
+}
+
+/// Whether `name` is built for size: the level, or an `optsize`/`minsize`
+/// attribute.
+fn size_build(
+    module: &Module,
+    name: &str,
+    options: Options,
+) -> bool {
+    options.size
+        || module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
+}
+
+fn same_instructions(
+    a: &crate::mfunc::MFunction,
+    b: &crate::mfunc::MFunction,
+) -> bool {
+    a.blocks.len() == b.blocks.len() && a.blocks.iter().zip(&b.blocks).all(|(a, b)| a.insts == b.insts)
 }
 
 /// The bytes of `items` as assembled (a branch not yet sized counts 6).
@@ -675,7 +707,9 @@ fn items_once(
         function = crate::regalloc::shared_licm(&function, wants_size)?;
     }
     if options.shared_cse {
-        function = crate::regalloc::shared_cse(&function)?;
+        let shared = crate::regalloc::shared_cse(&function)?;
+        touched.shared_cse = !same_instructions(&function, &shared);
+        function = shared;
     }
     machine_sink(&mut function);
     if options.short && options.reuse_shift_out_flags {
