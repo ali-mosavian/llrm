@@ -1349,6 +1349,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::ipsccp_widen_keeps_sign_at_size`.
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
