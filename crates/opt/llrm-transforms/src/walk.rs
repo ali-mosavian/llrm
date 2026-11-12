@@ -100,7 +100,7 @@ impl ProgramPass for ModuleIpo {
         let costs = program.target.size_costs();
         let mut modules = managers(program, analyses);
         let mut changed = false;
-        for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
+        for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules, self.inline.single) {
             modules[at].changed(id);
             changed = true;
         }
@@ -161,7 +161,7 @@ impl ProgramPass for ModuleIpo {
             if !cloned_now {
                 break;
             }
-            for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
+            for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules, self.inline.single) {
                 modules[at].changed(id);
             }
         }
