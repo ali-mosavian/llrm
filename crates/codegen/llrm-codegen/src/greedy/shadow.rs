@@ -137,10 +137,16 @@ impl SpillWeightEnv for BodyEnv<'_> {
     ) -> Option<(u32, u32)> {
         use crate::model::ir::Loc;
         let what = instr.what.as_ref()?;
-        let held = what.dests.iter().chain(&what.sources).find_map(|place| match place {
-            Loc::Held(held) if held.value == reg => Some(*held),
-            _ => None,
-        })?;
+        let held = what
+            .dests
+            .iter()
+            .chain(&what.sources)
+            .find_map(
+                |place| match place {
+                    Loc::Held(held) if held.value == reg => Some(*held),
+                    _ => None,
+                },
+            )?;
         // The whole of a value is as wide as its instructions read it; a value
         // none reads is as wide as its widest access.
         let whole = match self.orders.natural.borrow().get(&reg) {
@@ -498,7 +504,9 @@ fn reclass_by_operands(
             let kept: Vec<RegId> = order
                 .iter()
                 .copied()
-                .filter(|one| lanes.iter().all(|&(offset, width)| registers.lane_register(*one, offset, width).is_some()))
+                .filter(|one| {
+                    lanes.iter().all(|&(offset, width)| registers.lane_register(*one, offset, width).is_some())
+                })
                 .collect();
             if !kept.is_empty() {
                 *order = kept;
@@ -1279,15 +1287,16 @@ fn intervals_to_allocate(
     body: &LirBody,
     carry: bool,
 ) -> LiveIntervals {
-    let mut lis =
-        crate::liveness::liveintervals::take_handed_over_edited_to(body, carry).unwrap_or_else(|| LiveIntervals::new(body));
+    let mut lis = crate::liveness::liveintervals::take_handed_over_edited_to(body, carry)
+        .unwrap_or_else(|| LiveIntervals::new(body));
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
         // The premise: the intervals the edits left are the ones made afresh.
         lis.assert_intervals_cover_afresh(body);
     }
     lis.indexes.pack_indexes();
     if llrm_support::env_flag!("LLRM_SLOT_COUNT") {
-        // `tools/slotcmp.py`: the instructions the pin's `-stop-before=greedy` MIR of the same IR has.
+        // `tools/slotcmp.py`: the instructions the pin's `-stop-before=greedy`
+        // MIR of the same IR has.
         let slots: usize = body
             .blocks
             .iter()
@@ -1736,9 +1745,7 @@ fn exiting_blocks(body: &LirBody) -> Vec<bool> {
     body.blocks
         .iter()
         .map(|block| {
-            forest
-                .innermost(block.at)
-                .is_some_and(|inner| block.succ.iter().any(|to| !forest.contains(inner, *to)))
+            forest.innermost(block.at).is_some_and(|inner| block.succ.iter().any(|to| !forest.contains(inner, *to)))
         })
         .collect()
 }
@@ -2099,7 +2106,13 @@ mod tests {
             (from..from + n).map(|k| Arc::new(Insn::new(k, None, None, vec![], vec![]))).collect()
         };
         let body_of = |list: Vec<Arc<Insn>>| {
-            LirBody::new("holes", 0, vec![Block::from(LirBlock::new(0, list))], IndexMap::default(), IndexMap::default())
+            LirBody::new(
+                "holes",
+                0,
+                vec![Block::from(LirBlock::new(0, list))],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
         };
         let all = make(0, 4);
         let before = body_of(all.clone());
@@ -2110,8 +2123,8 @@ mod tests {
         let after = body_of(vec![Arc::clone(&all[2]), Arc::clone(&all[0]), Arc::clone(&all[3])]);
         let lis = intervals_to_allocate(&after, true);
         let entries = lis.indexes.get_last_index().get_index() / SlotIndex::INSTR_DIST + 1;
-        // Start, 4 instructions, the end of the block, and the move's new entry;
-        // numbered afresh the body has 5.
+        // Start, 4 instructions, the end of the block, and the move's new
+        // entry; numbered afresh the body has 5.
         assert_eq!(entries, 7, "the entries of the coalescer's list, not a fresh one");
         // A target that does not carry them (x86, until priced) numbers afresh.
         crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
@@ -2454,7 +2467,8 @@ mod tests {
     fn reachability_is_worked_out_for_the_blocks_asked_of() {
         let blocks = 300;
         let flow: Vec<Vec<usize>> = (0..blocks).map(|at| if at + 1 < blocks { vec![at + 1] } else { vec![] }).collect();
-        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), Vec::new(), Vec::new(), widths(&[])).with_flow(flow);
+        let masks =
+            CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), Vec::new(), Vec::new(), widths(&[])).with_flow(flow);
         assert!(masks.reaches(0, 299) && masks.reaches(10, 11) && !masks.reaches(11, 10));
         assert!(!masks.reaches(299, 299), "a block does not reach itself without a loop");
         let made = masks.reach.borrow().iter().filter(|row| row.is_some()).count();
@@ -2915,7 +2929,12 @@ mod tests {
             &tables,
             &Default::default(),
             Some(&sets),
-            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes, basic_semantics: false, address_reference_milliweight: 3000 },
+            &crate::greedy::tii::X86InstrInfo {
+                bits: 32,
+                classes: &classes,
+                basic_semantics: false,
+                address_reference_milliweight: 3000,
+            },
             classes.registers,
             &lis,
             &[word, base],
@@ -3059,7 +3078,8 @@ mod exiting_tests {
 
     /// `decide_with_split` scanned every loop for every block (654k
     /// `Body::contains` calls, 41 M of memory_expansion's compile); one forest
-    /// lookup per block gives the same answer: 1 -> 2 <-> 3 (inner), 2 -> 4 -> 1.
+    /// lookup per block gives the same answer: 1 -> 2 <-> 3 (inner), 2 -> 4 ->
+    /// 1.
     #[test]
     fn test_the_exiting_blocks_of_nested_loops_are_those_with_an_edge_out_of_their_innermost_loop() {
         let block = |at: i64, succ: &[i64]| LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, Vec::new()) };

@@ -22,14 +22,21 @@ use crate::mfunc::MFunction;
 /// The values `moveq` loads.
 const MOVEQ: std::ops::RangeInclusive<i64> = -128..=127;
 
-pub fn rematerializable_constants(function: &mut MFunction) {
+/// How many constants it marked.
+pub fn rematerializable_constants(function: &mut MFunction) -> usize {
+    let mut marked = 0;
     for block in &mut function.blocks {
         for one in &mut block.insts {
             if one.kind == Kind::Op("MOVI32ri")
-                && matches!(one.operands[..], [Operand::Def(_), Operand::Imm(value)] if MOVEQ.contains(&value))
+                && matches!(
+                    one.operands[..],
+                    [Operand::Def(_), Operand::Imm(value)] if MOVEQ.contains(&value)
+                )
             {
                 one.rematerializable = true;
+                marked += 1;
             }
         }
     }
+    marked
 }

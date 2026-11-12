@@ -84,7 +84,8 @@ pub fn preserve_flags(
                 r += 1;
                 continue;
             }
-            let Some(mut s) = block.insts[..r].iter().rposition(|inst| inst.sets_flags && !is_remade_moveq(inst)) else {
+            let Some(mut s) = block.insts[..r].iter().rposition(|inst| inst.sets_flags && !is_remade_moveq(inst))
+            else {
                 r += 1;
                 continue;
             };
