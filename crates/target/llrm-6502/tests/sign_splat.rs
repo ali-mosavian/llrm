@@ -18,3 +18,11 @@ fn a_word_shifted_right_by_15_splats_its_sign_once() {
     let n = splats("define i16 @f(i16 %x) {\n  %s = ashr i16 %x, 15\n  ret i16 %s\n}\n");
     assert_eq!(n, 1, "{n} splats");
 }
+
+/// A char widened to long splatted its sign twice: the low word's high byte
+/// and the high word, each from the char (rep_count -O1, 2026-11-12).
+#[test]
+fn a_char_widened_to_long_splats_its_sign_once() {
+    let n = splats("define i32 @f(i8 %x) {\n  %s = sext i8 %x to i32\n  ret i32 %s\n}\n");
+    assert_eq!(n, 1, "{n} splats");
+}
