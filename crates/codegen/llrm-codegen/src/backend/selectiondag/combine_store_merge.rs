@@ -4,8 +4,8 @@
 //! integer type that covers a run of them.
 //!
 //! DEVIATE SD217: only the stores of constants and of loads (no vector element
-//! extracts as the source, no vector store, no truncating store for a type that
-//! promotes, no rotate of two loads in reverse order), the base of an address
+//! extracts as the source, no vector store, a truncating store for a type that
+//! promotes only where the target opts in (`merge_stores_via_trunc_store`), no rotate of two loads in reverse order), the base of an address
 //! is a frame index, a global or one node plus constant offsets
 //! (`BaseIndexOffset::match` without the index register), and
 //! `allowsMemoryAccess` is true for every scalar the target holds (x86 assumes
@@ -24,7 +24,7 @@
 //! `tryStoreMergeOfLoads`
 //! ([L23969](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23969)).
 
-use super::actions::{Action, TargetLowering};
+use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemBase, MemInfo, MemLocation, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
@@ -451,6 +451,23 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
     }
 
+    /// `isLoadLegal(promoted, StoreTy, ZEXTLOAD/SEXTLOAD/EXTLOAD)` for a
+    /// `StoreTy` of `bits` that the type legalizer promotes.
+    fn ext_loads_are_legal(
+        &self,
+        tli: &TargetLowering,
+        bits: u32,
+    ) -> bool {
+        match (self.promoted(bits), EVT::integer(bits)) {
+            (EVT::Simple(wide), EVT::Simple(narrow)) => {
+                [LoadExt::ZExtLoad, LoadExt::SExtLoad, LoadExt::ExtLoad]
+                    .into_iter()
+                    .all(|ext| tli.load_ext_action(ext, wide, narrow) == Action::Legal)
+            }
+            _ => false,
+        }
+    }
+
     /// `getMergeStoreChains` and the `MemInfo` of the joined store of `total`
     /// bits: the stores' chains, each once, not the stores; the pointer info
     /// of the first when all name one object.
@@ -547,6 +564,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let element = i64::from(element_bits / 8);
         let mut changed = false;
         while consecutive >= 2 {
+            let mut truncating = false;
             let first_load = self.stored_load(&stores[0]);
             let first_align = self.load_align(first_load);
             let first_store_align = self.store_align(stores[0].store);
@@ -568,6 +586,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     break;
                 }
                 if tli.types.is_type_legal(EVT::integer(bits)) {
+                    truncating = false;
+                    last_legal = i + 1;
+                } else if self.hooks.merge_stores_via_trunc_store()
+                    && self.trunc_store_is_legal(tli, bits)
+                    && self.ext_loads_are_legal(tli, bits)
+                {
+                    // "Or check whether a truncstore and extload is legal."
+                    truncating = true;
                     last_legal = i + 1;
                 }
             }
@@ -590,7 +616,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 consecutive -= count;
                 continue;
             }
-            changed |= self.merge_store_loads(&stores[..count]);
+            changed |= self.merge_store_loads(&stores[..count], truncating);
             stores.drain(..count);
             consecutive -= count;
         }
@@ -602,6 +628,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     fn merge_store_loads(
         &mut self,
         stores: &[Link],
+        truncating: bool,
     ) -> bool {
         let first_load = self.stored_load(&stores[0]);
         let NodeData::Mem(load_info) = self.dag.node(first_load).data else { return false };
@@ -619,7 +646,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let joint = EVT::integer(total);
         let base = if same_object { self.joined_base(load_info.base, total) } else { MemBase::Unknown };
         let wide = MemInfo { mem_vt: joint, ext: None, base, ..load_info };
-        let new_load = self.dag.get_load(joint, self.dag.operand(first_load, 0), self.dag.operand(first_load, 1), wide);
+        let (chain_in, ptr) = (self.dag.operand(first_load, 0), self.dag.operand(first_load, 1));
+        // The truncstore/extload case: an `EXTLOAD` into the promoted type
+        // and a truncating store of it.
+        let new_load = if truncating {
+            self.dag.get_ext_load(LoadExt::ExtLoad, self.promoted(total), chain_in, ptr, wide)
+        } else {
+            self.dag.get_load(joint, chain_in, ptr, wide)
+        };
         let new_store = self.dag.get_store(chain, new_load, self.dag.operand(stores[0].store, 2), store_info);
         for link in stores {
             let load = self.stored_load(link);

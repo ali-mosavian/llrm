@@ -17,8 +17,9 @@
 //! Nothing runs it yet: stage 3 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE IU1: users of a value are visited in descending program order, not
-//! use-list order. Use-list order is edit history; the pin's order on parsed
+//! DEVIATE IU1: unless the target asks for use-list order
+//! (`Tti::lsr_users_in_use_list_order`), users of a value are visited in
+//! descending program order, not use-list order. Use-list order is edit history; the pin's order on parsed
 //! IR is the only reproducible one, and it breaks ties in LSR's register
 //! choice. Cost (IU1-COST): one map of the layout per loop and a block's
 //! instruction numbers, where the pin has none (it was a map of every
@@ -55,6 +56,10 @@ pub struct Env<'a> {
     /// (`Tti::lsr_native_integer_widths`); the pin's check is
     /// [`!DL.isLegalInteger(Width)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L157).
     pub native_widths: &'a [u32],
+    /// `Tti::lsr_users_in_use_list_order`: the users of a value are met in
+    /// use-list order, as the pin's `for (Use &U : I->uses())`, not in
+    /// descending program order (DEVIATE IU1).
+    pub use_list_order: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/IVUsers.h#L33
@@ -77,6 +82,7 @@ pub struct IvUsers {
     processed: IdSet<InstId>,
     /// How many users had their place worked out.
     ordered: usize,
+    use_list_order: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L52
@@ -200,7 +206,7 @@ impl IvUsers {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
         let mut users =
-            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
+            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0, use_list_order: env.use_list_order };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -267,7 +273,11 @@ impl IvUsers {
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
-        if users.len() > 1 {
+        if env.use_list_order {
+            // One instruction using the result twice is visited once.
+            let mut seen = std::collections::HashSet::new();
+            users.retain(|user| seen.insert(*user));
+        } else if users.len() > 1 {
             self.ordered += users.len();
             // The function keeps each block's index in the layout, made once
             // for all the loops (IU1).
@@ -347,6 +357,12 @@ impl IvUsers {
         copy: Option<InstId>,
     ) -> bool {
         let Some(at) = self.uses.iter().position(|u| u.user == old) else { return true };
+        if self.use_list_order && copy.is_some() {
+            // A copy is a new use, first in its operands' lists, which the walk
+            // would meet before the others: the uses are made again. A move
+            // leaves the lists as they were.
+            return false;
+        }
         // A test of two induction variables is a user of both: which of them
         // finds it first depends on where it is.
         let walked = |value: &Operand| match value {
@@ -360,6 +376,9 @@ impl IvUsers {
         };
         if function.instruction(old).operands.iter().filter(|op| walked(op)).count() > 1 {
             return false;
+        }
+        if self.use_list_order {
+            return true;
         }
         let place = |user: InstId| {
             let block = function.parent(user)?;
