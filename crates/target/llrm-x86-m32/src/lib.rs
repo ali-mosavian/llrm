@@ -385,6 +385,13 @@ impl llrm_target::Target for M32 {
         true
     }
 
+    // DEVIATE UNCHEAP-IMM-M16 (owner x86-m32, exit 2026-11-24): m16 is also
+    // `Not64BitMode` and the pin makes +1/-1 there the same way; it keeps the
+    // default until the m16 owner prices it.
+    fn uncheap_move_immediate_at_size(&self) -> fn(u8, i64) -> bool {
+        llrm_target::x86_uncheap_move_immediate_at_size
+    }
+
     // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's
     // MachineCSE shares a branch-opening compare with the same subtract on
     // one side, moving the subtract in front of the branch and copying the
