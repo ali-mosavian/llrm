@@ -81,11 +81,14 @@ pub struct Request {
     /// Cost: -Oz compiles twice (median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The real fix is the
     /// rotation/LSR interplay; the exit date is the revisit.
     pub oz_best_of: bool,
+    /// DEVIATE Z80-SP-FRAME (owner z80, exit 2026-11-24): a function whose frame is addressed from SP is no larger and no
+    /// slower than with IX (`sp_frame.rs`). Off, every framed function keeps IX.
+    pub sp_frame: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true }
     }
 }
 

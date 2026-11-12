@@ -814,6 +814,13 @@ pub trait Target {
         false
     }
 
+    /// DEVIATE DIV-HOT: where a size build takes the size divide, an `i64` divide in a loop
+    /// takes the speed routine. The size routine is a bit a round, some 600 instructions
+    /// slower; the module pays the speed one's extra bytes once.
+    fn fast_divide_in_loops_at_size(&self) -> bool {
+        false
+    }
+
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
     fn float_width(

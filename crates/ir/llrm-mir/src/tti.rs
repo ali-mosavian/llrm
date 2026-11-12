@@ -958,6 +958,20 @@ pub trait Tti {
     /// size build a counted loop RS1 still rotates is also tried unrotated in a second
     /// compile, and the smaller object is kept. Needs
     /// [`Self::rotation_guard_must_fold_at_size`]. False: no trial.
+    /// DEVIATE ROTATION-HOT (beyond the pin, owner x86-m32, exit 2026-11-24): at a size build with the
+    /// rotation trial, a loop RS1 leaves (unfolded guard, trips not counted) is also tried rotated as the pin
+    /// does, and kept where the finished code executes less for a few bytes a loop. False: RS1 alone.
+    fn rotation_hot_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a predecessor in a function
+    /// marked `optsize` or `minsize` (gcc's `tree-ssa-pre.cc` inserts at -Os only on a hot
+    /// edge, and none is hot). The pin's `PerformLoadPRE` has no size gate.
+    fn load_pre_off_at_size(&self) -> bool {
+        false
+    }
+
     fn rotation_trial_at_size(&self) -> bool {
         false
     }
@@ -1023,6 +1037,20 @@ pub trait Tti {
     /// already taken), nothing at m32.
     fn constant_offset_phi_is_cheap(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LU30: whether a static alloca in an address is the frame
+    /// register and a displacement, which costs no register (`[bp+si+disp]`).
+    fn frame_slot_is_free_base(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU31: whether LSR's over-complex search keeps, for every
+    /// address use, only the formulae of the fewest registers (the pin does
+    /// it for post-indexed targets only): where registers are scarcer than
+    /// the winner-register heuristic assumes (x86-m16: six).
+    fn lsr_address_fewest_registers(&self) -> bool {
+        false
     }
 
     /// Whether a constant operand of an arithmetic instruction may become a phi
@@ -1346,6 +1374,11 @@ pub trait Tti {
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::ipsccp_widen_keeps_sign_at_size`.
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
         false
     }
 

@@ -938,11 +938,24 @@ fn pointer_alignment_at(
     };
     let mut at = pointer;
     let mut offset: i128 = 0;
-    while let Operand::Value(value) = at
-        && let ValueDef::Instruction(def) = function.value(value).def
-        && let Opcode::GetElementPtr { source } = function.instruction(def).opcode
-    {
-        let operands = &function.instruction(def).operands;
+    // A GEP is an instruction or a constant expression (`GEPOperator`).
+    let gep_parts = |at: Operand| match at {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => match function.instruction(def).opcode {
+                Opcode::GetElementPtr { source } => Some((source, function.instruction(def).operands.clone())),
+                _ => None,
+            },
+            _ => None,
+        },
+        Operand::Constant(id) => match &context.get(id).kind {
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { source, operands, .. }) => {
+                Some((*source, operands.iter().map(|&one| Operand::Constant(one)).collect()))
+            }
+            _ => None,
+        },
+        Operand::Block(_) => None,
+    };
+    while let Some((source, operands)) = gep_parts(at) {
         let indices: Vec<Option<i128>> = operands[1..]
             .iter()
             .map(|&one| match one {

@@ -420,6 +420,9 @@ impl llrm_target::Target for M64 {
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
+                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+                            // `Tti::lsr_users_in_use_list_order`.
+                            lsr_users_in_use_list_order: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
@@ -447,6 +450,17 @@ impl llrm_target::Target for M64 {
                             // `mov m64, imm32`: sign-extended.
                             unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
+                            // DEVIATE SD103-M64 (owner x86-m64, exit 2026-11-24), as x86-m32's SD103-M32:
+                            // the pin's cost rule, with the price of a merged `a && b` it omits taken
+                            // from the table: two `setcc`, a logic op and a `test`, less the branch
+                            // saved. sieve `i <= 31 && i*i < n` merged is `setb; setb; and; cmp 1; jne`.
+                            merged_condition_clocks: 2 * prices.operations.set + 2 * prices.operations.add
+                                - prices.operations.branch,
+                            // DEVIATE ROTATION-TRIAL at m64 (owner x86-m64, exit 2026-12-05, as m32's
+                            // #9141): -Os rotates a counted loop whose copied guard does not fold, then
+                            // compiles the module again with those loops unrotated (gcc's `-Os` shape)
+                            // and keeps the smaller object.
+                            rotation_trial_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than
@@ -474,6 +488,7 @@ impl llrm_target::Target for M64 {
                             // trial copy priced by the sheet's latencies.
                             // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
                             ipsccp_widen_keeps_sign: true,
+                            ipsccp_widen_keeps_sign_at_size: true,
                             // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
                             // 28-micro-op loop buffer gave the jam of an outer loop
                             // of that size a count of 0 (particle -O3: 15850 cycles,

@@ -321,6 +321,39 @@ fn multiply_longs_stops_when_the_multiplier_is_spent() {
     }
 }
 
+/// The 16 x 16 -> 32 products: unsigned 65535 * 65535 = 0xFFFE0001, signed
+/// -32768 * -32768 = 0x40000000, -3 * 7 = -21, 0x7FFF * 0x8001 (= -32767)
+/// negative; a multiplier under 256 ends after its first byte (0xFFFF * 0xFF, 0x8000 * 0x80). The signed routine takes the unsigned product less the other
+/// operand from the high word for each negative operand.
+#[test]
+fn widening_multiplies_give_the_32_bit_product() {
+    for (a, b) in [(0u32, 0u32), (1, 0xFFFF), (0xFFFF, 0xFFFF), (0x8000, 0x8000), (0x7FFF, 0x8001), (0xFFFD, 7), (0xFFFF, 0xFF), (0x1234, 0x0100), (0x8000, 0x0080)] {
+        assert_eq!(long(&format!("umulhisi-{a}-{b}"), "__umulhisi3", a, b), a * b, "{a} * {b}");
+        let signed = i32::from(a as u16 as i16) * i32::from(b as u16 as i16);
+        assert_eq!(long(&format!("mulhisi-{a}-{b}"), "__mulhisi3", a, b), signed as u32, "{a} * {b} signed");
+    }
+}
+
+/// A multiplier under 256 is added for each set bit and the walk ends with its
+/// last (fcmp_all: 384 calls of `(F) * (k + 1)`, 414 clocks each): the carries
+/// run through all three product bytes (0xFFFF * 0xFF), and a multiplier of 3
+/// costs 194 clocks, not the 419 of 16 bits. The signed entry takes the byte from the high
+/// word of a negative multiplicand.
+#[test]
+fn a_byte_multiplier_ends_with_its_last_set_bit() {
+    for (a, b) in [(0xFFFFu32, 0xFFu32), (0xABCD, 0x55), (0x1234, 0)] {
+        assert_eq!(long(&format!("umulbyte-{a}-{b}"), "__umulhisi3_byte", a, b), a * b, "{a} * {b}");
+    }
+    for (a, b) in [(0xFFFFu32, 0xFFu32), (0xABCD, 0x55), (0x7FFF, 0x81)] {
+        let signed = i32::from(a as u16 as i16) * b as i32;
+        assert_eq!(long(&format!("mulbyte-{a}-{b}"), "__mulhisi3_byte", a, b), signed as u32, "{a} * {b} signed");
+    }
+    let setup = "  lda #0\n  sta __sa+1\n  sta __sb+1\n  lda #100\n  sta __sa\n  lda #3\n  sta __sb\n";
+    let with = common::cycles_with("umulbyte-clocks", &format!("{setup}  jsr __umulhisi3_byte\n"), "");
+    let without = common::cycles_with("umulbyte-clocks-none", setup, "");
+    assert!(with - without < 250, "{} clocks", with - without);
+}
+
 /// `x * 15` walked all 32 bits of the multiplier: 2054 clocks, 10x gcc's loop
 /// in shrink_wrapped_frame (`n * i` over a 16 trip loop). The speed variant
 /// stops at the last set byte of 15: a third of that.
