@@ -49,13 +49,12 @@ pub fn missing_env(
 }
 
 /// `missing_env` for a compile with `arguments` (`-m32` is wide, `-m64` flat).
-pub fn missing_env_for<S: AsRef<str>>(
+pub fn missing_env_for<S: AsRef<std::ffi::OsStr>>(
     arguments: &[S],
     value: impl Fn(&str) -> Option<OsString>,
 ) -> Vec<&'static str> {
-    let wide = arguments.iter().any(|one| one.as_ref() == "-m32");
-    let flat64 = arguments.iter().any(|one| one.as_ref() == "-m64");
-    missing_env(value, wide, flat64)
+    let has = |flag: &str| arguments.iter().any(|one| one.as_ref() == std::ffi::OsStr::new(flag));
+    missing_env(value, has("-m32"), has("-m64"))
 }
 
 /// The process environment, with the Open Watcom tree where this machine keeps it.
@@ -152,6 +151,8 @@ impl LlrmC {
     }
 
     fn command(&mut self) -> Command {
+        let wide = self.arguments.iter().any(|one| one == "-m32");
+        let flat64 = self.arguments.iter().any(|one| one == "-m64");
         let missing = missing_env_for(&self.arguments, toolchain_env);
         assert!(
             missing.is_empty(),
