@@ -140,6 +140,12 @@ impl CombineHooks for WasmCombines {
         false
     }
 
+    /// `convertSetCCLogicToBitwiseLogic`: WebAssembly keeps the pin's default
+    /// (false), so `(a != 7) | (b != 9)` stays two compares and an `or`.
+    fn convert_setcc_logic_to_bitwise_logic(&self) -> bool {
+        false
+    }
+
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
