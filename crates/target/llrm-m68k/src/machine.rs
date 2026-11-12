@@ -437,6 +437,14 @@ impl Tti for M68k {
         if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
     }
 
+    /// DEVIATE SZ2-TRIPS (owner m68k, exit 2026-11-24): the callee's loop runs
+    /// its trips in the clocks the priced trial weighs against the copy's
+    /// bytes (recsum -O2: the constant trip count makes the `%` unsigned,
+    /// 24,009 clk the once-through count never saw).
+    fn inline_trial_by_trips(&self) -> bool {
+        true
+    }
+
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
@@ -699,6 +707,20 @@ impl Tti for M68k {
     ) -> Cost {
         if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020), self.speed_lowering);
+        }
+        // A quotient by a constant is the magic multiply the DAG makes of it:
+        // its clocks, not one operation's (SZ2-TRIPS: the unsigned and the
+        // signed differ by the sign's three instructions a trip).
+        if kind == CostKind::Latency
+            && let Some(clocks) = crate::sizes::constant_division_clocks(
+                self.cpu,
+                op,
+                ty,
+                right,
+                self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020),
+            )
+        {
+            return Cost::of(clocks);
         }
         // DEVIATE: the pin's base class prices a multiply or divide it expands
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
