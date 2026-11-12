@@ -122,6 +122,20 @@ fn test_a_udiv_by_a_power_of_two_is_a_shift_right() {
     assert_eq!(lines(&text), ["%0 = lshr i32 %a, 3"]);
 }
 
+/// `mul(4, (udiv a, 4))` is the mask `a & -4`, not `(a >> 2) << 2`
+/// (object_extent_loop +4 B at -O2: the unrolled loop's trip count).
+#[test]
+fn test_a_multiple_of_a_udiv_by_the_same_power_of_two_is_a_mask() {
+    let text = expanded(|se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let four = constant(se, 32, 4);
+        let quotient = se.get_udiv_expr(cx, a, four);
+        let four = constant(se, 32, 4);
+        se.get_mul_expr(cx, vec![four, Use::of(quotient)], Flags::default(), 0).scev
+    });
+    assert_eq!(lines(&text), ["%0 = and i32 %a, -4"]);
+}
+
 #[test]
 fn test_a_max_of_unknowns_is_the_intrinsic() {
     let text = expanded(|se, cx, args| {

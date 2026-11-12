@@ -823,6 +823,19 @@ impl Run<'_> {
         s: Scev,
         ops: &[Use],
     ) -> Operand {
+        // `mul(PowerOf2C, (udiv X, PowerOf2C))` is `(X >> C) << C`, the mask
+        // `X & (-1 << C)`.
+        if let [c1, other] = ops
+            && let Some(multiple) = self.se.as_constant(c1.scev)
+            && multiple.bits.count_ones() == 1
+            && let Kind::UDiv(x, divisor) = self.se.node(other.scev).kind.clone()
+            && divisor.scev == c1.scev
+        {
+            let lhs = self.expand(x.scev);
+            let ty = self.ty_of_operand(lhs);
+            let mask = self.constant(ty, -1i128 << multiple.bits.trailing_zeros());
+            return self.insert_binop(BinaryOp::And, lhs, mask, flags::NONE, true);
+        }
         let mut wrap = self.se.get_no_wrap_flags(s, flags::NUW | flags::NSW);
         let all = self.ops_and_loops(ops);
         let mut prod: Option<Operand> = None;
