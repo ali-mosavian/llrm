@@ -2891,7 +2891,10 @@ pub fn compare_before_step(
         let mut moved = false;
         'blocks: for (b, block) in function.blocks.iter_mut().enumerate() {
             for s in 1..block.insts.len() {
-                if !matches!(block.insts[s].kind, Kind::Op("INC16" | "DEC16")) {
+                if !matches!(
+                    block.insts[s].kind,
+                    Kind::Op("INC16" | "DEC16" | "INC" | "DEC")
+                ) {
                     continue;
                 }
                 let (step_writes, step_reads) = (regs(&block.insts[s], true), regs(&block.insts[s], false));
@@ -2989,8 +2992,9 @@ fn forward_old_copies(
         };
         let (to_at, from_at) = (at(to), at(from));
         // a copy into a register may be free (a reload through x leaves the
-        // value there): only a copy into a cell is a store to save
-        if !is_cell(to_at)
+        // value there): forward it only to save a store, or to read the
+        // register the step leaves (`cpx`)
+        if !(is_cell(to_at) || !is_cell(from_at))
             || !step_writes.contains(&from_at)
             || step_writes.contains(&to_at)
             || after[b][step].contains(&to_at)
@@ -3005,14 +3009,16 @@ fn forward_old_copies(
             .all(
                 |i| {
                     let w = written(i);
-                    !w.contains(&to_at) && !w.contains(&from_at) && (!reads_to(i) || i.kind == Kind::Copy)
+                    !w.contains(&to_at)
+                        && !w.contains(&from_at)
+                        && (!reads_to(i) || i.kind == Kind::Copy || i.kind == Kind::Op("CMP"))
                 },
             );
         if !untouched {
             continue;
         }
         for inst in &mut block.insts[between] {
-            if inst.kind != Kind::Copy {
+            if inst.kind != Kind::Copy && inst.kind != Kind::Op("CMP") {
                 continue;
             }
             for o in &mut inst.operands {
