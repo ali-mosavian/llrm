@@ -146,6 +146,10 @@ pub struct X86Lowering<'a> {
     /// than the pin's chain (DEVIATE MUL-OS): `min_size` then holds for the
     /// other rules, not for `combineMul`.
     pub imul_if_smaller: bool,
+    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): the block runs more than once per call at
+    /// `-Os`, so `combineMul` decomposes as the pin does at `-Os` (`hasMinSize` is `-Oz`'s): the
+    /// chain is bytes the module pays once and clocks it saves on every run.
+    pub hot_chains: bool,
     /// The target adds three-address (`lea`) and the build is for speed: flat
     /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
     /// ([`combine_masked_xor_difference`]) is made there only.
@@ -516,7 +520,7 @@ impl CombineHooks for X86Lowering<'_> {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul if self.imul_if_smaller && dag.value_type(node) != EVT::I64 => {
+            ISD::Mul if self.imul_if_smaller && !self.hot_chains && dag.value_type(node) != EVT::I64 => {
                 combine_mul(dag, node, level, false, self.i16_mul_chains, self.profile).filter(|chain| {
                     let imul = if dag.constant(dag.operand(node, 1)).is_some_and(|bits| {
                         let bits = bits as u32 as i32;
@@ -538,7 +542,7 @@ impl CombineHooks for X86Lowering<'_> {
                     chain_bytes(dag, body, dag.operand(node, 0)) <= imul
                 })
             }
-            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
+            ISD::Mul => combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
             ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free)

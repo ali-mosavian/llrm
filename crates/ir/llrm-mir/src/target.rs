@@ -214,6 +214,10 @@ pub struct Tuning {
     /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
     pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
+    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): at `-Os` a multiply by a constant in a block that runs
+    /// more than once per call is decomposed as the pin does at `-Os` (`Tti::mul_chains_hot_at_size`); the
+    /// `imul` stays in the blocks that run once.
+    pub mul_chains_hot_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -554,6 +558,7 @@ impl Tuning {
         price_pin_multiplies: false,
         lftr_any_stride: false,
         imul_at_size: false,
+        mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,

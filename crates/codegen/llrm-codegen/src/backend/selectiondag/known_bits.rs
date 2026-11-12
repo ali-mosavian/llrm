@@ -198,6 +198,16 @@ fn walk(
             let zero = inner.zero | (all & !mask(asserted.min(width)));
             KnownBits { zero, one: inner.one & !zero, width }
         }
+        // `computeKnownBits`, `BUILD_PAIR`: the low half's bits below the high half's.
+        ISD::BuildPair if dag.config().known_bits_of_build_pair && width % 2 == 0 => {
+            let (low, high) = (operand(0), operand(1));
+            let half = width / 2;
+            KnownBits {
+                zero: (low.zero & mask(half)) | ((high.zero & mask(half)) << half),
+                one: (low.one & mask(half)) | ((high.one & mask(half)) << half),
+                width,
+            }
+        }
         ISD::ZeroExtend => {
             let inner = operand(0);
             // The new high bits are zero.
