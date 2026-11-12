@@ -299,6 +299,20 @@ fn near_power_factor(c: u128) -> bool {
 }
 
 impl CombineHooks for Z80Combines {
+    /// `isTruncateFree` and `isZExtFree` for a pair or a long and its low
+    /// byte or word: the narrow value is a lane of the wide one, and an
+    /// any-extension leaves the high lanes unwritten. `ShrinkDemandedOp` then
+    /// does an add or a subtract whose result is truncated (a shift count
+    /// `iv + off` read as a byte) on the byte, not on the word with its high
+    /// half dropped after.
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        matches!((wide, narrow), (EVT::I16 | EVT::I32, EVT::I8) | (EVT::I32, EVT::I16))
+    }
+
     /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
     /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
     /// a small `c` was `inc hl`s (bintree -O2 +14 B). The pin's default is
