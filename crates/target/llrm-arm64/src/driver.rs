@@ -324,6 +324,7 @@ fn lower_function(
     crate::copyprop::run(&mut machine);
     crate::postrasink::run(&mut machine);
     dump("PostRaSink", &machine);
+    crate::trial::add(&machine);
     let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
     let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
         .map_err(|why| format!("@{name}: {why}"))?;
@@ -464,20 +465,98 @@ pub fn object_with(
     level: impl Into<Level>,
     debug: bool,
 ) -> Result<llrm_debug::Described, String> {
-    let mut program = program(text, platform)?;
-    let level = level.into();
-    if debug {
-        llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
-    }
-    if level != Level::O0 {
-        optimized_at(&mut program, level)?;
-    } else {
-        lowered_before_selection(&mut program)?;
-    }
-    let lowered = functions_with(&program, debug)?;
+    let (program, lowered) = compiled(text, platform, level.into(), debug, false)?;
     let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
     let debug = if debug { crate::debug::info(&program.modules[0], platform, &object, &lowered, name)? } else { None };
     Ok(llrm_debug::Described { object, debug })
+}
+
+/// `text` through the mid-end and the backend. At -Os on a target with the
+/// rotation trial, DEVIATE ROTATION-TRIAL and ROTATION-HOT (see
+/// [`crate::trial`]): a module whose pass noted a loop it rotated or
+/// left is compiled again with the decision reversed, and the finished code
+/// decides.
+fn compiled(
+    text: &str,
+    platform: Platform,
+    level: Level,
+    debug: bool,
+    refuse_aliases: bool,
+) -> Result<(Program, Vec<crate::emit::Function>), String> {
+    type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price);
+    let size = matches!(level, Level::Os | Level::Oz);
+    let asked = crate::trial::asked(platform, size);
+    let once = |unrotated: bool, more: bool| -> Result<Built, String> {
+        let mut program = program(text, platform)?;
+        if refuse_aliases {
+            // The text carries no alias: refuse it rather than drop the symbol.
+            program.modules[0].refuse_aliases("arm64")?;
+        }
+        if debug {
+            llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
+        }
+        if level != Level::O0 {
+            let run = |program: &mut Program| optimized_at(program, level);
+            match (unrotated, more) {
+                (true, _) => llrm_transforms::trial::with_unrotated(|| run(&mut program))?,
+                (_, true) => llrm_transforms::trial::with_more_rotation(|| run(&mut program))?,
+                _ => run(&mut program)?,
+            }
+        } else {
+            lowered_before_selection(&mut program)?;
+        }
+        if asked.is_some() {
+            crate::trial::start();
+        }
+        let lowered = functions_with(&program, debug)?;
+        let cost = crate::trial::price(&lowered);
+        Ok((program, lowered, cost))
+    };
+    let Some(hot) = asked else {
+        let (program, lowered, _) = once(false, false)?;
+        return Ok((program, lowered));
+    };
+    use llrm_transforms::trial;
+    let _ = (trial::take_left(), trial::take_rotated());
+    trial::clear_rotated_loops();
+    let first = once(false, false)?;
+    let (left, left_loops) = trial::take_left();
+    let rotated = trial::take_rotated();
+    let loops = trial::rotated_loops();
+    let mut best = first;
+    if !rotated.is_empty() {
+        let kept = best.2;
+        let other = once(true, false)?;
+        let _ = (trial::take_left(), trial::take_rotated());
+        let pays = crate::trial::keeps_unrotated(kept, other.2, hot, loops);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!(
+                "trial unrotated: {rotated:?} {kept:?} -> {:?}: {}",
+                other.2,
+                if pays { "kept" } else { "put back" }
+            );
+        }
+        if pays {
+            best = other;
+        }
+    }
+    if hot && !left.is_empty() {
+        let kept = best.2;
+        let other = once(false, true)?;
+        let _ = (trial::take_left(), trial::take_rotated());
+        let pays = crate::trial::keeps_rotated(kept, other.2, left_loops);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!(
+                "trial rotation-hot: {left:?} {kept:?} -> {:?}: {}",
+                other.2,
+                if pays { "kept" } else { "put back" }
+            );
+        }
+        if pays {
+            best = other;
+        }
+    }
+    Ok((best.0, best.1))
 }
 
 /// The assembly of the lowered functions, one instruction a line.
@@ -495,17 +574,9 @@ pub fn assembly(
     platform: Platform,
     level: impl Into<Level>,
 ) -> Result<String, String> {
-    let mut program = program(text, platform)?;
-    // The text carries no alias: refuse it rather than drop the symbol.
-    program.modules[0].refuse_aliases("arm64")?;
-    let level = level.into();
-    if level != Level::O0 {
-        optimized_at(&mut program, level)?;
-    } else {
-        lowered_before_selection(&mut program)?;
-    }
+    let (_, lowered) = compiled(text, platform, level.into(), false, true)?;
     let mut out = String::new();
-    for function in functions(&program)? {
+    for function in lowered {
         out.push_str(&format!("{}:\n", function.symbol));
         for block in &function.blocks {
             out.push_str(&format!("{}:\n", block.label));
