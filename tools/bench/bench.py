@@ -217,19 +217,19 @@ def c_environment(variant: Variant) -> dict[str, str]:
     return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
 
 
-def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | None:
+def kept_a_call(variant: Variant, work: Path, stem: str, shim: bool = True) -> tuple[Path, Path] | None:
     """A C kernel's sources that keep it a call without `-fno-inline-functions`, which also kept a recursive function from inlining
     itself, as gcc and clang do (`rectwo` ran 4.2x gcc's clocks, 2.6x with it on): `main` calling it through a volatile pointer
     (vsgcc's `wrap.py`, which a kernel of constants cannot be folded out of), to run and count, and the kernel `noinline` with `main` as
     it was, whose object is the one sized: the pointer is 18 bytes of code and 4 of data no reference compiler's object has. The
     attribute is added to what llrm-cc reads; the reference compilers read the source as it is. None where the source has no such kernel
-    (the build then keeps the flag)."""
+    (the build then keeps the flag). `shim`: file programs call the `vs_*` stubs of vsgcc's harness (gcc and clang); m16 passes False and links DOS's file API."""
     text = variant.source.read_text()
     found = re.search(rf"^([a-z][a-z ]*[ *]){re.escape(variant.region)}\(", text, re.M)
     if found is None:
         return None
     try:
-        wrapped = wrap.wrapped(variant.region.removeprefix("bench_"), text)
+        wrapped = wrap.wrapped(variant.region.removeprefix("bench_"), text, shim)
     except SystemExit:
         return None
     (counted, sized) = (work / f"{stem}.wrapped.c", work / f"{stem}.noinline.c")
@@ -272,7 +272,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     if variant.language in OURS_BASIC:
         arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
     extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
-    kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
+    kept = kept_a_call(variant, work, stem, shim=False) if variant.language == "c" else None
     if variant.language == "c":
         extra += ["-I", str(variant.source.parent), "-c"]
     flags = compile_flags(variant, opt, kept is not None)
@@ -288,7 +288,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
     # The kernel stays a call: inlined into main it has no entry to count from.
     source, counted = variant.source, None
-    kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
+    kept = kept_a_call(variant, work, stem, shim=False) if variant.language == "c" else None
     flags = compile_flags(variant, opt, kept is not None)
     if kept is not None:
         counted, source = kept

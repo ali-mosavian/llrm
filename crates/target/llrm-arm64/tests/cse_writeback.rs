@@ -9,7 +9,7 @@ fn compile(fixture: &str, level: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .env_remove("LLRM_ARM64_VECTORS")
+        .env("LLRM_ARM64_VECTORS", "0")
         .args(["-S", level, "-o"])
         .arg(&output)
         .arg(format!("{}/tests/data/{fixture}.ll", env!("CARGO_MANIFEST_DIR")))

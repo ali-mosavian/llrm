@@ -1131,6 +1131,131 @@ fn a_small_immediate_at_m32_os_is_push_pop() {
     assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
 }
 
+/// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1: at m32 -Os it was used in loops as well, and jpeg_fixed -Os ran
+/// 244k more `pop`s than main (+1.3% clk, 46 B). A constant in a loop is a `mov`; one that runs once per call stays a push and pop.
+/// DEVIATE PUSH-IMM-OS.
+#[test]
+fn a_small_immediate_at_m32_os_is_a_mov_in_a_loop() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %n, ptr %p) optsize {\n\
+                entry:\n  %first = load volatile i32, ptr %p\n  %z = icmp slt i32 %first, 0\n  br i1 %z, label %early, label %loop\n\
+                early:\n  ret i32 41\n\
+                loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %s = phi i32 [ %first, %entry ], [ %s2, %loop ]\n\
+                \x20 %v = load volatile i32, ptr %p\n  %c = icmp slt i32 %v, 0\n  %k = select i1 %c, i32 40, i32 50\n\
+                \x20 %s2 = add i32 %s, %k\n  %i2 = add i32 %i, 1\n  %d = icmp eq i32 %i2, %n\n  br i1 %d, label %out, label %loop\n\
+                out:\n  ret i32 %s2\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("pushd 40") && !listing.contains("pushd 50"), "{listing}");
+    assert!(listing.contains("pushd 41"), "the once-per-call constant stays push/pop: {listing}");
+}
+
+/// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the
+/// bytes, and x_bubble -Os grew 3 B (273 against 270), quicksort 2, switch_sparse 1, jpeg_fixed 16, while the sparse switch
+/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS.
+#[test]
+fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
+    let bubble = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @a = internal global [200 x i32] zeroinitializer, align 4\n\
+                define i32 @bench_x_bubble(i32 %0)  {\n\
+                  %2 = icmp sgt i32 %0, 0\n\
+                  br i1 %2, label %6, label %3\n\
+                3:\n\
+                  %4 = add i32 %0, -1\n\
+                  %5 = icmp sgt i32 %0, 1\n\
+                  br i1 %5, label %16, label %20\n\
+                6:\n\
+                  %7 = phi i32 [ %14, %6 ], [ 0, %1 ]\n\
+                  %8 = phi i32 [ %10, %6 ], [ 12345, %1 ]\n\
+                  %9 = mul i32 %8, 1103515245\n\
+                  %10 = add i32 %9, 12345\n\
+                  %11 = lshr i32 %10, 16\n\
+                  %12 = and i32 %11, 32767\n\
+                  %13 = getelementptr inbounds [4 x i8], ptr @a, i32 %7\n\
+                  store i32 %12, ptr %13, align 4\n\
+                  %14 = add i32 %7, 1\n\
+                  %15 = icmp eq i32 %14, %0\n\
+                  br i1 %15, label %3, label %6\n\
+                16:\n\
+                  %17 = phi i32 [ %35, %33 ], [ %4, %3 ]\n\
+                  %18 = phi i32 [ %34, %33 ], [ 0, %3 ]\n\
+                  %19 = icmp sgt i32 %4, %18\n\
+                  br i1 %19, label %22, label %33\n\
+                20:\n\
+                  %21 = icmp sgt i32 %0, 0\n\
+                  br i1 %21, label %37, label %46\n\
+                22:\n\
+                  %23 = phi i32 [ %26, %31 ], [ 0, %16 ]\n\
+                  %24 = getelementptr inbounds [4 x i8], ptr @a, i32 %23\n\
+                  %25 = load i32, ptr %24, align 4\n\
+                  %26 = add i32 %23, 1\n\
+                  %27 = getelementptr inbounds [4 x i8], ptr @a, i32 %26\n\
+                  %28 = load i32, ptr %27, align 4\n\
+                  %29 = icmp sgt i32 %25, %28\n\
+                  br i1 %29, label %30, label %31\n\
+                30:\n\
+                  store i32 %28, ptr %24, align 4\n\
+                  store i32 %25, ptr %27, align 4\n\
+                  br label %31\n\
+                31:\n\
+                  %32 = icmp eq i32 %26, %17\n\
+                  br i1 %32, label %33, label %22\n\
+                33:\n\
+                  %34 = add i32 %18, 1\n\
+                  %35 = add i32 %17, -1\n\
+                  %36 = icmp eq i32 %34, %4\n\
+                  br i1 %36, label %20, label %16\n\
+                37:\n\
+                  %38 = phi i32 [ %43, %37 ], [ 0, %20 ]\n\
+                  %39 = phi i32 [ %44, %37 ], [ 0, %20 ]\n\
+                  %40 = mul i32 %38, 31\n\
+                  %41 = getelementptr inbounds [4 x i8], ptr @a, i32 %39\n\
+                  %42 = load i32, ptr %41, align 4\n\
+                  %43 = add i32 %42, %40\n\
+                  %44 = add i32 %39, 1\n\
+                  %45 = icmp eq i32 %44, %0\n\
+                  br i1 %45, label %46, label %37\n\
+                46:\n\
+                  %47 = phi i32 [ 0, %20 ], [ %43, %37 ]\n\
+                  ret i32 %47\n\
+                }\n";
+    let sparse = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %0)  {\n\
+                  switch i32 %0, label %6 [\n\
+                    i32 7, label %7\n\
+                    i32 99, label %2\n\
+                    i32 1234, label %3\n\
+                    i32 4001, label %4\n\
+                    i32 77, label %5\n\
+                  ]\n\
+                2:\n\
+                  br label %7\n\
+                3:\n\
+                  br label %7\n\
+                4:\n\
+                  br label %7\n\
+                5:\n\
+                  br label %7\n\
+                6:\n\
+                  br label %7\n\
+                7:\n\
+                  %8 = phi i32 [ 0, %6 ], [ 61, %5 ], [ 52, %2 ], [ 93, %3 ], [ 17, %4 ], [ 31, %1 ]\n\
+                  ret i32 %8\n\
+                }\n";
+    let listing = |text: &str, name: &str, folded: bool| {
+        let build = || compiled(&flags(&["-mabi=sysv", "-Os"]), text, name).unwrap();
+        let (built, _) = if folded { build() } else { llrm_codegen::backend::leaffold::without(build) };
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let (kept, off) = (listing(bubble, "bench_x_bubble", true), listing(bubble, "bench_x_bubble", false));
+    assert_eq!(kept, off, "the fold grew x_bubble and stays: {kept}");
+    let (kept, off) = (listing(sparse, "f", true), listing(sparse, "f", false));
+    assert_ne!(kept, off, "the fold that shrinks the sparse switch is kept: {kept}");
+}
+
 /// IPSCCP's sign-keeping widening (REC5-1) proves the counters that feed a recursive `a % b` non-negative, and the remainder
 /// becomes unsigned: `xor edx, edx; div` against `cdq; idiv`, a byte more at each site (recgcd -Os 100 B, frames 110, recmany
 /// 139, switch 210: 2..5 B over the pin's shape). -Os is bytes-strict, so it keeps the signed divide; -O2 keeps the proof.
@@ -1236,6 +1361,39 @@ fn load_pre_is_off_at_m32_os() {
     assert!(folded(&os), "-Os keeps the join's load, folded into the add: {os}");
     let speed = listing("-O2", "");
     assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
+}
+
+/// RS1 leaves a loop whose copied guard does not fold and whose trips are not counted unrotated at -Os, and each trip pays the taken
+/// `jmp` back to the guard (3 clocks on the 486). A walk of a list is that loop; rotated it is one branch back at 4 B.
+/// ROTATION-HOT compiles it rotated too and keeps that where the finished code runs less for a few bytes a loop.
+/// DEVIATE ROTATION-HOT.
+#[test]
+fn a_hot_loop_of_an_unfolded_guard_is_rotated_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(ptr %p, i32 %k) {\n\
+                entry:\n  br label %head\n\
+                head:\n  %q = phi ptr [ %p, %entry ], [ %n, %body ]\n  %s = phi i32 [ 0, %entry ], [ %s2, %body ]\n\
+                \x20 %v = load i32, ptr %q, align 4\n  %z = icmp eq i32 %v, %k\n  br i1 %z, label %out, label %body\n\
+                body:\n  %m = mul i32 %v, 3\n  %s2 = add i32 %s, %m\n  %n = getelementptr i32, ptr %q, i32 1\n  br label %head\n\
+                out:\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("jmp"), "the loop is rotated, no jmp back to its guard: {listing}");
+}
+
+/// The pin leaves the 3x3 window of x_life a loop nest at -Os (`OptSizeThreshold` 0); gcc peels it where the code does not grow. The loops
+/// the threshold refused are unrolled in a second compile, and that is kept when the object is smaller (x_life -Os 360 -> 347 B, -55% clk).
+/// DEVIATE UNROLL-OS-TRIAL.
+#[test]
+fn a_small_window_loop_is_unrolled_at_m32_os_when_the_object_shrinks() {
+    let text = include_str!("testdata/x_life.ll");
+    let labels = |built: &llrm_codegen::backend::masm::Module| {
+        llrm_codegen::backend::masm::text(built).unwrap().lines().filter(|line| line.ends_with(':')).count()
+    };
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "bench_x_life").unwrap();
+    let (rolled, _) = llrm_codegen::driver::trial::without_size_unroll(|| compiled(&flags(&["-mabi=sysv", "-Os"]), text, "bench_x_life")).unwrap();
+    assert!(labels(&built) < labels(&rolled), "{} labels against {}", labels(&built), labels(&rolled));
 }
 
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
@@ -1984,6 +2142,53 @@ fn a_one_byte_struct_result_through_a_function_pointer_comes_back_in_al_too() {
     let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
+const THREE_BYTE_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { [3 x i8] }\n\
+    define void @make(ptr sret(%struct.T) align 1 %out, i16 %a) addrspace(1) noinline {\n  \
+    %b = trunc i16 %a to i8\n  store i8 %b, ptr %out, align 1\n  ret void\n}\n\
+    define i16 @f(i16 %a) addrspace(1) {\n  %t = alloca %struct.T, align 1\n  \
+    call addrspace(1) void @make(ptr sret(%struct.T) align 1 %t, i16 %a)\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+
+/// A struct of 3 bytes comes back through Borland's hidden far pointer, `ss`
+/// and then the offset pushed after the arguments, and DX:AX returns it. clang
+/// writes a near `sret`: the call pushed only an offset, so a BCC callee read
+/// the argument it found as the segment and wrote through a wild pointer
+/// (callconv CFLB/PFLB `r_s3`, `r_s5`, `r_s7`, `r_s8`, `r_s9`, `r_sci`).
+#[test]
+fn a_three_byte_struct_result_goes_through_a_far_pointer_under_borland_cdecl() {
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), THREE_BYTE_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push ss"), "the caller pushes the segment of the result\n{listing}");
+    assert!(listing.contains("add sp, 6"), "offset, segment and the argument leave the stack\n{listing}");
+    assert!(listing.contains("[bp+8]"), "the callee finds its argument above the pointer\n{listing}");
+}
+
+/// The call through a function pointer carries its convention too.
+#[test]
+fn a_three_byte_struct_result_through_a_function_pointer_goes_far_too() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+        target triple = \"i386-unknown-unknown-code16\"\n\
+        %struct.T = type { [3 x i8] }\n\
+        @fp = external global ptr addrspace(1)\n\
+        define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  %p = load ptr addrspace(1), ptr @fp, align 4\n  \
+        call addrspace(1) void %p(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+        %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push ss"), "{listing}");
+}
+
+/// Open Watcom's 16-bit convention passes the result address in SI, near: the
+/// far pointer is Borland's.
+#[test]
+fn a_three_byte_struct_result_stays_near_under_the_watcom_convention() {
+    let (built, _) = compiled(&flags(&["-mabi=watcom", "-m16"]), THREE_BYTE_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("push ss"), "{listing}");
 }
 
 /// `-fno-inline=sum5` named the function as the source does, but the module

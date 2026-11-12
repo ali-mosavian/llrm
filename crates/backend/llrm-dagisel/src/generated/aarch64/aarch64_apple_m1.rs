@@ -35136,7 +35136,7 @@ pub fn node_predicate<D: Dag, H: Hooks<D>>(dag: &D, hooks: &H, value: SDValue, i
         7 => predicates::non_truncating_store(args),
         10 => predicates::or_disjoint(args),
         12 => predicates::imm_u64_lt_2(args),
-        13 => predicates::sve_increment(args),
+        13 => predicates::imm_u32_1_to_16(args),
         14 => predicates::memory_vt_i16(args),
         15 => predicates::unindexed_store(args),
         18 => predicates::imm_u32_1_to_32(args),

@@ -2655,7 +2655,11 @@ fn lines_of_form(
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
     }
-    .map(|lines| expand::relax(lines, !matches!(request.level, Level::Os | Level::Oz)))
+    .map(|lines| {
+        let speed = !matches!(request.level, Level::Os | Level::Oz);
+        let lines = if request.sp_frame { crate::sp_frame::without_ix(lines, speed) } else { lines };
+        expand::relax(lines, speed)
+    })
 }
 
 /// The function as text: its label, then one line per instruction.

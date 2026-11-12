@@ -91,7 +91,8 @@ define void @f() nounwind {
 }
 "#;
     let asm = text(ir, "f", 0, &Request::new(Level::Os)).expect("compiles");
-    assert!(asm.contains("(ix), #9") && asm.contains("(ix), #0"), "not stored through ix:\n{asm}");
+    let through_frame = |value: &str| asm.contains(&format!("(ix), #{value}")) || asm.contains(&format!("(iy), #{value}"));
+    assert!(through_frame("9") && through_frame("0"), "not stored through ix or iy:\n{asm}");
     assert!(!asm.contains("ld (hl), #9"), "stored through a built address:\n{asm}");
 }
 

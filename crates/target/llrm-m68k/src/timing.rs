@@ -30,6 +30,7 @@ mod m68030;
 mod m68040;
 mod m68060;
 mod table;
+pub use table::keys_made;
 
 use crate::dagisel::hooks::Cpu as SelectCpu;
 use crate::isa::Cpu;

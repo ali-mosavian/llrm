@@ -12,7 +12,7 @@ use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
-use crate::mc::inst::{Addr, Arrangement, Gpr, ImmShape};
+use crate::mc::inst::{Addr, Arrangement, Gpr, ImmShape, VectorOp, VectorShift};
 use crate::mfunc::Callee;
 
 fn g(n: u32) -> Gpr {
@@ -234,6 +234,18 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
+    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+            if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+                continue;
+            }
+            out.push(Inst::VectorBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        }
+    }
+    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
+        out.push(Inst::VectorShift { op, lanes: Arrangement::H8, rd: v(0), rn: v(1), amount: 3 });
+    }
+    out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
     for fill in [
         Fill::Zero,
         Fill::Byte(0xa5),
@@ -295,6 +307,9 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::FpInt { .. } => "FpInt",
         Inst::FpFixed { .. } => "FpFixed",
         Inst::VectorFill { .. } => "VectorFill",
+        Inst::VectorBinary { .. } => "VectorBinary",
+        Inst::VectorShift { .. } => "VectorShift",
+        Inst::VectorNot { .. } => "VectorNot",
         Inst::Svc { .. } => "Svc",
         Inst::Atomic { .. } => "Atomic",
         Inst::Dmb { .. } => "Dmb",
@@ -307,7 +322,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 47] = [
+const ALL: [&str; 50] = [
     "Mark",
     "Label",
     "Cfi",
@@ -349,6 +364,9 @@ const ALL: [&str; 47] = [
     "FpInt",
     "FpFixed",
     "VectorFill",
+    "VectorBinary",
+    "VectorShift",
+    "VectorNot",
     "Svc",
     "Atomic",
     "Dmb",
