@@ -907,4 +907,9 @@ fn fewer_address_registers_win_before_fewer_bytes_when_sized() {
     };
     let (one_register, two_registers) = (sized(&[1], 9), sized(&[1, 2], 6));
     assert!(one_register.is_less(&tti, &two_registers) && !two_registers.is_less(&tti, &one_register));
+    // Flat addressing takes any register: the count is no key and the fewer bytes win.
+    let flat = X86::of_cpu("i486")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
+    assert!(two_registers.is_less(&flat, &one_register) && !one_register.is_less(&flat, &two_registers));
 }
