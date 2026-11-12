@@ -958,6 +958,13 @@ pub trait Tti {
     /// size build a counted loop RS1 still rotates is also tried unrotated in a second
     /// compile, and the smaller object is kept. Needs
     /// [`Self::rotation_guard_must_fold_at_size`]. False: no trial.
+    /// DEVIATE ROTATION-HOT (beyond the pin, owner x86-m32, exit 2026-11-24): at a size build with the
+    /// rotation trial, a loop RS1 leaves (unfolded guard, trips not counted) is also tried rotated as the pin
+    /// does, and kept where the finished code executes less for a few bytes a loop. False: RS1 alone.
+    fn rotation_hot_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a predecessor in a function
     /// marked `optsize` or `minsize` (gcc's `tree-ssa-pre.cc` inserts at -Os only on a hot
     /// edge, and none is hot). The pin's `PerformLoadPRE` has no size gate.
@@ -1160,6 +1167,11 @@ pub trait Tti {
     /// caller's bytes, in a module of at most `instructions` instructions (it compiles the mid-end twice). None:
     /// no trial, as on every target but the 6502.
     fn opt_size_inline_trial_limits(&self) -> Option<(i64, usize)> {
+        None
+    }
+
+    /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
+    fn unroll_trial_at_size(&self) -> Option<u32> {
         None
     }
 
@@ -2087,6 +2099,17 @@ pub trait Tti {
     /// inline cost of the callee that holds it. Flip the default when fixed.
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L4172)
     fn folds_select_to_cmp(&self) -> bool {
+        false
+    }
+
+    /// Whether InstCombine folds `icmp (phi C1, C2), C` into a phi of the
+    /// folded compares (`foldICmpWithConstant`). The pin does so on every target.
+    /// DEVIATE ICMPPHI-1 (2026-11-12, owner wasm, exit 2026-11-24): on for
+    /// wasm only. Elsewhere the exit test of a counted loop becomes a live i1
+    /// value the lowering handles badly (m68k, z80, 6502: 31 cells up +295 B;
+    /// arm64, x86: 18 of 21 cells up +128 B). Flip when their lowering does.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1369)
+    fn folds_icmp_of_constant_phi(&self) -> bool {
         false
     }
 

@@ -424,6 +424,24 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::FpSelect { size, rd, rn, rm, cond } => {
             0x1E20_0C00 | size.field() << 22 | vreg(*rm)? << 16 | cond.field() << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorBinary { op, lanes, rd, rn, rm } => {
+            let (u, opcode, logical) = op.fields();
+            let size = logical.unwrap_or_else(|| lanes.size());
+            0x4E20_0400 | u << 29 | size << 22 | vreg(*rm)? << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorShift { op, lanes, rd, rn, amount } => {
+            let esize = lanes.lane_bits();
+            let amount = u32::from(*amount);
+            // `immh:immb` is `esize + shift` for a left shift and `2 * esize -
+            // shift` for a right one; the lane size is its highest set bit.
+            let (u, opcode, immhb) = match op {
+                VectorShift::Shl => (0, 0b01010, esize + amount),
+                VectorShift::Ushr => (1, 0b00000, 2 * esize - amount),
+                VectorShift::Sshr => (0, 0b00000, 2 * esize - amount),
+            };
+            0x4F00_0400 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorNot { rd, rn } => 0x6E20_5800 | vreg(*rn)? << 5 | vreg(*rd)?,
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
             Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
