@@ -469,6 +469,11 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE INL-SPEED-OS (owner w11, exit 2026-12-05): see `Tti::inline_trial_speed_at_size`.
+    fn inline_trial_speed_at_size(&self) -> Option<i64> {
+        Some(16)
+    }
+
     /// DEVIATE (owner greedy-anyisa, exit 2026-11-15): the pin has no byte
     /// trial. At -Os the trial that keeps `tmul`, `clamp`, `extend` inline
     /// (smaller in bytes, the unit model refuses them) is bounded by the
