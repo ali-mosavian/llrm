@@ -35,8 +35,10 @@ const CONVERSIONS: &[(CastKind, VectorTy, VectorTy, i64)] = &[
     (CastKind::Trunc, v(Ty::Int(16), 4), v(Ty::Int(64), 4), 2),
     (CastKind::Trunc, v(Ty::Int(32), 4), v(Ty::Int(64), 4), 1), // 1 uzp1
     (CastKind::Trunc, v(Ty::Int(8), 8), v(Ty::Int(16), 8), 1),  // 1 xtn
-    (CastKind::Trunc, v(Ty::Int(8), 8), v(Ty::Int(32), 8), 2),  // 1 uzp1 + 1 xtn
-    (CastKind::Trunc, v(Ty::Int(8), 8), v(Ty::Int(64), 8), 4),  // 3 x uzp1 + xtn
+    // 1 uzp1 + 1 xtn
+    (CastKind::Trunc, v(Ty::Int(8), 8), v(Ty::Int(32), 8), 2),
+    // 3 x uzp1 + xtn
+    (CastKind::Trunc, v(Ty::Int(8), 8), v(Ty::Int(64), 8), 4),
     (CastKind::Trunc, v(Ty::Int(16), 8), v(Ty::Int(32), 8), 1), // 1 uzp1
     (CastKind::Trunc, v(Ty::Int(16), 8), v(Ty::Int(64), 8), 3), // 3 x uzp1
     (CastKind::Trunc, v(Ty::Int(32), 8), v(Ty::Int(64), 8), 2), // 2 x uzp1
