@@ -28,7 +28,7 @@
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_analysis::scev::expander::{Env as ExpandEnv, Expander};
-use llrm_analysis::scev::expr::Scev;
+use llrm_analysis::scev::expr::{Scev, Type};
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
@@ -98,8 +98,12 @@ const MAX_IV_USERS: usize = 200;
 
 /// LLVM's loop strength reduction. `size`: the compile is for size, which the
 /// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
+/// `bytes_strict`: code bytes outrank clocks (-O1, -Os), which DEVIATE LG3's
+/// keep rule reads: a base added outside the loop counts against the
+/// instructions it saves once, not once a trip.
 pub struct LoopStrengthReduce {
     pub size: bool,
+    pub bytes_strict: bool,
 }
 
 impl FunctionPass for LoopStrengthReduce {
@@ -148,6 +152,7 @@ impl FunctionPass for LoopStrengthReduce {
             &*tti,
             false,
             self.size,
+            self.bytes_strict,
             Some(held.take()),
         );
         let kept = scev.is_some();
@@ -243,6 +248,7 @@ fn plan_loop(
     shadowed: bool,
     stress_chains: bool,
     size: bool,
+    bytes_strict: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
@@ -271,6 +277,7 @@ fn plan_loop(
         // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
         // wide loop grew tail_calls by 354 bytes.
         native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+        use_list_order: tti.lsr_users_in_use_list_order(),
     };
     let mut users = match carried {
         Some(users) => {
@@ -403,8 +410,26 @@ fn plan_loop(
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
         let spent = cost.c.insns + cost.c.setup_cost;
         let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
+        // DEVIATE LG3: the `spent` against `saved` test above, over the trips
+        // the loop is known to run, with the symbol bases the end-biased
+        // solution adds to the pin's priced as the target's setup says
+        // (`setup_cost` counts each as one instruction). Where bytes outrank
+        // clocks (-O1, -Os) the loop is counted once, whatever its trips: an
+        // instruction saved in it is one instruction of code, as a base is.
+        let symbol_setup = tti.lsr_symbol_base_setup_insns();
+        let symbols_outweigh_saving = symbol_setup != 0 && {
+            let new_bases = symbol_bases(se, &lsr, &solution);
+            let pin_bases = symbol_bases(se, &pin, &pin_solution);
+            let added = new_bases.iter().filter(|base| !pin_bases.contains(base)).count() as u32;
+            let trips = if bytes_strict { 1 } else { u64::from(se.get_small_constant_max_trip_count(&cx, header)) };
+            let total = |insns: u32, setup: u32| trips * u64::from(insns) + u64::from(setup);
+            trips != 0
+                && total(cost.c.insns, cost.c.setup_cost) + u64::from(added * (symbol_setup - 1))
+                    > total(pin_cost.c.insns, pin_cost.c.setup_cost)
+        };
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
+                || symbols_outweigh_saving
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
@@ -425,6 +450,39 @@ fn plan_loop(
     plan.end_biased_differs = differs;
     plan.chains = chains.chains;
     planned(Some(plan))
+}
+
+/// The distinct base registers of `solution`'s formulae that name a global's
+/// address.
+fn symbol_bases(
+    se: &ScalarEvolution,
+    lsr: &Collection,
+    solution: &[usize],
+) -> Vec<Scev> {
+    fn names_global(
+        se: &ScalarEvolution,
+        lsr: &Collection,
+        s: Scev,
+        depth: u32,
+    ) -> bool {
+        match se.scev_type(s) {
+            Type::Unknown => lsr.global_of(se, s).is_some(),
+            _ if depth == 0 => false,
+            Type::Add | Type::Mul | Type::AddRec => {
+                se.operands(s).iter().any(|operand| names_global(se, lsr, operand.scev, depth - 1))
+            }
+            _ => false,
+        }
+    }
+    let mut bases = Vec::new();
+    for (lu, &chosen) in lsr.uses.iter().zip(solution) {
+        for &base in &lu.formulae[chosen].base_regs {
+            if !bases.contains(&base) && names_global(se, lsr, base, 4) {
+                bases.push(base);
+            }
+        }
+    }
+    bases
 }
 
 /// `ReduceLoopStrength` over every loop of `function`, innermost first;
@@ -451,7 +509,7 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
-    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, None).0
+    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, false, None).0
 }
 
 /// [`reduced_with`], continuing the expressions `held` of the passes before;
@@ -466,6 +524,7 @@ pub fn reduced_held(
     tti: &dyn Tti,
     stress_chains: bool,
     size: bool,
+    bytes_strict: bool,
     held: Option<ScalarEvolution>,
 ) -> (bool, Option<ScalarEvolution>) {
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
@@ -524,6 +583,7 @@ pub fn reduced_held(
                     shadowed,
                     stress_chains,
                     size,
+                    bytes_strict,
                 ) {
                     Outcome::Planned(None) => break,
                     Outcome::Edit(edits, mut users) => {

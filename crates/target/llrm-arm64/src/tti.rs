@@ -633,6 +633,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): see the
+    /// trait. fpbench -O3: 2,300 B, 1,412 B with the inner loops unrolled by
+    /// the pin's threshold.
+    fn unroll_pin_decides_inner_of_known_trips(&self) -> bool {
+        true
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }
@@ -1035,6 +1042,11 @@ impl Tti for AArch64 {
         scale: i64,
     ) -> bool {
         AArch64::is_legal_addressing_mode_for(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
+    }
+
+    /// `adrp` + `add` for each symbol base (see the trait).
+    fn lsr_symbol_base_setup_insns(&self) -> u32 {
+        2
     }
 
     fn is_legal_addressing_mode_at(

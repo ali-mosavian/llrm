@@ -115,3 +115,42 @@ fn an_outer_loops_row_address_steps_by_the_row_size_and_calls_no_multiply() {
         assert!(!body.contains("mulhi"), "{level:?}: {body}");
     }
 }
+
+
+/// word_compares at -O2: with a narrowed `i8` counter the loop kept
+/// `gep v, zext(j)` and paid `zext; asl; rol; adc` per trip where a pointer
+/// phi steps by 4 (LU19 kept the extended index out of LSR whatever the element size, 2026-11-12).
+const NARROW_INDEX: &str = "@v = global [16 x i32] zeroinitializer\n\
+    define i32 @f() {\nentry:\n  br label %l\n\
+    l:\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %j = phi i8 [0, %entry], [%j1, %l]\n  \
+    %w = zext i8 %j to i16\n  %p = getelementptr inbounds nuw [4 x i8], ptr @v, i16 %w\n  \
+    %x = load volatile i32, ptr %p\n  %s1 = add i32 %s, %x\n  %j1 = add nuw nsw i8 %j, 1\n  \
+    %c = icmp ult i8 %j1, 14\n  br i1 %c, label %l, label %out\n\
+    out:\n  ret i32 %s1\n}\n";
+
+#[test]
+fn an_address_rebuilt_from_a_narrow_counter_becomes_a_pointer() {
+    let ir = format!("target datalayout = \"{}\"\n{NARROW_INDEX}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    assert!(!body.contains("asl"), "{body}");
+}
+
+/// ring at -O2: `buf[i] = (i + 1) * 3 + n` over a byte counter kept
+/// `asl; adc` of the extended counter each trip, where the 16-bit counter
+/// stepped `adc #3` (frameless -O2 +2,611 clk, 2026-11-12). A constant
+/// multiply scales the extension like an address does.
+const SCALED_COUNTER: &str = "define i32 @f(i32 %n) {\nentry:\n  br label %l\n\
+    l:\n  %j = phi i8 [0, %entry], [%j1, %l]\n  %j1 = add nuw nsw i8 %j, 1\n  \
+    %w = zext i8 %j1 to i16\n  %m = mul nuw nsw i16 %w, 3\n  %e = zext i16 %m to i32\n  \
+    %x = add i32 %n, %e\n  store volatile i32 %x, ptr @g\n  \
+    %c = icmp ult i8 %j1, 64\n  br i1 %c, label %l, label %out\n\
+    out:\n  ret i32 0\n}\n@g = global i32 0\n";
+
+#[test]
+fn a_constant_multiple_of_a_narrow_counter_steps_instead_of_being_rebuilt() {
+    let ir = format!("target datalayout = \"{}\"\n{SCALED_COUNTER}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    assert!(!body.contains("asl"), "{body}");
+}

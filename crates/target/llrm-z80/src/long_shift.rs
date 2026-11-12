@@ -1,11 +1,15 @@
-//! A long doubled in a loop: one instruction, and sunk to the edge that reads
-//! it.
+//! A long doubled: one instruction on whichever two pairs hold its words, and
+//! in a loop sunk to the edge that reads it.
 //!
 //! # How it works
-//! `x << 1` on a long is `sla lo; rl hi; adc hl, hl` in the flags: selection
-//! gives `SHL16F` (the low word, carry out) and `ADC16Fhl` (the high word),
-//! two instructions the carry in `f` binds. [`fuse`] makes them one `SHL32`
-//! with no flag between its parts.
+//! `x << 1` on a long is `sla lo; rl hi` in the flags: selection gives
+//! `ADD16F` (the low word, carry out) and `ADC16F` (the high word), two
+//! instructions that need `hl` for each word in turn and the carry in `f`
+//! between them. [`fuse`] makes them one `SHL32` over the two words' own
+//! pairs with no flag between its parts: `add hl, hl` when a word is in `hl`,
+//! `sla`/`rl` of its bytes otherwise, so `x << 1` with `x` in `hl:de` is
+//! `add hl, hl; rl e; rl d` and the words never trade places through a third
+//! pair.
 //!
 //! Mid-end IR computes `x << 1` in the loop header ahead of the exit test, and
 //! the exit returns the old `x`: both live across the test, four pairs on a
@@ -57,8 +61,8 @@ fn copied_into(
 }
 
 /// `ADD16F x, x` and the `ADC16F y, y` after it (a long added to itself) as one
-/// `SHL32 [lo', hl', f, x, hl]`: the copies in and out of hl around each stay,
-/// those of the low word go with the instruction.
+/// `SHL32 [lo', hi', f, x, y]`: the copies in and out of hl around each go
+/// with the instructions, the results are the fused instruction's own.
 fn fuse_block(
     function: &mut MFunction,
     b: usize,
@@ -86,7 +90,7 @@ fn fuse_block(
         }) else {
             continue;
         };
-        let Operand::Def(low) = insts[out].operands[0] else { continue };
+        let Operand::Def(low @ Reg::Virt(low_id)) = insts[out].operands[0] else { continue };
         let Some(adc) = (out + 1..insts.len()).find(|&k| insts[k].kind != Kind::Copy) else { continue };
         let [Operand::Def(_), Operand::Def(flags), Operand::Use(_), Operand::Use(Reg::Virt(y)), Operand::Use(_)] =
             insts[adc].operands[..]
@@ -96,26 +100,43 @@ fn fuse_block(
         if insts[adc].kind != Kind::Op("ADC16F") {
             continue;
         }
-        let Some((_, held_high)) = copied_into(insts, adc, hl) else { continue };
-        if root(function, held_high) != root(function, y) || insts[out + 1..adc].iter().any(|i| i.kind != Kind::Copy) {
+        let Some((copy_in, held_high)) = copied_into(insts, adc, hl) else { continue };
+        if root(function, held_high) != root(function, y)
+            || insts[out + 1..adc].iter().any(|i| i.kind != Kind::Copy || reads(i, low_id))
+        {
+            continue;
+        }
+        // the high word leaves hl by the next copy
+        let Some(copy_out) = insts.get(adc + 1).filter(|i| {
+            i.kind == Kind::Copy && matches!(&i.operands[..], [Operand::Def(Reg::Virt(_)), Operand::Use(r)] if *r == hl)
+        }) else {
+            continue;
+        };
+        let Operand::Def(high) = copy_out.operands[0] else { continue };
+        // the high word's `rl` leaves the other flags of its byte, not of the
+        // word: no one may read them
+        if insts[adc + 2..]
+            .iter()
+            .take_while(|i| !i.operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == flags)))
+            .any(|i| i.reads_flags)
+        {
             continue;
         }
         let mut fused = Inst::new(
             Kind::Op("SHL32"),
             vec![
                 Operand::Def(low),
-                Operand::Def(hl),
+                Operand::Def(high),
                 Operand::Def(flags),
                 Operand::Use(Reg::Virt(x)),
-                Operand::Use(hl),
+                Operand::Use(Reg::Virt(y)),
             ],
         );
         fused.ties = vec![(0, 3), (1, 4)];
         fused.sets_flags = true;
         let insts = &mut function.blocks[b].insts;
         insts[adc] = fused;
-        // the low word's copy out, its add and the copy in ahead of it go
-        for k in [out, add, into] {
+        for k in [adc + 1, copy_in, out, add, into] {
             insts.remove(k);
         }
         return true;
@@ -148,23 +169,19 @@ fn reads(
     inst.operands.iter().any(|operand| matches!(operand, Operand::Use(Reg::Virt(u)) if *u == v))
 }
 
-/// A long doubled in a block that branches: fused, and moved with the copies
-/// that carry its results into the successor whose only predecessor is the
-/// block, where everything that reads them is, so the exit path no longer
-/// computes it. A block where that does not happen keeps the two instructions:
-/// fused, a doubling in straight code pays for the forced registers
-/// (rotate_small -O1 +347 B).
+/// Every long doubled is fused; one in a block that branches is also moved
+/// with the copies that carry its results into the successor whose only
+/// predecessor is the block, where everything that reads them is, so the exit
+/// path no longer computes it.
 pub fn double_and_sink(function: &mut MFunction) {
     if std::env::var("LLRM_NO_Z80_SHL32").is_ok() {
         return;
     }
     for b in 0..function.blocks.len() {
-        if successors(function, b).len() < 2 {
-            continue;
-        }
-        let before = function.clone();
-        if !fuse_block(function, b) || !sink_block(function, b) {
-            *function = before;
+        while fuse_block(function, b) {
+            if successors(function, b).len() >= 2 {
+                sink_block(function, b);
+            }
         }
     }
 }
@@ -202,41 +219,12 @@ fn sink_into(
             return false;
         }
         let insts = &function.blocks[b].insts;
-        // the copy into hl just ahead of the shift, and the copy out of hl just
-        // after
         let mut unit = vec![shift];
-        let Operand::Use(hl) = insts[shift].operands[4] else { return false };
-        let Some(copy_in) = (0..shift).rev().find(|&k| {
-            matches!(
-                &insts[k].operands[..],
-                [Operand::Def(d), Operand::Use(_)] if *d == hl && insts[k].kind == Kind::Copy
-            )
-        }) else {
-            return false;
-        };
-        if insts[copy_in + 1..shift]
-            .iter()
-            .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == hl)))
-        {
-            return false;
-        }
-        unit.push(copy_in);
-        let Some(copy_out) = (shift + 1..insts.len()).find(|&k| {
-            matches!(
-                &insts[k].operands[..],
-                [Operand::Def(_), Operand::Use(s)] if *s == hl && insts[k].kind == Kind::Copy
-            )
-        }) else {
-            return false;
-        };
-        unit.push(copy_out);
         // the results' copies, followed while they stay in the block
         let mut defined: Vec<u32> = Vec::new();
-        for &k in &unit {
-            for operand in &insts[k].operands {
-                if let Operand::Def(Reg::Virt(v)) = operand {
-                    defined.push(*v);
-                }
+        for operand in &insts[shift].operands {
+            if let Operand::Def(Reg::Virt(v)) = operand {
+                defined.push(*v);
             }
         }
         let target_id = function.blocks[target].id;

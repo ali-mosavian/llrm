@@ -929,6 +929,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 an
+    /// innermost loop directly inside a loop of known trips is unrolled by the
+    /// pin's threshold alone, unpriced (see `full_unroll_pays`). False: it is
+    /// priced like any other loop.
+    fn unroll_pin_decides_inner_of_known_trips(&self) -> bool {
+        false
+    }
+
     /// DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): a phi of constants is
     /// folded into the users that fold, in a loop, and through a phi of
     /// constants behind a diamond. A move per edge the fold adds is paid by
@@ -1137,6 +1145,11 @@ pub trait Tti {
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
         false
+    }
+
+    /// `Tuning::inline_dying_credit_at_os` (D13).
+    fn inline_dying_credit_at_os(&self) -> bool {
+        true
     }
 
     /// `Tuning::unroll_never_grows_at_o1`.
@@ -1357,6 +1370,13 @@ pub trait Tti {
     /// asks for gcc's).
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         None
+    }
+
+    /// DEVIATE IPACP-O3: whether a function is copied for the constants its
+    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        false
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
@@ -1962,6 +1982,15 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin: whether [`Tti::narrows_counters`] also applies when the
+    /// function is not sized for bytes. A narrower counter is fewer bytes of
+    /// code but can cost clocks (a scaled byte index is a shift chain the
+    /// pointer recurrence did not need); a target that has not priced that
+    /// says no and narrows at `-Os` only.
+    fn narrows_counters_at_speed(&self) -> bool {
+        true
+    }
+
     /// Beyond the pin: whether a cycle through a phi whose values only matter
     /// at a narrower native width (read through `and` masks, `trunc`s and
     /// values known zero above it) is carried at that width (`narrowcycle`),
@@ -2082,6 +2111,16 @@ pub trait Tti {
         self.number_of_gpr_registers()
     }
 
+    /// DEVIATE LG3: instructions one base register that names a global's address
+    /// costs in the preheader (arm64: `adrp` + `add`, and a symbol plus a
+    /// constant is a new pair, not the pair the pin's bases already hold). LSR
+    /// keeps the pin's solution over the end-biased one when those new bases
+    /// outweigh the loop instructions the latter saves over the trips the loop
+    /// is known to run. 0: bases are not priced (the pin's rule).
+    fn lsr_symbol_base_setup_insns(&self) -> u32 {
+        0
+    }
+
     /// Whether a one-register formula of the first use makes its register a
     /// loser for the later uses (`VisitedRegs`, `SolveRecurse` L5600): the pin's
     /// rule. DEVIATE LS1 turns it off where the target has too few registers
@@ -2195,6 +2234,15 @@ pub trait Tti {
         &[]
     }
 
+    /// DEVIATE IU1: whether `IVUsers` meets the users of a value in use-list
+    /// order, as the pin does, where the default is descending program order.
+    /// LSR's ties follow it: wasm32 memory_expansion -O2 was 1307 B over the
+    /// pin and is 367 B under. Other targets state it when their cells agree.
+    /// Owner llrm-target-wasm; exit: every target judged, 2026-11-24.
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
@@ -2268,6 +2316,14 @@ pub trait Tti {
         _bits: u32,
     ) -> u32 {
         0
+    }
+
+    /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the
+    /// extension of a phi of that loop (`zext i8 j`) is as free as the phi
+    /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
+    /// formula naming the inner loop's narrowed counter a loser.
+    fn lsr_extension_of_phi_exists(&self) -> bool {
+        false
     }
 
     /// Whether an offset LSR leaves unfolded in an address that has one base

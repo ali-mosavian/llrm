@@ -495,12 +495,19 @@ impl Printer<'_> {
                 let source = name_of(self, 3)?;
                 self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
             }
-            // a long doubled: the low word in its pair, the high word in hl
+            // a long doubled in the pairs of its words: the carry runs from the low word's bytes into the high's;
+            // `hl` doubles in one instruction
             "SHL32" => {
-                let (lo, hi) = lanes(self.register(inst, 0)?)?;
-                self.push(format!("sla {}", name(lo)));
-                self.push(format!("rl {}", name(hi)));
-                self.push("adc hl, hl");
+                for (word, first) in [(0, true), (1, false)] {
+                    let pair = self.register(inst, word)?;
+                    if pair == reg::HL {
+                        self.push(if first { "add hl, hl" } else { "adc hl, hl" });
+                    } else {
+                        let (low, high) = lanes(pair)?;
+                        self.push(format!("{} {}", if first { "sla" } else { "rl" }, name(low)));
+                        self.push(format!("rl {}", name(high)));
+                    }
+                }
             }
             "SUB16F" => {
                 let source = name_of(self, 3)?;
@@ -562,6 +569,15 @@ impl Printer<'_> {
             }
             // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
             // h`'s 4 B / 16 T
+            // the low bit of the second word through the carry into the top of the first: `a` is read, not kept
+            "FSHR1" => {
+                let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                let (from, _) = lanes(self.register(inst, 2)?)?;
+                self.push(format!("ld a, {}", name(from)));
+                self.push("rra");
+                self.push(format!("rr {}", name(hi)));
+                self.push(format!("rr {}", name(lo)));
+            }
             "SHL16" if self.register(inst, 0)? == reg::HL => {
                 for _ in 0..shift_count(inst)? {
                     self.push("add hl, hl");

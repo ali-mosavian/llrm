@@ -2342,7 +2342,9 @@ fn va_start_names_the_first_unnamed_argument_on_the_stack() {
     let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
     for level in [Level::O0, Level::O2, Level::Os] {
         let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(callee.contains("ld e, 4(ix)") && callee.contains("ld d, 5(ix)"), "{level:?}: {callee}");
+        // the word is read from 4(ix), 5(ix), into whichever pair the allocation gives it (the list pointer is a
+        // register since the va_list promotion, no longer a frame slot read through de)
+        assert!(callee.contains(", 4(ix)") && callee.contains(", 5(ix)"), "{level:?}: {callee}");
     }
 }
 

@@ -87,6 +87,11 @@ pub struct Tuning {
     /// did not pay on x86-m32: 1 of 46 programs). False: any refused loop under the threshold, which
     /// is what the 6502 and m68k trials were fit on (float_in_place_update: 9441 B at -O1 against 19 B).
     pub unroll_trial_nests_only: bool,
+    /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
+    /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
+    /// carries more bytes than its units where an argument is several words (x86-m16:
+    /// QCport `pl_box_axis`, 21 units, ~70 B a copy, three copies +181 B).
+    pub inline_dying_credit_at_os: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -403,6 +408,10 @@ pub struct Tuning {
     /// `pass_tail_recursion` runs early, `passes.def` before
     /// `pass_ipa_inline`), not after (D10).
     pub recursive_tre_first: (bool, bool),
+    /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
+    /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
+    /// (`Tti::ipa_cp_clones_at_speed`).
+    pub ipa_cp_clones_at_speed: bool,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -494,6 +503,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
+        inline_dying_credit_at_os: true,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -560,6 +570,7 @@ impl Tuning {
         recursive_inlining_growth: None,
         recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
+        ipa_cp_clones_at_speed: false,
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,

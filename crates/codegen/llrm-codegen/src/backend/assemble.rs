@@ -223,10 +223,9 @@ pub fn assembled_by(
     let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
     let mut shared_registers = None;
     let mut data = Vec::new();
-    // A variable of zeros moves to `.data?` after this (`zero_to_bss`): where
-    // one is among `data`, the pool's start offset in `.data` is not known
-    // here.
-    let mut zero_may_move = false;
+    // A variable of zeros moves to `.data?` after this (`zero_to_bss`): the
+    // pool's start offset in `.data` is where the others end.
+    let mut staying_end = 0_i64;
     let mut far_data = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
@@ -316,12 +315,15 @@ pub fn assembled_by(
                     far_data.extend(datums);
                 } else {
                     let start = data.len();
-                    zero_may_move |= !variable.constant
+                    let zero_may_move = !variable.constant
                         && datums.iter().all(|one| match one {
                             masm::Datum::Align(_) | masm::Datum::Label(_) => true,
                             masm::Datum::Bytes(bytes) => bytes.iter().all(|byte| *byte == 0),
                             _ => false,
                         });
+                    if !zero_may_move {
+                        staying_end += masm::data_size(&datums, staying_end);
+                    }
                     data.extend(datums);
                     if let Some(comdat) = comdat_of(module, name) {
                         let symbol = names[&(globals::space(module, id), at as i64)].clone();
@@ -520,11 +522,12 @@ pub fn assembled_by(
     let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
     // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
     let entries = pool.borrow();
-    let pooled = if flat_elf || zero_may_move {
+    let pooled = if flat_elf {
         crate::backend::constpool::wide_first(entries.entries())
     } else {
-        crate::backend::constpool::gap_filled(entries.entries(), masm::data_size(&data, 0))
+        crate::backend::constpool::gap_filled(entries.entries(), staying_end)
     };
+    let mut pool_end = staying_end;
     for (bytes, id) in pooled {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
@@ -558,9 +561,13 @@ pub fn assembled_by(
             section.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
             continue;
         }
-        if to > 1 && (to >= 8 || masm::data_size(&data, 0) % to != 0) {
+        // The offset counts what stays in `.data`: the variables of zeros that
+        // `zero_to_bss` moves are not before the pool.
+        if to > 1 && (to >= 8 || pool_end % to != 0) {
             data.push(masm::Datum::Align(masm::Align { to }));
+            pool_end += (to - pool_end % to) % to;
         }
+        pool_end += bytes.len() as i64;
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
