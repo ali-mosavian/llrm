@@ -2926,6 +2926,7 @@ impl<'a> TypeLegalizer<'a> {
         if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
             && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
             && !self.product_fits(lhs, rhs, bits)
+            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
         {
             let vt = self.dag.value_type(value);
