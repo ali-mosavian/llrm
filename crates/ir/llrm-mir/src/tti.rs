@@ -1170,6 +1170,11 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        None
+    }
+
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
         false
@@ -2094,6 +2099,17 @@ pub trait Tti {
     /// inline cost of the callee that holds it. Flip the default when fixed.
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L4172)
     fn folds_select_to_cmp(&self) -> bool {
+        false
+    }
+
+    /// Whether InstCombine folds `icmp (phi C1, C2), C` into a phi of the
+    /// folded compares (`foldICmpWithConstant`). The pin does so on every target.
+    /// DEVIATE ICMPPHI-1 (2026-11-12, owner wasm, exit 2026-11-24): on for
+    /// wasm only. Elsewhere the exit test of a counted loop becomes a live i1
+    /// value the lowering handles badly (m68k, z80, 6502: 31 cells up +295 B;
+    /// arm64, x86: 18 of 21 cells up +128 B). Flip when their lowering does.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1369)
+    fn folds_icmp_of_constant_phi(&self) -> bool {
         false
     }
 

@@ -87,6 +87,11 @@ pub struct Tuning {
     /// did not pay on x86-m32: 1 of 46 programs). False: any refused loop under the threshold, which
     /// is what the 6502 and m68k trials were fit on (float_in_place_update: 9441 B at -O1 against 19 B).
     pub unroll_trial_nests_only: bool,
+    /// DEVIATE UNROLL-OS-TRIAL (owner x86-m32, exit 2026-11-24): the unrolled size, in the unroll
+    /// units, up to which a loop the -Os threshold refused is unrolled on trial; kept where the
+    /// finished object is smaller, or grows by a few bytes a function and runs less
+    /// (`Tti::unroll_trial_at_size`). `None`: no trial.
+    pub unroll_trial_at_size: Option<u32>,
     /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
     /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
     /// carries more bytes than its units where an argument is several words (x86-m16:
@@ -522,6 +527,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
+        unroll_trial_at_size: None,
         inline_dying_credit_at_os: true,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,

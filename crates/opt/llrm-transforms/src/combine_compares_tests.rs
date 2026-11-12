@@ -1031,3 +1031,69 @@ fn an_unsigned_samesign_compare_shares_the_known_sign_between_its_sides() {
     samesign("uge", 127, "  %0 = icmp eq i8 %x, 127\n  ret i1 %0\n");
     samesign("uge", -128, "  ret i1 true\n");
 }
+
+const CONSTANT_PHI_LOOP: &str = "declare void @report(i32)
+
+define i32 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ 1, %b1 ]
+  %r = add nuw nsw i32 %i, 7
+  call void @report(i32 %r)
+  %c = icmp eq i32 %i, 0
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i32 0
+}
+";
+
+/// `@f` after `visitICmpInst` on a target that does (`on`) or does not fold a
+/// compare of a constant phi.
+fn combined_on(
+    text: &str,
+    on: bool,
+) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { icmp_of_constant_phi: on, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `icmp eq (phi [0, 1]), 0` stayed a compare: the loop exit test never became
+/// `phi i1 [true], [false]`, so SimplifyCFG could not thread it and the
+/// two-trip loop was not unrolled at optsize (wasm function_table -Os, +4 B).
+#[test]
+fn test_a_compare_of_a_constant_phi_is_a_phi_of_the_folded_compares() {
+    let out = combined_on(CONSTANT_PHI_LOOP, true);
+    assert!(out.contains("phi i1 [ true, %b0 ], [ false, %b1 ]"), "{out}");
+    assert!(!out.contains("icmp"), "{out}");
+    assert!(out.contains("%i = phi i32"), "the integer phi keeps its other user: {out}");
+}
+
+/// m68k, z80 and 6502 handle the live i1 exit test badly (31 cells, +295 B):
+/// where the target says no, the compare stays.
+#[test]
+fn test_a_target_that_declines_keeps_the_compare_of_a_constant_phi() {
+    let out = combined_on(CONSTANT_PHI_LOOP, false);
+    assert!(out.contains("icmp eq i32 %i, 0"), "{out}");
+    assert!(!out.contains("phi i1"), "{out}");
+}
