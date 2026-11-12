@@ -341,7 +341,7 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 
     fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_mir::target::OperationCosts { jump_table: 4, ..llrm_mir::target::Neutral.costs() }
+        crate::clocks::sheet()
     }
 
     /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).

@@ -11,6 +11,7 @@ pub mod frequency;
 pub mod inline_rt;
 pub mod bump;
 pub mod carry;
+pub mod clocks;
 pub mod commute;
 pub mod ldir;
 pub mod long_shift;
