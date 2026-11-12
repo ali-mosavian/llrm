@@ -56,12 +56,45 @@ fn two_shifts_at_the_speed_levels_link_no_routine() {
     }
 }
 
-/// Every site is a loop of its own: past the point where the loops together are
-/// larger than one routine linked once and a call at each site, the calls win.
-/// Six shifts at -Os are the 101 B routine and six calls.
+/// shift_int64_variable -Os called the 101 B routine for its shifts (388 T a bit): 872 B and 12.3M T against SDCC's
+/// 1438 B and 11.7M T. Where the module's clocks are the shifts', the loops (half the clocks a bit) win by the
+/// smaller relative regret, bytes first or not: 14 shifts are 14 loops and no routine.
 #[test]
-fn many_shifts_share_the_routine() {
-    let out = compiled(&module("minsize", 6), Level::Os);
+fn many_shifts_in_a_module_of_shifts_are_loops() {
+    let out = compiled(&module("minsize", 14), Level::Os);
+    assert!(out.matches("djnz").count() == 14 && !out.contains("__s_"), "{out}");
+}
+
+/// Every site is a loop of its own, unless the module's clocks are another loop's: the loops are 34 B a site
+/// against a 9 B call and 101 B once, and the size routine's 388 T a bit is lost beside 40000 trips of a loop.
+/// Six shifts beside it at -Os are the 101 B routine and six calls.
+#[test]
+fn many_shifts_beside_a_hot_loop_share_the_routine() {
+    let hot = "@a = global [200 x i8] zeroinitializer
+define void @g() minsize {
+entry:
+  br label %outer
+outer:
+  %j = phi i16 [ 0, %entry ], [ %j.next, %inner.end ]
+  br label %inner
+inner:
+  %i = phi i16 [ 0, %outer ], [ %i.next, %inner ]
+  %p = getelementptr i8, ptr @a, i16 %i
+  %v = load i8, ptr %p
+  %w = add i8 %v, 1
+  store i8 %w, ptr %p
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 200
+  br i1 %c, label %inner, label %inner.end
+inner.end:
+  %j.next = add nuw i16 %j, 1
+  %d = icmp ne i16 %j.next, 200
+  br i1 %d, label %outer, label %exit
+exit:
+  ret void
+}
+";
+    let out = compiled(&format!("{LAYOUT}{hot}{}", module("minsize", 6).replace(LAYOUT, "")), Level::Os);
     assert!(out.contains("call __s_ashldi3") && !out.contains("djnz"), "{out}");
 }
 
