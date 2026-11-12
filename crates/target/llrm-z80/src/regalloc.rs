@@ -281,6 +281,20 @@ impl Target for Z80Registers {
         register: Reg,
         slot: i32,
     ) -> Option<Inst> {
+        // a half taken from a spilled pair is that half's byte of the cell
+        if let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(byte), Operand::Use(pair)]) = (inst.kind, &inst.operands[..])
+            && *pair == register
+            && byte != pair
+            && !NO_FOLD.with(std::cell::Cell::get)
+        {
+            return Some(Inst {
+                may_load: true,
+                ..Inst::new(
+                    Kind::Op("RELOAD8L"),
+                    vec![Operand::Def(*byte), Operand::Frame(slot), Operand::Imm(i64::from(op == "HI"))],
+                )
+            });
+        }
         let (Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16"), Some(Operand::Use(second))) =
             (inst.kind, inst.operands.get(2))
         else {

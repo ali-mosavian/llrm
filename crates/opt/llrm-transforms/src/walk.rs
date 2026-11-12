@@ -140,6 +140,7 @@ impl ProgramPass for ModuleIpo {
                         &private[at],
                         &costs,
                         self.inline.cp_clone.unwrap_or(false),
+                        self.inline.cp_hint_clones,
                         &mut cloning,
                     )
                 });
@@ -803,9 +804,7 @@ impl ProgramPass for Walk {
                                             .map(|body| function_clocks(module, &program.layout, tti, body))
                                             .sum();
                                         let once = kept_clocks + run - function_clocks(module, &program.layout, tti, now);
-                                        trips >= least as f64
-                                            && (once as f64 * trips) as i64 > 0
-                                            && growth <= INLINE_SPEED_BYTES_PER_SITE * calls.len() as i64
+                                        speed_keeps_at_size(least, trips, once, calls.len(), growth)
                                     }
                                     _ => false,
                                 };
@@ -1707,6 +1706,24 @@ const HOT_TRIALS: usize = 4;
 #[allow(clippy::too_many_arguments)]
 /// Bytes a site may add where INL-SPEED-OS keeps a trial for the clocks it saves.
 const INLINE_SPEED_BYTES_PER_SITE: i64 = 4;
+
+/// Instructions a call site runs that its copy does not: the call and the callee's return.
+const INLINE_CALL_AND_RETURN: i64 = 2;
+
+/// DEVIATE INL-SPEED-OS: whether an -Os trial is kept for its clocks: its sites run at least `least` times per
+/// call of the caller, `once` is the clocks one run of the sites saves (the latency model prices a call as its
+/// callee's body, so a copy that merely replaces it reads 0: it also drops the call and the return), and the copy
+/// adds at most `INLINE_SPEED_BYTES_PER_SITE` bytes a site.
+fn speed_keeps_at_size(
+    least: i64,
+    trips: f64,
+    once: i64,
+    sites: usize,
+    growth: i64,
+) -> bool {
+    let once = once + INLINE_CALL_AND_RETURN * sites as i64;
+    trips >= least as f64 && (once as f64 * trips) as i64 > 0 && growth <= INLINE_SPEED_BYTES_PER_SITE * sites as i64
+}
 
 fn trial_accepted(
     byte_gate: bool,
