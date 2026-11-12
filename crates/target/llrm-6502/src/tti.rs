@@ -255,6 +255,13 @@ impl Tti for Mos6502 {
         &[16, 32]
     }
 
+    /// 16 at `-Os` too: a pointer or index stepped by a row size is a pair of
+    /// cells and one add, where the pin's widths call `__mulhi3` each trip
+    /// (rep_count -Os). Not 32: tail_calls grew 354 B.
+    fn lsr_native_integer_widths_for_size(&self) -> &'static [u32] {
+        &[16]
+    }
+
     /// `isLSRCostLess` with the target's own instruction counts, the shape of
     /// the pin's x86 override ("instruction number 1st priority",
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)
@@ -313,6 +320,15 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// At `-Os` too: the `__mulhi3` call is its arguments, the call and the
+    /// result moves, more bytes than a pair of cells and one 16-bit add.
+    fn reduces_outer_multiply_for_size(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        self.reduces_outer_multiply(multiplier)
     }
 
     /// DEVIATE LU22: the inner loop's byte counter, extended, is the counter.

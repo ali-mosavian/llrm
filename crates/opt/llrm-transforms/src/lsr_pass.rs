@@ -41,11 +41,21 @@ use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
 use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
 
+/// `Tti::reduces_outer_multiply` for speed, `reduces_outer_multiply_for_size` at `-Os`.
+fn reduces(
+    tti: &dyn Tti,
+    size: bool,
+    multiplier: Option<u128>,
+) -> bool {
+    if size { tti.reduces_outer_multiply_for_size(multiplier) } else { tti.reduces_outer_multiply(multiplier) }
+}
+
 /// Whether `operand` is computed with a multiply the target prices as worth
 /// reducing in an outer loop (`Tti::reduces_outer_multiply`), through adds,
 /// subtracts and casts to `depth` levels.
 fn computed_by_priced_multiply(
     tti: &dyn Tti,
+    size: bool,
     context: &Context,
     layout: &DataLayout,
     function: &Function,
@@ -64,24 +74,24 @@ fn computed_by_priced_multiply(
                 },
                 _ => None,
             };
-            tti.reduces_outer_multiply(constant)
+            reduces(tti, size, constant)
         }
         // An index of a GEP is multiplied by the size of the element it steps
         // over: `g[i]` over rows of 54 bytes is `i * 54`.
         Opcode::GetElementPtr { source } => {
-            let size = layout.alloc_size(&context.types, source);
-            let scaled = size > 1
+            let element = layout.alloc_size(&context.types, source);
+            let scaled = element > 1
                 && matches!(inst.operands.get(1), Some(Operand::Value(_)))
-                && tti.reduces_outer_multiply(Some(u128::from(size)));
+                && reduces(tti, size, Some(u128::from(element)));
             scaled
                 || depth > 0
                     && inst
                         .operands
                         .iter()
-                        .any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+                        .any(|&one| computed_by_priced_multiply(tti, size, context, layout, function, one, depth - 1))
         }
         Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(_) if depth > 0 => {
-            inst.operands.iter().any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+            inst.operands.iter().any(|&one| computed_by_priced_multiply(tti, size, context, layout, function, one, depth - 1))
         }
         _ => false,
     }
@@ -276,7 +286,7 @@ fn plan_loop(
         ephemeral: &is_ephemeral,
         // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
         // wide loop grew tail_calls by 354 bytes.
-        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+        native_widths: if size { tti.lsr_native_integer_widths_for_size() } else { tti.lsr_native_integer_widths() },
         use_list_order: tti.lsr_users_in_use_list_order(),
     };
     let mut users = match carried {
@@ -320,15 +330,18 @@ fn plan_loop(
     // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop
     // that has a subloop): where the target prices it
     // (`Tti::reduces_outer_multiply`: the multiply's clocks against a
-    // counter held across the inner loop) and not at -Os, an outer loop
+    // counter held across the inner loop; at -Os its bytes, by
+    // `reduces_outer_multiply_for_size`), an outer loop
     // that computes an affine value with a multiply is reduced as
     // an inner loop is, so `i * 300` feeding the inner loop becomes a counter
     // stepped by 300. gcc's ivopts does this on every loop (named behaviour
     // only, its code is not translated). x_cordic -O1: 200 `imul` x 19
     // clocks.
     if !lp.is_innermost()
-        && !(!size
-            && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, layout, function, one.operand, 3)))
+        && !users
+            .uses
+            .iter()
+            .any(|one| computed_by_priced_multiply(tti, size, context, layout, function, one.operand, 3))
     {
         return planned(None);
     }

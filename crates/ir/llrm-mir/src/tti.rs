@@ -615,6 +615,16 @@ pub trait Tti {
         false
     }
 
+    /// `reduces_outer_multiply` at `-Os`: whether the counter's bytes (setup
+    /// and step) are fewer than the multiply's. false: the pin's.
+    fn reduces_outer_multiply_for_size(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let _ = multiplier;
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
@@ -2257,6 +2267,12 @@ pub trait Tti {
     /// Owner llrm-target-6502; exit: 16-bit widths and `-Os` with a byte-aware
     /// LSR cost, 2026-11-20.
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
+        &[]
+    }
+
+    /// `lsr_native_integer_widths` at `-Os`, where a wider counter's bytes
+    /// count (tail_calls grew 354 B with 32). None: the datalayout's.
+    fn lsr_native_integer_widths_for_size(&self) -> &'static [u32] {
         &[]
     }
 
