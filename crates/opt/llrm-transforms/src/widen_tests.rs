@@ -96,6 +96,37 @@ fn test_a_counter_is_not_widened_past_the_pointer_width_on_the_16_bit_target() {
     assert!(!after.contains("phi i32"), "{after}");
 }
 
+/// A 32-bit pointer with a legal `i64` (wasm32's `n32:64`) widens an `i32` counter that a `zext`
+/// takes to `i64`: the pin does, and D18's pointer-width bound held it back. shift_int64_variable
+/// -O1 and -Os kept an `i32` counter and a second `i64` one for the shift amount: +12 B.
+#[test]
+fn test_a_counter_zero_extended_to_i64_is_widened_with_a_32_bit_pointer() {
+    let text = "target datalayout = \"e-p:32:32-i64:64-n32:64\"
+
+define i64 @f(i64 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i64 [ 0, %b0 ], [ %sum, %b1 ]
+  %w = zext nneg i32 %i to i64
+  %s = shl i64 %x, %w
+  %sum = add i64 %acc, %s
+  %next = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %next, 40
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret i64 %sum
+}
+";
+    let mut module = parsed(text);
+    managed(&mut module, IndVars { lftr: true, size: false });
+    let after = printed(&module);
+    assert!(after.contains("phi i64 [ 0, %b0 ], [ %") && !after.contains("phi i32"), "{after}");
+}
+
 /// A user of the counter with no value (a `store` of it) is a use to truncate
 /// for. `widen_iv_use` asked every user for its value first: `bench/bintree`
 /// at -O2 -m32 panicked 'an instruction with a value' (#2531).
