@@ -30,6 +30,8 @@ thread_local! {
     /// The functions with a loop that ROTATION-TRIAL rotated and a trial may
     /// leave unrotated.
     static ROTATED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The loops ROTATION-TRIAL noted, counted apart from the functions they are in.
+    static ROTATED_LOOPS: Cell<usize> = const { Cell::new(0) };
     /// Set while the trial compile of ROTATION-HOT runs: a loop whose copied guard does not fold and whose
     /// trips are not counted is rotated as well.
     static MORE: Cell<bool> = const { Cell::new(false) };
@@ -108,12 +110,23 @@ pub fn with_unrotated<T>(body: impl FnOnce() -> T) -> T {
 /// Notes that `function` has a counted loop of an unfolded guard that was rotated
 /// and a trial may leave as it was.
 pub(crate) fn note_rotated(function: &str) {
+    ROTATED_LOOPS.with(|count| count.set(count.get() + 1));
     ROTATED.with(|list| {
         let mut list = list.borrow_mut();
         if !list.iter().any(|one| one == function) {
             list.push(function.to_owned());
         }
     });
+}
+
+/// The loops [`note_rotated`] saw since [`clear_rotated_loops`].
+pub fn rotated_loops() -> usize {
+    ROTATED_LOOPS.with(Cell::get)
+}
+
+/// Forgets the loops counted for an earlier compile.
+pub fn clear_rotated_loops() {
+    ROTATED_LOOPS.with(|count| count.set(0));
 }
 
 /// The functions noted by [`note_rotated`] since the last call.

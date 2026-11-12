@@ -795,6 +795,43 @@ impl Printer<'_> {
                 self.push("inc de");
                 self.push("ldir");
             }
+            // eight bytes at hl shifted in place a bit a trip, count in
+            // bc: `inc b` and the jump to the test make a count of zero no trip
+            // (the test is `dec b; jp nz`, which the relax pass makes `djnz`);
+            // the bytes chain through the carry from the low one (left) or the
+            // high one (right), hl kept across the trip
+            "WSHIFT" => {
+                let Some(Operand::Imm(kind)) = inst.operands.get(2) else {
+                    return Err("a wide shift with no kind".to_owned());
+                };
+                let (first, step, next) = match kind {
+                    0 => ("sla (hl)", "inc hl", "rl (hl)"),
+                    1 => ("srl (hl)", "dec hl", "rr (hl)"),
+                    _ => ("sra (hl)", "dec hl", "rr (hl)"),
+                };
+                let lines = |out: &[Line]| out.iter().filter(|line| !matches!(line, Line::Loc(_))).count();
+                let start = lines(&self.out);
+                // the names are the line counts at the labels: the loop's after
+                // `inc b; jp`, the test's after the body
+                let (again, test) = (format!("{}$", start + 3), format!("{}$", start + 21));
+                self.push("ld b, c");
+                self.push("inc b");
+                self.push(format!("jp {test}"));
+                self.out.push(Line::Label(again.clone()));
+                self.push("push hl");
+                self.push(first);
+                for _ in 0..7 {
+                    self.push(step);
+                    self.push(next);
+                }
+                self.push("pop hl");
+                if lines(&self.out) != start + 21 {
+                    return Err("a wide shift body of another length".to_owned());
+                }
+                self.out.push(Line::Label(test));
+                self.push("dec b");
+                self.push(format!("jp nz, {again}"));
+            }
             "LDIRG" => {
                 let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
                 self.push("ld a, b");
@@ -2882,8 +2919,9 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
     let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
     let (mut bytes, mut clocks) = (0, 0.0);
     let weighted = weighted(lines, &frequencies);
+    let trips = local_loop_trips(lines);
     let mut before: Vec<&str> = Vec::new();
-    for (line, weight) in &weighted {
+    for ((line, weight), trips) in weighted.iter().zip(&trips) {
         let Line::Inst(text) = line else {
             before.clear();
             continue;
@@ -2891,10 +2929,39 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
         let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
         // the routine a call reaches runs too (`runtime_size::routine_clocks`: `__mulsi3` is 120 T a multiplier bit)
-        clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight;
+        clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight * trips;
         before.push(text);
     }
     (bytes, clocks.round() as u64)
+}
+
+/// How often each line runs per pass of the block it is in: the typical shift
+/// count for a line inside a loop of an expansion (a numeric local label, `N$`,
+/// jumped back to: the 64-bit shift loop, `WSHIFT`), 1 for the rest.
+/// The IR loops are weighted by their blocks' frequencies ([`weighted`]); an
+/// expansion's own loop has no block.
+fn local_loop_trips(lines: &[Line]) -> Vec<f64> {
+    let local = |name: &str| name.strip_suffix('$').is_some_and(|digits| digits.bytes().all(|b| b.is_ascii_digit()));
+    let mut trips = vec![1.0; lines.len()];
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let (mnemonic, rest) = text.split_once(' ').unwrap_or((text.as_str(), ""));
+        if !matches!(mnemonic, "jp" | "jr" | "djnz") {
+            continue;
+        }
+        let target = rest.rsplit(',').next().unwrap_or("").trim();
+        if !local(target) {
+            continue;
+        }
+        let Some(head) = lines[..at].iter().rposition(|line| matches!(line, Line::Label(name) if name == target))
+        else {
+            continue;
+        };
+        for one in &mut trips[head..=at] {
+            *one = f64::from(crate::runtime_size::TYPICAL_WIDE_SHIFT);
+        }
+    }
+    trips
 }
 
 /// [`price_in_loops`] of the lines as emitted: after branch relaxation, which
@@ -3327,6 +3394,44 @@ mod tests {
         let byte = op("STSP8", vec![Operand::Use(Reg::Phys(reg::A)), Operand::Imm(0)]);
         assert_eq!(push_places(&[area(2), byte, call()], 0, &a), None);
         assert_eq!(push_places(&[area(2), store(reg::BC, 0)], 0, &a), None);
+    }
+
+    /// The 64-bit shift loop (`WSHIFT`) is a loop of the expansion, not of the
+    /// IR: its lines ran once in the price, so a shift by 30 bits read as
+    /// one trip and the inline form beat the routine (shift_int64_variable -O2
+    /// +57 B, +2.6M T).
+    #[test]
+    fn a_local_loop_of_an_expansion_is_priced_by_the_typical_count() {
+        let loop_of = |back: &str| {
+            vec![Line::Label("5$".to_owned()), Line::Inst("sla (hl)".to_owned()), Line::Inst(back.to_owned())]
+        };
+        let trips = u64::from(crate::runtime_size::TYPICAL_WIDE_SHIFT);
+        assert_eq!(price_in_loops(&loop_of("djnz 5$")), (4, (15 + 13) * trips));
+        // a forward jump to a local label is no loop
+        let forward =
+            vec![Line::Inst("jr z, 5$".to_owned()), Line::Inst("sla (hl)".to_owned()), Line::Label("5$".to_owned())];
+        let alone = |text: &str| price_in_loops(&[Line::Inst(text.to_owned())]).1;
+        assert_eq!(price_in_loops(&forward).1, alone("jr z, 5$") + alone("sla (hl)"));
+    }
+
+    /// `push hl`, `pop hl`, `dec hl` and the `(hl)` rotates had no row, so each
+    /// was priced as an unknown form (2 B, 8 T): the 64-bit shift loop
+    /// (seven `rl (hl)` at 15 T) read as 56 T a trip less than it runs, and the
+    /// inline form won call_cleanup_keeps_pair and shift_int64_variable -O2
+    /// (+57 B, +2.6M T) against the routine.
+    #[test]
+    fn the_hl_stack_and_memory_rotate_forms_are_priced_from_the_table() {
+        for (text, bytes, clocks) in [
+            ("push hl", 1, 11),
+            ("pop hl", 1, 10),
+            ("dec hl", 1, 6),
+            ("rl (hl)", 2, 15),
+            ("rr (hl)", 2, 15),
+            ("srl (hl)", 2, 15),
+            ("sra (hl)", 2, 15),
+        ] {
+            assert_eq!(price(&[Line::Inst(text.to_owned())]), (bytes, clocks), "{text}");
+        }
     }
 
     /// `form` spelled a register copy `ld b;b`, a key the table lacks, so

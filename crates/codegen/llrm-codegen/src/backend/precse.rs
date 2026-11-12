@@ -613,6 +613,17 @@ pub(crate) fn flags_read_after(
     matches!(flags_after(regs, bits, insns, index, true), Flags::Read)
 }
 
+/// Whether `one` reads the flags: an `addx` of two equal operands is two values
+/// after two different `add`s. The pin refuses an operation that uses a
+/// physical register that is not constant (`MachineCSE::ProcessBlockCSE`).
+pub(crate) fn reads_flags(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    one: &Insn,
+) -> bool {
+    liveness::effect(regs, bits, one).is_some_and(|effect| !flag_lanes(&effect.all_reads()).is_empty())
+}
+
 /// Whether `one` writes the flags (an operation with no effect table is
 /// taken to). A move and a load leave them alone.
 pub(crate) fn sets_flags(
@@ -708,6 +719,7 @@ fn pre_candidate(
         && !one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))))
         && !cheap(one, classes)
         && !sets_flags(regs, bits, one)
+        && !reads_flags(regs, bits, one)
 }
 
 #[cfg(test)]
@@ -957,7 +969,7 @@ pub fn shared_constrained(
         let number = walk.by_at[&at];
         let mut mine: Vec<Semantics> = Vec::new();
         for (index, one) in body.blocks[number].insns.iter().enumerate() {
-            if !candidate(one, classes) {
+            if !candidate(one, classes) || reads_flags(regs, body.bits, one) {
                 continue;
             }
             let Some(what) = one.what.as_ref() else { continue };

@@ -84,6 +84,11 @@ thread_local! {
     /// Set while a function is selected at a level that allows no trade between bytes and clocks (-O1, -Os, -Oz).
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected with the words of its long adds and subtracts left to the generic
+    /// Set while a function with a variable 64-bit shift is selected the second
+    /// time, each such shift an in-place loop over eight bytes of the frame
+    /// (`Z80Lowering::lower_wide_shift`) where the first selection calls the
+    /// shift routine; the caller prices the two with the routine linked once.
+    pub static INLINE_SHIFTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// expansion (an add and a compare of the sum), not the carry ops (`lower_carry_op`); the caller prices the
     /// two forms (`compile::lines_of`).
     pub static GENERIC_CARRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -461,6 +466,11 @@ pub fn select_block(
             tli.set_operation_action(op, MVT::I16, llrm_codegen::backend::selectiondag::Action::Expand);
         }
     }
+    if INLINE_SHIFTS.with(std::cell::Cell::get) {
+        for op in [ISD::Shl, ISD::Srl, ISD::Sra] {
+            tli.set_operation_action(op, MVT::I64, llrm_codegen::backend::selectiondag::Action::Custom);
+        }
+    }
     tli.set_opt_for_size(sized);
     // a long multiply is a call (`RTLIB::MUL_I32`) in a module with enough of
     // them to pay for the routine (`prepare::mark_long_multiplies`), at every
@@ -479,8 +489,9 @@ pub fn select_block(
     // the product of two zero-extended words is a call in a block that runs
     // once (`block_frequencies` at most 1): 15 B against 216 B of partial
     // products for a few hundred T-states more; in a loop the products stay
-    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
-    if cold && !sized {
+    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only). Above -O1, where the module links
+    // `__mulsi3` for its long products, the call is `__umulhisi3` for two words too: the same call, half the steps.
+    if (cold || (long_multiply && !STRICT_LEVEL.with(std::cell::Cell::get))) && !sized {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized };
