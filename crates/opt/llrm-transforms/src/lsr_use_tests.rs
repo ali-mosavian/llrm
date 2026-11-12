@@ -875,3 +875,36 @@ fn a_frame_slot_takes_the_base_register_and_leaves_one_for_an_index() {
     let global = Formula { has_base_reg: true, scale: 2, ..Formula::default() };
     assert_eq!(global.mode(), Some(Mode { global: false, has_base_reg: true, scale: 2 }));
 }
+
+/// DEVIATE LSR-SIZE at m16: two solutions of the same instructions and registers, one holding two address registers where the other
+/// holds one for more bytes of setup. Ranked by bytes alone the two-register one won, and QCport render/d_alias grew 159 B at -Os
+/// (the allocator then spills the restricted base/index registers).
+#[test]
+fn fewer_address_registers_win_before_fewer_bytes_when_sized() {
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: Some(4),
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    let tti = X86::of_cpu("i486")
+        .unwrap()
+        .in_real_mode(real)
+        .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
+    let sized = |addressed: &[u32], size_bytes| {
+        let mut cost = Cost::new();
+        cost.c = LsrCost { insns: 2, num_regs: 3, ..LsrCost::default() };
+        cost.size = true;
+        cost.addressed = addressed.iter().map(|&at| Scev(at)).collect();
+        cost.size_bytes = size_bytes;
+        cost
+    };
+    let (one_register, two_registers) = (sized(&[1], 9), sized(&[1, 2], 6));
+    assert!(one_register.is_less(&tti, &two_registers) && !two_registers.is_less(&tti, &one_register));
+}
