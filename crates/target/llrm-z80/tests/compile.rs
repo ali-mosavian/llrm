@@ -1749,12 +1749,37 @@ fn a_counted_loop_counts_its_trips_in_a_byte() {
 
 /// A function tuned for size called the long long divide made for speed: the
 /// routine is 179 B more to link (data_int64 and int64_division, -Os). It
-/// calls the size routine; any other function the speed one.
+/// calls the size routine where the module's clocks are another loop's (the
+/// size routine is 99k T a divide: `size_divide.rs` has it called in a module
+/// where the divide is the clocks); any other function the speed one.
 #[test]
 fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
     let body = |attr: &str| {
         format!(
-            "define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
+            "@a = global [200 x i8] zeroinitializer
+define void @g() {attr} {{
+entry:
+  br label %outer
+outer:
+  %j = phi i16 [ 0, %entry ], [ %j.next, %inner.end ]
+  br label %inner
+inner:
+  %i = phi i16 [ 0, %outer ], [ %i.next, %inner ]
+  %p = getelementptr i8, ptr @a, i16 %i
+  %v = load i8, ptr %p
+  %w = add i8 %v, 1
+  store i8 %w, ptr %p
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 200
+  br i1 %c, label %inner, label %inner.end
+inner.end:
+  %j.next = add nuw i16 %j, 1
+  %d = icmp ne i16 %j.next, 200
+  br i1 %d, label %outer, label %exit
+exit:
+  ret void
+}}
+define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
         )
     };
     for attr in ["optsize", "minsize"] {

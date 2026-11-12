@@ -129,8 +129,14 @@ pub struct Selection {
     pub local: bool,
     /// The function carries `optsize` or `minsize`: tuned for size at any level.
     pub sized: bool,
-    /// The same function selected with its long adds as the generic expansion, not carry ops
-    /// (`pipeline::GENERIC_CARRY`); none where it has no carry ops.
+    /// Selected the second time for the module price with the speed routines or
+    /// the shift loops (`pipeline::SPEED_ROUTINES`, `INLINE_SHIFTS`): a
+    /// function tuned for size chooses between its two by the
+    /// smaller relative regret, not by bytes first.
+    pub wide_alternative: bool,
+    /// The same function selected with its long adds as the generic expansion,
+    /// not carry ops (`pipeline::GENERIC_CARRY`); none where it has no
+    /// carry ops.
     pub generic: Option<Box<Selection>>,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
@@ -256,7 +262,22 @@ pub fn select_function_with(
             llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
         );
     let tables = info.jump_tables.clone();
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, generic: None, unreachable, frequencies, tables })
+    Ok(Selection {
+        blocks: selected,
+        locals,
+        cpu,
+        widths,
+        variables,
+        returns_twice,
+        local,
+        sized: tuned_for_size,
+        wide_alternative: super::pipeline::SPEED_ROUTINES.with(std::cell::Cell::get)
+            || super::pipeline::INLINE_SHIFTS.with(std::cell::Cell::get),
+        generic: None,
+        unreachable,
+        frequencies,
+        tables,
+    })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

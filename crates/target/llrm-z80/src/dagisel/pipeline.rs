@@ -83,14 +83,20 @@ thread_local! {
     pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected at a level that allows no trade between bytes and clocks (-O1, -Os, -Oz).
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set while a function is selected with the words of its long adds and subtracts left to the generic
     /// Set while a function with a variable 64-bit shift is selected the second
     /// time, each such shift an in-place loop over eight bytes of the frame
     /// (`Z80Lowering::lower_wide_shift`) where the first selection calls the
     /// shift routine; the caller prices the two with the routine linked once.
     pub static INLINE_SHIFTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// expansion (an add and a compare of the sum), not the carry ops (`lower_carry_op`); the caller prices the
-    /// two forms (`compile::lines_of`).
+    /// Set while a function with a long divide is
+    /// selected the second time, a function tuned for size calling the speed
+    /// routines (`target_lowering(true)`); priced against the size routines by
+    /// the smaller relative regret (`compile::decomposed_functions`).
+    pub static SPEED_ROUTINES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function is selected with the words of its long adds and subtracts left to the generic
+    /// expansion (an add and a compare of the sum), not the carry ops
+    /// (`lower_carry_op`); the caller prices the two forms
+    /// (`compile::lines_of`).
     pub static GENERIC_CARRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The carry ops `lower_carry_op` made since the count was last taken: a function with none has no
     /// generic form to price.
@@ -460,7 +466,8 @@ pub fn select_block(
     optimize: bool,
     (sized, long_multiply, cold, chain_credit): (bool, bool, bool, bool),
 ) -> Result<Vec<Unit>, Refusal> {
-    let mut tli = target_lowering();
+    let speed_routines = SPEED_ROUTINES.with(std::cell::Cell::get);
+    let mut tli = target_lowering(speed_routines);
     if GENERIC_CARRY.with(std::cell::Cell::get) {
         for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
             tli.set_operation_action(op, MVT::I16, llrm_codegen::backend::selectiondag::Action::Expand);
@@ -493,8 +500,12 @@ pub fn select_block(
     if cold && !sized {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
-    let mut lowering = Z80Lowering { sized };
-    let mut combines = Z80Combines { long_multiply: (sized || all_calls) && long_multiply, strict: STRICT_LEVEL.with(std::cell::Cell::get), chain_credit };
+    let mut lowering = Z80Lowering { sized: sized && !speed_routines };
+    let mut combines = Z80Combines {
+        long_multiply: (sized || all_calls) && long_multiply,
+        strict: STRICT_LEVEL.with(std::cell::Cell::get),
+        chain_credit,
+    };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);
