@@ -1032,6 +1032,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPRA-DSO-LOCAL: see `Tuning::ipra_binds_local`.
+    fn ipra_binds_local(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.

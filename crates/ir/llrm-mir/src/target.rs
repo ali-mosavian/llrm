@@ -97,6 +97,12 @@ pub struct Tuning {
     /// finished object is smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
+    /// DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): a function that binds
+    /// locally (external linkage, hidden or protected, or default visibility in code that is not
+    /// shared-library code) takes part in the callee-written-registers facts, as GCC's `-fipa-ra`
+    /// uses every definition no other definition can replace; the pin's `RegUsageInfoCollector`
+    /// takes local linkage only (`isSafeForNoCSROpt`) and is off by default.
+    pub ipra_binds_local: bool,
     /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
     /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
     /// carries more bytes than its units where an argument is several words (x86-m16:
@@ -550,6 +556,7 @@ impl Tuning {
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
+        ipra_binds_local: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
         inline_never_grows_without_rate: false,
