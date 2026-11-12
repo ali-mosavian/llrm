@@ -22,6 +22,9 @@ fn compile(fixture: &str, level: &str) -> String {
 #[test]
 fn lru_o3_shares_the_symbol_base_add_past_a_pre_indexed_store() {
     let text = compile("bench_lru", "-O3");
-    let adds = text.lines().filter(|line| line.trim_start().starts_with("add ") && line.contains("_MergedGlobals@PAGEOFF")).count();
+    let adds = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("add ") && line.contains("_MergedGlobals@PAGEOFF"))
+        .count();
     assert!(adds <= 2, "{adds} symbol base adds:\n{text}");
 }
