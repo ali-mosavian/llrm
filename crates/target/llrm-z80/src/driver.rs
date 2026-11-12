@@ -344,6 +344,12 @@ impl llrm_mir::target::Machine for Z80Machine {
         crate::clocks::sheet()
     }
 
+    /// One unit an operation, as `costs()` was before it stated T-states: the pin's thresholds read instruction
+    /// units, and the size decisions defaulted to `costs()` (-Os grew copy_runs +362 B reading T-states as bytes).
+    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::OperationCosts { jump_table: 4, ..llrm_mir::target::Neutral.costs() }
+    }
+
     /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).
     fn byte_costs(&self) -> llrm_mir::target::OperationCosts {
         DESCRIPTION.size_costs()
