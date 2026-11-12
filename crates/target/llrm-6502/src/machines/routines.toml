@@ -37,3 +37,7 @@ __modhi3c = "__modhi3a"
 # quotients of Euclid's gcd and the digit loops that the aligned loop is for.
 compact_clocks = 735
 aligned_clocks = 200
+# Policy: the share of its estimated clocks a module must save for each percent of its bytes the aligned
+# divides add. By the estimate idiv_loop_os saves 100%+ for +5.4%, compound_assignment_types 86% for +2.4%
+# (36x), idioms 0.3% for +0.7% (0.4x); any value from 1 to 30 gives the same choices.
+percent_per_percent = 4
