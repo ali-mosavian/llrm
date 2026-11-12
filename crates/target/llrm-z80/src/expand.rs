@@ -739,6 +739,10 @@ impl Printer<'_> {
                 let source = name_of(self, 1)?;
                 self.push(format!("bit 7, {source}"));
             }
+            "BIT8" => {
+                let (source, bit) = (name_of(self, 1)?, self.immediate(inst, 2, 7)?);
+                self.push(format!("bit {}, {source}", &bit[1..]));
+            }
             "BIT7_16" => {
                 let (_, hi) = lanes(self.register(inst, 1)?)?;
                 self.push(format!("bit 7, {}", name(hi)));

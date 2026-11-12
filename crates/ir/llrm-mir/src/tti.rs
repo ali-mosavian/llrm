@@ -1296,6 +1296,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE MUL-HOT: see `Tuning::mul_chains_hot_at_size`.
+    fn mul_chains_hot_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
         false

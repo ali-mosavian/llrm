@@ -1452,8 +1452,10 @@ fn selected_in(
     // often enough to pay its bytes.
     let select_branch = if cpu.speed_rate && !cpu.size { cpu.branch_constant_selects } else { 0 };
     let fast_divide = tli.small_divide() && tli.fast_divide_in_loops();
+    // DEVIATE MUL-HOT: see `X86Lowering::hot_chains`.
+    let hot_mul = cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.mul_chains_hot_at_size());
     let frequencies =
-        (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0 || fast_divide).then(|| {
+        (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0 || fast_divide || hot_mul).then(|| {
             let bpi = info
                 .bpi
                 .get_or_insert_with(
@@ -1533,6 +1535,8 @@ fn selected_in(
                         || bytes_beat_clocks
                         || (cpu.size && machine.tti().is_some_and(|tti| tti.imul_at_size())),
                     imul_if_smaller: cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.imul_at_size()),
+                    hot_chains: hot_mul
+                        && frequencies.as_ref().is_some_and(|frequencies| frequencies.relative_to_entry(parent) > 1.0),
                     three_address_adds: !(cpu.size || cpu.min_size)
                         && !matches!(
                             cpu.three_address(),

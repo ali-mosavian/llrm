@@ -5771,3 +5771,25 @@ fn a_counted_loop_that_is_smaller_unrotated_stays_unrotated_at_os_on_m64() {
     .unwrap();
     assert!(bytes <= 195, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
 }
+
+/// MUL-HOT (m32 -Os): `x * 45` keeps its `imul` in a block that runs once and is the pin's `lea` chain in a loop (the pin
+/// decomposes at -Os, `hasMinSize` is -Oz's). The tip kept the `imul` everywhere at -Os: x_mul_constants -Os ran
+/// 388,733 clk against clang's 286,797.
+#[test]
+fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
+    let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
+    let once = format!("{head}define i32 @f(i32 %x) {{\n  %m = mul i32 %x, 45\n  ret i32 %m\n}}\n");
+    let looped = format!(
+        "{head}define i32 @f(i32 %n, ptr %p) {{\nentry:\n  br label %body\n\
+         body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  \
+         %v = load i32, ptr %a\n  %m = mul i32 %v, 45\n  store i32 %m, ptr %a\n  %j = add i32 %i, 1\n  \
+         %c = icmp slt i32 %j, %n\n  br i1 %c, label %body, label %done\n\
+         done:\n  ret i32 0\n}}\n"
+    );
+    let listing = |text: &str| {
+        let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    assert!(listing(&once).contains("imul"), "a multiply that runs once keeps its imul:\n{}", listing(&once));
+    assert!(!listing(&looped).contains("imul"), "a multiply in a loop is the chain:\n{}", listing(&looped));
+}
