@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -Os -march=i486
+// bar: not comparable (SDCC double is 32 bits: it computes a different program)
 /* Every float compare code, as a value, negated, in a branch and as a select, f32 and f64, over -1, 0, 1 and NaN:
    the pin's SETCC code expansion (LegalizeSetCCCondCode) must keep x86's oeq/une and every unordered result. */
 extern void report(long value);
