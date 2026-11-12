@@ -198,7 +198,11 @@ pub fn module_text(
     // the speed multiply is 19 bytes linked once: a module whose multiplies
     // are cold keeps the compact routine
     let calls_multiply = |text: &str| text.contains(" __mulsi3\n");
-    if texts.iter().any(|text| calls_multiply(text)) && crate::hotmultiply::hot(module) {
+    if texts.iter().any(|text| calls_multiply(text))
+        && crate::hotmultiply::hot(module)
+        && (parts.first().is_none_or(|(_, selection)| selection.tuning != alloc::Tuning::SIZE)
+            || fast_multiply_pays_at_size(module, parts, &texts)?)
+    {
         for at in 0..texts.len() {
             if calls_multiply(&texts[at]) {
                 texts[at] = alloc::with_fast_multiply(true, || function_text(module, parts[at].0, parts[at].1))?;
@@ -929,4 +933,30 @@ fn lower(
         }
         other => Err(format!("{other:?} is not a machine node")),
     }
+}
+
+/// At size the speed multiply (`hotmultiply::FAST_BYTES` more, linked once) is the module's choice by the
+/// share of its clocks it saves against the share of its bytes it adds (`mulimage::pays_by_share`): the
+/// static runs of its multiplies times what a call saves, against the module priced as it stands.
+///
+/// DEVIATE 6502-MUL-OS (owner llrm-target-6502, exit 2026-11-24): the pin's `__mulsi3` is one routine.
+/// mul_constants -Os ran 200-trip loops of the 32-trip compact walk, 42.0M clocks against llvm-mos's 13.6M.
+fn fast_multiply_pays_at_size(
+    module: &Module,
+    parts: &[(&str, &Selection)],
+    texts: &[String],
+) -> Result<bool, String> {
+    let Some((_, first)) = parts.first() else { return Ok(false) };
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
+    let weights: Vec<Vec<u64>> = names
+        .iter()
+        .map(|name| {
+            let function = module.named(name).and_then(|id| module.global(id).function());
+            function.map_or_else(Vec::new, |function| crate::weights::block_weights(module, function, &layout))
+        })
+        .collect();
+    let (clocks, bytes) = crate::weights::run_cost(first.cpu, &names, texts, &weights)?;
+    let saved = (crate::hotmultiply::runs(module) * crate::hotmultiply::SAVED_CLOCKS) as u64;
+    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::FAST_BYTES as i64), clocks, bytes))
 }

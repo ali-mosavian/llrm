@@ -503,7 +503,7 @@ fn tail(
     if let Some(sites) = sites {
         let weights = estimate_weights(module, &names, &sources, &program.layout);
         let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
-        if crate::mulimage::aligned_divides_pay(sites, run, size) {
+        if crate::mulimage::pays_by_share(sites, run, size) {
             crate::routines::set_aligned_divides(true);
             let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
             pieces = module_text(module, &parts)?;
