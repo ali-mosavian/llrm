@@ -1147,6 +1147,9 @@ impl Printer<'_> {
                 let (index, register) =
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
+                if op == "RELOAD16" && self.stepped_word_in_place(inst, rest)? {
+                    return Ok(());
+                }
                 if op == "RELOAD16"
                     && self.call_bytes == 0
                     && self.spill_bytes == 0
@@ -1688,6 +1691,74 @@ impl Printer<'_> {
             self.push(format!("{} {slot}", op[..3].to_lowercase()));
         }
         self.skip = taken;
+        Ok(true)
+    }
+
+    /// A `RELOAD16` of a frame cell, a step of the pair (`INC16`, or `INC16c` that steps when its condition holds) and
+    /// the `SPILL16` back to the same cell, with nothing else reading the pair, is `inc d(ix)`, a `jr nz` over `inc
+    /// d+1(ix)`: the carry runs through the cell and no register holds the word (`foldMemoryOperand` of the frame
+    /// cell, `X86InstrInfo::foldMemoryOperandImpl` for `INC`; 15 B and 88 T became 10 B and 12 to 59 T in
+    /// div_constants_short's carry steps). The memory step sets the flags the register step left alone, so they
+    /// must be dead after. Prints it and reports whether it did.
+    fn stepped_word_in_place(
+        &mut self,
+        reload: &Inst,
+        rest: &[Inst],
+    ) -> Result<bool, String> {
+        let (Some(Operand::Def(loaded @ Reg::Virt(_))), Some(Operand::Frame(cell))) =
+            (reload.operands.first(), reload.operands.get(1))
+        else {
+            return Ok(false);
+        };
+        let register = self.physical(*loaded);
+        let [step, back, tail @ ..] = rest else { return Ok(false) };
+        let Kind::Op(op @ ("INC16" | "INC16c")) = step.kind else { return Ok(false) };
+        let steps_in_place = matches!(
+            &step.operands[..],
+            [Operand::Def(d), Operand::Use(u), ..] if self.physical(*d) == register && self.physical(*u) == register
+        );
+        let spills = back.kind == Kind::Op("SPILL16")
+            && matches!(
+                &back.operands[..],
+                [Operand::Frame(one), Operand::Use(r)] if one == cell && self.physical(*r) == register
+            );
+        if !steps_in_place || !spills || !self.flags_dead(tail) {
+            return Ok(false);
+        }
+        // nothing else reads the loaded value, the stepped value or the pair after the spill
+        let stepped = match back.operands.get(1) {
+            Some(Operand::Use(Reg::Virt(v))) => Some(*v),
+            _ => None,
+        };
+        let loaded_reads = match loaded {
+            Reg::Virt(v) => self.reads.get(v).copied().unwrap_or(0),
+            Reg::Phys(_) => return Ok(false),
+        };
+        let step_reads = match step.operands.first() {
+            Some(Operand::Use(Reg::Virt(v)) | Operand::Def(Reg::Virt(v))) => self.reads.get(v).copied().unwrap_or(0),
+            _ => 0,
+        };
+        let stepped_reads = stepped.map_or(0, |v| self.reads.get(&v).copied().unwrap_or(0));
+        if loaded_reads > 1 || step_reads > 1 || stepped_reads != 1 || !self.dead_after(register, tail) {
+            return Ok(false);
+        }
+        let opposite = if op == "INC16c" {
+            let Some(Operand::Imm(cond)) = step.operands.get(2) else { return Ok(false) };
+            Some(*["z", "nz", "c", "nc"].get(*cond as usize).ok_or("a conditional step on an unknown condition")?)
+        } else {
+            None
+        };
+        let slots = self.frame_slots(*cell, 0, 2)?;
+        let count = || self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count();
+        let skip = format!("{}$", count());
+        if let Some(opposite) = opposite {
+            self.push(format!("jr {opposite}, {skip}"));
+        }
+        self.push(format!("inc {}", slots[0]));
+        self.push(format!("jr nz, {skip}"));
+        self.push(format!("inc {}", slots[1]));
+        self.out.push(Line::Label(skip));
+        self.skip = 2;
         Ok(true)
     }
 

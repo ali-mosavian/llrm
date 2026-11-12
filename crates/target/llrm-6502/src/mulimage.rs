@@ -253,7 +253,7 @@ pub fn widen_when_it_pays(
 
 /// The compact word divides loop 16 times whatever the quotient; the aligned ones loop for its bits (one or
 /// two for Euclid's gcd) and are larger. The routine is linked once for all the module's calls, so the
-/// module chooses: [`aligned_divide_sites`] prices what they save and cost, [`aligned_divides_pay`] weighs the
+/// module chooses: [`aligned_divide_sites`] prices what they save and cost, [`pays_by_share`] weighs the
 /// two against the module itself.
 ///
 /// DEVIATE 6502-ALIGNED-DIVIDE (owner llrm-target-6502, exit 2026-11-24): llvm-mos's `__umodhi3` aligns the
@@ -306,17 +306,42 @@ pub fn aligned_divide_sites(
     Some((weighted.saturating_mul(crate::routines::aligned_divide_saving()), growth))
 }
 
-/// Whether the module, of `clocks` and `bytes` by the static estimate, takes the aligned divides that save
-/// `saved` clocks for `growth` bytes: when the share of its clocks they save is at least
-/// `[divide] percent_per_percent` times the share of its bytes they add. The shares by this estimate:
-/// idiv_loop_os saves more than all of its clocks for 5.4% of its bytes, compound_assignment_types 86% for
-/// 2.4%, idioms 0.3% for 0.7%; measured, -60% / -12% / -0.0% clocks.
-pub fn aligned_divides_pay(
+/// Whether a module, of `clocks` and `bytes` by the static estimate, takes a speed routine at size that
+/// saves `saved` clocks for `growth` bytes: when the share of its clocks it saves is at least
+/// `[share] percent_per_percent` times the share of its bytes it adds. The shares by this estimate for the
+/// aligned divide: idiv_loop_os saves more than all of its clocks for 5.4% of its bytes,
+/// compound_assignment_types 86% for 2.4%, idioms 0.3% for 0.7%; measured, -60% / -12% / -0.0% clocks.
+pub fn pays_by_share(
     (saved, growth): (u64, i64),
     clocks: u64,
     bytes: u64,
 ) -> bool {
-    let percent = u128::from(crate::routines::aligned_divide_percent());
-    growth <= 0
-        || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
+    let percent = u128::from(crate::routines::share_percent());
+    growth <= 0 || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
+}
+
+/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones those call.
+pub fn image_of_texts(
+    names: &[String],
+    texts: &[String],
+) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for text in texts {
+        for line in text.lines() {
+            let code = line.trim();
+            let Some(target) = code.strip_prefix("jsr ").or_else(|| code.strip_prefix("jmp ")).map(str::trim) else {
+                continue;
+            };
+            if names.iter().all(|one| one != target) && crate::RUNTIME.contains(&format!("\n{target}:")) {
+                found.insert(target.to_owned());
+            }
+        }
+    }
+    links_callees(&mut found);
+    found
+}
+
+/// The bytes the routines add to an image.
+pub fn image_bytes(routines: &std::collections::BTreeSet<String>) -> i64 {
+    routines.iter().map(|one| i64::from(library_bytes(one))).sum()
 }
