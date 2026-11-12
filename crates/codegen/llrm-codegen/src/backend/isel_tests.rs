@@ -4223,7 +4223,8 @@ body:
   %vb = load i8, ptr %pb, !tbaa !5
   %xw = sext i16 %vw to i32
   %xb = sext i8 %vb to i32
-  %u = add i32 %vl, %xw
+  %a = add i32 %s, %vl
+  %u = add i32 %a, %xw
   %t = add i32 %u, %xb
   %j = add nuw nsw i32 %i, 1
   %more = icmp ult i32 %j, 16

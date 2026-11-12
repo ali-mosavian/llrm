@@ -1343,6 +1343,11 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::unroll_trial_bytes_strict`.
+    fn unroll_trial_bytes_strict(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
         false
