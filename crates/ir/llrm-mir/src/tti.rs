@@ -1695,6 +1695,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE FPTOINT-CHECKED: the width of the integer a float is converted
+    /// into in one instruction (the x87's `fistp` stores a dword or a qword,
+    /// and NaN and overflow come out as its most negative value) when the
+    /// result is `bits` wide; none: the range of the integer is checked on the
+    /// float.
+    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+        let _ = bits;
+        None
+    }
+
     /// `Tuning::size_fill`: the encoded bytes of a constant fill at size.
     fn size_fill(&self) -> Option<crate::target::SizeFill> {
         None

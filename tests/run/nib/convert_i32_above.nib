@@ -1,9 +1,13 @@
 # flags: -O2 -march=i486 | -Os -march=i486
-# i32(f) of 2^31 panics: past the integer's range or not a number.
-var over: f64 = 2147483648.0
+# i32(f) of one past the maximum panics. The value is stored through an opaque call, so nothing folds the conversion.
+var v: f64 = 0.0
+
+@noipa
+fn put(x: f64) -> void:
+    v = x
 
 fn main() -> i16:
     print("start")
-    let x: f64 = over
-    print(i32(x))
+    put(2147483648.0)
+    print(i32(v))
     return 0

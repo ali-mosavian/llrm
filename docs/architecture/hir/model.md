@@ -85,7 +85,7 @@ callee name. Families of `Op`:
 | --- | --- |
 | Data movement | `copy`, `load`, `store`, `address`, `copy_bytes`, `lifetime_start`, `lifetime_end` |
 | Pointers | `ptr_offset`, `ptr_diff`, `pointer_segment`, `pointer_offset`, `concat` |
-| Conversion | `convert`, `truncate`, `sign_extend`, `zero_extend` |
+| Conversion | `convert`, `truncate`, `truncate_checked`, `sign_extend`, `zero_extend` |
 | Integer | `add sub mul div rem divmod udiv urem udivmod`, `and or xor shl shr sar neg not`, `fixed_mul`, `fixed_div` |
 | Compare | `eq ne lt le gt ge below below_eq above above_eq`, string compares |
 | Float | `fadd fsub fmul fdiv fneg fabs fsqrt fsin fcos fatan fround` |

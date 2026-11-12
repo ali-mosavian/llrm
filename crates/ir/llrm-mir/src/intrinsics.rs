@@ -89,6 +89,13 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
+    /// `llrm.fp{to,}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
+    /// the float toward zero as an integer of the result's width, and whether
+    /// it fits that integer (NaN and a float past the range do not). The value
+    /// is unspecified where it does not fit, and no instruction faults.
+    FpToIntChecked {
+        signed: bool,
+    },
     /// `llvm.llrint`: `LRint` with a `long long` result, which a target
     /// without the instruction calls `llrint` for.
     LLRint,
@@ -568,7 +575,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 86] = [
+const TABLE: [Spec; 88] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -646,6 +653,22 @@ const TABLE: [Spec; 86] = [
         returns: Slot::Any(0),
         parameters: &[Slot::Any(1)],
         own: None,
+    },
+    Spec {
+        name: "llrm.fptosi.checked",
+        intrinsic: Intrinsic::FpToIntChecked { signed: true },
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::WithFlag(0),
+        parameters: &[Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
+    },
+    Spec {
+        name: "llrm.fptoui.checked",
+        intrinsic: Intrinsic::FpToIntChecked { signed: false },
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::WithFlag(0),
+        parameters: &[Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llvm.llrint",
@@ -1045,7 +1068,7 @@ pub fn is_wide_divide(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.fptosi.checked") || name.starts_with("llrm.fptoui.checked") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
