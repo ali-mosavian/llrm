@@ -10,3 +10,4 @@ Write one per program:
 - Do not shortcut the Nib source's work; the twin must not be cheaper than Nib by construction.
 - Run `bench.py --lang c --opt O1 Os NAME~bounds` and confirm `checked` is true.
 - Reference: `bench/grep/twin/bounds.c`.
+- Fixed-point programs: every Q operation is a 64-bit intermediate then shift (`docs/frontends/nib/language-spec.md` §3.4), written with `long long`. Borland C has no 64-bit type: tc/bcc/tcpp keep their column on the plain `NAME.c`, not on the twin.
