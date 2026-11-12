@@ -4,6 +4,9 @@
 //! 4-byte alignment is `REP_MOVS`/`REP_STOS` (the bytes past the last block
 //! stored as above), and the rest is a call of `memcpy` or `memset`.
 
+/// A `rep movsw` in 32-bit code is a byte longer than `rep movsb`: copies of at least this many bytes win 48 clocks for it.
+const REP_WORD_MIN_BYTES: u64 = 32;
+
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Instruction, Operand, ValueDef};
@@ -446,7 +449,8 @@ impl Builder<'_> {
 
     /// DEVIATE REP-MOVS-OS keeps `rep movs` for any size at `-Os`, but moves the widest block the copy is a whole
     /// number of and the pointers are aligned to (`emitConstantSizeRepmov`'s `AVT`, without a tail): the same
-    /// bytes as `rep movsb`, a block of 2 or 4 bytes for the same 3 clocks.
+    /// bytes as `rep movsb`, a block of 4 bytes for the same 3 clocks. A block of 2 carries the operand-size
+    /// prefix in 32-bit code, one byte that 1.5 clocks a byte copied pay back from `REP_WORD_MIN_BYTES`.
     fn exact_rep_block(
         &self,
         size: u64,
@@ -455,6 +459,7 @@ impl Builder<'_> {
         [4, 2]
             .into_iter()
             .filter(|block| *block <= self.string_block())
+            .filter(|block| *block != 2 || self.string_block() < 4 || size >= REP_WORD_MIN_BYTES)
             .find(|block| alignment >= *block && size % *block == 0)
             .unwrap_or(1)
     }

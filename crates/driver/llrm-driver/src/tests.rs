@@ -5816,5 +5816,6 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     assert!(listing(2, 4000).contains("movsw"), "two-byte aligned:\n{}", listing(2, 4000));
     assert!(listing(4, 4000).contains("movsd"), "four-byte aligned:\n{}", listing(4, 4000));
     assert!(listing(1, 4000).contains("movsb") && !listing(1, 4000).contains("movsw"), "unaligned stays bytes");
+    assert!(!listing(2, 30).contains("movsw"), "a short copy would pay the operand-size prefix for nothing:\n{}", listing(2, 30));
     assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
 }
