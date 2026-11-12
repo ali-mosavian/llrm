@@ -1170,6 +1170,11 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        None
+    }
+
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
         false

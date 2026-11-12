@@ -1382,6 +1382,20 @@ fn a_hot_loop_of_an_unfolded_guard_is_rotated_at_m32_os() {
     assert!(!listing.contains("jmp"), "the loop is rotated, no jmp back to its guard: {listing}");
 }
 
+/// The pin leaves the 3x3 window of x_life a loop nest at -Os (`OptSizeThreshold` 0); gcc peels it where the code does not grow. The loops
+/// the threshold refused are unrolled in a second compile, and that is kept when the object is smaller (x_life -Os 360 -> 347 B, -55% clk).
+/// DEVIATE UNROLL-OS-TRIAL.
+#[test]
+fn a_small_window_loop_is_unrolled_at_m32_os_when_the_object_shrinks() {
+    let text = include_str!("testdata/x_life.ll");
+    let labels = |built: &llrm_codegen::backend::masm::Module| {
+        llrm_codegen::backend::masm::text(built).unwrap().lines().filter(|line| line.ends_with(':')).count()
+    };
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "bench_x_life").unwrap();
+    let (rolled, _) = llrm_codegen::driver::trial::without_size_unroll(|| compiled(&flags(&["-mabi=sysv", "-Os"]), text, "bench_x_life")).unwrap();
+    assert!(labels(&built) < labels(&rolled), "{} labels against {}", labels(&built), labels(&rolled));
+}
+
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
 /// `sar; shr; add; sar` sequence. The tip kept `idiv` at -Os: stft_fixed -Os ran 188.9M clk against main's 96.8M (+95%).
 #[test]
