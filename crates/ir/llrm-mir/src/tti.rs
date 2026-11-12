@@ -1323,6 +1323,13 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE PEEL-OS-TRIAL: whether the -Os trial also peels the loops
+    /// `computePeelCount` would at the `unroll_trial_at_size` bar (the pin's
+    /// optsize threshold of 0 never does).
+    fn peels_on_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
@@ -1365,6 +1372,11 @@ pub trait Tti {
     /// `Tuning::unroll_o1_analyzed_trips`.
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         None
+    }
+
+    /// `Tuning::pops_arguments_at_size`.
+    fn pops_arguments_at_size(&self) -> bool {
+        true
     }
 
     /// `Tuning::multiply_by_clocks`.
