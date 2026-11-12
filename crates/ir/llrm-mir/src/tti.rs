@@ -2309,6 +2309,14 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the
+    /// extension of a phi of that loop (`zext i8 j`) is as free as the phi
+    /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
+    /// formula naming the inner loop's narrowed counter a loser.
+    fn lsr_extension_of_phi_exists(&self) -> bool {
+        false
+    }
+
     /// Whether an offset LSR leaves unfolded in an address that has one base
     /// register and no scale is folded into that address after LSR (the 6502's
     /// `(zp),y` with a constant `y`): then it costs no add. DEVIATE LU16
