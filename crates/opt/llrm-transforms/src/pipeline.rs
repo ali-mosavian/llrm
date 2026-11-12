@@ -1950,7 +1950,10 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
-        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce {
+            size: applied.options.prefers_size(),
+            bytes_strict: applied.options.prefers_size() || applied.options.at_o1(),
+        }));
         // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
         // LSR; it does nothing for a target whose TTI does not enable it.
         if applied.options.wanted("looptermfold") {
