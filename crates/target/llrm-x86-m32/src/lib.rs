@@ -71,13 +71,14 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
 /// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
 /// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
-/// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
-/// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
+/// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -Os
+/// keeps bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
-/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-24, re-dated
-/// 2026-11-11 from 2026-11-10; the O1 rule is strict per axis, so the exit is a priced choice that
-/// keeps the chain only where its clocks and bytes are both no worse; oversight 2026-11-08: a Pareto chain search, equal clocks and
-/// fewer bytes, replaces the fewest-clocks chain; per-site pricing stays
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-24,
+/// re-dated 2026-11-11 from 2026-11-10; the O1 rule is strict per axis, so the
+/// exit is a priced choice that keeps the chain only where its clocks and bytes
+/// are both no worse; oversight 2026-11-08: a Pareto chain search, equal clocks
+/// and fewer bytes, replaces the fewest-clocks chain; per-site pricing stays
 /// unshipped, it moves no row). Open vs the byte bar: bintree +32, recpow +29,
 /// x_spill_store_order +54 B (also tail_calls_edges +32, stft_fixed +32,
 /// copy_runs +40 against the `imul` build). At -O1
@@ -102,64 +103,88 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
-        // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop header of
-        // at most 4 instructions, not the pin's 16 (the copy is a compare and a
-        // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
-        // x_rle -8 B, none larger; limits 1..3 grow x_insertion/x_jpeg_single, 1 grows 60 cells.
+        // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop
+        // header of at most 4 instructions, not the pin's 16 (the copy is a
+        // compare and a branch, more than the jump rotation removes). m32 -Os
+        // kernels (73): x_hash -29 B, x_rle -8 B, none larger; limits 1..3 grow
+        // x_insertion/x_jpeg_single, 1 grows 60 cells.
         size_rotation_header_limit: Some(4),
-        // DEVIATE RS1 at m32 (owners x86-m32-bytes, exit 2026-12-20, as m64 and arm64): -Os rotates a
-        // loop only if its copied exit test folds in the preheader or counts its trips, as gcc's
-        // `ch_base::copy_headers` does at -Os (the copy is a compare and a branch, more than the
-        // jump it removes). 296 kernels, -Os: 17 shrink (-296 B: x_jpeg_fixed 2995 -> 2898, x_jpeg_single
-        // 3041 -> 2960, x_primes 100 -> 85), gap to best(gcc, clang) 4361 -> 4102 B. Os is strict bytes,
-        // clocks not bound: shellsort/x_isqrt/x_popcount/x_collatz +9..11%, 8 others +-1%.
-        // ROW M32-RS1-COLLATZ (owner x86-m32-bytes, exit 2026-11-27): x_collatz 84 -> 85 B (best 74),
-        // an unrotated inner loop changes the outer loop's registers (cause card to the greedy owners).
+        // DEVIATE RS1 at m32 (owners x86-m32-bytes, exit 2026-12-20, as m64 and
+        // arm64): -Os rotates a loop only if its copied exit test folds in the
+        // preheader or counts its trips, as gcc's
+        // `ch_base::copy_headers` does at -Os (the copy is a compare and a
+        // branch, more than the jump it removes). 296 kernels, -Os: 17 shrink
+        // (-296 B: x_jpeg_fixed 2995 -> 2898, x_jpeg_single 3041 -> 2960,
+        // x_primes 100 -> 85), gap to best(gcc, clang) 4361 -> 4102 B. Os is
+        // strict bytes, clocks not bound:
+        // shellsort/x_isqrt/x_popcount/x_collatz +9..11%, 8 others +-1%. ROW
+        // M32-RS1-COLLATZ (owner x86-m32-bytes, exit 2026-11-27): x_collatz
+        // 84 -> 85 B (best 74), an unrotated inner loop changes the outer
+        // loop's registers (cause card to the greedy owners).
         rotation_guard_must_fold_at_size: true,
-        // DEVIATE ROTATION-TRIAL (owner greedy-os-causes, exit 2026-12-05, with RS1): a counted loop
-        // RS1 rotates is also tried unrotated in a second compile, kept only if the object is
-        // smaller. Os, 98 cells, unrotated everywhere: 21 smaller (x_jpeg_fixed -213 B, x_radix -20,
-        // x_idioms -16, x_prefix -12), 64 larger (x_transpose +34, x_matmul_f +29, x_life +25).
+        // DEVIATE ROTATION-TRIAL (owner greedy-os-causes, exit 2026-12-05, with
+        // RS1): a counted loop RS1 rotates is also tried unrotated in a second
+        // compile, kept only if the object is smaller. Os, 98 cells, unrotated
+        // everywhere: 21 smaller (x_jpeg_fixed -213 B, x_radix -20,
+        // x_idioms -16, x_prefix -12), 64 larger (x_transpose +34,
+        // x_matmul_f +29, x_life +25).
         rotation_trial_at_size: true,
-        // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
-        // a full unroll is made only where its simulated cost does not exceed the rolled loop's
-        // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
+        // DEVIATE ROTATION-HOT (owner x86-m32, exit 2026-11-24):
+        // see `Tti::rotation_hot_at_size`.
+        rotation_hot_at_size: true,
+        // DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01):
+        // see `Tti::load_pre_off_at_size`.
+        load_pre_off_at_size: true,
+        // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27,
+        // with `unroll_at_o1`): at -O1 a full unroll is made only where its
+        // simulated cost does not exceed the rolled loop's size; O1 is strict
+        // (no cell larger), gcc's complete unroll is size-neutral.
         unroll_never_grows_at_o1: true,
-        // DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05, with UNROLL-O1): a loop
-        // that rule refuses is unrolled by the pin's threshold (150 units,
-        // `UnrollThresholdDefault`) in a second compile, kept only if neither the bytes nor the
-        // executed work grow. x_life O1: the 3x3 nest unrolled is -15 B and -62% clk (the rolled
-        // nest spills); matmul O1 is +1601 B and stays rolled.
+        // DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05, with
+        // UNROLL-O1): a loop that rule refuses is unrolled by the pin's
+        // threshold (150 units,
+        // `UnrollThresholdDefault`) in a second compile, kept only if neither
+        // the bytes nor the executed work grow. x_life O1: the 3x3 nest
+        // unrolled is -15 B and -62% clk (the rolled nest spills); matmul O1
+        // is +1601 B and stays rolled.
         unroll_trial_at_o1: Some(150),
         unroll_trial_nests_only: true,
-        // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
-        // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
-        // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
+        // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1):
+        // the -O1 rule analyses the folds of up to 16 trips,
+        // gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
+        // over a constant table folds to nothing and stayed rolled: 64 -> 158
+        // B).
         unroll_o1_analyzed_trips: Some(16),
-        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after inlining, as gcc's
-        // IPA-CP): a function called directly only after inlining keeps its address-taken
-        // parameters through the pin's one IPSCCP; a second one after promotion folds them.
-        // m32 memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
+        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
+        // inlining, as gcc's IPA-CP): a function called directly only after
+        // inlining keeps its address-taken parameters through the pin's one
+        // IPSCCP; a second one after promotion folds them. m32
+        // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
-        // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+        // DEVIATE LFTR1 (owner w12, review 2026-12-20):
+        // see `Tuning::lftr_any_stride`.
         lftr_any_stride: true,
-        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24): the pin's cost rule, with the price
-        // of a merged `a && b` it omits taken from the table: two `setcc`, a logic op and a
-        // `test`, less the branch saved. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb;
-        // and; cmp 1; jne`, 20% more clocks; a pair the DAG folds to one compare stays merged.
+        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24): the pin's cost rule,
+        // with the price of a merged `a && b` it omits taken from the table:
+        // two `setcc`, a logic op and a
+        // `test`, less the branch saved. sieve -O1: `i <= 31 && i*i < n` merged
+        // is `setb; setb; and; cmp 1; jne`, 20% more clocks; a pair the DAG
+        // folds to one compare stays merged.
         merged_condition_clocks: 2 * costs.set + 2 * costs.add - costs.branch,
-        // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27): see `Tuning::multiply_clocks`.
+        // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27):
+        // see `Tuning::multiply_clocks`.
         multiply_clocks: costs.multiply,
         loop_carried_clocks: costs.store + costs.load,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
         push_imm_at_size: true,
-        // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): see `Tuning::merge_functions_at_size`.
+        // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30):
+        // see `Tuning::merge_functions_at_size`.
         merge_functions_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
@@ -170,17 +195,22 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         promote_va_list: true,
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
-        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc completely peels a loop whose
-        // trips the object it indexes bounds (max-completely-peel-times 16); the pin does not.
-        // x_matmul_f / x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14.
-        // Tried at m64 on 2026-11-08, hook on: only x_matmul_f / x_ld_matmul O2/O3 change (-848 B on x_matmul_f), but
-        // executed instructions rise 53% (7416 -> 11364: guarded peeled copies against a 4x runtime unroll); left None.
-        // The m64 x_matmul_f size gap (ours 1751 B, pin 2296 B, 50 packed ops) is vector-shaped: vector-deferred list.
+        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
+        // completely peels a loop whose trips the object it indexes bounds
+        // (max-completely-peel-times 16); the pin does not. x_matmul_f /
+        // x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14. Tried
+        // at m64 on 2026-11-08, hook on: only x_matmul_f / x_ld_matmul O2/O3
+        // change (-848 B on x_matmul_f), but executed instructions rise 53%
+        // (7416 -> 11364: guarded peeled copies against a 4x runtime unroll);
+        // left None. The m64 x_matmul_f size gap (ours 1751 B, pin 2296 B, 50
+        // packed ops) is vector-shaped: vector-deferred list.
         unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
-        // DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner counts a callee in
-        // bytes of encoded code by instruction kind (`sizes`), not one unit an instruction scaled by
-        // a fitted 3.5. x_jpeg_single -O1 inlined `next` (about 190 B, 8 sites) at an estimated 82 B:
+        // DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the
+        // inliner counts a callee in bytes of encoded code by instruction kind
+        // (`sizes`), not one unit an instruction scaled by a fitted 3.5.
+        // x_jpeg_single -O1 inlined `next` (about 190 B, 8 sites) at an
+        // estimated 82 B:
         // +1533 B and +0.5 M clk.
         inline_size_bytes: true,
         inline_o1_unit_bytes_milli: 1000,
@@ -195,15 +225,19 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
         // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin
         // keeps up to MaxStoresPerMemsetOptSize stores). `mov dword/word/byte
-        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax` 2,
+        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax`
+        // 2,
         // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
         // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
-        // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin sinks
-        // `z -= a` / `z += b` of a diamond into the join as `z += phi(-a, b)`; on
-        // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
+        // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin
+        // sinks
+        // `z -= a` / `z += b` of a diamond into the join as `z += phi(-a, b)`;
+        // on a 486 each arm then pays a `mov imm` and one a taken `jmp`
+        // (x_cordic -O3
         // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
         keep_constant_arith_operands: true,
-        // DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): see `Tti::folds_phi_constant_chains`.
+        // DEVIATE PHICONST-2 (owner x87, exit 2026-11-24):
+        // see `Tti::folds_phi_constant_chains`.
         phi_constant_chains: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
@@ -218,9 +252,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
-        // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also inlines the sites its
-        // splice brings. The pin inlines callee-first (`bar` into `foo`, cost 15 < 75, then `foo` into
-        // `main`); the size guard prices each edge alone and keeps both calls. byvalue_struct_address
+        // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also
+        // inlines the sites its splice brings. The pin inlines callee-first
+        // (`bar` into `foo`, cost 15 < 75, then `foo` into
+        // `main`); the size guard prices each edge alone and keeps both calls.
+        // byvalue_struct_address
         // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
         inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
@@ -236,28 +272,34 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // worse with 450; their O3 card is open). Owner x86-m32, exit
         // 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
-        // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2 and -O3. rectwo -O2
-        // 1449397 -> 347314 clk (1965 -> 277 B), fib 99618 -> 19993 (962 -> 215 B), frames
-        // 5035113 -> 4585856. -O3 had gcc's 8: over 12 recursion programs it cost +5556 B and
+        // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2 and -O3.
+        // rectwo -O2 1449397 -> 347314 clk (1965 -> 277 B), fib 99618 -> 19993
+        // (962 -> 215 B), frames 5035113 -> 4585856. -O3 had gcc's 8: over 12
+        // recursion programs it cost +5556 B and
         // +1.12 M instructions over -O2 (REC-8).
         recursive_inlining_depth: Some((2, 2)),
         // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
-        // threshold alone refuses, at a site 16x the caller's entry or hotter, is tried
-        // inlined at -O2 and kept where the rate pays, the trial counting the callee's
-        // preserved registers (x_sf_* -O2 clk -10..-23%, +516..676 B; jpeg -0.4% clk,
-        // +442..586 B). Trips are the pin's block frequency (31 in x_sf_add's loop, 400 run), not a
-        // profile; -O3 stays off (jpeg `getbit` into `receive`: est. 31 trips, ~1 real).
+        // threshold alone refuses, at a site 16x the caller's entry or hotter,
+        // is tried inlined at -O2 and kept where the rate pays, the trial
+        // counting the callee's preserved registers (x_sf_* -O2
+        // clk -10..-23%, +516..676 B; jpeg -0.4% clk,
+        // +442..586 B). Trips are the pin's block frequency (31 in x_sf_add's
+        // loop, 400 run), not a profile. -O3 too since 2026-11-12: jpeg no
+        // longer meets a trial there.
         inline_hot_trial_frequency: Some(16),
-        // -O3 off: x_jpeg_fixed/single get +129/+112 B and +0.2%/+0.1% clk there
-        // (`getbit` into `receive`; a trip count of 31 estimated, ~1 real).
-        // A callee that keeps more than eax/ecx/edx live pushes and pops ebx, esi,
-        // edi, ebp once per call: the trial's clocks saved count it.
+        // x_sf_* -O3 clk -10..-16 k, +528..657 B; the other 116 programs are
+        // unchanged at -O2 and -O3.
+        inline_hot_trial_at_o3: true,
+        // A callee that keeps more than eax/ecx/edx live pushes and pops ebx,
+        // esi, edi, ebp once per call: the trial's clocks saved count it.
         callee_saved: Some((3, 4, costs.argument + costs.pop)),
-        // DEVIATE REC-2/REC-8: gcc eliminates tail calls before it copies a recursion
-        // (passes.def:97, then pass_ipa_inline :164). Here the tree's copies come first at
-        // -O2 and -O3: GVN merges the pure same-argument calls across them (fib 99618 clk
-        // against 228901 with the loop first), and -O3 with the loop first and depth 8 lost
-        // to -O2 on fib, frames and rectwo. Owner x86-m32, exit 2026-11-20.
+        // DEVIATE REC-2/REC-8: gcc eliminates tail calls before it copies a
+        // recursion (passes.def:97, then pass_ipa_inline :164). Here the tree's
+        // copies come first at
+        // -O2 and -O3: GVN merges the pure same-argument calls across them (fib
+        // 99618 clk against 228901 with the loop first), and -O3 with the loop
+        // first and depth 8 lost to -O2 on fib, frames and rectwo. Owner
+        // x86-m32, exit 2026-11-20.
         recursive_tre_first: (false, false),
         // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): queens -O3
         // 160324 -> 79692 clk (gcc 94851, which has `-fipa-cp-clone` on
@@ -274,9 +316,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it
         // is `rep movsd` inline, as gcc's `rep_prefix_4_byte`. x_mergesort -O3:
         // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
-        // (gcc 60026: row MEM-1-R1). -O1 and size keep the call (`bytes_strict`:
-        // no byte rate pays for the ~17 B; x_jpeg_single -O1 inlined it twice).
-        // Owner w2. Exit 2026-11-20.
+        // (gcc 60026: row MEM-1-R1). -O1 and size keep the call
+        // (`bytes_strict`: no byte rate pays for the ~17 B; x_jpeg_single -O1
+        // inlined it twice). Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20), not at -Os:
         // see `Tuning::ipsccp_widen_keeps_sign`.
@@ -334,11 +376,12 @@ impl llrm_target::Target for M32 {
         true
     }
 
-    // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's MachineCSE
-    // shares a branch-opening compare with the same subtract on one side, moving
-    // the subtract in front of the branch and copying the operand the other side
-    // reads. x_isqrt -O2: -7.7% clocks, -10 B (-O1 -5.9%, -Os -4.7%); the other 286
-    // non-m16 kernels at -O1/-O2/-O3/-Os are byte-identical.
+    // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's
+    // MachineCSE shares a branch-opening compare with the same subtract on
+    // one side, moving the subtract in front of the branch and copying the
+    // operand the other side reads. x_isqrt -O2: -7.7% clocks, -10 B (-O1
+    // -5.9%, -Os -4.7%); the other 286 non-m16 kernels at -O1/-O2/-O3/-Os
+    // are byte-identical.
     fn cse_keeps_compare_with_live_minuend(&self) -> bool {
         true
     }
@@ -734,8 +777,9 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
-    /// #9101 narrowed every target's -O1 unroll trial to nests; only m32 was fit on that (a lone loop
-    /// paid in 1 of 46 programs), so m32 says so itself.
+    /// #9101 narrowed every target's -O1 unroll trial to nests; only m32 was
+    /// fit on that (a lone loop paid in 1 of 46 programs), so m32 says so
+    /// itself.
     #[test]
     fn test_the_o1_unroll_trial_takes_nests_only() {
         let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());

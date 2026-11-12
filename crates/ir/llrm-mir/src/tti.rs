@@ -958,6 +958,20 @@ pub trait Tti {
     /// size build a counted loop RS1 still rotates is also tried unrotated in a second
     /// compile, and the smaller object is kept. Needs
     /// [`Self::rotation_guard_must_fold_at_size`]. False: no trial.
+    /// DEVIATE ROTATION-HOT (beyond the pin, owner x86-m32, exit 2026-11-24): at a size build with the
+    /// rotation trial, a loop RS1 leaves (unfolded guard, trips not counted) is also tried rotated as the pin
+    /// does, and kept where the finished code executes less for a few bytes a loop. False: RS1 alone.
+    fn rotation_hot_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a predecessor in a function
+    /// marked `optsize` or `minsize` (gcc's `tree-ssa-pre.cc` inserts at -Os only on a hot
+    /// edge, and none is hot). The pin's `PerformLoadPRE` has no size gate.
+    fn load_pre_off_at_size(&self) -> bool {
+        false
+    }
+
     fn rotation_trial_at_size(&self) -> bool {
         false
     }
