@@ -227,6 +227,10 @@ pub fn assembled_by(
     // pool's start offset in `.data` is where the others end.
     let mut staying_end = 0_i64;
     let mut far_data = Vec::new();
+    // Private constants of no alignment (string literals) go after every aligned datum: the pin
+    // gives them their own mergeable `.rodata.str1.1` section, so an odd-sized one never pads what
+    // follows it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single +2).
+    let mut unaligned_tail = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
@@ -313,6 +317,13 @@ pub fn assembled_by(
                     huge_objects.push((name.to_owned(), datums));
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
+                } else if variable.constant
+                    && global.linkage == Linkage::Private
+                    && comdat_of(module, name).is_none()
+                    && segment_bytes != i64::MAX
+                    && !datums.iter().any(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Pointer(_)))
+                {
+                    unaligned_tail.extend(datums);
                 } else {
                     let start = data.len();
                     let zero_may_move = !variable.constant
@@ -572,6 +583,7 @@ pub fn assembled_by(
     }
     let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
     data.extend(tables);
+    data.extend(unaligned_tail);
     if !read_only.is_empty() {
         sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
     }
