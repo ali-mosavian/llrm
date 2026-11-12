@@ -67,9 +67,10 @@ pub fn narrowed(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
+    size: bool,
 ) -> bool {
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
-    narrowed_in(&mut session, context, layout, function, outer)
+    narrowed_in(&mut session, context, layout, function, outer, size)
 }
 
 /// The counters of `function` narrowed where the target asks
@@ -81,8 +82,9 @@ pub fn narrowed_in(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
+    size: bool,
 ) -> bool {
-    if !outer.target().tti().is_some_and(|tti| tti.narrows_counters()) {
+    if !outer.target().tti().is_some_and(|tti| tti.narrows_counters() && (size || tti.narrows_counters_at_speed())) {
         return false;
     }
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
