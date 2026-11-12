@@ -180,6 +180,7 @@ pub fn select_function_with(
     let tuned_for_size = sized;
     let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
         && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
+    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -212,6 +213,7 @@ pub fn select_function_with(
             built,
             cpu,
             (optimize, sized, long_multiply),
+            frequencies.iter().any(|&(one, frequency)| one == block.0 && frequency <= 1.0),
             &mut info,
             &mut selected,
         )?;
@@ -253,7 +255,6 @@ pub fn select_function_with(
             llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
         );
     let tables = info.jump_tables.clone();
-    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
     Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, generic: None, unreachable, frequencies, tables })
 }
 
@@ -342,6 +343,7 @@ fn select_built(
     mut built: BlockDag,
     cpu: Cpu,
     (optimize, sized, long_multiply): (bool, bool, bool),
+    cold: bool,
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
@@ -349,7 +351,7 @@ fn select_built(
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
     let units =
-        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply)).map_err(|why| format!("{why:?}"))?;
+        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply, cold)).map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -387,7 +389,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, (optimize, sized, long_multiply), info, selected)?;
+        select_built(None, extra, made, cpu, (optimize, sized, long_multiply), cold, info, selected)?;
     }
     Ok(())
 }

@@ -329,13 +329,14 @@ pub fn items_with(
     let price = crate::timing::Price::of(wants_size, options.strict);
     // The relaxation is the last choice of a build, so it is made before the
     // two builds of the shared `MachineCSE` are compared.
+    let emitted = Emitted::default();
     let finished = |options: Options| -> Result<(Vec<Item>, bool), String> {
         let (plain, saved, chosen, shared) =
-            items_trials(module, name, cpu, Options { relax_classes: false, ..options })?;
+            items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &emitted)?;
         if !options.relax_classes || !saved {
             return Ok((plain, shared));
         }
-        let (relaxed, touched) = items_once(module, name, cpu, Options { relax_classes: true, ..chosen })?;
+        let (relaxed, touched) = items_once(module, name, cpu, Options { relax_classes: true, ..chosen }, &emitted)?;
         let relax = touched.relax_classes && crate::trial::keeps(&relaxed, &plain, cpu, price);
         Ok((if relax { relaxed } else { plain }, shared))
     };
@@ -360,9 +361,10 @@ fn items_trials(
     name: &str,
     cpu: Cpu,
     options: Options,
+    emitted: &Emitted,
 ) -> Result<(Vec<Item>, bool, Options, bool), String> {
     let mut options = options;
-    let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    let (mut kept, touched) = items_once(module, name, cpu, options, emitted)?;
     let saved = touched.global_copies;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
@@ -388,13 +390,13 @@ fn items_trials(
     if touched.mul_trial {
         use crate::dagisel::mulprice::Mode;
         let without = Options { mul: Mode::Kept, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, emitted)?;
         if touched.mul_synthesized {
             // DEVIATE G2: the pin's shapes are judged as before (clocks
             // count wherever they run); a chain beyond them only against
             // that winner, and its clocks only inside loops
             let shapes = Options { mul: Mode::TrialPinShapes, ..options };
-            let (pin, _) = items_once(module, name, cpu, shapes)?;
+            let (pin, _) = items_once(module, name, cpu, shapes, emitted)?;
             let (base, base_options) = if crate::trial::prefers_without(&pin, &plain, cpu, price, true) {
                 (plain, without)
             } else {
@@ -411,7 +413,7 @@ fn items_trials(
     }
     if touched.class_split {
         let without = Options { class_split: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, emitted)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -419,7 +421,7 @@ fn items_trials(
     }
     if touched.tail_dup {
         let without = Options { tail_duplicate: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, emitted)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -427,7 +429,7 @@ fn items_trials(
     }
     if touched.return_dup {
         let without = Options { return_dup: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, emitted)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -436,7 +438,7 @@ fn items_trials(
     if touched.global_copies {
         // the default stands unless the other join order is cheaper
         let other = Options { global_copies: false, ..options };
-        let (items, _) = items_once(module, name, cpu, other)?;
+        let (items, _) = items_once(module, name, cpu, other, emitted)?;
         if crate::trial::keeps(&items, &kept, cpu, price) {
             kept = items;
             options = other;
@@ -444,7 +446,7 @@ fn items_trials(
     }
     if touched.remat_constants {
         let without = Options { remat_constants: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, emitted)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -453,7 +455,7 @@ fn items_trials(
     // last: the two builds compared are final, the other choices made
     if touched.carry_chain {
         let without = Options { carry_chain: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, emitted)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -461,7 +463,7 @@ fn items_trials(
     }
     if touched.compare_destinations {
         let without = Options { compare_destinations: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, emitted)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
         }
@@ -609,12 +611,65 @@ pub fn libcalls_for(
     crate::libcalls::mask(&kinds)
 }
 
+/// Everything that decides what selection and emission make of a function: the
+/// trials of [`items_with`] that change none of it share one result.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Selection {
+    source_order: bool,
+    indexed: bool,
+    short: bool,
+    absolute_data: bool,
+    wants_size: bool,
+    strict: bool,
+    carry_chain: bool,
+    mul: crate::dagisel::mulprice::Mode,
+    libcalls: Vec<crate::libcalls::Kind>,
+    direct_copies: bool,
+    copy_destinations: bool,
+}
+
+thread_local! {
+    static SELECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread ran selection and emission for a function: the
+/// regression tests of the shared emission count it.
+pub fn selections_run() -> usize {
+    SELECTIONS.with(std::cell::Cell::get)
+}
+
+/// The function as emitted, with whether the build decomposed a multiply and
+/// took a chain beyond the pin's shape.
+type Emission = (crate::mfunc::MFunction, bool, bool);
+
+/// The emissions of one function's builds, by [`Selection`]. Selection
+/// (legalize, match, schedule) was a third of the cost of every trial build
+/// although only the multiply and carry-chain trials change its inputs.
+#[derive(Default)]
+struct Emitted(std::cell::RefCell<llrm_support::hash::HashMap<Selection, Emission>>);
+
+impl Emitted {
+    fn get_or_select(
+        &self,
+        selection: Selection,
+        select: impl FnOnce(&Selection) -> Result<Emission, String>,
+    ) -> Result<Emission, String> {
+        if let Some(found) = self.0.borrow().get(&selection) {
+            return Ok(found.clone());
+        }
+        let made = select(&selection)?;
+        self.0.borrow_mut().insert(selection, made.clone());
+        Ok(made)
+    }
+}
+
 /// One build of the function, and the optional rewrites that changed it.
 fn items_once(
     module: &Module,
     name: &str,
     cpu: Cpu,
     options: Options,
+    emitted: &Emitted,
 ) -> Result<(Vec<Item>, Touched), String> {
     // one full select, allocate and emit; a function with optional rewrites
     // runs it again per trial
@@ -634,35 +689,54 @@ fn items_once(
     } else {
         Vec::new()
     };
-    let chain = crate::dagisel::mulprice::Chain::of(options.mul);
-    let blocks = select_function_with(
-        module,
-        name,
-        cpu,
-        options.source_order,
-        options.indexed,
-        options.short,
-        options.code_model.absolute_data(),
+    let selection = Selection {
+        source_order: options.source_order,
+        indexed: options.indexed,
+        short: options.short,
+        absolute_data: options.code_model.absolute_data(),
         wants_size,
-        options.carry_chain,
-        crate::timing::Price::of(wants_size, options.strict),
-        &chain,
-        &libcalls,
-    )?;
-    let mut function = emit_with(
-        name,
-        &blocks,
-        Shape {
-            direct_copies: options.direct_copies,
-            // what the hosted stages read: a result is defined in its copy's
-            // register
-            copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
-        },
-    )?;
+        strict: options.strict,
+        carry_chain: options.carry_chain,
+        mul: options.mul,
+        libcalls: libcalls.clone(),
+        direct_copies: options.direct_copies,
+        // what the hosted stages read: a result is defined in its copy's
+        // register
+        copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+    };
+    let (mut function, mul_used, mul_synthesized) = emitted.get_or_select(selection, |selection| {
+        SELECTIONS.with(|count| count.set(count.get() + 1));
+        let chain = crate::dagisel::mulprice::Chain::of(selection.mul);
+        let blocks = {
+            let _span = llrm_support::debug::span("m68k select");
+            select_function_with(
+                module,
+                name,
+                cpu,
+                selection.source_order,
+                selection.indexed,
+                selection.short,
+                selection.absolute_data,
+                selection.wants_size,
+                selection.carry_chain,
+                crate::timing::Price::of(selection.wants_size, selection.strict),
+                &chain,
+                &selection.libcalls,
+            )?
+        };
+        let _span = llrm_support::debug::span("m68k emit");
+        let function = emit_with(
+            name,
+            &blocks,
+            Shape { direct_copies: selection.direct_copies, copy_destinations: selection.copy_destinations },
+        )?;
+        Ok((function, chain.used(), chain.synthesized()))
+    })?;
+    let sp = llrm_support::debug::span("m68k prealloc");
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
-    touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
-    touched.mul_synthesized = chain.synthesized();
+    touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && mul_used;
+    touched.mul_synthesized = mul_synthesized;
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
@@ -733,6 +807,7 @@ fn items_once(
     if options.remat_constants {
         touched.remat_constants = crate::moveqremat::rematerializable_constants(&mut function) > 0;
     }
+    drop(sp);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     let allocating = llrm_support::debug::span("m68k allocate");
@@ -751,6 +826,7 @@ fn items_once(
     };
     drop(allocating);
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    let sp = llrm_support::debug::span("m68k postalloc");
     verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {
@@ -801,6 +877,8 @@ fn items_once(
         }
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
+    drop(sp);
+    let sp = llrm_support::debug::span("m68k expand");
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is
     // from no instruction).
@@ -840,6 +918,7 @@ fn items_once(
         });
     }
     out.extend(jump_tables(&function, number));
+    drop(sp);
     Ok((out, touched))
 }
 

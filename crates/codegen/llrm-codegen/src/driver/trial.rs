@@ -229,7 +229,7 @@ fn leaf_fold_trial(options: &Options) -> bool {
 /// counted, the module is compiled again with those loops rotated as the pin does, and that is kept if the
 /// finished code executes less for a few bytes a loop (`trial::keeps_rotation_hot`). The pass notes the loops it
 /// left; a module with none is compiled once.
-pub fn compiled_module_trying(
+fn compiled_module_with_rotation(
     module: llrm_mir::module::Module,
     name: &str,
     options: &Options,
@@ -284,4 +284,71 @@ pub fn compiled_module_trying(
     let chosen = if pays { second } else { first };
     stage_files(options, "", &chosen)?;
     Ok(chosen)
+}
+
+/// [`compiled_module_with_rotation`], and at -Os on a target with `Tti::unroll_trial_at_size`, DEVIATE
+/// UNROLL-OS-TRIAL (owner x86-m32, exit 2026-11-24): the loops the -Os threshold refused under the target's
+/// size are unrolled in a second compile (gcc peels a small loop at -Os when the code does not grow), kept
+/// if the object is smaller, or grows a few bytes a function and the code runs less
+/// (`trial::keeps_unroll_at_size`). The pass notes the refused loops; a module with none is compiled once.
+pub fn compiled_module_trying(
+    module: llrm_mir::module::Module,
+    name: &str,
+    options: &Options,
+    bytes: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+) -> Result<masm::Module, String> {
+    let limit = options
+        .pipeline
+        .for_size
+        .then(|| options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.unroll_trial_at_size()))
+        .flatten();
+    let Some(limit) = limit.filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) else {
+        return compiled_module_with_rotation(module, name, options, bytes, unpadded);
+    };
+    let _ = trial::take();
+    let first = compiled_module_with_rotation(module.clone(), name, options, bytes, unpadded)?;
+    let (functions, _) = trial::take();
+    if functions.is_empty() {
+        return Ok(first);
+    }
+    let mut again = options.clone();
+    again.dump = None;
+    let second = trial::with(limit, || compiled_module_with_rotation(module, name, &again, bytes, unpadded))?;
+    let cpu = options.cpu()?;
+    let clocks = |built: &masm::Module| {
+        built
+            .procedures
+            .iter()
+            .map(|one| {
+                let done = executed::executed(&one.body)?;
+                let jumps = done.jump_cycles(cpu).ok()?;
+                Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
+            })
+            .sum::<Option<f64>>()
+    };
+    let pays = match (clocks(&first), clocks(&second), unpadded(&first), unpadded(&second)) {
+        (Some(was), Some(now), Some(before), Some(after)) => {
+            trial::keeps_unroll_at_size((was - now).round() as i64, after - before, functions.len())
+        }
+        _ => false,
+    };
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial unroll-os: {functions:?}, {:?} -> {:?} bytes: {}", unpadded(&first), unpadded(&second), if pays { "kept" } else { "put back" });
+    }
+    let chosen = if pays { second } else { first };
+    stage_files(options, "", &chosen)?;
+    Ok(chosen)
+}
+
+thread_local! {
+    static NO_SIZE_UNROLL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `body` with UNROLL-OS-TRIAL off: the compile it would be compared with.
+pub fn without_size_unroll<T>(body: impl FnOnce() -> T) -> T {
+    let before = NO_SIZE_UNROLL.with(|one| one.replace(true));
+    let made = body();
+    NO_SIZE_UNROLL.with(|one| one.set(before));
+    made
 }

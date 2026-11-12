@@ -94,6 +94,9 @@ fn straight(op: Op) -> bool {
 /// reads nothing new. A call, a raw line or an instruction not listed is not
 /// known to leave it dead.
 ///
+/// A scratch cell (`rc16`..) is clobbered by a call, which reads none of them: a store followed by a
+/// `jsr` before any read is dead.
+///
 /// A callee-saved cell (`rc8`..`rc15`) is the caller's at the return: a store to it is dead only
 /// when a write to it (the epilogue's restore) comes before every `rts`, and a call neither reads
 /// nor changes it (the callee saves it on entry and restores it), so the scan goes on past a `jsr`.
@@ -133,6 +136,10 @@ fn cell_dead_from(
         }
         if inst.op == Op::Jsr && callee_saved {
             continue;
+        }
+        // a call clobbers the scratch cells above the callee-saved ones and reads none of them
+        if inst.op == Op::Jsr && n >= 16 {
+            return true;
         }
         let label = |inst: &Inst| {
             let name = inst.target()?;

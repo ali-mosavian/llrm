@@ -733,6 +733,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        self.tuning.unroll_trial_at_size
+    }
+
     fn unroll_trial_nests_only(&self) -> bool {
         self.tuning.unroll_trial_nests_only
     }
@@ -1058,6 +1062,17 @@ impl Tti for X86 {
 
     fn sinks_select_arms(&self) -> bool {
         self.tuning.sink_select_arms
+    }
+
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        self.tuning.prefixed_16_bit_counters
+    }
+
+    fn narrow_counter_is_taxed(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits == 16 && self.tuning.prefixed_16_bit_counters
     }
 
     fn inlines_variable_memcpy(&self) -> bool {
