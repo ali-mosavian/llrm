@@ -251,66 +251,9 @@ pub fn widen_when_it_pays(
     Ok(())
 }
 
-/// The compact word divides loop 16 times whatever the quotient; the aligned ones loop for its bits (one or
-/// two for Euclid's gcd) and are larger. The routine is linked once for all the module's calls, so the
-/// module chooses: [`aligned_divide_sites`] prices what they save and cost, [`pays_by_share`] weighs the
-/// two against the module itself.
-///
-/// DEVIATE 6502-ALIGNED-DIVIDE (owner llrm-target-6502, exit 2026-11-24): llvm-mos's `__umodhi3` aligns the
-/// divisor too; the pin has no divide routine to price. Exit: with the shared inline-or-call cost model.
-///
-/// The clocks the aligned divides save in `module` (each call weighted by its block's trips) and the bytes
-/// they add to the image, if it calls a compact divide. `from_module[i]` is whether `selections[i]` was
-/// selected from `module` itself.
-pub fn aligned_divide_sites(
-    module: &llrm_mir::module::Module,
-    names: &[String],
-    selections: &[Selection],
-    from_module: &[bool],
-    layout: &llrm_mir::datalayout::DataLayout,
-    request: &Request,
-) -> Option<(u64, i64)> {
-    use crate::dagisel::generated::ids::opcode as op;
-    use llrm_codegen::backend::selectiondag::isd::ISD;
-    if !matches!(request.level, Level::Os | Level::Oz) {
-        return None;
-    }
-    let (mut weighted, mut used) = (0u64, std::collections::BTreeSet::new());
-    for (at, (name, selection)) in names.iter().zip(selections).enumerate() {
-        let function = module.named(name).and_then(|id| module.global(id).function());
-        let weights = function.filter(|_| from_module[at]).map(|function| crate::weights::block_weights(module, function, layout));
-        for one in &selection.blocks {
-            for &node in one.units.iter().flat_map(|unit| &unit.nodes) {
-                let routine = match one.dag.nodes()[node as usize].opcode {
-                    ISD::Machine(code) if code as u16 == op::SDIV16 => "__divhi3c",
-                    ISD::Machine(code) if code as u16 == op::SREM16 => "__modhi3c",
-                    ISD::Machine(code) if code as u16 == op::UDIVREM16 => "__udivhi3c",
-                    _ => continue,
-                };
-                used.insert(routine.to_owned());
-                let weight = weights.as_ref().and_then(|all| all.get(one.block.0 as usize)).copied().unwrap_or(1);
-                weighted = weighted.saturating_add(weight);
-            }
-        }
-    }
-    if used.is_empty() {
-        return None;
-    }
-    let image = |routines: std::collections::BTreeSet<String>| -> i64 {
-        let mut all = routines;
-        links_callees(&mut all);
-        all.iter().map(|one| i64::from(library_bytes(one))).sum()
-    };
-    let aligned = used.iter().filter_map(|one| crate::routines::aligned_variant(one)).map(str::to_owned).collect();
-    let growth = image(aligned) - image(used);
-    Some((weighted.saturating_mul(crate::routines::aligned_divide_saving()), growth))
-}
-
 /// Whether a module, of `clocks` and `bytes` by the static estimate, takes a speed routine at size that
 /// saves `saved` clocks for `growth` bytes: when the share of its clocks it saves is at least
-/// `[share] percent_per_percent` times the share of its bytes it adds. The shares by this estimate for the
-/// aligned divide: idiv_loop_os saves more than all of its clocks for 5.4% of its bytes,
-/// compound_assignment_types 86% for 2.4%, idioms 0.3% for 0.7%; measured, -60% / -12% / -0.0% clocks.
+/// `[share] percent_per_percent` times the share of its bytes it adds.
 pub fn pays_by_share(
     (saved, growth): (u64, i64),
     clocks: u64,

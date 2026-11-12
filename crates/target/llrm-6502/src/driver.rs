@@ -409,7 +409,6 @@ fn tail(
     price: bool,
     audit: bool,
 ) -> Result<Assembled, String> {
-    crate::routines::set_aligned_divides(false);
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
     let copies = if request.level == Level::O0 {
@@ -498,17 +497,7 @@ fn tail(
         selection.source = file.clone().map(|file| (file, scope));
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
-    let mut pieces = module_text(module, &parts)?;
-    let sites = crate::mulimage::aligned_divide_sites(module, &names, &selections, &from_module, &program.layout, request);
-    if let Some(sites) = sites {
-        let weights = estimate_weights(module, &names, &sources, &program.layout);
-        let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
-        if crate::mulimage::pays_by_share(sites, run, size) {
-            crate::routines::set_aligned_divides(true);
-            let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
-            pieces = module_text(module, &parts)?;
-        }
-    }
+    let pieces = module_text(module, &parts)?;
     let functions = if audit {
         names
             .iter()
