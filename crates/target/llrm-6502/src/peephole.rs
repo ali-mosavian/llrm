@@ -1991,7 +1991,7 @@ pub(crate) fn dead_from(
             // steps and compares
             (Op::Cpx | Op::Inx | Op::Dex, Registers::Y | Registers::A)
             | (Op::Cpy | Op::Iny | Op::Dey, Registers::X | Registers::A) => (false, false),
-            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => (true, false),
+            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Bit | Op::Pha, Registers::A) => (true, false),
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
                 (matches!(inst.operand, Operand::Acc | Operand::None), false)
             }
