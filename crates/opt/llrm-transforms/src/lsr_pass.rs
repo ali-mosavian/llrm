@@ -451,9 +451,13 @@ fn plan_loop(
                         || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
         llrm_support::debug!(
             "lsr",
-            "  pin's space solved: kept {kept} (bytes {} against the pin's {})",
+            "  pin's space solved: kept {kept} (bytes {} against the pin's {}; size_bytes {} against {}; insns {} against {})",
             cost.bytes,
-            pin_cost.bytes
+            pin_cost.bytes,
+            cost.size_bytes,
+            pin_cost.size_bytes,
+            cost.c.insns,
+            pin_cost.c.insns
         );
         if kept {
             lsr = pin;
