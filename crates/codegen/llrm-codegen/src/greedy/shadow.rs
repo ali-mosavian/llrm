@@ -1411,6 +1411,25 @@ pub fn decide_with_split(
         let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
     }
+    {
+        // DEVIATE SPILL-ZEXT: general-register values the target zero-extends.
+        let tii = &inputs.tii;
+        let mut zero = crate::backend::widths::_zero_extended(
+            body.blocks.iter().flat_map(|block| block.insns.iter()),
+            &widest,
+            &|written, whole| tii.write_zero_extends(written, whole),
+        );
+        zero.retain(|value| {
+            tables
+                .orders
+                .borrow()
+                .get(value)
+                .is_some_and(|order| !order.is_empty() && order.iter().all(|one| one.is_gpr()))
+                && !floats.contains(value)
+                && !inputs.pins.contains_key(value)
+        });
+        *tables.zero_extended.borrow_mut() = zero;
+    }
     if lanes {
         // Where the wide reads are, for `CallMasks::wide_read_follows`.
         let mut family = tables.family.borrow_mut();

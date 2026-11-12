@@ -150,6 +150,12 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE MERGEFUNC-OS (owner z80, exit 2026-11-24; x86 joins it): `MergeFunctions` is off in the pin's
+    /// pipeline; at -Os/-Oz two functions of one body are one (shl_long_by_one: `twice` and `twice_signed`).
+    fn merge_functions_at_size(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "z80"
     }

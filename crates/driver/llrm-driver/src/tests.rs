@@ -1363,6 +1363,29 @@ fn load_pre_is_off_at_m32_os() {
     assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
 }
 
+/// As `load_pre_is_off_at_m32_os`, at m64: GVN's load PRE made the join's own load a phi, a `mov` in the call path and an
+/// `add reg, reg` for the `add reg, [p]` (jpeg_fixed -Os +17 B, jpeg_single +15 B). DEVIATE GVN-PRE-OPTSIZE.
+#[test]
+fn load_pre_is_off_at_m64_os() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @g()\n\
+                define i32 @f(ptr %p, i32 %c) ATTR {\n\
+                entry:\n  %t = icmp ne i32 %c, 0\n  br i1 %t, label %then, label %else\n\
+                then:\n  %a = load i32, ptr %p\n  br label %join\n\
+                else:\n  call void @g()\n  br label %join\n\
+                join:\n  %x = phi i32 [ %a, %then ], [ 0, %else ]\n  %b = load i32, ptr %p\n  %s = add i32 %x, %b\n  ret i32 %s\n}\n";
+    let listing = |level: &str, attr: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), &text.replace("ATTR", attr), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let folded = |text: &str| text.lines().any(|line| line.trim_start().starts_with("add ") && line.contains("ptr ["));
+    let os = listing("-Os", "optsize");
+    assert!(folded(&os), "-Os keeps the join's load, folded into the add: {os}");
+    let speed = listing("-O2", "");
+    assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
+}
+
 /// RS1 leaves a loop whose copied guard does not fold and whose trips are not counted unrotated at -Os, and each trip pays the taken
 /// `jmp` back to the guard (3 clocks on the 486). A walk of a list is that loop; rotated it is one branch back at 4 B.
 /// ROTATION-HOT compiles it rotated too and keeps that where the finished code runs less for a few bytes a loop.
@@ -3112,7 +3135,8 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
 /// A 72-byte zero fill and copy at m64 -Os (`pattern_fill.c`,
 /// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
 /// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
-/// operand (RAX) not set by a glued CopyToReg" refused the function.
+/// operand (RAX) not set by a glued CopyToReg" refused the function. The -Os copy is `rep movsd` since
+/// REP-MOVS-OS (the dword block is a byte shorter than REX.W `movsq`).
 #[test]
 fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3126,7 +3150,7 @@ fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
                 \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("rep stosq") && listing.contains("rep movsq"), "{listing}");
+    assert!(listing.contains("rep stosq") && listing.contains("rep movsd"), "{listing}");
 }
 
 /// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
@@ -4627,20 +4651,19 @@ fn a_parent_of_an_unrolled_loop_is_folded_by_indvars_at_m64_o3() {
     assert!(listing.contains("mov rdi, 229508"), "{listing}");
 }
 
-/// A 31-byte struct copy at m64 -Os was a `call memcpy` (the real-mode string
-/// rule counted it as eight dwords); it is now whichever of two overlapping 16-byte pieces (16 B) or the call
-/// (14 B with the arguments) is smaller (DEVIATE MEM-OS, #7892): here the call, and never a mix of both.
+/// A 31-byte struct copy at m64 -Os was a `call memcpy`, then the cheaper of two
+/// overlapping 16-byte pieces and the call (DEVIATE MEM-OS, #7892). With REP-MOVS-OS
+/// `mov ecx, n; rep movsb` is smaller than both and is taken.
 #[test]
-fn a_31_byte_copy_at_m64_os_is_the_cheaper_of_pieces_and_a_call() {
+fn a_31_byte_copy_at_m64_os_is_rep_movsb() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
                 define void @f(ptr %d, ptr %s) optsize {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 31, i1 false)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let call = listing.contains("memcpy");
-    let pieces = listing.matches("movups").count();
-    assert!((call && pieces == 0) || (!call && pieces == 4), "{listing}");
+    assert!(listing.contains("rep movsb"), "{listing}");
+    assert!(!listing.contains("memcpy") && !listing.contains("movups"), "{listing}");
 }
 
 /// A 136-byte local read through an index at m64: the red zone put `-0x80` on
@@ -4797,7 +4820,7 @@ fn a_register_fill_and_a_quadword_copy_at_m64_are_rep_string_instructions() {
                 \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("rep stosb") && listing.contains("rep movsq"), "{listing}");
+    assert!(listing.contains("rep stosb") && listing.contains("rep movsd"), "{listing}");
 }
 
 /// `mov rdi, rbx` (3 B) of a value a dword write zeroed above bit 31 is `mov

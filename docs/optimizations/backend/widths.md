@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/widths.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/widths.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/widths.rs sha256:4def2865c0320b6ead4600b8d022f74e3461a94b88ba548d38ad063d2f92173d -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/widths.rs sha256:56657b72377a3ef1a20f83e4261e0f10e26a51210996d17ee859741256735783 -->
 
 # widths
 
@@ -11,6 +11,9 @@ How wide each value is where an instruction names it.
 `_widest_read` count only the places an instruction reads, so a value no
 instruction reads wider than 2 bytes never needs its high half, however
 wide its definition is.
+
+`_zero_extended` lists the values every definition of which is a write the
+target extends to the whole register, so their upper bytes are zero.
 
 ## Used by
 The greedy allocator's inputs (`greedy::shadow`), which size each value's
