@@ -182,9 +182,15 @@ pub fn optimized_at(
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     lowered_before_selection(program)?;
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
-    if let Some(merge) = program.target.global_merge(level == Level::O3) {
+    if let Some(mut merge) = program.target.global_merge(level == Level::O3) {
+        // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the pin does, nothing at -Os.
+        merge.optsize_counts &= !crate::trial::unmerged();
         for module in &mut program.modules {
-            llrm_transforms::globalmerge::merged(module, &program.layout, &merge)?;
+            let before = module.globals.len();
+            if llrm_transforms::globalmerge::merged(module, &program.layout, &merge)? && merge.optsize_counts {
+                // Each merged global leaves; one struct stays.
+                crate::trial::note_merged(before + 1 - module.globals.len());
+            }
         }
     }
     Ok(())
@@ -486,7 +492,7 @@ fn compiled(
     type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price);
     let size = matches!(level, Level::Os | Level::Oz);
     let asked = crate::trial::asked(platform, size);
-    let once = |unrotated: bool, more: bool| -> Result<Built, String> {
+    let once = |(unrotated, more, unmerged): (bool, bool, bool)| -> Result<Built, String> {
         let mut program = program(text, platform)?;
         if refuse_aliases {
             // The text carries no alias: refuse it rather than drop the symbol.
@@ -497,11 +503,12 @@ fn compiled(
         }
         if level != Level::O0 {
             let run = |program: &mut Program| optimized_at(program, level);
-            match (unrotated, more) {
-                (true, _) => llrm_transforms::trial::with_unrotated(|| run(&mut program))?,
-                (_, true) => llrm_transforms::trial::with_more_rotation(|| run(&mut program))?,
-                _ => run(&mut program)?,
-            }
+            let go = |program: &mut Program| match (unrotated, more) {
+                (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
+                (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
+                _ => run(program),
+            };
+            if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
         } else {
             lowered_before_selection(&mut program)?;
         }
@@ -513,20 +520,22 @@ fn compiled(
         Ok((program, lowered, cost))
     };
     let Some(hot) = asked else {
-        let (program, lowered, _) = once(false, false)?;
+        let (program, lowered, _) = once((false, false, false))?;
         return Ok((program, lowered));
     };
     use llrm_transforms::trial;
     let _ = (trial::take_left(), trial::take_rotated());
     trial::clear_rotated_loops();
-    let first = once(false, false)?;
+    let first = once((false, false, false))?;
+    let merged = crate::trial::take_merged();
+    let mut state = (false, false, false);
     let (left, left_loops) = trial::take_left();
     let rotated = trial::take_rotated();
     let loops = trial::rotated_loops();
     let mut best = first;
     if !rotated.is_empty() {
         let kept = best.2;
-        let other = once(true, false)?;
+        let other = once((true, false, false))?;
         let _ = (trial::take_left(), trial::take_rotated());
         let pays = crate::trial::keeps_unrotated(kept, other.2, hot, loops);
         if llrm_support::debug::enabled("trial") {
@@ -538,16 +547,34 @@ fn compiled(
         }
         if pays {
             best = other;
+            state.0 = true;
         }
     }
     if hot && !left.is_empty() {
         let kept = best.2;
-        let other = once(false, true)?;
+        let other = once((state.0, true, false))?;
         let _ = (trial::take_left(), trial::take_rotated());
         let pays = crate::trial::keeps_rotated(kept, other.2, left_loops);
         if llrm_support::debug::enabled("trial") {
             eprintln!(
                 "trial rotation-hot: {left:?} {kept:?} -> {:?}: {}",
+                other.2,
+                if pays { "kept" } else { "put back" }
+            );
+        }
+        if pays {
+            best = other;
+            state = (false, true, false);
+        }
+    }
+    if merged > 0 {
+        let kept = best.2;
+        let other = once((state.0, state.1, true))?;
+        let _ = (trial::take_left(), trial::take_rotated(), crate::trial::take_merged());
+        let pays = crate::trial::keeps_unmerged(kept, other.2, merged);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!(
+                "trial unmerged: {merged} globals {kept:?} -> {:?}: {}",
                 other.2,
                 if pays { "kept" } else { "put back" }
             );
