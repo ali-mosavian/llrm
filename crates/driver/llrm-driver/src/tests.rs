@@ -5610,6 +5610,22 @@ fn counted_loops_that_are_smaller_unrotated_stay_unrotated_at_os() {
     assert!(object.len() < 310, "{} bytes: {}", object.len(), llrm_codegen::backend::masm::text(&built).unwrap());
 }
 
+/// x86-m32 x_crc32 -Os: the table-driven loop is counted, its copied guard does not fold, and the unrotated
+/// trial was a few bytes smaller, so the loop stayed unrotated and paid a taken `jmp` a trip (+7.5% clocks
+/// against clang). ROTATION-HOT keeps the rotated loop when it runs less for at most 4 B a loop.
+/// DEVIATE ROTATION-HOT.
+#[test]
+fn a_counted_loop_that_runs_less_rotated_stays_rotated_at_m32_os() {
+    let text = include_str!("tests_data/crc_table_loop.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_x_crc32").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let back = listing.lines().enumerate().any(|(at, line)| {
+        let Some(target) = line.trim().strip_prefix("jmp ") else { return false };
+        listing.lines().position(|label| label == format!("{target}:")).is_some_and(|label| label < at)
+    });
+    assert!(!back, "a loop is unrotated, a jmp back to its guard: {listing}");
+}
+
 /// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an object file and 2 B
 /// longer in code (the padding between functions moved). The trial compares the bytes without
 /// padding, so the rotated loops stay.
