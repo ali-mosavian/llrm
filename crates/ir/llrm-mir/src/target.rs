@@ -358,6 +358,9 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_order`.
     pub lsr_size_order: bool,
+    /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+    /// `Tti::lsr_users_in_use_list_order`.
+    pub lsr_users_in_use_list_order: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -383,6 +386,13 @@ pub struct Tuning {
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE LU30: a static alloca is the frame register and a
+    /// displacement, not a register: LSR leaves it out of a formula's
+    /// registers where an address takes `[frame + index + displacement]`
+    /// (x86-m16: `[bp+si+disp]`). false: the pin's.
+    pub frame_slot_is_free_base: bool,
+    /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
+    pub lsr_address_fewest_registers: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
     pub keep_constant_arith_operands: bool,
@@ -453,6 +463,10 @@ pub struct Tuning {
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
     /// all the way into the callee.
     pub ipsccp_widen_keeps_sign: bool,
+    /// REC5-1 also at -Os. m32 leaves it off (bytes-strict): the unsigned
+    /// remainder is `xor edx, edx; div`, a byte over `cdq; idiv` (recgcd,
+    /// frames, recmany, switch: 2..5 B).
+    pub ipsccp_widen_keeps_sign_at_size: bool,
 }
 
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
@@ -558,12 +572,15 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_users_in_use_list_order: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
         keep_constant_displacements: false,
+        frame_slot_is_free_base: false,
+        lsr_address_fewest_registers: false,
         keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
@@ -580,6 +597,7 @@ impl Tuning {
         inline_variable_memcpy: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
+        ipsccp_widen_keeps_sign_at_size: false,
     };
 }
 

@@ -1236,6 +1236,89 @@ fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
     assert_ne!(kept, off, "the fold that shrinks the sparse switch is kept: {kept}");
 }
 
+/// IPSCCP's sign-keeping widening (REC5-1) proves the counters that feed a recursive `a % b` non-negative, and the remainder
+/// becomes unsigned: `xor edx, edx; div` against `cdq; idiv`, a byte more at each site (recgcd -Os 100 B, frames 110, recmany
+/// 139, switch 210: 2..5 B over the pin's shape). -Os is bytes-strict, so it keeps the signed divide; -O2 keeps the proof.
+/// DEVIATE REC5-1.
+#[test]
+fn a_remainder_of_counters_at_m32_os_stays_signed() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %n) {\n\
+                entry:\n\
+                %n.addr = alloca i32, align 4\n\
+                %t = alloca i32, align 4\n\
+                %i = alloca i32, align 4\n\
+                store i32 %n, ptr %n.addr, align 4\n\
+                store i32 0, ptr %t, align 4\n\
+                store i32 1, ptr %i, align 4\n\
+                br label %for.cond\n\
+                for.cond:\n\
+                %0 = load i32, ptr %i, align 4\n\
+                %1 = load i32, ptr %n.addr, align 4\n\
+                %cmp = icmp sle i32 %0, %1\n\
+                br i1 %cmp, label %for.body, label %for.end\n\
+                for.body:\n\
+                %2 = load i32, ptr %i, align 4\n\
+                %mul = mul nsw i32 %2, 7\n\
+                %add = add nsw i32 %mul, 3\n\
+                %3 = load i32, ptr %i, align 4\n\
+                %mul1 = mul nsw i32 %3, 5\n\
+                %add2 = add nsw i32 %mul1, 2\n\
+                %call = call i32 @gcd(i32 %add, i32 %add2)\n\
+                %4 = load i32, ptr %i, align 4\n\
+                %add3 = add nsw i32 %4, 90\n\
+                %call4 = call i32 @gcd(i32 %add3, i32 360)\n\
+                %add5 = add nsw i32 %call, %call4\n\
+                %5 = load i32, ptr %t, align 4\n\
+                %add6 = add nsw i32 %5, %add5\n\
+                store i32 %add6, ptr %t, align 4\n\
+                br label %for.inc\n\
+                for.inc:\n\
+                %6 = load i32, ptr %i, align 4\n\
+                %inc = add nsw i32 %6, 1\n\
+                store i32 %inc, ptr %i, align 4\n\
+                br label %for.cond\n\
+                for.end:\n\
+                %7 = load i32, ptr %t, align 4\n\
+                ret i32 %7\n\
+                }\n\
+                define internal i32 @gcd(i32 %a, i32 %b) {\n\
+                entry:\n\
+                %retval = alloca i32, align 4\n\
+                %a.addr = alloca i32, align 4\n\
+                %b.addr = alloca i32, align 4\n\
+                store i32 %a, ptr %a.addr, align 4\n\
+                store i32 %b, ptr %b.addr, align 4\n\
+                %0 = load i32, ptr %b.addr, align 4\n\
+                %cmp = icmp eq i32 %0, 0\n\
+                br i1 %cmp, label %if.then, label %if.end\n\
+                if.then:\n\
+                %1 = load i32, ptr %a.addr, align 4\n\
+                store i32 %1, ptr %retval, align 4\n\
+                br label %return\n\
+                if.end:\n\
+                %2 = load i32, ptr %b.addr, align 4\n\
+                %3 = load i32, ptr %a.addr, align 4\n\
+                %4 = load i32, ptr %b.addr, align 4\n\
+                %rem = srem i32 %3, %4\n\
+                %call = call i32 @gcd(i32 %2, i32 %rem)\n\
+                store i32 %call, ptr %retval, align 4\n\
+                br label %return\n\
+                return:\n\
+                %5 = load i32, ptr %retval, align 4\n\
+                ret i32 %5\n\
+                }\n";
+    let listing = |level: &str| {
+        let (built, _) = compiled(&flags(&["-mabi=sysv", level]), text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let os = listing("-Os");
+    assert!(os.contains("idiv") && !os.contains("\tdiv"), "-Os: {os}");
+    let speed = listing("-O2");
+    assert!(speed.contains("div") && !speed.contains("idiv"), "-O2: {speed}");
+}
+
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
 /// `sar; shr; add; sar` sequence. The tip kept `idiv` at -Os: stft_fixed -Os ran 188.9M clk against main's 96.8M (+95%).
 #[test]

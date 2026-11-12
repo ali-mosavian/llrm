@@ -1025,6 +1025,20 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LU30: whether a static alloca in an address is the frame
+    /// register and a displacement, which costs no register (`[bp+si+disp]`).
+    fn frame_slot_is_free_base(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU31: whether LSR's over-complex search keeps, for every
+    /// address use, only the formulae of the fewest registers (the pin does
+    /// it for post-indexed targets only): where registers are scarcer than
+    /// the winner-register heuristic assumes (x86-m16: six).
+    fn lsr_address_fewest_registers(&self) -> bool {
+        false
+    }
+
     /// Whether a constant operand of an arithmetic instruction may become a phi
     /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
     /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.
@@ -1346,6 +1360,11 @@ pub trait Tti {
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::ipsccp_widen_keeps_sign_at_size`.
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
         false
     }
 
