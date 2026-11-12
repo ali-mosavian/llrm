@@ -2078,10 +2078,12 @@ impl<'a> Analyzer<'a> {
 
     /// The target's byte view of the callee's code, for a speed caller only: a
     /// size caller keeps the units its -Os bound was fitted in (DEVIATE
-    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14).
+    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14). The view's lowering
+    /// is the -O2/-O3 one: -O1 keeps the pricing its bound was fitted in.
     fn size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
         let tti = self.site.tti?;
-        tti.inline_size_view().filter(|_| !tti.inline_size_view_is_measured() || self.site.caller_size == CallerSize::Speed)
+        let speed = self.site.caller_size == CallerSize::Speed;
+        tti.inline_size_view_at(speed && !self.params.o1_bound).filter(|_| !tti.inline_size_view_is_measured() || speed)
     }
 
     /// Whether the size view is the measured one (`inline_size_view_is_measured`)

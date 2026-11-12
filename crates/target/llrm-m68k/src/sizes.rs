@@ -73,9 +73,13 @@ pub fn arithmetic(
     ty: Ty,
     right: OperandInfo,
     cpu_has_long_muldiv: bool,
+    speed: bool,
 ) -> Cost {
     let parts = pieces(ty);
     let wide = parts > 1;
+    if !wide && let Some(bytes) = constant_division(op, ty, right, cpu_has_long_muldiv, speed) {
+        return Cost::of(bytes);
+    }
     let bytes = match op {
         ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => {
             (2 + immediate(op, ty, right, parts)) * parts
@@ -105,6 +109,62 @@ pub fn arithmetic(
         ArithOp::FNeg => 6,
     };
     Cost::of(bytes)
+}
+
+/// Bytes of a division or remainder by a constant, as the DAG lowers it, or
+/// None where the plain divide stands. Measured on `a[1] = a[0] op K` at -O2
+/// (the framing load and store, 2 B beyond the base copy, taken off):
+///
+/// | divisor | width | udiv | urem | sdiv | srem |
+/// |---|---|---|---|---|---|
+/// | power of two | 8 | 2 | 4 | 10 | 14 |
+/// | power of two | 16, 32 | 2 | 4 | 18 | 24 |
+/// | other | 8, 16 | 10 | 22 | 22 | 36 |
+/// | other, `muls.l` | 32 | 12 | 28 | 24 | 38 |
+///
+/// A quotient by a non-power of two is the magic multiply (`muls.w #imm`, or
+/// `muls.l` on the 68020), a 32-bit one on the 68000 the library call with the
+/// constant pushed (4 B more than two registers). Only a speed caller (-O2,
+/// -O3) is priced so: the -O1 and -Os bounds were fitted to the plain
+/// divide's price, and -Os keeps `divs.l #imm`.
+fn constant_division(
+    op: ArithOp,
+    ty: Ty,
+    right: OperandInfo,
+    cpu_has_long_muldiv: bool,
+    speed: bool,
+) -> Option<i64> {
+    let (signed, rem) = match op {
+        ArithOp::UDiv => (false, false),
+        ArithOp::URem => (false, true),
+        ArithOp::SDiv => (true, false),
+        ArithOp::SRem => (true, true),
+        _ => return None,
+    };
+    let Ty::Int(bits) = ty else { return None };
+    if !speed || !right.constant || right.value.is_some_and(|value| value.unsigned_abs() <= 1) {
+        return None;
+    }
+    if right.power_of_two {
+        return Some(match (signed, rem, bits <= 8) {
+            (false, false, _) => 2,
+            (false, true, _) => 4,
+            (true, false, true) => 10,
+            (true, true, true) => 14,
+            (true, false, false) => 18,
+            (true, true, false) => 24,
+        });
+    }
+    if bits > 16 && !cpu_has_long_muldiv {
+        return Some(libcall(2) + 4);
+    }
+    let long = bits > 16;
+    Some(match (signed, rem) {
+        (false, false) => 10 + if long { 2 } else { 0 },
+        (false, true) => 22 + if long { 6 } else { 0 },
+        (true, false) => 22 + if long { 2 } else { 0 },
+        (true, true) => 36 + if long { 2 } else { 0 },
+    })
 }
 
 /// Bytes of a compare or select.
@@ -144,10 +204,18 @@ pub fn cast(
     Cost::of(match op {
         CastKind::Trunc | CastKind::BitCast | CastKind::PtrToInt | CastKind::IntToPtr => 0,
         CastKind::SExt => {
-            if to_parts > from_parts { 2 + 2 * (to_parts - from_parts) } else { 2 }
+            if to_parts > from_parts {
+                2 + 2 * (to_parts - from_parts)
+            } else {
+                2
+            }
         }
         CastKind::ZExt => {
-            if to_parts > from_parts { 2 * (to_parts - from_parts) + 2 } else { 4 }
+            if to_parts > from_parts {
+                2 * (to_parts - from_parts) + 2
+            } else {
+                4
+            }
         }
         _ => libcall(pieces(from)),
     })

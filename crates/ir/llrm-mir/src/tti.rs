@@ -750,6 +750,13 @@ pub trait Tti {
         None
     }
 
+    /// [`Self::inline_size_view`] for a caller lowered for `speed` (-O2,
+    /// -O3), where the target's lowering of an operation is larger than a
+    /// size caller's. The default is the one view.
+    fn inline_size_view_at(&self, _speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+        self.inline_size_view()
+    }
+
     /// What the address of a load or store adds to its `CodeSize`, beyond
     /// the access itself (`memory_op_cost`): the bytes of a global's absolute
     /// address, a frame slot's, a displacement or a scaled index. Free: the
@@ -1518,7 +1525,7 @@ pub trait Tti {
     }
 
     /// DEVIATE IPACP-O3: whether a function is copied for the constants its
-    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone` (on at -O3) does and the
     /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
@@ -2493,6 +2500,23 @@ pub trait Tti {
         _bits: u32,
     ) -> u32 {
         0
+    }
+
+    /// DEVIATE LU24 (`lsr_solve.rs`): the search's required-register rule
+    /// ("formulae that do not use a register the solution so far could
+    /// share are ignored") is left off for address uses, as the pin does for
+    /// post-indexed targets: the cost model weighs a pointer that steps
+    /// against the index and base add it replaces.
+    fn lsr_address_left_to_cost_model(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU23 (`lsr_use.rs`): in the baseline, an address `gep p, n` of
+    /// a pointer in a register and a counter that is the only phi is a base
+    /// add each trip (`num_base_adds`), not a recurrence of its own. False
+    /// where the add folds into the access (the pin's x86).
+    fn lsr_written_pointer_add_is_base_add(&self) -> bool {
+        false
     }
 
     /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the

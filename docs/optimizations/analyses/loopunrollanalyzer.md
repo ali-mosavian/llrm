@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loopunrollanalyzer.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loopunrollanalyzer.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loopunrollanalyzer.rs sha256:e4a99a9c4fdbb0a972a60ba6992fe7eb91bd6deb7b131e4ad2b752fdde4725df -->
+<!-- src: crates/opt/llrm-analysis/src/loopunrollanalyzer.rs sha256:8543239f87ba2027cfbfd07efb7abb87f92aeec9c05664ea1e082df0f2bb12f8 -->
 
 # loopunrollanalyzer
 
@@ -23,6 +23,10 @@ plus an offset known at this iteration is remembered with that offset.
 - U1 `fcmp` is not simplified: no `simplifyFCmpInst` exists in
   `llrm_mir::simplify`; it is asked of ScalarEvolution alone.
 - U2 No `FPMathOperator` fast-math flags beyond those on the instruction.
+- U3 An `fcmp` or a `select` whose operands the map holds is simplified
+  (`simplifyInstructionWithOperands`); the pin's visitor has no
+  `visitSelectInst` and asks ScalarEvolution alone for an `fcmp`. gcc's
+  `constant_after_peeling` folds every statement the peeling makes constant.
 
 ## Example
 At iteration 2 of a loop with `%i = phi i16 [ 0, %pre ], [ %n, %latch ]`,
