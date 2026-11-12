@@ -583,7 +583,28 @@ fn improved(
             }
         }
     }
+    // a spilled read taken from its cell stays where it beats the slot as a
+    // `push` and a `pop`
+    if best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
+        crate::regalloc::NO_FOLD.with(|one| one.set(true));
+        let other = allocate_with(None, true, function, name, level);
+        crate::regalloc::NO_FOLD.with(|one| one.set(false));
+        if let Ok((other, _)) = other
+            && let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level))
+            && cheaper(level, then, now)
+        {
+            best = other;
+        }
+    }
     best
+}
+
+/// An ALU op or compare whose second source is a frame cell (`Target::fold_spill`).
+fn reads_its_cell(inst: &Inst) -> bool {
+    matches!(
+        inst.kind,
+        Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
+    ) && matches!(inst.operands.get(2), Some(Operand::Frame(_)))
 }
 
 thread_local! {
@@ -618,6 +639,7 @@ fn allocate_once(
     if std::env::var("LLRM_NO_Z80_NARROW").is_err() {
         crate::narrow::narrow_low_only_pairs(&mut function);
     }
+    crate::regalloc::FRAME_STANDS.with(|one| one.set(!function.locals.is_empty() || !function.fixed.is_empty()));
     two_address(&mut function);
     let held = read_bytes_through_their_pairs(&mut function, strict);
     use_the_shift_carry(&mut function);
@@ -1162,6 +1184,8 @@ pub enum StackRefusal {
     PathsDisagree,
     /// A byte slot whose pair's other half is live after the `pop`.
     ByteMateLive,
+    /// A slot an instruction reads in place (`and a, d(ix)`): a pop cannot.
+    ReadInPlace,
 }
 
 /// What [`stack_slots`] decided, slot by slot.
@@ -1217,6 +1241,16 @@ pub fn stack_slot_report_by(
     for (b, block) in function.blocks.iter().enumerate() {
         for (at, inst) in block.insts.iter().enumerate() {
             let area = areas[b][at];
+            if spill(inst).is_none() {
+                for operand in &inst.operands {
+                    if let Operand::Frame(slot) = operand
+                        && inst.may_load
+                    {
+                        chosen.insert(*slot);
+                        barred.entry(*slot).or_insert(StackRefusal::ReadInPlace);
+                    }
+                }
+            }
             if let Some((store, slot, register)) = spill(inst) {
                 chosen.insert(slot);
                 let counts = accesses.entry(slot).or_default();
