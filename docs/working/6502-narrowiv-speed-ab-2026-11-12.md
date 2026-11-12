@@ -1,9 +1,9 @@
-# 6502 narrow counters at speed + scaled extended index, A/B, 2026-11-12
+# 6502 narrow counters at speed + LU19/LU22, A/B, 2026-11-12
 
-Base 0e1e83e22f (tip with #9280) vs this branch, `6502-sim65`, `ours_cr.py`, 81 programs PASS per side, 4-pad mean executed clocks, whole-program off. Os: 0 cells change.
-Open: `lsr_pointer::an_outer_loops_row_address_steps_by_the_row_size_and_calls_no_multiply` fails (outer byte counter: `__mulhi3` per row); rep_count O1 +50 B.
+Base 0e1e83e22f (tip with #9280) vs this branch, `6502-sim65`, `ours_cr.py`, 81 programs PASS per side, mean of 4 code paddings (0, 64, 128, 192), executed sim65, whole-program off. Os: 0 cells change.
+Clock deltas under the pad spread are noise (div_constants_ulong, huffman_decode: instructions +46K of 22M, +6 of 35K).
 
-## O1: 30 cells, -8378 B
+## O1: 30 cells, -8438 B
 
 | program | bytes | clocks |
 |---|---|---|
@@ -28,7 +28,7 @@ Open: `lsr_pointer::an_outer_loops_row_address_steps_by_the_row_size_and_calls_n
 | mul_constants | 14399 -> 12540 | 16882748 -> 16572915 (-1.8%) |
 | overflow_builtins | 8069 -> 8045 | 427061 -> 425936 (-0.3%) |
 | pattern_fill | 845 -> 820 | 125039 -> 121374 (-2.9%) |
-| rep_count | 372 -> 422 | 133230 -> 114052 (-14.4%) |
+| rep_count | 372 -> 362 | 133230 -> 133092 (-0.1%) |
 | sat_builtins | 2115 -> 2089 | 33853 -> 33638 (-0.6%) |
 | split_loops | 632 -> 630 | 40128 -> 38235 (-4.7%) |
 | stack_arrays_copy | 290 -> 263 | 12066 -> 7435 (-38.4%) |

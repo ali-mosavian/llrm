@@ -315,6 +315,11 @@ impl Tti for Mos6502 {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
     }
 
+    /// DEVIATE LU22: the inner loop's byte counter, extended, is the counter.
+    fn lsr_extension_of_phi_exists(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
     fn lsr_written_exit_bound_is_live(&self) -> bool {
         true
