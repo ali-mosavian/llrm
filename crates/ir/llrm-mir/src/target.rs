@@ -406,6 +406,8 @@ pub struct Tuning {
     pub rotation_trial_at_size: bool,
     /// DEVIATE ROTATION-HOT: see `Tti::rotation_hot_at_size`.
     pub rotation_hot_at_size: bool,
+    /// `Tti::rotation_hot_bytes_per_loop`.
+    pub rotation_hot_bytes_per_loop: i64,
     /// DEVIATE GVN-PRE-OPTSIZE: see `Tti::load_pre_off_at_size`.
     pub load_pre_off_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
@@ -624,6 +626,7 @@ impl Tuning {
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
         rotation_hot_at_size: false,
+        rotation_hot_bytes_per_loop: 4,
         load_pre_off_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
