@@ -73,6 +73,7 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             dso_local_symbols: true,
             sext_bool_add_max_bits: u32::MAX,
+            known_bits_of_build_pair: true,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
         // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads

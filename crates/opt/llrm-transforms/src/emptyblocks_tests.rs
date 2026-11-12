@@ -58,3 +58,65 @@ b2:
 ";
     assert_eq!(after(source), printed(&parsed(&format!("{HEAD}{source}"))));
 }
+
+const THREE_WAY: &str = "declare void @g()
+
+define i16 @f(i16 %x) {
+b0:
+  switch i16 %x, label %b3 [
+    i16 1, label %b1
+    i16 2, label %b2
+  ]
+
+b1:
+  br label %b4
+
+b2:
+  call void @g()
+  br label %b4
+
+b3:
+  call void @g()
+  br label %b4
+
+b4:
+  %p = phi i16 [ 1, %b1 ], [ 2, %b2 ], [ 3, %b3 ]
+  ret i16 %p
+}
+";
+
+/// An empty case block of a three-way switch stays: it takes a third of the
+/// switch's flow, and the copy for the join's phi goes in it rather than on the
+/// switch, which a jump table cannot split. Merged, it cost the wasm
+/// switch_header_marker_loop 5 B (253 B in the pin, 258 B here), at -O1 to -Os.
+#[test]
+fn test_an_empty_case_block_of_a_switch_stays_when_the_switch_is_hotter() {
+    let text = after(THREE_WAY);
+    assert!(text.contains("b1:"), "the empty case block stays: {text}");
+}
+
+/// With one case and a default the empty block takes half the flow, the limit:
+/// the switch is no more than twice as hot, so the block goes.
+#[test]
+fn test_an_empty_case_block_of_a_two_way_switch_is_merged() {
+    let text = after(
+        "define i16 @f(i16 %x) {
+b0:
+  switch i16 %x, label %b3 [
+    i16 1, label %b1
+  ]
+
+b1:
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %p = phi i16 [ 1, %b1 ], [ 3, %b3 ]
+  ret i16 %p
+}
+",
+    );
+    assert!(!text.contains("b1:"), "the empty case block goes: {text}");
+}
