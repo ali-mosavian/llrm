@@ -2032,3 +2032,50 @@ fn test_a_kept_divides_remainder_is_not_split_into_the_addresses() {
     assert!(text.contains("urem i32"), "{text}");
     assert!(!text.contains("udiv"), "{text}");
 }
+
+const NEXT_CONVERTED: &str = "define double @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %s = phi double [ 0.0, %entry ], [ %s3, %loop ]
+  %d = sitofp i32 %i to double
+  %next = add nuw nsw i32 %i, 1
+  %e = sitofp i32 %next to double
+  %q = fdiv double 1.0, %e
+  %s2 = fadd double %s, %d
+  %s3 = fadd double %s2, %q
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret double %s3
+}
+";
+
+fn reduced_next_converted(x87: bool) -> String {
+    let tuning = llrm_mir::target::Tuning { x87_stack_slots: x87.then_some(8), ..llrm_mir::target::Tuning::PIN };
+    let mut module = parsed(&format!("{FLAT}{NEXT_CONVERTED}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+    printed(&module)
+}
+
+/// `1.0 / (double)(i + 1)` beside `(double)i`: x_ldmath at O2 kept an `fadd`
+/// counter and also converted `i + 1` (an `fidiv` of the integer) every trip,
+/// +400 clk against gcc's one `fild` shared by both.
+#[test]
+fn test_a_conversion_of_the_increment_is_the_double_counters_increment() {
+    let after = reduced_next_converted(true);
+    assert!(!after.contains("sitofp"), "{after}");
+}
+
+/// Off the x87 stack the conversion stays: 6502 x_ldmath grew 32 B with the
+/// counter's next value kept live across the soft-float calls.
+#[test]
+fn test_a_conversion_of_the_increment_stays_off_the_x87_stack() {
+    let after = reduced_next_converted(false);
+    assert!(after.contains("sitofp"), "{after}");
+}

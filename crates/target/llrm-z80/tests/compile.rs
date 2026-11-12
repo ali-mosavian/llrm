@@ -1036,8 +1036,8 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
 fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
     let ir = include_str!("kernels/ir/stackargs.ll");
     let out = text(ir, "stackargs", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("push bc") && out.contains("(ix), "), "{out}");
-    assert!(out.contains("pop bc") || out.contains("ld sp, ix"), "{out}");
+    assert!(out.contains("push bc") && (out.contains("(ix), ") || out.contains("(iy), ")), "{out}");
+    assert!(out.contains("pop bc") || out.contains("ld sp, ix") || out.contains("pop iy"), "{out}");
 }
 
 /// A frame object out of the byte displacement of IX was refused: "frame object
@@ -2344,7 +2344,10 @@ fn va_start_names_the_first_unnamed_argument_on_the_stack() {
         let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
         // the word is read from 4(ix), 5(ix), into whichever pair the allocation gives it (the list pointer is a
         // register since the va_list promotion, no longer a frame slot read through de)
-        assert!(callee.contains(", 4(ix)") && callee.contains(", 5(ix)"), "{level:?}: {callee}");
+        // (an SP-addressed frame reaches the word through a base it sets: `0(iy)`, `1(iy)` from `ld iy, #2; add iy, sp`)
+        let from_ix = callee.contains(", 4(ix)") && callee.contains(", 5(ix)");
+        let from_sp = callee.contains("add iy, sp") && callee.contains("(iy)");
+        assert!(from_ix || from_sp, "{level:?}: {callee}");
     }
 }
 

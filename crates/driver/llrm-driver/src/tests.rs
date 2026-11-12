@@ -1131,6 +1131,26 @@ fn a_small_immediate_at_m32_os_is_push_pop() {
     assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
 }
 
+/// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1: at m32 -Os it was used in loops as well, and jpeg_fixed -Os ran
+/// 244k more `pop`s than main (+1.3% clk, 46 B). A constant in a loop is a `mov`; one that runs once per call stays a push and pop.
+/// DEVIATE PUSH-IMM-OS.
+#[test]
+fn a_small_immediate_at_m32_os_is_a_mov_in_a_loop() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %n, ptr %p) optsize {\n\
+                entry:\n  %first = load volatile i32, ptr %p\n  %z = icmp slt i32 %first, 0\n  br i1 %z, label %early, label %loop\n\
+                early:\n  ret i32 41\n\
+                loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %s = phi i32 [ %first, %entry ], [ %s2, %loop ]\n\
+                \x20 %v = load volatile i32, ptr %p\n  %c = icmp slt i32 %v, 0\n  %k = select i1 %c, i32 40, i32 50\n\
+                \x20 %s2 = add i32 %s, %k\n  %i2 = add i32 %i, 1\n  %d = icmp eq i32 %i2, %n\n  br i1 %d, label %out, label %loop\n\
+                out:\n  ret i32 %s2\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("pushd 40") && !listing.contains("pushd 50"), "{listing}");
+    assert!(listing.contains("pushd 41"), "the once-per-call constant stays push/pop: {listing}");
+}
+
 /// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the
 /// bytes, and x_bubble -Os grew 3 B (273 against 270), quicksort 2, switch_sparse 1, jpeg_fixed 16, while the sparse switch
 /// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS.
@@ -1341,6 +1361,25 @@ fn load_pre_is_off_at_m32_os() {
     assert!(folded(&os), "-Os keeps the join's load, folded into the add: {os}");
     let speed = listing("-O2", "");
     assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
+}
+
+/// RS1 leaves a loop whose copied guard does not fold and whose trips are not counted unrotated at -Os, and each trip pays the taken
+/// `jmp` back to the guard (3 clocks on the 486). A walk of a list is that loop; rotated it is one branch back at 4 B.
+/// ROTATION-HOT compiles it rotated too and keeps that where the finished code runs less for a few bytes a loop.
+/// DEVIATE ROTATION-HOT.
+#[test]
+fn a_hot_loop_of_an_unfolded_guard_is_rotated_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(ptr %p, i32 %k) {\n\
+                entry:\n  br label %head\n\
+                head:\n  %q = phi ptr [ %p, %entry ], [ %n, %body ]\n  %s = phi i32 [ 0, %entry ], [ %s2, %body ]\n\
+                \x20 %v = load i32, ptr %q, align 4\n  %z = icmp eq i32 %v, %k\n  br i1 %z, label %out, label %body\n\
+                body:\n  %m = mul i32 %v, 3\n  %s2 = add i32 %s, %m\n  %n = getelementptr i32, ptr %q, i32 1\n  br label %head\n\
+                out:\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("jmp"), "the loop is rotated, no jmp back to its guard: {listing}");
 }
 
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the

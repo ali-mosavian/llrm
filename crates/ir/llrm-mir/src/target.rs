@@ -199,9 +199,10 @@ pub struct Tuning {
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
     /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
-    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`). DEVIATE
-    /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
-    /// against the `mov`'s one; the level is bytes-strict.
+    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`), in blocks
+    /// that run at most once per call. DEVIATE PUSH-IMM-OS (owner x86-m32,
+    /// exit 2026-11-30): 5 clocks on the 486 against the `mov`'s 1, so never in
+    /// a loop.
     pub push_imm_at_size: bool,
     /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
     /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
@@ -373,6 +374,8 @@ pub struct Tuning {
     pub rotation_guard_must_fold_at_size: bool,
     /// DEVIATE ROTATION-TRIAL: see `Tti::rotation_trial_at_size`.
     pub rotation_trial_at_size: bool,
+    /// DEVIATE ROTATION-HOT: see `Tti::rotation_hot_at_size`.
+    pub rotation_hot_at_size: bool,
     /// DEVIATE GVN-PRE-OPTSIZE: see `Tti::load_pre_off_at_size`.
     pub load_pre_off_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
@@ -578,6 +581,7 @@ impl Tuning {
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
+        rotation_hot_at_size: false,
         load_pre_off_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
