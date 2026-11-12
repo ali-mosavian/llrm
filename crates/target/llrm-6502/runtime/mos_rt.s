@@ -563,6 +563,95 @@ __mulsi3_fast:                  ; __sa * __sb -> __sa (the low 32 bits)
 @done:
   jmp copy_st_to_sa
 
+; 16 x 16 -> 32: __sa and __sb low words in, the product in __sa. The product is built
+; in __st:__sb, the multiplier shifting out of __sb as the low half shifts in. A multiplier
+; whose high byte is zero is spent after 8 bits: the product is then the 32 bits shifted
+; down a byte.
+.export __umulhisi3
+__umulhisi3:
+  lda #0
+  sta __st
+  sta __st+1
+  ldy #2
+@pass:
+  ldx #8
+@next:
+  lda __sb
+  lsr a
+  bcc @skip
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+@skip:
+  ror __st+1
+  ror __st
+  ror __sb+1
+  ror __sb
+  dex
+  bne @next
+  dey
+  beq @long
+  lda __sb
+  bne @pass
+  lda __sb+1
+  sta __sa
+  lda __st
+  sta __sa+1
+  lda __st+1
+  sta __sa+2
+  lda #0
+  sta __sa+3
+  rts
+@long:
+  lda __sb
+  sta __sa
+  lda __sb+1
+  sta __sa+1
+  lda __st
+  sta __sa+2
+  lda __st+1
+  sta __sa+3
+  rts
+
+; the signed product: the unsigned one less the other operand from the high word for each
+; negative operand
+.export __mulhisi3
+__mulhisi3:
+  lda __sa
+  sta __sr
+  lda __sa+1
+  sta __sr+1
+  lda __sb
+  sta __sr+2
+  lda __sb+1
+  sta __sr+3
+  jsr __umulhisi3
+  lda __sr+1
+  bpl @a
+  sec
+  lda __sa+2
+  sbc __sr+2
+  sta __sa+2
+  lda __sa+3
+  sbc __sr+3
+  sta __sa+3
+@a:
+  lda __sr+3
+  bpl @done
+  sec
+  lda __sa+2
+  sbc __sr
+  sta __sa+2
+  lda __sa+3
+  sbc __sr+1
+  sta __sa+3
+@done:
+  rts
+
 .macro cmp_sub_32
   sec
   lda __sr

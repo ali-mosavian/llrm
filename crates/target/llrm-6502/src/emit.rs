@@ -558,6 +558,21 @@ pub fn expand(
             copy_byte(&mut out, &high.0, "__sa+2");
             copy_byte(&mut out, &high.1, "__sa+3");
         }
+        // A widening multiply: the operands' low words in `__sa` and `__sb`,
+        // the product in `__sa`.
+        op::UMULW16 | op::SMULW16 => {
+            let routine = if inst.opcode == op::UMULW16 { "__umulhisi3" } else { "__mulhisi3" };
+            let (low, high) = (word(&o[0])?, word(&o[1])?);
+            for (to, source) in [("__sa", word(&o[2])?), ("__sb", word(&o[3])?)] {
+                copy_byte(&mut out, to, &source.0);
+                copy_byte(&mut out, &format!("{to}+1"), &source.1);
+            }
+            writeln!(out, "  jsr {routine}").unwrap();
+            copy_byte(&mut out, &low.0, "__sa");
+            copy_byte(&mut out, &low.1, "__sa+1");
+            copy_byte(&mut out, &high.0, "__sa+2");
+            copy_byte(&mut out, &high.1, "__sa+3");
+        }
         op::COPY8 => copy_byte(&mut out, reg(&o[0])?, reg(&o[1])?),
         op::COPY16 => {
             let ((dl, dh), (sl, sh)) = (word(&o[0])?, word(&o[1])?);
