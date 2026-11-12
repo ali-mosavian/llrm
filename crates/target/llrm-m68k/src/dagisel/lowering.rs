@@ -679,6 +679,31 @@ fn has_non_flags_use(
     })
 }
 
+/// `LowerBRCOND` and `LowerSELECT` look past the extension of a boolean to the
+/// value it extends (`(and (setcc_carry ...), 1)`, a truncate with zero high
+/// bits). A promoted `i1` condition is `sign_extend_inreg x, i1`, which is
+/// non-zero exactly when bit 0 of `x` is: the condition is `btst #0,x` of a
+/// long, else the test of `x & 1`, so no `neg` is made.
+fn look_past_boolean(
+    dag: &mut SelectionDAG,
+    cond_value: SDValue,
+) -> SDValue {
+    let one_bit = dag.opcode(cond_value) == ISD::SignExtendInReg
+        && matches!(dag.node(dag.operand(cond_value, 1)).data, NodeData::ValueType(vt) if vt.size_in_bits() == 1);
+    if !one_bit {
+        return cond_value;
+    }
+    let value = dag.operand(cond_value, 0);
+    let vt = dag.value_type(value);
+    if vt == EVT::I32 {
+        let bit_no = dag.get_constant(0, EVT::I32);
+        return bit_test(dag, value, bit_no, CondCode::SetNe);
+    }
+    // `btst` takes a long: a byte would first be zero extended
+    let one = dag.get_constant(1, vt);
+    dag.get_node(ISD::And, vt, &[value, one])
+}
+
 /// `EmitTest`: the condition-code register of `op` against zero.
 fn emit_test(
     dag: &mut SelectionDAG,
@@ -1017,6 +1042,7 @@ fn lower_select(
             cond_value = lowered;
         }
     }
+    cond_value = look_past_boolean(dag, cond_value);
     let (code, flags) = if dag.opcode(cond_value) == m68kisd::SETCC {
         (dag.operand(cond_value, 0), dag.operand(cond_value, 1))
     } else {
@@ -1044,6 +1070,7 @@ fn lower_brcond(
             cond_value = lowered;
         }
     }
+    cond_value = look_past_boolean(dag, cond_value);
     let (code, flags) = if dag.opcode(cond_value) == m68kisd::SETCC {
         let (code, cmp) = (dag.operand(cond_value, 0), dag.operand(cond_value, 1));
         // A carry or overflow code reads the flags of the arithmetic itself.
