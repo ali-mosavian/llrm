@@ -1442,6 +1442,22 @@ fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_minsize_only() {
     assert!(!at_speed.contains("idiv") && at_speed.contains("sar"), "-O2: {at_speed}");
 }
 
+/// An unsigned 64-bit integer to `f32` or `f64` at m64 was `mov [rsp-16], rdi; fild; fadd [fudge + 4*sign]; fstp; movsd`: through the
+/// x87 and the stack, 38 B and a store-forward stall for `f64`, where the pin has an SSE convert of the halved value. DEVIATE
+/// UITOFP-F64: `cvtsi2sd` of the value, or of the halved one doubled.
+#[test]
+fn an_unsigned_64_bit_integer_to_float_is_an_sse_convert_at_m64() {
+    for (ty, convert) in [("double", "cvtsi2sd"), ("float", "cvtsi2ss")] {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+             define {ty} @f(i64 %x) {{\n  %r = uitofp i64 %x to {ty}\n  ret {ty} %r\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O1"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains("fild") && listing.contains(convert), "{ty}: {listing}");
+    }
+}
+
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
 /// llrm-llc refused the module with "calling convention 232", so no QCport
 /// module that calls qgl compiled.
