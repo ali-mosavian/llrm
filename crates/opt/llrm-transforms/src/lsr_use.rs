@@ -883,12 +883,6 @@ impl Cost {
                 let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
                 self.c.num_iv_muls += r.tti.lsr_written_step_multiplies(c.sext_value() as i64, bits);
             }
-            // DEVIATE LU21: the same addrec costs its derivation each trip
-            // (extend, scale, add the base); the target says how many base adds.
-            if r.as_written && !is_existing_phi(r.se, r.cx, reg) && r.se.match_affine_add_rec(reg).is_some() {
-                let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
-                self.c.num_base_adds += r.tti.lsr_written_derivation_adds(bits);
-            }
             // DEVIATE LU20: the loop as written keeps the bound of its exit
             // test next to the counter; the folded `{-bound,+,1}` counts one.
             if r.as_written
