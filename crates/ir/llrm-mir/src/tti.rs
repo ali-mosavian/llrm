@@ -1974,6 +1974,15 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin: whether [`Tti::narrows_counters`] also applies when the
+    /// function is not sized for bytes. A narrower counter is fewer bytes of
+    /// code but can cost clocks (a scaled byte index is a shift chain the
+    /// pointer recurrence did not need); a target that has not priced that
+    /// says no and narrows at `-Os` only.
+    fn narrows_counters_at_speed(&self) -> bool {
+        true
+    }
+
     /// Beyond the pin: whether a cycle through a phi whose values only matter
     /// at a narrower native width (read through `and` masks, `trunc`s and
     /// values known zero above it) is carried at that width (`narrowcycle`),
