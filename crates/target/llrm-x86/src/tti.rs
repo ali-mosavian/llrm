@@ -930,6 +930,10 @@ impl Tti for X86 {
         self.tuning.lftr_any_stride
     }
 
+    fn mul_chains_hot_at_size(&self) -> bool {
+        self.tuning.mul_chains_hot_at_size
+    }
+
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
     }
@@ -1062,6 +1066,17 @@ impl Tti for X86 {
 
     fn sinks_select_arms(&self) -> bool {
         self.tuning.sink_select_arms
+    }
+
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        self.tuning.prefixed_16_bit_counters
+    }
+
+    fn narrow_counter_is_taxed(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits == 16 && self.tuning.prefixed_16_bit_counters
     }
 
     fn inlines_variable_memcpy(&self) -> bool {

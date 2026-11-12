@@ -1296,6 +1296,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE MUL-HOT: see `Tuning::mul_chains_hot_at_size`.
+    fn mul_chains_hot_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
         false
@@ -2270,6 +2275,17 @@ pub trait Tti {
     /// table, `short i`). The pin sees only an extension of the counter's own
     /// recurrence, so the chain stays narrow and `LSR` skips it.
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE IND-PREFIX (beyond the pin; exit 2026-11-30): an integer
+    /// width `indvars_widens_narrow_counter_through_masks` also covers
+    /// although it is legal, because every operation on it pays more than the
+    /// register's width (the 486's operand-size prefix on 16 bits).
+    fn narrow_counter_is_taxed(
+        &self,
+        _bits: u32,
+    ) -> bool {
         false
     }
 
