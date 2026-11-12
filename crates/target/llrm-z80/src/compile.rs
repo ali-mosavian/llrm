@@ -711,6 +711,7 @@ fn reads_its_cell(inst: &Inst) -> bool {
         inst.kind,
         Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
     ) && matches!(inst.operands.get(2), Some(Operand::Frame(_)))
+        || matches!(inst.kind, Kind::Op("RELOAD8L"))
 }
 
 thread_local! {
