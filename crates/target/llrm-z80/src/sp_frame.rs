@@ -10,7 +10,9 @@
 //! instruction may read it.
 //!
 //! The form stays only where the function is no larger and no slower, loops weighted, than with
-//! IX (`price_emitted`).
+//! IX (`price_emitted`). A label reached through a jump table must lie at the depth of the dispatch.
+//! The caller pops stack arguments (`cleanup = "caller"`), so a call leaves the depth as it found it; the epilogue
+//! is followed by `ret` or a tail `jp`, neither of which reads flags, so `add iy,sp` there needs no carry guard.
 //!
 //! DEVIATE: a pass over the printed lines, not a frame lowering that knows its own form. Pin
 //! counterpart: `X86FrameLowering::hasFP` and `eliminateFrameIndex` choose between a frame
@@ -123,6 +125,9 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
     // the displacement the live IY stands for, if any
     let mut base: Option<i64> = None;
     let mut label_depth: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    // the depth at each `jp (rr)` and the labels of the `.dw` entries it may reach
+    let mut dispatches: Vec<i64> = Vec::new();
+    let mut entries: Vec<&str> = Vec::new();
     let mut at = 0;
     while at < lines.len() {
         let line = &lines[at];
@@ -143,12 +148,20 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
             continue;
         }
         // a jump records the depth its target must have
-        if matches!(mnemonic(text), "jp" | "jr") {
+        if matches!(mnemonic(text), "jp" | "jr" | "djnz") {
             let target = text.rsplit([' ', ',']).next().unwrap_or("");
-            if label_depth.get(target).is_some_and(|depth| *depth != pushed) {
-                return None;
+            if target.starts_with('(') {
+                // a jump table's dispatch: its entries are checked at the end
+                dispatches.push(pushed);
+            } else {
+                if label_depth.get(target).is_some_and(|depth| *depth != pushed) {
+                    return None;
+                }
+                label_depth.entry(target).or_insert(pushed);
             }
-            label_depth.entry(target).or_insert(pushed);
+        }
+        if let Some(target) = text.strip_prefix(".dw ") {
+            entries.push(target);
         }
         if text == "ld sp, ix" && texts.get(at + 1).copied().flatten() == Some("pop ix") {
             if pushed < 0 || pushed % 2 != 0 {
@@ -239,6 +252,12 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
         out.push(Line::Inst(text));
         at += 1;
     }
+    // a label reached through a table is entered at the depth of the dispatch
+    for entry in entries {
+        if !label_depth.get(entry).is_some_and(|depth| dispatches.iter().all(|dispatch| dispatch == depth)) {
+            return None;
+        }
+    }
     Some(out)
 }
 
@@ -278,6 +297,32 @@ mod tests {
     #[test]
     fn the_saved_ix_and_the_return_address_keep_the_ix_frame() {
         let lines = texts(&["push ix", "ld ix, #0", "add ix, sp", "ld c, 2(ix)", "ld sp, ix", "pop ix", "ret"]);
+        assert!(rewritten(&lines).is_none());
+    }
+
+    /// A case block that pushes a call's arguments and returns through `ld sp, ix` leaves the depth high; the next
+    /// label, reached only through the table, is entered at the dispatch's depth.
+    #[test]
+    fn a_label_reached_through_a_table_at_another_depth_keeps_the_ix_frame() {
+        let lines = vec![
+            inst("push ix"),
+            inst("ld ix, #0"),
+            inst("add ix, sp"),
+            inst("jp (hl)"),
+            Line::Label("A".to_owned()),
+            inst("push hl"),
+            inst("call g"),
+            inst("ld sp, ix"),
+            inst("pop ix"),
+            inst("ret"),
+            Line::Label("B".to_owned()),
+            inst("ld sp, ix"),
+            inst("pop ix"),
+            inst("ret"),
+            Line::Label("JT".to_owned()),
+            inst(".dw A"),
+            inst(".dw B"),
+        ];
         assert!(rewritten(&lines).is_none());
     }
 
