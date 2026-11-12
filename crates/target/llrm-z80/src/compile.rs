@@ -519,7 +519,7 @@ fn cheaper(
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
+    let priced = |(bytes, clocks): (u32, u64)| clocks + u64::from(bytes) * crate::tti::SPEED_MILLICLOCKS_PER_BYTE as u64 / 1000;
     if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
 }
 

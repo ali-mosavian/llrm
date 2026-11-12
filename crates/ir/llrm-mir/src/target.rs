@@ -97,6 +97,10 @@ pub struct Tuning {
     /// finished object is smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
+    /// DEVIATE UNROLL-OS-TRIAL-STRICT (owner llrm-target-x86-m64, exit 2026-11-24): the -Os unroll trial is kept
+    /// only where the object is smaller, never for a few bytes a function that the code runs less
+    /// (`trial::keeps_unroll_at_size`): bytes are the one strict axis at -Os. False: m32's rule.
+    pub unroll_trial_bytes_strict: bool,
     /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
     /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
     /// carries more bytes than its units where an argument is several words (x86-m16:
@@ -397,6 +401,8 @@ pub struct Tuning {
     pub rotation_trial_at_size: bool,
     /// DEVIATE ROTATION-HOT: see `Tti::rotation_hot_at_size`.
     pub rotation_hot_at_size: bool,
+    /// `Tti::rotation_hot_bytes_per_loop`.
+    pub rotation_hot_bytes_per_loop: i64,
     /// DEVIATE GVN-PRE-OPTSIZE: see `Tti::load_pre_off_at_size`.
     pub load_pre_off_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
@@ -550,6 +556,7 @@ impl Tuning {
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
+        unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
         inline_never_grows_without_rate: false,
@@ -613,6 +620,7 @@ impl Tuning {
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
         rotation_hot_at_size: false,
+        rotation_hot_bytes_per_loop: 4,
         load_pre_off_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
