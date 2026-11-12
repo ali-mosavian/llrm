@@ -761,6 +761,10 @@ impl Tti for X86 {
         self.tuning.pops_arguments_at_size
     }
 
+    fn libc_memcpy(&self) -> bool {
+        self.tuning.libc_memcpy
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }

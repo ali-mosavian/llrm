@@ -769,6 +769,7 @@ impl LoopIdiomRecognize {
         // 2026-11-20.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
+            && !run.tti.is_some_and(|tti| tti.libc_memcpy())
         {
             let blocks = run.cur_loop.get_blocks();
             if !crate::loopidioms::variable_copy_pays(
