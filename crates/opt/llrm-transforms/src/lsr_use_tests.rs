@@ -95,6 +95,7 @@ fn rated_by(
         as_written: false,
         other_register_units: 0,
         size: false,
+        bytes_counted: false,
         across_call: false,
     };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
@@ -235,6 +236,7 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
             as_written: false,
             other_register_units: 0,
             size: false,
+            bytes_counted: false,
             across_call: false,
         };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
@@ -456,6 +458,7 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
                 as_written: false,
                 other_register_units: 0,
                 size: false,
+                bytes_counted: false,
                 across_call: false,
             };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
@@ -608,6 +611,7 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
                 as_written: false,
                 other_register_units: 0,
                 size: false,
+                bytes_counted: false,
                 across_call: false,
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
@@ -641,6 +645,7 @@ fn a_zero_ending_counter_pays_the_targets_zero_test() {
                 as_written: false,
                 other_register_units: 0,
                 size: false,
+                bytes_counted: false,
                 across_call: false,
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
@@ -806,6 +811,7 @@ fn the_loop_as_written_pays_for_the_multiply_that_forms_a_recurrence() {
                 as_written,
                 other_register_units: 0,
                 size: false,
+                bytes_counted: false,
                 across_call: false,
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
@@ -844,6 +850,7 @@ fn the_loop_as_written_keeps_the_exit_bound_live() {
                 as_written,
                 other_register_units: 0,
                 size: false,
+                bytes_counted: false,
                 across_call: false,
             };
             let f = Formula { base_regs: vec![reg], has_base_reg: true, ..Formula::default() };

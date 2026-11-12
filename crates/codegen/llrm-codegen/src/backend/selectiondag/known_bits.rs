@@ -122,8 +122,20 @@ pub fn known_bits(
     walk(dag, value, 0)
 }
 
+/// `computeKnownBits(Op, Depth)`: the walk starts `depth` operands down, so it
+/// stops at `MaxRecursionDepth` sooner (the pin's callers pass their own depth).
+pub fn known_bits_at(
+    dag: &SelectionDAG,
+    value: SDValue,
+    depth: u32,
+) -> KnownBits {
+    walk(dag, value, depth)
+}
+
 #[cfg(test)]
 thread_local! {
+    /// How many values `known_bits` looked at.
+    pub(super) static KNOWN_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many values `num_sign_bits` looked at (what a test counts to see the
     /// search is bounded by `MAX_DEPTH`).
     pub(super) static SIGN_BITS_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -143,6 +155,8 @@ fn walk(
     value: SDValue,
     depth: u32,
 ) -> KnownBits {
+    #[cfg(test)]
+    KNOWN_VISITS.with(|visits| visits.set(visits.get() + 1));
     let vt = dag.value_type(value);
     if !vt.is_integer() {
         return KnownBits::unknown(1);
