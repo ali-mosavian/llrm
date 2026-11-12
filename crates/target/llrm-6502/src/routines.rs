@@ -63,12 +63,16 @@ pub fn aligned_variant(name: &str) -> Option<&'static str> {
         .map(|(_, aligned)| aligned.as_str())
 }
 
-/// The share of its clocks a module must save, in percent, for each percent of its bytes the aligned
-/// divides add (`[divide] percent_per_percent`).
-pub fn aligned_divide_percent() -> u64 {
+/// The share of its clocks a module must save, in percent, for each percent of its bytes a speed routine
+/// adds at size (`[share] percent_per_percent`).
+pub fn share_percent() -> u64 {
     let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
-    let table = doc.get("divide").and_then(|t| t.as_table()).expect("a [divide] table");
-    table.get("percent_per_percent").and_then(|v| v.as_integer()).and_then(|v| u64::try_from(v).ok()).expect("divide.percent_per_percent is a count")
+    let table = doc.get("share").and_then(|t| t.as_table()).expect("a [share] table");
+    table
+        .get("percent_per_percent")
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u64::try_from(v).ok())
+        .expect("share.percent_per_percent is a count")
 }
 
 /// What an aligned divide call saves over a compact one, in clocks (`[divide]`).

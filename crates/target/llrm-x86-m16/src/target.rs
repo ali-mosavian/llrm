@@ -300,6 +300,11 @@ impl Machine for Dos {
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
             price_fills: true,
+            // DEVIATE LSR-SIZE (owner m16, exit 2026-11-24): at -Os LSR orders formulae by
+            // x86 bytes, as m32 does (`Tuning::lsr_size_order`). A global's base with the
+            // field offset in the displacement (`[bx+4]`) over a biased base (`_V+4`)
+            // saved 3 to 6 B in 11 -Os objects, none larger.
+            lsr_size_order: true,
             // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a constant weighs
             // its bytes at the rate against the multiply-high sequence; the pin's
             // `isIntDivCheap` is `minsize` alone

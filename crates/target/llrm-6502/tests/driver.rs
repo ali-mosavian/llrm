@@ -2017,7 +2017,9 @@ fn a_signed_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_sp
          \x20 %r = srem i16 %a, %b\n  %t = lshr i16 %r, 8\n  %u = xor i16 %r, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
     );
     let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(size.contains("jsr __divhi3c") && size.contains("jsr __modhi3c"), "{size}");
+    // the compact bit loop, or the aligned one where the module's share of clocks pays for it
+    let compact = |routine: &str| size.contains(&format!("jsr {routine}c")) || size.contains(&format!("jsr {routine}a"));
+    assert!(compact("__divhi3") && compact("__modhi3"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(speed.contains("jsr __divhi3\n") && speed.contains("jsr __modhi3\n"), "{speed}");
 }
@@ -2034,7 +2036,7 @@ fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
          \x20 %t = lshr i16 %s, 8\n  %u = xor i16 %s, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
     );
     let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(size.contains("jsr __udivhi3c"), "{size}");
+    assert!(size.contains("jsr __udivhi3c") || size.contains("jsr __udivhi3a"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
     // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B = 0xF7
@@ -2613,7 +2615,8 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
 /// of multiplier a call): mul_constants 20.7M clocks against 16.8M, and
 /// overflow_builtins 720k against 426k with `__mulsi3_fast`. A module links
 /// the speed routine where its multiply sites count three runs
-/// (`hotmultiply`): a loop, or a function called from one; -Os never does.
+/// (`hotmultiply`): a loop, or a function called from one; at -Os, where the share of the module's
+/// clocks it saves is worth the share of its bytes it adds (`a_module_takes_the_speed_multiply_...`).
 #[test]
 fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
     let looped = module(
@@ -2624,7 +2627,7 @@ fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
     let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
     assert!(text.contains("jsr __mulsi3_fast\n"), "a loop at -O2:\n{text}");
     let small = assembly(&looped, &Request::new(Level::Os)).unwrap();
-    assert!(small.contains("__mulsi3") && !small.contains("_fast"), "a loop at -Os:\n{small}");
+    assert!(small.contains("jsr __mulsi3_fast\n"), "a loop that is the whole module at -Os:\n{small}");
 }
 
 /// `__builtin_mul_overflow` in a loop is `llvm.umul.with.overflow.i32`, no `mul`:
@@ -2865,8 +2868,9 @@ fn a_local_past_255_bytes_from_rc0_is_still_reached() {
 /// divide once, cold (`compound_assignment_types`: +139 B for -9 clocks). A
 /// module links it only where its division sites run 3 times (`hotdivision`): in a loop,
 /// or in a function called from one. Elsewhere the routine with the small wide
-/// path (the compact one is 3195 clocks slower on one call); -Os never has a
-/// speed one.
+/// path (the compact one is 3195 clocks slower on one call); -Os never has the wide one, and the small one
+/// where the module's share of clocks pays for its bytes (`a_module_takes_the_speed_divide_...`) or where
+/// it is smaller than the compact routine, as the signed pair is.
 #[test]
 fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
     let cold = module("define i32 @f(i32 %a, i32 %b) {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}");
@@ -2890,14 +2894,14 @@ fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
         let text = assembly(ir, &Request::new(Level::O2)).unwrap();
         assert!(text.contains("jsr __modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
         let small = assembly(ir, &Request::new(Level::Os)).unwrap();
-        assert!(small.contains("__modsi3") && !small.contains("_fast"), "{what} at -Os:\n{small}");
+        assert!(small.contains("jsr __modsi3_fast_small\n"), "{what} at -Os:\n{small}");
     }
 }
 
 /// A long division whose divisor is known to be a byte (a constant, or a
 /// zero-extended byte) called the general routine and linked the 141 B wide
 /// path with it: `a % 5` cost +141 B for nothing. At speed it calls the byte
-/// entry; a divisor of any width, and -Os, keep their routines.
+/// entry; a divisor of any width keeps its routine, and -Os never links the wide path.
 #[test]
 fn a_long_division_by_a_known_byte_calls_the_byte_entry_at_speed() {
     for (opcode, routine) in [("udiv", "__udivsi3"), ("sdiv", "__divsi3"), ("urem", "__umodsi3"), ("srem", "__modsi3")]
@@ -2915,7 +2919,7 @@ fn a_long_division_by_a_known_byte_calls_the_byte_entry_at_speed() {
             let text = assembly(ir, &Request::new(Level::O2)).unwrap();
             assert!(text.contains(&format!("{routine}_fast_byte")), "{opcode} by {what}:\n{text}");
             let small = assembly(ir, &Request::new(Level::Os)).unwrap();
-            assert!(!small.contains("_byte") && !small.contains("_fast"), "{opcode} by {what} at -Os:\n{small}");
+            assert!(!small.contains(&format!("{routine}_fast\n")), "{opcode} by {what} at -Os:\n{small}");
         }
         let text = assembly(&by_word, &Request::new(Level::O2)).unwrap();
         assert!(
@@ -3193,4 +3197,66 @@ fn a_module_takes_the_aligned_divide_where_the_clocks_they_save_are_its_own() {
     let once = module("define i16 @g(i16 %a, i16 %b) {\n  %r = srem i16 %a, %b\n  ret i16 %r\n}");
     let text = assembly(&once, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__modhi3a"), "the only work of the module: {text}");
+}
+
+/// At -Os the long multiply is the 32-step compact walk (mul_constants: 42.0M clocks in 200-trip loops, llvm-mos
+/// 13.6M); `__mulsi3_fast` stops at the multiplier's last byte and is 19 B larger, linked once. A module takes
+/// it where the share of its clocks it saves is worth the share of its bytes it adds: multiplies in its loops,
+/// not one beside loops of other work.
+#[test]
+fn a_module_takes_the_speed_multiply_where_the_clocks_it_saves_are_its_own() {
+    let padding: String = (0..60).map(|k| format!("  store volatile i32 %a, ptr @g{}\n", k % 3)).collect();
+    let multiplies = |inner: &str, outer: &str| {
+        module(&format!(
+            "@g0 = global i32 0\n@g1 = global i32 0\n@g2 = global i32 0\n\
+             define i32 @f(i32 %a, i32 %b, i16 %n, i16 %m) {{\nentry:\n  {padding}  br label %outer\n\
+             outer:\n  %i = phi i16 [ 0, %entry ], [ %i1, %inner_end ]\n  %s = phi i32 [ 0, %entry ], [ %t3, %inner_end ]\n  br label %inner\n\
+             inner:\n  %j = phi i16 [ 0, %outer ], [ %j1, %inner ]\n  %t = phi i32 [ %s, %outer ], [ %t3, %inner ]\n  \
+             %x = add i32 %t, %a\n  {inner}\n  %t3 = add i32 %r2, 7\n  \
+             %j1 = add nuw i16 %j, 1\n  %c = icmp ult i16 %j1, %m\n  br i1 %c, label %inner, label %inner_end\n\
+             inner_end:\n  %i1 = add nuw i16 %i, 1\n  %o = icmp ult i16 %i1, %n\n  br i1 %o, label %outer, label %out\n\
+             out:\n  {outer}\n  ret i32 %r3\n}}"
+        ))
+    };
+    let in_loop = multiplies("%r1 = mul i32 %x, %b\n  %r2 = mul i32 %r1, %a", "%r3 = add i32 %t3, 1");
+    let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("__mulsi3_fast"), "{text}");
+    let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
+    let beside = multiplies(
+        &format!("{work}%r2 = shl i32 %x, 3"),
+        "%p1 = mul i32 %t3, %b\n  %p2 = mul i32 %p1, %a\n  %p3 = mul i32 %p2, %b\n  %r3 = mul i32 %p3, %t3",
+    );
+    let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("jsr __mulsi3\n") && !text.contains("__mulsi3_fast"), "{text}");
+}
+
+/// At -Os a long divide is the compact 32-step walk (loop_interchange: 13.9M clocks, llvm-mos 3.3M); the speed
+/// routines start at the quotient's first bit and are larger. A module takes them where the share of its
+/// clocks they save is worth the share of its bytes they add: divides in its loops, not one beside loops of
+/// other work.
+#[test]
+fn a_module_takes_the_speed_divide_where_the_clocks_it_saves_are_its_own() {
+    let padding: String = (0..60).map(|k| format!("  store volatile i32 %a, ptr @g{}\n", k % 3)).collect();
+    let divides = |inner: &str, outer: &str| {
+        module(&format!(
+            "@g0 = global i32 0\n@g1 = global i32 0\n@g2 = global i32 0\n\
+             define i32 @f(i32 %a, i32 %b, i16 %n, i16 %m) {{\nentry:\n  {padding}  br label %outer\n\
+             outer:\n  %i = phi i16 [ 0, %entry ], [ %i1, %inner_end ]\n  %s = phi i32 [ 0, %entry ], [ %t3, %inner_end ]\n  br label %inner\n\
+             inner:\n  %j = phi i16 [ 0, %outer ], [ %j1, %inner ]\n  %t = phi i32 [ %s, %outer ], [ %t3, %inner ]\n  \
+             %x = add i32 %t, %a\n  {inner}\n  %t3 = add i32 %r2, 7\n  \
+             %j1 = add nuw i16 %j, 1\n  %c = icmp ult i16 %j1, %m\n  br i1 %c, label %inner, label %inner_end\n\
+             inner_end:\n  %i1 = add nuw i16 %i, 1\n  %o = icmp ult i16 %i1, %n\n  br i1 %o, label %outer, label %out\n\
+             out:\n  {outer}\n  ret i32 %r3\n}}"
+        ))
+    };
+    let in_loop = divides("%r1 = urem i32 %x, %b\n  %r2 = urem i32 %r1, %a", "%r3 = add i32 %t3, 1");
+    let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("jsr __umodsi3_fast_small"), "{text}");
+    let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
+    let beside = divides(
+        &format!("{work}%r2 = shl i32 %x, 3"),
+        "%p1 = urem i32 %t3, %b\n  %p2 = urem i32 %p1, %a\n  %p3 = urem i32 %p2, %b\n  %r3 = urem i32 %p3, %t3",
+    );
+    let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("jsr __umodsi3\n") && !text.contains("_fast"), "{text}");
 }

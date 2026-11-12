@@ -92,6 +92,20 @@ thread_local! {
     /// Whether a long multiply calls `__mulsi3_fast` (see
     /// [`with_fast_multiply`]).
     static FAST_MULTIPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a long division calls the speed routine at size too (see [`with_size_fast_division`]).
+    static SIZE_FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the long divisions calling the speed routines at size: a module asks for them where the
+/// clocks they save are worth the bytes (`select::module_text`).
+pub fn with_size_fast_division<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = SIZE_FAST_DIVISION.with(|a| a.replace(allowed));
+    let result = f();
+    SIZE_FAST_DIVISION.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the speed multiply called or not: 19 bytes linked once, a module
@@ -4028,7 +4042,10 @@ fn emit_with<const STACK: bool>(
                     };
                     let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
                     let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
-                    let entry = if !speed {
+                    let entry = if !speed
+                        && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
+                        && !(division && SIZE_FAST_DIVISION.with(|f| f.get()))
+                    {
                         ""
                     } else if division && byte {
                         "_fast_byte"
