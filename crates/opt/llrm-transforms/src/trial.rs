@@ -178,6 +178,16 @@ pub fn keeps_at_size(added: i64) -> bool {
     added < 0
 }
 
+/// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is smaller, or it grows by
+/// at most `ROTATION_HOT_BYTES_PER_LOOP` for each function the trial took and the code runs less.
+pub fn keeps_unroll_at_size(
+    saved: i64,
+    added: i64,
+    functions: usize,
+) -> bool {
+    added < 0 || (saved > 0 && added <= ROTATION_HOT_BYTES_PER_LOOP * functions as i64)
+}
+
 /// The names of the functions whose finished bodies differ between two modules
 /// of one source (one that only one of them defines counts).
 pub fn differing(
