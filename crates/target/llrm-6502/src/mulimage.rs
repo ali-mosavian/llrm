@@ -319,3 +319,29 @@ pub fn pays_by_share(
     let percent = u128::from(crate::routines::share_percent());
     growth <= 0 || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
 }
+
+/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones those call.
+pub fn image_of_texts(
+    names: &[String],
+    texts: &[String],
+) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for text in texts {
+        for line in text.lines() {
+            let code = line.trim();
+            let Some(target) = code.strip_prefix("jsr ").or_else(|| code.strip_prefix("jmp ")).map(str::trim) else {
+                continue;
+            };
+            if names.iter().all(|one| one != target) && crate::RUNTIME.contains(&format!("\n{target}:")) {
+                found.insert(target.to_owned());
+            }
+        }
+    }
+    links_callees(&mut found);
+    found
+}
+
+/// The bytes the routines add to an image.
+pub fn image_bytes(routines: &std::collections::BTreeSet<String>) -> i64 {
+    routines.iter().map(|one| i64::from(library_bytes(one))).sum()
+}

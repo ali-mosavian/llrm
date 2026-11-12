@@ -195,6 +195,25 @@ pub fn module_text(
             }
         }
     }
+    // at size the long divisions are the compact 32-step walk; the speed family with the small wide path
+    // stops at the quotient's first bit: the module's choice by the share of its clocks it saves
+    let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
+    let compact_division = |text: &str| {
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+    };
+    if size && texts.iter().any(|text| compact_division(text)) {
+        let mut faster = texts.clone();
+        for at in 0..faster.len() {
+            if compact_division(&faster[at]) {
+                faster[at] = alloc::with_size_fast_division(true, || {
+                    alloc::with_fast_division(false, || function_text(module, parts[at].0, parts[at].1))
+                })?;
+            }
+        }
+        if fast_division_pays_at_size(module, parts, &texts, &faster)? {
+            texts = faster;
+        }
+    }
     // the speed multiply is 19 bytes linked once: a module whose multiplies
     // are cold keeps the compact routine
     let calls_multiply = |text: &str| text.contains(" __mulsi3\n");
@@ -946,7 +965,18 @@ fn fast_multiply_pays_at_size(
     parts: &[(&str, &Selection)],
     texts: &[String],
 ) -> Result<bool, String> {
-    let Some((_, first)) = parts.first() else { return Ok(false) };
+    let (clocks, bytes) = priced(module, parts, texts)?;
+    let saved = (crate::hotmultiply::runs(module) * crate::hotmultiply::SAVED_CLOCKS) as u64;
+    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::FAST_BYTES as i64), clocks, bytes))
+}
+
+/// The module as it stands, in estimated clocks and bytes (`weights::run_cost`).
+fn priced(
+    module: &Module,
+    parts: &[(&str, &Selection)],
+    texts: &[String],
+) -> Result<(u64, u64), String> {
+    let Some((_, first)) = parts.first() else { return Ok((0, 0)) };
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
     let weights: Vec<Vec<u64>> = names
@@ -956,7 +986,24 @@ fn fast_multiply_pays_at_size(
             function.map_or_else(Vec::new, |function| crate::weights::block_weights(module, function, &layout))
         })
         .collect();
-    let (clocks, bytes) = crate::weights::run_cost(first.cpu, &names, texts, &weights)?;
-    let saved = (crate::hotmultiply::runs(module) * crate::hotmultiply::SAVED_CLOCKS) as u64;
-    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::FAST_BYTES as i64), clocks, bytes))
+    crate::weights::run_cost(first.cpu, &names, texts, &weights)
+}
+
+/// At size the speed long divisions (the small wide path, bytes by the image they link) are the module's
+/// choice by the share of its clocks they save against the share of its bytes they add.
+///
+/// DEVIATE 6502-DIV-OS (owner llrm-target-6502, exit 2026-11-24): the pin's `__udivXi3` is one routine, and
+/// it starts at the quotient's first bit. loop_interchange -Os ran 13.9M clocks against llvm-mos's 3.3M.
+fn fast_division_pays_at_size(
+    module: &Module,
+    parts: &[(&str, &Selection)],
+    compact: &[String],
+    faster: &[String],
+) -> Result<bool, String> {
+    let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
+    let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, faster))
+        - crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
+    let (clocks, bytes) = priced(module, parts, compact)?;
+    let saved = (crate::hotdivision::runs(module) * crate::hotdivision::SAVED_AT_SIZE) as u64;
+    Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }
