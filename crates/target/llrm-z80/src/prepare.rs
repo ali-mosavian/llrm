@@ -182,8 +182,42 @@ pub fn mark_word_chains(module: &mut Module) {
     }
 }
 
-/// The attribute that marks a function with a `memset` of a constant count of two or more: it is also
-/// selected with each such fill an inline `ldir` fill (`driver::selections_with_alternatives`).
+/// The attribute that marks a function with a divide or remainder of a long or
+/// a long long: it is also selected with the speed routines in place of the
+/// size ones (`driver::selections_with_alternatives`).
+pub const WIDE_DIVIDE: &str = "llrm-wdiv";
+
+/// Marks every function with a body that divides or takes a remainder of an
+/// `i32` or an `i64`.
+pub fn mark_wide_divides(module: &mut Module) {
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, _, function)| {
+            function
+                .layout()
+                .iter()
+                .flat_map(|&block| function.iter_block(block))
+                .map(|inst| function.instruction(inst))
+                .any(|instruction| {
+                    matches!(
+                        instruction.opcode,
+                        Opcode::Binary(BinaryOp::SDiv | BinaryOp::UDiv | BinaryOp::SRem | BinaryOp::URem)
+                    ) && matches!(module.context.types.int_bits(instruction.ty), Some(32 | 64))
+                })
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(WIDE_DIVIDE.into()));
+        }
+    }
+}
+
+/// The attribute that marks a function with a `memset` of a constant count of
+/// two or more: it is also selected with each such fill an inline `ldir` fill
+/// (`driver::selections_with_alternatives`).
 pub const CONSTANT_FILL: &str = "llrm-fill";
 
 /// Marks every function with a body that calls `llvm.memset` with a constant count of two or more. The

@@ -420,6 +420,12 @@ impl llrm_target::Target for M64 {
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
+                            // DEVIATE GVN-PRE-OPTSIZE, MERGEFUNC-OS, REP-MOVS-OS (owner llrm-target-x86-m64,
+                            // exit 2026-11-24): m32's -Os entries, see their `Tuning` fields. 20 -Os cells
+                            // of the corpus shrink, none grows.
+                            load_pre_off_at_size: true,
+                            merge_functions_at_size: true,
+                            rep_movs_at_size: true,
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,

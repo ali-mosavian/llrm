@@ -7,6 +7,9 @@
 //! instruction reads wider than 2 bytes never needs its high half, however
 //! wide its definition is.
 //!
+//! [`_zero_extended`] lists the values every definition of which is a write the
+//! target extends to the whole register, so their upper bytes are zero.
+//!
 //! # Used by
 //! The greedy allocator's inputs (`greedy::shadow`), which size each value's
 //! register and decide which values need only a half register.
@@ -14,6 +17,8 @@
 //! # Example
 //! `v1 := mov32 [bp+8]; v2 := mov16 v1`: `v1` is named at 4 bytes and 2, so
 //! [`_widest`] is 4; only 2 bytes of it are read, so [`_widest_read`] is 2.
+
+use std::sync::Arc;
 
 use crate::model::ir::{self, Loc};
 use crate::model::lir::{Insn, LirBody};
@@ -69,6 +74,42 @@ pub fn _widest_read(body: &LirBody) -> IndexMap<u32, u32> {
     out
 }
 
+/// The values whose every definition writes them as a plain destination of a
+/// width the target extends to the value's whole width (`zeroes(written,
+/// whole)`: a dword write zeroes the upper half of a 64-bit register). Their
+/// upper bytes are zero wherever the value lives, so a copy of the low bytes
+/// is the whole value.
+pub fn _zero_extended<'a>(
+    insns: impl Iterator<Item = &'a Arc<Insn>> + Clone,
+    widest: &IndexMap<u32, u32>,
+    zeroes: &dyn Fn(u32, u32) -> bool,
+) -> crate::support::hash::HashSet<u32> {
+    let mut out: crate::support::hash::HashSet<u32> =
+        widest.iter().filter(|(_, whole)| **whole > 1).map(|(value, _)| *value).collect();
+    for one in insns.clone() {
+        for &value in &one.defines {
+            let Some(&whole) = widest.get(&value) else { continue };
+            let plain = one.group.is_none()
+                && !one.partial_defs.contains(&value)
+                && !one.def_lanes.iter().any(|(lane, _)| *lane == value)
+                && !one.requires.iter().chain(&one.delivers).any(|(held, _)| held.value == value)
+                && one.what.as_ref().is_some_and(|what| {
+                    matches!(
+                        what.dests.iter().find(|loc| matches!(loc, Loc::Held(held) if held.value == value)),
+                        Some(Loc::Held(held)) if held.offset == 0 && held.width < whole && zeroes(held.width, whole)
+                    )
+                });
+            if !plain {
+                out.remove(&value);
+            }
+        }
+    }
+    // A value no instruction defines (an argument) is not known to be zero.
+    let defined: crate::support::hash::HashSet<u32> = insns.flat_map(|one| one.defines.iter().copied()).collect();
+    out.retain(|value| defined.contains(value));
+    out
+}
+
 /// Each (value, width) an instruction names.
 pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
     one.what
@@ -106,5 +147,30 @@ mod tests {
         let named: Vec<(u32, u32)> = _named_widths(&copy).collect();
         assert!(named.contains(&(1, 2)), "the pair is two bytes wide there: {named:?}");
         assert!(named.contains(&(2, 1)), "the byte stays one: {named:?}");
+    }
+
+    fn write(
+        name: &str,
+        value: u32,
+        width: u32,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some(name.into()),
+            dests: vec![Loc::Held(Held { value, width, offset: 0 })],
+            sources: Vec::new(),
+            ..Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![value], Vec::new()))
+    }
+
+    /// `v1` is set by `mov r32, 1` only and read whole; `v2` also by a
+    /// qword write. The jpeg_single spill of `v1` took 8 bytes (+48 B in all).
+    #[test]
+    fn test_a_value_set_only_by_dword_writes_is_zero_extended() {
+        let insns = [write("mov", 1, 4), write("add", 1, 4), write("mov", 2, 4), write("mov", 2, 8)];
+        let widest: IndexMap<u32, u32> = [(1, 8), (2, 8)].into_iter().collect();
+        let zero = _zero_extended(insns.iter(), &widest, &|written, whole| written == 4 && whole == 8);
+        assert!(zero.contains(&1), "{zero:?}");
+        assert!(!zero.contains(&2), "a qword write sets the upper half: {zero:?}");
     }
 }

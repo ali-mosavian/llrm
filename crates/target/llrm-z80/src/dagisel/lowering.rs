@@ -50,7 +50,10 @@ pub mod cond {
     pub const C: u128 = 3;
 }
 
-pub fn target_lowering() -> TargetLowering {
+/// `speed_routines`: the long divides and the variable 64-bit shifts keep the
+/// speed routines in a function tuned for size too (`pipeline::SPEED_ROUTINES`,
+/// the second selection `compile::decomposed_functions` prices).
+pub fn target_lowering(speed_routines: bool) -> TargetLowering {
     use ISD::*;
     let mut tl = TargetLowering::empty(
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_narrow_library_shift(),
@@ -167,7 +170,9 @@ pub fn target_lowering() -> TargetLowering {
     }
     // the 64-bit shifts have a smaller routine for a function tuned for size (a bit at a time: 101 B against 189)
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__s_ashldi3", "__s_lshrdi3", "__s_ashrdi3"]) {
-        tl.set_size_variable_libcall_name(op, MVT::I64, name);
+        if !speed_routines {
+            tl.set_size_variable_libcall_name(op, MVT::I64, name);
+        }
     }
     tl.set_size_shift_call(8, 10);
     // the long divide has a smaller routine for a function tuned for size
@@ -175,7 +180,9 @@ pub fn target_lowering() -> TargetLowering {
     for (op, name) in
         [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divsi3", "__s_udivsi3", "__s_modsi3", "__s_umodsi3"])
     {
-        tl.set_size_libcall_name(op, MVT::I32, name);
+        if !speed_routines {
+            tl.set_size_libcall_name(op, MVT::I32, name);
+        }
     }
     // a word divide and remainder of the same operands are one call too
     // (`lower_divrem_word`)
@@ -189,14 +196,18 @@ pub fn target_lowering() -> TargetLowering {
     for (op, name, small) in [(SDivRem, "__divremsi4", "__s_divremsi4"), (UDivRem, "__udivremsi4", "__s_udivremsi4")] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
         tl.set_libcall_name(op, MVT::I32, name);
-        tl.set_size_libcall_name(op, MVT::I32, small);
+        if !speed_routines {
+            tl.set_size_libcall_name(op, MVT::I32, small);
+        }
     }
     // the long long divide has a smaller routine (one step per dividend bit)
     // for a function tuned for size
     for (op, name) in
         [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divdi3", "__s_udivdi3", "__s_moddi3", "__s_umoddi3"])
     {
-        tl.set_size_libcall_name(op, MVT::I64, name);
+        if !speed_routines {
+            tl.set_size_libcall_name(op, MVT::I64, name);
+        }
     }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
