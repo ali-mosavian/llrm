@@ -178,6 +178,13 @@ pub fn lowered_for(
     lowered(text, cpu, level, None, &Policy::default())
 }
 
+/// The unrolled size, in the unroll units, of the refused loops of a module
+/// above which -Os does not compile it again: the second compile is the
+/// module's whole mid-end. Over the corpus (116 of 434 cells run the trial,
+/// 34 keep it) none of the 11 modules above 700 kept it, and they took 9.9 of
+/// the 29.4 s the trial added (run/fixed_point 3,628 units: 0.95 s -> 3.7 s).
+const TRIAL_MAX_UNITS: u64 = 700;
+
 /// [`lowered_once`], then at -Os DEVIATE UNROLL-OS-TRIAL (the shared
 /// `llrm_transforms::trial`, as x86's driver): the module compiled again with
 /// the loops the -Os threshold refused unrolled, kept if its functions that
@@ -193,13 +200,13 @@ fn lowered(
     use llrm_transforms::trial;
     let _ = trial::take();
     let base = lowered_once(text, cpu, level, dump, policy)?;
-    let (noted, _) = trial::take();
+    let (noted, units) = trial::take();
     let limit = if matches!(level, Level::Os | Level::Oz) {
         M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
     } else {
         None
     };
-    let Some(limit) = limit.filter(|_| !noted.is_empty()) else { return Ok(base) };
+    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(base) };
     let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(base) };
     let _ = trial::take();
     let cut = trial::differing(&base, &other);
