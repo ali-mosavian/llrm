@@ -1013,6 +1013,22 @@ fn test_a_branching_recursion_called_once_is_not_cloned_down_a_chain() {
     assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
 }
 
+/// `down` that also calls itself for `row + 2` shares subproblems between its
+/// clones (`fib(n - 1)`, `fib(n - 2)`): no chain is credited, as for fib on m64
+/// (-O2 +50% clk) and arm64 frames (+30 k) when the calls to one callee ended
+/// up in different clones.
+#[test]
+fn test_a_recursion_that_calls_itself_for_two_contexts_is_credited_no_chain() {
+    let text = DOWN.replace(
+        "  call void @down(i16 %r1, i16 %e)\n",
+        "  call void @down(i16 %r1, i16 %e)\n  %r2 = add nsw i16 %row, 2\n  call void @down(i16 %r2, i16 %e)\n",
+    );
+    assert_ne!(text, DOWN);
+    let mut module = parsed(&text);
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("down.constprop.1").is_none(), "{}", printed(&module));
+}
+
 /// A function only an invoke or a `!callees` list names is still called.
 #[test]
 fn test_a_function_only_an_invoke_calls_is_not_dead() {

@@ -468,7 +468,13 @@ fn chain_benefit(
     let mut chain_size = size_of;
     let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs);
     let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
-    if level + 1 < MAX_CLONES {
+    // DEVIATE IPACP-BRANCH (owner w10, exit 2026-11-24): gcc credits every
+    // context a function passes to itself. Two (`fib(n - 1)`, `fib(n - 2)`)
+    // are subproblems the clones share: the calls to one pure callee land in
+    // different functions and nothing merges them again (m64 -O2 fib(20) runs
+    // fib(16) three times, +50% clk; arm64 frames +30 k). One context, as in
+    // queens' `place(row + 1)`, is a chain.
+    if level + 1 < MAX_CLONES && next.iter().map(|(context, _)| context).filter(|context| context.as_slice() != known).collect::<std::collections::BTreeSet<_>>().len() <= 1 {
         for (context, frequency) in next {
             if context.as_slice() == known {
                 continue;
