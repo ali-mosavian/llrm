@@ -693,6 +693,18 @@ pub fn unpadded_bytes(
     format: Format,
     objects: &dyn DebugObjectTarget,
 ) -> Result<i64, Error> {
+    let (code, data) = unpadded_split(module, source, layout, format, objects)?;
+    Ok(code + data)
+}
+
+/// [`unpadded_bytes`] as the functions' code and the data sections' images.
+pub fn unpadded_split(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<(i64, i64), Error> {
     use llrm_object::{Definition, Role};
     let object = built_inner(module, source, layout, format, objects)?.object;
     let code: usize = object
@@ -709,7 +721,7 @@ pub fn unpadded_bytes(
         .filter(|section| matches!(section.role, Role::ROData | Role::Data))
         .map(|section| section.image.len())
         .sum();
-    Ok((code + data) as i64)
+    Ok((code as i64, data as i64))
 }
 
 /// What `format` says of the code it holds, from the target's table.
