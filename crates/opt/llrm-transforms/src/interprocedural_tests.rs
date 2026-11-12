@@ -1392,8 +1392,49 @@ go:
   %d = mul i16 %c, %b
   %e = add i16 %d, %c
   %f = mul i16 %e, %d
-  store i16 %f, ptr %p
   %r1 = add nsw i16 %row, 1
+  %q1 = mul i16 %r1, %r1
+  %q2 = mul i16 %q1, %r1
+  %q3 = mul i16 %q2, %r1
+  %q4 = mul i16 %q3, %r1
+  %q5 = mul i16 %q4, %r1
+  %q6 = mul i16 %q5, %r1
+  %q7 = mul i16 %q6, %r1
+  %q8 = mul i16 %q7, %r1
+  %q9 = mul i16 %q8, %r1
+  %q10 = mul i16 %q9, %r1
+  %q11 = mul i16 %q10, %r1
+  %q12 = mul i16 %q11, %r1
+  %q13 = mul i16 %q12, %r1
+  %q14 = mul i16 %q13, %r1
+  %q15 = mul i16 %q14, %r1
+  %q16 = mul i16 %q15, %r1
+  %q17 = mul i16 %q16, %r1
+  %q18 = mul i16 %q17, %r1
+  %q19 = mul i16 %q18, %r1
+  %q20 = mul i16 %q19, %r1
+  %q21 = mul i16 %q20, %r1
+  %q22 = mul i16 %q21, %r1
+  %q23 = mul i16 %q22, %r1
+  %q24 = mul i16 %q23, %r1
+  %q25 = mul i16 %q24, %r1
+  %q26 = mul i16 %q25, %r1
+  %q27 = mul i16 %q26, %r1
+  %q28 = mul i16 %q27, %r1
+  %q29 = mul i16 %q28, %r1
+  %q30 = mul i16 %q29, %r1
+  %q31 = mul i16 %q30, %r1
+  %q32 = mul i16 %q31, %r1
+  %q33 = mul i16 %q32, %r1
+  %q34 = mul i16 %q33, %r1
+  %q35 = mul i16 %q34, %r1
+  %q36 = mul i16 %q35, %r1
+  %q37 = mul i16 %q36, %r1
+  %q38 = mul i16 %q37, %r1
+  %q39 = mul i16 %q38, %r1
+  %q40 = mul i16 %q39, %r1
+  %g = add i16 %f, %q40
+  store i16 %g, ptr %p
   call void @down(i16 %r1, i16 %e)
   br label %out
 
