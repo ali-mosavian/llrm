@@ -35,7 +35,7 @@ use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
-use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape};
+use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape, VectorOp, VectorShift};
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
@@ -614,6 +614,69 @@ fn vector_fill(
     None
 }
 
+/// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`, `SHLv8i16_shift`, `NOTv16i8`: an
+/// integer vector operation on whole 128-bit registers.
+fn vector_inst(
+    name: &str,
+    rd: Vreg,
+    operands: &[Operand],
+) -> Option<Result<Inst, String>> {
+    let wrong = || Err(format!("{name}: operands are not those of its form"));
+    let lanes_of = |text: &str| match text {
+        "16i8" => Some(Arrangement::B16),
+        "8i16" => Some(Arrangement::H8),
+        "4i32" => Some(Arrangement::S4),
+        "2i64" => Some(Arrangement::D2),
+        _ => None,
+    };
+    if name == "NOTv16i8" {
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [
+        ("ADD", VectorOp::Add),
+        ("SUB", VectorOp::Sub),
+        ("MUL", VectorOp::Mul),
+        ("AND", VectorOp::And),
+        ("BIC", VectorOp::Bic),
+        ("ORR", VectorOp::Orr),
+        ("ORN", VectorOp::Orn),
+        ("EOR", VectorOp::Eor),
+        ("USHL", VectorOp::Ushl),
+        ("SSHL", VectorOp::Sshl),
+    ] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
+            continue;
+        };
+        if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+            continue;
+        }
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [("SHL", VectorShift::Shl), ("USHR", VectorShift::Ushr), ("SSHR", VectorShift::Sshr)] {
+        let Some(lanes) = name
+            .strip_prefix(stem)
+            .and_then(|rest| rest.strip_prefix('v'))
+            .and_then(|rest| rest.strip_suffix("_shift"))
+            .and_then(lanes_of)
+        else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Imm(amount)] => {
+                Ok(Inst::VectorShift { op, lanes, rd, rn: *rn, amount: *amount as u8 })
+            }
+            _ => wrong(),
+        });
+    }
+    None
+}
+
 /// A float machine node as an instruction: the float arithmetic, compare,
 /// select, conversion and move rows. `None` for any other opcode. The
 /// destination is a float register, or a general one for a conversion to an
@@ -627,6 +690,9 @@ fn float_inst(
     let wrong = || Err(format!("{name}: operands are not those of its form"));
     if let Some(fill) = vector_fill(name, operands) {
         return Some(fill.map(|fill| Inst::VectorFill { rd, fill }));
+    }
+    if let Some(inst) = vector_inst(name, rd, operands) {
+        return Some(inst);
     }
     // The size letter sits before `rr`, `r`, `rrr` or `i`.
     let binary = [

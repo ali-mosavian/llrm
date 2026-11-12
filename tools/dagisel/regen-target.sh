@@ -52,7 +52,7 @@ sed -n '/MatcherTable\[\] = {/,/^  };/p' "$WORK/GenDAGISel.inc" |
 
 grep -oE '\bOPC_[A-Za-z0-9_]+|\bOPFL_[A-Za-z0-9_]+' "$S/include/llvm/CodeGen/SelectionDAGISel.h" | grep -v OPFL_VariadicN | sort -u > "$WORK/members.txt"
 # An own id is in no header: the program cannot name it, whoever lists it.
-{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; field extra_symbols; field registers | sed "/./s/^/$NS/"; } | grep . | sort -u | grep -vxFf <(cut -d' ' -f1 "$OWN") | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
+{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; field extra_symbols; field dynamic_extra_symbols; field registers | sed "/./s/^/$NS/"; } | grep . | sort -u | grep -vxFf <(cut -d' ' -f1 "$OWN") | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
 sed -n '/enum BuiltinOpcodes {/,/^  };/p;/^  enum {/,/^  };/p' "$S/include/llvm/CodeGen/SelectionDAGISel.h" > "$WORK/enums.cpp"
 sed 's/.*/P(&);/' "$WORK/members.txt" > "$WORK/members.cpp"
 field ids_includes > "$WORK/includes.cpp"
@@ -103,6 +103,7 @@ atoms = re.findall(r'^("[^"]+") = ', m.group(1), re.M)
 text = text.replace(m.group(0), "")
 text = text.replace("[atom]\n", "[atom]\n" + "".join(f"{a} = false\n" for a in atoms), 1)
 text = re.sub(r"^live = \[[^\]]*\]", "live = []", text, flags=re.M)
+text = re.sub(r"^dynamic_extra_symbols = \[[^\]]*\]\n", "", text, flags=re.M)
 open(dst, "w").write(text)
 PY
     mkdir -p "$WORK/baseline"

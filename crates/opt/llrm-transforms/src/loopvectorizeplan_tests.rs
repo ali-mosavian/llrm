@@ -98,11 +98,9 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     let tti = AArch64::of_cpu("generic").unwrap();
     for bits in [8, 16, 32, 64] {
         for trips in [3, 15] {
-            assert_eq!(
-                plan(&tti, &facts(bits, trips, false)).unwrap_err().0,
-                "A scalar epilogue would remain",
-                "i{bits} x{trips}"
-            );
+            // The clamped VF (trip count 3 or 15) fills no register: LV-SPLIT
+            // refuses it before the epilogue rule can.
+            assert!(plan(&tti, &facts(bits, trips, false)).is_err(), "i{bits} x{trips}");
         }
     }
     let mut size = facts(16, 1001, false);
@@ -113,4 +111,17 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     // A count the factors divide (VF 8, IC 1 at `-Os`) needs none.
     size.trip_count = 1000;
     assert_eq!(plan(&tti, &size), Ok(Plan { vf: 8, ic: 1 }));
+}
+
+/// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) took VF 8 for a loop
+/// storing `i16` and `i64`: a `<8 x i64>` the backend cannot split, so arm64
+/// refused the whole function ("vector with no register class"); at VF 2 the
+/// `<2 x i16>` has no register either. With no VF filling a register for every
+/// type, the loop stays scalar (LV-SPLIT).
+#[test]
+fn a_loop_whose_types_fill_no_common_register_is_not_vectorized() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let store = |bits: u32| Recipe::Store { lane: Ty::Int(bits), align: u64::from(bits / 8) };
+    let mixed = LoopFacts { recipes: vec![store(16), store(64)], ..facts(16, 64, false) };
+    assert!(plan(&tti, &mixed).is_err(), "{:?}", plan(&tti, &mixed));
 }

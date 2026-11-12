@@ -62,6 +62,15 @@ impl Reassociator<'_> {
         ) {
             return;
         }
+        // DEVIATE REASSOC-VEC: the rewrites read integer widths; the pin's also
+        // handle vectors (the loop vectorizer's operations), which are left
+        // as they are. Exit: vector-aware rewrites (owner arm64-vec, LV-X3).
+        if matches!(
+            self.context.types.get(self.function.instruction(i).ty),
+            llrm_mir::types::Type::Vector { .. }
+        ) {
+            return;
+        }
 
         if self.binop(i) == Some(BinaryOp::Shl)
             && self.int_constant(self.operand(i, 1)).is_some()
