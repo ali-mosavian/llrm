@@ -438,6 +438,11 @@ impl llrm_target::Target for M64 {
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            // DEVIATE UNROLL-OS-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
+                            // m32 entry, see `Tuning::unroll_trial_at_size`. gcc completely peels a
+                            // small loop at -Os when the code does not grow.
+                            unroll_trial_at_size: Some(30),
+                            unroll_trial_bytes_strict: true,
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
                             // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.

@@ -505,7 +505,9 @@ pub fn compiled_dumping(
         objbuild::written_in(built, name, layout_of(flags, format), format, objects).ok().map(|object| object.len() as i64)
     };
     let unpadded = |built: &masm::Module| {
-        objbuild::unpadded_bytes(built, name, layout_of(flags, format), format, objects).ok()
+        objbuild::unpadded_split(built, name, layout_of(flags, format), format, objects)
+            .ok()
+            .map(|(code, data)| llrm_codegen::driver::trial::Sizes { code, data })
     };
     Ok((llrm_codegen::driver::trial::compiled_module_trying(module, name, &options, &bytes, &unpadded)?, format))
 }

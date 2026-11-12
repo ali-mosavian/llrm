@@ -140,7 +140,10 @@ impl ProgramPass for ModuleIpo {
                         &private[at],
                         &costs,
                         self.inline.cp_clone.unwrap_or(false),
-                        self.inline.cp_hint_clones,
+                        crate::ipacp::Tuning {
+                            hint_clones: self.inline.cp_hint_clones,
+                            peel_limited: self.inline.cp_peel_limited,
+                        },
                         &mut cloning,
                     )
                 });
