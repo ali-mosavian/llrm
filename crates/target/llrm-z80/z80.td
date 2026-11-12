@@ -143,9 +143,9 @@ let Constraints = "$d = $a" in {
   def SUB16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "or a; sbc hl, $b", [(set i16:$d, i8:$f, (Z80subf i16:$a, i16:$b))]>;
   def SBC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "sbc hl, $b", [(set i16:$d, i8:$f, (Z80sbcf i16:$a, i16:$b, i8:$c))]>;
 }
-// `ADD16F` and `ADC16F` of one value twice, fused by `long_shift`: a long doubled, no selection pattern
+// `ADD16F` and `ADC16F` of one value twice, fused by `long_shift`: a long doubled in any two pairs, no selection pattern
 let Defs = [F], Constraints = "$lo = $a, $hi = $b" in
-  def SHL32 : Z80Inst<(outs GR16:$lo, HLR:$hi), (ins GR16:$a, HLR:$b), "sla lo; rl hi; adc hl, hl", []>;
+  def SHL32 : Z80Inst<(outs GR16:$lo, GR16:$hi), (ins GR16:$a, GR16:$b), "sla lo; rl hi", []>;
 let Constraints = "$d = $a" in {
   def INC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "inc $d", [(set i16:$d, (add i16:$a, (i16 1)))]>;
   def DEC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "dec $d", [(set i16:$d, (add i16:$a, (i16 -1)))]>;
@@ -206,6 +206,11 @@ multiclass Shift<string n, RegisterClass rc, ValueType vt> {
 }
 defm "" : Shift<"8", GR8, i8>;
 defm "" : Shift<"16", GR16, i16>;
+
+// A word shifted right by one with the low bit of another word shifted in at the top (`fshr`, the low word of a long
+// shifted right by one): that bit goes through the carry, `ld a, hi.lo; rra; rr d.hi; rr d.lo`.
+let Defs = [A, F], Constraints = "$d = $a" in
+  def FSHR1 : Z80Inst<(outs GR16:$d), (ins GR16:$a, GR16:$b), "fshr1 $d, $b", [(set i16:$d, (fshr i16:$b, i16:$a, (i8 1)))]>;
 
 // A constant is loaded again where it is wanted rather than kept or spilled.
 let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
