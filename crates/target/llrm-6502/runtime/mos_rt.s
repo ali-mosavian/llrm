@@ -652,6 +652,67 @@ __mulhisi3:
 @done:
   rts
 
+; the same for a multiplier under 256 (its high byte known zero at the call): the multiplicand shifts
+; left into 24 bits and is added for each set bit, and the walk ends with the multiplier's last set bit
+.export __umulhisi3_byte
+__umulhisi3_byte:
+  lda #0
+  sta __st
+  sta __st+1
+  sta __st+2
+  sta __sa+2
+@bit:
+  lsr __sb
+  bcc @no
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+  lda __st+2
+  adc __sa+2
+  sta __st+2
+@no:
+  lda __sb
+  beq @out
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  jmp @bit
+@out:
+  lda __st
+  sta __sa
+  lda __st+1
+  sta __sa+1
+  lda __st+2
+  sta __sa+2
+  lda #0
+  sta __sa+3
+  rts
+
+; the signed multiplicand by a byte: the unsigned product less the byte from the high word if the
+; multiplicand is negative
+.export __mulhisi3_byte
+__mulhisi3_byte:
+  lda __sb
+  sta __sr
+  lda __sa+1
+  sta __sr+1
+  jsr __umulhisi3_byte
+  lda __sr+1
+  bpl @done
+  sec
+  lda __sa+2
+  sbc __sr
+  sta __sa+2
+  lda __sa+3
+  sbc #0
+  sta __sa+3
+@done:
+  rts
+
 .macro cmp_sub_32
   sec
   lda __sr

@@ -41,14 +41,14 @@
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::tti::{AddressingMode, Tti};
 use llrm_mir::types::Type as MirType;
 use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
 use crate::ivusers::IvUsers;
-use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
+use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
 use crate::lsr_use::{
     Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between, is_legal_use_formula,
 };
@@ -242,33 +242,68 @@ pub fn extract_immediate(
     }
 }
 
+/// The static alloca `s` is, where the target takes a frame slot as a free
+/// base.
+fn frame_slot(
+    se: &ScalarEvolution,
+    cx: &Cx,
+    s: Scev,
+) -> Option<ValueId> {
+    let Some(Operand::Value(value)) = se.unknown_value(s) else { return None };
+    match cx.function.value(value).def {
+        ValueDef::Instruction(inst)
+            if matches!(cx.function.instruction(inst).opcode, Opcode::Alloca { .. })
+                && llrm_mir::instructioncost::is_static_alloca(cx.function, inst) =>
+        {
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
 /// `ExtractSymbol`: the global whose address is added in `s`, and `s` without
-/// it.
+/// it. DEVIATE LU30: with `frame`, a static alloca is a symbol too, found among
+/// any term of a sum (an alloca sorts before the recurrences it is added to).
 pub fn extract_symbol(
     se: &mut ScalarEvolution,
     cx: &Cx,
     s: Scev,
-) -> (Option<GlobalId>, Scev) {
+    frame: bool,
+) -> (Option<Symbol>, Scev) {
     match se.node(s).kind.clone() {
         ScevKind::Unknown(Operand::Constant(id)) => {
             if let llrm_mir::context::ConstantKind::Global(global) = cx.context.get(id).kind {
-                return (Some(global), se.get_constant_of_type(cx, se.type_of(s), 0));
+                return (Some(Symbol::Global(global)), se.get_constant_of_type(cx, se.type_of(s), 0));
             }
             (None, s)
         }
+        ScevKind::Unknown(Operand::Value(_)) => match frame.then(|| frame_slot(se, cx, s)).flatten() {
+            Some(value) => (Some(Symbol::Frame(value)), se.get_constant_of_type(cx, se.type_of(s), 0)),
+            None => (None, s),
+        },
         ScevKind::Add(ops) => {
             let mut ops = ops.to_vec();
             let last = ops.len() - 1;
-            let (result, rest) = extract_symbol(se, cx, ops[last].scev);
+            let (result, rest) = extract_symbol(se, cx, ops[last].scev, frame);
             if result.is_some() {
                 ops[last] = ScevUse::of(rest);
                 return (result, se.get_add_expr(cx, ops, Flags::default(), 0).scev);
+            }
+            if frame && let Some(at) = ops.iter().position(|one| frame_slot(se, cx, one.scev).is_some()) {
+                let value = frame_slot(se, cx, ops[at].scev).expect("found above");
+                ops.remove(at);
+                let rest = if ops.is_empty() {
+                    se.get_constant_of_type(cx, se.type_of(s), 0)
+                } else {
+                    se.get_add_expr(cx, ops, Flags::default(), 0).scev
+                };
+                return (Some(Symbol::Frame(value)), rest);
             }
             (None, s)
         }
         ScevKind::AddRec(ops, header) => {
             let mut ops = ops.to_vec();
-            let (result, rest) = extract_symbol(se, cx, ops[0].scev);
+            let (result, rest) = extract_symbol(se, cx, ops[0].scev, frame);
             if result.is_some() {
                 ops[0] = ScevUse::of(rest);
                 return (result, se.get_add_rec_expr(cx, ops, header, Flags::default()).scev);
@@ -430,12 +465,13 @@ pub fn is_always_foldable_scev(
         return true;
     }
     let (base_offset, rest) = extract_immediate(se, cx, s);
-    let (base_gv, rest) = extract_symbol(se, cx, rest);
+    let (symbol, rest) = extract_symbol(se, cx, rest, tti.frame_slot_is_free_base());
+    let base_gv = symbol.filter(|one| matches!(one, Symbol::Global(_)));
     // Anything else involved does not fold.
     if !se.match_zero(rest) {
         return false;
     }
-    if base_offset.is_zero() && base_gv.is_none() {
+    if base_offset.is_zero() && symbol.is_none() {
         return true;
     }
     let scale = if kind == Kind::ICmpZero { -1 } else { 1 };
@@ -680,7 +716,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                 for g in &lu.formulae {
                     if g.base_regs == f.base_regs
                         && g.scaled_reg == f.scaled_reg
-                        && g.base_gv == f.base_gv
+                        && g.symbol == f.symbol
                         && g.scale == f.scale
                         && g.unfolded_offset == f.unfolded_offset
                     {

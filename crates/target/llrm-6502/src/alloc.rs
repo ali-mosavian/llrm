@@ -2394,7 +2394,15 @@ pub fn build_with_places(
             // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
             // words in `__sa` and `__sb`, the product in `__sa`
             code @ (op::UMULW16 | op::SMULW16) => {
-                let routine = if code == op::UMULW16 { "__umulhisi3" } else { "__mulhisi3" };
+                // a multiplier whose high byte is known zero is a byte: the entry that walks to its last set
+                // bit links only the byte loop
+                let byte = b.constants.get(&format!("{}+1", name(&o[3])?)) == Some(&0);
+                let routine = match (code == op::UMULW16, byte) {
+                    (true, true) => "__umulhisi3_byte",
+                    (true, false) => "__umulhisi3",
+                    (false, true) => "__mulhisi3_byte",
+                    (false, false) => "__mulhisi3",
+                };
                 let acc = Reg::Phys(reg::A);
                 for (to, source) in [("__sa", name(&o[2])?), ("__sb", name(&o[3])?)] {
                     let (low, high) = b.read_word(source)?;
