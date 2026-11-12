@@ -70,3 +70,17 @@ Clock deltas under the pad spread are noise (div_constants_ulong, huffman_decode
 | word_compare_branches | 874 -> 840 | 187088 -> 185224 (-1.0%) |
 | word_compares | 521 -> 485 | 94566 -> 95014 (+0.5%) |
 
+
+## Byte step: compare above it (be135daf8d)
+
+dist-E (above) to dist-F, same harness, 4-pad mean. Bytes only fall.
+
+| cell | level | bytes | clocks |
+|---|---|---|---|
+| overflow_builtins | O1, O2 | 8045 -> 8043 | 425936 -> 425914 |
+| sat_builtins | O1, O2 | 2089 -> 2087 | 33638 -> 33644 |
+| div_constants_long | Os | 24116 -> 24088 | 420507882 -> 420806737 |
+| div_constants_ulong | Os | 16958 -> 16938 | 279878394 -> 280095303 |
+| loop_interchange | Os | 1363 -> 1359 | 14125676 -> 14105256 |
+| overflow_builtins | Os | 8088 -> 8086 | 723027 -> 723023 |
+| sat_builtins | Os | 2037 -> 2035 | 33943 -> 33936 |
