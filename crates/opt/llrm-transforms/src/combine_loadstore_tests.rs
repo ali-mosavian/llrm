@@ -440,6 +440,73 @@ b0:
     assert!(out.contains("load"), "{out}");
 }
 
+/// `combineLoadToOperationType`: `%x = load i32` read only by `bitcast ... to
+/// float` stayed an integer load plus a cast, so a loop that adds floats kept
+/// its loads typed `i16`/`i32` and LoopVectorize read them as integer work
+/// (`sfm16_float_sub` stayed scalar).
+#[test]
+fn a_load_read_only_by_a_bitcast_loads_the_cast_type() {
+    let out = combined_with_loads(
+        "define float @f(ptr %p) {
+b0:
+  %x = load i32, ptr %p
+  %y = bitcast i32 %x to float
+  ret float %y
+}
+",
+    );
+    assert!(out.contains("load float"), "{out}");
+    assert!(!out.contains("bitcast") && !out.contains("load i32"), "{out}");
+}
+
+/// The load is read twice: the pin leaves the type alone (it must not add a
+/// load).
+#[test]
+fn a_load_with_two_users_keeps_its_type() {
+    let out = combined_with_loads(
+        "define i32 @f(ptr %p) {
+b0:
+  %x = load i32, ptr %p
+  %y = bitcast i32 %x to float
+  %z = fptosi float %y to i32
+  %w = add i32 %x, %z
+  ret i32 %w
+}
+",
+    );
+    assert!(out.contains("load i32") && out.contains("bitcast"), "{out}");
+}
+
+/// A pointer loaded as an integer is type punning: left alone.
+#[test]
+fn a_load_cast_between_pointer_and_integer_keeps_its_type() {
+    let out = combined_with_loads(
+        "define i64 @f(ptr %p) {
+b0:
+  %x = load ptr, ptr %p
+  %y = ptrtoint ptr %x to i64
+  ret i64 %y
+}
+",
+    );
+    assert!(out.contains("load ptr") && out.contains("ptrtoint"), "{out}");
+}
+
+/// A volatile load keeps its type.
+#[test]
+fn a_volatile_load_read_by_a_bitcast_keeps_its_type() {
+    let out = combined_with_loads(
+        "define float @f(ptr %p) {
+b0:
+  %x = load volatile i32, ptr %p
+  %y = bitcast i32 %x to float
+  ret float %y
+}
+",
+    );
+    assert!(out.contains("load volatile i32") && out.contains("bitcast"), "{out}");
+}
+
 #[test]
 fn a_volatile_load_is_kept() {
     let out = combined_with_loads(

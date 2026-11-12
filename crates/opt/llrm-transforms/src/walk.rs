@@ -140,7 +140,10 @@ impl ProgramPass for ModuleIpo {
                         &private[at],
                         &costs,
                         self.inline.cp_clone.unwrap_or(false),
-                        self.inline.cp_hint_clones,
+                        crate::ipacp::Tuning {
+                            hint_clones: self.inline.cp_hint_clones,
+                            peel_limited: self.inline.cp_peel_limited,
+                        },
                         &mut cloning,
                     )
                 });
@@ -602,7 +605,8 @@ impl ProgramPass for Walk {
                                     continue;
                                 }
                                 let kept = function_mut(module, id).1.clone();
-                                let kept_clocks = function_clocks(module, &program.layout, tti, &kept);
+                                let by_trips = tti.inline_trial_by_trips();
+                                let kept_clocks = trial_clocks(by_trips, module, &program.layout, tti, &kept);
                                 let mut chosen = accepted.clone();
                                 chosen.extend(calls.iter().copied());
                                 let available: llrm_support::hash::SparseIdMap<_, _> =
@@ -706,7 +710,7 @@ impl ProgramPass for Walk {
                                         .collect();
                                     let run: i64 = callees
                                         .iter()
-                                        .map(|body| function_clocks(module, &program.layout, tti, body))
+                                        .map(|body| trial_clocks(by_trips, module, &program.layout, tti, body))
                                         .sum();
                                     let gone: i64 = if credit > 0 {
                                         let sites: Vec<GlobalId> =
@@ -729,9 +733,18 @@ impl ProgramPass for Walk {
                                         .iter()
                                         .map(|body| tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None)))
                                         .sum();
-                                    let once = kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
+                                    let now_clocks = trial_clocks(by_trips, module, &program.layout, tti, now);
+                                    // By trips the caller's loops weigh the
+                                    // copy among them: the callee's
+                                    // run and saves are what the site's
+                                    // frequency repeats.
+                                    let saved = if by_trips {
+                                        (kept_clocks as f64 + (run + saves) as f64 * trips - now_clocks as f64) as i64
+                                    } else {
+                                        ((kept_clocks + run + saves - now_clocks) as f64 * trips) as i64
+                                    };
                                     (
-                                        (once as f64 * trips) as i64,
+                                        saved,
                                         function_bytes(module, &program.layout, &costs, now)
                                             - function_bytes(module, &program.layout, &costs, &kept)
                                             - gone,
@@ -855,7 +868,7 @@ impl ProgramPass for Walk {
                                         .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
                                         .collect(),
                                 });
-                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes);
+                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes);
                                 let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
@@ -1788,6 +1801,67 @@ fn function_clocks(
             .value
         })
         .sum()
+}
+
+/// Trips a loop is priced at where ScalarEvolution proves no fewer than
+/// this: the conventional ten.
+const TRIAL_TRIPS: f64 = 10.0;
+
+/// SZ2 with `Tti::inline_trial_by_trips`: the clocks of `function` per entry,
+/// each instruction repeated by the trips of the loops around it (ten, or the
+/// fewer ScalarEvolution proves). The same weight on both sides of a trial: a
+/// branch estimate weighs a loop of the callee and its copy differently (20
+/// and 32 for the one loop of `recsum`), more than the clocks a copy saves a
+/// trip. Else [`function_clocks`].
+fn trial_clocks(
+    by_trips: bool,
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    tti: &dyn llrm_mir::tti::Tti,
+    function: &llrm_mir::module::Function,
+) -> i64 {
+    if !by_trips {
+        return function_clocks(module, layout, tti, function);
+    }
+    let mut session = llrm_analysis::scev::analysis::ScevSession::within(
+        &module.context,
+        &module.globals,
+        &module.metadata,
+        function,
+    );
+    let weights: std::collections::HashMap<llrm_mir::module::BlockId, f64> =
+        session.ask_within(&module.context, layout, &module.globals, &module.metadata, function, |scev, cx| {
+            function
+                .layout()
+                .iter()
+                .map(|&block| {
+                    let mut weight = 1.0;
+                    let mut around = cx.loops.get_loop_for(block);
+                    while let Some(found) = around {
+                        let proven = f64::from(scev.get_small_constant_max_trip_count(cx, found.get_header()));
+                        weight *= if proven > 0.0 { proven.min(TRIAL_TRIPS) } else { TRIAL_TRIPS };
+                        around = found.get_parent_loop();
+                    }
+                    (block, weight)
+                })
+                .collect()
+        });
+    function
+        .walk()
+        .map(|(_, inst)| {
+            let clocks = llrm_mir::instructioncost::instruction_cost(
+                tti,
+                &module.context,
+                layout,
+                &module.globals,
+                function,
+                inst,
+                llrm_mir::tti::CostKind::Latency,
+            )
+            .value;
+            clocks as f64 * function.parent(inst).and_then(|block| weights.get(&block).copied()).unwrap_or(1.0)
+        })
+        .sum::<f64>() as i64
 }
 
 /// Units a rerun of the Simplify list over a settled body must save to stay:
