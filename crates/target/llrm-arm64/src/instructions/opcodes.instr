@@ -203,6 +203,19 @@ ORRv16i8                 binary   x/x,x         -                        fp_arit
 ORNv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                ORNv16i8
 EORv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                EORv16i8
 NOTv16i8                 unary    x/x           -                        fp_arith   - - - -/-                NOTv16i8
+# ---- vector float arithmetic
+FADDv4f32                binary   x/x,x         -                        fp_arith   - - - -/-                FADDv4f32
+FADDv2f64                binary   x/x,x         -                        fp_arith   - - - -/-                FADDv2f64
+FSUBv4f32                binary   x/x,x         -                        fp_arith   - - - -/-                FSUBv4f32
+FSUBv2f64                binary   x/x,x         -                        fp_arith   - - - -/-                FSUBv2f64
+FMULv4f32                binary   x/x,x         -                        fp_arith   - - - -/-                FMULv4f32
+FMULv2f64                binary   x/x,x         -                        fp_arith   - - - -/-                FMULv2f64
+FDIVv4f32                binary   x/x,x         -                        fp_arith   - - - -/-                FDIVv4f32
+FDIVv2f64                binary   x/x,x         -                        fp_arith   - - - -/-                FDIVv2f64
+FNEGv4f32                unary    x/x           -                        fp_arith   - - - -/-                FNEGv4f32
+FNEGv2f64                unary    x/x           -                        fp_arith   - - - -/-                FNEGv2f64
+FABSv4f32                unary    x/x           -                        fp_arith   - - - -/-                FABSv4f32
+FABSv2f64                unary    x/x           -                        fp_arith   - - - -/-                FABSv2f64
 # ---- pseudo operations (a call, a tail call and the return carry a variable number of
 # registers: no row, their effects are the contract's)
 COPY                     move     r/r           -                        alu        - - - -/-                COPY

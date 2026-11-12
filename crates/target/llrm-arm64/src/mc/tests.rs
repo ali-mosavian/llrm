@@ -303,6 +303,14 @@ fn branches() {
         }
     }
     all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
+            all.push(Inst::VectorFpBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+        }
+        for op in [VectorFpUnary::Neg, VectorFpUnary::Abs] {
+            all.push(Inst::VectorFpUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
+        }
+    }
     all.push(Inst::VectorMov { rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::VectorMov { rd: Vreg(31), rn: Vreg(30) });
     for (subtract, set_flags, width) in [

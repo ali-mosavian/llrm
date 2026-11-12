@@ -243,6 +243,8 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::V8I16) => mvt::v8i16,
         EVT::Simple(MVT::V4I32) => mvt::v4i32,
         EVT::Simple(MVT::V2I64) => mvt::v2i64,
+        EVT::Simple(MVT::V4F32) => mvt::v4f32,
+        EVT::Simple(MVT::V2F64) => mvt::v2f64,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -257,10 +259,16 @@ fn our_vt(
     vectors: bool,
 ) -> EVT {
     if vectors {
-        if let Some(found) =
-            [(mvt::v16i8, MVT::V16I8), (mvt::v8i16, MVT::V8I16), (mvt::v4i32, MVT::V4I32), (mvt::v2i64, MVT::V2I64)]
-                .into_iter()
-                .find(|(p, _)| *p == vt)
+        if let Some(found) = [
+            (mvt::v16i8, MVT::V16I8),
+            (mvt::v8i16, MVT::V8I16),
+            (mvt::v4i32, MVT::V4I32),
+            (mvt::v2i64, MVT::V2I64),
+            (mvt::v4f32, MVT::V4F32),
+            (mvt::v2f64, MVT::V2F64),
+        ]
+        .into_iter()
+        .find(|(p, _)| *p == vt)
         {
             return EVT::Simple(found.1);
         }

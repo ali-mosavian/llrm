@@ -12,7 +12,7 @@ use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
-use crate::mc::inst::{Addr, Arrangement, Gpr, ImmShape, VectorOp, VectorShift};
+use crate::mc::inst::{Addr, Arrangement, Gpr, ImmShape, VectorFpOp, VectorFpUnary, VectorOp, VectorShift};
 use crate::mfunc::Callee;
 
 fn g(n: u32) -> Gpr {
@@ -246,6 +246,14 @@ pub(super) fn instructions() -> Vec<Inst> {
         out.push(Inst::VectorShift { op, lanes: Arrangement::H8, rd: v(0), rn: v(1), amount: 3 });
     }
     out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
+            out.push(Inst::VectorFpBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        }
+        for op in [VectorFpUnary::Neg, VectorFpUnary::Abs] {
+            out.push(Inst::VectorFpUnary { op, lanes, rd: v(0), rn: v(1) });
+        }
+    }
     for fill in [
         Fill::Zero,
         Fill::Byte(0xa5),
@@ -310,6 +318,8 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBinary { .. } => "VectorBinary",
         Inst::VectorShift { .. } => "VectorShift",
         Inst::VectorNot { .. } => "VectorNot",
+        Inst::VectorFpBinary { .. } => "VectorFpBinary",
+        Inst::VectorFpUnary { .. } => "VectorFpUnary",
         Inst::Svc { .. } => "Svc",
         Inst::Atomic { .. } => "Atomic",
         Inst::Dmb { .. } => "Dmb",
@@ -322,7 +332,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 50] = [
+const ALL: [&str; 52] = [
     "Mark",
     "Label",
     "Cfi",
@@ -367,6 +377,8 @@ const ALL: [&str; 50] = [
     "VectorBinary",
     "VectorShift",
     "VectorNot",
+    "VectorFpBinary",
+    "VectorFpUnary",
     "Svc",
     "Atomic",
     "Dmb",

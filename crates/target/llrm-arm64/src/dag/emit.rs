@@ -35,7 +35,7 @@ use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
-use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape, VectorOp, VectorShift};
+use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape, VectorFpOp, VectorFpUnary, VectorOp, VectorShift};
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
@@ -632,6 +632,32 @@ fn vector_inst(
     if name == "NOTv16i8" {
         return Some(match operands {
             [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    // `FADDv4f32`, `FSUBv2f64`, `FNEGv4f32`: the float vector operations.
+    let fp_lanes = |text: &str| match text {
+        "4f32" => Some(Arrangement::S4),
+        "2f64" => Some(Arrangement::D2),
+        _ => None,
+    };
+    for (stem, op) in
+        [("FADD", VectorFpOp::Add), ("FSUB", VectorFpOp::Sub), ("FMUL", VectorFpOp::Mul), ("FDIV", VectorFpOp::Div)]
+    {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorFpBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [("FNEG", VectorFpUnary::Neg), ("FABS", VectorFpUnary::Abs)] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::VectorFpUnary { op, lanes, rd, rn: *rn }),
             _ => wrong(),
         });
     }

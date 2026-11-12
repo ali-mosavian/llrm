@@ -958,6 +958,11 @@ impl Builder<'_> {
                         .and_then(|lane| MVT::vector(lane, *count))
                         .map(EVT::Simple)
                         .ok_or(Refused("vector with no register class")),
+                    // `v4f32`, `v2f64`
+                    Type::Float(kind @ (llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)) => {
+                        let lane = if matches!(kind, llrm_mir::types::FloatKind::Float) { MVT::F32 } else { MVT::F64 };
+                        MVT::vector(lane, *count).map(EVT::Simple).ok_or(Refused("vector with no register class"))
+                    }
                     _ => Err(Refused("vector with no register class")),
                 }
             }

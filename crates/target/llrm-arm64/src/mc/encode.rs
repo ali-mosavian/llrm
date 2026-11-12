@@ -442,6 +442,16 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x4F00_0400 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorNot { rd, rn } => 0x6E20_5800 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
+            let (u, a, opcode) = op.fields();
+            let sz = u32::from(*lanes == Arrangement::D2);
+            0x4E20_0400 | u << 29 | a << 23 | sz << 22 | vreg(*rm)? << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorFpUnary { op, lanes, rd, rn } => {
+            let (u, opcode) = op.fields();
+            let sz = u32::from(*lanes == Arrangement::D2);
+            0x4EA0_0800 | u << 29 | sz << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
             Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,

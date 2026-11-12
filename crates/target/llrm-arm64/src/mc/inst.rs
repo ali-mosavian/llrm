@@ -447,6 +447,62 @@ impl VectorOp {
     }
 }
 
+/// The three-register float vector operations: `fadd v.4s, v.4s, v.4s`. The
+/// lanes are `S4` or `D2`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorFpOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl VectorFpOp {
+    /// (`U`, `a` (bit 23), `opcode`) of the "three same" float encoding.
+    pub(super) fn fields(self) -> (u32, u32, u32) {
+        match self {
+            VectorFpOp::Add => (0, 0, 0b11010),
+            VectorFpOp::Sub => (0, 1, 0b11010),
+            VectorFpOp::Mul => (1, 0, 0b11011),
+            VectorFpOp::Div => (1, 0, 0b11111),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorFpOp::Add => "fadd",
+            VectorFpOp::Sub => "fsub",
+            VectorFpOp::Mul => "fmul",
+            VectorFpOp::Div => "fdiv",
+        }
+    }
+}
+
+/// The one-register float vector operations: `fneg v.4s, v.4s`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorFpUnary {
+    Neg,
+    Abs,
+}
+
+impl VectorFpUnary {
+    /// (`U`, `opcode`) of the "two-register misc" float encoding (bit 23 is
+    /// set).
+    pub(super) fn fields(self) -> (u32, u32) {
+        match self {
+            VectorFpUnary::Neg => (1, 0b01111),
+            VectorFpUnary::Abs => (0, 0b01111),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorFpUnary::Neg => "fneg",
+            VectorFpUnary::Abs => "fabs",
+        }
+    }
+}
+
 /// The shifts of a vector by an immediate.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VectorShift {
@@ -883,6 +939,22 @@ pub enum Inst {
     },
     /// `not v.16b` (`mvn`).
     VectorNot {
+        rd: Vreg,
+        rn: Vreg,
+    },
+    /// A 16-byte float vector operation on every lane: `fadd v.4s, v.4s,
+    /// v.4s`; `lanes` is `S4` or `D2`.
+    VectorFpBinary {
+        op: VectorFpOp,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// `fneg v.4s, v.4s` and `fabs`; `lanes` is `S4` or `D2`.
+    VectorFpUnary {
+        op: VectorFpUnary,
+        lanes: Arrangement,
         rd: Vreg,
         rn: Vreg,
     },
