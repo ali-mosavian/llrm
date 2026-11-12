@@ -24,3 +24,27 @@ fn a_word_times_a_constant_is_shifts_and_adds() {
 fn a_word_times_a_variable_is_the_call() {
     assert!(text("by_variable").contains("__mulhi3"));
 }
+
+const CREDIT: &str = include_str!("data/word_chains_credit.ll");
+
+fn strict(ir: &str, function: &str) -> String {
+    let request = Request::new(Level::O1);
+    let prepared = prepare(ir, &request).expect("prepares");
+    let (number, name) = prepared.names().enumerate().find(|(_, name)| *name == function).expect("function");
+    text_in(&prepared, name, number, &request).expect("compiles")
+}
+
+/// -O1 took the call for `x * 100` and `x * 11` (variadic +23 B: the 24 B routine linked for two sites): with no
+/// other word multiply in the module the chains are smaller than the routine and the calls.
+#[test]
+fn a_module_of_constant_word_products_links_no_routine_at_o1() {
+    for function in ["by_hundred", "by_eleven"] {
+        let text = strict(CREDIT, function);
+        assert!(!text.contains("__mulhi3"), "{text}");
+    }
+}
+
+#[test]
+fn a_variable_word_product_keeps_the_calls_at_o1() {
+    assert!(strict(IR, "by_hundred").contains("__mulhi3"));
+}
