@@ -966,6 +966,53 @@ fn test_a_loop_bound_past_the_peel_limit_is_no_reason_to_clone() {
     assert_eq!((cloned("4"), cloned("400")), (true, false));
 }
 
+/// `fib(20)` credited clones for 19 and 18 but counted only the first's size:
+/// m64 fib -O2 grew 424 -> 595 B and 12.7 k -> 19.1 k clocks. A chain pays for
+/// every clone it credits (gcc's `prop_size_cost`).
+const BRANCHING: &str = "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %done, label %rec
+
+rec:
+  %a1 = sub i32 %n, 1
+  %a = call i32 @fib(i32 %a1)
+  %b1 = sub i32 %n, 2
+  %b = call i32 @fib(i32 %b1)
+  %m1 = mul i32 %n, %n
+  %m2 = mul i32 %m1, %n
+  %m3 = mul i32 %m2, %n
+  %m4 = mul i32 %m3, %n
+  %m5 = mul i32 %m4, %n
+  %m6 = mul i32 %m5, %n
+  %m7 = mul i32 %m6, %n
+  %m8 = mul i32 %m7, %n
+  %m9 = mul i32 %m8, %n
+  %m10 = mul i32 %m9, %n
+  %m11 = mul i32 %m10, %n
+  %m12 = mul i32 %m11, %n
+  %s0 = add i32 %a, %b
+  %s = add i32 %s0, %m12
+  ret i32 %s
+
+done:
+  ret i32 %n
+}
+
+define i32 @f(i32 %x) {
+b0:
+  %r = call i32 @fib(i32 20)
+  ret i32 %r
+}
+";
+
+#[test]
+fn test_a_branching_recursion_called_once_is_not_cloned_down_a_chain() {
+    let mut module = parsed(BRANCHING);
+    stepped(&mut module, &["f", "fib"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
+}
+
 /// A function only an invoke or a `!callees` list names is still called.
 #[test]
 fn test_a_function_only_an_invoke_calls_is_not_dead() {
@@ -1373,8 +1420,8 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
     .unwrap();
 }
 
-/// Each level of `down` saves one address, too little to pay for a copy; the
-/// four levels together do, and GCC's `propagate_effects` credits the copy for
+/// Each level of `down` saves a few clocks, too little to pay for a copy; the
+/// four levels, each called four times, do, and GCC's `propagate_effects` credits the copy for
 /// `row = 0` with the ones after it. Priced alone, the copy was refused: queens
 /// got four clones of eight, hanoi2 none.
 const DOWN: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
@@ -1405,38 +1452,19 @@ go:
   %q10 = mul i16 %q9, %r1
   %q11 = mul i16 %q10, %r1
   %q12 = mul i16 %q11, %r1
-  %q13 = mul i16 %q12, %r1
-  %q14 = mul i16 %q13, %r1
-  %q15 = mul i16 %q14, %r1
-  %q16 = mul i16 %q15, %r1
-  %q17 = mul i16 %q16, %r1
-  %q18 = mul i16 %q17, %r1
-  %q19 = mul i16 %q18, %r1
-  %q20 = mul i16 %q19, %r1
-  %q21 = mul i16 %q20, %r1
-  %q22 = mul i16 %q21, %r1
-  %q23 = mul i16 %q22, %r1
-  %q24 = mul i16 %q23, %r1
-  %q25 = mul i16 %q24, %r1
-  %q26 = mul i16 %q25, %r1
-  %q27 = mul i16 %q26, %r1
-  %q28 = mul i16 %q27, %r1
-  %q29 = mul i16 %q28, %r1
-  %q30 = mul i16 %q29, %r1
-  %q31 = mul i16 %q30, %r1
-  %q32 = mul i16 %q31, %r1
-  %q33 = mul i16 %q32, %r1
-  %q34 = mul i16 %q33, %r1
-  %q35 = mul i16 %q34, %r1
-  %q36 = mul i16 %q35, %r1
-  %q37 = mul i16 %q36, %r1
-  %q38 = mul i16 %q37, %r1
-  %q39 = mul i16 %q38, %r1
-  %q40 = mul i16 %q39, %r1
-  %g = add i16 %f, %q40
+  %g = add i16 %f, %q12
   store i16 %g, ptr %p
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %go ], [ %i1, %next ]
+  %more = icmp slt i16 %i, 4
+  br i1 %more, label %next, label %out
+
+next:
   call void @down(i16 %r1, i16 %e)
-  br label %out
+  %i1 = add nsw i16 %i, 1
+  br label %head
 
 out:
   ret void
