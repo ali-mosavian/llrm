@@ -268,3 +268,37 @@ fn a_vector_binary_operation_is_one_instruction_on_its_lanes() {
         assert!(text.contains(&format!("{mnemonic} v")) && text.contains(arrangement), "{op} {lanes}: {text}");
     }
 }
+
+/// An inner loop storing `i16` and `i64` in the same iteration was widened to
+/// `<8 x i16>` and `<8 x i64>` (bandwidth maximization); the backend cannot
+/// split the second, and the compile stopped with "vector with no register
+/// class" (tests/run/c/pattern_fill.c at -O2). Non-constant values, so loop-idiom
+/// leaves the stores.
+#[test]
+fn a_loop_storing_two_element_widths_compiles() {
+    let text = assembly(
+        "@a = global [64 x i16] zeroinitializer, align 2\n\
+         @b = global [64 x i64] zeroinitializer, align 8\n\
+         declare void @report(i64)\n\
+         define void @f(i64 %t, i64 %m, i16 %x, i64 %y) {\n\
+         entry:\n  br label %outer\n\
+         outer:\n\
+         \x20 %k = phi i64 [ %t, %entry ], [ %k1, %next ]\n  br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %outer ], [ %n, %loop ]\n\
+         \x20 %p = getelementptr inbounds i16, ptr @a, i64 %i\n\
+         \x20 store i16 %x, ptr %p, align 2\n\
+         \x20 %q = getelementptr inbounds i64, ptr @b, i64 %i\n\
+         \x20 store i64 %y, ptr %q, align 8\n\
+         \x20 %n = add nuw nsw i64 %i, 1\n\
+         \x20 %c = icmp eq i64 %n, %m\n\
+         \x20 br i1 %c, label %next, label %loop\n\
+         next:\n\
+         \x20 call void @report(i64 %k)\n\
+         \x20 %k1 = add nsw i64 %k, -1\n\
+         \x20 %more = icmp sgt i64 %k, 1\n\
+         \x20 br i1 %more, label %outer, label %exit\n\
+         exit:\n  ret void\n}\n",
+    );
+    assert!(text.contains("report"), "{text}");
+}
