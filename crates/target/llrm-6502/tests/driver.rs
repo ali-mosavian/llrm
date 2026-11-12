@@ -3164,3 +3164,33 @@ fn a_product_by_a_byte_calls_the_byte_entry() {
         assert!(text.contains(&format!("jsr {routine}")), "{x}:\n{text}");
     }
 }
+
+/// The compact word divide loops 16 times whatever the quotient (idiv_loop_os -Os: 2,374,468 clocks against
+/// llvm-mos's 1,083,830, 2026-11-12); the aligned one is 16 B larger and loops for the quotient's bits. A
+/// module takes it where the share of its clocks the divides save is worth the share of its bytes they add:
+/// a divide in a loop (idiv_loop_os), or the module's main work (compound_assignment_types), not one beside
+/// loops that run a thousand times as often (idioms: +16 B for -0.0% clocks).
+#[test]
+fn a_module_takes_the_aligned_divide_where_the_clocks_they_save_are_its_own() {
+    let divides = |inner: &str, outer: &str| {
+        module(&format!(
+            "define i16 @f(i16 %a, i16 %b, i16 %n, i16 %m) {{\nentry:\n  %d = or i16 %b, 1\n  br label %outer\n\
+             outer:\n  %i = phi i16 [ 0, %entry ], [ %i1, %inner_end ]\n  %s = phi i16 [ 0, %entry ], [ %t3, %inner_end ]\n  br label %inner\n\
+             inner:\n  %j = phi i16 [ 0, %outer ], [ %j1, %inner ]\n  %t = phi i16 [ %s, %outer ], [ %t3, %inner ]\n  \
+             %x = add i16 %t, %a\n  {inner}\n  %t3 = add i16 %r2, 7\n  \
+             %j1 = add nuw i16 %j, 1\n  %c = icmp ult i16 %j1, %m\n  br i1 %c, label %inner, label %inner_end\n\
+             inner_end:\n  %i1 = add nuw i16 %i, 1\n  %o = icmp ult i16 %i1, %n\n  br i1 %o, label %outer, label %out\n\
+             out:\n  {outer}\n  ret i16 %r3\n}}"
+        ))
+    };
+    let in_loop = divides("%r1 = srem i16 %x, %b\n  %y = add i16 %r1, %j\n  %r2 = srem i16 %y, %d", "%r3 = add i16 %t3, 1");
+    let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("jsr __modhi3a"), "{text}");
+    // the same loops with the work in shifts and one divide after them: too small a share of the clocks
+    let beside = divides("%r2 = mul i16 %x, 3", "%r3 = srem i16 %t3, %d");
+    let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("__modhi3c") && !text.contains("__modhi3a"), "{text}");
+    let once = module("define i16 @g(i16 %a, i16 %b) {\n  %r = srem i16 %a, %b\n  ret i16 %r\n}");
+    let text = assembly(&once, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("__modhi3a"), "the only work of the module: {text}");
+}
