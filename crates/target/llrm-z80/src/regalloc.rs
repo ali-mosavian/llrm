@@ -57,11 +57,6 @@ thread_local! {
     /// the argument registers are left unjoined, instead of what the
     /// convention says (`Target::joins_pinned_copies`).
     pub static UNJOINED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-    /// Set while a function is allocated: whether its frame stands whatever
-    /// the spills do (it has locals or stack arguments). A spill slot in a
-    /// frameless function is a `push` and a `pop`, which no instruction reads
-    /// in place; one in a frame is read as `d(ix)`.
-    pub static FRAME_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is allocated to price the other choice: no spilled
     /// read is taken from its cell (a `push` and a `pop` of the slot can be
     /// smaller than `ld d(ix), r` and `op a, d(ix)`).
@@ -307,7 +302,7 @@ impl Target for Z80Registers {
             return None;
         };
         let once = inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count() == 1;
-        if *second != register || !once || !FRAME_STANDS.with(std::cell::Cell::get) || NO_FOLD.with(std::cell::Cell::get) {
+        if *second != register || !once || NO_FOLD.with(std::cell::Cell::get) {
             return None;
         }
         let mut folded = inst.clone();
