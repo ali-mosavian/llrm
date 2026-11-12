@@ -129,7 +129,9 @@ fn stack_arguments_are_loads_and_a_vector_is_refused() {
     let ir = format!("define i32 @f({params}) {{\n  %z = zext i8 %b to i32\n  %r = add i32 %a8, %z\n  ret i32 %r\n}}");
     assert_eq!(selected(&ir).unwrap(), [["LDRBBui", "LDRWui", "ADDWrr", "RET_ReallyLR"]]);
     let why = selected("define <4 x i32> @f(<4 x i32> %a) {\n  ret <4 x i32> %a\n}").expect_err("refused");
-    assert!(why.contains("vector"), "{why}");
+    // With the vectors off the type is named; on, the calling hook has no
+    // vector argument registers (AAPCS vector arguments are not translated).
+    assert!(why.contains("vector") || why.contains("no integer"), "{why}");
 }
 
 /// Calls: `ADJCALLSTACKDOWN`, the stack stores, `BL` or `BLR`,
