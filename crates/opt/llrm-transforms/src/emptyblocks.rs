@@ -22,13 +22,9 @@
 //! ```
 //!
 //! MIRROR: the dead-phi sweep, `findDestBlockOfMergeableEmptyBlock`,
-//! `canMergeBlocks`, the preheader rule and the `callbr` rule of
-//! `isMergingEmptyBlockProfitable`.
-//!
-//! DEVIATE ECB1: the last rule of `isMergingEmptyBlockProfitable` (a switch or
-//! indirect jump's only successor to a phi block, kept by the ratio of block
-//! frequencies) always merges: MIR has no block frequency here. Exit: the
-//! frequency analysis (BlockOdds), owner w12, 2026-12-02.
+//! `canMergeBlocks`, and the preheader and switch-frequency rules of
+//! `isMergingEmptyBlockProfitable` (`FreqRatioToSkipMerge` 2, frequencies from
+//! before the first merge, as the pin's `BFI`). No `indirectbr` in this IR.
 //!
 //! DEVIATE ECB2: the merge itself is `simplifycfg::empty_block_removed`
 //! (`TryToSimplifyUncondBranchFromEmptyBlock`), which does the same to the
@@ -43,11 +39,13 @@
 //! # Runs
 //! First in `cgpaddr`'s run, before the sinks: it changes the CFG.
 
+use llrm_analysis::blockfreq::BlockFrequencies;
 use llrm_analysis::cfg;
 use llrm_mir::context::Context;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::passes::Analyses;
 
 use crate::edges;
 use crate::simplifycfg::empty_block_removed;
@@ -139,22 +137,61 @@ fn can_merge(
     true
 }
 
-/// `isMergingEmptyBlockProfitable`, less its frequency rule (DEVIATE ECB1).
+/// The predecessor whose `switch` the rule weighs `block` against: `block`'s
+/// unique predecessor, if it ends in a `switch` and `dest` starts with a phi.
+fn switch_predecessor(
+    function: &Function,
+    block: BlockId,
+    dest: BlockId,
+) -> Option<BlockId> {
+    let pred = function.sole_predecessor(block)?;
+    let ends_in_switch = function.terminator(pred).is_some_and(|last| function.instruction(last).opcode == Opcode::Switch);
+    (ends_in_switch && !edges::phis(function, dest).is_empty()).then_some(pred)
+}
+
+/// `isMergingEmptyBlockProfitable`.
 fn profitable(
     function: &Function,
     block: BlockId,
     dest: BlockId,
     is_preheader: bool,
+    freqs: Option<&BlockFrequencies>,
 ) -> bool {
-    let _ = dest;
     if is_preheader {
         let single = function.sole_predecessor(block);
         if !single.is_some_and(|pred| function.successors(pred).len() == 1) {
             return false;
         }
     }
-    true
+    let Some(pred) = switch_predecessor(function, block, dest) else { return true };
+    let freqs = freqs.expect("frequencies are computed when a switch precedes an empty block");
+    // The blocks that give the join's phis the values `block` gives them.
+    let dest_phis = edges::phis(function, dest);
+    let incoming = |phi: InstId, from: BlockId| {
+        llrm_analysis::occurrence::arms(function, phi).into_iter().find(|&(_, one)| one == from).map(|(value, _)| value)
+    };
+    let mut same: Vec<BlockId> = Vec::new();
+    for &one in function.predecessors(dest).iter() {
+        if one != block && !same.contains(&one) && dest_phis.iter().all(|&phi| incoming(phi, block) == incoming(phi, one)) {
+            same.push(one);
+        }
+    }
+    // The copies are in `pred` already.
+    if same.contains(&pred) {
+        return true;
+    }
+    let mut together = freqs.get_block_freq(block);
+    for &twin in &same {
+        if function.sole_predecessor(twin) == Some(pred) && destination(function, twin) == Some(dest) {
+            together = together + freqs.get_block_freq(twin);
+        }
+    }
+    // Skipping costs the copy and a branch in the block, merging a copy in `pred`.
+    together.mul_u64(FREQ_RATIO_TO_SKIP_MERGE).is_none_or(|limit| freqs.get_block_freq(pred) <= limit)
 }
+
+/// `FreqRatioToSkipMerge`.
+const FREQ_RATIO_TO_SKIP_MERGE: u64 = 2;
 
 /// The blocks that are some loop's preheader: the one block outside a loop
 /// that jumps to its header and to nothing else (`getLoopPreheader`).
@@ -206,17 +243,24 @@ fn dead_phis_deleted(function: &mut Function) -> bool {
 /// went).
 pub fn eliminated(
     context: &Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    analyses: &mut Analyses,
     function: &mut Function,
 ) -> bool {
     let mut changed = dead_phis_deleted(function);
     let preheaders = preheaders(function);
     let blocks: Vec<BlockId> = function.layout().iter().copied().skip(1).collect();
+    // The pin's `BFI` is computed once, before the first merge.
+    let weighs = blocks
+        .iter()
+        .any(|&block| destination(function, block).is_some_and(|dest| switch_predecessor(function, block, dest).is_some()));
+    let freqs = weighs.then(|| analyses.get::<BlockFrequencies>(context, layout, function));
     for block in blocks {
         if !function.is_placed(block) {
             continue;
         }
         let Some(dest) = destination(function, block) else { continue };
-        if !profitable(function, block, dest, preheaders.contains(&block)) {
+        if !profitable(function, block, dest, preheaders.contains(&block), freqs.as_deref()) {
             continue;
         }
         changed |= empty_block_removed(context, function, block, dest);
