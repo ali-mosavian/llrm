@@ -20,6 +20,10 @@ def find_input(name):
         if not os.path.exists(path):
             open(path, 'wb').write(data)
         return path
+    if wanted == 'DICKENS':  # the 10 MB corpus, verified against its pinned hash; rt.c reads the first ci_bytes of it
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dosbatch'))
+        import corpus
+        return str(corpus.path('dickens'))
     if os.environ.get('ARM64_BENCH_DATA'):
         return os.path.join(os.environ['ARM64_BENCH_DATA'], wanted)
     for folder in sorted(os.listdir(BENCH)):
