@@ -57,6 +57,15 @@ thread_local! {
     /// the argument registers are left unjoined, instead of what the
     /// convention says (`Target::joins_pinned_copies`).
     pub static UNJOINED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Set while a function is allocated: whether its frame stands whatever
+    /// the spills do (it has locals or stack arguments). A spill slot in a
+    /// frameless function is a `push` and a `pop`, which no instruction reads
+    /// in place; one in a frame is read as `d(ix)`.
+    pub static FRAME_STANDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function is allocated to price the other choice: no spilled
+    /// read is taken from its cell (a `push` and a `pop` of the slot can be
+    /// smaller than `ld d(ix), r` and `op a, d(ix)`).
+    pub static NO_FOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl Target for Z80Registers {
@@ -266,6 +275,30 @@ impl Target for Z80Registers {
                 vec![Operand::Frame(slot), Operand::Use(register), Operand::Imm(i64::from(offset))],
             )
         })
+    }
+
+    /// `foldMemoryOperand` (`InlineSpiller::foldMemoryOperand`,
+    /// `X86InstrInfo::foldMemoryOperandImpl`): the second source of a byte
+    /// ALU op or compare, or of the word `and`/`or`/`xor`, is read from its
+    /// frame cell (`and a, d(ix)`), not loaded into a register first.
+    fn fold_spill(
+        inst: &Inst,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        let (Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16"), Some(Operand::Use(second))) =
+            (inst.kind, inst.operands.get(2))
+        else {
+            return None;
+        };
+        let once = inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count() == 1;
+        if *second != register || !once || !FRAME_STANDS.with(std::cell::Cell::get) || NO_FOLD.with(std::cell::Cell::get) {
+            return None;
+        }
+        let mut folded = inst.clone();
+        folded.operands[2] = Operand::Frame(slot);
+        folded.may_load = true;
+        Some(folded)
     }
 
     fn spill_load(

@@ -431,7 +431,13 @@ pub fn assembled_module(
     })?;
     let mut assembled = assembled;
     options.describe_debug(&mut assembled);
-    data::zero_to_bss(&mut assembled, module, program.segments.data_space, options.machine.bss_begin);
+    data::zero_to_bss(
+        &mut assembled,
+        module,
+        program.segments.data_space,
+        options.machine.bss_begin,
+        options.arch.layout().segment_bytes().is_some(),
+    );
     if options.machine.far_bss {
         data::zero_far_to_bss(&mut assembled, module);
     }

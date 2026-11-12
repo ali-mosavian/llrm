@@ -363,6 +363,7 @@ fn a_function_with_many_kinds_or_many_instructions_is_built_a_bounded_number_of_
         let count = std::cell::Cell::new(0);
         llrm_m68k::libcalls::chosen(
             &module,
+            Cpu::M68020,
             Mode::Auto,
             |_| true,
             |_, _| {

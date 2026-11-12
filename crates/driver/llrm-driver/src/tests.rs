@@ -3701,14 +3701,11 @@ fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m6
     assert!(!listing.lines().any(|l| l.trim().starts_with("or ")), "the and became an or:\n{listing}");
 }
 
-/// `icmp ult` before `icmp ne` joined by `and` and branched on: the pin keeps
-/// each compare's IR order through De Morgan (`SDLoc(N00)`, `SDLoc(N01)`), so
-/// the source-order scheduler emits `cmp ecx, 7` before `cmp eax, 204`. Ours
-/// gave both flipped compares the branch's order and emitted them the other
-/// way round (jpeg -O2, +59 B of spill in `bench_jpeg_fixed_`). `swapped`
-/// is the same with the compares in the other order.
+/// `and` of an `icmp ne` and an `icmp ult`, branched on, at m32 -O2: since #8912 the condition is two branches
+/// (`cmp; je; add; cmp; ja`), taken in the `and`'s operand order whichever compare the IR defines first. The
+/// merged form this test pinned (De Morgan with each compare's IR order, jpeg -O2 +59 B of spill) no longer exists.
 #[test]
-fn the_compares_of_a_negated_and_keep_their_ir_order_at_m32() {
+fn the_compares_of_an_and_are_two_branches_in_operand_order_at_m32() {
     let ir = |first: &str, second: &str| {
         format!(
             "target datalayout = \"@m32-datalayout@\"\n\
@@ -3721,15 +3718,17 @@ fn the_compares_of_a_negated_and_keep_their_ir_order_at_m32() {
     };
     let ult = "%u = icmp ult i32 %s, 7";
     let ne = "%n = icmp ne i32 %x, 204";
-    let order = |text: String| -> Vec<&'static str> {
+    let listing = |text: String| {
         let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), &text, "f").unwrap();
-        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-        let first = listing.lines().position(|l| l.trim().starts_with("cmp ecx, 7")).unwrap();
-        let second = listing.lines().position(|l| l.trim().starts_with("cmp eax, 204")).unwrap();
-        vec![if first < second { "ult first" } else { "ne first" }]
+        llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    assert_eq!(order(ir(ult, ne)), ["ult first"]);
-    assert_eq!(order(ir(ne, ult)), ["ne first"]);
+    for text in [ir(ult, ne), ir(ne, ult)] {
+        let listing = listing(text);
+        let at = |needle: &str| listing.lines().position(|l| l.trim().starts_with(needle));
+        assert!(!listing.contains("setb") && !listing.contains("seta"), "the compares were joined:\n{listing}");
+        let (ne, ult) = (at("cmp eax, 204"), at("cmp eax, 6"));
+        assert!(ne.is_some() && ne < ult, "the compares are not in operand order:\n{listing}");
+    }
 }
 
 /// The copy that puts a call's argument in its register is of the call's line
@@ -4331,11 +4330,10 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     assert_eq!(doubled, 0, "{listing}");
 }
 
-/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass
-/// allowed (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B);
-/// -O3 keeps 150 (m32's rectwo and bintree are worse with 450 there).
+/// fib at m64 was copied into itself to a growth cap (-O2: 150 `gcc_insns`, 25941 clocks, 556 B; gcc's 450: 10793
+/// clocks, 1028 B). Since REC-7 (#9043) a recursion is copied two deep at -O2 and -O3 alike: 4 calls at both.
 #[test]
-fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
+fn fib_is_copied_two_deep_into_itself_at_o2_and_o3_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i32 @fib(i32 %n) {\n\
@@ -4351,7 +4349,7 @@ fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
         llrm_codegen::backend::masm::text(&built).unwrap().matches("call fib").count()
     };
     let (o2, o3) = (calls("-O2"), calls("-O3"));
-    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+    assert!(o2 == 4 && o3 == 4, "-O2 made {o2} calls of fib, -O3 {o3}");
 }
 
 /// An `i32` divided by a constant at m64 was `mov ecx, 0xcccccccd; mul ecx;
@@ -5844,6 +5842,31 @@ fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
     };
     assert!(listing(&once).contains("imul"), "a multiply that runs once keeps its imul:\n{}", listing(&once));
     assert!(!listing(&looped).contains("imul"), "a multiply in a loop is the chain:\n{}", listing(&looped));
+}
+
+/// MUL-HOT (m32 -Os): a block runs often when its function does, not only when its loop does. x_dct -Os called `dct8`
+/// (`x * 7`, `x * 5`, `x * 3` in straight-line code) from two nested loops and kept every `imul`: 314,722 clk against
+/// clang's 211,103. A function called from a loop is hot in all its blocks; one called once keeps its `imul`.
+#[test]
+fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
+    let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
+    let callee = "define internal i32 @g(i32 %x) noinline {\n  %m = mul i32 %x, 45\n  ret i32 %m\n}\n";
+    let once = format!("{head}{callee}define i32 @f(i32 %x) {{\n  %r = call i32 @g(i32 %x)\n  ret i32 %r\n}}\n");
+    let looped = format!(
+        "{head}{callee}define i32 @f(i32 %n) {{\nentry:\n  br label %body\n\
+         body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %s = phi i32 [ 0, %entry ], [ %t, %body ]\n  \
+         %r = call i32 @g(i32 %i)\n  %t = add i32 %s, %r\n  %j = add i32 %i, 1\n  \
+         %c = icmp slt i32 %j, %n\n  br i1 %c, label %body, label %done\n\
+         done:\n  ret i32 %s\n}}\n"
+    );
+    let callee_listing = |text: &str| {
+        let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let start = listing.find("g proc").unwrap_or_else(|| panic!("no g:\n{listing}"));
+        listing[start..].split("g endp").next().unwrap().to_owned()
+    };
+    assert!(callee_listing(&once).contains("imul"), "a function called once keeps its imul:\n{}", callee_listing(&once));
+    assert!(!callee_listing(&looped).contains("imul"), "a function called from a loop is the chain:\n{}", callee_listing(&looped));
 }
 
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:

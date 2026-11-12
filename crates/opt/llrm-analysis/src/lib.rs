@@ -100,6 +100,7 @@ pub mod attrsummary;
 pub mod avail;
 pub mod basicaa;
 pub mod blockfreq;
+pub mod entryweight;
 pub mod bpi;
 pub mod branchprob;
 pub mod captureanalysis;

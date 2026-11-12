@@ -350,6 +350,22 @@ impl Tti for M68k {
         llrm_mir::tti::Saving { clocks: zero + copy, bytes: 4 }
     }
 
+    /// DEVIATE UNROLL-O1 (owner m68k, exit 2026-12-04, with `unroll_at_o1` in
+    /// `targets.toml`): clang marks every loop `unroll.disable` at -O1, so a
+    /// two-trip float loop stayed rolled at 170 B where gcc's complete unroll
+    /// folds it to 16 (float_in_place_update). At -O1 a loop is unrolled where
+    /// the copies cost no more than the rolled loop after the folding the
+    /// analysis simulates (gcc's size-neutral complete unroll); a call the
+    /// copies keep is priced as one instruction, where the pin's analysis gives
+    /// up on it.
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        true
+    }
+
+    fn unroll_o1_prices_calls(&self) -> bool {
+        true
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the
@@ -701,8 +717,8 @@ impl M68k {
     /// Whether the lowering writes a wide multiply of `left` by `right` with no
     /// library call: from 32-bit `UMUL_LOHI`s when the target has them
     /// (`ExpandIntRes_MUL`), else only a power of two, its negation, or a
-    /// positive constant of shifts and an add
-    /// ([`crate::dagisel::mulprice::chain`]; any other negative one is a call).
+    /// constant whose word multiplies are all chains
+    /// ([`Self::constant_product_is_chains`]).
     fn multiply_makes_no_call(
         &self,
         left: OperandInfo,
@@ -720,10 +736,30 @@ impl M68k {
         [left, right].into_iter().any(|operand| {
             operand.power_of_two
                 || operand.negated_power_of_two
-                || operand
-                    .value
-                    .and_then(|value| i32::try_from(value).ok())
-                    .is_some_and(|value| value > 0 && crate::dagisel::mulprice::chain(self.cpu, value as u32).is_some())
+                || operand.value.and_then(|value| i64::try_from(value).ok()).is_some_and(|value| {
+                    self.constant_product_is_chains(value)
+                })
+        })
+    }
+}
+
+impl M68k {
+    /// Whether `x * value` in 64 bits is shifts and adds only. The expansion
+    /// (`forceExpandMultiply`) multiplies each 32-bit word of `x` by the
+    /// constant's low word, its two 16-bit halves and its high word; a
+    /// multiplier with no priced chain (DEVIATE G2, `dagisel::synth`) is a
+    /// `__mulsi3` call. Priced at speed: a chain's clocks count in the loops
+    /// the unroller prices, so the call is taken only where none exists.
+    fn constant_product_is_chains(
+        &self,
+        value: i64,
+    ) -> bool {
+        let (low, high) = (value as u32, (value >> 32) as u32);
+        [low, low & 0xFFFF, low >> 16, high].into_iter().all(|word| {
+            word < 2
+                || word.is_power_of_two()
+                || word == u32::MAX
+                || crate::dagisel::synth::plan(self.cpu, crate::timing::Price::Rate, 32, u128::from(word)).is_some()
         })
     }
 }

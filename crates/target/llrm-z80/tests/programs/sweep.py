@@ -240,7 +240,12 @@ def main():
     ap.add_argument("--program-flags-to-llc", action="store_true")
     ap.add_argument("--ours-only", action="store_true")
     ap.add_argument("--sdcc-only", action="store_true")
+    ap.add_argument("--runtime", default=str(run.RUNTIME), help="the z80_rt.s to link (the compiler's own build of it)")
+    ap.add_argument("--allow-runtime-mismatch", action="store_true")
     ctx = ap.parse_args()
+    run.RUNTIME = Path(ctx.runtime)
+    if not ctx.sdcc_only and not ctx.allow_runtime_mismatch and (why := run.runtime_mismatch(ctx.llc, run.RUNTIME)):
+        sys.exit(f"sweep.py: {why}")
     corpus = [p.stem for p in run.selected(Path(ctx.src))]
     expected = ctx.names or corpus
     # a requested name the corpus does not select (a typo, or tagged for other targets) is a dropped program, not a skipped one

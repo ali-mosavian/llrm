@@ -1894,6 +1894,9 @@ pub fn recorded(
     {
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
+    if applied.options.at_o1() && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_o1()) {
+        manager.add_program(crate::mergefunc::MergeLocalFunctions);
+    }
     if applied.options.optimize {
         // `GlobalDCEPass` then `ConstantMergePass` after the function passes:
         // what a late unroll or fold left unnamed goes before merging.

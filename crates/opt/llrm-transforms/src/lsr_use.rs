@@ -511,9 +511,9 @@ pub struct Cost {
     /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
     scaled: Vec<(Scev, i64)>,
     /// The registers rated so far as part of an address (DEVIATE LU8).
-    addressed: Vec<Scev>,
+    pub(crate) addressed: Vec<Scev>,
     /// Rated for size (set by `rate_formula`).
-    size: bool,
+    pub(crate) size: bool,
     /// DEVIATE LG3: the bytes of the setup and exit-test code, for a target
     /// that gives a byte model (`Tti::lsr_bytes`); 0 elsewhere.
     pub bytes: u32,
@@ -575,13 +575,19 @@ impl Cost {
         }
         // DEVIATE LSR-SIZE: sized for bytes, the bytes of the displacements,
         // adds and setup come before the cost of the recurrences, the
-        // instructions and registers staying first.
+        // instructions and registers staying first. Where addresses take a
+        // class smaller than the register file (real mode: bx, bp, si, di),
+        // the registers an address holds come next: LLVM's `NumRegs` comes
+        // before the rest in `isLess`, and an address register is the scarcer
+        // one there (DEVIATE LU8).
         if (self.size || other.size) && tti.lsr_size_order() {
+            let restricted = tti.address_registers() < tti.number_of_gpr_registers();
             let key = |x: &Cost| {
                 let c = &x.c;
                 (
                     c.insns,
                     c.num_regs,
+                    if restricted { x.addressed.len() } else { 0 },
                     x.size_bytes,
                     c.add_rec_cost,
                     c.num_iv_muls,
@@ -1043,7 +1049,17 @@ pub fn is_extension_of_existing_phi(
     cx: &Cx,
     ar: Scev,
 ) -> bool {
-    let Some(header) = se.addrec_header(ar) else { return false };
+    extension_of_existing_phi(se, cx, ar).is_some()
+}
+
+/// The phi `is_extension_of_existing_phi` found, and whether the extension is
+/// a sign extension.
+pub fn extension_of_existing_phi(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    ar: Scev,
+) -> Option<(InstId, bool)> {
+    let header = se.addrec_header(ar)?;
     let ty = se.type_of(ar);
     let bits = se.get_type_size_in_bits(cx, ty);
     for inst in cx.function.iter_block(header) {
@@ -1059,13 +1075,14 @@ pub fn is_extension_of_existing_phi(
         if se.get_type_size_in_bits(cx, se.type_of(narrow)) >= bits || se.addrec_header(narrow) != Some(header) {
             continue;
         }
-        if se.get_zero_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar
-            || se.get_sign_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar
-        {
-            return true;
+        if se.get_zero_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar {
+            return Some((inst, false));
+        }
+        if se.get_sign_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar {
+            return Some((inst, true));
         }
     }
-    false
+    None
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1397
