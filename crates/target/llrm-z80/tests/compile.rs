@@ -206,6 +206,38 @@ fn a_reloaded_byte_stepped_and_spilled_back_is_stepped_in_the_frame() {
     assert!(!insts.iter().any(|text| text.starts_with("ld b")), "{insts:?}");
 }
 
+/// A spilled word stepped when the carry says so (`add hl, bc; jr nc, 1$; inc de`) was reloaded, stepped and stored
+/// back (`ld e, -8(ix)` / `ld d, -7(ix)` / `inc de` / two stores: 15 B, 88 T, div_constants_short's carry steps); the
+/// carry runs through the frame cell (`inc -8(ix)` / `jr nz` / `inc -7(ix)`: 10 B).
+#[test]
+fn a_reloaded_word_stepped_on_a_carry_and_spilled_back_is_stepped_in_the_frame() {
+    use llrm_spike_mf::regalloc::Assignment;
+    use llrm_z80::expand::{Line, finish, reads};
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::regalloc::Class;
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr16, Class::Gr16];
+    let (loaded, stepped) = (Reg::Virt(0), Reg::Virt(1));
+    let insts = vec![
+        Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(loaded), Operand::Frame(0)]),
+        Inst::new(Kind::Op("INC16c"), vec![Operand::Def(stepped), Operand::Use(loaded), Operand::Imm(3)]),
+        Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(0), Operand::Use(stepped)]),
+        Inst::new(Kind::Op("RET"), vec![]),
+    ];
+    function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+    let assignment = Assignment(vec![llrm_z80::reg::DE, llrm_z80::reg::DE]);
+    let lines = finish(&function, &assignment, 0, &[(0, 2)], reads(&function)).unwrap_or_else(|why| panic!("{why}"));
+    let insts: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(insts.iter().filter(|text| text.starts_with("inc ") && text.ends_with("(ix)")).count(), 2, "{insts:?}");
+    assert!(!insts.iter().any(|text| text.starts_with("ld e") || text.starts_with("ld d")), "{insts:?}");
+}
+
 /// The divisor 10 was kept in `de` across the call, so it was spilled to the
 /// frame and loaded back for the compare (`ld -3(ix), e` / `ld c, -3(ix)`); a
 /// constant is loaded again where it is wanted.
@@ -1749,12 +1781,37 @@ fn a_counted_loop_counts_its_trips_in_a_byte() {
 
 /// A function tuned for size called the long long divide made for speed: the
 /// routine is 179 B more to link (data_int64 and int64_division, -Os). It
-/// calls the size routine; any other function the speed one.
+/// calls the size routine where the module's clocks are another loop's (the
+/// size routine is 99k T a divide: `size_divide.rs` has it called in a module
+/// where the divide is the clocks); any other function the speed one.
 #[test]
 fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
     let body = |attr: &str| {
         format!(
-            "define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
+            "@a = global [200 x i8] zeroinitializer
+define void @g() {attr} {{
+entry:
+  br label %outer
+outer:
+  %j = phi i16 [ 0, %entry ], [ %j.next, %inner.end ]
+  br label %inner
+inner:
+  %i = phi i16 [ 0, %outer ], [ %i.next, %inner ]
+  %p = getelementptr i8, ptr @a, i16 %i
+  %v = load i8, ptr %p
+  %w = add i8 %v, 1
+  store i8 %w, ptr %p
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 200
+  br i1 %c, label %inner, label %inner.end
+inner.end:
+  %j.next = add nuw i16 %j, 1
+  %d = icmp ne i16 %j.next, 200
+  br i1 %d, label %outer, label %exit
+exit:
+  ret void
+}}
+define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
         )
     };
     for attr in ["optsize", "minsize"] {
