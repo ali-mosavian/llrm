@@ -24,8 +24,14 @@ use llrm_mir::tti::CostKind;
 use super::partial::{PartialIv, has_partial_iv_condition, result_of};
 use super::{Analyzed, Run, collect_homogenous_inst_graph_loop_invariants, def_of, logical, skip_trivial_select};
 
-/// `-unswitch-threshold`.
+/// `-unswitch-threshold`'s default.
 const UNSWITCH_THRESHOLD: i64 = 50;
+
+/// The `UnswitchThreshold` option the pin reads: the target's table
+/// (`Tuning::unswitch_threshold`, DEVIATE in the x86-m16 table) or the default.
+fn unswitch_threshold(run: &Run) -> i64 {
+    run.tti.unswitch_threshold_override().unwrap_or(UNSWITCH_THRESHOLD)
+}
 /// `-unswitch-siblings-toplevel-div`.
 const UNSWITCH_SIBLINGS_TOPLEVEL_DIV: i64 = 2;
 /// `-unswitch-parent-blocks-div`.
@@ -226,13 +232,11 @@ fn cost_multiplier(
     let siblings_multiplier =
         (if parent.is_some() { siblings_count } else { siblings_count / UNSWITCH_SIBLINGS_TOPLEVEL_DIV }).max(1);
     // Saturating at the threshold keeps the product from overflowing.
-    if clones_power > log2(UNSWITCH_THRESHOLD)
-        || siblings_multiplier > UNSWITCH_THRESHOLD
-        || parent_loop_size_multiplier > UNSWITCH_THRESHOLD
-    {
-        UNSWITCH_THRESHOLD
+    let threshold = unswitch_threshold(run);
+    if clones_power > log2(threshold) || siblings_multiplier > threshold || parent_loop_size_multiplier > threshold {
+        threshold
     } else {
-        (siblings_multiplier * (1 << clones_power)).min(UNSWITCH_THRESHOLD)
+        (siblings_multiplier * (1 << clones_power)).min(threshold)
     }
 }
 
@@ -354,5 +358,5 @@ pub(super) fn best(
     }
     let (cost, candidate) = best?;
     llrm_support::debug!("simpleloopunswitch", "lowest cost found: {cost}");
-    (cost < UNSWITCH_THRESHOLD).then(|| candidate.clone())
+    (cost < unswitch_threshold(run)).then(|| candidate.clone())
 }
