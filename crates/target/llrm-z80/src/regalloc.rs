@@ -285,7 +285,6 @@ impl Target for Z80Registers {
         if let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(byte), Operand::Use(pair)]) = (inst.kind, &inst.operands[..])
             && *pair == register
             && byte != pair
-            && FRAME_STANDS.with(std::cell::Cell::get)
             && !NO_FOLD.with(std::cell::Cell::get)
         {
             return Some(Inst {
