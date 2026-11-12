@@ -3214,7 +3214,7 @@ impl<'a> TypeLegalizer<'a> {
         };
         // A dword divisor's size form always does two `div`s: -Os only, -O1
         // keeps the clocks.
-        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-27): in a block that runs more than once a
+        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that runs more than once a
         // call the speed routine, whose bytes the module pays once.
         let hot = self.tli.fast_divide_in_loops() && self.dag.config().block_frequency > 1.0;
         let small = (self.tli.small_divide() && (wide || self.tli.size_only()) && !hot)
