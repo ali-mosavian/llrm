@@ -519,7 +519,7 @@ impl Options {
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
             "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
-            "indvars" | "window" | "gepoffset" => self.strength,
+            "indvars" | "window" | "gepoffset" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
@@ -1984,6 +1984,12 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
+        // A divide whose operands ScalarEvolution proves narrow, in the narrow
+        // type, where the target has one (DEVIATE NRW-1); at speed
+        // only: the call it replaces is the smaller code.
+        if applied.options.wanted("narrowrange") && !applied.options.prefers_size() && !applied.options.at_o1() {
+            passes.push(Box::new(crate::narrowrange::NarrowByRange));
+        }
         // The pin's llc runs it in the pre-ISel passes, after LSR; it does
         // nothing for a target that counts no loop in hardware.
         if applied.options.wanted("hardwareloops") {

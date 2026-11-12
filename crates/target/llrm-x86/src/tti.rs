@@ -733,6 +733,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn ipra_binds_local(&self) -> bool {
+        self.tuning.ipra_binds_local
+    }
+
     fn unroll_trial_at_size(&self) -> Option<u32> {
         self.tuning.unroll_trial_at_size
     }
@@ -1181,6 +1185,10 @@ impl Tti for X86 {
 
     fn rotation_hot_at_size(&self) -> bool {
         self.tuning.rotation_hot_at_size
+    }
+
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        self.tuning.rotation_hot_bytes_per_loop
     }
 
     fn size_rotation_header_limit(&self) -> Option<u32> {

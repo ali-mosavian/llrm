@@ -1032,6 +1032,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPRA-DSO-LOCAL: see `Tuning::ipra_binds_local`.
+    fn ipra_binds_local(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
@@ -1118,6 +1123,12 @@ pub trait Tti {
     /// bytes a loop. False: RS1 alone.
     fn rotation_hot_at_size(&self) -> bool {
         false
+    }
+
+    /// Bytes a loop ROTATION-HOT rotates may add where the finished code executes less. 0: the object
+    /// may not grow (-Os strict on bytes).
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        4
     }
 
     /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a
@@ -2573,6 +2584,13 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
+    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
+    /// none: the pass does not run.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        None
     }
 
     /// Whether the loop as written keeps the bound of its exit test live next
