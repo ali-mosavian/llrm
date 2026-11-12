@@ -449,26 +449,16 @@ fn allocated_choosing(
     let mut split = function.clone();
     let splits = split_loop_constant_stores(&mut split) && hoist_constants(&mut split);
     let base = if hoist_constants(&mut hoisted) {
-<<<<<<< /tmp/cur.rs
         // the allocator does not see that a byte of a pair is read in place, so a
         // constant kept across a loop can cost more than making it there, or less:
         // the hoisted loop stays unless the plain one is cheaper by the loop's
         // weighted cost. The other choices are explored on both: lz4c -O2 wants
         // the plain one's (exploring only the better first allocation made it 442
         // B against 427).
-        match (allocate(function.clone(), name, request.level), allocate(hoisted, name, request.level)) {
-=======
-        // the allocator does not see that a byte of a pair is read in place, so
-        // a constant kept across a loop can cost more than making it
-        // there, or less: the hoisted loop stays unless the plain one
-        // is cheaper by the loop's weighted cost. The other choices are
-        // explored on both: lz4c -O2 wants the plain one's (exploring
-        // only the better first allocation made it 442 B against 427).
         match (
             allocate_from(function.clone(), name, request.level, plain_first),
             allocate(hoisted, name, request.level),
         ) {
->>>>>>> /tmp/f1.rs
             (Ok(plain), Ok(with)) => {
                 match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
                     (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
