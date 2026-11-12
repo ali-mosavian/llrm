@@ -16,7 +16,7 @@ fn pricing_an_instruction_normalizes_a_handful_of_labels() {
             let before = keys_made();
             cost(cpu, one, 2, false).unwrap_or_else(|why| panic!("{one}: {why}"));
             let made = keys_made() - before;
-            assert!(made <= 40, "{made} labels normalized to price `{one}` on {cpu:?}");
+            assert!(made <= 12, "{made} labels normalized to price `{one}` on {cpu:?}");
         }
     }
 }
