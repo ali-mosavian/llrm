@@ -26,6 +26,7 @@ pub mod isd {
     pub const SUBZX: u16 = 28683;
     pub const TSTS: u16 = 28680;
     pub const WRAPPER: u16 = 28676;
+    pub const WSHIFT: u16 = 28693;
 }
 
 pub mod opcode {
@@ -119,12 +120,13 @@ pub mod opcode {
     pub const SUB8r: u16 = 425;
     pub const SUBZX8: u16 = 426;
     pub const UMUL8X8: u16 = 427;
-    pub const XOR16: u16 = 428;
-    pub const XOR16i: u16 = 429;
-    pub const XOR8i: u16 = 430;
-    pub const XOR8m: u16 = 431;
-    pub const XOR8r: u16 = 432;
-    pub const ZEXT8: u16 = 433;
+    pub const WSHIFT: u16 = 428;
+    pub const XOR16: u16 = 429;
+    pub const XOR16i: u16 = 430;
+    pub const XOR8i: u16 = 431;
+    pub const XOR8m: u16 = 432;
+    pub const XOR8r: u16 = 433;
+    pub const ZEXT8: u16 = 434;
 }
 
 pub mod reg {

@@ -84,6 +84,11 @@ thread_local! {
     /// Set while a function is selected at a level that allows no trade between bytes and clocks (-O1, -Os, -Oz).
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected with the words of its long adds and subtracts left to the generic
+    /// Set while a function with a variable 64-bit shift is selected the second
+    /// time, each such shift an in-place loop over eight bytes of the frame
+    /// (`Z80Lowering::lower_wide_shift`) where the first selection calls the
+    /// shift routine; the caller prices the two with the routine linked once.
+    pub static INLINE_SHIFTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// expansion (an add and a compare of the sum), not the carry ops (`lower_carry_op`); the caller prices the
     /// two forms (`compile::lines_of`).
     pub static GENERIC_CARRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -177,6 +182,8 @@ struct Z80Combines {
     long_multiply: bool,
     /// Selected at a level that allows no trade between bytes and clocks (`STRICT_LEVEL`).
     strict: bool,
+    /// The module's word multiplies are all constants that chain (`prepare::mark_word_chains`): the routine goes.
+    chain_credit: bool,
 }
 
 /// The bytes and T-states of a chain of shifts and adds on a word in `hl`, the source copied to `bc` when a step adds it.
@@ -208,19 +215,19 @@ fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
 ///
 /// DEVIATE Z80-MUL-CHAIN (owner z80, exit 2026-11-24): the pin has no such search; AArch64's `performMulCombine`
 /// and X86's `combineMul` are the table-driven analogues.
-fn word_product_chain(
-    dag: &mut SelectionDAG,
-    node: SDValue,
+/// The chain of shifts and adds for a word times `c`, with its bytes and T-states, and the `ld de, #c; call` it
+/// replaces; `None` where the call is no dearer. `forced` takes the chain whatever its bytes (the routine is paid for).
+pub(crate) fn word_chain(
+    c: i64,
     strict: bool,
-) -> Option<SDValue> {
-    let (x, bits) = (dag.operand(node, 0), dag.constant(dag.operand(node, 1))?);
-    let c = i64::from(bits as u16);
-    if c < 3 || dag.constant(x).is_some() {
+    forced: bool,
+) -> Option<(Vec<(&'static str, i64)>, (i64, i64), (i64, i64))> {
+    if c < 3 {
         return None;
     }
     let weight = if strict { 40 } else { 3 };
     let call = (6, 40 + 65 * i64::from(16 - (c as u16).leading_zeros()));
-    let limit = weight * call.0 + call.1;
+    let limit = if forced { i64::MAX / 8 } else { weight * call.0 + call.1 };
     let (chain, _) = llrm_codegen::backend::arithmetic::synthesize_chain(
         c,
         limit,
@@ -228,11 +235,34 @@ fn word_product_chain(
         weight + 11,
         2 * weight + 8,
     )?;
-    let (bytes, clocks) = word_chain_price(&chain);
-    let wins = if strict { bytes <= call.0 && clocks <= call.1 } else { weight * bytes + clocks < limit };
-    if !wins {
+    let price = word_chain_price(&chain);
+    let wins = if forced {
+        price.1 <= call.1
+    } else if strict {
+        price.0 <= call.0 && price.1 <= call.1
+    } else {
+        weight * price.0 + price.1 < limit
+    };
+    wins.then_some((chain, price, call))
+}
+
+/// Whether the pin turns a word times `c` into shifts and one add (`2^k +- 1`, times a power of two): no call.
+pub(crate) fn pin_decomposes(c: u64) -> bool {
+    let odd = c >> c.trailing_zeros().min(63);
+    c == 0 || odd == 1 || (odd - 1).is_power_of_two() || (odd + 1).is_power_of_two()
+}
+
+fn word_product_chain(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    strict: bool,
+    credit: bool,
+) -> Option<SDValue> {
+    let (x, bits) = (dag.operand(node, 0), dag.constant(dag.operand(node, 1))?);
+    if dag.constant(x).is_some() {
         return None;
     }
+    let (chain, _, _) = word_chain(i64::from(bits as u16), strict, credit)?;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, EVT::I16, &[value, by])
@@ -359,7 +389,7 @@ impl CombineHooks for Z80Combines {
         if dag.opcode(node) == ISD::Mul {
             let word = dag.value_type(node) == EVT::I16;
             return (word && level == CombineLevel::BeforeLegalizeTypes)
-                .then(|| word_product_chain(dag, node, self.strict))
+                .then(|| word_product_chain(dag, node, self.strict, self.chain_credit))
                 .flatten();
         }
         if dag.opcode(node) == ISD::And {
@@ -428,12 +458,17 @@ pub fn select_block(
     cpu: Cpu,
     info: &mut FunctionLoweringInfo,
     optimize: bool,
-    (sized, long_multiply, cold): (bool, bool, bool),
+    (sized, long_multiply, cold, chain_credit): (bool, bool, bool, bool),
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering();
     if GENERIC_CARRY.with(std::cell::Cell::get) {
         for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
             tli.set_operation_action(op, MVT::I16, llrm_codegen::backend::selectiondag::Action::Expand);
+        }
+    }
+    if INLINE_SHIFTS.with(std::cell::Cell::get) {
+        for op in [ISD::Shl, ISD::Srl, ISD::Sra] {
+            tli.set_operation_action(op, MVT::I64, llrm_codegen::backend::selectiondag::Action::Custom);
         }
     }
     tli.set_opt_for_size(sized);
@@ -454,12 +489,13 @@ pub fn select_block(
     // the product of two zero-extended words is a call in a block that runs
     // once (`block_frequencies` at most 1): 15 B against 216 B of partial
     // products for a few hundred T-states more; in a loop the products stay
-    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
-    if cold && !sized {
+    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only). Above -O1, where the module links
+    // `__mulsi3` for its long products, the call is `__umulhisi3` for two words too: the same call, half the steps.
+    if (cold || (long_multiply && !STRICT_LEVEL.with(std::cell::Cell::get))) && !sized {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized };
-    let mut combines = Z80Combines { long_multiply: (sized || all_calls) && long_multiply, strict: STRICT_LEVEL.with(std::cell::Cell::get) };
+    let mut combines = Z80Combines { long_multiply: (sized || all_calls) && long_multiply, strict: STRICT_LEVEL.with(std::cell::Cell::get), chain_credit };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);

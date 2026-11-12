@@ -409,6 +409,7 @@ fn tail(
     price: bool,
     audit: bool,
 ) -> Result<Assembled, String> {
+    crate::routines::set_aligned_divides(false);
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
     let copies = if request.level == Level::O0 {
@@ -447,7 +448,11 @@ fn tail(
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
     let data = data_text(module, &program.layout)?;
-    crate::dagisel::function::set_widen_products(matches!(request.level, Level::O2 | Level::O3 | Level::Omax));
+    crate::dagisel::function::set_widen_products(if matches!(request.level, Level::O2 | Level::O3 | Level::Omax) {
+        crate::dagisel::function::Widen::Unsized
+    } else {
+        crate::dagisel::function::Widen::Off
+    });
     let mut selections = Vec::new();
     let mut from_module = Vec::new();
     // The module each function was selected from: its blocks are the text's.
@@ -484,6 +489,7 @@ fn tail(
         sources.push(source);
         from_module.push(as_called && !paged_chosen);
     }
+    crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
@@ -492,7 +498,17 @@ fn tail(
         selection.source = file.clone().map(|file| (file, scope));
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
-    let pieces = module_text(module, &parts)?;
+    let mut pieces = module_text(module, &parts)?;
+    let sites = crate::mulimage::aligned_divide_sites(module, &names, &selections, &from_module, &program.layout, request);
+    if let Some(sites) = sites {
+        let weights = estimate_weights(module, &names, &sources, &program.layout);
+        let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
+        if crate::mulimage::aligned_divides_pay(sites, run, size) {
+            crate::routines::set_aligned_divides(true);
+            let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
+            pieces = module_text(module, &parts)?;
+        }
+    }
     let functions = if audit {
         names
             .iter()
@@ -506,16 +522,7 @@ fn tail(
     };
     let (mut clocks, mut bytes) = (0i64, 0i64);
     if price {
-        let weights: Vec<Vec<u64>> = names
-            .iter()
-            .zip(&sources)
-            .map(|(name, source)| {
-                let from = source.unwrap_or(module);
-                let function = from.named(name).and_then(|id| from.global(id).function());
-                function
-                    .map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, &program.layout))
-            })
-            .collect();
+        let weights = estimate_weights(module, &names, &sources, &program.layout);
         let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
         (clocks, bytes) = (run as i64, size as i64);
     }
@@ -889,4 +896,22 @@ fn write_constant(
         }
         _ => Err("a global initializer that is not an integer, pointer, array or struct".into()),
     }
+}
+
+/// The trips each block of each function runs, from the module a function was selected from.
+fn estimate_weights(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    sources: &[Option<&llrm_mir::module::Module>],
+    layout: &llrm_mir::datalayout::DataLayout,
+) -> Vec<Vec<u64>> {
+    names
+        .iter()
+        .zip(sources)
+        .map(|(name, source)| {
+            let from = source.unwrap_or(module);
+            let function = from.named(name).and_then(|id| from.global(id).function());
+            function.map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, layout))
+        })
+        .collect()
 }

@@ -80,6 +80,10 @@ def Z80ldirg : SDNode<"Z80ISD::LDIRG", SDTZ80Ldir, [SDNPHasChain, SDNPMayLoad, S
 // (so the count is one less than the bytes filled, and nonzero). `de` is made from the pointer by the expansion.
 def SDTZ80Fill : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>]>;
 def Z80ldfill : SDNode<"Z80ISD::LDFILL", SDTZ80Fill, [SDNPHasChain, SDNPMayStore]>;
+// A 64-bit value in eight bytes of memory shifted in place by a count of bits: the node carries the address of the low
+// byte (of the high byte for a right shift), the count in BC, and the kind (0 shl, 1 lshr, 2 ashr). One loop, a bit a trip.
+def SDTZ80WShift : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i8>]>;
+def Z80wshift : SDNode<"Z80ISD::WSHIFT", SDTZ80WShift, [SDNPHasChain, SDNPMayLoad, SDNPMayStore]>;
 // A store to SP + offset in the call frame the callseq opens. The Z80 has no SP-relative store, so the pseudo is
 // expanded after frame layout; PUSH, one byte and 11 T, is the later call-frame optimization.
 def SDT_Z80StSP : SDTypeProfile<0, 2, [SDTCisInt<0>, SDTCisVT<1, i16>]>;
@@ -385,6 +389,10 @@ let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in {
   def LDFILLi : Z80Inst<(outs), (ins HLR:$p, i8imm:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, (i8 imm:$v), i16:$n)]>;
   def LDFILLr : Z80Inst<(outs), (ins HLR:$p, ACC:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, i8:$v, i16:$n)]>;
 }
+
+// `ld b, c; inc b; jr test; loop: push hl; sla (hl) or srl/sra (hl); (inc or dec hl; rl or rr (hl)) x 7; pop hl; test: djnz loop`.
+let mayLoad = 1, mayStore = 1, Defs = [HL, BC, F] in
+  def WSHIFT : Z80Inst<(outs), (ins HLR:$p, BCR:$n, i8imm:$k), "wshift $p, $n, $k", [(Z80wshift i16:$p, i16:$n, (i8 imm:$k))]>;
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
