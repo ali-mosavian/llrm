@@ -3251,3 +3251,17 @@ fn a_table_whose_loads_the_late_unroll_folded_leaves_the_module() {
     let text = llrm_mir::print::module(&module);
     assert!(!text.contains("@main.xs"), "{text}");
 }
+
+/// m64 queens -O2 ran 9.4% more instructions because ipa-cp copied only at
+/// -O3: a target that clones at speed copies at -O2 too, never at -O1, -Os or
+/// where the target says no.
+#[test]
+fn a_target_that_clones_at_speed_copies_at_o2_and_o3_not_at_o1_or_size() {
+    let copies = |options: pipeline::Options, target: bool| super::cp_clones_by_default(&options, target);
+    assert!(copies(pipeline::Options::standard(), true));
+    assert!(copies(pipeline::Options::speed(), true));
+    assert!(!copies(pipeline::Options::basic(), true));
+    assert!(!copies(pipeline::Options::size(), true));
+    assert!(!copies(pipeline::Options::standard(), false));
+    assert!(!copies(pipeline::Options::speed(), false));
+}

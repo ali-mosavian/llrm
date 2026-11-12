@@ -215,7 +215,8 @@ pub struct Tuning {
     pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
     /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): at `-Os` a multiply by a constant in a block that runs
-    /// more than once per call is decomposed as the pin does at `-Os` (`Tti::mul_chains_hot_at_size`); the
+    /// more than once per run of the program (its frequency over its function's entry times how often the
+    /// function's direct callers run it) is decomposed as the pin does at `-Os` (`Tti::mul_chains_hot_at_size`); the
     /// `imul` stays in the blocks that run once.
     pub mul_chains_hot_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
@@ -371,6 +372,9 @@ pub struct Tuning {
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.
     pub lsr_users_in_use_list_order: bool,
+    /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
+    /// `Tti::lsr_phi_operand_uses`.
+    pub lsr_phi_operand_uses: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -434,7 +438,9 @@ pub struct Tuning {
     pub recursive_tre_first: (bool, bool),
     /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
     /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
-    /// (`Tti::ipa_cp_clones_at_speed`).
+    /// (`Tti::ipa_cp_clones_at_speed`). DEVIATE IPACP-O2 (owner w10, exit
+    /// 2026-11-24): and at -O2, where gcc has none: queens m32 151807 ->
+    /// 139804 clk for +293 B, m64 -9.4% instructions for +830 B.
     pub ipa_cp_clones_at_speed: bool,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
@@ -592,6 +598,7 @@ impl Tuning {
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
         lsr_users_in_use_list_order: false,
+        lsr_phi_operand_uses: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,

@@ -1143,6 +1143,10 @@ impl Tti for X86 {
         self.tuning.lsr_size_order
     }
 
+    fn lsr_phi_operand_uses(&self) -> bool {
+        self.tuning.lsr_phi_operand_uses
+    }
+
     fn lsr_users_in_use_list_order(&self) -> bool {
         self.tuning.lsr_users_in_use_list_order
     }

@@ -520,6 +520,8 @@ impl llrm_target::Target for M64 {
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
+                            // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
+                            ipa_cp_clones_at_speed: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

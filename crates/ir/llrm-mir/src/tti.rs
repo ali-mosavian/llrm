@@ -861,6 +861,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE INL-SPEED-OS (owner w11, exit 2026-12-05): at a size build an SZ2 trial the byte count refuses is
+    /// kept where its sites run at least this many times per call of the caller and the copies save clocks, for at
+    /// most `INLINE_SPEED_BYTES_PER_SITE` bytes a site. The pin's `OptSizeThreshold` and gcc's `-Os` inline a small
+    /// callee in a hot loop (jpeg_single -Os: `clamp`, 1.18 M calls, 7% of the instructions). None: bytes alone.
+    fn inline_trial_speed_at_size(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether INL-HOT's trials run at -O3 too (false: -O2 only).
     fn inline_hot_trial_at_o3(&self) -> bool {
         false
@@ -1202,6 +1210,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UP1-CALL at -O1: the size-neutral rule above prices a call the
+    /// copies keep as one instruction with its operands, where the pin's
+    /// analysis gives up on a call (gcc's `estimate_num_insns` prices it).
+    fn unroll_o1_prices_calls(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_o1_analyzed_trips`.
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         None
@@ -1387,6 +1402,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE LG1, LG2: `GenerateICmpZeroScales` scales a compare against zero
+    /// by a factor whose product may wrap, where it is still a zero test
+    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as the
+    /// pin has it (wasm). owner: wasm, exit: 2026-12-04.
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        true
+    }
+
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         false
@@ -1421,7 +1444,7 @@ pub trait Tti {
     }
 
     /// DEVIATE IPACP-O3: whether a function is copied for the constants its
-    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone` (on at -O3) does and the
     /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
@@ -2313,6 +2336,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): whether `IVUsers` makes a
+    /// use of each incoming value of a phi that is a user, where the pin's
+    /// `Processed` check (`IVUsers.cpp` `AddUsersImpl`, "do not recurse into a
+    /// phi twice") keeps the first and drops the rest, so `i*300+21472` and
+    /// `i*300-81472` merging in one phi leave one of the two a multiply chain.
+    /// x_cordic m32 -O3: 100 trips of a 5-instruction chain gcc does not pay.
+    fn lsr_phi_operand_uses(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
@@ -2386,6 +2419,23 @@ pub trait Tti {
         _bits: u32,
     ) -> u32 {
         0
+    }
+
+    /// DEVIATE LU24 (`lsr_solve.rs`): the search's required-register rule
+    /// ("formulae that do not use a register the solution so far could
+    /// share are ignored") is left off for address uses, as the pin does for
+    /// post-indexed targets: the cost model weighs a pointer that steps
+    /// against the index and base add it replaces.
+    fn lsr_address_left_to_cost_model(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU23 (`lsr_use.rs`): in the baseline, an address `gep p, n` of
+    /// a pointer in a register and a counter that is the only phi is a base
+    /// add each trip (`num_base_adds`), not a recurrence of its own. False
+    /// where the add folds into the access (the pin's x86).
+    fn lsr_written_pointer_add_is_base_add(&self) -> bool {
+        false
     }
 
     /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the

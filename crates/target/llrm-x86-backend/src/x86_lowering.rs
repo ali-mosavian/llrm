@@ -146,7 +146,8 @@ pub struct X86Lowering<'a> {
     /// than the pin's chain (DEVIATE MUL-OS): `min_size` then holds for the
     /// other rules, not for `combineMul`.
     pub imul_if_smaller: bool,
-    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): the block runs more than once per call at
+    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): the block runs more than once per run of the program (its
+    /// frequency over the function's entry times how often its direct callers run it) at
     /// `-Os`, so `combineMul` decomposes as the pin does at `-Os` (`hasMinSize` is `-Oz`'s): the
     /// chain is bytes the module pays once and clocks it saves on every run.
     pub hot_chains: bool,
@@ -2615,6 +2616,14 @@ fn lower_int_to_fp(
         if !signed && in_reg(32) && pointer == EVT::I64 {
             let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[src]);
             return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
+        }
+        // `LowerUINT_TO_FP`: a 64-bit `u64` to `f32` or `f64` is `Expand`
+        // (`return SDValue()`), the legalizer's signed convert of the halved
+        // value, doubled. The x87 `fild` and its 2^64 fudge below are for the
+        // targets without a signed 64-bit SSE convert (DEVIATE UITOFP-F64:
+        // the pin's `f64` is an SSE2 vector sequence, see `expand_uint_to_fp`).
+        if !signed && in_reg(64) && pointer == EVT::I64 {
+            return None;
         }
     }
     // DEVIATE SD332 (exit: the pin gains it; re-check at each pin bump): a

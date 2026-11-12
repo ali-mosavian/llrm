@@ -222,6 +222,20 @@ pub trait TargetInstrInfo {
         cell: &Mem,
     ) -> Option<Arc<Insn>>;
 
+    /// `foldMemoryOperand` with the register class of every value known: `xmm`
+    /// says whether a value lives in an xmm register. The pin's opcodes carry
+    /// the class (`MOVPQIto64rr` against `MOV64toPQIrr`); LIR's `movq` does not,
+    /// so a target that folds a cross-class move needs it here.
+    fn fold_memory_operand_classed(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+        _xmm: &dyn Fn(u32) -> bool,
+    ) -> Option<Arc<Insn>> {
+        self.fold_memory_operand(one, reg, cell)
+    }
+
     /// `foldMemoryOperand` for one move of a parallel copy.
     fn fold_copy_member(
         &self,
@@ -413,6 +427,16 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         fold_memory_operand(one, reg, cell, self.bits, self.classes)
     }
 
+    fn fold_memory_operand_classed(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+        xmm: &dyn Fn(u32) -> bool,
+    ) -> Option<Arc<Insn>> {
+        fold_with_classes(one, reg, cell, self.bits, self.classes, Some(xmm))
+    }
+
     fn fold_copy_member(
         &self,
         one: &Insn,
@@ -459,6 +483,22 @@ pub fn fold_memory_operand(
     cell: &Mem,
     bits: u32,
     classes: &RegisterClasses,
+) -> Option<Arc<Insn>> {
+    fold_with_classes(one, reg, cell, bits, classes, None)
+}
+
+/// [`fold_memory_operand`] with `xmm`, when the caller knows it, saying which
+/// values live in xmm registers: the folded form is then priced with every
+/// operand in its own class, not in all-general or all-xmm registers (a
+/// `movq r64, xmm` whose xmm source became memory was priced as the
+/// `movq xmm, [mem]` it is not).
+fn fold_with_classes(
+    one: &Arc<Insn>,
+    reg: u32,
+    cell: &Mem,
+    bits: u32,
+    classes: &RegisterClasses,
+    xmm: Option<&dyn Fn(u32) -> bool>,
 ) -> Option<Arc<Insn>> {
     let original = one.what.as_ref()?;
     // X86InstrInfo::foldMemoryOperandImpl, Ops = {0, 1}: `test r, r` becomes
@@ -562,7 +602,7 @@ pub fn fold_memory_operand(
     {
         return None;
     }
-    if !is_encodable(bits, &made, classes).ok()? {
+    if !is_encodable(bits, &made, classes, xmm).ok()? {
         return None;
     }
     let mut out = (**one).clone();
@@ -768,6 +808,7 @@ pub(crate) fn is_encodable(
     bits: u32,
     what: &Semantics,
     classes: &RegisterClasses,
+    xmm_of: Option<&dyn Fn(u32) -> bool>,
 ) -> Result<bool, Error> {
     let regs = classes.registers;
     // A scalar float operand (4 or 8 bytes) is an xmm register: the probe is
@@ -806,7 +847,7 @@ pub(crate) fn is_encodable(
                 return operand.clone();
             };
             if !taken.contains_key(&held.value) {
-                let row = pool(xmm, u32::from(held.width));
+                let row = pool(xmm_of.map_or(xmm, |class| class(held.value)), u32::from(held.width));
                 if taken.len() >= row.len() {
                     // refuses below, which is the safe answer
                     return operand.clone();
@@ -822,6 +863,11 @@ pub(crate) fn is_encodable(
         };
         crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some()
     };
+    // Every value in its own class when the caller knows them; else all-general,
+    // then all-xmm.
+    if xmm_of.is_some() {
+        return Ok(priced(false));
+    }
     Ok(priced(false) || (!classes.xmm.is_empty() && priced(true)))
 }
 
