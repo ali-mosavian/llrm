@@ -34,17 +34,23 @@ impl DataRegisters {
         self.known = [None; 8];
     }
 
+    /// The data register that holds the places of the shift `text`, when it
+    /// shifts by a register.
+    pub fn count_register(text: &str) -> Option<usize> {
+        let (base, _, operands) = parts(text);
+        if !is_shift(base) || operands.len() != 2 {
+            return None;
+        }
+        data_register(operands[0])
+    }
+
     /// The places the shift `text` moves, if it shifts by a register whose
     /// value is known.
     pub fn places_of(
         &self,
         text: &str,
     ) -> Option<u32> {
-        let (base, _, operands) = parts(text);
-        if !is_shift(base) || operands.len() != 2 {
-            return None;
-        }
-        self.known[data_register(operands[0])?].map(|value| value % 64)
+        self.known[Self::count_register(text)?].map(|value| value % 64)
     }
 
     /// Account for the registers `text` writes; call after it executed.
