@@ -154,7 +154,7 @@ pub fn target_lowering_with(
     // table entry, then an indirect jump
     set(&[BrJT], &[MVT::Other], Action::Expand);
     set(&[Select, SetCC, SetCCCarry], &int, Action::Custom);
-    // DEVIATE M68K-ABS-SELECT (owner m68k, exit 2026-11-27): `abs` is a
+    // DEVIATE M68K-ABS-SELECT (owner m68k, exit 2026-11-24): `abs` is a
     // compare and a conditional negate (`tst`, `bpl`, `neg`), as gcc emits it.
     // The pin keeps `expandABS`, `(x ^ s) - s` for `s = x >>s 31`: a shift by
     // 31 is a register count on the 68000 (`asr.l` takes 1..8 as an

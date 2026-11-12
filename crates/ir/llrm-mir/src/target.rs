@@ -358,6 +358,9 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_order`.
     pub lsr_size_order: bool,
+    /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+    /// `Tti::lsr_users_in_use_list_order`.
+    pub lsr_users_in_use_list_order: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -370,6 +373,8 @@ pub struct Tuning {
     pub rotation_guard_must_fold_at_size: bool,
     /// DEVIATE ROTATION-TRIAL: see `Tti::rotation_trial_at_size`.
     pub rotation_trial_at_size: bool,
+    /// DEVIATE GVN-PRE-OPTSIZE: see `Tti::load_pre_off_at_size`.
+    pub load_pre_off_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
     /// than the branches the rotation removes (the loop-closing jump and
     /// the exit test), in `CodeSize` (arm64's w15 rule). false: the header
@@ -569,9 +574,11 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_users_in_use_list_order: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
+        load_pre_off_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
         keep_constant_displacements: false,
