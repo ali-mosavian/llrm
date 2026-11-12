@@ -3143,11 +3143,9 @@ fn a_product_of_two_words_calls_the_widening_multiply() {
         assert!(text.contains(&format!("jsr {routine}")), "{x} * {y}:\n{text}");
         if routine != "__mulsi3" {
             assert!(!text.contains("__mulsi3"), "{x} * {y}:\n{text}");
-            // the two routines add bytes: -O1 and -Os keep the long multiply
-            for level in [Level::O1, Level::Os] {
-                let text = assembly(&product(x, y), &Request::new(level)).unwrap();
-                assert!(!text.contains("mulhisi3"), "{level:?} {x} * {y}:\n{text}");
-            }
+            // the two routines add bytes: -O1 keeps the long multiply (-Os prices it: widen_image.rs)
+            let text = assembly(&product(x, y), &Request::new(Level::O1)).unwrap();
+            assert!(!text.contains("mulhisi3"), "O1 {x} * {y}:\n{text}");
         }
     }
 }
