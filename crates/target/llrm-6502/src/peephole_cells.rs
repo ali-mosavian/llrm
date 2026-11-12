@@ -1028,10 +1028,12 @@ fn coalesce_once(
     if !caller_saved(sn) || !caller_saved(tn) {
         return false;
     }
-    let mut lines = asm.lines.clone();
-    let mut renamed = false;
+    let (s, t) = (s.clone(), t.clone());
+    // The reads of `t` to turn into reads of `s`; nothing changes until the
+    // copy is known to go.
+    let mut renames = Vec::new();
     let mut end = at + 2;
-    while let Some(Line::Inst(inst)) = lines.get_mut(end) {
+    while let Some(Line::Inst(inst)) = asm.lines.get(end) {
         if !straight(inst.op) {
             break;
         }
@@ -1041,20 +1043,21 @@ fn coalesce_once(
             Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) if pair(c, sn) || pair(c, tn) => {
                 return false;
             }
-            Operand::Direct(c) if c == s => return false,
-            Operand::Direct(c) if c == t => {
-                inst.operand = Operand::Direct(s.clone());
-                renamed = true;
-            }
+            Operand::Direct(c) if *c == s => return false,
+            Operand::Direct(c) if *c == t => renames.push(end),
             _ => {}
         }
         end += 1;
     }
     let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.result_cells, &mut BTreeSet::new());
-    if !renamed || !dead(s) || !dead(t) {
+    if renames.is_empty() || !dead(&s) || !dead(&t) {
         return false;
     }
-    lines.remove(at + 1);
-    asm.lines = lines;
+    for index in renames {
+        if let Line::Inst(inst) = &mut asm.lines[index] {
+            inst.operand = Operand::Direct(s.clone());
+        }
+    }
+    asm.lines.remove(at + 1);
     true
 }

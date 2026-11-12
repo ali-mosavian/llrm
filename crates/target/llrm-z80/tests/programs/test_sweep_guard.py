@@ -152,3 +152,29 @@ class Imports(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RuntimeStamp(unittest.TestCase):
+    def fake_llc(self, stamp):
+        import os, stat, tempfile
+        path = Path(tempfile.mkdtemp()) / "llc"
+        path.write_text(f"#!/bin/sh\n[ \"$1\" = --runtime-stamp ] && echo {stamp} && exit 0\nexit 2\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+        return str(path)
+
+    def test_a_runtime_the_compiler_was_not_built_with_is_named(self):
+        """A divide fix compared as two compilers on one working-tree runtime showed 0 diff (2026-11-12): the sweep links the file,
+        not the compiler's copy. A compiler whose stamp is not the file's is refused."""
+        stamp = run.fnv1a64(run.RUNTIME.read_bytes())
+        self.assertIsNone(run.runtime_mismatch(self.fake_llc(stamp), run.RUNTIME))
+        why = run.runtime_mismatch(self.fake_llc("0123456789abcdef"), run.RUNTIME)
+        self.assertIn("0123456789abcdef", why or "")
+        self.assertIn(stamp, why or "")
+
+    def test_a_compiler_that_reports_no_stamp_is_refused_not_trusted(self):
+        why = run.runtime_mismatch(self.fake_llc(""), run.RUNTIME)
+        self.assertIsNotNone(why)
+
+    def test_the_stamp_is_fnv1a_64(self):
+        self.assertEqual(run.fnv1a64(b""), "cbf29ce484222325")
+        self.assertEqual(run.fnv1a64(b"a"), "af63dc4c8601ec8c")

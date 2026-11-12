@@ -97,16 +97,16 @@ type Selections = std::rc::Rc<
 >;
 
 thread_local! {
-    /// The two modules most recently run through the mid-end and selection (two: -Oz compiles a module as -Oz and as
-    /// -Os, then reads the one it keeps), most recent first, with what each was run for.
+    /// The three modules most recently run through the mid-end and selection (three: -Oz compiles a module three ways, as -Oz and as
+    /// -Os twice, then reads the one it keeps), most recent first, with what each was run for.
     static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
     /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
     static KEPT_LINES: std::cell::RefCell<std::collections::HashMap<(usize, String, usize), Vec<Line>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    /// The level `effective` chose for the module most recently asked about.
-    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Level)>> = const { std::cell::RefCell::new(None) };
+    /// The request `effective` chose for the module most recently asked about.
+    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Request)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
@@ -115,7 +115,7 @@ fn selection_key(request: &Request) -> SelectionKey {
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of)),
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only)),
         environment,
     )
 }
@@ -130,24 +130,40 @@ pub fn effective(
         return Ok(request.clone());
     }
     let key = selection_key(request);
-    let held = CHOSEN.with(|held| held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., level)| *level));
-    let level = match held {
-        Some(level) => level,
+    let held = CHOSEN.with(|held| {
+        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., chosen)| chosen.clone())
+    });
+    let chosen = match held {
+        Some(chosen) => chosen,
         None => {
-            let os = Request { level: Level::Os, ..request.clone() };
-            // an -Os compile that is refused, or whose lines are, leaves -Oz
-            let level = match (module_bytes(ir, request), module_bytes(ir, &os)) {
-                (Ok(oz), Ok(os)) if os < oz => Level::Os,
-                _ => Level::Oz,
-            };
+            // -Oz, then -Os as the functions say (`minsize` kept), then -Os as clang makes it (`minsize` dropped): a
+            // compile that is refused, or whose lines are, is not a candidate; a tie keeps the earlier
+            let candidates = [
+                request.clone(),
+                Request { level: Level::Os, ..request.clone() },
+                Request { level: Level::Os, optsize_only: true, ..request.clone() },
+            ];
+            let sizes: Vec<Result<u32, String>> = candidates.iter().map(|one| module_bytes(ir, one)).collect();
+            if std::env::var_os("LLRM_DEBUG_BESTOF").is_some() {
+                eprintln!("best-of oz, os, os without minsize: {sizes:?}");
+            }
+            let mut best = 0;
+            for (at, size) in sizes.iter().enumerate() {
+                if let (Ok(size), Ok(held)) = (size, &sizes[best])
+                    && size < held
+                {
+                    best = at;
+                }
+            }
+            let chosen = candidates[best].clone();
             // keep only the lines of the module that stays
-            let kept = cached_both(ir, &Request { level, ..request.clone() }).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+            let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
             KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
-            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, level)));
-            level
+            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+            chosen
         }
     };
-    Ok(Request { level, ..request.clone() })
+    Ok(chosen)
 }
 
 /// The module's code bytes at `request.level`: its functions as emitted and the runtime routines they reach, each
@@ -202,7 +218,7 @@ fn cached_both(
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
         held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
-        held.truncate(2);
+        held.truncate(3);
     });
     Ok((one, other))
 }
@@ -235,9 +251,20 @@ fn machine_function_with(
 }
 
 /// Drops the instructions whose results nothing reads (`ZEXT8` of a byte whose
-/// widening an `EXTRACT_SUBREG` bypassed). Only an instruction that defines
-/// virtual registers alone, touches no memory and has no other effect goes.
+/// widening an `EXTRACT_SUBREG` bypassed, the sign fill of a word added in
+/// 16 bits). Only an instruction that touches no memory and has no other
+/// effect goes, and every register it writes is a virtual one nothing reads,
+/// or `a` or the flags with no reader before the next write.
+///
+/// Translation: `DeadMachineInstrElim` (DeadMachineInstructionElim.cpp,
+/// `isDead`: a physical register def is dead where it is not live after).
+/// DEVIATE: only `a` and the flags are judged, the two registers an
+/// accumulator op clobbers without naming a result; every other physical
+/// def keeps its instruction. Exit: the pass on the shared flow.
 fn eliminate_dead(function: &mut MFunction) {
+    // the flags as a register of their own, apart from `a`'s id
+    const FLAGS: RegId = reg::FLAGS;
+    let judged = |r: RegId| r == reg::A || r == FLAGS;
     loop {
         let mut read = llrm_support::hash::HashSet::default();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
@@ -256,22 +283,101 @@ fn eliminate_dead(function: &mut MFunction) {
                 }
             }
         }
+        // what `a` and the flags hold for a reader at the start of each block
+        let successors = llrm_spike_mf::regalloc::successors(function);
+        let mut live_in: Vec<[bool; 2]> = vec![[false; 2]; function.blocks.len()];
+        let slot = |r: RegId| usize::from(r == FLAGS);
+        let reads_of = |inst: &Inst, r: RegId| {
+            inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(p)) if *p == r))
+                || (r == FLAGS && inst.reads_flags)
+        };
+        let writes_of = |inst: &Inst, r: RegId| {
+            inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Phys(p)) if *p == r))
+                || (r == FLAGS && inst.sets_flags)
+        };
+        // a block nothing follows may leave `a` and the flags to its caller
+        let exits: Vec<bool> = (0..function.blocks.len())
+            .map(|block| function.blocks[block].insts.last().is_none_or(|i| i.terminator) && successors[block].is_empty())
+            .collect();
+        let live_after = |block: usize, live_in: &[[bool; 2]]| {
+            let mut live = [exits[block]; 2];
+            for &next in &successors[block] {
+                for k in 0..2 {
+                    live[k] |= live_in[next][k];
+                }
+            }
+            live
+        };
+        let mut moved = true;
+        while moved {
+            moved = false;
+            for block in (0..function.blocks.len()).rev() {
+                let mut live = live_after(block, &live_in);
+                for inst in function.blocks[block].insts.iter().rev() {
+                    for r in [reg::A, FLAGS] {
+                        if writes_of(inst, r) && !inst.call {
+                            live[slot(r)] = false;
+                        }
+                        if inst.call {
+                            live[slot(r)] = true;
+                        }
+                    }
+                    for r in [reg::A, FLAGS] {
+                        if reads_of(inst, r) {
+                            live[slot(r)] = true;
+                        }
+                    }
+                }
+                if live != live_in[block] {
+                    live_in[block] = live;
+                    moved = true;
+                }
+            }
+        }
         let mut removed = false;
-        for block in &mut function.blocks {
-            let before = block.insts.len();
-            block.insts.retain(|inst| {
-                let defs: Vec<&Operand> = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).collect();
-                let dead = !defs.is_empty()
-                    && defs.iter().all(|o| matches!(o, Operand::Def(Reg::Virt(v)) if !read.contains(v)))
+        for block in 0..function.blocks.len() {
+            let mut live = live_after(block, &live_in);
+            let mut dead = vec![false; function.blocks[block].insts.len()];
+            for (k, inst) in function.blocks[block].insts.iter().enumerate().rev() {
+                let defs = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).count();
+                let removable = defs > 0
+                    && inst.operands.iter().all(|o| match o {
+                        Operand::Def(Reg::Virt(v)) => !read.contains(v),
+                        Operand::Def(Reg::Phys(p)) => judged(*p) && !live[slot(*p)],
+                        Operand::Def(_) => false,
+                        _ => true,
+                    })
+                    && !(inst.sets_flags && live[slot(FLAGS)])
                     && !(inst.call
                         || inst.terminator
                         || inst.barrier
                         || inst.side_effects
                         || inst.may_store
                         || inst.may_load);
-                !dead
+                dead[k] = removable;
+                if removable {
+                    continue;
+                }
+                for r in [reg::A, FLAGS] {
+                    if writes_of(inst, r) && !inst.call {
+                        live[slot(r)] = false;
+                    }
+                    if inst.call {
+                        live[slot(r)] = true;
+                    }
+                }
+                for r in [reg::A, FLAGS] {
+                    if reads_of(inst, r) {
+                        live[slot(r)] = true;
+                    }
+                }
+            }
+            let mut k = 0;
+            function.blocks[block].insts.retain(|_| {
+                k += 1;
+                !dead[k - 1]
             });
-            removed |= block.insts.len() != before;
+            removed |= dead.iter().any(|d| *d);
         }
         if !removed {
             return;
@@ -549,7 +655,30 @@ fn allocate(
     LOOPS_FOLDED.with(|one| one.set(false));
     let first = allocate_first(function.clone(), name, level)?;
     let folded = LOOPS_FOLDED.with(|one| one.get());
-    Ok(improved(first, folded, function, name, level))
+    let best = improved(first, folded, function.clone(), name, level);
+    // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
+    // slots are all frame cells, so it folds every spilled read. Here a slot
+    // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
+    // after allocation: a spilled read is taken from its cell where the
+    // function is cheaper for it, every other choice explored on both. Exit:
+    // the stack slots chosen before the fold.
+    if !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
+        return Ok(best);
+    }
+    crate::regalloc::NO_FOLD.with(|one| one.set(true));
+    LOOPS_FOLDED.with(|one| one.set(false));
+    let other = allocate_first(function.clone(), name, level).map(|first| {
+        let folded = LOOPS_FOLDED.with(|one| one.get());
+        improved(first, folded, function, name, level)
+    });
+    crate::regalloc::NO_FOLD.with(|one| one.set(false));
+    Ok(match other {
+        Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
+            (Some(now), Some(then)) if cheaper(level, then, now) => other,
+            _ => best,
+        },
+        Err(_) => best,
+    })
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
@@ -630,6 +759,15 @@ fn improved(
         }
     }
     best
+}
+
+/// An ALU op or compare whose second source is a frame cell (`Target::fold_spill`).
+fn reads_its_cell(inst: &Inst) -> bool {
+    matches!(
+        inst.kind,
+        Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
+    ) && matches!(inst.operands.get(2), Some(Operand::Frame(_)))
+        || matches!(inst.kind, Kind::Op("RELOAD8L"))
 }
 
 thread_local! {
@@ -1256,6 +1394,8 @@ pub enum StackRefusal {
     PathsDisagree,
     /// A byte slot whose pair's other half is live after the `pop`.
     ByteMateLive,
+    /// A slot an instruction reads in place (`and a, d(ix)`): a pop cannot.
+    ReadInPlace,
 }
 
 /// What [`stack_slots`] decided, slot by slot.
@@ -1311,6 +1451,16 @@ pub fn stack_slot_report_by(
     for (b, block) in function.blocks.iter().enumerate() {
         for (at, inst) in block.insts.iter().enumerate() {
             let area = areas[b][at];
+            if spill(inst).is_none() {
+                for operand in &inst.operands {
+                    if let Operand::Frame(slot) = operand
+                        && inst.may_load
+                    {
+                        chosen.insert(*slot);
+                        barred.entry(*slot).or_insert(StackRefusal::ReadInPlace);
+                    }
+                }
+            }
             if let Some((store, slot, register)) = spill(inst) {
                 chosen.insert(slot);
                 let counts = accesses.entry(slot).or_default();

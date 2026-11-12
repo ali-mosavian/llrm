@@ -47,6 +47,13 @@ pub const CALLING: &str = include_str!("machines/calling.toml");
 /// sdasz80 syntax.
 pub const RUNTIME: &str = include_str!("../runtime/z80_rt.s");
 
+/// FNV-1a (64 bits) of [`RUNTIME`], as 16 hex digits: `llrm-z80-llc --runtime-stamp`. A sweep links the runtime from
+/// the working tree, not from the compiler, so it compares this with the file it links (`tests/programs/run.py`).
+pub fn runtime_stamp() -> String {
+    let hash = RUNTIME.bytes().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3));
+    format!("{hash:016x}")
+}
+
 /// The register ids, numbered by `registers.regs`'s lines: `reg::HL`.
 pub mod reg {
     use super::RegId;
@@ -75,5 +82,20 @@ mod stack_natural_alignment_tests {
             llrm_target::Target::stack_alignment(&super::target::Z80) as u64,
             None,
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_stamp_tests {
+    /// `--runtime-stamp` is what `tests/programs/run.py` compares with the file it links: FNV-1a over the bytes, so a Python
+    /// `fnv1a64` agrees (the same vectors are in `test_sweep_guard.py`).
+    #[test]
+    fn the_runtime_stamp_is_fnv1a_64_of_the_embedded_runtime() {
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in super::RUNTIME.bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+        }
+        assert_eq!(super::runtime_stamp(), format!("{hash:016x}"));
+        assert_eq!(super::runtime_stamp().len(), 16);
     }
 }

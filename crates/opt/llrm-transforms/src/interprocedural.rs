@@ -798,6 +798,7 @@ pub fn optimized_with<E: From<String>>(
                     &private[at],
                     costs,
                     threshold.cp_clone.unwrap_or(false),
+                    threshold.cp_hint_clones,
                     cloning,
                 )
             });
