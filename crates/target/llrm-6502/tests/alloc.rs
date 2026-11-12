@@ -3200,6 +3200,24 @@ fn a_load_into_x_is_dead_before_a_call_that_does_not_take_x() {
     assert_eq!(asm.text(), code("walk"));
 }
 
+/// A branch on the zero or sign between `ldx m` and its `txa` reads the flags the load set: deleting the
+/// load leaves it testing whatever came before (found by reading, 2026-11-13). A carry branch does not read them.
+#[test]
+fn a_zero_branch_between_the_load_and_its_transfer_keeps_the_load() {
+    use llrm_6502::peephole::load_straight_into_a;
+    let code = |branch: &str| format!("  ldx rc7\n  sta rc4\n  {branch} out\n  txa\n  sta rc5\n  rts\nout:\n  rts\n");
+    for branch in ["bne", "beq", "bmi", "bpl"] {
+        let mut asm = Asm::parse(&code(branch));
+        asm.no_x_result = true;
+        load_straight_into_a(&mut asm);
+        assert_eq!(asm.text(), code(branch), "{branch} reads the flags of the ldx");
+    }
+    let mut asm = Asm::parse(&code("bcs"));
+    asm.no_x_result = true;
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), "  sta rc4\n  bcs out\n  lda rc7\n  sta rc5\n  rts\nout:\n  rts\n", "a carry branch does not");
+}
+
 /// The same for `y`: PTRSTEP, `ldy rc3; lda rc2; cmp rc4; bne; tya; cmp rc5`
 /// kept the load and the `tya` (+1 B, +2 clocks) because `y` was live at the
 /// `jsr`/`rts` after it; the fold is `lda rc3` once `y` is dead there.
