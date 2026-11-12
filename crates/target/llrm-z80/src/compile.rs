@@ -97,16 +97,16 @@ type Selections = std::rc::Rc<
 >;
 
 thread_local! {
-    /// The two modules most recently run through the mid-end and selection (two: -Oz compiles a module as -Oz and as
-    /// -Os, then reads the one it keeps), most recent first, with what each was run for.
+    /// The three modules most recently run through the mid-end and selection (three: -Oz compiles a module three ways, as -Oz and as
+    /// -Os twice, then reads the one it keeps), most recent first, with what each was run for.
     static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
     /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
     static KEPT_LINES: std::cell::RefCell<std::collections::HashMap<(usize, String, usize), Vec<Line>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    /// The level `effective` chose for the module most recently asked about.
-    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Level)>> = const { std::cell::RefCell::new(None) };
+    /// The request `effective` chose for the module most recently asked about.
+    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Request)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
@@ -115,7 +115,7 @@ fn selection_key(request: &Request) -> SelectionKey {
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of)),
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only)),
         environment,
     )
 }
@@ -130,24 +130,40 @@ pub fn effective(
         return Ok(request.clone());
     }
     let key = selection_key(request);
-    let held = CHOSEN.with(|held| held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., level)| *level));
-    let level = match held {
-        Some(level) => level,
+    let held = CHOSEN.with(|held| {
+        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., chosen)| chosen.clone())
+    });
+    let chosen = match held {
+        Some(chosen) => chosen,
         None => {
-            let os = Request { level: Level::Os, ..request.clone() };
-            // an -Os compile that is refused, or whose lines are, leaves -Oz
-            let level = match (module_bytes(ir, request), module_bytes(ir, &os)) {
-                (Ok(oz), Ok(os)) if os < oz => Level::Os,
-                _ => Level::Oz,
-            };
+            // -Oz, then -Os as the functions say (`minsize` kept), then -Os as clang makes it (`minsize` dropped): a
+            // compile that is refused, or whose lines are, is not a candidate; a tie keeps the earlier
+            let candidates = [
+                request.clone(),
+                Request { level: Level::Os, ..request.clone() },
+                Request { level: Level::Os, optsize_only: true, ..request.clone() },
+            ];
+            let sizes: Vec<Result<u32, String>> = candidates.iter().map(|one| module_bytes(ir, one)).collect();
+            if std::env::var_os("LLRM_DEBUG_BESTOF").is_some() {
+                eprintln!("best-of oz, os, os without minsize: {sizes:?}");
+            }
+            let mut best = 0;
+            for (at, size) in sizes.iter().enumerate() {
+                if let (Ok(size), Ok(held)) = (size, &sizes[best])
+                    && size < held
+                {
+                    best = at;
+                }
+            }
+            let chosen = candidates[best].clone();
             // keep only the lines of the module that stays
-            let kept = cached_both(ir, &Request { level, ..request.clone() }).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+            let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
             KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
-            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, level)));
-            level
+            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+            chosen
         }
     };
-    Ok(Request { level, ..request.clone() })
+    Ok(chosen)
 }
 
 /// The module's code bytes at `request.level`: its functions as emitted and the runtime routines they reach, each
@@ -202,7 +218,7 @@ fn cached_both(
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
         held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
-        held.truncate(2);
+        held.truncate(3);
     });
     Ok((one, other))
 }
