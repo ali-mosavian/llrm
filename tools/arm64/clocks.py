@@ -11,6 +11,7 @@ import argparse, os, re, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 LLVM = os.environ.get('LLVM_BIN', os.path.expanduser('~/scratch/llvm-build-aarch64/bin'))
 ENDS_BLOCK = re.compile(r'^(b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz|b\.\w+)\s')
+CALL = re.compile(r'^(bl|blr)\s')
 STEADY_ITERATIONS = 100
 
 
@@ -51,10 +52,15 @@ def blocks(code, executed):
 
 def mca_cycles(lines, iterations):
     """Cycles per iteration of `lines` repeated `iterations` times, from llvm-mca, or None if it did not run."""
+    # llvm-mca assumes 100 cycles for any call; a call here is the branch that ends the block, one cycle.
+    calls = sum(1 for line in lines if CALL.match(line + ' '))
+    lines = [line for line in lines if not CALL.match(line + ' ')]
+    if not lines:
+        return float(calls)
     text = '\n'.join(re.sub(r'\b0x[0-9a-f]+ <[^>]*>', '#4096' if line.startswith('adrp') else '#16', line) for line in lines)
     run = subprocess.run([f'{LLVM}/llvm-mca', '-mtriple=aarch64-linux-gnu', '-mcpu=apple-m1', f'-iterations={iterations}', '-'], input=text, capture_output=True, text=True)
     cycles, done = re.search(r'Total Cycles:\s+(\d+)', run.stdout), re.search(r'Iterations:\s+(\d+)', run.stdout)
-    return int(cycles.group(1)) / int(done.group(1)) if cycles and done else None
+    return int(cycles.group(1)) / int(done.group(1)) + calls if cycles and done else None
 
 
 def modelled_clocks(code, histogram):

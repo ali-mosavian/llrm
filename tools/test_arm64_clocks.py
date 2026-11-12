@@ -44,6 +44,14 @@ class Model(unittest.TestCase):
         self.assertEqual(instructions, 30)
         self.assertAlmostEqual(clocks_, 10 * clocks.mca_cycles(["mul x0, x0, x0", "mul x0, x0, x0", "b.ne 0x100 <f>"], 100), delta=1)
 
+    def test_a_call_costs_a_branch_not_the_hundred_clocks_llvm_mca_assumes(self):
+        # llvm-mca assumes 100 cycles for any `bl`/`blr` ("call instructions are not correctly modeled"): fib -O2 was
+        # 64,037 modelled clocks for 7,653 instructions, 8.4 a instruction, every call block priced at 103.
+        code = {0x100: "mov x21, x0", 0x104: "bl 0x200 <g>"}
+        clocks_, instructions = clocks.modelled_clocks(code, {0x100: 1, 0x104: 1})
+        self.assertEqual(instructions, 2)
+        self.assertLess(clocks_, 10)
+
 
 if __name__ == "__main__":
     unittest.main()
