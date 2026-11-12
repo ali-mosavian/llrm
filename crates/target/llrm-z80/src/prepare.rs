@@ -88,6 +88,63 @@ pub fn mark_long_multiplies(module: &mut Module) {
     }
 }
 
+/// The attribute that lets every word times a constant of a function be a shift-add chain whatever its bytes: no word
+/// multiply of the module needs `__mulhi3`, and the chains together are smaller than the routine and the calls.
+pub const WORD_CHAINS: &str = "llrm-mulhi3-chains";
+
+/// Marks every function with a body when each word multiply of the module is by a constant and has a chain, and the
+/// chains add fewer bytes over the calls (6 B each) than the 24 B routine is (`runtime/sizes.csv`). Strict levels only
+/// (above them the rate prices each site, `dagisel::pipeline::word_chain`). Pin-decomposed constants need no call.
+pub fn mark_word_chains(module: &mut Module) {
+    const ROUTINE: i64 = 24;
+    let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
+    let mut extra = 0;
+    let mut sites = 0;
+    for (_, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+        let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
+        let muls = function
+            .layout()
+            .iter()
+            .flat_map(|&block| function.iter_block(block))
+            .filter(|&inst| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Mul))
+            .filter(|&inst| module.context.types.int_bits(function.instruction(inst).ty) != Some(8));
+        for inst in muls {
+            let Some(&operand) = function.instruction(inst).operands.get(1) else { return };
+            let Some(c) = constant_int_u64(&query, operand) else { return };
+            let wide = module.context.types.int_bits(function.instruction(inst).ty) != Some(16);
+            // a long product is expanded to word products, some of them calls: the routine stays
+            if wide {
+                if crate::dagisel::pipeline::pin_decomposes(c) {
+                    continue;
+                }
+                return;
+            }
+            let c = c & 0xFFFF;
+            if crate::dagisel::pipeline::pin_decomposes(c) {
+                continue;
+            }
+            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, true) else {
+                return;
+            };
+            extra += bytes - call;
+            sites += 1;
+        }
+    }
+    if sites == 0 || extra >= ROUTINE {
+        return;
+    }
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(WORD_CHAINS.into()));
+        }
+    }
+}
+
 /// The attribute that marks a function with a `memset` of a constant count of two or more: it is also
 /// selected with each such fill an inline `ldir` fill (`driver::selections_with_alternatives`).
 pub const CONSTANT_FILL: &str = "llrm-fill";
