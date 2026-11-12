@@ -475,6 +475,30 @@ fn instruction(
             let op = if name == "cmp" { "CMP" } else { "TEST" };
             writeln!(out, "    {op}{}rr {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
+        // The carry comes from the compare before: `bt` then `adc`.
+        (op @ ("adc" | "sbb"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) if a.value == d.value => writeln!(
+            out,
+            "    {} = {}{}ri {}, {}, implicit-def dead $eflags, implicit $eflags",
+            vreg(d)?,
+            op.to_uppercase(),
+            bits(d.width)?,
+            vreg(a)?,
+            immediate(i, symbols)?
+        )
+        .unwrap(),
+        (op @ ("adc" | "sbb"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if a.value == d.value => writeln!(
+            out,
+            "    {} = {}{}rr {}, {}, implicit-def dead $eflags, implicit $eflags",
+            vreg(d)?,
+            op.to_uppercase(),
+            bits(d.width)?,
+            vreg(a)?,
+            vreg(b)?
+        )
+        .unwrap(),
+        ("bt", None, [Loc::Held(a), Loc::Imm(i)]) => {
+            writeln!(out, "    BT{}ri8 {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, immediate(i, symbols)?).unwrap()
+        }
         (op @ ("cmp" | "test"), None, [Loc::Held(a), Loc::Imm(i)]) => {
             writeln!(
                 out,
@@ -552,6 +576,12 @@ fn instruction(
             immediate(count, symbols)?
         )
         .unwrap(),
+        // The bit scan keeps the destination's old value for a zero source: the
+        // pin's `BSR32rr` ties it to the first source.
+        (op @ ("bsr" | "bsf"), Some(Loc::Held(d)), [Loc::Held(old), Loc::Held(s)]) if old.value == d.value => {
+            writeln!(out, "    {} = {}{}rr {}, {}, {eflags}", vreg(d)?, op.to_uppercase(), bits(d.width)?, vreg(old)?, vreg(s)?)
+                .unwrap()
+        }
         (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(_)]) => writeln!(
             out,
             "    {} = {}{}rCL {}, {eflags}, implicit $cl",
@@ -1435,6 +1465,24 @@ mod tests {
         let body = LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("TEST32ri %1, 4096, implicit-def $eflags"), "{text}");
+    }
+
+    /// `bsr`, `bt` and `adc` were refused ("`bsr` (Binary) with 1 destinations
+    /// and 2 sources"), so the pin's greedy could not allocate x_sf_sub's
+    /// `_bench_x_sf_sub` (add_bits inlined) for a same-MIR comparison.
+    #[test]
+    fn test_a_bit_scan_a_bit_test_and_an_add_with_carry_print() {
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let scan = insn("bsr", Operation::Binary, vec![held(1)], vec![held(1), held(2)]);
+        let bit = insn("bt", Operation::Compare, vec![], vec![held(2), imm(3)]);
+        let carry = insn("adc", Operation::Binary, vec![held(2)], vec![held(2), imm(3)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![scan, bit, carry, ret]))];
+        let body = LirBody::new("b", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("%1 = BSR32rr %1, %2, implicit-def dead $eflags"), "{text}");
+        assert!(text.contains("BT32ri8 %2, 3, implicit-def $eflags"), "{text}");
+        assert!(text.contains("%2 = ADC32ri %2, 3, implicit-def dead $eflags, implicit $eflags"), "{text}");
     }
 
     #[test]
