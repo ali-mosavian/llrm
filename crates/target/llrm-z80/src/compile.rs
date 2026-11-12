@@ -235,9 +235,20 @@ fn machine_function_with(
 }
 
 /// Drops the instructions whose results nothing reads (`ZEXT8` of a byte whose
-/// widening an `EXTRACT_SUBREG` bypassed). Only an instruction that defines
-/// virtual registers alone, touches no memory and has no other effect goes.
+/// widening an `EXTRACT_SUBREG` bypassed, the sign fill of a word added in
+/// 16 bits). Only an instruction that touches no memory and has no other
+/// effect goes, and every register it writes is a virtual one nothing reads,
+/// or `a` or the flags with no reader before the next write.
+///
+/// Translation: `DeadMachineInstrElim` (DeadMachineInstructionElim.cpp,
+/// `isDead`: a physical register def is dead where it is not live after).
+/// DEVIATE: only `a` and the flags are judged, the two registers an
+/// accumulator op clobbers without naming a result; every other physical
+/// def keeps its instruction. Exit: the pass on the shared flow.
 fn eliminate_dead(function: &mut MFunction) {
+    // the flags as a register of their own, apart from `a`'s id
+    const FLAGS: RegId = reg::FLAGS;
+    let judged = |r: RegId| r == reg::A || r == FLAGS;
     loop {
         let mut read = llrm_support::hash::HashSet::default();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
@@ -256,22 +267,101 @@ fn eliminate_dead(function: &mut MFunction) {
                 }
             }
         }
+        // what `a` and the flags hold for a reader at the start of each block
+        let successors = llrm_spike_mf::regalloc::successors(function);
+        let mut live_in: Vec<[bool; 2]> = vec![[false; 2]; function.blocks.len()];
+        let slot = |r: RegId| usize::from(r == FLAGS);
+        let reads_of = |inst: &Inst, r: RegId| {
+            inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(p)) if *p == r))
+                || (r == FLAGS && inst.reads_flags)
+        };
+        let writes_of = |inst: &Inst, r: RegId| {
+            inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Phys(p)) if *p == r))
+                || (r == FLAGS && inst.sets_flags)
+        };
+        // a block nothing follows may leave `a` and the flags to its caller
+        let exits: Vec<bool> = (0..function.blocks.len())
+            .map(|block| function.blocks[block].insts.last().is_none_or(|i| i.terminator) && successors[block].is_empty())
+            .collect();
+        let live_after = |block: usize, live_in: &[[bool; 2]]| {
+            let mut live = [exits[block]; 2];
+            for &next in &successors[block] {
+                for k in 0..2 {
+                    live[k] |= live_in[next][k];
+                }
+            }
+            live
+        };
+        let mut moved = true;
+        while moved {
+            moved = false;
+            for block in (0..function.blocks.len()).rev() {
+                let mut live = live_after(block, &live_in);
+                for inst in function.blocks[block].insts.iter().rev() {
+                    for r in [reg::A, FLAGS] {
+                        if writes_of(inst, r) && !inst.call {
+                            live[slot(r)] = false;
+                        }
+                        if inst.call {
+                            live[slot(r)] = true;
+                        }
+                    }
+                    for r in [reg::A, FLAGS] {
+                        if reads_of(inst, r) {
+                            live[slot(r)] = true;
+                        }
+                    }
+                }
+                if live != live_in[block] {
+                    live_in[block] = live;
+                    moved = true;
+                }
+            }
+        }
         let mut removed = false;
-        for block in &mut function.blocks {
-            let before = block.insts.len();
-            block.insts.retain(|inst| {
-                let defs: Vec<&Operand> = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).collect();
-                let dead = !defs.is_empty()
-                    && defs.iter().all(|o| matches!(o, Operand::Def(Reg::Virt(v)) if !read.contains(v)))
+        for block in 0..function.blocks.len() {
+            let mut live = live_after(block, &live_in);
+            let mut dead = vec![false; function.blocks[block].insts.len()];
+            for (k, inst) in function.blocks[block].insts.iter().enumerate().rev() {
+                let defs = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).count();
+                let removable = defs > 0
+                    && inst.operands.iter().all(|o| match o {
+                        Operand::Def(Reg::Virt(v)) => !read.contains(v),
+                        Operand::Def(Reg::Phys(p)) => judged(*p) && !live[slot(*p)],
+                        Operand::Def(_) => false,
+                        _ => true,
+                    })
+                    && !(inst.sets_flags && live[slot(FLAGS)])
                     && !(inst.call
                         || inst.terminator
                         || inst.barrier
                         || inst.side_effects
                         || inst.may_store
                         || inst.may_load);
-                !dead
+                dead[k] = removable;
+                if removable {
+                    continue;
+                }
+                for r in [reg::A, FLAGS] {
+                    if writes_of(inst, r) && !inst.call {
+                        live[slot(r)] = false;
+                    }
+                    if inst.call {
+                        live[slot(r)] = true;
+                    }
+                }
+                for r in [reg::A, FLAGS] {
+                    if reads_of(inst, r) {
+                        live[slot(r)] = true;
+                    }
+                }
+            }
+            let mut k = 0;
+            function.blocks[block].insts.retain(|_| {
+                k += 1;
+                !dead[k - 1]
             });
-            removed |= block.insts.len() != before;
+            removed |= dead.iter().any(|d| *d);
         }
         if !removed {
             return;
