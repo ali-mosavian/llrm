@@ -46,9 +46,9 @@ fn o1_unroll_limit(options: &Options) -> Option<u32> {
 enum Dimension {
     /// DEVIATE ROTATION-TRIAL: leave unrotated the counted loops RS1 rotated. The flag: a rotation that executes
     /// less for a few bytes a loop stays (DEVIATE ROTATION-HOT, `Tti::rotation_hot_at_size`).
-    Unrotate { hot: bool },
+    Unrotate { hot: bool, bytes: i64 },
     /// DEVIATE ROTATION-HOT: rotate the loops of an unfolded guard and uncounted trips RS1 left.
-    RotateMore,
+    RotateMore { bytes: i64 },
     /// DEVIATE UNROLL-OS-TRIAL: unroll the loops under this size that the -Os threshold refused.
     Unroll { limit: u32, bytes_strict: bool },
 }
@@ -80,7 +80,7 @@ impl Noted {
     ) -> bool {
         match dimension {
             Dimension::Unrotate { .. } => !self.rotated.is_empty(),
-            Dimension::RotateMore => !self.left.0.is_empty(),
+            Dimension::RotateMore { .. } => !self.left.0.is_empty(),
             Dimension::Unroll { .. } => !self.unroll.0.is_empty(),
         }
     }
@@ -95,9 +95,9 @@ impl Dimension {
         let Some(tti) = options.cpu().ok().and_then(|cpu| cpu.target().tti()) else { return Vec::new() };
         let mut all = Vec::new();
         if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() {
-            all.push(Dimension::Unrotate { hot: tti.rotation_hot_at_size() });
+            all.push(Dimension::Unrotate { hot: tti.rotation_hot_at_size(), bytes: tti.rotation_hot_bytes_per_loop() });
             if tti.rotation_hot_at_size() {
-                all.push(Dimension::RotateMore);
+                all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
             }
         }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
@@ -113,7 +113,7 @@ impl Dimension {
     ) -> T {
         match self {
             Dimension::Unrotate { .. } => trial::with_unrotated(body),
-            Dimension::RotateMore => trial::with_more_rotation(body),
+            Dimension::RotateMore { .. } => trial::with_more_rotation(body),
             Dimension::Unroll { limit, .. } => trial::with(limit, body),
         }
     }
@@ -136,12 +136,12 @@ impl Dimension {
         let measured = kept_work.is_some() && other_work.is_some();
         let (what, pays) = match self {
             // The unrotated object is smaller; the rotated one stays if it executes less for a few bytes a loop.
-            Dimension::Unrotate { hot } => (
+            Dimension::Unrotate { hot, bytes } => (
                 "unrotated",
                 trial::keeps_at_size(added)
-                    && !(hot && trial::keeps_rotation_hot(-saved, -added, noted.rotated_loops)),
+                    && !(hot && trial::keeps_rotation_hot(-saved, -added, noted.rotated_loops, bytes)),
             ),
-            Dimension::RotateMore => ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1)),
+            Dimension::RotateMore { bytes } => ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1, bytes)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }

@@ -45,7 +45,7 @@ use super::dag::SDValue;
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::fold::mask;
 use super::isd::ISD;
-use super::known_bits::{KnownBits, known_bits, num_sign_bits};
+use super::known_bits::{KnownBits, known_bits, known_bits_at, num_sign_bits};
 use super::mvt::EVT;
 
 /// `TargetLoweringOpt`: the value to replace and what replaces it.
@@ -195,12 +195,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if depth >= MAX_DEPTH || self.dag.constant(op).is_some() {
             return None;
         }
-        let known = known_bits(self.dag, op);
+        let known = known_bits_at(self.dag, op, depth);
         if demanded & !(known.zero | known.one) == 0 {
             return Some(self.dag.get_constant(known.one, vt));
         }
         let identity = |dag: &super::dag::SelectionDAG, ops: [SDValue; 2]| {
-            let [a, b] = ops.map(|v| known_bits(dag, v));
+            let [a, b] = ops.map(|v| known_bits_at(dag, v, depth + 1));
             (a, b)
         };
         match self.dag.opcode(op) {
@@ -308,7 +308,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             ISD::And => {
                 let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
                 if let Some(c) = self.dag.constant(op1) {
-                    let lhs = known_bits(self.dag, op0);
+                    let lhs = known_bits_at(self.dag, op0, depth);
                     if lhs.zero & demanded == !c & demanded {
                         return Self::combine_to(tlo, op, op0);
                     }
@@ -436,7 +436,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             ISD::Shl | ISD::Srl => {
                 let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
                 let Some(amount) = self.dag.constant(op1).filter(|&a| a < u128::from(width)) else {
-                    return self.finish(op, demanded, known_bits(self.dag, op), tlo);
+                    return self.finish(op, demanded, known_bits_at(self.dag, op, depth), tlo);
                 };
                 let amount = amount as u32;
                 if amount == 0 {
@@ -488,7 +488,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     if self.hooks.narrowing_profitable(vt, half)
                         && self.hooks.free_narrowing(vt, half)
                         && (in_demanded.leading_zeros() as i64 - (128 - width as i64) >= i64::from(width / 2)
-                            || known_bits(self.dag, op0).zero & high == high)
+                            || known_bits_at(self.dag, op0, depth).zero & high == high)
                     {
                         let x = self.dag.get_node(ISD::Truncate, half, &[op0]);
                         let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(half));
@@ -621,7 +621,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             ISD::SignExtendInReg => {
                 let src = self.dag.operand(op, 0);
                 let super::dag::NodeData::ValueType(inner) = self.dag.node(self.dag.operand(op, 1)).data else {
-                    return Ok(known_bits(self.dag, op));
+                    return Ok(known_bits_at(self.dag, op, depth));
                 };
                 let inner_bits = inner.size_in_bits();
                 let in_mask = mask(inner_bits);
@@ -681,7 +681,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     return Self::combine_to(tlo, op, new);
                 }
                 let Some(amount) = self.dag.constant(op1).filter(|&a| a < u128::from(width)) else {
-                    return self.finish(op, demanded, known_bits(self.dag, op), tlo);
+                    return self.finish(op, demanded, known_bits_at(self.dag, op, depth), tlo);
                 };
                 let amount = amount as u32;
                 if amount == 0 {
@@ -741,7 +741,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                         }
                     }
                 }
-                known_bits(self.dag, op)
+                known_bits_at(self.dag, op, depth)
             }
             // `SimplifyDemandedBits` of `CTPOP` (TargetLowering.cpp#L2478): one
             // demanded bit is the parity, taken before operation legalization (this
@@ -750,7 +750,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let new = self.dag.get_node(ISD::Parity, vt, &[self.dag.operand(op, 0)]);
                 return Self::combine_to(tlo, op, new);
             }
-            _ => known_bits(self.dag, op),
+            _ => known_bits_at(self.dag, op, depth),
         };
         known.width = width;
         self.finish(op, demanded, known, tlo)

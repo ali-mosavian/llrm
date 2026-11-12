@@ -1565,3 +1565,16 @@ fn a_fill_in_a_loop_that_reads_its_object_is_kept() {
     let (after, changed) = fill_priced(16, &reading_loop(), &[&[0], &[3], &[5]]);
     assert!(!changed, "{after}");
 }
+
+/// A loop that keeps a computed store beside a constant one was never filled under a rate: the fill's own clocks
+/// were not weighed against the removed stores', so a 1200-trip `dst[i] = 0xEE` stayed in the loop beside
+/// `src[i] = ...` (memory_expansion `reset`, 13M T over the program).
+#[test]
+fn a_constant_store_beside_a_computed_one_is_filled_when_the_trips_pay() {
+    let sheet = llrm_mir::target::OperationCosts { store_immediate: 1, fill: 1, fill_cell: 1, ..Default::default() };
+    let priced = |trips| Some((&sheet, 3000, Some(trips), Some((trips + 3) / 4)));
+    assert!(super::fill_beside_computed_stores_pays(true, priced(1200), 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(true, priced(1), 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(false, priced(1200), 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(true, None, 1, 1));
+}
