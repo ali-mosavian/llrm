@@ -3,6 +3,7 @@
 /* Twin of jpeg_single.nib with its semantics: every index checked against the array length of the Nib program (its flat arrays, the BMP header built in line), local arrays zeroed. JPEG to BMP, an MCU row at a time: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0, with restart markers. Reads
    PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. The IDCT and the colour
    conversion are in float; chroma is replicated. A progressive or arithmetic-coded file is refused with a message. */
+#define BENCH_IO_FUNCTIONS /* the I/O calls are functions of this object, as Nib's std.io are of its */
 #include "../../bench_io.h"
 extern void report(long value);
 extern void ebnd(void);

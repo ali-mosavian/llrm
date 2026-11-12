@@ -8,6 +8,7 @@
 extern void report(long value);
 extern void ebnd(void);
 #define CK(i, n) ((unsigned)(i) < (n) ? (i) : (ebnd(), 0))
+#define BENCH_IO_FUNCTIONS /* the I/O calls are functions of this object, as Nib's std.io are of its */
 #include "../../bench_io.h"
 
 #define N 256
