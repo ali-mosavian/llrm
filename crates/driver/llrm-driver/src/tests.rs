@@ -5793,3 +5793,28 @@ fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
     assert!(listing(&once).contains("imul"), "a multiply that runs once keeps its imul:\n{}", listing(&once));
     assert!(!listing(&looped).contains("imul"), "a multiply in a loop is the chain:\n{}", listing(&looped));
 }
+
+/// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
+/// the same bytes, a third to a quarter of the clocks. scroll -Os copied 4000 bytes of two-byte-aligned shorts a byte at a
+/// time: 958,326 clk against clang's 536,067.
+#[test]
+fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
+    let text = |align: u32, bytes: u32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             @a = external global [2000 x i16], align {align}\n\
+             @b = external global [2000 x i16], align {align}\n\
+             declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+             define void @f() {{\n  call void @llvm.memcpy.p0.p0.i32(ptr align {align} @b, ptr align {align} @a, i32 {bytes}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |align, bytes| {
+        let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), &text(align, bytes), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    assert!(listing(2, 4000).contains("movsw"), "two-byte aligned:\n{}", listing(2, 4000));
+    assert!(listing(4, 4000).contains("movsd"), "four-byte aligned:\n{}", listing(4, 4000));
+    assert!(listing(1, 4000).contains("movsb") && !listing(1, 4000).contains("movsw"), "unaligned stays bytes");
+    assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
+}

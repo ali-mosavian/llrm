@@ -444,6 +444,21 @@ impl Builder<'_> {
             || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
     }
 
+    /// DEVIATE REP-MOVS-OS keeps `rep movs` for any size at `-Os`, but moves the widest block the copy is a whole
+    /// number of and the pointers are aligned to (`emitConstantSizeRepmov`'s `AVT`, without a tail): the same
+    /// bytes as `rep movsb`, a block of 2 or 4 bytes for the same 3 clocks.
+    fn exact_rep_block(
+        &self,
+        size: u64,
+        alignment: u64,
+    ) -> u64 {
+        [4, 2]
+            .into_iter()
+            .filter(|block| *block <= self.string_block())
+            .find(|block| alignment >= *block && size % *block == 0)
+            .unwrap_or(1)
+    }
+
     /// The pin's `hasMinSize` (`-Oz`), as [`Self::has_opt_size`].
     pub(super) fn has_min_size(&self) -> bool {
         self.target.min_size || self.function_has("minsize")
@@ -1320,7 +1335,7 @@ impl Builder<'_> {
                     (Some(chain), _, _) => chain,
                     (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
                     (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.rep_movsb_copy() => {
-                        self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
+                        self.rep_movs(root, dst, other, bytes, dst_align.min(src_align), dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
                         if strings_exist && bytes <= MAX_INLINE_SIZE && alignment >= 4 =>
@@ -2125,7 +2140,13 @@ impl Builder<'_> {
     ) -> Result<SDValue, Refused> {
         let chain_in = chain;
         let pointer = self.target.dag.pointer;
-        let block = if self.rep_movsb_copy() { 1 } else { alignment };
+        let block = if self.has_min_size() {
+            1
+        } else if self.rep_movsb_copy() {
+            self.exact_rep_block(size, alignment)
+        } else {
+            alignment
+        };
         let (count, left) = (size / block, size % block);
         let (cx, di, si) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
