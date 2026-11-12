@@ -1213,10 +1213,12 @@ fn visit_iv_cast(
     // ADD is required to increment the induction variable. We could compute
     // more comprehensively the cost of all instructions on the induction
     // variable when necessary.
-    // DEVIATE 18: no widening past the pointer's index width (the 16-bit
-    // target's): its arithmetic on a wider type costs more, and `n32` states
-    // `i32` legal there, so the X86 model prices the add alike.
-    if width > e.layout.pointer(0).index_bits {
+    // DEVIATE 18: no widening past the pointer's index width where that is under
+    // 32 bits (the 16-bit targets): their arithmetic on a wider type costs more,
+    // and `n32` states `i32` legal there, so the X86 model prices the add alike.
+    // A 32-bit pointer with a legal `i64` (wasm32) widens a counter to `i64`, as the pin.
+    let index_bits = e.layout.pointer(0).index_bits;
+    if width > index_bits && index_bits < 32 {
         return;
     }
     if let Some(tti) = e.outer.target().tti() {
