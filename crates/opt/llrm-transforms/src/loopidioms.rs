@@ -1079,7 +1079,8 @@ fn trip_total<'a>(
 
 /// DEVIATE, for `loopidiom`: whether `rep movs` over a length known only at
 /// run time is fewer code bytes than the loop over `blocks` it replaces. The
-/// pin lowers that copy to a libc call, which llrm has none of: the string
+/// pin lowers that copy to a libc call, which a target without one
+/// (`Tuning::libc_memcpy` false: m16) has none of: the string
 /// instruction takes ES, three registers, the count split in dwords and odd
 /// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
 /// 16 bytes over the loop each). Owner w2, exit 2026-11-20: the DAG's
