@@ -165,6 +165,44 @@ MVNIv4i32                move     x/i,i         -                        fp_arit
 MVNIv2i32                move     x/i,i         -                        fp_arith   - - - -/-                MVNIv2i32
 MOVIv4s_msl              move     x/i,i         -                        fp_arith   - - - -/-                MOVIv4s_msl
 MVNIv4s_msl              move     x/i,i         -                        fp_arith   - - - -/-                MVNIv4s_msl
+# ---- vector integer arithmetic (the loop vectorizer's)
+ADDv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                ADDv16i8
+SUBv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                SUBv16i8
+USHLv16i8                binary   x/x,x         -                        fp_arith   - - - -/-                USHLv16i8
+SSHLv16i8                binary   x/x,x         -                        fp_arith   - - - -/-                SSHLv16i8
+MULv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                MULv16i8
+SHLv16i8_shift           binary   x/x,i         -                        fp_arith   - - - -/-                SHLv16i8_shift
+USHRv16i8_shift          binary   x/x,i         -                        fp_arith   - - - -/-                USHRv16i8_shift
+SSHRv16i8_shift          binary   x/x,i         -                        fp_arith   - - - -/-                SSHRv16i8_shift
+ADDv8i16                 binary   x/x,x         -                        fp_arith   - - - -/-                ADDv8i16
+SUBv8i16                 binary   x/x,x         -                        fp_arith   - - - -/-                SUBv8i16
+USHLv8i16                binary   x/x,x         -                        fp_arith   - - - -/-                USHLv8i16
+SSHLv8i16                binary   x/x,x         -                        fp_arith   - - - -/-                SSHLv8i16
+MULv8i16                 binary   x/x,x         -                        fp_arith   - - - -/-                MULv8i16
+SHLv8i16_shift           binary   x/x,i         -                        fp_arith   - - - -/-                SHLv8i16_shift
+USHRv8i16_shift          binary   x/x,i         -                        fp_arith   - - - -/-                USHRv8i16_shift
+SSHRv8i16_shift          binary   x/x,i         -                        fp_arith   - - - -/-                SSHRv8i16_shift
+ADDv4i32                 binary   x/x,x         -                        fp_arith   - - - -/-                ADDv4i32
+SUBv4i32                 binary   x/x,x         -                        fp_arith   - - - -/-                SUBv4i32
+USHLv4i32                binary   x/x,x         -                        fp_arith   - - - -/-                USHLv4i32
+SSHLv4i32                binary   x/x,x         -                        fp_arith   - - - -/-                SSHLv4i32
+MULv4i32                 binary   x/x,x         -                        fp_arith   - - - -/-                MULv4i32
+SHLv4i32_shift           binary   x/x,i         -                        fp_arith   - - - -/-                SHLv4i32_shift
+USHRv4i32_shift          binary   x/x,i         -                        fp_arith   - - - -/-                USHRv4i32_shift
+SSHRv4i32_shift          binary   x/x,i         -                        fp_arith   - - - -/-                SSHRv4i32_shift
+ADDv2i64                 binary   x/x,x         -                        fp_arith   - - - -/-                ADDv2i64
+SUBv2i64                 binary   x/x,x         -                        fp_arith   - - - -/-                SUBv2i64
+USHLv2i64                binary   x/x,x         -                        fp_arith   - - - -/-                USHLv2i64
+SSHLv2i64                binary   x/x,x         -                        fp_arith   - - - -/-                SSHLv2i64
+SHLv2i64_shift           binary   x/x,i         -                        fp_arith   - - - -/-                SHLv2i64_shift
+USHRv2i64_shift          binary   x/x,i         -                        fp_arith   - - - -/-                USHRv2i64_shift
+SSHRv2i64_shift          binary   x/x,i         -                        fp_arith   - - - -/-                SSHRv2i64_shift
+ANDv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                ANDv16i8
+BICv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                BICv16i8
+ORRv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                ORRv16i8
+ORNv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                ORNv16i8
+EORv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                EORv16i8
+NOTv16i8                 unary    x/x           -                        fp_arith   - - - -/-                NOTv16i8
 # ---- pseudo operations (a call, a tail call and the return carry a variable number of
 # registers: no row, their effects are the contract's)
 COPY                     move     r/r           -                        alu        - - - -/-                COPY

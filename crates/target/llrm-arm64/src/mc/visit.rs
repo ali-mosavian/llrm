@@ -291,6 +291,15 @@ impl Inst {
                 }
             }
             Inst::FpMoveImm { rd, .. } => f(Fpr(rd), Role::Def),
+            Inst::VectorBinary { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorShift { rd, rn, .. } | Inst::VectorNot { rd, rn } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
             Inst::VectorFill { rd, fill } => {
                 f(Fpr(rd), Role::Def);
                 if let Fill::Dup(_, source) = fill {

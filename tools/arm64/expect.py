@@ -7,7 +7,7 @@ import sys
 # 78803551, the DOS/x87 value. The float result depends on contraction, so aarch64 cannot reach it.
 # Every level prints 40144774 (O1 and O3 were missed at first: their cells failed the check).
 CAUSE = "verified: value depends on -ffp-contract (off 502187692, on 40144774)"
-EXCEPTIONS = {("stft_single", level): ("40144774", "78803551", CAUSE) for level in ("O1", "O2", "O3", "Os")}
+EXCEPTIONS = {("stft_single", level): ("40144774", "78803551", CAUSE) for level in ("O1", "O2", "O3", "Os", "Oz")}
 
 
 def same_value(reported, expected):

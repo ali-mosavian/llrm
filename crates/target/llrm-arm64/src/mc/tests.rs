@@ -273,6 +273,36 @@ fn branches() {
     }
     all.push(Inst::Ret { rn: Gpr(5) });
     all.push(Inst::Svc { imm16: 0x80 });
+    for op in [
+        VectorOp::Add,
+        VectorOp::Sub,
+        VectorOp::Mul,
+        VectorOp::And,
+        VectorOp::Bic,
+        VectorOp::Orr,
+        VectorOp::Orn,
+        VectorOp::Eor,
+        VectorOp::Ushl,
+        VectorOp::Sshl,
+    ] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+            if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+                continue;
+            }
+            all.push(Inst::VectorBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+        }
+    }
+    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+            let esize = lanes.lane_bits() as u8;
+            // A left shift is 0..esize-1, a right one 1..esize.
+            let amounts = if op == VectorShift::Shl { [0, 3, esize - 1] } else { [1, 3, esize] };
+            for amount in amounts {
+                all.push(Inst::VectorShift { op, lanes, rd: Vreg(2), rn: Vreg(29), amount });
+            }
+        }
+    }
+    all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
     all.push(Inst::VectorMov { rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::VectorMov { rd: Vreg(31), rn: Vreg(30) });
     for (subtract, set_flags, width) in [

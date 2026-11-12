@@ -389,3 +389,16 @@ fn drains_visits_and_inserts_count_the_worklist() {
     let [_, visits, initial, inserts] = delta(before);
     assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");
 }
+
+/// The loop vectorizer's `add <8 x i16>` reached `fold_box_multiply`, which
+/// reads an integer width, and panicked ("an integer") the arm64 compile of a
+/// widened add. The vector operations are left as they are.
+#[test]
+fn a_vector_operation_is_not_visited_by_the_scalar_folds() {
+    for op in ["add", "sub", "mul", "shl", "lshr", "ashr", "and", "or", "xor"] {
+        let text = format!(
+            "define <8 x i16> @f(<8 x i16> %x, <8 x i16> %y) {{\nb0:\n  %a = {op} <8 x i16> %x, %y\n  ret <8 x i16> %a\n}}\n"
+        );
+        check(&text, &text);
+    }
+}

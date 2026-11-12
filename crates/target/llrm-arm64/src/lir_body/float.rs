@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::mc::inst::Cond;
-use crate::mc::inst::{Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding};
+use crate::mc::inst::{
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding, VectorOp, VectorShift,
+};
 
 const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Mov, "FMOV"),
@@ -112,6 +114,31 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
         ),
         Inst::VectorMov { rd, rn } => {
             semantics(Operation::Move, "ORRv16b", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
+        }
+        Inst::VectorBinary { op, lanes, rd, rn, rm } => semantics(
+            Operation::Binary,
+            vector_op_name(*op, *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
+        Inst::VectorShift { op, lanes, rd, rn, amount } => semantics(
+            Operation::Binary,
+            format!(
+                "{}v{}_shift",
+                match op {
+                    VectorShift::Shl => "SHL",
+                    VectorShift::Ushr => "USHR",
+                    VectorShift::Sshr => "SSHR",
+                },
+                lane_name(*lanes)
+            ),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), imm(i64::from(*amount))],
+            None,
+        ),
+        Inst::VectorNot { rd, rn } => {
+            semantics(Operation::Unary, "NOTv16i8", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
         }
         Inst::FpBinary { op, size, rd, rn, rm } => semantics(
             Operation::Binary,
@@ -248,9 +275,66 @@ fn dup_name(arrangement: Arrangement) -> &'static str {
     }
 }
 
+/// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the lanes as the pin's opcode names spell them.
+fn lane_name(lanes: Arrangement) -> &'static str {
+    match lanes {
+        Arrangement::B16 => "16i8",
+        Arrangement::H8 => "8i16",
+        Arrangement::S4 => "4i32",
+        Arrangement::D2 => "2i64",
+    }
+}
+
+/// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
+fn vector_op_name(op: VectorOp, lanes: Arrangement) -> String {
+    let stem = op.mnemonic().to_uppercase();
+    let lanes = if op.is_logical() { "16i8" } else { lane_name(lanes) };
+    format!("{stem}v{lanes}")
+}
+
+const VECTOR_OPS: [VectorOp; 10] = [
+    VectorOp::Add,
+    VectorOp::Sub,
+    VectorOp::Mul,
+    VectorOp::And,
+    VectorOp::Bic,
+    VectorOp::Orr,
+    VectorOp::Orn,
+    VectorOp::Eor,
+    VectorOp::Ushl,
+    VectorOp::Sshl,
+];
+const ARRANGEMENTS: [Arrangement; 4] = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2];
+
 pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let name = what.name.as_deref()?;
     let (dest, s) = (what.dests.first(), &what.sources);
+    if name == "NOTv16i8" {
+        return Some(Inst::VectorNot { rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
+    }
+    for op in VECTOR_OPS {
+        for lanes in ARRANGEMENTS {
+            if name == vector_op_name(op, lanes)
+                && (!op.is_logical() || lanes == Arrangement::B16)
+                && !(op == VectorOp::Mul && lanes == Arrangement::D2)
+            {
+                return Some(Inst::VectorBinary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]), rm: vreg_of(&s[1]) });
+            }
+        }
+    }
+    for (stem, op) in [("SHL", VectorShift::Shl), ("USHR", VectorShift::Ushr), ("SSHR", VectorShift::Sshr)] {
+        for lanes in ARRANGEMENTS {
+            if name == format!("{stem}v{}_shift", lane_name(lanes)) {
+                return Some(Inst::VectorShift {
+                    op,
+                    lanes,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[0]),
+                    amount: value_of(&s[1]) as u8,
+                });
+            }
+        }
+    }
     match name {
         "ORRv16b" => return Some(Inst::VectorMov { rd: vreg_of(dest?), rn: vreg_of(&s[0]) }),
         "MOVIv2d" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Zero }),
