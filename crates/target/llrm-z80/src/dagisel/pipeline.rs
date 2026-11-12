@@ -175,6 +175,85 @@ pub enum Refusal {
 struct Z80Combines {
     /// The size routine `__mulsi3` is this function's long multiply.
     long_multiply: bool,
+    /// Selected at a level that allows no trade between bytes and clocks (`STRICT_LEVEL`).
+    strict: bool,
+}
+
+/// The bytes and T-states of a chain of shifts and adds on a word in `hl`, the source copied to `bc` when a step adds it.
+fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
+    let (mut bytes, mut clocks) = (0, 0);
+    let mut seeded = false;
+    for &(step, m) in chain {
+        let (b, t) = match step {
+            "shl" => (m, 11 * m),
+            "add" => (1, 11),
+            "sub" => (3, 19),
+            "fadd" => (3 + m, 19 + 11 * m),
+            _ => (5 + m, 27 + 11 * m),
+        };
+        seeded |= matches!(step, "add" | "sub");
+        bytes += b;
+        clocks += t;
+    }
+    if seeded {
+        bytes += 2;
+        clocks += 8;
+    }
+    (bytes, clocks)
+}
+
+/// A word multiplied by a constant as the shifts and adds of `chain_search` (Bernstein 1986), where the pin leaves
+/// every constant but `2^k +- 1` to the `__mulhi3` call: `ld de, #c; call` is 6 B and a loop of about 65 T a bit of
+/// the constant. Taken where the chain is no larger and no slower (a strict level), or by the rate 1 B = 3 T.
+///
+/// DEVIATE Z80-MUL-CHAIN (owner z80, exit 2026-11-24): the pin has no such search; AArch64's `performMulCombine`
+/// and X86's `combineMul` are the table-driven analogues.
+fn word_product_chain(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    strict: bool,
+) -> Option<SDValue> {
+    let (x, bits) = (dag.operand(node, 0), dag.constant(dag.operand(node, 1))?);
+    let c = i64::from(bits as u16);
+    if c < 3 || dag.constant(x).is_some() {
+        return None;
+    }
+    let weight = if strict { 40 } else { 3 };
+    let call = (6, 40 + 65 * i64::from(16 - (c as u16).leading_zeros()));
+    let limit = weight * call.0 + call.1;
+    let (chain, _) = llrm_codegen::backend::arithmetic::synthesize_chain(
+        c,
+        limit,
+        &|m| m * (weight + 11),
+        weight + 11,
+        2 * weight + 8,
+    )?;
+    let (bytes, clocks) = word_chain_price(&chain);
+    let wins = if strict { bytes <= call.0 && clocks <= call.1 } else { weight * bytes + clocks < limit };
+    if !wins {
+        return None;
+    }
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
+        let by = dag.get_constant(by as u128, EVT::I8);
+        dag.get_node(ISD::Shl, EVT::I16, &[value, by])
+    };
+    let mut current = x;
+    for (step, m) in chain {
+        current = match step {
+            "shl" => shift(dag, current, m),
+            "add" => dag.get_node(ISD::Add, EVT::I16, &[current, x]),
+            "sub" => dag.get_node(ISD::Sub, EVT::I16, &[current, x]),
+            "fadd" => {
+                let moved = shift(dag, current, m);
+                dag.get_node(ISD::Add, EVT::I16, &[current, moved])
+            }
+            _ => {
+                let moved = shift(dag, current, m);
+                dag.get_node(ISD::Sub, EVT::I16, &[moved, current])
+            }
+        };
+    }
+    Some(current)
 }
 
 /// `2^k +- 1` (k up to 8): shifts and one add (`decompose_mul_by_constant`).
@@ -267,7 +346,7 @@ impl CombineHooks for Z80Combines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Shl | ISD::Srl | ISD::And)
+        matches!(op, ISD::Shl | ISD::Srl | ISD::And | ISD::Mul)
     }
 
     fn perform_dag_combine(
@@ -277,6 +356,12 @@ impl CombineHooks for Z80Combines {
         level: CombineLevel,
     ) -> Option<SDValue> {
         // Also called for every target node, whatever its operands.
+        if dag.opcode(node) == ISD::Mul {
+            let word = dag.value_type(node) == EVT::I16;
+            return (word && level == CombineLevel::BeforeLegalizeTypes)
+                .then(|| word_product_chain(dag, node, self.strict))
+                .flatten();
+        }
         if dag.opcode(node) == ISD::And {
             // A mask that fits the byte a word was extended from (zero or any: the high byte is masked off) is a byte `and`, extended after: no pair is made
             // for the extension and read back. The pin leaves it to isel.
@@ -374,7 +459,7 @@ pub fn select_block(
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized };
-    let mut combines = Z80Combines { long_multiply: (sized || all_calls) && long_multiply };
+    let mut combines = Z80Combines { long_multiply: (sized || all_calls) && long_multiply, strict: STRICT_LEVEL.with(std::cell::Cell::get) };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);
