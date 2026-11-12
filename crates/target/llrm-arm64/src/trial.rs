@@ -34,7 +34,56 @@ pub struct Price {
 }
 
 thread_local! {
+    static UNMERGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static MERGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WORK: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the compile that merges no global of an `optsize` function is
+/// running.
+pub fn unmerged() -> bool {
+    UNMERGED.with(std::cell::Cell::get)
+}
+
+/// Runs `body` with GlobalMerge as the pin has it: nothing at -Os.
+pub fn without_merge<T>(body: impl FnOnce() -> T) -> T {
+    let before = UNMERGED.with(|cell| cell.replace(true));
+    let value = body();
+    UNMERGED.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes `count` globals GM-OPTSIZE merged that the pin would not.
+pub fn note_merged(count: usize) {
+    MERGED.with(|cell| cell.set(cell.get() + count));
+}
+
+/// The globals noted since the last call.
+pub fn take_merged() -> usize {
+    MERGED.with(|cell| cell.replace(0))
+}
+
+/// Bytes one unmerged global costs: its own `adrp` and `add`.
+const BYTES_PER_UNMERGED_GLOBAL: i64 = 8;
+
+/// The model's frequencies are estimates: a gain under this share of the work
+/// is noise (jpeg_fixed -Os modelled 0.004% and ran 5,497 instructions more).
+const MIN_GAIN: f64 = 0.001;
+
+/// DEVIATE GM-TRIAL: whether the compile that merges nothing at -Os is kept
+/// over `kept`, which merged `merged` globals GM-OPTSIZE takes: it executes
+/// less, for no more than the `adrp`+`add` each global needs of its own. A
+/// merged base reaches its members by offset, so a loop that indexes them pays
+/// an `add` a trip (particle -Os: 6.5% more instructions than gcc and clang, 36
+/// B smaller).
+pub fn keeps_unmerged(
+    kept: Price,
+    other: Price,
+    merged: usize,
+) -> bool {
+    !(kept.work.is_nan() || other.work.is_nan())
+        && kept.work - other.work >= MIN_GAIN * kept.work
+        && other.bytes - kept.bytes <= BYTES_PER_UNMERGED_GLOBAL * merged as i64
 }
 
 /// Starts summing the work of the functions lowered on this thread.
