@@ -5943,3 +5943,32 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     assert!(!listing(2, 30).contains("movsw"), "a short copy would pay the operand-size prefix for nothing:\n{}", listing(2, 30));
     assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
 }
+
+/// x86-m64 shellsort -O2: `bench_main_` took a second 255 B copy of `bench_shellsort`, a public function that stays,
+/// for one constant argument: 499 B of code against gcc's 235. INL-O2 RATE prices the copy's bytes at the m64 rate
+/// as m32's does, and the caller keeps the call (271 B).
+#[test]
+fn a_speed_inline_pays_its_bytes_at_o2_on_m64() {
+    let text = include_str!("tests_data/shellsort_o2.ll");
+    let (built, format) = compiled(&flags(&["-m64", "-O2"]), text, "bench_shellsort").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
+        &built,
+        "shellsort_o2.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap();
+    assert!(bytes <= 350, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
+}
+
+/// x86-m64 crc -O2: the rate kept `bench_main_`'s call of `bench_crc(0)`, whose copy folds to one constant: 21 executed
+/// instructions became 561 and the object grew 5 B. A priced trial measures the folded copy (no growth, fewer clocks)
+/// and keeps it, as the pin's inliner does.
+#[test]
+fn a_call_whose_copy_folds_to_a_constant_is_inlined_at_o2_on_m64() {
+    let text = include_str!("tests_data/crc_o2.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), text, "bench_main_").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("call bench_crc"), "main still calls bench_crc:\n{listing}");
+}

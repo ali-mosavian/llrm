@@ -59,8 +59,8 @@ fn an_add_of_two_loaded_arrays_is_widened() {
     assert_eq!(count(&text, "load i16"), 0, "{text}");
 }
 
-/// A chain of operations feeds one into the next, a constant operand is a splat:
-/// pin VF 8, IC 2.
+/// A chain of operations feeds one into the next, a constant operand is a
+/// splat: pin VF 8, IC 2.
 #[test]
 fn a_chain_of_binary_operations_is_widened_with_its_constants_splat() {
     let text = run(CHAIN);
@@ -96,10 +96,11 @@ fn a_mul_of_i64_and_a_division_stay_scalar() {
     }
 }
 
-/// Where the pin allows no epilogue it does not interleave (`selectInterleaveCount`
-/// L3705 returns 1): a trip count under 16 widened i64 copy twice (IC 2, four
-/// lanes a step) where the pin takes VF 2, IC 1 (`opt -passes=loop-vectorize`,
-/// `icmp eq i64 %index.next, 8` after `add nuw i64 %index, 2`).
+/// Where the pin allows no epilogue it does not interleave
+/// (`selectInterleaveCount` L3705 returns 1): a trip count under 16 widened i64
+/// copy twice (IC 2, four lanes a step) where the pin takes VF 2, IC 1 (`opt
+/// -passes=loop-vectorize`, `icmp eq i64 %index.next, 8` after `add nuw i64
+/// %index, 2`).
 #[test]
 fn a_tiny_trip_count_is_not_interleaved() {
     let text = run(&COPY.replace("i16", "i64").replace("align 2", "align 8").replace("1920", "8"));
@@ -107,8 +108,8 @@ fn a_tiny_trip_count_is_not_interleaved() {
     assert!(text.contains("add nuw nsw i64 %i, 2"), "{text}");
 }
 
-/// `-O1` runs the pass with `VectorizeOnlyWhenForced`: the pin (and clang) widen
-/// nothing there, and the scroll fill was widened at O1.
+/// `-O1` runs the pass with `VectorizeOnlyWhenForced`: the pin (and clang)
+/// widen nothing there, and the scroll fill was widened at O1.
 #[test]
 fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     let mut module = crate::testing::parsed(COPY);
@@ -123,9 +124,10 @@ fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     assert_eq!(count(&crate::testing::printed(&module), "load <"), 0);
 }
 
-/// Two pointers that may overlap need the pin's `vector.memcheck` (LoopVectorize
-/// L1637), which is not built: `b[i] = a[i]` over plain pointers was widened
-/// with no overlap test, so `b = a + 1` read stale lanes. It stays scalar.
+/// Two pointers that may overlap need the pin's `vector.memcheck`
+/// (LoopVectorize L1637), which is not built: `b[i] = a[i]` over plain pointers
+/// was widened with no overlap test, so `b = a + 1` read stale lanes. It stays
+/// scalar.
 #[test]
 fn a_copy_between_pointers_that_may_overlap_stays_scalar() {
     let text = run(&COPY.replace("noalias ", ""));
@@ -135,8 +137,9 @@ fn a_copy_between_pointers_that_may_overlap_stays_scalar() {
 
 /// A trip count VF x IC does not divide (1921) was left scalar ("A scalar
 /// epilogue would remain"); the pin widens the first 1920 and leaves the last
-/// iteration to a copy of the loop, entered at 1920 (`opt -passes=loop-vectorize`
-/// on this loop: `icmp eq i64 %index.next, 1920`, then `%i = phi [ 1920, ..]`).
+/// iteration to a copy of the loop, entered at 1920 (`opt
+/// -passes=loop-vectorize` on this loop: `icmp eq i64 %index.next, 1920`, then
+/// `%i = phi [ 1920, ..]`).
 #[test]
 fn a_trip_count_with_a_remainder_is_widened_with_a_scalar_remainder() {
     let text = run(&COPY.replace("1920", "1921"));
@@ -164,7 +167,10 @@ fn a_remainder_resumes_where_the_vector_loop_ends() {
 fn no_remainder_is_made_where_the_pin_allows_none() {
     let text = run(&COPY.replace("1920", "15"));
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
-    let text = run(&COPY.replace("1920", "1921").replace("define void @f(ptr noalias %a, ptr noalias %b, i64 %n)", "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize"));
+    let text = run(&COPY.replace("1920", "1921").replace(
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n)",
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize",
+    ));
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
 }
 
@@ -172,9 +178,15 @@ fn no_remainder_is_made_where_the_pin_allows_none() {
 /// added bytes at -Os (histo +4, scroll +4, jpeg_fixed +24); it stays scalar.
 #[test]
 fn an_optsize_loop_stays_scalar_even_when_vf_divides_the_trip_count() {
-    let text = run(&COPY.replace("define void @f(ptr noalias %a, ptr noalias %b, i64 %n)", "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize"));
+    let text = run(&COPY.replace(
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n)",
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize",
+    ));
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
-    let text = run(&COPY.replace("define void @f(ptr noalias %a, ptr noalias %b, i64 %n)", "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) minsize"));
+    let text = run(&COPY.replace(
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n)",
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) minsize",
+    ));
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
     assert_eq!(count(&run(COPY), "<8 x i16>") > 0, true);
 }
@@ -264,7 +276,8 @@ fn a_fill_with_a_constant_stores_a_constant_splat() {
 
 /// A loop returning its last index (`ret %i` through an exit phi) would return
 /// the last vector iteration's index (1904, not 1919) once widened; the pin
-/// fixes it up in the middle block. Left scalar until that is translated (LVP5).
+/// fixes it up in the middle block. Left scalar until that is translated
+/// (LVP5).
 #[test]
 fn an_induction_used_after_the_loop_is_left_scalar() {
     let text = run(include_str!("../tests/lv/exit_value.ll"));
@@ -323,7 +336,8 @@ fn an_interleaved_sum_with_a_remainder_resumes_from_the_folded_value() {
     let text = run(SUM_REMAINDER);
     assert_eq!(count(&text, "= add i64 %sum"), 3, "{text}");
     assert_eq!(count(&text, "load i16"), 5, "{text}");
-    // The remainder starts from the folded sum; a constant trip count has no scalar.ph.
+    // The remainder starts from the folded sum; a constant trip count has no
+    // scalar.ph.
     assert!(text.contains("%s.scalar = phi i64 [ %bin.rdx2, %middle.block ]"), "{text}");
     assert!(!text.contains("bc.merge.rdx"), "{text}");
     assert!(text.contains("%r = phi i64 [ %sum.scalar, %loop.scalar ]"), "{text}");
@@ -331,9 +345,9 @@ fn an_interleaved_sum_with_a_remainder_resumes_from_the_folded_value() {
 
 const SUM_N: &str = include_str!("../tests/lv/sum_sext_n.ll");
 
-/// A run-time trip count checks `min.iters.check`, and the remainder resumes the
-/// sum from `bc.merge.rdx` (the folded value, or the start where the interleaved
-/// loop was skipped), as the pin's (IC 4).
+/// A run-time trip count checks `min.iters.check`, and the remainder resumes
+/// the sum from `bc.merge.rdx` (the folded value, or the start where the
+/// interleaved loop was skipped), as the pin's (IC 4).
 #[test]
 fn an_interleaved_sum_of_a_run_time_count_merges_the_sum_at_scalar_ph() {
     let text = run(SUM_N);
@@ -375,7 +389,8 @@ const REM_STORE: &str = include_str!("../tests/lv/rem_store.ll");
 
 /// A remainder by a constant stored per element is vectorized by the pin
 /// (huge -O2: VF 8); the target prices no vector division here, which read as
-/// "the pin stays scalar" and interleaved the loop alone (+31,612 instructions).
+/// "the pin stays scalar" and interleaved the loop alone (+31,612
+/// instructions).
 #[test]
 fn a_remainder_the_pin_may_vectorize_is_not_interleaved_alone() {
     let text = run(REM_STORE);
@@ -391,4 +406,31 @@ const DOT_SEXT: &str = include_str!("../tests/lv/dot_sext.ll");
 fn a_dot_product_of_extended_values_is_not_interleaved_alone() {
     let text = run(DOT_SEXT);
     assert!(!text.contains("bin.rdx"), "{text}");
+}
+
+const FP_CANON_SUM: &str = include_str!("../tests/lv/fp_canon_sum.ll");
+const FP_SCALE: &str = include_str!("../tests/lv/fp_scale.ll");
+
+/// `sfm16_float_add`'s loop stayed one scalar loop ("An element type the target
+/// has no cost for"): the pin prices VF 4 at 48 against the scalar 11
+/// (`-debug-only=loop-vectorize`), keeps it scalar and interleaves it four
+/// times.
+#[test]
+fn a_loop_the_pin_finds_vectorization_not_beneficial_for_is_interleaved() {
+    let text = run(FP_CANON_SUM);
+    assert_eq!(count(&text, "fcmp uno"), 4, "{text}");
+    // Four accumulators and the exit's.
+    assert_eq!(count(&text, "= phi i32"), 5, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
+}
+
+/// A scale of consecutive floats the pin widens (VF 4) must not be interleaved
+/// alone: that was the +12,213 and +31,612 instruction failure of an interleave
+/// where a vector factor takes the loop.
+#[test]
+fn a_float_loop_the_pin_vectorizes_is_not_interleaved_alone() {
+    let text = run(FP_SCALE);
+    assert_eq!(count(&text, "fmul float"), 1, "{text}");
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 0, "{text}");
 }

@@ -315,6 +315,16 @@ impl Tti for Mos6502 {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
     }
 
+    /// DEVIATE LU24: a pointer that steps is weighed against `p + n`.
+    fn lsr_address_left_to_cost_model(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LU23: an address `p + n` is an add of two cells each trip.
+    fn lsr_written_pointer_add_is_base_add(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LU22: the inner loop's byte counter, extended, is the counter.
     fn lsr_extension_of_phi_exists(&self) -> bool {
         true
