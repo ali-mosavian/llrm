@@ -5961,3 +5961,14 @@ fn a_speed_inline_pays_its_bytes_at_o2_on_m64() {
     .unwrap();
     assert!(bytes <= 350, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
 }
+
+/// x86-m64 crc -O2: the rate kept `bench_main_`'s call of `bench_crc(0)`, whose copy folds to one constant: 21 executed
+/// instructions became 561 and the object grew 5 B. A priced trial measures the folded copy (no growth, fewer clocks)
+/// and keeps it, as the pin's inliner does.
+#[test]
+fn a_call_whose_copy_folds_to_a_constant_is_inlined_at_o2_on_m64() {
+    let text = include_str!("tests_data/crc_o2.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), text, "bench_main_").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("call bench_crc"), "main still calls bench_crc:\n{listing}");
+}
