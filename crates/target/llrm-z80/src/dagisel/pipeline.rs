@@ -84,6 +84,11 @@ thread_local! {
     /// Set while a function is selected at a level that allows no trade between bytes and clocks (-O1, -Os, -Oz).
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected with the words of its long adds and subtracts left to the generic
+    /// Set while a function with a variable 64-bit shift is selected the second
+    /// time, each such shift an in-place loop over eight bytes of the frame
+    /// (`Z80Lowering::lower_wide_shift`) where the first selection calls the
+    /// shift routine; the caller prices the two with the routine linked once.
+    pub static INLINE_SHIFTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// expansion (an add and a compare of the sum), not the carry ops (`lower_carry_op`); the caller prices the
     /// two forms (`compile::lines_of`).
     pub static GENERIC_CARRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -349,6 +354,11 @@ pub fn select_block(
     if GENERIC_CARRY.with(std::cell::Cell::get) {
         for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
             tli.set_operation_action(op, MVT::I16, llrm_codegen::backend::selectiondag::Action::Expand);
+        }
+    }
+    if INLINE_SHIFTS.with(std::cell::Cell::get) {
+        for op in [ISD::Shl, ISD::Srl, ISD::Sra] {
+            tli.set_operation_action(op, MVT::I64, llrm_codegen::backend::selectiondag::Action::Custom);
         }
     }
     tli.set_opt_for_size(sized);

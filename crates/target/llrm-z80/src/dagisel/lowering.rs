@@ -219,6 +219,54 @@ pub struct Z80Lowering {
 }
 
 impl Z80Lowering {
+    /// A variable 64-bit shift as one loop over eight bytes in a frame cell, a
+    /// bit a trip (`WSHIFT`): the value stored, shifted in place and loaded
+    /// back. The module price decides against the routine's call
+    /// (`INLINE_SHIFTS`, `compile::decomposed_functions`). The pin's
+    /// counterpart is `ExpandIntRes_Shift`'s library call; MSP430
+    /// (`EmitShiftInstr`) and AVR (`insertShift`) expand a variable shift into
+    /// a loop block.
+    fn lower_wide_shift(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+        if dag.constant(amount).is_some() {
+            return None;
+        }
+        let (kind, to_high) = match dag.opcode(node) {
+            ISD::Shl => (0, 0),
+            ISD::Srl => (1, 7),
+            _ => (2, 7),
+        };
+        let cell = dag.create_stack_temporary(8, 1);
+        let info = MemInfo {
+            mem_vt: EVT::I64,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let address = dag.get_frame_index(EVT::I16, cell);
+        let root = dag.entry_node();
+        let stored = dag.get_store(root, value, address, info);
+        // the loop starts at the byte the bits leave from: the low one for a
+        // left shift, the high one for a right
+        let pointer = if to_high == 0 {
+            address
+        } else {
+            let seven = dag.get_constant(to_high, EVT::I16);
+            dag.get_node(ISD::Add, EVT::I16, &[address, seven])
+        };
+        let count = dag.get_zext_or_trunc(amount, EVT::I16);
+        let kind = dag.get_constant(kind, EVT::I8);
+        let shifted = dag.get_node(super::call::WSHIFT, EVT::OTHER, &[stored, pointer, count, kind]);
+        Some(dag.get_load(EVT::I64, shifted, address, info))
+    }
+
     /// A shift by a constant is selected as it is; by a variable it is the call
     /// of `__ashl`, `__lshr` or `__ashr` (`RTLIB::SHL_I16`, ...), the
     /// amount a byte.
@@ -229,6 +277,9 @@ impl Z80Lowering {
     ) -> Option<SDValue> {
         let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
         let vt = dag.value_type(node);
+        if vt == EVT::I64 {
+            return self.lower_wide_shift(dag, node);
+        }
         if let Some(count) = dag.constant(amount) {
             // a word shifted right by a byte or more, keeping its sign, is its
             // high byte shifted by the rest and sign-extended: the bit by bit

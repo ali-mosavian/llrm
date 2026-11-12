@@ -88,6 +88,43 @@ pub fn mark_long_multiplies(module: &mut Module) {
     }
 }
 
+/// The attribute that marks a function with a shift of a 64-bit value by a
+/// variable amount: it is also selected with each such shift an in-place loop
+/// (`driver::selections_with_alternatives`).
+pub const WIDE_SHIFT: &str = "llrm-wshift";
+
+/// Marks every function with a body that shifts an `i64` by an amount that is
+/// not a constant.
+pub fn mark_wide_shifts(module: &mut Module) {
+    let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, _, function)| {
+            let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
+            function
+                .layout()
+                .iter()
+                .flat_map(|&block| function.iter_block(block))
+                .map(|inst| function.instruction(inst))
+                .any(|instruction| {
+                    matches!(
+                        instruction.opcode,
+                        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr)
+                    )
+                        && module.context.types.int_bits(instruction.ty) == Some(64)
+                        && instruction.operands.get(1).is_some_and(|&amount| constant_int_u64(&query, amount).is_none())
+                })
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(WIDE_SHIFT.into()));
+        }
+    }
+}
+
 /// The attribute that marks a function with a `memset` of a constant count of two or more: it is also
 /// selected with each such fill an inline `ldir` fill (`driver::selections_with_alternatives`).
 pub const CONSTANT_FILL: &str = "llrm-fill";
