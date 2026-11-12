@@ -101,6 +101,9 @@ pub struct Executed {
     pub branches: f64,
     pub taken: f64,
     pub jumps: f64,
+    /// Each call or jump instruction (`Insn::at`) with the runs it is expected to make per call of the
+    /// function: a caller's price of the callee bodies it reaches (`driver::trial::weighted_clocks`).
+    pub calls: Vec<(i64, f64)>,
 }
 
 impl Executed {
@@ -254,7 +257,11 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                     (out.branches, out.taken, reaching) =
                         (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
-                Some((Operation::Jump, _)) => out.jumps += reaching,
+                Some((Operation::Jump, _)) => {
+                    out.jumps += reaching;
+                    out.calls.push((one.at, reaching));
+                }
+                Some((Operation::Call, _)) => out.calls.push((one.at, reaching)),
                 _ => {}
             }
             // A remat may be built as a reload; it counts as a remat.

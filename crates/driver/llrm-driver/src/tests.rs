@@ -5771,3 +5771,27 @@ fn a_counted_loop_that_is_smaller_unrotated_stays_unrotated_at_os_on_m64() {
     .unwrap();
     assert!(bytes <= 195, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
 }
+
+/// The clocks a trial prices are a callee's body once per call: a helper called twice in a loop and not inlined must not read
+/// at less than three quarters of the same code inlined. `executed` priced each procedure per entry, so x_dct -O1 read 48763 -> 15259 clocks
+/// for code that ran 137185 -> 210783, and INLINE-O1-TRIAL would have kept six cells that got slower.
+#[test]
+fn a_callee_called_in_a_loop_is_priced_per_call() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define internal i32 @h(i32 %x) {\n  %a = mul i32 %x, 7\n  %b = xor i32 %a, %x\n  %c = add i32 %b, 3\n  %d = shl i32 %c, 2\n  %e = sub i32 %d, %x\n  ret i32 %e\n}\n\
+                define i32 @bench(i32 %n) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i32 [ 0, %entry ], [ %j, %loop ]\n  %s = phi i32 [ 0, %entry ], [ %t, %loop ]\n  \
+                %p = call i32 @h(i32 %i)\n  %q = call i32 @h(i32 %p)\n  %t = add i32 %s, %q\n  %j = add i32 %i, 1\n  \
+                %c = icmp slt i32 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i32 %t\n}\n";
+    let clocks = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-mabi=sysv", "-O1"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "bench").unwrap();
+        llrm_codegen::driver::trial::weighted_clocks(&built, &|done| Some(done.taken * 3.0 + (done.branches - done.taken) + done.jumps * 3.0)).unwrap()
+    };
+    let (inlined, called) = (clocks(&[]), clocks(&["-fno-inline-functions"]));
+    // The same work out of line costs its calls on top; the per-entry sum read it at 0.38 of the inlined (336 against 881).
+    assert!(called * 4.0 >= inlined * 3.0, "{called} clocks with the helper called, {inlined} inlined");
+}

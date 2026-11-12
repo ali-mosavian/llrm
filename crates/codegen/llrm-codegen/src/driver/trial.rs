@@ -341,6 +341,62 @@ fn compiled_module_unrolling(
     Ok(chosen)
 }
 
+/// The expected clocks of the entries of a finished module, a callee's body counted once for each time
+/// its callers run the call (`executed::executed` prices a procedure per entry, so work moved into a
+/// callee, or out of one by inlining, looked saved or spent: x_dct -O1 read 48763 -> 15259 clocks
+/// where the code ran 137185 -> 210783). Entries are the public procedures, else those nothing calls;
+/// a recursive edge counts its own body once.
+pub fn weighted_clocks(
+    built: &masm::Module,
+    jump_clocks: &dyn Fn(&executed::Executed) -> Option<f64>,
+) -> Option<f64> {
+    let index: std::collections::HashMap<&str, usize> =
+        built.procedures.iter().enumerate().map(|(at, one)| (one.name.as_str(), at)).collect();
+    let mut own = Vec::new();
+    let mut edges: Vec<Vec<(usize, f64)>> = Vec::new();
+    let mut called = vec![false; built.procedures.len()];
+    for one in &built.procedures {
+        let done = executed::executed(&one.body)?;
+        let jumps = jump_clocks(&done)?;
+        own.push(done.instructions - done.branches - done.jumps + done.memory + jumps);
+        let mut out = Vec::new();
+        for (at, runs) in &done.calls {
+            if let Some(&to) = one.callees.get(at).and_then(|callee| index.get(callee.name.as_str())) {
+                called[to] = true;
+                out.push((to, *runs));
+            }
+        }
+        edges.push(out);
+    }
+    fn total(
+        at: usize,
+        own: &[f64],
+        edges: &[Vec<(usize, f64)>],
+        memo: &mut [Option<f64>],
+        open: &mut Vec<usize>,
+    ) -> f64 {
+        if let Some(done) = memo[at] {
+            return done;
+        }
+        if open.contains(&at) {
+            return own[at];
+        }
+        open.push(at);
+        let sum = own[at] + edges[at].iter().map(|&(to, runs)| runs * total(to, own, edges, memo, open)).sum::<f64>();
+        open.pop();
+        memo[at] = Some(sum);
+        sum
+    }
+    let mut memo = vec![None; own.len()];
+    let public = built.procedures.iter().any(|one| one.public);
+    Some(
+        (0..own.len())
+            .filter(|&at| if public { built.procedures[at].public } else { !called[at] })
+            .map(|at| total(at, &own, &edges, &mut memo, &mut Vec::new()))
+            .sum(),
+    )
+}
+
 /// [`compiled_module_unrolling`], and at -O1 on a target with `Tti::inline_trial_at_o1`, DEVIATE
 /// INLINE-O1-TRIAL (owner x86-m32, exit 2026-11-24): a module that inlined a call the -Os threshold would
 /// have refused is compiled again under the -Os threshold (the pin inlines at 225 at -O1, gcc -O1 hardly at
@@ -373,17 +429,7 @@ pub fn compiled_module_trying(
     let second = compiled_module_unrolling(module, name, &again, bytes, unpadded)?;
     let _ = trial::take_inlined();
     let cpu = options.cpu()?;
-    let clocks = |built: &masm::Module| {
-        built
-            .procedures
-            .iter()
-            .map(|one| {
-                let done = executed::executed(&one.body)?;
-                let jumps = done.jump_cycles(cpu).ok()?;
-                Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
-            })
-            .sum::<Option<f64>>()
-    };
+    let clocks = |built: &masm::Module| weighted_clocks(built, &|done| done.jump_cycles(cpu).ok());
     let pays = match (clocks(&first), clocks(&second), unpadded(&first), unpadded(&second)) {
         (Some(was), Some(now), Some(before), Some(after)) => trial::keeps_inline_at_o1(was, now, after - before, permille),
         _ => false,
