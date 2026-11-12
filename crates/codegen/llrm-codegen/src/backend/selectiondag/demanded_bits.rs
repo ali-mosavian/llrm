@@ -84,6 +84,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.add_to_worklist(node.node);
         self.replace_value(old, new);
         self.add_to_worklist_with_users(new.node);
+        // `CommitTargetLoweringOpt` is `CombineTo`: the replaced node goes, or it
+        // stays a reader of its operands (a load with a second use is not folded).
+        self.dag.delete_dead(old.node);
+        self.queue_survivors();
         true
     }
 

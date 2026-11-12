@@ -693,15 +693,28 @@ fn look_past_boolean(
     if !one_bit {
         return cond_value;
     }
-    let value = dag.operand(cond_value, 0);
+    let mut value = dag.operand(cond_value, 0);
+    // Bit 0 of `x ^ c` is bit 0 of `x` flipped where `c` has it set: a
+    // branch on the opposite of a boolean (`not`, `xor 1`) reads `x` itself
+    // with the opposite condition.
+    let mut flipped = false;
+    while dag.opcode(value) == ISD::Xor
+        && let Some(mask) = dag.constant(dag.operand(value, 1))
+    {
+        flipped ^= mask & 1 == 1;
+        value = dag.operand(value, 0);
+    }
     let vt = dag.value_type(value);
     if vt == EVT::I32 {
         let bit_no = dag.get_constant(0, EVT::I32);
-        return bit_test(dag, value, bit_no, CondCode::SetNe);
+        return bit_test(dag, value, bit_no, if flipped { CondCode::SetEq } else { CondCode::SetNe });
     }
     // `btst` takes a long: a byte would first be zero extended
     let one = dag.get_constant(1, vt);
-    dag.get_node(ISD::And, vt, &[value, one])
+    let bit = dag.get_node(ISD::And, vt, &[value, one]);
+    let code = cc_operand(dag, if flipped { cond::EQ } else { cond::NE });
+    let flags = emit_test(dag, bit, if flipped { cond::EQ } else { cond::NE });
+    dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags])
 }
 
 /// `EmitTest`: the condition-code register of `op` against zero.

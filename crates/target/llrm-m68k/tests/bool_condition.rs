@@ -35,3 +35,17 @@ fn a_select_on_a_bool_phi_tests_its_bit_without_negating_it() {
         assert!(!out.contains("neg.b"), "{cpu:?}: the condition is negated:\n{out}");
     }
 }
+
+/// The exit of float_in_place_update once the compare of a constant phi folds
+/// (`br i1 %6, %exit, %loop` with `%6 = phi i1 [false], [true]`) branched on
+/// `not.b; and.b #1`: the opposite condition is the same bit tested the other
+/// way, not a copy of the byte made opposite first.
+const EXIT_PHI: &str = include_str!("fixtures/bool_phi_exit_main.ll");
+
+#[test]
+fn a_branch_on_the_opposite_of_a_bool_tests_the_bool_with_the_opposite_condition() {
+    let module = llrm_mir::parse::module(EXIT_PHI).expect("parses");
+    let out = text_with(&module, "main", Cpu::M68000, Options { size: true, mid_end: false, ..Options::default() })
+        .expect("compiles");
+    assert!(!out.contains("not.b"), "the boolean is inverted first:\n{out}");
+}
