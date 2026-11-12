@@ -5972,3 +5972,14 @@ fn a_call_whose_copy_folds_to_a_constant_is_inlined_at_o2_on_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("call bench_crc"), "main still calls bench_crc:\n{listing}");
 }
+
+/// x86-m64 shellsort -Os: the uncounted `while (at >= gap && ...)` loop stayed unrotated, so each trip tested
+/// `at >= gap` through `add; jb` ahead of the body (9276 instructions against clang's 7708 for the same 179 B). The
+/// ROTATION-HOT trial rotates it where the object does not grow: `sub di, ax; jae` closes the loop.
+#[test]
+fn an_uncounted_loop_is_rotated_at_os_on_m64_where_the_object_does_not_grow() {
+    let text = include_str!("tests_data/shellsort_os.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-Os"]), text, "bench_shellsort").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sub di, ax"), "the loop is not rotated:\n{listing}");
+}

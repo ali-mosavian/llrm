@@ -1112,6 +1112,12 @@ pub trait Tti {
         false
     }
 
+    /// Bytes a loop ROTATION-HOT rotates may add where the finished code executes less. 0: the object
+    /// may not grow (-Os strict on bytes).
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        4
+    }
+
     /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a
     /// predecessor in a function marked `optsize` or `minsize` (gcc's
     /// `tree-ssa-pre.cc` inserts at -Os only on a hot edge, and none is
