@@ -2110,6 +2110,53 @@ fn a_one_byte_struct_result_through_a_function_pointer_comes_back_in_al_too() {
     assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
 }
 
+const THREE_BYTE_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { [3 x i8] }\n\
+    define void @make(ptr sret(%struct.T) align 1 %out, i16 %a) addrspace(1) noinline {\n  \
+    %b = trunc i16 %a to i8\n  store i8 %b, ptr %out, align 1\n  ret void\n}\n\
+    define i16 @f(i16 %a) addrspace(1) {\n  %t = alloca %struct.T, align 1\n  \
+    call addrspace(1) void @make(ptr sret(%struct.T) align 1 %t, i16 %a)\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+
+/// A struct of 3 bytes comes back through Borland's hidden far pointer, `ss`
+/// and then the offset pushed after the arguments, and DX:AX returns it. clang
+/// writes a near `sret`: the call pushed only an offset, so a BCC callee read
+/// the argument it found as the segment and wrote through a wild pointer
+/// (callconv CFLB/PFLB `r_s3`, `r_s5`, `r_s7`, `r_s8`, `r_s9`, `r_sci`).
+#[test]
+fn a_three_byte_struct_result_goes_through_a_far_pointer_under_borland_cdecl() {
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), THREE_BYTE_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push ss"), "the caller pushes the segment of the result\n{listing}");
+    assert!(listing.contains("add sp, 6"), "offset, segment and the argument leave the stack\n{listing}");
+    assert!(listing.contains("[bp+8]"), "the callee finds its argument above the pointer\n{listing}");
+}
+
+/// The call through a function pointer carries its convention too.
+#[test]
+fn a_three_byte_struct_result_through_a_function_pointer_goes_far_too() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+        target triple = \"i386-unknown-unknown-code16\"\n\
+        %struct.T = type { [3 x i8] }\n\
+        @fp = external global ptr addrspace(1)\n\
+        define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  %p = load ptr addrspace(1), ptr @fp, align 4\n  \
+        call addrspace(1) void %p(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+        %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push ss"), "{listing}");
+}
+
+/// Open Watcom's 16-bit convention passes the result address in SI, near: the
+/// far pointer is Borland's.
+#[test]
+fn a_three_byte_struct_result_stays_near_under_the_watcom_convention() {
+    let (built, _) = compiled(&flags(&["-mabi=watcom", "-m16"]), THREE_BYTE_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("push ss"), "{listing}");
+}
+
 /// `-fno-inline=sum5` named the function as the source does, but the module
 /// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
 /// looked up: "the program defines no function of that name", so
