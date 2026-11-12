@@ -709,6 +709,8 @@ impl<'a> InlineSpiller<'a> {
                         })
                         .ok()
                         .flatten()
+                } else if cell_width < width {
+                    self.tii.fold_memory_operand(&copy_at_width(self.tii, one, reg, cell_width), reg, &cell)
                 } else {
                     self.tii.fold_memory_operand(one, reg, &cell)
                 }
@@ -1091,6 +1093,36 @@ fn widest_operand(
         .filter(|held| held.value == reg)
         .map(|held| held.width)
         .max()
+}
+
+/// SPILL-ZEXT: the plain register copy `one` of the zero-extended `reg`, made
+/// to move only the low `width` bytes, the whole of a value whose upper bytes
+/// are zero: the copy then folds into a store or a load of the narrow cell,
+/// and a copy out of it writes the dword form of its register, which zeroes
+/// the upper half again. Any other instruction is returned as it is.
+fn copy_at_width(
+    tii: &dyn TargetInstrInfo,
+    one: &Arc<Insn>,
+    reg: u32,
+    width: u32,
+) -> Arc<Insn> {
+    let Some(what) = one.what.as_ref() else { return Arc::clone(one) };
+    let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+        return Arc::clone(one);
+    };
+    let of_reg = dest.value == reg || source.value == reg;
+    let whole = dest.width >= width && source.width >= width && dest.offset == 0 && source.offset == 0;
+    if one.group.is_some() || !tii.is_plain_move(what) || !of_reg || !whole {
+        return Arc::clone(one);
+    }
+    let narrow = |held: &Held| Held { width, ..held.clone() };
+    super::tii::_with(one, |made| {
+        made.what = Some(Semantics {
+            dests: vec![Loc::Held(narrow(dest))],
+            sources: vec![Loc::Held(narrow(source))],
+            ..what.clone()
+        });
+    })
 }
 
 /// Whether `one` writes only part of `reg` (its def narrower than the cell).
@@ -2874,5 +2906,29 @@ mod tests {
         let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
         spiller.spill(ctx, 2, &mut made);
         assert_eq!(spiller.stored.len(), 1, "the store %1 -> home is a mergeable spill");
+    }
+
+    /// jpeg_single -Os: `sar eax, 4; mov ecx, eax; mov [slot], ecx` where the
+    /// pin-shaped spill stored `rax`: the 8-byte copy a split leaves could not
+    /// fold into the 4-byte cell, so the store went through a register copy.
+    #[test]
+    fn test_a_copy_of_a_zero_extended_value_moves_only_its_cell() {
+        let classes = RegisterClasses::m16();
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 64,
+            classes: &classes,
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
+        assert!(tii.write_zero_extends(4, 8) && !tii.write_zero_extends(2, 8) && !tii.write_zero_extends(4, 4));
+        let wide = |value| Held { value, width: 8, offset: 0 };
+        let copy = x87(0, Operation::Move, "mov", vec![Loc::Held(wide(2))], vec![Loc::Held(wide(1))], vec![2], vec![1]);
+        let narrowed = copy_at_width(&tii, &copy, 2, 4);
+        let what = narrowed.what.as_ref().unwrap();
+        assert!(matches!(&what.dests[..], [Loc::Held(held)] if held.value == 2 && held.width == 4), "{what:?}");
+        assert!(matches!(&what.sources[..], [Loc::Held(held)] if held.value == 1 && held.width == 4), "{what:?}");
+        let other =
+            x87(0, Operation::Move, "mov", vec![Loc::Held(wide(3))], vec![Loc::Held(wide(1))], vec![3], vec![1]);
+        assert_eq!(copy_at_width(&tii, &other, 2, 4).id(), other.id(), "a copy of another value is left as it is");
     }
 }
