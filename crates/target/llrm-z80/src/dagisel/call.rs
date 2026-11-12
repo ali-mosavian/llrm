@@ -44,6 +44,9 @@ pub const STSP: ISD = ISD::Target(ids::STSP);
 pub const LDIRG: ISD = ISD::Target(ids::LDIRG);
 /// The byte stored, then `ldir` over the rest: a fill of a constant count.
 pub const LDFILL: ISD = ISD::Target(ids::LDFILL);
+/// A 64-bit value in memory shifted in place, a bit a trip: address, count,
+/// kind (0 shl, 1 lshr, 2 ashr).
+pub const WSHIFT: ISD = ISD::Target(ids::WSHIFT);
 
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
 use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, Site, TargetCalling};

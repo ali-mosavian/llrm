@@ -5,20 +5,21 @@ use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};
 
 const IR: &str = include_str!("data/cold_word_product.ll");
+const HOT: &str = include_str!("data/hot_word_product.ll");
 
-fn text(function: &str) -> String {
+fn text(ir: &str, function: &str) -> String {
     let request = Request::new(Level::O2);
-    let prepared = prepare(IR, &request).expect("prepares");
+    let prepared = prepare(ir, &request).expect("prepares");
     let (number, name) = prepared.names().enumerate().find(|(_, name)| *name == function).expect("function");
     text_in(&prepared, name, number, &request).expect("compiles")
 }
 
 #[test]
 fn a_word_product_outside_a_loop_is_a_call() {
-    assert!(text("once").contains("__umulhisi3"), "{}", text("once"));
+    assert!(text(IR, "once").contains("__umulhisi3"), "{}", text(IR, "once"));
 }
 
 #[test]
 fn a_word_product_in_a_loop_stays_inline() {
-    assert!(!text("looped").contains("__umulhisi3"), "{}", text("looped"));
+    assert!(!text(HOT, "looped").contains("__umulhisi3"), "{}", text(HOT, "looped"));
 }

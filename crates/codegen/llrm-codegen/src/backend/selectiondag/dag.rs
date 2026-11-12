@@ -348,6 +348,9 @@ pub struct DagConfig {
     /// arm64 leaves it off (no `AliasOracle` is wired for it, as wasm's is).
     /// Exit: 2026-11-12, owner w15.
     pub use_aa: bool,
+    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the pin always does). DEVIATE: off by
+    /// default so the other targets' output stays as it was until their owners judge it. Exit: all targets judged.
+    pub known_bits_of_build_pair: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -386,6 +389,7 @@ impl Default for DagConfig {
             narrow_divrem: None,
             narrow_srem_overflow_defined: false,
             use_aa: false,
+            known_bits_of_build_pair: false,
         }
     }
 }

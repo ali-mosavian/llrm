@@ -206,8 +206,11 @@ def one(job):
     w = Path(tempfile.mkdtemp(prefix=f"zp-{path.stem}-", dir=work))
     want = run.expected(path.with_suffix(".out"))
     rows, reasons = [], {}
+    not_a_bar = guard.incomparable(path.read_text(errors="replace"))
+    columns = [] if ctx.ours_only or not_a_bar else SDCC
+    reasons.update({tag: f"NOTCOMPARABLE {not_a_bar}" for tag, _ in SDCC if not_a_bar and not ctx.ours_only})
     cells = ([] if ctx.sdcc_only else [("ours", lambda: ours_cell(path, w, ctx, want))]) + \
-            ([] if ctx.ours_only else [(tag, lambda tag=tag, flags=flags: sdcc_cell(path, w, tag, flags, ctx, want)) for tag, flags in SDCC])
+            [(tag, lambda tag=tag, flags=flags: sdcc_cell(path, w, tag, flags, ctx, want)) for tag, flags in columns]
     for column, cell in cells:
         try:
             rows.append((column, *cell()))
