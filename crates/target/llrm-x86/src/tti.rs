@@ -1120,6 +1120,10 @@ impl Tti for X86 {
         self.tuning.lsr_size_order
     }
 
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        self.tuning.lsr_users_in_use_list_order
+    }
+
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
     }
