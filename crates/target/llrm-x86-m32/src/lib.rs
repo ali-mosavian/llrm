@@ -241,6 +241,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 5035113 -> 4585856. -O3 had gcc's 8: over 12 recursion programs it cost +5556 B and
         // +1.12 M instructions over -O2 (REC-8).
         recursive_inlining_depth: Some((2, 2)),
+        // DEVIATE REC-1 (priced) at m32 (owner x86-m32, exit 2026-11-30): each level of copies
+        // is made while its saved call clocks, at the derived byte rate (0.3125 clk/B), pay its
+        // bytes, to gcc's depth 8 and body 450; the fixed depth above is the fallback.
+        priced_self_inlining: Some((8, 450)),
         // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
         // threshold alone refuses, at a site 16x the caller's entry or hotter, is tried
         // inlined at -O2 and kept where the rate pays, the trial counting the callee's

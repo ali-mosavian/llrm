@@ -403,6 +403,13 @@ pub struct Tuning {
     /// DEVIATE REC-7: the copies' depth at (-O2, -O3), where the target wants
     /// a depth apart from `recursive_inlining`'s; none: that one's.
     pub recursive_inlining_depth: Option<(u32, u32)>,
+    /// DEVIATE REC-1 (priced), flat targets: the ceilings (depth, callee size
+    /// in `gcc_insns`) within which a recursion's copies of itself are chosen
+    /// by price (`Tti::priced_self_inlining`); none: the fixed depth.
+    pub priced_self_inlining: Option<(u32, i64)>,
+    /// What a byte is worth in thousandths of a clock to the priced copies;
+    /// 0: `speed_milliclocks_per_byte`.
+    pub recursion_milliclocks_per_byte: i64,
     /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are
     /// eliminated before it is copied into itself (gcc:
     /// `pass_tail_recursion` runs early, `passes.def` before
@@ -569,6 +576,8 @@ impl Tuning {
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
         recursive_inlining_depth: None,
+        priced_self_inlining: None,
+        recursion_milliclocks_per_byte: 0,
         recursive_tre_first: (false, false),
         ipa_cp_clones_at_speed: false,
         peel_folded_entry: false,

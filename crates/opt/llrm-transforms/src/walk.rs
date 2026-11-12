@@ -1089,7 +1089,7 @@ pub(crate) fn priced_copy_depth(
     frequencies: &llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>,
     ceilings: (u32, i64),
 ) -> usize {
-    let rate = tti.speed_milliclocks_per_byte();
+    let rate = tti.recursion_milliclocks_per_byte();
     let Some(body) = module.global(id).function() else { return 0 };
     if rate <= 0 || crate::inline::gcc_work(body) > ceilings.1 {
         return 0;

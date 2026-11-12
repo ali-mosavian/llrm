@@ -1434,6 +1434,12 @@ pub trait Tti {
         None
     }
 
+    /// What a byte is worth to the priced copies, in thousandths of a clock;
+    /// the speed rate where the target states no rate of its own.
+    fn recursion_milliclocks_per_byte(&self) -> i64 {
+        self.speed_milliclocks_per_byte()
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {

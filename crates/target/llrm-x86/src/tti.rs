@@ -1073,7 +1073,14 @@ impl Tti for X86 {
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
-        self.real_mode.as_ref()?.priced_self_inlining
+        self.real_mode.as_ref().and_then(|real| real.priced_self_inlining).or(self.tuning.priced_self_inlining)
+    }
+
+    fn recursion_milliclocks_per_byte(&self) -> i64 {
+        match self.tuning.recursion_milliclocks_per_byte {
+            0 => self.tuning.speed_milliclocks_per_byte,
+            rate => rate,
+        }
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
