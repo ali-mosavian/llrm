@@ -971,6 +971,25 @@ define cc1000 void @MAIN() addrspace(1) {
     );
 }
 
+/// m16 stft_single -O2: two string literals of 15 B came first, so `align 2` padded the next datum
+/// (+1 B of data against bcc, jpeg_single +2). A private constant of no alignment goes last.
+#[test]
+fn test_a_string_literal_follows_the_aligned_data_and_the_pool() {
+    let text = "@.str = private unnamed_addr constant [3 x i8] c\"ab\\00\"
+@count = internal global i16 5
+define cc1000 void @MAIN() addrspace(1) {
+  %c = load i16, ptr @count
+  %s = getelementptr i8, ptr @.str, i16 %c
+  %v = load i8, ptr %s
+  store i8 %v, ptr @count
+  ret void
+}
+";
+    let got = assembled(text);
+    let data: Vec<&str> = got.lines().map(str::trim).skip_while(|line| *line != ".data").take_while(|line| !line.starts_with("extern") && !line.starts_with(".code")).collect();
+    assert_eq!(data, [".data", "align 2", "count label byte", "db 005h,000h", "G$0$str label byte", "db 061h,062h,000h"], "{got}");
+}
+
 /// An intrinsic is no symbol: declaring one refused the module as "no
 /// assembler symbol".
 #[test]
