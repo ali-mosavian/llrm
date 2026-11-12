@@ -907,6 +907,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ2-TRIPS: whether the priced SZ2 trial counts clocks at each
+    /// block's frequency over the entry's (a loop's trips), and lets the byte
+    /// rate alone decide a copy whose callee stays. False: each instruction
+    /// once, and the callee must go with the copy or the site be hot.
+    fn inline_trial_by_trips(&self) -> bool {
+        false
+    }
+
     /// The largest caller, in instructions, whose refused sites SZ2 tries
     /// inline: a trial runs the simplifier over the whole caller once per
     /// callee tried.
@@ -1333,6 +1341,11 @@ pub trait Tti {
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
+    }
+
+    /// `Tuning::unroll_trial_bytes_strict`.
+    fn unroll_trial_bytes_strict(&self) -> bool {
+        false
     }
 
     /// `Tuning::unroll_trial_nests_only`.

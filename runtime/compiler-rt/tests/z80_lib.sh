@@ -6,9 +6,9 @@ set -e
 cd "$(dirname "$0")/.."
 OUT=${1:?output directory}; OPT=${2:-Os}; LLC=${LLRM_Z80_LLC:?path of llrm-z80-llc}; CLANG=${LLRM_PIN_CLANG:-/opt/llrm-pin/bin/clang}
 DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float fp/f64/pack fp/f32/pack fp/f32/extend fp/f32/trunc
+MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float_si fp/f64/float_usi fp/f64/float_di fp/f64/float_udi fp/f64/pack fp/f32/pack fp/f32/extend fp/f32/trunc
  fp/f32/float_di fp/f32/fix_di fp/f64/fix_si fp/f64/fix_usi fp/f64/fix_di fp/f64/fix_udi
- fp/f64/cmp fp/f32/neg fp/f64/neg fp/f64/unord int/clzsi2"
+ fp/f64/cmp_cmp fp/f64/cmp_eq fp/f64/cmp_ne fp/f64/cmp_lt fp/f64/cmp_le fp/f64/cmp_ge fp/f64/cmp_gt fp/f32/neg fp/f64/neg fp/f64/unord int/clzsi2"
 mkdir -p "$OUT"; T=$(mktemp -d); trap 'rm -r $T' EXIT
 for m in $MODULES; do
   n=$(echo "$m" | tr / _)
