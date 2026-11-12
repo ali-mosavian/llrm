@@ -1,4 +1,5 @@
 // flags: -O0 -fexcess-precision=standard | -O2 -fexcess-precision=standard | -Os -fexcess-precision=standard
+// bar: not comparable (SDCC double is 32 bits: it computes a different program)
 // An integer compared with a float is converted to the float's type first, which rounds it (C11 6.3.1.8, 6.3.1.4p2): 16777217L is
 // 16777216.0f, equal to the float (gcc.c-torture 920710-1). That conversion rounds only under -fexcess-precision=standard, as in gcc;
 // by default x87 keeps the integer exact in its register. `ficomp` read the integer exactly and found them different; against a

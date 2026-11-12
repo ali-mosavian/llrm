@@ -757,6 +757,10 @@ impl Tti for X86 {
         self.tuning.unroll_o1_analyzed_trips
     }
 
+    fn pops_arguments_at_size(&self) -> bool {
+        self.tuning.pops_arguments_at_size
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
