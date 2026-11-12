@@ -34,6 +34,7 @@ pub struct Price {
 }
 
 thread_local! {
+    static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static UNMERGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MERGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WORK: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
@@ -98,6 +99,7 @@ pub fn add(function: &crate::mfunc::MFunc) {
     if WORK.with(|work| work.get()).is_none() {
         return;
     }
+    PRICED.with(|count| count.set(count.get() + 1));
     let done = crate::lir_body::to_lir(function).ok().and_then(|lowered| executed::executed(&lowered.body));
     WORK.with(|work| {
         // A function with no finite estimate poisons the sum: no work saved is
@@ -107,6 +109,12 @@ pub fn add(function: &crate::mfunc::MFunc) {
                 .map(|sum| done.map_or(f64::NAN, |one| sum + one.instructions + one.memory + one.taken + one.jumps)),
         );
     });
+}
+
+/// How many function bodies this thread has priced: the cost of the trials' pricing, which a module that
+/// noted nothing must not pay (compile time x2.5 on nbody -Os before).
+pub fn priced() -> usize {
+    PRICED.with(std::cell::Cell::get)
 }
 
 /// The work summed since [`start`].
