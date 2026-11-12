@@ -662,6 +662,10 @@ mod tests {
             // instructions its non-refining simplification went through
             // (`DropFlags`). It grants no flag.
             "combine_select_equivalence.rs",
+            // `strcat`, `strncat` and `strncpy` expand to `inbounds` GEPs of the destination
+            // (`emitStrLenMemCpy`'s `CreateInBoundsGEP`); they read no flag off an existing
+            // instruction.
+            "copy.rs",
             // `zeromerge` makes one `inbounds` GEP per member of the new
             // `alloca` it builds (llrm only); it reads no flag off an
             // existing instruction.
