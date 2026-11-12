@@ -1210,6 +1210,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UP1-CALL at -O1: the size-neutral rule above prices a call the
+    /// copies keep as one instruction with its operands, where the pin's
+    /// analysis gives up on a call (gcc's `estimate_num_insns` prices it).
+    fn unroll_o1_prices_calls(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_o1_analyzed_trips`.
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         None
@@ -1393,6 +1400,14 @@ pub trait Tti {
     /// bytes. None: the pin's order stands. owner: w12, exit: 2026-11-20.
     fn lsr_bytes(&self) -> Option<LsrBytes> {
         None
+    }
+
+    /// DEVIATE LG1, LG2: `GenerateICmpZeroScales` scales a compare against zero
+    /// by a factor whose product may wrap, where it is still a zero test
+    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as the
+    /// pin has it (wasm). owner: wasm, exit: 2026-12-04.
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        true
     }
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
@@ -2318,6 +2333,16 @@ pub trait Tti {
     /// pin and is 367 B under. Other targets state it when their cells agree.
     /// Owner llrm-target-wasm; exit: every target judged, 2026-11-24.
     fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): whether `IVUsers` makes a
+    /// use of each incoming value of a phi that is a user, where the pin's
+    /// `Processed` check (`IVUsers.cpp` `AddUsersImpl`, "do not recurse into a
+    /// phi twice") keeps the first and drops the rest, so `i*300+21472` and
+    /// `i*300-81472` merging in one phi leave one of the two a multiply chain.
+    /// x_cordic m32 -O3: 100 trips of a 5-instruction chain gcc does not pay.
+    fn lsr_phi_operand_uses(&self) -> bool {
         false
     }
 
