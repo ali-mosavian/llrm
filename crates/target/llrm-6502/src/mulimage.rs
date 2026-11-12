@@ -252,27 +252,28 @@ pub fn widen_when_it_pays(
 }
 
 /// The compact word divides loop 16 times whatever the quotient; the aligned ones loop for its bits (one or
-/// two for Euclid's gcd) and are 16 B larger. They are the module's choice, as the routine is linked once
-/// for all its calls: kept when the clocks they save, each call weighted by its block's trips, are worth
-/// the bytes at the -Os price of a byte (`[copy] byte_clocks_size`), the one policy that prices a size
-/// against a clock at size.
+/// two for Euclid's gcd) and are larger. The routine is linked once for all the module's calls, so the
+/// module chooses: [`aligned_divide_sites`] prices what they save and cost, [`aligned_divides_pay`] weighs the
+/// two against the module itself.
 ///
-/// DEVIATE 6502-ALIGNED-DIVIDE (owner llrm-target-6502, exit 2026-11-24): llvm-mos's `__umodhi3` aligns
-/// the divisor too; the pin has no divide routine to price. Exit: with the shared inline-or-call cost model.
+/// DEVIATE 6502-ALIGNED-DIVIDE (owner llrm-target-6502, exit 2026-11-24): llvm-mos's `__umodhi3` aligns the
+/// divisor too; the pin has no divide routine to price. Exit: with the shared inline-or-call cost model.
 ///
-/// `from_module[i]` is whether `selections[i]` was selected from `module` itself.
-pub fn aligned_divides_pay(
+/// The clocks the aligned divides save in `module` (each call weighted by its block's trips) and the bytes
+/// they add to the image, if it calls a compact divide. `from_module[i]` is whether `selections[i]` was
+/// selected from `module` itself.
+pub fn aligned_divide_sites(
     module: &llrm_mir::module::Module,
     names: &[String],
     selections: &[Selection],
     from_module: &[bool],
     layout: &llrm_mir::datalayout::DataLayout,
     request: &Request,
-) -> bool {
+) -> Option<(u64, i64)> {
     use crate::dagisel::generated::ids::opcode as op;
     use llrm_codegen::backend::selectiondag::isd::ISD;
     if !matches!(request.level, Level::Os | Level::Oz) {
-        return false;
+        return None;
     }
     let (mut weighted, mut used) = (0u64, std::collections::BTreeSet::new());
     for (at, (name, selection)) in names.iter().zip(selections).enumerate() {
@@ -293,7 +294,7 @@ pub fn aligned_divides_pay(
         }
     }
     if used.is_empty() {
-        return false;
+        return None;
     }
     let image = |routines: std::collections::BTreeSet<String>| -> i64 {
         let mut all = routines;
@@ -302,7 +303,20 @@ pub fn aligned_divides_pay(
     };
     let aligned = used.iter().filter_map(|one| crate::routines::aligned_variant(one)).map(str::to_owned).collect();
     let growth = image(aligned) - image(used);
-    let price = i64::try_from(crate::routines::copy_prices().byte_clocks.1).unwrap_or(i64::MAX);
-    let saved = i64::try_from(weighted.saturating_mul(crate::routines::aligned_divide_saving())).unwrap_or(i64::MAX);
-    growth <= 0 || saved >= price.saturating_mul(growth)
+    Some((weighted.saturating_mul(crate::routines::aligned_divide_saving()), growth))
+}
+
+/// Whether the module, of `clocks` and `bytes` by the static estimate, takes the aligned divides that save
+/// `saved` clocks for `growth` bytes: when the share of its clocks they save is at least
+/// `[divide] percent_per_percent` times the share of its bytes they add. The shares by this estimate:
+/// idiv_loop_os saves more than all of its clocks for 5.4% of its bytes, compound_assignment_types 86% for
+/// 2.4%, idioms 0.3% for 0.7%; measured, -60% / -12% / -0.0% clocks.
+pub fn aligned_divides_pay(
+    (saved, growth): (u64, i64),
+    clocks: u64,
+    bytes: u64,
+) -> bool {
+    let percent = u128::from(crate::routines::aligned_divide_percent());
+    growth <= 0
+        || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
 }
