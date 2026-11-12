@@ -295,6 +295,9 @@ pub struct DagConfig {
     pub div_live_max_bits: u32,
     /// The values live across the narrow divides of the block this DAG is of.
     pub div_live: u32,
+    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0 where none was
+    /// computed. DEVIATE DIV-HOT reads it.
+    pub block_frequency: f64,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
     pub div_prices: Option<DivPrices>,
@@ -370,6 +373,7 @@ impl Default for DagConfig {
             div_live_limit: 0,
             div_live_max_bits: 31,
             div_live: 0,
+            block_frequency: 0.0,
             div_prices: None,
             sdiv_pow2_stays: false,
             sdiv_by_magnitude: false,
@@ -650,6 +654,7 @@ impl SelectionDAG {
         &mut self,
         frequency: f64,
     ) {
+        self.config.block_frequency = frequency;
         if let Some(bytes) = self.config.div_prices.as_mut().and_then(|prices| prices.bytes.as_mut()) {
             bytes.frequency = frequency;
         }
