@@ -4,8 +4,8 @@
 m68k_corpus_matrix.py [--cpus 68000,68020,68040,68060] [--levels O1,O2,O3,Os] [--jobs N] --out DIR [NAME...]
 
 Denominator: the tests/run/c programs (those a `// targets:` line leaves for the CPU, as tools/m68k_exec_sweep.py) plus the bench/*/NAME.c
-programs; a file in both (same bytes) counts once and is reported. Columns, per program, CPU and level: `ours` (llrm-cc -S, relaxing
-branches, gas: as examples/matrix.rs builds it), `gcc` and `clang` (the pin's clang into the pin's llc), both with the shared external flags
+programs; a file in both (same bytes) counts once and is reported. Columns, per program, CPU and level: `ours` (llrm-cc -c, the shipped
+object; its -S text through gas is only the asm-error check), `gcc` and `clang` (the pin's clang into the pin's llc), both with the shared external flags
 (tools/external_flags.py, hash cd1e12d510e4). Bytes are the CODE sections of the object (alignment fill included). No libc is linked, so
 there are NO CLOCKS: the rows leave the field empty and tools/m68k_worse_cells.py judges them on bytes alone.
 
