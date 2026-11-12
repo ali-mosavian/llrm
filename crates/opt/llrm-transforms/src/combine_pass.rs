@@ -103,7 +103,7 @@ impl FunctionPass for Combine {
             combine::TargetHooks {
                 fixed_shift_count: outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
                 select_to_cmp: outer.target().tti().is_some_and(|tti| tti.folds_select_to_cmp()),
-                icmp_of_constant_phi: outer.target().tti().is_none_or(|tti| tti.folds_icmp_of_constant_phi()),
+                icmp_of_constant_phi: outer.target().tti().is_some_and(|tti| tti.folds_icmp_of_constant_phi()),
                 // Where the target trades bytes for clocks (wasm and the
                 // targets without a rate are strict at every level).
                 phi_constant_users: self.phi_constant_users

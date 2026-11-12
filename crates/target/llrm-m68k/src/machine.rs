@@ -241,11 +241,6 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
-    /// DEVIATE ICMPPHI-1 (owner m68k, exit 2026-11-24): see `Tti::folds_icmp_of_constant_phi`.
-    fn folds_icmp_of_constant_phi(&self) -> bool {
-        false
-    }
-
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
     /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
     fn promote_va_list(&self) -> bool {

@@ -2092,13 +2092,13 @@ pub trait Tti {
 
     /// Whether InstCombine folds `icmp (phi C1, C2), C` into a phi of the
     /// folded compares (`foldICmpWithConstant`). The pin does so on every target.
-    /// DEVIATE ICMPPHI-1 (2026-11-12, owners m68k, z80, 6502, exit 2026-11-24):
-    /// off on those three. The exit test of a counted loop becomes a live i1
-    /// value their lowering handles badly (31 cells up, +295 B: m68k Os
-    /// float_in_place_update +38 B). Flip when their bool-branch lowering does.
+    /// DEVIATE ICMPPHI-1 (2026-11-12, owner wasm, exit 2026-11-24): on for
+    /// wasm only. Elsewhere the exit test of a counted loop becomes a live i1
+    /// value the lowering handles badly (m68k, z80, 6502: 31 cells up +295 B;
+    /// arm64, x86: 18 of 21 cells up +128 B). Flip when their lowering does.
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1369)
     fn folds_icmp_of_constant_phi(&self) -> bool {
-        true
+        false
     }
 
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
