@@ -737,6 +737,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
+    fn inline_trial_at_o1(&self) -> Option<i64> {
+        self.tuning.inline_trial_at_o1
+    }
+
     fn unroll_trial_nests_only(&self) -> bool {
         self.tuning.unroll_trial_nests_only
     }

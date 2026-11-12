@@ -3325,6 +3325,15 @@ pub fn decide(
         tti: context.tti,
     };
     let cost = inline_cost(&site, context.params);
+    // INLINE-O1-TRIAL: a call the -O1 threshold takes and the -Os threshold would not.
+    if context.size == CallerSize::Speed
+        && context.params.o1_bound
+        && let InlineCost::Cost { cost: spent, threshold, .. } = &cost
+        && spent < threshold
+        && *spent >= context.params.opt_size_threshold
+    {
+        crate::trial::note_inlined(&caller_global_name(module, caller_id));
+    }
     if llrm_support::debug::enabled("inline") {
         eprintln!(
             "inline: {} -> {}: {} (site frequency {:?})",

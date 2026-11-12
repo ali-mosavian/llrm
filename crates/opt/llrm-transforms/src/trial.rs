@@ -35,6 +35,8 @@ thread_local! {
     static MORE: Cell<bool> = const { Cell::new(false) };
     /// The functions, and loops together, ROTATION-HOT left unrotated.
     static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+    /// The callers INLINE-O1-TRIAL saw inline a call the -Os threshold would have refused.
+    static PASTSIZE: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The trial threshold in force, if a trial compile is running.
@@ -151,6 +153,34 @@ pub(crate) fn note_left(function: &str) {
 /// The functions and loops noted by [`note_left`] since the last call.
 pub fn take_left() -> (Vec<String>, usize) {
     LEFT.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// DEVIATE INLINE-O1-TRIAL (beyond the pin; owner x86-m32, exit 2026-11-24): notes that `caller` inlined a
+/// call the -Os threshold would have refused. The pin inlines at 225 at -O1, gcc -O1 hardly at all; the
+/// driver compiles the module again under the -Os threshold and the finished code decides.
+pub(crate) fn note_inlined(caller: &str) {
+    PASTSIZE.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == caller) {
+            list.push(caller.to_owned());
+        }
+    });
+}
+
+/// The callers noted by [`note_inlined`] since the last call.
+pub fn take_inlined() -> Vec<String> {
+    PASTSIZE.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// Whether the -Os-threshold compile is kept at -O1, where each axis is strict: the object is smaller
+/// and the code is expected to execute no more than `permille` over the first compile's.
+pub fn keeps_inline_at_o1(
+    was: f64,
+    now: f64,
+    added: i64,
+    permille: i64,
+) -> bool {
+    added < 0 && now * 1000.0 <= was * (1000 + permille) as f64
 }
 
 /// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare and a jump).

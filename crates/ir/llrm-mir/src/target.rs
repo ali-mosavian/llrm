@@ -92,6 +92,11 @@ pub struct Tuning {
     /// finished object is smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
+    /// DEVIATE INLINE-O1-TRIAL (owner x86-m32, exit 2026-11-24): at -O1 the pin inlines at 225 and gcc
+    /// barely at all. A module with a call inlined past the -Os threshold is compiled again under the -Os
+    /// threshold and the smaller object is kept where the modelled clocks grow by at most this many
+    /// permille (`Tti::inline_trial_at_o1`). `None`: no trial.
+    pub inline_trial_at_o1: Option<i64>,
     /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
     /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
     /// carries more bytes than its units where an argument is several words (x86-m16:
@@ -528,6 +533,7 @@ impl Tuning {
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
+        inline_trial_at_o1: None,
         inline_dying_credit_at_os: true,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,

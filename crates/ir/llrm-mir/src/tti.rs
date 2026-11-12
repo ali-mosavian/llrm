@@ -1175,6 +1175,11 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE INLINE-O1-TRIAL: see `Tuning::inline_trial_at_o1`.
+    fn inline_trial_at_o1(&self) -> Option<i64> {
+        None
+    }
+
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
         false

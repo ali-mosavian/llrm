@@ -291,7 +291,7 @@ fn compiled_module_with_rotation(
 /// size are unrolled in a second compile (gcc peels a small loop at -Os when the code does not grow), kept
 /// if the object is smaller, or grows a few bytes a function and the code runs less
 /// (`trial::keeps_unroll_at_size`). The pass notes the refused loops; a module with none is compiled once.
-pub fn compiled_module_trying(
+fn compiled_module_unrolling(
     module: llrm_mir::module::Module,
     name: &str,
     options: &Options,
@@ -335,6 +335,68 @@ pub fn compiled_module_trying(
     };
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll-os: {functions:?}, {:?} -> {:?} bytes: {}", unpadded(&first), unpadded(&second), if pays { "kept" } else { "put back" });
+    }
+    let chosen = if pays { second } else { first };
+    stage_files(options, "", &chosen)?;
+    Ok(chosen)
+}
+
+/// [`compiled_module_unrolling`], and at -O1 on a target with `Tti::inline_trial_at_o1`, DEVIATE
+/// INLINE-O1-TRIAL (owner x86-m32, exit 2026-11-24): a module that inlined a call the -Os threshold would
+/// have refused is compiled again under the -Os threshold (the pin inlines at 225 at -O1, gcc -O1 hardly at
+/// all), and the second is kept if the object is smaller and the code is expected to execute no more than
+/// the target's permille over the first (`trial::keeps_inline_at_o1`).
+pub fn compiled_module_trying(
+    module: llrm_mir::module::Module,
+    name: &str,
+    options: &Options,
+    bytes: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+) -> Result<masm::Module, String> {
+    let permille = options
+        .pipeline
+        .at_o1()
+        .then(|| options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.inline_trial_at_o1()))
+        .flatten();
+    let Some(permille) = permille else {
+        return compiled_module_unrolling(module, name, options, bytes, unpadded);
+    };
+    let _ = trial::take_inlined();
+    let first = compiled_module_unrolling(module.clone(), name, options, bytes, unpadded)?;
+    let callers = trial::take_inlined();
+    if callers.is_empty() {
+        return Ok(first);
+    }
+    let mut again = options.clone();
+    again.dump = None;
+    again.pipeline.inline = again.pipeline.inline.for_size();
+    let second = compiled_module_unrolling(module, name, &again, bytes, unpadded)?;
+    let _ = trial::take_inlined();
+    let cpu = options.cpu()?;
+    let clocks = |built: &masm::Module| {
+        built
+            .procedures
+            .iter()
+            .map(|one| {
+                let done = executed::executed(&one.body)?;
+                let jumps = done.jump_cycles(cpu).ok()?;
+                Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
+            })
+            .sum::<Option<f64>>()
+    };
+    let pays = match (clocks(&first), clocks(&second), unpadded(&first), unpadded(&second)) {
+        (Some(was), Some(now), Some(before), Some(after)) => trial::keeps_inline_at_o1(was, now, after - before, permille),
+        _ => false,
+    };
+    if llrm_support::debug::enabled("trial") {
+        eprintln!(
+            "trial inline-o1: {callers:?}, clocks {:?} -> {:?}, {:?} -> {:?} bytes: {}",
+            clocks(&first),
+            clocks(&second),
+            unpadded(&first),
+            unpadded(&second),
+            if pays { "kept" } else { "put back" }
+        );
     }
     let chosen = if pays { second } else { first };
     stage_files(options, "", &chosen)?;
