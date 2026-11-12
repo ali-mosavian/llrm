@@ -1,95 +1,146 @@
-reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
-blessed = "2026-11-10"
-corpus = "691e1774e53fd1d9ebfc503e9a381e6a"
+reason = "references re-measured after #9464: ow's far __doserror_; ow stft_single O2 (-or) and tc stft_single print another sum, left unmeasured"
+blessed = "2026-11-12"
+corpus = "527a458fc987f9e681ce216c11a8a6f6"
+
+[ow.O1]
+instructions = 31245390
+memory_operands = 14960573
+clocks = 118016788
+layout_clocks = 118002273
+pad_nops = 14515
+code_bytes = 2784
+data_bytes = 638
+bss_bytes = 15849
+helper_bytes = 24
+
+[ow.O2]
+instructions = 31863016
+memory_operands = 11224922
+clocks = 106877641
+layout_clocks = 106716621
+pad_nops = 161020
+code_bytes = 2941
+data_bytes = 638
+bss_bytes = 15849
+helper_bytes = 24
+
+[ow.Os]
+instructions = 31245390
+memory_operands = 14960573
+clocks = 118016788
+layout_clocks = 118002273
+pad_nops = 14515
+code_bytes = 2784
+data_bytes = 638
+bss_bytes = 15849
+helper_bytes = 24
 
 [bcc.O1]
 instructions = 54498978
 memory_operands = 14491113
 clocks = 147473785
+layout_clocks = 147473588
+pad_nops = 197
 code_bytes = 3089
-helper_bytes = 0
 data_bytes = 634
 bss_bytes = 15849
+helper_bytes = 0
 kernel_ms = 746.7694
 
 [bcc.O2]
 instructions = 44103690
 memory_operands = 15359714
 clocks = 127787522
+layout_clocks = 127787132
+pad_nops = 390
 code_bytes = 3189
-helper_bytes = 0
 data_bytes = 634
 bss_bytes = 15849
+helper_bytes = 0
 kernel_ms = 608.1105
 
 [bcc.Os]
 instructions = 54498978
 memory_operands = 14491113
 clocks = 147473785
+layout_clocks = 147473588
+pad_nops = 197
 code_bytes = 3089
-helper_bytes = 0
 data_bytes = 634
 bss_bytes = 15849
+helper_bytes = 0
 kernel_ms = 746.7694
 
 [tc.O1]
 instructions = 68020058
 memory_operands = 19076094
 clocks = 169770491
+layout_clocks = 169768912
+pad_nops = 1579
 code_bytes = 3417
-helper_bytes = 56
 data_bytes = 662
 bss_bytes = 15849
+helper_bytes = 56
 kernel_ms = 927.1243
 
 [tc.O2]
 instructions = 68173061
 memory_operands = 17970712
 clocks = 167551157
+layout_clocks = 167315203
+pad_nops = 235954
 code_bytes = 3486
-helper_bytes = 56
 data_bytes = 662
 bss_bytes = 15849
+helper_bytes = 56
 kernel_ms = 929.1652
 
 [tc.Os]
 instructions = 68020058
 memory_operands = 19076094
 clocks = 169770491
+layout_clocks = 169768912
+pad_nops = 1579
 code_bytes = 3417
-helper_bytes = 56
 data_bytes = 662
 bss_bytes = 15849
+helper_bytes = 56
 kernel_ms = 927.1243
 
 [tcpp.O1]
 instructions = 58984038
 memory_operands = 20013497
 clocks = 156686657
+layout_clocks = 156685445
+pad_nops = 1212
 code_bytes = 3323
-helper_bytes = 56
 data_bytes = 634
 bss_bytes = 15849
+helper_bytes = 56
 kernel_ms = 806.5953
 
 [tcpp.O2]
 instructions = 59517888
 memory_operands = 19039547
 clocks = 152272925
+layout_clocks = 152271552
+pad_nops = 1373
 code_bytes = 3496
-helper_bytes = 56
 data_bytes = 634
 bss_bytes = 15849
+helper_bytes = 56
 kernel_ms = 813.7158
 
 [tcpp.Os]
 instructions = 58984038
 memory_operands = 20013497
 clocks = 156686657
+layout_clocks = 156685445
+pad_nops = 1212
 code_bytes = 3323
-helper_bytes = 56
 data_bytes = 634
 bss_bytes = 15849
+helper_bytes = 56
 kernel_ms = 806.5953
 
 [bc.O2]
