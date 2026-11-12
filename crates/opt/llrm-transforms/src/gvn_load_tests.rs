@@ -430,3 +430,48 @@ b1:
     let after = printed(&module);
     assert!(!after.contains("load"), "{after}");
 }
+
+#[test]
+fn test_a_load_past_a_volatile_load_of_other_memory_is_still_the_first() {
+    let (text, changed) = loaded(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = load i16, ptr @g
+  %w = load volatile i16, ptr @h
+  %b = load i16, ptr @g
+  %s = add i16 %a, %b
+  %r = add i16 %s, %w
+  ret i16 %r
+}
+",
+        XY,
+    );
+    assert!(changed && text.matches("load i16, ptr @g").count() == 1, "{text}");
+}
+
+#[test]
+fn test_a_load_of_a_constant_array_past_a_call_is_still_the_first() {
+    let (text, changed) = loaded(
+        "@c = constant [8 x i16] [i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8]
+define void @report(i16 %v) noinline {
+b0:
+  store i16 %v, ptr @g
+  ret void
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b0:
+  %i = and i16 %x, 7
+  %p = getelementptr inbounds i16, ptr @c, i16 %i
+  %q = getelementptr inbounds i16, ptr @c, i16 %i
+  %a = load i16, ptr %p
+  call void @report(i16 %y)
+  %b = load i16, ptr %q
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+",
+        XY,
+    );
+    assert!(changed && text.matches("load i16").count() == 1, "{text}");
+}

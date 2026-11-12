@@ -1895,6 +1895,9 @@ pub fn recorded(
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
     if applied.options.optimize {
+        // `GlobalDCEPass` then `ConstantMergePass` after the function passes:
+        // what a late unroll or fold left unnamed goes before merging.
+        manager.add_program(globaldce::GlobalDce);
         manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
