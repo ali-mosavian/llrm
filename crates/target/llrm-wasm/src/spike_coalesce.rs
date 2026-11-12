@@ -175,7 +175,9 @@ pub fn coalesce(f: &mut Function) -> usize {
         block.retain(|inst| {
             let here = (at, position);
             position += 1;
-            !((inst.opcode == crate::mir::IMPLICIT_DEF || is_copy(inst.opcode)) && converted_all.contains(&here) && !kept.contains(&here))
+            !((inst.opcode == crate::mir::IMPLICIT_DEF || is_copy(inst.opcode))
+                && converted_all.contains(&here)
+                && !kept.contains(&here))
         });
     }
     let map = converted.joined();
