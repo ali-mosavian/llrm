@@ -741,6 +741,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
+    fn unroll_trial_bytes_strict(&self) -> bool {
+        self.tuning.unroll_trial_bytes_strict
+    }
+
     fn unroll_trial_nests_only(&self) -> bool {
         self.tuning.unroll_trial_nests_only
     }
