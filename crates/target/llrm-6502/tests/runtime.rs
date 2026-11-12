@@ -321,6 +321,19 @@ fn multiply_longs_stops_when_the_multiplier_is_spent() {
     }
 }
 
+/// The 16 x 16 -> 32 products: unsigned 65535 * 65535 = 0xFFFE0001, signed
+/// -32768 * -32768 = 0x40000000, -3 * 7 = -21, 0x7FFF * 0x8001 (= -32767)
+/// negative; a multiplier under 256 ends after its first byte (0xFFFF * 0xFF, 0x8000 * 0x80). The signed routine takes the unsigned product less the other
+/// operand from the high word for each negative operand.
+#[test]
+fn widening_multiplies_give_the_32_bit_product() {
+    for (a, b) in [(0u32, 0u32), (1, 0xFFFF), (0xFFFF, 0xFFFF), (0x8000, 0x8000), (0x7FFF, 0x8001), (0xFFFD, 7), (0xFFFF, 0xFF), (0x1234, 0x0100), (0x8000, 0x0080)] {
+        assert_eq!(long(&format!("umulhisi-{a}-{b}"), "__umulhisi3", a, b), a * b, "{a} * {b}");
+        let signed = i32::from(a as u16 as i16) * i32::from(b as u16 as i16);
+        assert_eq!(long(&format!("mulhisi-{a}-{b}"), "__mulhisi3", a, b), signed as u32, "{a} * {b} signed");
+    }
+}
+
 /// `x * 15` walked all 32 bits of the multiplier: 2054 clocks, 10x gcc's loop
 /// in shrink_wrapped_frame (`n * i` over a 16 trip loop). The speed variant
 /// stops at the last set byte of 15: a third of that.
