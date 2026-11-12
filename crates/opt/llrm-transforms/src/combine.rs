@@ -158,6 +158,7 @@ fn prepare(
     let mut dead_edges = std::collections::BTreeSet::<(BlockId, BlockId)>::new();
     let mut live = std::collections::BTreeSet::<BlockId>::new();
     let mut seeded: Vec<InstId> = Vec::new();
+    let mut scopes = crate::combine_alias_scope::AliasScopeTracker::default();
     for at in order {
         let block = llrm_analysis::cfg::block(at);
         if !tree.is_reachable(block) {
@@ -198,6 +199,7 @@ fn prepare(
                 continue;
             }
             seeded.push(inst);
+            scopes.analyse(function, env.metadata, inst);
         }
         // A branch or switch on undef or poison is UB: no successor is live.
         if let Some(last) = function.terminator(block)
@@ -255,7 +257,9 @@ fn prepare(
         if function.parent(inst).is_none() {
             continue;
         }
-        if is_trivially_dead(env, context, function, inst) {
+        if is_trivially_dead(env, context, function, inst)
+            || scopes.is_no_alias_scope_decl_dead(function, env.metadata, inst)
+        {
             let _ = function.erase(inst);
             changed = true;
             continue;

@@ -108,6 +108,7 @@ mod codegen_slots_tests;
 pub mod combine;
 pub mod combine_abs;
 pub mod combine_add_idioms;
+pub mod combine_alias_scope;
 pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
