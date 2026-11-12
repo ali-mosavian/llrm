@@ -482,6 +482,12 @@ impl llrm_target::Target for M64 {
                             // compiles the module again with those loops unrotated (gcc's `-Os` shape)
                             // and keeps the smaller object.
                             rotation_trial_at_size: true,
+                            // DEVIATE ROTATION-HOT at m64 (owner x86-m64, exit 2026-12-05), as m32's: an
+                            // uncounted loop RS1 leaves is also tried rotated, as the pin rotates it, and
+                            // kept where the finished code executes less. -Os is strict on bytes: only
+                            // where the object does not grow.
+                            rotation_hot_at_size: true,
+                            rotation_hot_bytes_per_loop: 0,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than
