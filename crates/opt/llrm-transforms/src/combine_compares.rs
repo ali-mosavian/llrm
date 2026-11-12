@@ -199,7 +199,9 @@ pub fn visit_icmp(
     }
     // OWED: foldICmpWithConstant but the `processUGT_ADDCST_ADD` overflow
     // idiom, foldICmpUsingBoolRange.
-    if let Some(r) = fold_icmp_phi_of_constants(c, inst, pred, op0, op1) {
+    if c.env.hooks.icmp_of_constant_phi
+        && let Some(r) = fold_icmp_phi_of_constants(c, inst, pred, op0, op1)
+    {
         return r;
     }
     if let Some(r) = fold_icmp_with_dominating_icmp(c, inst, pred, op0, op1) {

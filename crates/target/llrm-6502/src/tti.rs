@@ -128,6 +128,11 @@ impl Default for Mos6502 {
 }
 
 impl Tti for Mos6502 {
+    /// DEVIATE ICMPPHI-1 (owner 6502, exit 2026-11-24): see `Tti::folds_icmp_of_constant_phi`.
+    fn folds_icmp_of_constant_phi(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "mos6502"
     }

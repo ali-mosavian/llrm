@@ -131,6 +131,11 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE ICMPPHI-1 (owner z80, exit 2026-11-24): see `Tti::folds_icmp_of_constant_phi`.
+    fn folds_icmp_of_constant_phi(&self) -> bool {
+        false
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it): `va_list` is `char *`, so `va_start` is a
     /// store of the first variadic argument's address and the list lives in a register, as SDCC has it.
     fn promote_va_list(&self) -> bool {
