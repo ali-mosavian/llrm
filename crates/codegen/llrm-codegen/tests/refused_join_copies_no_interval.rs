@@ -91,7 +91,8 @@ fn interfering() -> (LiveIntervals, u64) {
             block.succ = vec![at as i64 + 1].into();
         }
     }
-    let body = LirBody::new("long", 0, made.into_iter().map(Block::from).collect(), Default::default(), Default::default());
+    let body =
+        LirBody::new("long", 0, made.into_iter().map(Block::from).collect(), Default::default(), Default::default());
     let mut lis = LiveIntervals::new(&body);
     lis.interval(1);
     lis.interval(2);
