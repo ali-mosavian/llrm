@@ -165,8 +165,12 @@ class Tools:
     def commands(self, compiler: str, cpu: str, level: str, path: str, flags: list[str], out: str) -> list[list[str]]:
         """The command lines of one column, in order: build() runs these and the table header prints them (`path`/`out` are placeholders there)."""
         if compiler == "ours":
-            return [[self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), path, "-o", out + ".s"],
-                    [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".o", out + ".s"]]
+            # the object is the shipped one (`-c`); the `-S` text through gas is a validity check only (asm-error), never measured: gas
+            # assembles `jsr f` as absolute long, 2 B over the pc-relative call llrm-cc emits (select_of_constants 68020 -Os: 20948 B
+            # through gas, 18532 B shipped)
+            return [[self.cc, f"-{level}", "-w", "-c", *flags, "-isystem", str(POSIX), path, "-o", out + ".o"],
+                    [self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), path, "-o", out + ".s"],
+                    [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".gas.o", out + ".s"]]
         if compiler == "gcc":
             return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT,
                      *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags, Path(path).read_text(errors="replace") if Path(path).is_file() else ""), "-isystem", str(POSIX), "-c", path, "-o", out + ".o"]]
@@ -234,15 +238,15 @@ class Tools:
         timed, err = False, ""
         ok = True
         for at, cmd in enumerate(self.commands(compiler, cpu, level, str(path), flags, out)):
-            ok, timed, err = self.run(cmd, env if at == 0 else None)
-            if ok and compiler == "ours" and at == 0:
+            ok, timed, err = self.run(cmd, env if compiler == "ours" and at < 2 else None)
+            if ok and compiler == "ours" and at == 1:
                 Path(out + ".s").write_text(".text\n" + relaxing_branches(Path(out + ".s").read_text()))
             if not ok:
                 break
         obj = Path(out + ".o")
         if not ok:
             reason, cause = failure(compiler, timed, err)
-            if compiler == "ours" and at == 1 and not timed:
+            if compiler == "ours" and at == 2 and not timed:
                 reason = "asm-error"  # llrm-cc produced assembly gas refuses: a compiler bug, not a missing cell
             return None, reason, cause, None
         library, unresolved = self.library(cpu, level, obj, work)

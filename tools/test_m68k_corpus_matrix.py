@@ -121,19 +121,31 @@ class CorpusMatrix(unittest.TestCase):
         supported = tuple(re.findall(r"M(68\d+)", listed))
         self.assertEqual(mx.CPUS, supported)
 
+    def test_the_ours_object_is_the_shipped_c_object_not_gas_output(self):
+        """select_of_constants 68020 -Os read 20948 B through `-S` and gas (`jsr f` as absolute long) against 18532 B shipped: copy_runs and
+        idioms 68020 -O2 showed worse than gcc in the matrix and were smaller as shipped objects."""
+        import os
+        for name in ("GCC_M68K", "LLRM_CC", "LLRM_PIN_CLANG", "LLVM_M68K"):
+            os.environ.setdefault(name, "/x/" + name)
+        first = mx.Tools().commands("ours", "68020", "Os", "p.c", [], "out")[0]
+        self.assertIn("-c", first)
+        self.assertNotIn("-S", first)
+        self.assertEqual(first[-1], "out.o")
+
     def test_gas_refusing_our_assembly_is_an_asm_error_and_fails_the_run(self):
         """nbody at 68000 -O1 printed `(260,%sp,%a5)`; gas refused it, the cell was an ordinary compile-fail row and the run exited 0, so the
         broken tip was only seen as a missing `ours` number by the judge."""
         import tempfile
         tools = mx.Tools.__new__(mx.Tools)
-        tools.commands = lambda compiler, cpu, level, src, flags, out: [["llrm-cc"], ["as"]]
+        tools.commands = lambda compiler, cpu, level, src, flags, out: [["llrm-cc"], ["llrm-cc-s"], ["as"]]
         tools.lock = __import__("threading").Lock()
         calls = []
 
         def run(cmd, env):
             calls.append(cmd[0])
-            if cmd[0] == "llrm-cc":
+            if cmd[0] in ("llrm-cc", "llrm-cc-s"):
                 Path(tmp, "x_y.68000.O1.ours.s").write_text("\tnop\n")
+                Path(tmp, "x_y.68000.O1.ours.o").write_bytes(b"")
                 return True, False, ""
             return False, False, "Error: byte displacement out of range -- statement `move.l (260,%sp,%a5),-(%sp)' ignored"
 
