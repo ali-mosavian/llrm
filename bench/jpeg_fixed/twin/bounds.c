@@ -127,10 +127,19 @@ static void message(const char *text)
     bench_write(1, text, length);
 }
 
-/* The Q10 product, truncated toward zero (C's `/`; Nib's fixed `*` floors, so its tmul truncates). a * b fits 32 bits. */
+/* Nib's tmul: the Q10 product, full width (a 64-bit intermediate, as the language defines `*`), truncated toward zero by the sign cases. */
+static long qmul(long a, long b)
+{
+    return (long)(((long long)a * b) >> 10);
+}
+
 static long tmul(long a, long b)
 {
-    return a * b / 1024L;
+    if (a < 0)
+        return 0 - tmul(0 - a, b);
+    if (b < 0)
+        return 0 - qmul(a, 0 - b);
+    return qmul(a, b);
 }
 
 /* The 8x8 block in coef, into plane `p` at (x0, y0): rows to Q10, then columns, +128.5, to integers. */

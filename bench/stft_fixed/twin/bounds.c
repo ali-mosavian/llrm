@@ -1,6 +1,7 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
 // data: @signal
-/* Twin of stft_fixed.nib with its semantics: every index checked against the array length, the shorts block zeroed. Short-time Fourier transform in Q9 fixed point, as stft_single.c: long is 32-bit, >> floors, as Nib's fixed '*' does. A product is
+/* Twin of stft_fixed.nib with its semantics: every index checked against the array length, and every fixed-point
+   operation as Nib defines it (language-spec 3.4): `*` the full-width product shifted right by the fraction, `/` the dividend shifted left first. Short-time Fourier transform in Q9 fixed point, as stft_single.c: long is 32-bit, >> floors, as Nib's fixed '*' does. A product is
    (a * b) >> 9; samples are scaled by 1/4 and each stage by 1/2; a bin is ((re / 128)^2 + (im / 128)^2) / 256, at most
    65535. The twiddles are rotated in Q15 and cut to Q9. Prints the checksum of the values written:
    sum = (3 * sum + value + index) & 0x1FFFFFFF. */
@@ -13,6 +14,9 @@ extern void ebnd(void);
 #define HOP 128
 #define BINS 129
 #define ONE 512L
+
+static long qmul(long a, long b, int fraction) { return (long)(((long long)a * b) >> fraction); }
+static long qdiv(long a, long b, int fraction) { return (long)(((long long)a << fraction) / b); }
 
 static long tw_re[HOP], tw_im[HOP], window[N], re[N], im[N];
 static unsigned char rev[N];
@@ -32,6 +36,9 @@ static int bench_samples(int handle, short *to)
 #define bench_samples(handle, to) bench_read(handle, to, 2 * HOP)
 #endif
 
+/* Nib's quarter(): a sample over 4 in Q9, cut to an integer and back. */
+static long quarter(short sample) { return qdiv((long)sample * ONE, 4 * ONE, 9) / ONE * ONE; }
+
 long bench_stft_fixed(void)
 {
     long c = 32768L, s = 0, next, ar, ai, br, bi, tr, ti, pr, pi, sum = 0, index = 0, q;
@@ -40,12 +47,12 @@ long bench_stft_fixed(void)
     for (k = 0; k < HOP; ++k) {
         tw_re[CK(k, HOP)] = c / 64;
         tw_im[CK(k, HOP)] = -(s / 64);
-        next = ((c * 32758L) >> 15) - ((s * 804L) >> 15);
-        s = ((s * 32758L) >> 15) + ((c * 804L) >> 15);
+        next = qmul(c, 32758L, 15) - qmul(s, 804L, 15);
+        s = qmul(s, 32758L, 15) + qmul(c, 804L, 15);
         c = next;
     }
     for (k = 0; k < HOP; ++k) {
-        window[CK(k, N)] = (ONE - tw_re[CK(k, HOP)]) / 2;
+        window[CK(k, N)] = qdiv(ONE - tw_re[CK(k, HOP)], 2 * ONE, 9);
         window[CK(k + HOP, N)] = ONE - window[CK(k, N)];
     }
     for (i = 0; i < N; ++i) {
@@ -61,8 +68,8 @@ long bench_stft_fixed(void)
         return -1;
     while (bench_samples(in, block + (1 - now) * HOP) == 2 * HOP) {
         for (n = 0; n < HOP; ++n) {
-            re[CK(rev[CK(n, N)], N)] = (block[CK(now * HOP + n, 2 * HOP)] / 4L) * window[CK(n, N)];
-            re[CK(rev[CK(n + HOP, N)], N)] = (block[CK((1 - now) * HOP + n, 2 * HOP)] / 4L) * window[CK(n + HOP, N)];
+            re[CK(rev[CK(n, N)], N)] = qmul(quarter(block[CK(now * HOP + n, 2 * HOP)]), window[CK(n, N)], 9);
+            re[CK(rev[CK(n + HOP, N)], N)] = qmul(quarter(block[CK((1 - now) * HOP + n, 2 * HOP)]), window[CK(n + HOP, N)], 9);
             im[CK(rev[CK(n, N)], N)] = 0;
             im[CK(rev[CK(n + HOP, N)], N)] = 0;
         }
@@ -75,18 +82,18 @@ long bench_stft_fixed(void)
                     ai = im[CK(i + j, N)];
                     br = re[CK(i + j + half, N)];
                     bi = im[CK(i + j + half, N)];
-                    tr = ((tw_re[CK(j * stride, HOP)] * br) >> 9) - ((tw_im[CK(j * stride, HOP)] * bi) >> 9);
-                    ti = ((tw_re[CK(j * stride, HOP)] * bi) >> 9) + ((tw_im[CK(j * stride, HOP)] * br) >> 9);
-                    re[CK(i + j, N)] = (ar + tr) / 2;
-                    im[CK(i + j, N)] = (ai + ti) / 2;
-                    re[CK(i + j + half, N)] = (ar - tr) / 2;
-                    im[CK(i + j + half, N)] = (ai - ti) / 2;
+                    tr = qmul(tw_re[CK(j * stride, HOP)], br, 9) - qmul(tw_im[CK(j * stride, HOP)], bi, 9);
+                    ti = qmul(tw_re[CK(j * stride, HOP)], bi, 9) + qmul(tw_im[CK(j * stride, HOP)], br, 9);
+                    re[CK(i + j, N)] = qdiv(ar + tr, 2 * ONE, 9);
+                    im[CK(i + j, N)] = qdiv(ai + ti, 2 * ONE, 9);
+                    re[CK(i + j + half, N)] = qdiv(ar - tr, 2 * ONE, 9);
+                    im[CK(i + j + half, N)] = qdiv(ai - ti, 2 * ONE, 9);
                 }
             }
         }
         for (k = 0; k < BINS; ++k) {
-            pr = re[CK(k, N)] / 128;
-            pi = im[CK(k, N)] / 128;
+            pr = qmul(re[CK(k, N)], 4 * ONE, 9) / ONE; /* i32(re * 4) */
+            pi = qmul(im[CK(k, N)], 4 * ONE, 9) / ONE;
             q = (pr * pr + pi * pi) / 256;
             if (q > 65535L)
                 q = 65535L;
