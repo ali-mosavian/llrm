@@ -314,6 +314,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // full unroll must repay its bytes at the speed rate.
         unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
+        // DEVIATE IND-PREFIX (owner x87, exit 2026-11-30): `short i` is a
+        // 32-bit counter; the 486 and P5 pay a prefix on every 16-bit
+        // operation (ring -O2: 67177 clk, gcc 61179).
+        prefixed_16_bit_counters: true,
         // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
         // X86SelectionDAGInfo.cpp L328, leaves a variable length to a libcall):
         // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it

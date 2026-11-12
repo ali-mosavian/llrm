@@ -1064,6 +1064,17 @@ impl Tti for X86 {
         self.tuning.sink_select_arms
     }
 
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        self.tuning.prefixed_16_bit_counters
+    }
+
+    fn narrow_counter_is_taxed(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits == 16 && self.tuning.prefixed_16_bit_counters
+    }
+
     fn inlines_variable_memcpy(&self) -> bool {
         self.tuning.inline_variable_memcpy
     }
