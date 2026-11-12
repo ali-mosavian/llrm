@@ -108,5 +108,27 @@ class KernelRange(unittest.TestCase):
             self.assertEqual(expect.status("stft_single", level, "40144774:f14311fc", "78803551\n"), "exception", level)
 
 
+    def test_a_program_with_two_reports_is_judged_on_its_last(self):
+        # grep prints lines then a checksum; `reported` holds the checksum, the .out's first number (4745 lines) never equalled it:
+        # all 188 grep cells of the LV-X2 table read `unmeasured:value ... is not the expected one`.
+        import expect
+
+        ci_out = "115\n494962839\n"
+        self.assertEqual(expect.status("grep", "O2", "494962839", ci_out), "ok")
+        self.assertEqual(expect.status("grep", "O2", "115", ci_out), "fail")
+        self.assertEqual(expect.status("grep", "O2", "109617741", ci_out), "fail")  # rt.c's old 64 KiB of fixed text
+
+    def test_the_dickens_corpus_is_found_by_its_dos_name(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(COUNT), "..", "dosbatch"))
+        import corpus
+
+        count = self.load()
+        try:
+            want = str(corpus.path("dickens"))
+        except corpus.Unavailable as why:
+            self.skipTest(str(why))
+        self.assertEqual(count.find_input("dickens"), want)
+
+
 if __name__ == "__main__":
     unittest.main()
