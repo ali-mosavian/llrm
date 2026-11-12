@@ -1,7 +1,8 @@
-//! m32 -O2 (INL-HOT): a call the pin's threshold alone refuses at a hot site is inlined where the
-//! trial's clocks pay for the bytes, and kept where they do not. `mix` (cost 630 over 337, 31x a
-//! loop trip, 709 B for 682 clocks) stayed a call: x_sf_add's `add_bits` did the same and ran
-//! 52162 clocks against 41300 inlined (2026-11-08).
+//! m32 -O2 (INL-HOT): a call the pin's threshold alone refuses at a hot site is
+//! inlined where the trial's clocks pay for the bytes, and kept where they do
+//! not. `mix` (cost 630 over 337, 31x a loop trip, 709 B for 682 clocks) stayed
+//! a call: x_sf_add's `add_bits` did the same and ran 52162 clocks against
+//! 41300 inlined (2026-11-08).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,8 +15,9 @@ fn test_o2_inlines_a_hot_call_the_threshold_refused_when_the_trial_pays() {
     hot_call_is_inlined_at("-O2");
 }
 
-/// The same at -O3: x_sf_div -O3 137429 -> 120942 clk (+657 B), x_sf_add/sub/mul/i2d 10198-12441 clk
-/// each (+528..551 B) once the trial runs there; a 121-program A/B changed nothing else.
+/// The same at -O3: x_sf_div -O3 137429 -> 120942 clk (+657 B),
+/// x_sf_add/sub/mul/i2d 10198-12441 clk each (+528..551 B) once the trial runs
+/// there; a 121-program A/B changed nothing else.
 #[test]
 fn test_o3_inlines_a_hot_call_the_threshold_refused_when_the_trial_pays() {
     hot_call_is_inlined_at("-O3");
