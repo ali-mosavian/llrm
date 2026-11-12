@@ -22,7 +22,7 @@ __lshrsi3,15,
 __memcpy,10,
 __memmove,27,
 __memseta,22,
-__moddi3,368,__s_slow
+__moddi3,395,__s_slow
 __modhi3,13,__divhi3;__umodhi3
 __modqi3,13,__umodqi3
 __modsi3,2,__udivmodsi4
