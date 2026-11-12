@@ -1139,8 +1139,8 @@ impl Tti for X86 {
         self.tuning.unroll_store_immediate_bits
     }
 
-    fn lsr_size_order(&self) -> bool {
-        self.tuning.lsr_size_order
+    fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
+        self.tuning.lsr_size_order.then_some(llrm_mir::tti::LsrSizeModel::X86)
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {
