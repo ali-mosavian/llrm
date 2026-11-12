@@ -30,10 +30,13 @@ __mulhi3,24,
 __mulqi3,14,
 __mulsi3,58,
 __rt_end,0,
+__s_ashldi3,3,__s_ashrdi3
+__s_ashrdi3,94,
 __s_divdi3,4,__s_moddi3
 __s_divremsi4,160,__s_dvcore
 __s_divsi3,3,__s_modsi3
 __s_dvcore,68,
+__s_lshrdi3,4,__s_ashrdi3
 __s_moddi3,131,__s_slow
 __s_modsi3,136,__s_dvcore
 __s_slow,156,
