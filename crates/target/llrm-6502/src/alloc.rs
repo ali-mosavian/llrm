@@ -2267,6 +2267,11 @@ pub fn build_with_places(
                         shift(&mut b, ah, dl, "LSR", rest);
                         b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(dh), Operand::Imm(0)]));
                     }
+                    // a shift by 15 leaves the sign in both bytes: one splat, stored twice
+                    _ if rest == 7 => {
+                        shift(&mut b, ah, dl, "ASR", rest);
+                        b.copy(dh, acc);
+                    }
                     _ => {
                         shift(&mut b, ah, dl, "ASR", rest);
                         shift(&mut b, ah, dh, "ASR", 7);
