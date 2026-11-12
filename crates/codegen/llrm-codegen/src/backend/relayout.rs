@@ -36,7 +36,8 @@
 //! `PrologEpilogInserter` asks for at every optimisation level), applied to the
 //! first layout when it has far operands and the order reaches fewer of them.
 //! Objects sort by uses per byte, highest first, ties by alignment and then by
-//! later creation, and are laid from BP downward; a BASIC frame reorders the
+//! later creation, and are laid from BP downward, a spill slot aligned as its
+//! size (`getSpillAlignment`), not as its old home; a BASIC frame reorders the
 //! selector's slots only, since the runtime zero-fills them and the spill slots
 //! lie outside what it fills.
 //!
@@ -310,12 +311,11 @@ fn order_plan(
         for home in frame.slots.values() {
             if spills.insert(*home) {
                 let size = *frame.capacities.get(home)?;
-                objects.push(Object {
-                    home: *home,
-                    size: if size == 0 { 4 } else { size },
-                    align: align_of(*home),
-                    uses: 0,
-                });
+                let size = if size == 0 { 4 } else { size };
+                // A spill slot is aligned as its register class spills
+                // (`getSpillAlignment`), not as the home it happened to have:
+                // a 4-byte slot at an 8-aligned home took 8.
+                objects.push(Object { home: *home, size, align: (1 << size.ilog2()).min(reach).max(1), uses: 0 });
             }
         }
     }
