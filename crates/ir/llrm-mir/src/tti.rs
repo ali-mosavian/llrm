@@ -1411,7 +1411,7 @@ pub trait Tti {
     }
 
     /// DEVIATE IPACP-O3: whether a function is copied for the constants its
-    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone` (on at -O3) does and the
     /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false

@@ -1422,6 +1422,12 @@ pub fn timed() {
 /// The level `LoopFullUnroll` is told: 1 at -O1 (`pre` off, as `ABSENT_AT_O1`
 /// reads it), else 3 or 2 by the target percent. It was always 2 or 3, so the
 /// -O1 rule `unroll_never_grows_at_o1` never ran.
+/// Whether ipa-cp copies without `-fipa-cp-clone`: at -O2 and -O3 where the
+/// target says so, never for size.
+fn cp_clones_by_default(options: &Options, target_clones_at_speed: bool) -> bool {
+    target_clones_at_speed && unroll_level(options) >= 2 && !options.prefers_size()
+}
+
 fn unroll_level(options: &Options) -> u32 {
     if !options.pre {
         1
@@ -1597,14 +1603,16 @@ pub fn recorded(
     }
     // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): gcc's
     // `-fipa-cp-clone` is on at -O3, the pin has no such pass; the target
-    // states whether it copies at -O3. A flag given wins.
+    // states whether it copies at -O2 and -O3 (DEVIATE IPACP-O2 for -O2). A
+    // flag given wins.
     let resolved = Applied {
         options: Options {
             inline: inline::Threshold {
                 cp_clone: Some(applied.options.inline.cp_clone.unwrap_or_else(|| {
-                    unroll_level(&applied.options) == 3
-                        && !applied.options.prefers_size()
-                        && program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_speed())
+                    cp_clones_by_default(
+                        &applied.options,
+                        program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_speed()),
+                    )
                 })),
                 ..applied.options.inline
             },

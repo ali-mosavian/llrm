@@ -449,6 +449,12 @@ fn vector_arithmetic_cost(
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): gcc's ipa-cp copies
+    /// at speed; queens -O3 113741 -> 106011 instructions.
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
     fn lftr_any_stride(&self) -> bool {
