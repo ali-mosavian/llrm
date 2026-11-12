@@ -369,7 +369,12 @@ fn fold_constants(
             };
             // A constant the pool does not hold yet is a cell of its own, which
             // the fold pays for once (the fold of a repeated constant reuses it).
-            let cell_bytes = if pool.holds(&bytes) { 0 } else { bytes.len() as i64 };
+            let held = pool.holds(&bytes);
+            if cpu.pool_data_strict && !held {
+                at += 1;
+                continue;
+            }
+            let cell_bytes = if held { 0 } else { bytes.len() as i64 };
             let gained = 2 + REGISTER_FORM - _memory_operation_bytes(&probe, body.bits) - cell_bytes;
             let rate = cpu.speed_milliclocks_per_byte();
             let pays = if rate == 0 { saved > 0 && gained >= 0 } else { saved * 1000 + gained * rate > 0 };
@@ -990,6 +995,13 @@ mod tests {
     /// Integer registers of the m16 target.
     const REGISTERS: usize = 6;
 
+    /// The named profile with pool data free, so a test of the price sees the price alone.
+    fn speed_profile(name: &str) -> Result<&'static crate::backend::cpu::Profile, String> {
+        let mut profile = crate::backend::cpu::named(name)?.clone();
+        profile.pool_data_strict = false;
+        Ok(Box::leak(Box::new(profile)))
+    }
+
     fn held(value: u32) -> Loc {
         Loc::Held(Held { value, width: 10, offset: 0 })
     }
@@ -1081,7 +1093,7 @@ mod tests {
     /// instructions read is read from its cell by each.
     #[test]
     fn test_a_load_read_by_several_arithmetic_instructions_is_read_from_its_cell_by_each() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
@@ -1108,7 +1120,7 @@ mod tests {
     /// prices the clocks above the extra bytes.
     #[test]
     fn test_a_constant_one_instruction_reads_is_its_memory_operand_at_speed() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
@@ -1124,7 +1136,7 @@ mod tests {
     /// Where bytes are strict the constant stays loaded.
     #[test]
     fn test_a_constant_stays_loaded_where_bytes_are_strict() {
-        let mut cpu = crate::backend::cpu::profile("486").expect("a profile").clone();
+        let mut cpu = speed_profile("486").expect("a profile").clone();
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
@@ -1143,7 +1155,7 @@ mod tests {
     /// constant, which the call cannot write.
     #[test]
     fn test_a_pool_constant_read_across_calls_is_read_from_its_cell_where_bytes_are_strict() {
-        let mut cpu = crate::backend::cpu::profile("486").expect("a profile").clone();
+        let mut cpu = speed_profile("486").expect("a profile").clone();
         cpu.speed_rate = false;
         let call = |at: i64| insn(at, Operation::Call, "call", vec![], vec![]);
         let invariant = |one: Arc<Insn>| Arc::new(Insn { invariant: true, ..Insn::clone(&one) });
@@ -1177,7 +1189,7 @@ mod tests {
             fstp(3, 3, global(0, 0)),
         ]);
         let run = |name: &str, held_before: bool| {
-            let cpu = crate::backend::cpu::profile(name).expect("a profile");
+            let cpu = speed_profile(name).expect("a profile");
             let mut pool = crate::backend::constpool::Pool::new(0);
             if held_before {
                 pool.cell(crate::backend::constpool::narrowest(1.0));
@@ -1189,13 +1201,39 @@ mod tests {
         assert_eq!(run("P5", true), ["fld", "fadd+m", "fstp"], "P5 with the cell already there");
     }
 
+    /// m16 recfloat -O2: `fld1; faddp` became `fadd dword [K]` with a new 1.0f
+    /// cell, +4 B of data against bcc, and data is a strict axis of the ranking.
+    /// Where pool data is strict a fold makes no new cell; an existing one is free.
+    #[test]
+    fn test_a_fold_makes_no_pool_cell_where_pool_data_is_strict() {
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        let run = |held_before: bool| {
+            let mut strict = speed_profile("486").expect("a profile").clone();
+            strict.pool_data_strict = true;
+            let cpu = &strict;
+            let mut pool = crate::backend::constpool::Pool::new(0);
+            if held_before {
+                pool.cell(crate::backend::constpool::narrowest(1.0));
+            }
+            names(&folded_with(&body, cpu, REGISTERS, Some(&mut pool)))
+        };
+        assert!(run(false).contains(&"fld1".to_owned()), "a new cell: {:?}", run(false));
+        assert!(run(true).iter().any(|n| n.ends_with("+m")), "a held cell: {:?}", run(true));
+        assert!(!run(true).contains(&"fld1".to_owned()), "a held cell: {:?}", run(true));
+    }
+
     /// x_nbody_f -O3 m32 and x_ld_axpy -O2: the other operand is not the last
     /// float defined, so `fadd [K]` needs an exchange (or the constant loaded
     /// again): a tie in clocks and 4 bytes more, and in x_nbody_f a nest laid
     /// out again (+378 clocks). The constant stays `fld1`.
     #[test]
     fn test_a_constant_stays_loaded_where_its_memory_form_would_need_an_exchange() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 4, global(8, 0)),
@@ -1213,7 +1251,7 @@ mod tests {
     /// memory form needs no exchange.
     #[test]
     fn test_a_constant_folds_past_a_newer_value_already_consumed() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 4, global(8, 0)),
@@ -1232,7 +1270,7 @@ mod tests {
     /// constant stayed `fld1` (+3,999 clocks against the memory form).
     #[test]
     fn test_a_constant_folds_past_a_newer_value_one_instruction_read_twice() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 4, global(8, 0)),
@@ -1251,7 +1289,7 @@ mod tests {
     /// against 3 + 16 - 14), as gcc has it: `fld [K]; fimul [i]`, +576 clocks.
     #[test]
     fn test_an_integer_load_and_a_float_cell_read_the_integer_one_from_memory_at_speed() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
             insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
@@ -1268,7 +1306,7 @@ mod tests {
     /// against 13 + 16).
     #[test]
     fn test_the_386_column_prices_the_integer_memory_form_at_the_486_numbers() {
-        let cpu = crate::backend::cpu::profile("386").expect("a profile");
+        let cpu = speed_profile("386").expect("a profile");
         let body = one_block(vec![
             insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
             insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
@@ -1282,7 +1320,7 @@ mod tests {
     /// both, and each memory form would cost its bytes again.
     #[test]
     fn test_a_constant_read_twice_stays_loaded() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
@@ -1298,7 +1336,7 @@ mod tests {
     /// cell itself, and stays volatile.
     #[test]
     fn test_a_volatile_load_a_compare_reads_once_is_its_memory_operand() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let volatile = {
             let mut load = (*fld(1, 2, global(0, 0))).clone();
             load.volatile = true;
@@ -1315,7 +1353,7 @@ mod tests {
     /// reads: the load stays.
     #[test]
     fn test_a_load_is_not_read_from_its_cell_where_the_cell_is_written_between_the_reads() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
@@ -1335,7 +1373,7 @@ mod tests {
     /// keeps the load for all.
     #[test]
     fn test_a_load_one_reader_cannot_fold_is_kept() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let body = one_block(vec![
             fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
@@ -1399,7 +1437,7 @@ mod tests {
     /// read from its cell by each.
     #[test]
     fn test_a_load_read_in_two_blocks_is_read_from_its_cell_by_each() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let got = names(&folded(&two_blocks(Vec::new(), &[]), cpu, REGISTERS));
         assert_eq!(got, ["fld1", "fmul+m", "fadd+m", "fstp"], "{got:?}");
     }
@@ -1408,7 +1446,7 @@ mod tests {
     /// change the cell: the load stays.
     #[test]
     fn test_a_load_is_kept_where_a_store_through_a_pointer_may_reach_its_cell_before_a_reader() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let other = Mem { base: Some(Held { value: 8, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut store = (*fstp(3, 2, other)).clone();
         store.uses = vec![8];
@@ -1422,7 +1460,7 @@ mod tests {
     /// register left for it keeps the load.
     #[test]
     fn test_a_load_is_kept_where_its_pointer_would_be_live_over_a_block_with_no_register_left() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let crowded = two_blocks(Vec::new(), &[20, 21]);
         let got = names(&folded(&crowded, cpu, 3));
         assert!(got.contains(&"fld".to_owned()), "{got:?}");
@@ -1451,7 +1489,7 @@ mod tests {
     /// reader took the value of `[p + 8]` for that of `[p]`.
     #[test]
     fn test_a_load_is_kept_where_its_pointer_is_written_before_a_reader() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let step = Arc::new(Insn::new(
             9,
             None,
@@ -1474,7 +1512,7 @@ mod tests {
     /// The same inside one block: `fld [p]; p := p + 8; fadd` took `[p + 8]`.
     #[test]
     fn test_a_load_is_kept_where_its_pointer_is_written_before_its_one_reader_in_the_block() {
-        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let cpu = speed_profile("486").expect("a profile");
         let pointer = Mem { base: Some(Held { value: 9, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut load = (*fld(0, 1, pointer)).clone();
         load.uses = vec![9];
