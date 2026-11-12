@@ -77,3 +77,24 @@ def test_a_register_copy_costs_what_the_486_sheet_says_and_the_compilers_table_a
     hoisted operand copied each trip looked free (nbody -O2 m16). The harness figure is the sheet's, not read from the table: the two must agree."""
     assert harness.cost(one(32, 0xD9, 0xC1), False, True, 0) == clocks.UNTABLED["fld_reg"] == clocks.clocks("x87_copy") == 4   # fld st(1)
     assert clocks.clocks("x87_copy") == clocks.clocks("x87_load") + 1
+
+
+def test_the_multiplier_operand_is_the_target_descriptions_not_an_environment_switch(monkeypatch):
+    """quicksort -O2 read +29.4k, +8.0k or +18.7k clocks against the old compiler by which `VSGCC_IMUL_MODEL` the run happened to set: the
+    harness priced a multiplier the compiler's table never stated. The description (`smul_multiplier`) is the one place, and the 486 says
+    its source operand."""
+    monkeypatch.setenv("VSGCC_IMUL_MODEL", "dest")
+    assert harness.imul_model() == "source"
+    assert clocks.audited("smul_multiplier") == 1
+
+
+def test_a_multiply_costs_the_data_sheet_note_3_figure_from_the_descriptions_bounds(monkeypatch):
+    """Intel 240440-002 note 3, by hand: 10 + max(log2|m|, n), n = 3 for +m and 5 for -m (13 for m = 0), Dword column 13/42. The
+    emulator kept 10 and 42 as literals; it reads the description's `smul_min_w4`, `smul_max_w4`, `smul_negative_bits` now."""
+    by_hand = [(0, True, 13), (1, True, 13), (7, True, 13), (8, True, 14), (255, True, 18), (0x7FFF, True, 25),
+               (0x7FFFFFFF, True, 41), (-1 & 0xFFFFFFFF, True, 15), (-100000 & 0xFFFFFFFF, True, 27), (0xFFFFFFFF, False, 42)]
+    for m, signed, want in by_hand:
+        assert harness.multiply_clocks(m, signed) == want, (m, signed, want)
+    # a CPU whose description states other bounds is priced by them, not by the 486's literals
+    monkeypatch.setitem(clocks._FLAT[1], "smul_max_w4", 74)
+    assert harness.multiply_clocks(0x7FFFFFFF, True) == 13 + (74 - 13) * (31 - 3) // 29

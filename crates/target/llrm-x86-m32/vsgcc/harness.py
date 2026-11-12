@@ -189,24 +189,25 @@ UNICORN = {Register.EAX: UC_X86_REG_EAX, Register.EBX: UC_X86_REG_EBX, Register.
 
 
 def multiply_clocks(m, signed):
-    """The i486's MUL and IMUL clocks for multiplier `m` (Intel 240440-002, Table 10.1 note 3): 10 + max(log2|m|, n),
-    n = 3 for +m and 5 for -m, 13 for m = 0. The bits of |m| stand for log2|m|, rounded up."""
+    """The i486's MUL and IMUL clocks for multiplier `m` (Intel 240440-002, Table 10.1 note 3): 10 + max(log2|m|, n), n = 3 for +m
+    and `smul_negative_bits` (5) for -m, 13 for m = 0. The bits of |m| stand for log2|m|, rounded up. The 13 and 42 are the
+    description's `smul_min_w4` and `smul_max_w4` (the same rows the compiler prices its multiplies by): 13 + (bits - 3) per bit."""
     if signed and m >= 1 << 31:
         m -= 1 << 32
-    return 10 + max(abs(m).bit_length(), 5 if m < 0 else 3)
+    low, high = clocks.audited("smul_min_w4"), clocks.audited("smul_max_w4")
+    floor = clocks.audited("smul_negative_bits") if m < 0 else 3
+    bits = min(max(abs(m).bit_length(), floor), 32)
+    return low + (high - low) * (bits - 3) // 29
 
 
-IMUL_MODELS = ("source", "dest", "min")
+IMUL_MODELS = ("dest", "source", "min")
 
 
 def imul_model():
-    """Which operand of `IMUL r, r/m` / `IMUL r, r/m, imm` is the 'Multiplier' of Table 10.1 note 3: the data sheet states it
-    only for the one-operand form (r/m). `source` (the default) is the last operand, `dest` the other factor, `min` the cheaper of
-    the two. VSGCC_IMUL_MODEL picks the one `clocks` is priced with; `clocks_by_imul` always carries all three."""
-    model = os.environ.get("VSGCC_IMUL_MODEL", "source")
-    if model not in IMUL_MODELS:
-        raise SystemExit(f"harness: VSGCC_IMUL_MODEL={model!r}, not one of {IMUL_MODELS}")
-    return model
+    """Which operand of `IMUL r, r/m` / `IMUL r, r/m, imm` is the 'Multiplier' of Table 10.1 note 3, as the target description states
+    it (`smul_multiplier`: 0 dest, 1 source, 2 min); the data sheet names it only for the one-operand form, so the description's
+    comment carries the assumption. Not a switch: the compiler prices by the same row. `clocks_by_imul` still carries all three."""
+    return IMUL_MODELS[clocks.audited("smul_multiplier")]
 
 
 def _operand_value(uc, ins, index):
