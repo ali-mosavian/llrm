@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -O3
+// bar: not comparable (SDCC double is 32 bits); twin object_extent_loop_f32
 // A loop of a run-time `n` trips over a 12 x 12 array is copied out by its extent at -O3 (each copy keeps its exit):
 // every n from 0 to 12 must sum what the rolled loop does, the short ones leaving at their own test.
 extern void report(long value);
