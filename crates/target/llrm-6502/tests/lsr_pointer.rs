@@ -135,3 +135,22 @@ fn an_address_rebuilt_from_a_narrow_counter_becomes_a_pointer() {
     let body = text.split(".segment").next().unwrap();
     assert!(!body.contains("asl"), "{body}");
 }
+
+/// ring at -O2: `buf[i] = (i + 1) * 3 + n` over a byte counter kept
+/// `asl; adc` of the extended counter each trip, where the 16-bit counter
+/// stepped `adc #3` (frameless -O2 +2,611 clk, 2026-11-12). A constant
+/// multiply scales the extension like an address does.
+const SCALED_COUNTER: &str = "define i32 @f(i32 %n) {\nentry:\n  br label %l\n\
+    l:\n  %j = phi i8 [0, %entry], [%j1, %l]\n  %j1 = add nuw nsw i8 %j, 1\n  \
+    %w = zext i8 %j1 to i16\n  %m = mul nuw nsw i16 %w, 3\n  %e = zext i16 %m to i32\n  \
+    %x = add i32 %n, %e\n  store volatile i32 %x, ptr @g\n  \
+    %c = icmp ult i8 %j1, 64\n  br i1 %c, label %l, label %out\n\
+    out:\n  ret i32 0\n}\n@g = global i32 0\n";
+
+#[test]
+fn a_constant_multiple_of_a_narrow_counter_steps_instead_of_being_rebuilt() {
+    let ir = format!("target datalayout = \"{}\"\n{SCALED_COUNTER}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    assert!(!body.contains("asl"), "{body}");
+}
