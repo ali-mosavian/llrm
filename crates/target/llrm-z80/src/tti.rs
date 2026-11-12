@@ -559,6 +559,15 @@ impl Tti for Z80Tti {
         second: OperandInfo,
     ) -> Cost {
         use ArithOp::*;
+        // `BasicTTIImpl::getArithmeticInstrCost` hands every kind but throughput to the base class's unit costs, so the
+        // loop unroller and SimplifyCFG (`SizeAndLatency`) weigh an add and a 32-bit multiply alike.
+        // DEVIATE: code size, latency and throughput keep the z80 forms below.
+        if kind == CostKind::SizeAndLatency {
+            return match op {
+                UDiv | URem | SDiv | SRem | FDiv | FRem => Cost::EXPENSIVE,
+                _ => Cost::BASIC,
+            };
+        }
         let parts = self.parts(ty);
         let byte = self.is_byte(ty);
         let bits = if byte { 8 } else { 16 * parts };
