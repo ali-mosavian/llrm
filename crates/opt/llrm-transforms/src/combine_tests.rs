@@ -389,3 +389,45 @@ fn drains_visits_and_inserts_count_the_worklist() {
     let [_, visits, initial, inserts] = delta(before);
     assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");
 }
+
+/// A compare that the run itself folds to a number, not one `prepare` sees:
+/// the branch on it left its dead edge's phi input alone, so the join kept a
+/// two-input phi where the pin reads one value (known_loads_walks `f`, wasm32
+/// -O3 +132 B, the early InstCombine 979 instructions against 975).
+#[test]
+fn a_branch_that_the_run_makes_constant_cuts_its_dead_edge_too() {
+    let mut module = parsed(
+        "define i8 @f(i8 %x) {\nb0:\n  %c = icmp ult i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi i8 [ 5, %a ], [ 1, %b ]\n  ret i8 %p\n}\n",
+    );
+    assert!(combined(&mut module));
+    let out = printed(&module);
+    assert!(out.contains("ret i8 1"), "{out}");
+    assert!(!out.contains("phi"), "{out}");
+}
+
+/// The same for a `switch` whose condition the run folds to a number: the
+/// case that is not taken stops feeding the phi, and its block loses its
+/// instructions.
+#[test]
+fn a_switch_that_the_run_makes_constant_cuts_its_dead_edges_too() {
+    let mut module = parsed(
+        "@g = global i8 0\n\ndefine i8 @f(i8 %x) {\nb0:\n  %k = and i8 %x, 0\n  switch i8 %k, label %d [\n    i8 0, label %c\n  ]\nc:\n  br label %j\nd:\n  store i8 %x, ptr @g\n  br label %j\nj:\n  %p = phi i8 [ 1, %c ], [ 9, %d ]\n  ret i8 %p\n}\n",
+    );
+    assert!(combined(&mut module));
+    let out = printed(&module);
+    assert!(out.contains("ret i8 1"), "{out}");
+    assert!(!out.contains("store"), "{out}");
+}
+
+/// A phi that only dead-edge phi inputs read is dead once they are poison
+/// (`replaceUse` queues the old input): the join kept it (known_loads_walks
+/// `f`: one dead phi left in the early InstCombine's output, +1 instruction).
+#[test]
+fn a_phi_only_dead_edges_fed_is_removed() {
+    let mut module = parsed(
+        "define i8 @f(i8 %x, i1 %k) {\nb0:\n  br i1 %k, label %l, label %r\nl:\n  br label %m\nr:\n  br label %m\nm:\n  %q = phi i8 [ 1, %l ], [ 2, %r ]\n  %c = icmp ult i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi i8 [ %q, %a ], [ 7, %b ]\n  %s = phi i8 [ %q, %a ], [ 8, %b ]\n  %t = add i8 %p, %s\n  ret i8 %t\n}\n",
+    );
+    assert!(combined(&mut module));
+    let out = printed(&module);
+    assert!(!out.contains("phi i8 [ 1, %l ]"), "{out}");
+}
