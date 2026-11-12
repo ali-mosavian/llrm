@@ -317,6 +317,7 @@ pub mod loopinterchange;
 pub mod loopinterchange_transform;
 pub mod looploadelim;
 pub mod loopvectorize;
+pub mod loopvectorizeinterleave;
 pub mod loopvectorizelegality;
 pub mod loopvectorizeplan;
 pub mod loopvectorizeskeleton;

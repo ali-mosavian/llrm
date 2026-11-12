@@ -215,7 +215,8 @@ pub struct Tuning {
     pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
     /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): at `-Os` a multiply by a constant in a block that runs
-    /// more than once per call is decomposed as the pin does at `-Os` (`Tti::mul_chains_hot_at_size`); the
+    /// more than once per run of the program (its frequency over its function's entry times how often the
+    /// function's direct callers run it) is decomposed as the pin does at `-Os` (`Tti::mul_chains_hot_at_size`); the
     /// `imul` stays in the blocks that run once.
     pub mul_chains_hot_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
