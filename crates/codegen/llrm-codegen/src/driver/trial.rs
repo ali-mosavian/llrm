@@ -32,88 +32,141 @@ use llrm_transforms::trial::{self, differing, only};
 use super::{Options, assembled, assembled_module, compiled_module, optimized_program, stage_files};
 use crate::backend::{executed, masm};
 
-/// Which decision the second compile reverses.
-enum Trial {
-    /// Unroll the loops under this size that the -O1 rule refused.
-    Unroll(u32),
-    /// Leave unrotated the counted loops RS1 rotated; the flag: a rotation that executes less for a few bytes a
-    /// loop stays (DEVIATE ROTATION-HOT, `Tti::rotation_hot_at_size`).
-    Rotation(bool),
+/// The -O1 trial's loop-size limit, on a target that states one.
+fn o1_unroll_limit(options: &Options) -> Option<u32> {
+    if !options.pipeline.at_o1() {
+        return None;
+    }
+    options.cpu().ok().and_then(|cpu| cpu.target().tti())?.unroll_trial_threshold()
 }
 
-impl Trial {
-    /// The trial `options` asks for, if its target has one.
-    fn of(options: &Options) -> Option<Trial> {
-        let tti = options.cpu().ok().and_then(|cpu| cpu.target().tti())?;
-        if options.pipeline.at_o1() {
-            return tti.unroll_trial_threshold().map(Trial::Unroll);
-        }
-        (options.pipeline.for_size && tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size())
-            .then_some(Trial::Rotation(tti.rotation_hot_at_size()))
-    }
+/// A reversible decision of the -Os mid-end. The module is compiled again with one reversed and the finished code
+/// decides whether it stays.
+#[derive(Clone, Copy, PartialEq)]
+enum Dimension {
+    /// DEVIATE ROTATION-TRIAL: leave unrotated the counted loops RS1 rotated. The flag: a rotation that executes
+    /// less for a few bytes a loop stays (DEVIATE ROTATION-HOT, `Tti::rotation_hot_at_size`).
+    Unrotate { hot: bool },
+    /// DEVIATE ROTATION-HOT: rotate the loops of an unfolded guard and uncounted trips RS1 left.
+    RotateMore,
+    /// DEVIATE UNROLL-OS-TRIAL: unroll the loops under this size that the -Os threshold refused.
+    Unroll(u32),
+}
 
-    /// Whether the compile just made noted a decision to reverse.
-    fn noted(&self) -> bool {
-        match self {
-            Trial::Unroll(_) => !trial::take().0.is_empty(),
-            Trial::Rotation(_) => !trial::take_rotated().is_empty(),
-        }
-    }
+/// What the base compile noted for each dimension.
+struct Noted {
+    unroll: (Vec<String>, u64),
+    rotated: Vec<String>,
+    rotated_loops: usize,
+    left: (Vec<String>, usize),
+}
 
-    /// Discards what an earlier compile noted.
-    fn clear(&self) {
-        let _ = trial::take();
-        let _ = trial::take_rotated();
+impl Noted {
+    /// Takes what the compile just made noted and forgets it.
+    fn take() -> Noted {
+        let noted = Noted {
+            unroll: trial::take(),
+            rotated: trial::take_rotated(),
+            rotated_loops: trial::rotated_loops(),
+            left: trial::take_left(),
+        };
         trial::clear_rotated_loops();
+        noted
     }
 
-    /// Compiles with the decision reversed.
-    fn compile<T>(
+    fn has(
         &self,
+        dimension: Dimension,
+    ) -> bool {
+        match dimension {
+            Dimension::Unrotate { .. } => !self.rotated.is_empty(),
+            Dimension::RotateMore => !self.left.0.is_empty(),
+            Dimension::Unroll(_) => !self.unroll.0.is_empty(),
+        }
+    }
+}
+
+impl Dimension {
+    /// The dimensions `options` has, in the order they are decided.
+    fn of(options: &Options) -> Vec<Dimension> {
+        if options.pipeline.at_o1() || !options.pipeline.for_size {
+            return Vec::new();
+        }
+        let Some(tti) = options.cpu().ok().and_then(|cpu| cpu.target().tti()) else { return Vec::new() };
+        let mut all = Vec::new();
+        if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() {
+            all.push(Dimension::Unrotate { hot: tti.rotation_hot_at_size() });
+            if tti.rotation_hot_at_size() {
+                all.push(Dimension::RotateMore);
+            }
+        }
+        if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
+            all.push(Dimension::Unroll(limit));
+        }
+        all
+    }
+
+    /// Runs `body` with this decision reversed.
+    fn compile<T>(
+        self,
         body: impl FnOnce() -> T,
     ) -> T {
         match self {
-            Trial::Unroll(limit) => trial::with(*limit, body),
-            Trial::Rotation(_) => trial::with_unrotated(body),
+            Dimension::Unrotate { .. } => trial::with_unrotated(body),
+            Dimension::RotateMore => trial::with_more_rotation(body),
+            Dimension::Unroll(limit) => trial::with(limit, body),
         }
     }
 
-    /// Whether `other` is kept over `kept`, `bytes` and `work` being the
-    /// finished modules'.
+    /// Whether the reversed compile is kept over the base, `bytes` and `work` being the finished modules'.
     fn keeps(
-        &self,
-        (kept_bytes, kept_work): (i64, f64),
-        (other_bytes, other_work): (i64, f64),
+        self,
+        noted: &Noted,
+        (kept_bytes, kept_work): (i64, Option<f64>),
+        (other_bytes, other_work): (i64, Option<f64>),
     ) -> bool {
         let added = other_bytes - kept_bytes;
-        let saved = (kept_work - other_work).round() as i64;
-        let pays = match self {
-            Trial::Unroll(_) => trial::keeps_at_o1(saved, added),
+        let work = |one: Option<f64>| one.unwrap_or(0.0);
+        let saved = (work(kept_work) - work(other_work)).round() as i64;
+        let measured = kept_work.is_some() && other_work.is_some();
+        let (what, pays) = match self {
             // The unrotated object is smaller; the rotated one stays if it executes less for a few bytes a loop.
-            Trial::Rotation(hot) => {
+            Dimension::Unrotate { hot } => (
+                "unrotated",
                 trial::keeps_at_size(added)
-                    && !(*hot && trial::keeps_rotation_hot(-saved, -added, trial::rotated_loops()))
+                    && !(hot && trial::keeps_rotation_hot(-saved, -added, noted.rotated_loops)),
+            ),
+            Dimension::RotateMore => ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1)),
+            Dimension::Unroll(_) => {
+                ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len()))
             }
         };
         if llrm_support::debug::enabled("trial") {
-            let what = if matches!(self, Trial::Unroll(_)) { "unroll" } else { "unrotated" };
-            eprintln!(
-                "trial {what}: {added:+} bytes, {saved:+} work saved: {}",
-                if pays { "kept" } else { "put back" }
-            );
+            eprintln!("trial {what}: {added:+} bytes, {saved:+} work saved: {}", if pays { "kept" } else { "put back" });
         }
         pays
     }
 }
 
-/// What a finished module is expected to execute, for the rotation trial: instructions and memory operands as
-/// `executed::work`, the branches and jumps at their clocks on the CPU (a rotation trades a taken `jmp` for a
-/// copied guard, which the work alone does not see). `0.0` where the model has no answer: no work saved.
+/// `body` with every dimension of `all` reversed at once.
+fn compiled_with<T>(
+    all: &[Dimension],
+    body: impl FnOnce() -> T,
+) -> T {
+    match all.split_first() {
+        None => body(),
+        Some((one, rest)) => one.compile(|| compiled_with(rest, body)),
+    }
+}
+
+/// What a finished module is expected to execute: instructions and memory operands as `executed::work`, the
+/// branches and jumps at their clocks on the CPU (a rotation trades a taken `jmp` for a copied guard, which the
+/// work alone does not see). `None` where the model has no answer.
 fn rotation_work(
     built: &masm::Module,
     options: &Options,
-) -> f64 {
-    let Ok(cpu) = options.cpu() else { return 0.0 };
+) -> Option<f64> {
+    let cpu = options.cpu().ok()?;
     built
         .procedures
         .iter()
@@ -123,122 +176,25 @@ fn rotation_work(
             Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
         })
         .sum::<Option<f64>>()
-        .unwrap_or(0.0)
 }
 
-/// `module` compiled as `compiled_module` does, then, on a target with a trial
-/// and a noted decision, again with the decision reversed: whichever of the two
-/// the trial's rule prefers. `bytes` is the size of a compiled module as the
-/// caller will write it, `unpadded` the same without the padding between
-/// functions, which the rotation trial compares (a layout shift of one function
-/// is not a code-size win); `None` leaves the first compile.
-///
-/// The rotation trial decides before the backend runs: the mid-end runs twice,
-/// the backend on the functions whose bodies differ twice (cut out of the
-/// module) and on the whole module once, so its cost grows with the loops
-/// noted, not with the module.
-fn compiled_module_trying_once(
-    module: llrm_mir::module::Module,
-    name: &str,
-    options: &Options,
-    bytes: &dyn Fn(&masm::Module) -> Option<i64>,
-    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
-) -> Result<Variant, String> {
-    let build = |program: Program, with: &Options| -> Result<Variant, String> {
-        let _ = crate::backend::leaffold::take_folded();
-        let built = assembled(&program, name, with)?;
-        Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded() })
-    };
-    let Some(kind) = Trial::of(options) else {
-        return build(optimized_program(module, options)?, options);
-    };
-    kind.clear();
-    let kept = optimized_program(module.clone(), options)?;
-    if !kind.noted() {
-        return build(kept, options);
-    }
-    let mut again = options.clone();
-    again.dump = None;
-    let other = kind.compile(|| optimized_program(module, &again))?;
-    if matches!(kind, Trial::Rotation(_)) {
-        let cut = differing(&kept.modules[0], &other.modules[0]);
-        if llrm_support::debug::enabled("trial") {
-            let defined = kept.modules[0]
-                .globals
-                .iter()
-                .filter(|global| global.function().is_some_and(|f| !f.is_declaration()))
-                .count();
-            eprintln!("trial unrotated: {} of {defined} functions differ: {cut:?}", cut.len());
-        }
-        // Pricing the cut twice and assembling the winner costs `2 * cut + all`
-        // instructions of backend work; both modules whole cost `2 *
-        // all`. The cut is the cheaper only while it is under half.
-        let size = |module: &Module, only: Option<&BTreeSet<String>>| -> usize {
-            module
-                .globals
-                .iter()
-                .filter_map(|global| {
-                    Some((global.name.as_deref()?, global.function().filter(|f| !f.is_declaration())?))
-                })
-                .filter(|(name, _)| only.is_none_or(|cut| cut.contains(*name)))
-                .map(|(_, function)| function.instruction_count())
-                .sum()
-        };
-        if 2 * size(&kept.modules[0], Some(&cut)) >= size(&kept.modules[0], None) {
-            let first = build(kept, options)?;
-            let second = build(other, &again)?;
-            let pays = matches!(
-                (unpadded(&first.built), unpadded(&second.built)),
-                (Some(a), Some(b)) if kind.keeps((a, rotation_work(&first.built, options)), (b, rotation_work(&second.built, options)))
-            );
-            if !pays {
-                return Ok(first);
-            }
-            stage_files(options, "", &second.built)?;
-            return Ok(second);
-        }
-        let each = |program: &Program| {
-            let _ = crate::backend::leaffold::take_folded();
-            let built = assembled_module(&only(&program.modules[0], &cut), program, name, &again).ok()?;
-            Some((built, crate::backend::leaffold::take_folded()))
-        };
-        let (Some((first, first_folded)), Some((second, second_folded))) = (each(&kept), each(&other)) else {
-            return build(kept, options);
-        };
-        let pays = matches!(
-            (unpadded(&first), unpadded(&second)),
-            (Some(a), Some(b)) if kind.keeps((a, rotation_work(&first, options)), (b, rotation_work(&second, options)))
-        );
-        // Where every function differs, the cut module is the module: its masm
-        // is the answer.
-        let (chosen, built, folded) = if pays { (other, second, second_folded) } else { (kept, first, first_folded) };
-        if chosen.modules[0]
-            .globals
-            .iter()
-            .filter(|global| global.function().is_some_and(|f| !f.is_declaration()))
-            .all(|global| global.name.as_deref().is_some_and(|name| cut.contains(name)))
-        {
-            stage_files(options, "", &built)?;
-            return Ok(Variant { built, program: chosen, folded });
-        }
-        return build(chosen, options);
-    }
-    let kept = build(kept, options)?;
-    let other = build(other, &again)?;
-    let price = |built: &masm::Module| -> Option<(i64, f64)> {
-        let work = built.procedures.iter().map(|one| executed::work(&one.body)).sum::<Option<f64>>()?;
-        Some((bytes(built)?, work))
-    };
-    let (Some(kept_price), Some(other_price)) = (price(&kept.built), price(&other.built)) else { return Ok(kept) };
-    Ok(if kind.keeps(kept_price, other_price) { other } else { kept })
-}
-
-/// A compiled variant of a module: its code, the program the backend took (the leaf-fold pair assembles it again)
+/// A compiled variant of the module: its code, the program the backend took (the leaf-fold pair assembles it again)
 /// and whether the backend folded a leaf.
 struct Variant {
     built: masm::Module,
     program: Program,
     folded: bool,
+}
+
+/// `program` assembled, noting whether the backend folded a leaf.
+fn built(
+    program: Program,
+    name: &str,
+    options: &Options,
+) -> Result<Variant, String> {
+    let _ = crate::backend::leaffold::take_folded();
+    let built = assembled(&program, name, options)?;
+    Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded() })
 }
 
 /// DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the branching block, the module is
@@ -268,73 +224,11 @@ fn leaf_fold_trial(options: &Options) -> bool {
     options.cpu().is_ok_and(|cpu| cpu.size) && options.arch.leaf_fold_at_size()
 }
 
-/// [`compiled_module_trying`], and at -Os on a target with the rotation trial, DEVIATE ROTATION-HOT (owner
-/// x86-m32, exit 2026-11-24): where RS1 left a loop unrotated whose guard does not fold and whose trips are not
-/// counted, the module is compiled again with those loops rotated as the pin does, and that is kept if the
-/// finished code executes less for a few bytes a loop (`trial::keeps_rotation_hot`). The pass notes the loops it
-/// left; a module with none is compiled once.
-fn compiled_module_with_rotation(
-    module: llrm_mir::module::Module,
-    name: &str,
-    options: &Options,
-    bytes: &dyn Fn(&masm::Module) -> Option<i64>,
-    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
-) -> Result<Variant, String> {
-    let hot = matches!(Trial::of(options), Some(Trial::Rotation(_)))
-        && options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.rotation_hot_at_size());
-    let _ = trial::take_left();
-    let first = compiled_module_trying_once(module.clone(), name, options, bytes, unpadded)?;
-    if !hot {
-        return Ok(first);
-    }
-    let (left, loops) = trial::take_left();
-    if left.is_empty() {
-        return Ok(first);
-    }
-    let mut again = options.clone();
-    again.dump = None;
-    let second =
-        trial::with_more_rotation(|| compiled_module_trying_once(module, name, &again, bytes, unpadded))?;
-    // Instructions and memory operands as `executed::work`, the branches and jumps at their clocks on the CPU: a
-    // rotation trades a taken `jmp` for a copied guard, which the work alone does not see.
-    let cpu = options.cpu()?;
-    let work = |built: &masm::Module| {
-        built
-            .procedures
-            .iter()
-            .map(|one| {
-                let done = executed::executed(&one.body)?;
-                let jumps = done.jump_cycles(cpu).ok()?;
-                Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
-            })
-            .sum::<Option<f64>>()
-    };
-    let pays = match (work(&first.built), work(&second.built), unpadded(&first.built), unpadded(&second.built)) {
-        (Some(was), Some(now), Some(before), Some(after)) => {
-            trial::keeps_rotation_hot((was - now).round() as i64, after - before, loops)
-        }
-        _ => false,
-    };
-    if llrm_support::debug::enabled("trial") {
-        eprintln!(
-            "trial rotation-hot: {loops} loops in {left:?}, work {:?} -> {:?}, {:?} -> {:?} bytes: {}",
-            work(&first.built),
-            work(&second.built),
-            unpadded(&first.built),
-            unpadded(&second.built),
-            if pays { "kept" } else { "put back" }
-        );
-    }
-    let chosen = if pays { second } else { first };
-    stage_files(options, "", &chosen.built)?;
-    Ok(chosen)
-}
-
-/// [`compiled_module_with_rotation`], and at -Os on a target with `Tti::unroll_trial_at_size`, DEVIATE
-/// UNROLL-OS-TRIAL (owner x86-m32, exit 2026-11-24): the loops the -Os threshold refused under the target's
-/// size are unrolled in a second compile (gcc peels a small loop at -Os when the code does not grow), kept
-/// if the object is smaller, or grows a few bytes a function and the code runs less
-/// (`trial::keeps_unroll_at_size`). The pass notes the refused loops; a module with none is compiled once.
+/// `module` compiled as `compiled_module` does and, where the target has trials, again with one decision reversed
+/// at a time, each kept if the finished code prices better: at -O1 UNROLL-O1-TRIAL (`Tti::unroll_trial_threshold`),
+/// at -Os the dimensions of [`Dimension`]. `bytes` is the size of a compiled module as the caller will write it,
+/// `unpadded` the same without the padding between functions (a layout shift of one function is not a code-size
+/// win); `None` leaves the first compile.
 pub fn compiled_module_trying(
     module: llrm_mir::module::Module,
     name: &str,
@@ -342,46 +236,129 @@ pub fn compiled_module_trying(
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
     unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
 ) -> Result<masm::Module, String> {
-    let limit = options
-        .pipeline
-        .for_size
-        .then(|| options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.unroll_trial_at_size()))
-        .flatten();
-    let Some(limit) = limit.filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) else {
-        let one = compiled_module_with_rotation(module, name, options, bytes, unpadded)?;
-        return with_leaf_trial(one, name, options, unpadded);
-    };
+    if let Some(limit) = o1_unroll_limit(options) {
+        return compiled_module_at_o1(module, name, options, limit, bytes);
+    }
+    let dimensions = Dimension::of(options);
+    if dimensions.is_empty() {
+        if !leaf_fold_trial(options) {
+            return compiled_module(module, name, options);
+        }
+        let variant = built(optimized_program(module, options)?, name, options)?;
+        return with_leaf_trial(variant, name, options, unpadded);
+    }
+    compiled_module_at_size(module, name, options, &dimensions, unpadded)
+}
+
+/// UNROLL-O1-TRIAL: the loops under the trial size unrolled by the pin's threshold, kept if the object is no
+/// larger and the code does no more work.
+fn compiled_module_at_o1(
+    module: llrm_mir::module::Module,
+    name: &str,
+    options: &Options,
+    limit: u32,
+    bytes: &dyn Fn(&masm::Module) -> Option<i64>,
+) -> Result<masm::Module, String> {
     let _ = trial::take();
-    let first = compiled_module_with_rotation(module.clone(), name, options, bytes, unpadded)?;
-    let (functions, _) = trial::take();
-    if functions.is_empty() {
-        return with_leaf_trial(first, name, options, unpadded);
+    let kept = optimized_program(module.clone(), options)?;
+    if trial::take().0.is_empty() {
+        return assembled(&kept, name, options);
     }
     let mut again = options.clone();
     again.dump = None;
-    let second = trial::with(limit, || compiled_module_with_rotation(module, name, &again, bytes, unpadded))?;
-    let cpu = options.cpu()?;
-    let clocks = |built: &masm::Module| {
-        built
-            .procedures
-            .iter()
-            .map(|one| {
-                let done = executed::executed(&one.body)?;
-                let jumps = done.jump_cycles(cpu).ok()?;
-                Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
-            })
-            .sum::<Option<f64>>()
+    let other = trial::with(limit, || optimized_program(module, &again))?;
+    let kept = assembled(&kept, name, options)?;
+    let other = assembled(&other, name, &again)?;
+    let price = |built: &masm::Module| -> Option<(i64, f64)> {
+        let work = built.procedures.iter().map(|one| executed::work(&one.body)).sum::<Option<f64>>()?;
+        Some((bytes(built)?, work))
     };
-    let pays = match (clocks(&first.built), clocks(&second.built), unpadded(&first.built), unpadded(&second.built)) {
-        (Some(was), Some(now), Some(before), Some(after)) => {
-            trial::keeps_unroll_at_size((was - now).round() as i64, after - before, functions.len())
-        }
-        _ => false,
-    };
+    let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
+    let added = other_price.0 - kept_price.0;
+    let saved = (kept_price.1 - other_price.1).round() as i64;
+    let pays = trial::keeps_at_o1(saved, added);
     if llrm_support::debug::enabled("trial") {
-        eprintln!("trial unroll-os: {functions:?}, {:?} -> {:?} bytes: {}", unpadded(&first.built), unpadded(&second.built), if pays { "kept" } else { "put back" });
+        eprintln!("trial unroll: {added:+} bytes, {saved:+} work saved: {}", if pays { "kept" } else { "put back" });
     }
-    let chosen = if pays { second } else { first };
+    Ok(if pays { other } else { kept })
+}
+
+/// The -Os trials. The base compile notes what each dimension could reverse. Each noted dimension is compiled
+/// against the base alone, priced on the functions that differ (the whole module where they are half of it) and
+/// kept or put back; the dimensions that stay are compiled together once. The mid-end runs `1 + k` times for `k`
+/// noted dimensions, plus one where two or more stay, where nesting them ran it `2^k` times.
+fn compiled_module_at_size(
+    module: llrm_mir::module::Module,
+    name: &str,
+    options: &Options,
+    dimensions: &[Dimension],
+    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+) -> Result<masm::Module, String> {
+    let _ = Noted::take();
+    let base_program = optimized_program(module.clone(), options)?;
+    let noted = Noted::take();
+    let active: Vec<Dimension> = dimensions.iter().copied().filter(|one| noted.has(*one)).collect();
+    let base = built(base_program, name, options)?;
+    if active.is_empty() {
+        return with_leaf_trial(base, name, options, unpadded);
+    }
+    let mut again = options.clone();
+    again.dump = None;
+    // A dimension that stays, with its variant assembled whole or the program not yet assembled.
+    let mut kept: Vec<(Dimension, Result<Variant, Program>)> = Vec::new();
+    for dimension in active {
+        let program = dimension.compile(|| optimized_program(module.clone(), &again))?;
+        let _ = Noted::take();
+        let cut = differing(&base.program.modules[0], &program.modules[0]);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!("trial: {} of the functions differ: {cut:?}", cut.len());
+        }
+        if cut.is_empty() {
+            continue;
+        }
+        // Pricing the cut twice costs `2 * cut` instructions of backend work, the variant whole `all`: the cut is
+        // the cheaper only while it is under half.
+        let size = |module: &Module, only: Option<&BTreeSet<String>>| -> usize {
+            module
+                .globals
+                .iter()
+                .filter_map(|global| {
+                    Some((global.name.as_deref()?, global.function().filter(|f| !f.is_declaration())?))
+                })
+                .filter(|(name, _)| only.is_none_or(|cut| cut.contains(*name)))
+                .map(|(_, function)| function.instruction_count())
+                .sum()
+        };
+        let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options)));
+        if 2 * size(&base.program.modules[0], Some(&cut)) >= size(&base.program.modules[0], None) {
+            let variant = built(program, name, &again)?;
+            let pays = matches!((price(&base.built), price(&variant.built)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
+            if pays {
+                kept.push((dimension, Ok(variant)));
+            }
+            continue;
+        }
+        let each = |program: &Program| assembled_module(&only(&program.modules[0], &cut), program, name, &again).ok();
+        let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
+        let pays = matches!((price(&first), price(&second)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
+        if pays {
+            kept.push((dimension, Err(program)));
+        }
+    }
+    let chosen = match kept.len() {
+        0 => return with_leaf_trial(base, name, options, unpadded),
+        1 => match kept.pop() {
+            Some((_, Ok(variant))) => variant,
+            Some((_, Err(program))) => built(program, name, &again)?,
+            None => unreachable!(),
+        },
+        _ => {
+            let all: Vec<Dimension> = kept.iter().map(|(one, _)| *one).collect();
+            let program = compiled_with(&all, || optimized_program(module, &again))?;
+            let _ = Noted::take();
+            built(program, name, &again)?
+        }
+    };
     stage_files(options, "", &chosen.built)?;
     with_leaf_trial(chosen, name, options, unpadded)
 }
