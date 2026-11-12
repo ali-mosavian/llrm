@@ -210,8 +210,11 @@ fn the_compact_word_division_agrees_with_the_fast_one() {
         (65535, 16385, 3, 16380),
     ] {
         let n = format!("c{a}-{b}");
-        assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
-        assert_eq!(word(&format!("umodhic-{n}"), &two_words(a, b), "__umodhi3c"), remainder, "{a} % {b}");
+        for suffix in ["c", "a"] {
+            let (div, rem) = (format!("__udivhi3{suffix}"), format!("__umodhi3{suffix}"));
+            assert_eq!(word(&format!("udivhi{suffix}-{n}"), &two_words(a, b), &div), quotient, "{a} / {b} {div}");
+            assert_eq!(word(&format!("umodhi{suffix}-{n}"), &two_words(a, b), &rem), remainder, "{a} % {b} {rem}");
+        }
     }
 }
 
@@ -247,8 +250,11 @@ fn compact_signed_word_division_matches_the_fast_routines() {
         (30000, 300, 100, 0),
     ] {
         let n = format!("{a}-{b}");
-        assert_eq!(word(&format!("divhic-{n}"), &two_words(a, b), "__divhi3c"), quotient, "{a} / {b}");
-        assert_eq!(word(&format!("modhic-{n}"), &two_words(a, b), "__modhi3c"), remainder, "{a} % {b}");
+        for suffix in ["c", "a"] {
+            let (div, rem) = (format!("__divhi3{suffix}"), format!("__modhi3{suffix}"));
+            assert_eq!(word(&format!("divhi{suffix}-{n}"), &two_words(a, b), &div), quotient, "{a} / {b} {div}");
+            assert_eq!(word(&format!("modhi{suffix}-{n}"), &two_words(a, b), &rem), remainder, "{a} % {b} {rem}");
+        }
         assert_eq!(word(&format!("divhif-{n}"), &two_words(a, b), "__divhi3"), quotient, "{a} / {b} fast");
         assert_eq!(word(&format!("modhif-{n}"), &two_words(a, b), "__modhi3"), remainder, "{a} % {b} fast");
     }
@@ -831,14 +837,14 @@ fn the_fast_multiply_saves_what_hotmultiply_prices() {
     assert_eq!(mean.round(), llrm_6502::hotmultiply::SAVED_CLOCKS);
 }
 
-/// The compact word divide ran its 16 bit steps whatever the quotient: `gcd`'s `a % b` (quotients of one or
+/// The compact word divide (`__umodhi3c`) ran its 16 bit steps whatever the quotient: `gcd`'s `a % b` (quotients of one or
 /// two bits) took about 430 clocks a call, 2.2x llvm-mos's loop around it (idiv_loop_os -Os: 2,374,468
-/// clocks against 1,083,830, 2026-11-12). It runs for the quotient's bits.
+/// clocks against 1,083,830, 2026-11-12). The aligned one (`__umodhi3a`, called where the module pays for it) runs for the quotient's bits.
 #[test]
-fn a_compact_word_modulo_runs_for_the_quotients_bits() {
+fn an_aligned_word_modulo_runs_for_the_quotients_bits() {
     let clocks = |name: &str, a: u16, b: u16| {
         let setup = two_words(a, b);
-        let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __umodhi3c\n"), "");
+        let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __umodhi3a\n"), "");
         with - common::cycles_with(&format!("{name}-none"), &setup, "")
     };
     let (one, two) = (clocks("umodc-q1", 1000, 600), clocks("umodc-q2", 2300, 1000));
@@ -847,18 +853,18 @@ fn a_compact_word_modulo_runs_for_the_quotients_bits() {
 }
 
 /// A divide-remainder pair is one `__udivhi3` call that leaves the remainder in `rc6:rc7`; at -Os that call
-/// is `__udivhi3c`, which must too (the aligned loop keeps the remainder in `rc2:rc3`).
+/// may be `__udivhi3a`, which must too (the aligned loop keeps the remainder in `rc2:rc3`).
 #[test]
-fn the_compact_unsigned_divide_leaves_the_remainder_in_rc6_rc7() {
+fn the_aligned_unsigned_divide_leaves_the_remainder_in_rc6_rc7() {
     for (a, b, remainder) in [(50000, 7, 6), (2300, 1000, 300), (7, 2, 1), (999, 1000, 999), (65535, 16385, 16380)] {
         let n = format!("rem{a}-{b}");
         let low = common::run_with_runtime(
             &format!("{n}-lo"),
-            &format!("{}  jsr __udivhi3c\n  lda rc6\n", two_words(a, b)),
+            &format!("{}  jsr __udivhi3a\n  lda rc6\n", two_words(a, b)),
         );
         let high = common::run_with_runtime(
             &format!("{n}-hi"),
-            &format!("{}  jsr __udivhi3c\n  lda rc7\n", two_words(a, b)),
+            &format!("{}  jsr __udivhi3a\n  lda rc7\n", two_words(a, b)),
         );
         assert_eq!(high << 8 | low, remainder, "{a} % {b}");
     }

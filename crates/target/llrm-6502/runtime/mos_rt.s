@@ -286,6 +286,21 @@ __umodhi3:                      ; rs1 % rs2 -> A:X
 ; the compact variants, called where a byte is worth more than the clocks: no short-divisor path
 .export __udivhi3c
 __udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
+  jsr udivmod16c
+  lda rc2
+  ldx rc3
+  rts
+
+.export __umodhi3c
+__umodhi3c:                     ; rs1 % rs2 -> A:X
+  jsr udivmod16c
+  lda rc6
+  ldx rc7
+  rts
+
+; the same over the aligned loop (`[aligned]` in routines.toml): called at -Os where the module's divides pay for the bytes
+.export __udivhi3a
+__udivhi3a:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
   jsr udivmod16a
   lda rc6                       ; the quotient to A:X, the remainder to where udivmod16 leaves it
   ldx rc7
@@ -295,8 +310,8 @@ __udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
   sty rc7
   rts
 
-.export __umodhi3c
-__umodhi3c:                     ; rs1 % rs2 -> A:X
+.export __umodhi3a
+__umodhi3a:                     ; rs1 % rs2 -> A:X
   jsr udivmod16a
   lda rc2
   ldx rc3
@@ -408,6 +423,34 @@ __divhi3c:                       ; rs1 / rs2 -> A:X, compact
   eor rc5
   tay
   jsr abs16_pair
+  jsr udivmod16c
+  cpy #0
+  bpl @done
+  neg16 rc2, rc3
+@done:
+  lda rc2
+  ldx rc3
+  rts
+
+.export __modhi3c
+__modhi3c:                       ; rs1 % rs2 -> A:X, compact
+  ldy rc3
+  jsr abs16_pair
+  jsr udivmod16c
+  cpy #0
+  bpl @done
+  neg16 rc6, rc7
+@done:
+  lda rc6
+  ldx rc7
+  rts
+
+.export __divhi3a
+__divhi3a:                       ; rs1 / rs2 -> A:X, compact
+  lda rc3
+  eor rc5
+  tay
+  jsr abs16_pair
   jsr udivmod16a
   cpy #0
   bpl @done
@@ -417,8 +460,8 @@ __divhi3c:                       ; rs1 / rs2 -> A:X, compact
   ldx rc7
   rts
 
-.export __modhi3c
-__modhi3c:                       ; rs1 % rs2 -> A:X, compact
+.export __modhi3a
+__modhi3a:                       ; rs1 % rs2 -> A:X, compact
   ldy rc3
   jsr abs16_pair
   jsr udivmod16a
