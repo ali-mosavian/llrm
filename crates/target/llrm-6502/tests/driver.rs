@@ -2954,16 +2954,17 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     }
 }
 
-/// A branch on Z (`ne`) reads the flags `inx` sets: its compare keeps its
-/// place after the step, and the copy of the old counter stays.
+/// A branch on Z (`ne`) reads the flags the step sets: a compare of the old
+/// counter must stay after it. Narrowing turns this loop into a `dex; bne`
+/// down-counter, so only the order (when a compare remains) and the result
+/// are pinned.
 #[test]
 fn a_zero_branch_on_the_old_counter_keeps_its_compare_after_the_step() {
     let ir = counter_loop("ne i16 %i, 63");
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    let (compare, step) = (text.find("cmp #63"), text.find("inx"));
-    assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
-    assert!(step < compare, "the compare moved above the step:\n{text}");
-    assert!(text.contains("stx rc") || text.contains("sty rc"), "{text}");
+    if let (Some(compare), Some(step)) = (text.find("cmp #63"), text.find("inx")) {
+        assert!(step < compare, "the compare moved above the step:\n{text}");
+    }
     assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
 }
 
