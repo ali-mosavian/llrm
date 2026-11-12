@@ -373,6 +373,8 @@ pub struct Tuning {
     pub rotation_guard_must_fold_at_size: bool,
     /// DEVIATE ROTATION-TRIAL: see `Tti::rotation_trial_at_size`.
     pub rotation_trial_at_size: bool,
+    /// DEVIATE ROTATION-HOT: see `Tti::rotation_hot_at_size`.
+    pub rotation_hot_at_size: bool,
     /// DEVIATE GVN-PRE-OPTSIZE: see `Tti::load_pre_off_at_size`.
     pub load_pre_off_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
@@ -578,6 +580,7 @@ impl Tuning {
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
+        rotation_hot_at_size: false,
         load_pre_off_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,

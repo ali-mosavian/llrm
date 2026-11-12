@@ -9,7 +9,7 @@ savedsp dw ?
 handler dd ?
 after dw ?
 .code PROBE_TEXT
-public _trash, _arm, _verify, _verify_nosidi, _intcall
+public _trash, _arm, _arm_nosidi, _verify, _verify_nosidi, _intcall
 
 _trash proc far
     mov ax, 0BAD0h
@@ -41,6 +41,16 @@ _arm proc far
     mov di, 0A5A5h
     ret
 _arm endp
+
+; _arm_nosidi: _arm without the SI and DI canaries. A caller llrm compiled may keep a value in SI or DI across arm() (the shared copy of
+; SS pushed for each hidden result pointer): cdecl lets it, and _arm's canaries made it a wild segment (r_s5, r_s7, r_s8).
+_arm_nosidi proc far
+    mov savedbp, bp
+    mov ax, sp
+    add ax, 4
+    mov savedsp, ax
+    ret
+_arm_nosidi endp
 
 ; Bit 0 SI, 1 DI, 2 BP, 3 SP, 4 DS, 5 DF.
 _verify proc far

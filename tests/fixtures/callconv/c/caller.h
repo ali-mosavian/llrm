@@ -8,8 +8,11 @@ extern void far arm(void);
 extern void far verify(const char *what);
 #define ARM() arm()
 #ifdef ARMED_NO_SIDI
-/* llrm's caller may use SI and DI itself between arm() and verify(): they are not checked there. */
+/* llrm's caller may use SI and DI itself, before arm() too: arm_nosidi() sets no canary in them, and they are not checked. */
+extern void far arm_nosidi(void);
 extern void far verify_nosidi(const char *what);
+#undef ARM
+#define ARM() arm_nosidi()
 #define VERIFY(what) verify_nosidi(what)
 #else
 #define VERIFY(what) verify(what)
