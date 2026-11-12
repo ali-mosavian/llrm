@@ -36,3 +36,15 @@ def summary(expected, results, reasons=None, required=lambda tag: tag == "ours",
     if failed:
         line += "; no row: " + " ".join(f"{n}({reasons.get(n, lost.get(n, 'FAILED'))})" for n in sorted(failed))
     return line, not failed
+
+
+def softfloat_library_missing(environ, sdcc_only, no_softfloat):
+    """Why a sweep must not start, or None. Our float and double programs link `__adddf3` and its kin from the soft-float library
+    (`Z80_LIBC_EXTRA`); without it 13 of 121 programs fail to link and read as 'no row' (2026-11-12)."""
+    if sdcc_only or no_softfloat or environ.get("Z80_LIBC_EXTRA"):
+        return None
+    return (
+        "Z80_LIBC_EXTRA is unset: the float and double programs will not link. Build the library with "
+        "runtime/compiler-rt/tests/z80_lib.sh OUTDIR (LLRM_Z80_LLC=the compiler under test) and export Z80_LIBC_EXTRA=OUTDIR, "
+        "or pass --no-softfloat to leave them out."
+    )

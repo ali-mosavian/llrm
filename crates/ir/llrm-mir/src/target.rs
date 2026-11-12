@@ -97,6 +97,9 @@ pub struct Tuning {
     /// carries more bytes than its units where an argument is several words (x86-m16:
     /// QCport `pl_box_axis`, 21 units, ~70 B a copy, three copies +181 B).
     pub inline_dying_credit_at_os: bool,
+    /// `Tti::inline_trial_keeps_shrinking_copy`: a priced inline trial keeps a copy that
+    /// leaves the module no larger and saves clocks, though no callee goes with it.
+    pub inline_trial_keeps_shrinking_copy: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -542,6 +545,7 @@ impl Tuning {
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
         inline_dying_credit_at_os: true,
+        inline_trial_keeps_shrinking_copy: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,

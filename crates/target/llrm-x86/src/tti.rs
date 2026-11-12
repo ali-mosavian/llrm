@@ -745,6 +745,10 @@ impl Tti for X86 {
         self.tuning.inline_dying_credit_at_os
     }
 
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        self.tuning.inline_trial_keeps_shrinking_copy
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
