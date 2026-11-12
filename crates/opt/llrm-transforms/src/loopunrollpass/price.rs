@@ -151,6 +151,49 @@ pub(super) fn full_unroll_pays(
     priced_verdict(&*run, se, analyzed, lp, up, trips, uce, analysis, None, prices_nest, prices_nest, rate)
 }
 
+/// Whether a partial or runtime unroll of `lp` by `count` stays, at the target's rate. DEVIATE PART-UNROLL-M64
+/// (owner x86-m64, exit 2026-11-24): the pin unrolls any loop that fits the buffer by a count its threshold sets
+/// and prices nothing (`computeUnrollCount`, LoopUnrollPass.cpp). A target with a throughput model weighs what the
+/// copies remove, the counter, the exit test and the back edge of all but one trip in `count`, against the bytes
+/// of the copies and of the remainder. `trips` is 0 where the count is a run time value: `ASSUMED_TRIPS`, the
+/// pin's branch probability, stands for it.
+pub(super) fn partial_unroll_pays(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    count: u32,
+    trips: u32,
+) -> bool {
+    let rate = run.tti.unroll_milliclocks_per_byte();
+    let Some(tp) = run.outer.target().throughput() else { return true };
+    if rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+        return true;
+    }
+    let blocks = lp.get_blocks();
+    let trip = throughput::trip(run, blocks, tp, &|_| 1);
+    let bytes = run.outer.target().byte_costs();
+    let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
+    let expected = if trips != 0 { i64::from(trips) } else { ASSUMED_TRIPS };
+    let by = i64::from(count);
+    let iterations = (expected + by - 1) / by;
+    let removed: Vec<i64> = tp
+        .resources
+        .iter()
+        .map(|resource| (expected - iterations) * (resource.costs.branch + 2 * resource.costs.add))
+        .collect();
+    let milli = throughput::saved(tp, &trip, expected, &removed);
+    let saved = ((milli + 500) / 1000) * enclosing_runs(run, se, analyzed, lp);
+    let remainder = if trips != 0 && trips % count == 0 { 0 } else { body_bytes };
+    let added = (by - 1) * body_bytes + remainder;
+    why(
+        run,
+        lp,
+        &format!("priced partial unroll by {count}: {expected} trips, saves {saved} clk, adds {added} B (body {body_bytes} B)"),
+    );
+    unroll_pays(saved, added, rate)
+}
+
 /// The copies of each block a nest's unroll makes: the product of the trip
 /// counts of the loops inside the nest's root that hold it.
 pub(super) struct Projection {
