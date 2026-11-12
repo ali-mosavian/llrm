@@ -58,3 +58,12 @@ fn an_adc_chain_through_stores_and_loads_is_no_error() {
 fn a_zero_compare_that_expanded_to_nothing_reads_the_loads_flags() {
     check(&[(false, false, "  lda rc7"), (true, false, ""), (false, true, "  bmi far")]).unwrap();
 }
+
+/// `plx` and `ply` set Z and N like `pla`; a table without them let a pull clobber a compare's zero flag unreported.
+#[test]
+fn a_pull_into_an_index_register_between_a_compare_and_a_zero_branch_is_an_error() {
+    for pull in ["  pla", "  plx", "  ply"] {
+        check(&[(true, false, "  cmp #11"), (false, false, pull), (false, true, "  beq far")])
+            .expect_err("the pull wrote Z");
+    }
+}

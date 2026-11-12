@@ -31,7 +31,7 @@ fn writes(op: Op) -> u8 {
         "clv" => V,
         "bit" => Z | N | V,
         "inc" | "dec" | "inx" | "iny" | "dex" | "dey" | "lda" | "ldx" | "ldy" | "pla" | "and" | "ora" | "eor"
-        | "tax" | "tay" | "txa" | "tya" | "tsx" | "trb" | "tsb" => Z | N,
+        | "tax" | "tay" | "txa" | "tya" | "tsx" | "trb" | "tsb" | "plx" | "ply" => Z | N,
         "jsr" | "plp" | "rti" => ALL,
         _ => 0,
     }

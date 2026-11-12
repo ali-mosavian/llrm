@@ -4,17 +4,27 @@ Cause: `compare_before_step` moved a compare above `clc; adc #1` (#9508). Guard:
 
 Corpus, O1/O2/Os, 81 programs each: the verifier reports 0 violations on the fixed tree; on the tree with the fix removed it reports `c bb17: instruction 3 reads C, cleared by instruction 2 (clc; adc #1)` (`counter_compare_after_step`).
 
-What the verifier covers: the MIR motions before expansion (`compare_before_step`, `forward_old_copies`, copy removal, reload forwarding, `keep_carry_in_c`). What it does not: the text passes after it, which have no MIR flag edge to check.
+Method: every text pass in `peephole.rs`, `peephole_cells.rs`, `cmpzero.rs`, `copyprop.rs`, `sharecmp.rs` and the MIR motions in `alloc.rs` read line by line by two reading agents; each UNSOUND/UNCLEAR re-derived by hand and, where real, given a test that fails first. The verifier checks the MIR motions (`compare_before_step`, `forward_old_copies`, `keep_carry_in_c`, copy removal); it has no view of the text passes.
 
-| rewrite | moves or drops across flags | guard read | verdict |
-|---|---|---|---|
-| `compare_before_step` | compare above a step | the step must leave the carry | fixed |
-| `forward_old_copies`, copy removal, `forward_reloads` | copies (write N/Z only) | verifier | no violation |
-| `keep_carry_in_c` | `SAVEC`..`LOADC` | verifier | no violation |
-| peephole `drop_reloads`, `drop_known_loads`, `fold_known_cells` | loads | `flags_unread_after` | guard read, rewrite not re-derived |
-| `zero_test_through_an_index`, `step_in_place`, `shift_in_place` | `cmp #0`, `clc; adc #1`, shifts | `carry_dead_from` | guard read, rewrite not re-derived |
-| `drop_zero_compares`, `compare_through_an_index`, `cmpzero`, `sharecmp` | compares | branch kind (zero/sign only, carry select only) | guard read, rewrite not re-derived |
-| `branch_on_shift_carry`, `carry_holds_the_bit`, `carry_stays_in_the_flag` | carry producer | `sets_carry` | guard read, rewrite not re-derived |
-| `hoist_common_successor_code`, `hoist_loop_constant`, `drop_flag_reload`, `drop_dead_repeat_load` | code across a branch | not read | open |
+| rewrite | differs after it | verdict |
+|---|---|---|
+| `compare_before_step` | N/Z/V of the compare's run | fixed #9508; V/Z/N after the branch unchecked (no V branch emitted) |
+| `forward_old_copies`, copy removal | N/Z | sound; verifier clean |
+| `keep_carry_in_c` | A, N/Z | sound at removal; verifier guards what later passes add |
+| `load_straight_into_a` | N/Z of the deleted load | **unsound**: a zero/sign branch read them; fixed, #9518 |
+| `carry_stays_in_the_flag` | A/X/Y copies of the carry byte, Z/N of the `lsr` | **unsound**: fixed, #9518 |
+| `arithmetic_chain_in_a` | A after the chain | **unsound**: fixed, #9518 |
+| `dead_from(A)` | `bit` read as no read | **unsound**: fixed, #9518 |
+| `flagcheck` writes table | `plx`/`ply` missing | instrument gap: fixed in #9511 |
+| `drop_dead_stores`, `store_then_index_load`, `fold_temp_operand`, `fold_spill_copy` | cells, X | sound |
+| `chain_ends_in_a`, `shift_loop_in_a`, `forward_cell_copy`, `coalesce_copy`, `carry_holds_the_bit` | cells, A | sound |
+| `copyprop`, `drop_reloads`, `drop_known_loads`, `fold_known_cells`, `compare_through_an_index` | N/Z of removed loads | sound; `flags_unread_after` guards each |
+| `drop_zero_compares`, `cmpzero` | C of a dropped `cmp #0` | sound: no flag lives across blocks (`redo_compare`) |
+| `hoist_common_successor_code`, `drop_flag_reload`, `drop_dead_repeat_load` | code across a branch | sound |
+| `hoist_loop_constant` | a constant hoisted out of a loop with a second entry | latent: needs an irreducible loop; none seen in the corpus |
+| `step_in_place` | V of `clc; adc #1` | latent: no V branch is emitted |
+| `sharecmp` | A, N/Z, V | dead code: nothing builds `CMOV` after `expand_selects` |
 
-The run-output corpus passes at all three levels with every text pass on. A line-by-line check of the text passes, and the `hoist_*` rows, is open.
+Guard notes, none reachable from the compiler's output today: `flags_unread_after` assumes a `jmp` leaves the block; `is_cell` matches by prefix; `fold_temp_operand` compares pointer names only.
+
+The run-output corpus passes at all three levels with every text pass on (81 programs, O1/O2/Os; the carry-byte and load fixes change no cell).
