@@ -5,6 +5,16 @@ never reached a result left no FAILED row either, so the tally counted only the 
 """
 
 
+def incomparable(source):
+    """`WHY; twin NAME` for a program whose SDCC columns are not a bar, from its `// bar: not comparable (WHY); twin NAME` line,
+    or None. SDCC compiles a different program when the two compilers lay the same struct out differently
+    (volatile_bitfield, 2026-11-12: `f:15` at bit 3 under clang's packed layout, at a byte under SDCC's: +223 B read as a gap)."""
+    for line in source.splitlines():
+        if line.startswith("// bar: not comparable"):
+            return line.removeprefix("// bar: not comparable").strip().removeprefix("(").replace("); twin ", "; twin ").rstrip(")")
+    return None
+
+
 def dropped(expected, results, required=lambda tag: tag == "ours", excused=()):
     """`{program: reason}` for every program of `expected` without a row whose column `required` accepts (`ours`).
 

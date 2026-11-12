@@ -24,6 +24,17 @@ class CompileLimit(unittest.TestCase):
         self.assertEqual(done.returncode, run.CPU_LIMIT)
 
 
+class NotABar(unittest.TestCase):
+    def test_the_bitfield_row_names_its_twin_and_the_twin_has_a_bar(self):
+        """volatile_bitfield read +223 B against SDCC for a struct SDCC lays out differently (`f:15` at bit 3 under clang, at a
+        byte under SDCC): an instrument mismatch, not a code gap. Its SDCC columns are not a bar; the byte-aligned twin is."""
+        corpus = run.ROOT / "tests" / "run" / "c"
+        why = guard.incomparable((corpus / "volatile_bitfield.c").read_text())
+        self.assertIn("twin volatile_bitfield_aligned", why or "")
+        self.assertTrue((corpus / "volatile_bitfield_aligned.c").exists())
+        self.assertIsNone(guard.incomparable((corpus / "volatile_bitfield_aligned.c").read_text()))
+
+
 class RowCount(unittest.TestCase):
     def test_a_program_with_no_row_fails_the_run_and_is_named(self):
         """The sweep printed `112 programs 0 failed` with 3 rows missing (2026-11-09): a program that left neither an
