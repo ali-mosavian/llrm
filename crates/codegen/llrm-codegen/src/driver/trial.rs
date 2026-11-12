@@ -285,8 +285,9 @@ fn compiled_module_at_o1(
 
 /// The -Os trials. The base compile notes what each dimension could reverse. Each noted dimension is compiled
 /// against the base alone, priced on the functions that differ (the whole module where they are half of it) and
-/// kept or put back; the dimensions that stay are compiled together once. The mid-end runs `1 + k` times for `k`
-/// noted dimensions, plus one where two or more stay, where nesting them ran it `2^k` times.
+/// kept or put back; the dimensions that stay are added one at a time and priced against the code so far. The mid-end
+/// runs `1 + k` times for `k` noted dimensions, plus one for each that stays after the first, where nesting them ran
+/// it `2^k` times.
 fn compiled_module_at_size(
     module: llrm_mir::module::Module,
     name: &str,
@@ -345,20 +346,30 @@ fn compiled_module_at_size(
             kept.push((dimension, Err(program)));
         }
     }
-    let chosen = match kept.len() {
-        0 => return with_leaf_trial(base, name, options, unpadded),
-        1 => match kept.pop() {
-            Some((_, Ok(variant))) => variant,
-            Some((_, Err(program))) => built(program, name, &again)?,
-            None => unreachable!(),
-        },
-        _ => {
-            let all: Vec<Dimension> = kept.iter().map(|(one, _)| *one).collect();
-            let program = compiled_with(&all, || optimized_program(module, &again))?;
-            let _ = Noted::take();
-            built(program, name, &again)?
-        }
+    // The first dimension that stayed is the variant already priced against the base. Each further one is added to
+    // it and priced against the code so far: a dimension's gain does not carry over when another changed the loops
+    // (x_popcount: the unrotated loops and the hot rotations each paid alone and cost clocks together).
+    let mut kept = kept.into_iter();
+    let Some((first, variant)) = kept.next() else { return with_leaf_trial(base, name, options, unpadded) };
+    let mut accepted = vec![first];
+    let mut chosen = match variant {
+        Ok(variant) => variant,
+        Err(program) => built(program, name, &again)?,
     };
+    for (dimension, _) in kept {
+        accepted.push(dimension);
+        let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
+        let _ = Noted::take();
+        let together = built(program, name, &again)?;
+        let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options)));
+        let pays =
+            matches!((price(&chosen.built), price(&together.built)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
+        if pays {
+            chosen = together;
+        } else {
+            accepted.pop();
+        }
+    }
     stage_files(options, "", &chosen.built)?;
     with_leaf_trial(chosen, name, options, unpadded)
 }
