@@ -196,13 +196,6 @@ pub fn target_lowering_with(
     // `RTLIB::MUL_I64`: what `forceExpandWideMUL` calls for the product of two
     // `i32`s (a `smul.fix` with no `MULHS`, as the 68000's and the pin's)
     tl.set_libcall_name(Mul, MVT::I64, "__muldi3");
-    // the whole product of two `i64`s is one call in a function tuned for size,
-    // as gcc's: ~100 B of 16-bit partial products at the 68000 and 68010
-    // against a call of ~14 B and one routine. The 68020 to the 68040 reach it
-    // only past the `mulu.l` form `expandMUL` takes first. DEVIATE: the pin
-    // calls at every level it has no `MULHU`. Owner m68k. Exit: none (speed
-    // keeps the partial products, which beat the call in clocks).
-    tl.set_size_only_libcall_name(Mul, MVT::I64, "__muldi3");
     // `setMinStackArgumentAlignment`: the pin's M68k leaves it at 1, so its
     // `va_arg` rounds the list to the type's alignment (2 for an `i32`) with
     // `addq #1; and #-2`. Every stack argument takes a 4-byte slot (gcc's

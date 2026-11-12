@@ -1,27 +1,54 @@
-//! A 64-bit multiply of two variables in a function built for size was ~100 B
-//! of 16-bit partial products and `__mulsi3` calls at the 68000 and 68010
-//! (int64_divmod_edges -Os: `pair` 402 B against gcc's 236, `main` 728 against
-//! 410). One `__muldi3` call is the size routine, as `__muldi3` is gcc's.
-//! Speed levels keep the partial products.
+//! A module built for size calls `__muldi3` for its `i64` products when the
+//! calls save more than the routine costs (134 B at the 68000): int64_divmod_edges
+//! -Os was 1354 B of 16-bit partial products against gcc's 838. One site stays
+//! inline (sfm16_float -Os: -64 B in the object, +72 B linked). Speed keeps the
+//! partial products.
 
-use llrm_m68k::driver::{Level, assembly, cpu_of};
+use llrm_m68k::compile::{Options, text_with};
+use llrm_m68k::dagisel::hooks::Cpu;
 
-const IR: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
-define i64 @f(i64 %a, i64 %b) {\n  %r = mul i64 %a, %b\n  ret i64 %r\n}\n";
+const HEAD: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n";
+
+/// `sites` functions, each the product of two variable `i64`s.
+fn products(
+    sites: usize,
+    attrs: &str,
+) -> String {
+    let mut ir = HEAD.to_owned();
+    for n in 0..sites {
+        ir += &format!("define i64 @f{n}(i64 %a, i64 %b) {attrs} {{ %r = mul i64 %a, %b ret i64 %r }}\n");
+    }
+    ir
+}
+
+fn calls(
+    cpu: Cpu,
+    sites: usize,
+    attrs: &str,
+) -> bool {
+    let options = Options { mid_end: false, ..Options::default() };
+    let module = llrm_mir::parse::module(&products(sites, attrs)).expect("parses");
+    let text = text_with(&module, "f0", cpu, options).expect("compiles");
+    text.contains("__muldi3")
+}
 
 #[test]
-fn a_size_built_variable_i64_multiply_is_one_muldi3_call() {
-    for cpu in ["68000", "68010"] {
-        let text = assembly(IR, cpu_of(cpu).unwrap(), Level::Os).expect("compiles");
-        assert!(text.contains("__muldi3"), "{cpu}: no call:\n{text}");
-        assert!(!text.contains("mulu"), "{cpu}: partial products:\n{text}");
+fn a_size_module_with_several_i64_products_calls_muldi3() {
+    for cpu in [Cpu::M68000, Cpu::M68010] {
+        assert!(calls(cpu, 3, "optsize"), "{cpu:?}: partial products at -Os");
     }
 }
 
 #[test]
-fn a_speed_built_variable_i64_multiply_keeps_the_partial_products() {
-    for cpu in ["68000", "68010"] {
-        let text = assembly(IR, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
-        assert!(!text.contains("__muldi3"), "{cpu}: a call at speed:\n{text}");
+fn a_single_i64_product_stays_inline_at_size() {
+    for cpu in [Cpu::M68000, Cpu::M68010] {
+        assert!(!calls(cpu, 1, "optsize"), "{cpu:?}: a call for one site pays the routine for nothing");
+    }
+}
+
+#[test]
+fn a_speed_built_module_keeps_the_partial_products() {
+    for cpu in [Cpu::M68000, Cpu::M68010] {
+        assert!(!calls(cpu, 3, ""), "{cpu:?}: a call at speed");
     }
 }
