@@ -216,13 +216,24 @@ fn tool(name: &str) -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_llrm-qb")).with_file_name(name)
 }
 
-#[test]
-fn test_every_file_under_tests_check_satisfies_its_check_lines() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/check");
-    let mut all = Vec::new();
-    files(&root, &mut all);
-    all.sort();
-    let (mut ran, mut failures) = (0, Vec::new());
+/// What a pass over the check files did.
+#[derive(Default)]
+struct Ran {
+    ran: usize,
+    failures: Vec<String>,
+    /// The toolchain variables an `llrm-cc` RUN line needed and `env` lacked, with the lines skipped for it.
+    skipped: std::collections::BTreeMap<&'static str, usize>,
+}
+
+/// Every RUN line of `all`; one that drives `llrm-cc` is skipped, and counted under the variables it lacks, where
+/// `env` lacks a toolchain variable it needs. Without that skip each such line failed with the same message: 115
+/// false reds on a box without the Open Watcom headers.
+fn run_checks(
+    root: &Path,
+    all: Vec<PathBuf>,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Ran {
+    let mut done_all = Ran::default();
     for path in all {
         let Ok(source) = std::fs::read_to_string(&path) else { continue };
         for line in run_lines(&source) {
@@ -234,6 +245,13 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
             let arguments: Vec<String> =
                 words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
             let done = if words[0] == "llrm-cc" {
+                let missing = common::cc::missing_env_for(&arguments, &env);
+                if !missing.is_empty() {
+                    for name in missing {
+                        *done_all.skipped.entry(name).or_default() += 1;
+                    }
+                    continue;
+                }
                 // llrm-c's arguments, served by llrm-cc over the pinned clang
                 // (needs the Open Watcom tree, LLRM_CLANG_M16).
                 common::cc::llrm_c().args(&arguments).output()
@@ -242,18 +260,48 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
             }
             .unwrap_or_else(|error| panic!("{}: {}: {error}", path.display(), words[0]));
             let output = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
-            let name = path.strip_prefix(&root).unwrap().display();
+            let name = path.strip_prefix(root).unwrap().display();
             if done.status.success() == must_fail {
-                failures.push(format!("{name}: `{line}` {}", if must_fail { "succeeded" } else { "failed" }));
+                done_all.failures.push(format!("{name}: `{line}` {}", if must_fail { "succeeded" } else { "failed" }));
             } else if let Err(why) = filecheck(&output, &for_run(directives(&source), &line)) {
-                failures.push(format!("{name}: {why}\n{output}"));
+                done_all.failures.push(format!("{name}: {why}\n{output}"));
             }
-            ran += 1;
+            done_all.ran += 1;
         }
     }
+    done_all
+}
+
+#[test]
+fn test_every_file_under_tests_check_satisfies_its_check_lines() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/check");
+    let mut all = Vec::new();
+    files(&root, &mut all);
+    all.sort();
+    let Ran { ran, failures, skipped } = run_checks(&root, all, common::cc::toolchain_env);
     println!("{ran} RUN lines");
-    assert!(ran > 0, "premise: some file under tests/check has a RUN line");
+    if !skipped.is_empty() {
+        println!("SKIPPED llrm-cc RUN lines, toolchain missing (lines per variable): {skipped:?}");
+    }
+    assert!(ran > 0 || !skipped.is_empty(), "premise: some file under tests/check has a RUN line");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A box without the Open Watcom headers, the pinned clang or the m16 clang failed every `llrm-cc` RUN line (115 on
+/// 2026-11-12): they are skipped, named once, and what does not need the toolchain still runs.
+#[test]
+fn test_a_missing_toolchain_skips_the_llrm_cc_lines_instead_of_failing_them() {
+    let dir = std::env::temp_dir().join(format!("check-skip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("one.c");
+    std::fs::write(&file, "// RUN: llrm-cc -m32 -S %s\n// CHECK: nothing\n").unwrap();
+    let none = |_: &str| None;
+    let result = run_checks(&dir, vec![file], none);
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(result.ran, 0);
+    assert!(result.failures.is_empty(), "{:?}", result.failures);
+    assert_eq!(result.skipped.get("LLRM_PIN_CLANG"), Some(&1));
+    assert_eq!(result.skipped.get("OW_TREE"), Some(&1));
 }
 
 /// The directives that hold of the run `line`.
