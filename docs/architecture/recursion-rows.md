@@ -137,5 +137,5 @@ The pin's `FunctionSpecializer` solves, specialises and solves again before the 
 ipa-cp clones at -O2 on x86-m32, x86-m64 and arm64 (`Tti::ipa_cp_clones_at_speed`; gcc clones at -O3 only), net of clocks + 0.3125 B (arm64: instructions + 0.3 B). The loop hint counts only up to `max-completely-peel-times` trips (IPACP-LOOPS).
 
 - Wins: m32 -O2 queens -12.0 k clk, frames -48 k, quicksort -5.3 k, x_jpeg_fixed -42 k, bintree -1.6 k; m64 queens -O2 -9.4% instructions, -O3 -25%; arm64 queens -8.4 k.
-- Worse: m32 -O2 x_spill_store_order +22.4 k (the clone is inlined before the unroll that specialised it per mode); m32 -O3 frames +48 k vs release/next (the chain's size is now priced, so fib(24) is no longer cloned; the same clone made m64 fib -O2 +50%); arm64 frames +30 k.
-- Fix: find why the fib clone chain wins at m32 and loses at m64; defer a clone's last-call inline past the unroll.
+- Worse: m32 -O2 x_spill_store_order +22.4 k (the clone is inlined before the unroll that specialised it per mode); m32 -O3 frames +48 k and m64 -O2/-O3 frames +34 k vs release/next or the unchained clones (without the fib(24) chain, nothing merges fib's duplicate pure calls; with it m64 frames wins and m64 fib(20) loses 50%).
+- Fix: price a chain by whether its clones are inlined back into one caller (IPACP-SHARED is the conservative cut); defer a clone's last-call inline past the unroll.

@@ -319,8 +319,41 @@ pub fn cloned(
         for context in &contexts {
             let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs);
             let level = state.made.get(&origin).copied().unwrap_or(0);
-            let (chain, chain_size) =
-                chain_benefit(module, layout, name, body, context, &callees, costs, level, &mut BTreeMap::new());
+            let mut arrivals = BTreeMap::new();
+            let (mut chain, mut chain_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                context,
+                &callees,
+                costs,
+                level,
+                &mut BTreeMap::new(),
+                &mut arrivals,
+            );
+            // DEVIATE IPACP-SHARED (owner w10, exit 2026-11-24): gcc credits
+            // every context a function passes to itself. When two clones pass
+            // the same context on (`fib(n - 1)`, `fib(n - 2)`: clone 19 and
+            // clone 18 both call 17), the clones share subproblems: the calls
+            // to one pure callee sit in different functions and nothing merges
+            // them (m64 -O2 fib(20) runs fib(16) three times, +50% clk; arm64
+            // frames +30 k). A chain of single callers is inlined back into one
+            // function; queens' `place(row + 1)` is one.
+            if arrivals.values().any(|&arrived| arrived > 1) {
+                (chain, chain_size) = chain_benefit(
+                    module,
+                    layout,
+                    name,
+                    body,
+                    context,
+                    &callees,
+                    costs,
+                    MAX_CLONES - 1,
+                    &mut BTreeMap::new(),
+                    &mut BTreeMap::new(),
+                );
+            }
             let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
             // GCC's `incorporate_penalties`: a function in a cycle with others,
             // not one that calls itself.
@@ -458,7 +491,9 @@ fn chain_benefit(
     costs: &OperationCosts,
     level: usize,
     memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), (i64, i64)>,
+    arrivals: &mut BTreeMap<Vec<Option<ConstantId>>, usize>,
 ) -> (i64, i64) {
+    *arrivals.entry(known.to_vec()).or_default() += 1;
     if let Some(&done) = memo.get(&(known.to_vec(), level)) {
         return done;
     }
@@ -468,19 +503,13 @@ fn chain_benefit(
     let mut chain_size = size_of;
     let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs);
     let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
-    // DEVIATE IPACP-BRANCH (owner w10, exit 2026-11-24): gcc credits every
-    // context a function passes to itself. Two (`fib(n - 1)`, `fib(n - 2)`)
-    // are subproblems the clones share: the calls to one pure callee land in
-    // different functions and nothing merges them again (m64 -O2 fib(20) runs
-    // fib(16) three times, +50% clk; arm64 frames +30 k). One context, as in
-    // queens' `place(row + 1)`, is a chain.
-    if level + 1 < MAX_CLONES && next.iter().map(|(context, _)| context).filter(|context| context.as_slice() != known).collect::<std::collections::BTreeSet<_>>().len() <= 1 {
+    if level + 1 < MAX_CLONES {
         for (context, frequency) in next {
             if context.as_slice() == known {
                 continue;
             }
             let (after, after_size) =
-                chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo);
+                chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo, arrivals);
             let factor = (MAX_CLONES - level) as i64;
             benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
             chain_size = chain_size.saturating_add(after_size);
