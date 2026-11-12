@@ -461,6 +461,29 @@ mod tests {
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "movzx");
     }
+    /// Real mode sizes exactly (`0F B6` is a byte longer there, and the 66h prefix more): the same reload at 16
+    /// bits keeps the byte load, as before the frame-cell exception.
+    #[test]
+    fn a_byte_reload_of_a_frame_slot_stays_at_16_bits() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -54)), 1);
+        let what = copy(reg(RegId::CL, 1), Loc::Mem(cell));
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 16;
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false }.fixed(&body);
+        let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
+        assert_eq!(&*name, "mov");
+    }
     /// `mov cl, [esi]` then nothing: the extending load is a byte longer
     /// (`8A /r`, `0F B6 /r`). Where bytes are strict (-O1) it stays; at speed
     /// it widens. memory_expansion -O1 was +62 B at m64.
