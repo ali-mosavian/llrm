@@ -146,6 +146,17 @@ impl CombineHooks for WasmCombines {
         false
     }
 
+    /// `TargetLowering::shouldNormalizeToSelectSequence`: wasm keeps the pin's
+    /// default, true unless the select's type is split into registers, so
+    /// `select (and c0, c1), x, y` is `select c0, (select c1, x, y), y`.
+    fn normalize_to_select_sequence(
+        &self,
+        vt: EVT,
+        _cond_vt: EVT,
+    ) -> bool {
+        !(vt.is_integer() && vt.size_in_bits() > 64)
+    }
+
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
