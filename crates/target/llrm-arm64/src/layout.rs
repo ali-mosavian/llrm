@@ -748,10 +748,11 @@ pub fn fold(
             }
         }
         let pinned = place(&graph);
-        // DEVIATE: the old first-successor chain is kept unless placement
-        // executes fewer jumps by the same frequencies; the pin's
+        // DEVIATE: the old first-successor chain is kept where placement
+        // executes more jumps by the same frequencies; the pin's
         // placement ignores that cost (quicksort's swap path gains a
-        // `b`). Exit: none while the pin's does.
+        // `b`). On a tie the pin's order stands. Exit: none while the pin's
+        // does.
         let jumps = |order: &[usize]| -> u128 {
             order
                 .iter()
@@ -808,7 +809,7 @@ pub fn fold(
             }
             placed
         };
-        let order = if jumps(&pinned) < jumps(&identity) { pinned } else { identity };
+        let order = if jumps(&pinned) <= jumps(&identity) { pinned } else { identity };
         order.into_iter().map(|new| reachable[new]).collect()
     };
     let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();

@@ -38,6 +38,7 @@ pub mod z80isd {
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const TSTS: ISD = ISD::Target(ids::TSTS);
+    pub const BIT: ISD = ISD::Target(ids::BIT);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
 }
 
@@ -770,6 +771,49 @@ fn translate_cc(
     }
 }
 
+/// The byte and the bit of it that `value` is, as far as a compare with zero can tell: `x & (1 << n)`, in a byte or
+/// a word, and the same after the combiner narrowed it to the byte that holds the bit (`trunc (srl (and w, 1 << n), 8)`).
+fn single_bit_of(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> Option<(SDValue, u32)> {
+    let low_byte = |dag: &mut SelectionDAG, word: SDValue| match dag.value_type(word) {
+        EVT::I8 => word,
+        _ => dag.get_node(ISD::Truncate, EVT::I8, &[word]),
+    };
+    let high_byte = |dag: &mut SelectionDAG, word: SDValue| {
+        let eight = dag.get_constant(8, EVT::I8);
+        let high = dag.get_node(ISD::Srl, EVT::I16, &[word, eight]);
+        dag.get_node(ISD::Truncate, EVT::I8, &[high])
+    };
+    let single = |dag: &SelectionDAG, and: SDValue| {
+        (dag.opcode(and) == ISD::And)
+            .then(|| dag.constant(dag.operand(and, 1)).filter(|bits| bits.is_power_of_two()))
+            .flatten()
+            .map(|bits| (dag.operand(and, 0), bits.trailing_zeros()))
+    };
+    match dag.opcode(value) {
+        ISD::And if matches!(dag.value_type(value), EVT::I8 | EVT::I16) => {
+            let (word, index) = single(dag, value)?;
+            let byte = if index < 8 { low_byte(dag, word) } else { high_byte(dag, word) };
+            Some((byte, index & 7))
+        }
+        ISD::ZeroExtend | ISD::AnyExtend if dag.value_type(dag.operand(value, 0)) == EVT::I8 => {
+            single_bit_of(dag, dag.operand(value, 0))
+        }
+        ISD::Truncate => {
+            let shifted = dag.operand(value, 0);
+            let (inner, by) = (dag.operand(shifted, 0), dag.constant(dag.operand(shifted, 1))?);
+            if dag.opcode(shifted) != ISD::Srl || dag.value_type(shifted) != EVT::I16 || by != 8 {
+                return None;
+            }
+            let (word, index) = single(dag, inner)?;
+            (index >= 8).then(|| (high_byte(dag, word), index - 8))
+        }
+        _ => None,
+    }
+}
+
 /// The condition code and flags of `op0 cc op1`. A comparison of a signed value
 /// with zero is the test of its sign bit (`bit 7`), not a compare of the value
 /// with a flipped copy: `x < 0` is `NZ`, `x >= 0` is `Z`.
@@ -792,6 +836,15 @@ fn compare(
     if matches!(cc, SetLt | SetGe) && dag.constant(op1) == Some(0) {
         let flags = dag.get_node(z80isd::TSTS, EVT::I8, &[op0]);
         return (if cc == SetLt { cond::NZ } else { cond::Z }, flags);
+    }
+    // `(x & (1 << n)) == 0` is `bit n, x`: the Z flag is set when the bit is clear. X86's `LowerAndToBT`, on the byte
+    // of the word that holds the bit (`bit` has no word form).
+    if matches!(cc, SetEq | SetNe) && dag.constant(op1) == Some(0) {
+        if let Some((byte, index)) = single_bit_of(dag, op0) {
+            let bit = dag.get_constant(u128::from(index), EVT::I8);
+            let flags = dag.get_node(z80isd::BIT, EVT::I8, &[byte, bit]);
+            return (if cc == SetEq { cond::Z } else { cond::NZ }, flags);
+        }
     }
     // `cp (hl)` takes the memory operand second: a loaded byte compared with a
     // register is compared the other way round, with the order of the

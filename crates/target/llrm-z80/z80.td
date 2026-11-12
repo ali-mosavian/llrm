@@ -91,6 +91,9 @@ def Z80stsp : SDNode<"Z80ISD::STSP", SDT_Z80StSP, [SDNPHasChain, SDNPMayStore]>;
 // The sign of a byte or word as the Z flag: bit 7 of the byte, or of the high byte. Z is set when the sign bit is clear.
 def SDTZ80Tsts : SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisInt<1>]>;
 def Z80tsts : SDNode<"Z80ISD::TSTS", SDTZ80Tsts>;
+// Bit n of a byte as the Z flag, set when the bit is clear (`bit n, r`): `(x & (1 << n)) == 0`.
+def SDTZ80Bit : SDTypeProfile<1, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>;
+def Z80bit : SDNode<"Z80ISD::BIT", SDTZ80Bit>;
 // Nothing lowers to these two: they exist so the A-based byte forms below are in the instruction tables the emitter uses.
 def Z80ld8a : SDNode<"Z80ISD::LD8A", SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayLoad]>;
 def Z80st8a : SDNode<"Z80ISD::ST8A", SDTypeProfile<0, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayStore]>;
@@ -278,6 +281,7 @@ let Defs = [A] in {
   def CP16i : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, (i16 imm:$b)))]>;
 }
 def BIT7_8 : Z80Inst<(outs Flags:$f), (ins GR8:$a), "bit 7, $a", [(set i8:$f, (Z80tsts i8:$a))]>;
+def BIT8 : Z80Inst<(outs Flags:$f), (ins GR8:$a, i8imm:$n), "bit $n, $a", [(set i8:$f, (Z80bit i8:$a, (i8 imm:$n)))]>;
 def BIT7_16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "bit7 $a", [(set i8:$f, (Z80tsts i16:$a))]>;
 let isBranch = 1, isTerminator = 1 in {
   def JPNZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp nz, $t", [(Z80brcond bb:$t, (i8 0), i8:$f)]>;
