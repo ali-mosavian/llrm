@@ -429,9 +429,16 @@ fn plan_loop(
                 && total(cost.c.insns, cost.c.setup_cost) + u64::from(added * (symbol_setup - 1))
                     > total(pin_cost.c.insns, pin_cost.c.setup_cost)
         };
+        // DEVIATE LG3: where bytes outrank clocks (-O1, -Os) the code is counted
+        // once, in the loop and out of it: the end-biased solution is taken
+        // only if its instructions plus setup do not exceed the pin's. It trades
+        // a compare for bases and a negation (x_radix -O1 +37 B, x_reverse's
+        // pair of base+index accesses), which O1's bytes axis does not repay.
+        let bytes_outweigh_saving = bytes_strict && spent > saved;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving
+                || bytes_outweigh_saving
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
