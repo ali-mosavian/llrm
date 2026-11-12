@@ -786,6 +786,29 @@ impl ProgramPass for Walk {
                                     };
                                     (saved, growth)
                                 };
+                                // DEVIATE INL-SPEED-OS (`Tti::inline_trial_speed_at_size`): the clocks the copies
+                                // save at a hot site, weighed by its frequency, against a few bytes a site.
+                                let speed_at_size = match tti.inline_trial_speed_at_size() {
+                                    Some(least) if size != crate::inlinecost::CallerSize::Speed => {
+                                        let trips = calls
+                                            .iter()
+                                            .map(|one| site_frequencies.get(one).copied().unwrap_or(1.0).max(1.0))
+                                            .sum::<f64>()
+                                            / calls.len() as f64;
+                                        let now = module.global(id).function().expect("a body");
+                                        let run: i64 = calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_clocks(module, &program.layout, tti, body))
+                                            .sum();
+                                        let once = kept_clocks + run - function_clocks(module, &program.layout, tti, now);
+                                        trips >= least as f64
+                                            && (once as f64 * trips) as i64 > 0
+                                            && growth <= INLINE_SPEED_BYTES_PER_SITE * calls.len() as i64
+                                    }
+                                    _ => false,
+                                };
                                 if remarks {
                                     eprintln!(
                                         "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved, {} bytes{})",
@@ -833,7 +856,7 @@ impl ProgramPass for Walk {
                                         .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
                                         .collect(),
                                 });
-                                let ruled = trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes);
+                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes);
                                 let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
@@ -1682,6 +1705,9 @@ const HOT_TRIALS: usize = 4;
 /// goes with its last calls, accepted only by the credit for the callee (the copies alone count more), must also leave the bytes no larger: the count priced a float compare as an add, and
 /// `canon` (a libcall per site on m68k) was inlined five times for +28 B at -Os.
 #[allow(clippy::too_many_arguments)]
+/// Bytes a site may add where INL-SPEED-OS keeps a trial for the clocks it saves.
+const INLINE_SPEED_BYTES_PER_SITE: i64 = 4;
+
 fn trial_accepted(
     byte_gate: bool,
     by_bytes: bool,

@@ -37,8 +37,10 @@
 //!   `eq`/`ne` exit test). Exit: the vector trip count from the SCEV expander
 //!   when loops with a computed trip count are accepted.
 //! - LVS2 the remainder is the scalar loop only (VP3).
-//! - LVS3 the exit block's phis take invariant values only (a loop-defined
-//!   value used outside is refused by the recipe extraction, LVP2).
+//! - LVS3 the exit block's phis take invariant values only, but the final value
+//!   of a reduction (the interleaved loops' `bin.rdx`, LVI2), which the middle
+//!   block computes; any other loop-defined value used outside is refused by
+//!   the recipe extraction, LVP2.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::{Position, ValueMap};
@@ -63,6 +65,20 @@ pub(crate) struct Shape {
     pub compare: InstId,
     pub bound_operand: usize,
     pub index_ty: TypeId,
+}
+
+/// The blocks around a widened loop.
+pub(crate) struct Skeleton {
+    /// Where the loop's invariants are made and the loop is entered from
+    /// (`vector.ph`, or the preheader where the checks folded).
+    pub vector_ph: BlockId,
+    /// `middle.block`, between the loop and what follows it: made where the loop
+    /// has reductions to combine.
+    pub middle: Option<BlockId>,
+    /// `scalar.ph`, where the remainder resumes (a run-time trip count).
+    pub scalar_ph: Option<BlockId>,
+    /// The remainder loop and the copy of each instruction of the original.
+    pub remainder: Option<(BlockId, Vec<(InstId, InstId)>)>,
 }
 
 /// An integer constant's value, masked to its type.
@@ -125,7 +141,8 @@ fn end_with(
 /// the checks folded).
 ///
 /// `None`, with the loop untouched, where a constant trip count is under
-/// `vf_ic`: the vector loop would not run.
+/// `vf_ic`: the vector loop would not run. `with_middle`: the loop has
+/// reductions, so a middle block is made even where the checks fold.
 pub(crate) fn add_remainder(
     context: &mut Context,
     function: &mut Function,
@@ -133,7 +150,8 @@ pub(crate) fn add_remainder(
     metadata: &[MetadataNode],
     shape: Shape,
     vf_ic: u64,
-) -> Option<BlockId> {
+    with_middle: bool,
+) -> Option<Skeleton> {
     let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty } = shape;
     let bits = bits_of(context, index_ty);
     let preheader_term = function.terminator(preheader).expect("a terminated preheader");
@@ -167,6 +185,12 @@ pub(crate) fn add_remainder(
     }
     function.set_block_name(remainder, &format!("{header_name}.scalar"));
     function.insert_block(remainder, Some(header)).expect("a new block");
+    let copies: Vec<(InstId, InstId)> = function
+        .iter_block(header)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .zip(function.iter_block(remainder).collect::<Vec<_>>())
+        .collect();
 
     // The copy of the induction phi stands where the original does.
     let at = function.iter_block(header).position(|inst| inst == primary).expect("a phi of the loop");
@@ -180,13 +204,26 @@ pub(crate) fn add_remainder(
     };
 
     let vector_ph;
+    let mut middle_block = None;
+    let mut scalar_block = None;
     if let (Some(start_value), Some(bound_value)) = (start_value, bound_value) {
         // Both ends known: the checks fold (the pin's constant folder).
         let trip = bound_value.wrapping_sub(start_value) & mask(bits);
         let end = constant(context, start_value + (trip - trip % u128::from(vf_ic)));
         function.set_operand(compare, bound_operand, end);
-        edges::retarget(function, exit_term, exit, remainder);
-        function.set_operands(remainder_phi, from_arms(&[(end, header), (stepped, remainder)]));
+        let from = if with_middle {
+            // The reductions are combined between the loop and its remainder.
+            let middle = function.create_block(Some("middle.block"));
+            function.insert_block(middle, Some(header)).expect("a new block");
+            edges::retarget(function, exit_term, exit, middle);
+            end_with(function, middle, void, vec![Operand::Block(remainder)]);
+            middle_block = Some(middle);
+            middle
+        } else {
+            edges::retarget(function, exit_term, exit, remainder);
+            header
+        };
+        function.set_operands(remainder_phi, from_arms(&[(end, from), (stepped, remainder)]));
         retarget_exit_phis(function, exit, header, &[remainder]);
         vector_ph = preheader;
     } else {
@@ -238,6 +275,15 @@ pub(crate) fn add_remainder(
         let entering: Vec<_> =
             incoming.iter().map(|&(value, from)| (value, if from == preheader { vector } else { from })).collect();
         function.set_operands(primary, from_arms(&entering));
+        // The reductions' phis are entered from there too.
+        for phi in edges::phis(function, header) {
+            if phi == primary {
+                continue;
+            }
+            let moved: Vec<_> =
+                arms(function, phi).into_iter().map(|(value, from)| (value, if from == preheader { vector } else { from })).collect();
+            function.set_operands(phi, from_arms(&moved));
+        }
         function.set_operand(compare, bound_operand, end);
         edges::retarget(function, exit_term, exit, middle);
 
@@ -257,10 +303,30 @@ pub(crate) fn add_remainder(
         function.set_operands(remainder_phi, from_arms(&[(resume, scalar_ph), (stepped, remainder)]));
         retarget_exit_phis(function, exit, header, &[middle, remainder]);
         vector_ph = vector;
+        middle_block = Some(middle);
+        scalar_block = Some(scalar_ph);
     }
     mark_vectorized(context, declared, metadata, function, exit_term);
     mark_vectorized(context, declared, metadata, function, remainder_term);
-    Some(vector_ph)
+    Some(Skeleton { vector_ph, middle: middle_block, scalar_ph: scalar_block, remainder: Some((remainder, copies)) })
+}
+
+/// The middle block of a loop with no remainder (the trip count is a multiple of
+/// the lanes): between the loop and the block it leaves to, where the
+/// reductions are combined.
+pub(crate) fn add_middle(
+    function: &mut Function,
+    shape: Shape,
+) -> BlockId {
+    let Shape { header, exit, .. } = shape;
+    let exit_term = function.terminator(header).expect("a terminated loop");
+    let void = function.instruction(exit_term).ty;
+    let middle = function.create_block(Some("middle.block"));
+    function.insert_block(middle, Some(header)).expect("a new block");
+    edges::retarget(function, exit_term, exit, middle);
+    end_with(function, middle, void, vec![Operand::Block(exit)]);
+    retarget_exit_phis(function, exit, header, &[middle]);
+    middle
 }
 
 /// The exit block's phis: the arm from the loop `old` now comes from each of
