@@ -1,0 +1,13 @@
+# flags: -O2 -march=i486 | -Os -march=i486
+# i32(f) of the edges that pass: the minimum, a fraction above it, the maximum and a fraction past it.
+var low: f64 = -2147483648.0
+var below: f64 = -2147483648.9
+var high: f64 = 2147483647.0
+var above: f64 = 2147483647.9
+
+fn main() -> i16:
+    print(i32(low))
+    print(i32(below))
+    print(i32(high))
+    print(i32(above))
+    return 0

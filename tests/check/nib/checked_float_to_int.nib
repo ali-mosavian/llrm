@@ -1,0 +1,27 @@
+# RUN: llrm-nib %s -O2 -march=i486 -S -o /dev/stdout
+# The range check of i32(f) and i16(f) is on the integer: the float is converted into a wider integer
+# (the control word already truncates), and the check compares that, so no float bound sits in the pool
+# and no fcom runs: the two bounds were 31 bytes of code and 12 of data per site (floats m16 -O1 102 B
+# against bcc's 89; qmove has three sites).
+# CHECK-LABEL: _conv proc
+# CHECK: fistp qword ptr
+# CHECK-NOT: fcom
+# CHECK: N$ECNV
+# CHECK: _conv endp
+# CHECK-LABEL: _conv16 proc
+# CHECK: fistp dword ptr
+# CHECK-NOT: fcom
+# CHECK: N$ECNV
+# CHECK: _conv16 endp
+@noipa
+fn conv(x: f64) -> i32:
+    return i32(x)
+
+@noipa
+fn conv16(x: f64) -> i16:
+    return i16(x)
+
+fn main() -> i16:
+    print(conv(1.5))
+    print(conv16(1.5))
+    return 0

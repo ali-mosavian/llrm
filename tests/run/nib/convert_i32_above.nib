@@ -1,0 +1,9 @@
+# flags: -O2 -march=i486 | -Os -march=i486
+# i32(f) of 2^31 panics: past the integer's range or not a number.
+var over: f64 = 2147483648.0
+
+fn main() -> i16:
+    print("start")
+    let x: f64 = over
+    print(i32(x))
+    return 0

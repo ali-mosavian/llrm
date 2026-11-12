@@ -1,0 +1,9 @@
+# flags: -O2 -march=i486 | -Os -march=i486
+# i32(f) of a NaN panics: past the integer's range or not a number.
+var zero: f64 = 0.0
+
+fn main() -> i16:
+    print("start")
+    let x: f64 = zero / zero
+    print(i32(x))
+    return 0
