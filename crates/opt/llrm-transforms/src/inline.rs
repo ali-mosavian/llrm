@@ -775,6 +775,13 @@ struct Plan<'a, 'c> {
     peeled: i64,
     frame: u64,
     seq: usize,
+    /// Self-inlining: the copies at this depth and deeper are bounded by the
+    /// growth; those above it are not (they were found to fit whole).
+    budget_from: usize,
+    /// Self-inlining: the deepest copies planned.
+    cap: usize,
+    /// Self-inlining: a copy asked for more than eight times the growth.
+    overflow: bool,
 }
 
 impl<'a> Plan<'a, '_> {
@@ -811,11 +818,17 @@ impl<'a> Plan<'a, '_> {
             // `want_inline_self_recursive_call_p`: the frequency of the
             // call within the body, over the entry's, above the minimum.
             let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
-            if depth > self.caller.depth
+            if depth > self.cap
                 || gcc_work(callee) > self.caller.callee
-                || self.insns + grown > self.caller.growth
                 || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
             {
+                return None;
+            }
+            if depth >= self.budget_from && self.insns + grown > self.caller.growth {
+                return None;
+            }
+            if self.insns + grown > 8 * self.caller.growth {
+                self.overflow = true;
                 return None;
             }
             self.insns += grown;
@@ -1374,37 +1387,61 @@ pub fn expanded_all(
 ) -> Result<usize, String> {
     let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let start = (semantic_count(function), frame(context, caller.layout, function));
-    let mut plan = Plan {
-        context: &*context,
-        caller,
-        available,
-        own: start.0,
-        insns: gcc_insns(function),
-        peeled: 0,
-        frame: start.1,
-        seq: 0,
-    };
-    let mut results = SparseIdMap::default();
-    let mut sites: Vec<(InstId, Planned)> = Vec::new();
-    for call in calls {
-        let instruction = function.instruction(call);
-        let Opcode::Call(info) = &instruction.opcode else { continue };
-        let scope = Scope { function, actuals: None, results: &results };
-        let seen: Vec<Actual> = instruction.operands.iter().map(|&one| scope.actual(plan.context, one, 0)).collect();
-        let target = match constant {
-            Some(sites) => sites.get(&call),
-            None => seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)),
+    let plan_with = |budget_from: usize, cap: usize| {
+        let mut plan = Plan {
+            context: &*context,
+            caller,
+            available,
+            own: start.0,
+            insns: gcc_insns(function),
+            peeled: 0,
+            frame: start.1,
+            seq: 0,
+            budget_from,
+            cap,
+            overflow: false,
         };
-        let Some(target) = target else { continue };
-        plan.peeled = 0;
-        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, None) {
-            if instruction.result.is_some() {
-                results.insert(call, result);
+        let mut results = SparseIdMap::default();
+        let mut sites: Vec<(InstId, Planned)> = Vec::new();
+        for &call in &calls {
+            let instruction = function.instruction(call);
+            let Opcode::Call(info) = &instruction.opcode else { continue };
+            let scope = Scope { function, actuals: None, results: &results };
+            let seen: Vec<Actual> = instruction.operands.iter().map(|&one| scope.actual(plan.context, one, 0)).collect();
+            let target = match constant {
+                Some(sites) => sites.get(&call),
+                None => seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)),
+            };
+            let Some(target) = target else { continue };
+            plan.peeled = 0;
+            if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, None) {
+                if instruction.result.is_some() {
+                    results.insert(call, result);
+                }
+                sites.push((call, planned));
             }
-            sites.push((call, planned));
         }
-    }
-    let end = (plan.own, plan.frame);
+        (plan.own, plan.frame, plan.insns, plan.overflow, sites)
+    };
+    // gcc's `recursive_inlining` takes the call edges by their badness, the
+    // outer ones first: the copies grow a level at a time. Here: the deepest
+    // level that fits whole, then the next level as far as the growth allows.
+    let (own, frame_end, sites) = if caller.self_inlining.is_some() {
+        let mut whole = 0;
+        for level in 1..=caller.depth {
+            let (.., insns, overflow, _) = plan_with(usize::MAX, level);
+            if overflow || insns > caller.growth {
+                break;
+            }
+            whole = level;
+        }
+        let (own, frame, _, _, sites) = plan_with(whole + 1, (whole + 1).min(caller.depth));
+        (own, frame, sites)
+    } else {
+        let (own, frame, _, _, sites) = plan_with(usize::MAX, usize::MAX);
+        (own, frame, sites)
+    };
+    let end = (own, frame_end);
     let mut placed =
         Placed { base: function.entry().and_then(|entry| function.block(entry).first()), ..Placed::default() };
     for (call, planned) in sites.iter().rev() {
