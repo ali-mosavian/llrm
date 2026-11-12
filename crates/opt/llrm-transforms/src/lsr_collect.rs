@@ -41,7 +41,8 @@
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::instructioncost::is_static_alloca;
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::tti::{AddressingMode, Tti};
 use llrm_mir::types::Type as MirType;
@@ -249,26 +250,66 @@ pub fn extract_symbol(
     cx: &Cx,
     s: Scev,
 ) -> (Option<GlobalId>, Scev) {
-    match se.node(s).kind.clone() {
-        ScevKind::Unknown(Operand::Constant(id)) => {
-            if let llrm_mir::context::ConstantKind::Global(global) = cx.context.get(id).kind {
-                return (Some(global), se.get_constant_of_type(cx, se.type_of(s), 0));
+    let global = |cx: &Cx, operand: Operand| match operand {
+        Operand::Constant(id) => match cx.context.get(id).kind {
+            llrm_mir::context::ConstantKind::Global(global) => Some(global),
+            _ => None,
+        },
+        _ => None,
+    };
+    extract_unknown(se, cx, s, &global, false)
+}
+
+/// DEVIATE LU20: the static `alloca` whose address is added in `s`, and `s`
+/// without it. The pin's `ExtractSymbol` looks at the last operand of a sum;
+/// a slot sorts anywhere among them, so every operand is tried.
+pub fn extract_frame_slot(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    s: Scev,
+) -> (Option<ValueId>, Scev) {
+    let slot = |cx: &Cx, operand: Operand| match operand {
+        Operand::Value(value) => match cx.function.value(value).def {
+            ValueDef::Instruction(def) if is_static_alloca(cx.function, def) => {
+                matches!(cx.function.instruction(def).opcode, Opcode::Alloca { .. }).then_some(value)
             }
-            (None, s)
-        }
+            _ => None,
+        },
+        _ => None,
+    };
+    extract_unknown(se, cx, s, &slot, true)
+}
+
+/// The shared walk of `ExtractSymbol`: the first operand `pick` takes, taken
+/// out of the sum or the addrec's start. `any_operand`: not only the last
+/// operand of a sum.
+fn extract_unknown<T: Copy>(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    s: Scev,
+    pick: &dyn Fn(&Cx, Operand) -> Option<T>,
+    any_operand: bool,
+) -> (Option<T>, Scev) {
+    match se.node(s).kind.clone() {
+        ScevKind::Unknown(operand) => match pick(cx, operand) {
+            Some(found) => (Some(found), se.get_constant_of_type(cx, se.type_of(s), 0)),
+            None => (None, s),
+        },
         ScevKind::Add(ops) => {
             let mut ops = ops.to_vec();
-            let last = ops.len() - 1;
-            let (result, rest) = extract_symbol(se, cx, ops[last].scev);
-            if result.is_some() {
-                ops[last] = ScevUse::of(rest);
-                return (result, se.get_add_expr(cx, ops, Flags::default(), 0).scev);
+            let tried = if any_operand { 0..ops.len() } else { ops.len() - 1..ops.len() };
+            for at in tried.rev() {
+                let (result, rest) = extract_unknown(se, cx, ops[at].scev, pick, any_operand);
+                if result.is_some() {
+                    ops[at] = ScevUse::of(rest);
+                    return (result, se.get_add_expr(cx, ops, Flags::default(), 0).scev);
+                }
             }
             (None, s)
         }
         ScevKind::AddRec(ops, header) => {
             let mut ops = ops.to_vec();
-            let (result, rest) = extract_symbol(se, cx, ops[0].scev);
+            let (result, rest) = extract_unknown(se, cx, ops[0].scev, pick, any_operand);
             if result.is_some() {
                 ops[0] = ScevUse::of(rest);
                 return (result, se.get_add_rec_expr(cx, ops, header, Flags::default()).scev);
@@ -681,6 +722,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     if g.base_regs == f.base_regs
                         && g.scaled_reg == f.scaled_reg
                         && g.base_gv == f.base_gv
+                        && g.base_frame == f.base_frame
                         && g.scale == f.scale
                         && g.unfolded_offset == f.unfolded_offset
                     {
@@ -787,6 +829,10 @@ impl<'a, 'b> Collection<'a, 'b> {
         f: &Formula,
     ) -> bool {
         self.insert_attempts += 1;
+        // DEVIATE LU20: a frame base leaves one register to index it.
+        if f.mode().is_none() {
+            return false;
+        }
         let lu = &self.uses[lu_idx];
         // A formula that cannot be expanded is not inserted.
         assert!(
@@ -813,7 +859,17 @@ impl<'a, 'b> Collection<'a, 'b> {
             self.uses[lu_idx].rigid_formula = true;
         }
         let mut f = Formula::default();
-        f.initial_match(se, self.cx, s, self.l);
+        // DEVIATE LU20: the stack slot of an address is its frame base, not a
+        // register, as the target says; the registers are what is left.
+        let mut rest = s;
+        if self.tti.lsr_frame_slot_base() && self.uses[lu_idx].kind == Kind::Address {
+            let (frame, others) = extract_frame_slot(se, self.cx, s);
+            if frame.is_some() && !se.match_zero(others) {
+                f.base_frame = frame;
+                rest = others;
+            }
+        }
+        f.initial_match(se, self.cx, rest, self.l);
         let inserted = self.insert_formula(se, lu_idx, &f);
         assert!(inserted, "Initial formula already exists!");
     }

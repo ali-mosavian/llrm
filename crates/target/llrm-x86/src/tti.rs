@@ -1692,6 +1692,11 @@ impl Tti for X86 {
         true
     }
 
+    /// Real mode only: `[bp+si+disp]` takes the slot and one index register.
+    fn lsr_frame_slot_base(&self) -> bool {
+        self.real_mode.is_some() && std::env::var_os("LLRM_NO_FRAME_BASE").is_none() // TEMP-DEBUG
+    }
+
     /// 64 in long mode, else 32 (also at m16, on a 386 or later).
     fn gpr_bits(&self) -> u32 {
         if self.quad { 64 } else { 32 }

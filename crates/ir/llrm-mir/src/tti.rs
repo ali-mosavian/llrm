@@ -2275,6 +2275,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU20: whether LSR may take a stack slot out of an address use's
+    /// registers and keep it as the frame base of the formula (`[bp+si+disp]`):
+    /// the slot costs no register and its displacement is the frame's. The pin
+    /// has no such base, so an address off two arrays pays a register for each
+    /// array. Off: the slot is an ordinary base register.
+    fn lsr_frame_slot_base(&self) -> bool {
+        false
+    }
+
     /// The bits one general-purpose register holds: an `i32` takes one at 32,
     /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
     fn gpr_bits(&self) -> u32 {

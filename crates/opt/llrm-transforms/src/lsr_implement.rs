@@ -481,7 +481,7 @@ impl Implement<'_, '_> {
             };
             if lu.kind == Kind::ICmpZero
                 && f.base_regs.len() == 1
-                && f.base_gv.is_none()
+                && !f.has_symbol()
                 && !f.base_offset.add_unsigned(lf.offset).is_non_zero()
                 && !f.unfolded_offset.is_non_zero()
             {
@@ -492,7 +492,7 @@ impl Implement<'_, '_> {
             }
             if lu.kind == Kind::ICmpZero
                 && f.base_regs.len() == 1
-                && f.base_gv.is_none()
+                && !f.has_symbol()
                 && !f.unfolded_offset.is_non_zero()
             {
                 original = self.narrow_existing(lf, reg, op_ty_id);
@@ -566,6 +566,19 @@ impl Implement<'_, '_> {
             ops.push(u);
         }
 
+        // DEVIATE LU20: the frame slot, flushed the same way.
+        if let Some(slot) = f.base_frame {
+            if !ops.is_empty() {
+                let sum = self.add(&ops);
+                let full = self.expand_code_for(sum, Some(int_ty));
+                let u = self.unknown(full);
+                ops.clear();
+                ops.push(u);
+            }
+            let u = self.unknown(Operand::Value(slot));
+            ops.push(u);
+        }
+
         // Flushed: the folded and unfolded offsets live next to their uses.
         if !ops.is_empty() {
             let sum = self.add(&ops);
@@ -622,7 +635,7 @@ impl Implement<'_, '_> {
             if let Operand::Value(v) = self.function.instruction(ci).operands[1] {
                 self.dead.push(v);
             }
-            assert!(f.base_gv.is_none(), "ICmp does not support folding a global value and a scale at the same time!");
+            assert!(!f.has_symbol(), "ICmp does not support folding a global value and a scale at the same time!");
             if f.scale == -1 {
                 let mut v = icmp_scaled_v.expect("a scaled value");
                 if self.operand_ty(v) != op_ty_id {

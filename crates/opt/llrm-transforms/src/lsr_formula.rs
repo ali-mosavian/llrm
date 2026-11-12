@@ -24,7 +24,7 @@
 use llrm_analysis::scev::expr::{Scev, Ty, Use};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::BlockId;
+use llrm_mir::module::{BlockId, ValueId};
 use llrm_mir::types::TypeId;
 use llrm_support::hash::HashMap;
 
@@ -268,12 +268,24 @@ impl RegUseTracker {
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L475
+/// The arguments `Tti::is_legal_addressing_mode` takes for a formula.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Mode {
+    pub global: bool,
+    pub has_base_reg: bool,
+    pub scale: i64,
+}
+
 /// One way to compute a use: `base_gv + base_offset + base_regs + scale *
 /// scaled_reg + unfolded_offset`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Formula {
     /// Global base address used for complex addressing.
     pub base_gv: Option<GlobalId>,
+    /// DEVIATE LU20: a static `alloca` kept as the frame base of the address
+    /// (`Tti::lsr_frame_slot_base`); it is not one of the registers, and the
+    /// formula keeps at most one other.
+    pub base_frame: Option<ValueId>,
     pub base_offset: Immediate,
     /// Whether any complex addressing has a base register.
     pub has_base_reg: bool,
@@ -358,6 +370,28 @@ fn do_initial_match(
 }
 
 impl Formula {
+    /// Whether the address field holds a symbol: a global or a frame slot.
+    pub fn has_symbol(&self) -> bool {
+        self.base_gv.is_some() || self.base_frame.is_some()
+    }
+
+    /// The addressing mode `Tti` is asked about, or none when the target has
+    /// no mode for it. DEVIATE LU20: a frame slot is the base register of the
+    /// address, so the formula's registers are the index (a base register and
+    /// a scale of 1 sum into one); a scaled register beside a base register
+    /// is three registers.
+    pub fn mode(&self) -> Option<Mode> {
+        let global = self.base_gv.is_some();
+        if self.base_frame.is_none() {
+            return Some(Mode { global, has_base_reg: self.has_base_reg, scale: self.scale });
+        }
+        match (self.has_base_reg, self.scale) {
+            (true, 0 | 1) => Some(Mode { global, has_base_reg: true, scale: 1 }),
+            (true, _) => None,
+            (false, scale) => Some(Mode { global, has_base_reg: true, scale }),
+        }
+    }
+
     /// `Formula::initialMatch`: incorporate loop-variant parts of `s` into
     /// this formula, keeping all loop-invariant and loop-computable values in
     /// a single base register.

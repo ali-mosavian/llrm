@@ -56,7 +56,7 @@ use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::{Collection, extract_immediate, extract_symbol, get_exact_sdiv, is_always_foldable_scev};
 use crate::lsr_formula::{Formula, Immediate};
-use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use, may_use_post_inc_mode};
+use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use_formula, may_use_post_inc_mode};
 
 /// Which register of a formula a generator works on.
 #[derive(Clone, Copy)]
@@ -176,17 +176,7 @@ impl Collection<'_, '_> {
         f: &Formula,
     ) -> bool {
         let lu = &self.uses[lu_idx];
-        is_legal_use(
-            self.tti,
-            lu.min_offset,
-            lu.max_offset,
-            lu.kind,
-            lu.access_ty,
-            f.base_gv.is_some(),
-            f.base_offset,
-            f.has_base_reg,
-            f.scale,
-        )
+        is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f)
     }
 
     fn reg_at(
@@ -413,7 +403,7 @@ impl Collection<'_, '_> {
         base: Formula,
     ) {
         // An address with a global has no room for another.
-        if base.base_gv.is_some() {
+        if base.has_symbol() {
             return;
         }
         for i in 0..base.base_regs.len() {
@@ -535,7 +525,7 @@ impl Collection<'_, '_> {
         {
             return;
         }
-        assert!(base.base_gv.is_none(), "ICmpZero use is not legal!");
+        assert!(!base.has_symbol(), "ICmpZero use is not legal!");
 
         'factor: for factor in self.factors.clone() {
             if !valid_for_bits(bits, factor) {
@@ -571,17 +561,7 @@ impl Collection<'_, '_> {
             // This scale must be legal.
             {
                 let lu = &self.uses[lu_idx];
-                if !is_legal_use(
-                    self.tti,
-                    offset,
-                    offset,
-                    lu.kind,
-                    lu.access_ty,
-                    f.base_gv.is_some(),
-                    f.base_offset,
-                    f.has_base_reg,
-                    f.scale,
-                ) {
+                if !is_legal_use_formula(self.tti, offset, offset, lu.kind, lu.access_ty, &f) {
                     continue;
                 }
             }
@@ -696,17 +676,7 @@ impl Collection<'_, '_> {
                 (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty)
             };
             let legal = |kind| {
-                is_legal_use(
-                    self.tti,
-                    min,
-                    max,
-                    kind,
-                    space,
-                    base.base_gv.is_some(),
-                    base.base_offset,
-                    base.has_base_reg,
-                    base.scale,
-                )
+                is_legal_use_formula(self.tti, min, max, kind, space, &base)
             };
             if !legal(kind) {
                 // An out-of-loop basic use is special, and takes a -1 scale.
@@ -718,7 +688,7 @@ impl Collection<'_, '_> {
             }
             let kind = self.uses[lu_idx].kind;
             // Negating a solitary base register of a compare gives nothing new.
-            if kind == Kind::ICmpZero && !base.has_base_reg && base.base_offset.is_zero() && base.base_gv.is_none() {
+            if kind == Kind::ICmpZero && !base.has_base_reg && base.base_offset.is_zero() && !base.has_symbol() {
                 continue;
             }
             // Each addrec base register of this loop is scaled.
@@ -789,7 +759,7 @@ impl Collection<'_, '_> {
     ) {
         let cx = self.cx;
         // Symbolic values are not truncated.
-        if base.base_gv.is_some() {
+        if base.has_symbol() {
             return;
         }
         let Some(dst) = base.ty(se, cx) else { return };
@@ -1299,5 +1269,6 @@ fn legal_scale(
     f: &Formula,
     scale: i64,
 ) -> bool {
-    is_legal_use(tti, min, max, kind, access, f.base_gv.is_some(), f.base_offset, true, scale)
+    let scaled = Formula { has_base_reg: true, scale, ..f.clone() };
+    is_legal_use_formula(tti, min, max, kind, access, &scaled)
 }

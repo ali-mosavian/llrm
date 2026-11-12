@@ -29,7 +29,7 @@ use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::Collection;
 use crate::lsr_formula::{Formula, Immediate};
-use crate::lsr_use::{Cost, Kind, is_legal_use};
+use crate::lsr_use::{Cost, Kind, is_legal_use_formula};
 
 /// `ComplexityLimit` (`-lsr-complexity-limit`).
 const COMPLEXITY_LIMIT: usize = u16::MAX as usize;
@@ -78,7 +78,7 @@ impl Collection<'_, '_> {
                         // Formulas do not carry their width (PR41034).
                         new_f.base_offset = Immediate(new_f.base_offset.0.wrapping_add(c.sext_value() as i64));
                     } else if let Some(global) = self.global_of(se, reg) {
-                        if f.base_gv.is_some() {
+                        if f.has_symbol() {
                             continue;
                         }
                         new_f.base_gv = Some(global);
@@ -140,16 +140,13 @@ impl Collection<'_, '_> {
                 let mut i = 0;
                 while i < self.uses[that].formulae.len() {
                     let lu = &self.uses[that];
-                    if is_legal_use(
+                    if is_legal_use_formula(
                         self.tti,
                         lu.min_offset,
                         lu.max_offset,
                         lu.kind,
                         lu.access_ty,
-                        lu.formulae[i].base_gv.is_some(),
-                        lu.formulae[i].base_offset,
-                        lu.formulae[i].has_base_reg,
-                        lu.formulae[i].scale,
+                        &lu.formulae[i],
                     ) {
                         i += 1;
                     } else {
@@ -264,17 +261,7 @@ impl Collection<'_, '_> {
                         // This use's offsets must be legal for all the other's
                         // formulae.
                         if other.formulae.iter().any(|f| {
-                            !is_legal_use(
-                                self.tti,
-                                min,
-                                max,
-                                other.kind,
-                                other.access_ty,
-                                f.base_gv.is_some(),
-                                f.base_offset,
-                                f.has_base_reg,
-                                f.scale,
-                            )
+                            !is_legal_use_formula(self.tti, min, max, other.kind, other.access_ty, f)
                         }) {
                             return false;
                         }
@@ -286,6 +273,7 @@ impl Collection<'_, '_> {
                         this_f.base_regs == other_f.base_regs
                             && this_f.scaled_reg == other_f.scaled_reg
                             && this_f.base_gv == other_f.base_gv
+                            && this_f.base_frame == other_f.base_frame
                             && this_f.scale == other_f.scale
                             && this_f.unfolded_offset == other_f.unfolded_offset
                             && this_f.base_offset == other_f.base_offset

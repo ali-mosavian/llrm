@@ -365,6 +365,17 @@ fn plan_loop(
         |lsr: &Collection| lsr.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ");
     let narrowed = |se: &mut ScalarEvolution, lsr: &mut Collection| {
         llrm_support::debug!("lsr", "  formulae per use: {}", counts(lsr));
+        // TEMP-DEBUG
+        if llrm_support::debug::enabled("lsr-scev") {
+            let labels = llrm_analysis::scev::print::Labels::of(lsr.cx.function);
+            for (at, lu) in lsr.uses.iter().enumerate() {
+                for f in &lu.formulae {
+                    let regs: Vec<String> = f.base_regs.iter().map(|&r| se.print(lsr.cx, &labels, r)).collect();
+                    let sc = f.scaled_reg.map(|r| se.print(lsr.cx, &labels, r));
+                    eprintln!("[scev] use {at} {:?} frame={:?} gv={:?} off={} regs={:?} scale={} scaled={:?}", lu.kind, f.base_frame, f.base_gv, f.base_offset.0, regs, f.scale, sc);
+                }
+            }
+        }
         lsr.filter_out_undesirable_dedicated_registers(se);
         llrm_support::debug!("lsr", "  after filtering: {}", counts(lsr));
         lsr.narrow_search_space_using_heuristics(se);
