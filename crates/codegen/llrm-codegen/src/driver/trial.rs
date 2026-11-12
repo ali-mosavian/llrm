@@ -236,7 +236,8 @@ pub fn compiled_module_trying(
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
     unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
 ) -> Result<masm::Module, String> {
-    let hot = matches!(Trial::of(options), Some(Trial::Rotation));
+    let hot = matches!(Trial::of(options), Some(Trial::Rotation))
+        && options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.rotation_hot_at_size());
     let _ = trial::take_left();
     let first = compiled_module_trying_once(module.clone(), name, options, bytes, unpadded)?;
     if !hot {
