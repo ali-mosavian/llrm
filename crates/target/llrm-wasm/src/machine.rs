@@ -58,6 +58,10 @@ pub struct WasmMachine;
 const REGISTERS: i64 = 8;
 
 impl Machine for WasmMachine {
+    fn may_be_emitted_as_tail_call(&self) -> bool {
+        false
+    }
+
     fn foreign_span(
         &self,
         _selectors: (i64, i64),
