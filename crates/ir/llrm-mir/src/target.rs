@@ -460,6 +460,10 @@ pub struct Tuning {
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
     /// all the way into the callee.
     pub ipsccp_widen_keeps_sign: bool,
+    /// REC5-1 also at -Os. m32 leaves it off (bytes-strict): the unsigned
+    /// remainder is `xor edx, edx; div`, a byte over `cdq; idiv` (recgcd,
+    /// frames, recmany, switch: 2..5 B).
+    pub ipsccp_widen_keeps_sign_at_size: bool,
 }
 
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
@@ -589,6 +593,7 @@ impl Tuning {
         inline_variable_memcpy: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
+        ipsccp_widen_keeps_sign_at_size: false,
     };
 }
 

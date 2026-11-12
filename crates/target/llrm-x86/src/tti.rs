@@ -1072,6 +1072,10 @@ impl Tti for X86 {
         self.tuning.ipsccp_widen_keeps_sign
     }
 
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign_at_size
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.priced_self_inlining
     }

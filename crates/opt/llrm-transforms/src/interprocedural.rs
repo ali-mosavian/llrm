@@ -716,7 +716,7 @@ pub fn optimized_with<E: From<String>>(
         // Every body is told changed before the first runs again: the solver has
         // already restated the attributes of all of them, and a pipeline that
         // asks the declarations meanwhile must not find the others' standing.
-        let solved = crate::ipsccp::run_ipsccp_with(program, modules);
+        let solved = crate::ipsccp::run_ipsccp_with(program, modules, threshold.single);
         for &(at, id) in &solved {
             edited(&mut modules[at], &[id]);
         }
