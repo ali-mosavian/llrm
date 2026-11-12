@@ -52,3 +52,19 @@ fn a_speed_built_module_keeps_the_partial_products() {
         assert!(!calls(cpu, 3, ""), "{cpu:?}: a call at speed");
     }
 }
+
+/// fixed_point -Os: the widening product of `smul.fix` is the same `__muldi3`,
+/// found at no `mul i64` of the source (-656 B linked at the 68000).
+#[test]
+fn fixed_point_products_are_sites_of_the_same_call() {
+    let mut ir = format!("{HEAD}declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)\n");
+    for n in 0..3 {
+        ir += &format!(
+            "define i32 @f{n}(i32 %a, i32 %b) optsize {{ %r = call i32 @llvm.smul.fix.i32(i32 %a, i32 %b, i32 16) ret i32 %r }}\n"
+        );
+    }
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let options = Options { mid_end: false, ..Options::default() };
+    let text = text_with(&module, "f0", Cpu::M68000, options).expect("compiles");
+    assert!(text.contains("__muldi3"), "{text}");
+}

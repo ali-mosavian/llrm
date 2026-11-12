@@ -171,12 +171,18 @@ fn present(
             Opcode::Call(_) => {
                 let Some(Operand::Constant(id)) = instruction.operands.last().copied() else { continue };
                 let ConstantKind::Global(global) = module.context.get(id).kind else { continue };
-                let Some(Intrinsic::BitCount(count)) = module.global(global).intrinsic() else { continue };
-                match (count, bits(instruction.operands[0])) {
-                    (BitCount::TrailingZeros, Some(64)) => Kind::Ctz64,
-                    (BitCount::LeadingZeros, Some(64)) => Kind::Clz64,
-                    (BitCount::Population, Some(32)) => Kind::Pop32,
-                    (BitCount::Population, Some(64)) => Kind::Pop64,
+                match module.global(global).intrinsic() {
+                    Some(Intrinsic::BitCount(count)) => match (count, bits(instruction.operands[0])) {
+                        (BitCount::TrailingZeros, Some(64)) => Kind::Ctz64,
+                        (BitCount::LeadingZeros, Some(64)) => Kind::Clz64,
+                        (BitCount::Population, Some(32)) => Kind::Pop32,
+                        (BitCount::Population, Some(64)) => Kind::Pop64,
+                        _ => continue,
+                    },
+                    // the wide product the legalizer makes of these is an `i64` multiply
+                    Some(Intrinsic::WithOverflow { op: BinaryOp::Mul, .. })
+                    | Some(Intrinsic::Fixed { divide: false })
+                    | Some(Intrinsic::FixedMul { .. }) => Kind::Mul64,
                     _ => continue,
                 }
             }

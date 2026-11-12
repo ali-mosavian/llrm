@@ -701,8 +701,7 @@ impl M68k {
     /// Whether the lowering writes a wide multiply of `left` by `right` with no
     /// library call: from 32-bit `UMUL_LOHI`s when the target has them
     /// (`ExpandIntRes_MUL`), else only a power of two, its negation, or a
-    /// positive constant of shifts and an add
-    /// ([`crate::dagisel::mulprice::chain`]; any other negative one is a call).
+    /// constant the shift-and-add search reaches ([`crate::dagisel::synth`]).
     fn multiply_makes_no_call(
         &self,
         left: OperandInfo,
@@ -720,10 +719,24 @@ impl M68k {
         [left, right].into_iter().any(|operand| {
             operand.power_of_two
                 || operand.negated_power_of_two
-                || operand
-                    .value
-                    .and_then(|value| i32::try_from(value).ok())
-                    .is_some_and(|value| value > 0 && crate::dagisel::mulprice::chain(self.cpu, value as u32).is_some())
+                || operand.value.is_some_and(|value| {
+                    // DEVIATE G2 (`dagisel::synth`): any constant the search
+                    // reaches is shifts and adds, whatever its sign
+                    i32::try_from(value).is_ok_and(|value| {
+                        let word = value as u32;
+                        [word, word & 0xFFFF, word >> 16].into_iter().all(|piece| {
+                            piece < 2
+                                || piece.is_power_of_two()
+                                || crate::dagisel::synth::plan(
+                                    self.cpu,
+                                    crate::timing::Price::Rate,
+                                    32,
+                                    u128::from(piece),
+                                )
+                                .is_some()
+                        })
+                    })
+                })
         })
     }
 }
