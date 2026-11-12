@@ -2895,11 +2895,6 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
             && let Some(compact) = crate::routines::compact_variant(name)
         {
             *name = compact.to_owned();
-            if crate::routines::aligned_divides()
-                && let Some(aligned) = crate::routines::aligned_variant(compact)
-            {
-                *name = aligned.to_owned();
-            }
         }
     }
 }
@@ -2993,10 +2988,13 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
 /// - what it writes (the accumulator and the flags) is dead after it, and the
 ///   flags were not live into `S`;
 /// - an earlier copy of what `S` writes is what it reads (otherwise there is
-///   nothing to save).
+///   nothing to save);
+/// - `S` leaves the carry alone: not `clc; adc #1` in `a` (the 65C02's `inc a`
+///   does).
 pub fn compare_before_step(
     function: &mut MFunction<Class>,
     at: &dyn Fn(Reg) -> RegId,
+    cmos: bool,
 ) {
     let flags = reg::FLAGS;
     let regs = |inst: &Inst, def: bool| -> Vec<RegId> {
@@ -3021,6 +3019,10 @@ pub fn compare_before_step(
                     continue;
                 }
                 let (step_writes, step_reads) = (regs(&block.insts[s], true), regs(&block.insts[s], false));
+                // `clc; adc #1` (`sec; sbc #1`) clears the carry the compare sets
+                if !cmos && step_writes.contains(&reg::A) && matches!(block.insts[s].kind, Kind::Op("INC" | "DEC")) {
+                    continue;
+                }
                 // the run: copies, loads, compares; `last` is its last flag
                 // setter
                 let mut last = None;
@@ -3760,7 +3762,7 @@ fn emit_with<const STACK: bool>(
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(p) => p,
     };
-    compare_before_step(&mut function, &at);
+    compare_before_step(&mut function, &at, cmos);
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     // a reload of a slot whose register nothing has written is that register; x

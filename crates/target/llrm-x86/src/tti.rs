@@ -737,6 +737,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
+    fn unroll_trial_bytes_strict(&self) -> bool {
+        self.tuning.unroll_trial_bytes_strict
+    }
+
     fn unroll_trial_nests_only(&self) -> bool {
         self.tuning.unroll_trial_nests_only
     }
@@ -755,6 +759,10 @@ impl Tti for X86 {
 
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         self.tuning.unroll_o1_analyzed_trips
+    }
+
+    fn pops_arguments_at_size(&self) -> bool {
+        self.tuning.pops_arguments_at_size
     }
 
     fn multiply_by_clocks(&self) -> bool {
