@@ -518,7 +518,26 @@ fn allocate(
     level: Level,
 ) -> Result<Allocated, String> {
     let first = allocate_first(function.clone(), name, level)?;
-    Ok(improved(first, function, name, level))
+    let best = improved(first, function.clone(), name, level);
+    // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
+    // slots are all frame cells, so it folds every spilled read. Here a slot
+    // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
+    // after allocation: a spilled read is taken from its cell where the
+    // function is cheaper for it, every other choice explored on both. Exit:
+    // the stack slots chosen before the fold.
+    if !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
+        return Ok(best);
+    }
+    crate::regalloc::NO_FOLD.with(|one| one.set(true));
+    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level));
+    crate::regalloc::NO_FOLD.with(|one| one.set(false));
+    Ok(match other {
+        Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
+            (Some(now), Some(then)) if cheaper(level, then, now) => other,
+            _ => best,
+        },
+        Err(_) => best,
+    })
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
@@ -583,19 +602,6 @@ fn improved(
             }
         }
     }
-    // a spilled read taken from its cell stays where it beats the slot as a
-    // `push` and a `pop`
-    if best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
-        crate::regalloc::NO_FOLD.with(|one| one.set(true));
-        let other = allocate_with(None, true, function, name, level);
-        crate::regalloc::NO_FOLD.with(|one| one.set(false));
-        if let Ok((other, _)) = other
-            && let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level))
-            && cheaper(level, then, now)
-        {
-            best = other;
-        }
-    }
     best
 }
 
@@ -639,7 +645,6 @@ fn allocate_once(
     if std::env::var("LLRM_NO_Z80_NARROW").is_err() {
         crate::narrow::narrow_low_only_pairs(&mut function);
     }
-    crate::regalloc::FRAME_STANDS.with(|one| one.set(!function.locals.is_empty() || !function.fixed.is_empty()));
     two_address(&mut function);
     let held = read_bytes_through_their_pairs(&mut function, strict);
     use_the_shift_carry(&mut function);
