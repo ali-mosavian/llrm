@@ -149,6 +149,10 @@ pub struct M68k {
     /// ([`Tti::inline_size_view`]); the other passes' thresholds are in the
     /// pin's units, where it is false.
     pub code_size_bytes: bool,
+    /// With `code_size_bytes`: the bytes are a speed caller's, where a
+    /// quotient by a constant is the magic multiply, not the divide
+    /// (`sizes::constant_division`).
+    pub speed_lowering: bool,
 }
 
 impl M68k {
@@ -438,6 +442,10 @@ impl Tti for M68k {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
     }
 
+    fn inline_size_view_at(&self, speed: bool) -> Option<Rc<dyn Tti>> {
+        Some(Rc::new(M68k { code_size_bytes: true, speed_lowering: speed, ..*self }))
+    }
+
     /// `TargetLoweringBase::isLegalAddressingMode`.
     fn is_legal_addressing_mode(
         &self,
@@ -690,7 +698,7 @@ impl Tti for M68k {
         right: OperandInfo,
     ) -> Cost {
         if kind == CostKind::CodeSize && self.code_size_bytes {
-            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020));
+            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020), self.speed_lowering);
         }
         // DEVIATE: the pin's base class prices a multiply or divide it expands
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
