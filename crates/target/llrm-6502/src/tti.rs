@@ -284,14 +284,6 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// `-Os` only: narrowed, a scaled byte index is a shift chain per trip
-    /// that the pointer recurrence did not pay (word_compares -O2 -30 B,
-    /// +9,843 clk; loop_interchange +290,829 clk), and LSR's comparator does
-    /// not price it yet.
-    fn narrows_counters_at_speed(&self) -> bool {
-        false
-    }
-
     /// `shouldDropLSRSolutionIfLessProfitable`: a loop keeps its code where
     /// LSR's own model rates the rewrite worse, as on the z80 (DEVIATE LU15):
     /// with 16-bit widths on, switch_empty_cases, switch_jump_table and
@@ -321,6 +313,11 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// DEVIATE LU22: the inner loop's byte counter, extended, is the counter.
+    fn lsr_extension_of_phi_exists(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
