@@ -2880,6 +2880,11 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
             && let Some(compact) = crate::routines::compact_variant(name)
         {
             *name = compact.to_owned();
+            if crate::routines::aligned_divides()
+                && let Some(aligned) = crate::routines::aligned_variant(compact)
+            {
+                *name = aligned.to_owned();
+            }
         }
     }
 }
@@ -4023,7 +4028,7 @@ fn emit_with<const STACK: bool>(
                     };
                     let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
                     let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
-                    let entry = if !speed {
+                    let entry = if !speed && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get())) {
                         ""
                     } else if division && byte {
                         "_fast_byte"
