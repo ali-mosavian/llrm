@@ -182,9 +182,15 @@ pub fn optimized_at(
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     lowered_before_selection(program)?;
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
-    if let Some(merge) = program.target.global_merge(level == Level::O3) {
+    if let Some(mut merge) = program.target.global_merge(level == Level::O3) {
+        // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the pin does, nothing at -Os.
+        merge.optsize_counts &= !crate::trial::unmerged();
         for module in &mut program.modules {
-            llrm_transforms::globalmerge::merged(module, &program.layout, &merge)?;
+            let before = module.globals.len();
+            if llrm_transforms::globalmerge::merged(module, &program.layout, &merge)? && merge.optsize_counts {
+                // Each merged global leaves; one struct stays.
+                crate::trial::note_merged(before + 1 - module.globals.len());
+            }
         }
     }
     Ok(())
@@ -324,6 +330,7 @@ fn lower_function(
     crate::copyprop::run(&mut machine);
     crate::postrasink::run(&mut machine);
     dump("PostRaSink", &machine);
+    crate::trial::add(&machine);
     let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
     let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
         .map_err(|why| format!("@{name}: {why}"))?;
@@ -464,20 +471,117 @@ pub fn object_with(
     level: impl Into<Level>,
     debug: bool,
 ) -> Result<llrm_debug::Described, String> {
-    let mut program = program(text, platform)?;
-    let level = level.into();
-    if debug {
-        llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
-    }
-    if level != Level::O0 {
-        optimized_at(&mut program, level)?;
-    } else {
-        lowered_before_selection(&mut program)?;
-    }
-    let lowered = functions_with(&program, debug)?;
+    let (program, lowered) = compiled(text, platform, level.into(), debug, false)?;
     let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
     let debug = if debug { crate::debug::info(&program.modules[0], platform, &object, &lowered, name)? } else { None };
     Ok(llrm_debug::Described { object, debug })
+}
+
+/// `text` through the mid-end and the backend. At -Os on a target with the
+/// rotation trial, DEVIATE ROTATION-TRIAL and ROTATION-HOT (see
+/// [`crate::trial`]): a module whose pass noted a loop it rotated or
+/// left is compiled again with the decision reversed, and the finished code
+/// decides.
+fn compiled(
+    text: &str,
+    platform: Platform,
+    level: Level,
+    debug: bool,
+    refuse_aliases: bool,
+) -> Result<(Program, Vec<crate::emit::Function>), String> {
+    /// What the mid-end noted for a trial to reverse.
+    #[derive(Default)]
+    struct Notes {
+        left: Vec<String>,
+        left_loops: usize,
+        rotated: Vec<String>,
+        loops: usize,
+        merged: usize,
+    }
+    type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price, Notes);
+    let size = matches!(level, Level::Os | Level::Oz);
+    let asked = crate::trial::asked(platform, size);
+    let once = |(unrotated, more, unmerged): (bool, bool, bool)| -> Result<Built, String> {
+        let mut program = program(text, platform)?;
+        if refuse_aliases {
+            // The text carries no alias: refuse it rather than drop the symbol.
+            program.modules[0].refuse_aliases("arm64")?;
+        }
+        if debug {
+            llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
+        }
+        if level != Level::O0 {
+            let run = |program: &mut Program| optimized_at(program, level);
+            let go = |program: &mut Program| match (unrotated, more) {
+                (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
+                (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
+                _ => run(program),
+            };
+            if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
+        } else {
+            lowered_before_selection(&mut program)?;
+        }
+        let mut notes = Notes::default();
+        if asked.is_some() {
+            use llrm_transforms::trial;
+            (notes.left, notes.left_loops) = trial::take_left();
+            (notes.rotated, notes.loops) = (trial::take_rotated(), trial::rotated_loops());
+            notes.merged = crate::trial::take_merged();
+            // A module nothing was noted in is compiled once, unpriced: the pricing is a second walk of every
+            // function.
+            let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0);
+            if noted || (unrotated, more, unmerged) != (false, false, false) {
+                crate::trial::start();
+            }
+        }
+        let lowered = functions_with(&program, debug)?;
+        let cost = crate::trial::price(&lowered);
+        Ok((program, lowered, cost, notes))
+    };
+    let Some(hot) = asked else {
+        let (program, lowered, _, _) = once((false, false, false))?;
+        return Ok((program, lowered));
+    };
+    use llrm_transforms::trial;
+    let _ = (trial::take_left(), trial::take_rotated(), crate::trial::take_merged());
+    trial::clear_rotated_loops();
+    let mut best = once((false, false, false))?;
+    let notes = std::mem::take(&mut best.3);
+    let mut state = (false, false, false);
+    let mut try_one = |best: &mut Built, other: (bool, bool, bool), what: &str, pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool| -> Result<bool, String> {
+        trial::clear_rotated_loops();
+        let other_built = once(other)?;
+        let (kept, now) = (best.2, other_built.2);
+        let keeps = pays(kept, now);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!("trial {what}: {kept:?} -> {now:?}: {}", if keeps { "kept" } else { "put back" });
+        }
+        if keeps {
+            *best = other_built;
+        }
+        Ok(keeps)
+    };
+    if !notes.rotated.is_empty()
+        && try_one(&mut best, (true, false, false), "unrotated", &|kept, now| {
+            crate::trial::keeps_unrotated(kept, now, hot, notes.loops)
+        })?
+    {
+        state.0 = true;
+    }
+    if hot
+        && !notes.left.is_empty()
+        && try_one(&mut best, (state.0, true, false), "rotation-hot", &|kept, now| {
+            crate::trial::keeps_rotated(kept, now, notes.left_loops)
+        })?
+    {
+        state = (false, true, false);
+    }
+    if notes.merged > 0 {
+        try_one(&mut best, (state.0, state.1, true), "unmerged", &|kept, now| {
+            crate::trial::keeps_unmerged(kept, now, notes.merged)
+        })?;
+    }
+    Ok((best.0, best.1))
 }
 
 /// The assembly of the lowered functions, one instruction a line.
@@ -495,17 +599,9 @@ pub fn assembly(
     platform: Platform,
     level: impl Into<Level>,
 ) -> Result<String, String> {
-    let mut program = program(text, platform)?;
-    // The text carries no alias: refuse it rather than drop the symbol.
-    program.modules[0].refuse_aliases("arm64")?;
-    let level = level.into();
-    if level != Level::O0 {
-        optimized_at(&mut program, level)?;
-    } else {
-        lowered_before_selection(&mut program)?;
-    }
+    let (_, lowered) = compiled(text, platform, level.into(), false, true)?;
     let mut out = String::new();
-    for function in functions(&program)? {
+    for function in lowered {
         out.push_str(&format!("{}:\n", function.symbol));
         for block in &function.blocks {
             out.push_str(&format!("{}:\n", block.label));
