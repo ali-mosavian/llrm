@@ -1553,13 +1553,15 @@ fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
     assert!(placed_with(bound, 0.312).blocks.iter().any(|one| one.at == 30), "run once, the jump does not pay for it");
 }
 
-/// The loop's latch is not copied above the pin's bound: x_jpeg_fixed -O2 ran
-/// 137354 clocks longer when `inc; jne` latches went into their predecessors.
+/// A loop's latch is copied above the pin's bound only where the jump it saves
+/// is worth more than the back edge the copy takes (`HotTailDup::back_edge_clocks`,
+/// #9145): x_jpeg_fixed -O2 ran 137354 clocks longer when `inc; jne` latches went
+/// into their predecessors at a back edge as dear as the jump.
 #[test]
-fn test_a_loop_latch_is_not_copied_above_the_pin_bound() {
+fn test_a_loop_latch_is_copied_only_where_the_jump_outweighs_the_back_edge() {
     use super::placement::HotTailDup;
-    let hot = Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks: 0.0, clocks_per_byte: 0.01 });
-    let looped = |latch_back: bool| {
+    let hot = |back_edge_clocks: f64| Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks, clocks_per_byte: 0.01 });
+    let looped = |latch_back: bool, back_edge_clocks: f64| {
         let to_header = if latch_back { 2 } else { 50 };
         let mut made = body(
             "f",
@@ -1582,10 +1584,11 @@ fn test_a_loop_latch_is_not_copied_above_the_pin_bound() {
         let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
         made.odds.taken.insert((2, 10), fixed(0.5));
         made.odds.taken.insert((2, 20), fixed(0.5));
-        _placed(&made, false, false, None, hot, 0).unwrap()
+        _placed(&made, false, false, None, hot(back_edge_clocks), 0).unwrap()
     };
-    assert!(looped(true).blocks.iter().any(|one| one.at == 30), "the latch is kept");
-    assert!(looped(false).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
+    assert!(looped(true, 3.0).blocks.iter().any(|one| one.at == 30), "a back edge as dear as the jump: the latch is kept");
+    assert!(looped(true, 0.0).blocks.iter().all(|one| one.at != 30), "a free back edge: the jump pays, the latch is copied");
+    assert!(looped(false, 3.0).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
 }
 
 /// Only a block that goes to the join and nowhere else takes a copy: one that

@@ -1,6 +1,7 @@
 """`python3 -m unittest discover -s crates/target/llrm-z80/tests/programs`"""
 
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -152,3 +153,71 @@ class Imports(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RuntimeStamp(unittest.TestCase):
+    def fake_llc(self, stamp):
+        import os, stat, tempfile
+        path = Path(tempfile.mkdtemp()) / "llc"
+        path.write_text(f"#!/bin/sh\n[ \"$1\" = --runtime-stamp ] && echo {stamp} && exit 0\nexit 2\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+        return str(path)
+
+    def test_a_runtime_the_compiler_was_not_built_with_is_named(self):
+        """A divide fix compared as two compilers on one working-tree runtime showed 0 diff (2026-11-12): the sweep links the file,
+        not the compiler's copy. A compiler whose stamp is not the file's is refused."""
+        stamp = run.fnv1a64(run.RUNTIME.read_bytes())
+        self.assertIsNone(run.runtime_mismatch(self.fake_llc(stamp), run.RUNTIME))
+        why = run.runtime_mismatch(self.fake_llc("0123456789abcdef"), run.RUNTIME)
+        self.assertIn("0123456789abcdef", why or "")
+        self.assertIn(stamp, why or "")
+
+    def test_a_compiler_that_reports_no_stamp_is_refused_not_trusted(self):
+        why = run.runtime_mismatch(self.fake_llc(""), run.RUNTIME)
+        self.assertIsNotNone(why)
+
+    def test_the_stamp_is_fnv1a_64(self):
+        self.assertEqual(run.fnv1a64(b""), "cbf29ce484222325")
+        self.assertEqual(run.fnv1a64(b"a"), "af63dc4c8601ec8c")
+
+
+class SweepInstrument(unittest.TestCase):
+    def sweep(self):
+        spec = importlib.util.spec_from_file_location("sweep_instrument", Path(__file__).resolve().parent / "sweep.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_a_sweep_without_the_soft_float_library_is_refused(self):
+        """The owner sweep of 2026-11-12 ran without `Z80_LIBC_EXTRA`: 13 float programs failed to link and read as 'no row'. A run
+        that needs the library and has none is refused, with the way to build it; `--sdcc-only` and `--no-softfloat` opt out."""
+        why = guard.softfloat_library_missing({}, sdcc_only=False, no_softfloat=False)
+        self.assertIn("z80_lib.sh", why or "")
+        self.assertIsNone(guard.softfloat_library_missing({"Z80_LIBC_EXTRA": "/lib"}, False, False))
+        self.assertIsNone(guard.softfloat_library_missing({}, sdcc_only=True, no_softfloat=False))
+        self.assertIsNone(guard.softfloat_library_missing({}, sdcc_only=False, no_softfloat=True))
+
+    def test_the_sdcc_compile_gets_the_timeout_the_run_asked_for(self):
+        """div_constants_long's `-ma` variants (--max-allocs-per-node 200000) need over 300 s: the fixed limit dropped 2 of 4 SDCC
+        columns of that cell (and 1 of div_constants_ulong and long_shift_by_a_call_result) and the best-bar read from the rest."""
+        import subprocess
+        from types import SimpleNamespace
+        from unittest import mock
+
+        sweep = self.sweep()
+        seen = []
+
+        def timed_out(command, cwd, input=None, timeout=None):
+            seen.append(timeout)
+            raise subprocess.TimeoutExpired(command, timeout)
+
+        ctx = SimpleNamespace(sdcc_timeout=3600, defines=[], predefined={})
+        with mock.patch.object(sweep.run, "sh", timed_out), mock.patch.object(sweep, "assemble"), mock.patch.object(
+            sweep, "branch_header", return_value=[]
+        ):
+            with tempfile.TemporaryDirectory() as work:
+                source = Path(work) / "p.c"
+                source.write_text("int main(void) { return 0; }\n")
+                with self.assertRaises(sweep.Void):
+                    sweep.sdcc_cell(source, Path(work), "sdcc-x", [], ctx, [])
+        self.assertEqual(seen, [3600])

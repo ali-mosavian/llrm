@@ -871,10 +871,21 @@ impl Printer<'_> {
             }
             "AND16" | "OR16" | "XOR16" => {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
-                let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
+                let to = self.register(inst, 0)?;
+                let a = self.register(inst, 1)?;
+                // the second word read from its frame cell, byte by byte
+                let in_place = match inst.operands.get(2) {
+                    Some(Operand::Frame(cell)) => {
+                        let slots = self.frame_slots(*cell, 0, 2)?;
+                        Some([slots[0].clone(), slots[1].clone()])
+                    }
+                    _ => None,
+                };
+                let b = if in_place.is_some() { a } else { self.register(inst, 2)? };
                 let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
-                let cells = match self.folded_word.take() {
-                    Some((one, cells)) if one == self.register(inst, 2)? => Some(cells),
+                let cells = match (in_place, self.folded_word.take()) {
+                    (Some(cells), _) => Some(cells),
+                    (None, Some((one, cells))) if one == self.register(inst, 2)? => Some(cells),
                     _ => None,
                 };
                 for (lane, (d, x, y)) in [(dl, al, bl), (dh, ah, bh)].into_iter().enumerate() {
@@ -1633,6 +1644,9 @@ impl Printer<'_> {
         inst: &Inst,
         at: usize,
     ) -> Result<String, String> {
+        if let Some(Operand::Frame(cell)) = inst.operands.get(at) {
+            return Ok(self.frame_slots(*cell, 0, 1)?.remove(0));
+        }
         let register = self.register(inst, at)?;
         match self.folded.take() {
             Some((one, slot)) if one == register => Ok(slot),
@@ -2920,6 +2934,22 @@ thread_local! {
 /// Sets the block frequencies the prices of the function being compiled weigh by.
 pub fn set_frequencies(frequencies: &[(u32, f64)]) {
     FREQUENCIES.with(|one| *one.borrow_mut() = frequencies.iter().copied().collect());
+}
+
+/// The block frequencies now in force.
+pub fn frequencies() -> llrm_support::hash::HashMap<u32, f64> {
+    FREQUENCIES.with(|one| one.borrow().clone())
+}
+
+/// Puts `with` in force, and returns what was.
+pub fn replace_frequencies(with: llrm_support::hash::HashMap<u32, f64>) -> llrm_support::hash::HashMap<u32, f64> {
+    FREQUENCIES.with(|one| std::mem::replace(&mut *one.borrow_mut(), with))
+}
+
+/// The frequency of block `id` relative to the function's entry, if the
+/// selection gave one.
+pub fn frequency_of(id: u32) -> Option<f64> {
+    FREQUENCIES.with(|one| one.borrow().get(&id).copied())
 }
 
 /// The block a label names (`L<function>_<block>`).

@@ -749,12 +749,20 @@ impl Tti for X86 {
         self.tuning.inline_dying_credit_at_os
     }
 
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        self.tuning.inline_trial_keeps_shrinking_copy
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
 
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         self.tuning.unroll_o1_analyzed_trips
+    }
+
+    fn pops_arguments_at_size(&self) -> bool {
+        self.tuning.pops_arguments_at_size
     }
 
     fn multiply_by_clocks(&self) -> bool {
@@ -1143,8 +1151,12 @@ impl Tti for X86 {
         self.tuning.unroll_store_immediate_bits
     }
 
-    fn lsr_size_order(&self) -> bool {
-        self.tuning.lsr_size_order
+    fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
+        self.tuning.lsr_size_order.then_some(llrm_mir::tti::LsrSizeModel::X86)
+    }
+
+    fn lsr_phi_operand_uses(&self) -> bool {
+        self.tuning.lsr_phi_operand_uses
     }
 
     fn lsr_users_in_use_list_order(&self) -> bool {

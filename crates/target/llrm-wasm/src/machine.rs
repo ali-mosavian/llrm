@@ -58,6 +58,10 @@ pub struct WasmMachine;
 const REGISTERS: i64 = 8;
 
 impl Machine for WasmMachine {
+    fn may_be_emitted_as_tail_call(&self) -> bool {
+        false
+    }
+
     fn foreign_span(
         &self,
         _selectors: (i64, i64),
@@ -264,6 +268,14 @@ impl Tti for Wasm {
     /// `i32.const; i32.ne` (quicksort -O2 +10 B, tile -O1 -3 B).
     fn lsr_bytes(&self) -> Option<llrm_mir::tti::LsrBytes> {
         Some(llrm_mir::tti::LsrBytes { constant: 1, local_get: 2, local_set: 2, op: 1 })
+    }
+
+    /// The pin's `GenerateICmpZeroScales`: an exit compare is scaled only where
+    /// `getExactSDiv` proves the product does not wrap. With LG1 and LG2 the
+    /// exit test of an unrolled `countdown` moved to a 39-scaled counter and
+    /// cost `i32.const; i32.ne` (tail_calls -O2 +9 B).
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        false
     }
 
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as

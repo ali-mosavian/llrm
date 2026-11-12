@@ -85,6 +85,7 @@ thread_local! {
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
     static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static EMITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Whether a long division by a divisor not known to be a byte calls the
     /// speed routine with the pin-structure wide path, and not the one with
     /// the small wide path (see [`with_fast_division`]).
@@ -2894,11 +2895,6 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
             && let Some(compact) = crate::routines::compact_variant(name)
         {
             *name = compact.to_owned();
-            if crate::routines::aligned_divides()
-                && let Some(aligned) = crate::routines::aligned_variant(compact)
-            {
-                *name = aligned.to_owned();
-            }
         }
     }
 }
@@ -3483,11 +3479,11 @@ fn emit_on(
     cmos: bool,
     source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool, place: bool| {
+    let run = |function: MFunction<Class>, sink: bool, share: bool, place: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink, share, split, place, source)
+            emit_with::<true>(function, labels, cmos, sink, share, place, source)
         } else {
-            emit_with::<false>(function, labels, cmos, sink, share, split, place, source)
+            emit_with::<false>(function, labels, cmos, sink, share, place, source)
         }
     };
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
@@ -3504,50 +3500,33 @@ fn emit_on(
         let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
         better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
     };
-    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
+    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
     let mut place = true;
     if moved
-        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false, false)
+        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false)
         && wins((&code, &priced, &slots), (&other, &other_priced, &other_slots))
     {
         (code, priced, slots, place) = (other, other_priced, other_slots, false);
     }
-    // a function with calls that spilled may do better with a register kept in
-    // a slot across them only
-    let splittable = !slots.is_empty() && function.blocks.iter().any(|b| b.insts.iter().any(|i| i.call));
-    if !sunk && !shared && !splittable {
+    if !sunk && !shared {
         return Ok((code, slots));
     }
     // each change is kept only where it is no larger and no slower than the
     // function without it
     let mut best = (code, priced, slots);
-    let mut settings = (true, true);
     let mut variants = vec![(false, false)];
     if sunk && shared {
         variants.extend([(true, false), (false, true)]);
     }
-    if !sunk && !shared {
-        variants.clear();
-    }
     for (sink, share) in variants {
-        let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), sink, share, false, place) else {
+        let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), sink, share, place) else {
             continue;
         };
         if wins((&best.0, &best.1, &best.2), (&other, &other_priced, &other_slots)) {
             best = (other, other_priced, other_slots);
-            settings = (sink, share);
         }
-    }
-    if splittable
-        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
-        && let (Ok(kept), Ok(candidate)) = (price(&best.1, &best.2), price(&other_priced, &other_slots))
-        && candidate.0 <= kept.0
-        && candidate.1 <= kept.1
-        && candidate != kept
-    {
-        best = (other, other_priced, other_slots);
     }
     Ok((best.0, best.2))
 }
@@ -3722,16 +3701,22 @@ pub fn labels_with_new_blocks(
     all
 }
 
+/// How many times this thread ran `emit_with`, a whole function's selection
+/// to text (what a test counts to see how many variants a function paid for).
+pub fn emit_runs() -> usize {
+    EMITS.with(std::cell::Cell::get)
+}
+
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
     cmos: bool,
     sink: bool,
     share: bool,
-    _split: bool,
     place: bool,
     source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool), String> {
+    EMITS.with(|runs| runs.set(runs.get() + 1));
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
