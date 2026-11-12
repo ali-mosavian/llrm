@@ -437,6 +437,19 @@ impl Tti for M68k {
         if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL (owner m68k, exit 2026-11-24): the unrolled size
+    /// up to which a loop the -Os threshold refused is unrolled on trial; the
+    /// driver keeps it where the finished functions are smaller (as x86-m32's
+    /// 30). The pin never unrolls at -Os past its threshold.
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        Some(100)
+    }
+
+    /// DEVIATE PEEL-OS-TRIAL: the same trial peels (`loopunrollpass`).
+    fn peels_on_trial_at_size(&self) -> bool {
+        true
+    }
+
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
