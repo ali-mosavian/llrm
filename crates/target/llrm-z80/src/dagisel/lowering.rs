@@ -112,7 +112,11 @@ pub fn target_lowering() -> TargetLowering {
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     // no rotate or funnel shift instruction: shifts and an or (`expandROT`,
     // `expandFunnelShift`)
-    set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[Rotl, Rotr], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[FShl, FShr], &[MVT::I8], Action::Expand);
+    // `MatchRotate` makes `fshl` of the two shifts of a long shifted by one; a word funnel by 15 left or 1 right is
+    // `FSHR1`, the other amounts are the shifts and an or again
+    set(&[FShl, FShr], &[MVT::I16], Action::Custom);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
     set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
@@ -159,6 +163,10 @@ pub fn target_lowering() -> TargetLowering {
     // through their 32-bit halves.
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__ashlsi3", "__lshrsi3", "__ashrsi3"]) {
         tl.set_size_libcall_name(op, MVT::I32, name);
+    }
+    // the 64-bit shifts have a smaller routine for a function tuned for size (a bit at a time: 101 B against 189)
+    for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__s_ashldi3", "__s_lshrdi3", "__s_ashrdi3"]) {
+        tl.set_size_variable_libcall_name(op, MVT::I64, name);
     }
     tl.set_size_shift_call(8, 10);
     // the long divide has a smaller routine for a function tuned for size
@@ -375,6 +383,12 @@ impl Hooks for Z80Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
+            ISD::FShr => (dag.constant(dag.operand(node, 2)) == Some(1)).then_some(node),
+            ISD::FShl if dag.constant(dag.operand(node, 2)) == Some(15) => {
+                let (high, low) = (dag.operand(node, 0), dag.operand(node, 1));
+                let one = dag.get_constant(1, dag.value_type(dag.operand(node, 2)));
+                Some(dag.get_node(ISD::FShr, EVT::I16, &[high, low, one]))
+            }
             ISD::Sub => Some(lower_sub(dag, node)),
             ISD::UAddO | ISD::USubO | ISD::UAddOCarry | ISD::USubOCarry if dag.value_type(node) == EVT::I16 => {
                 Some(lower_carry_op(dag, node))

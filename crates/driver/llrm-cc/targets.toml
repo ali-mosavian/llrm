@@ -100,7 +100,7 @@ clang_env = "LLRM_CLANG_M16"
 clang = [
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
-  "-nostdinc", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
+  "-nostdinc", "-isystem", "{root}/toolchain/clang/borland", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
 ]
 llc = ["-mabi=cdecl"]
 object = "omf"
@@ -224,6 +224,7 @@ llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["{root}/tools/targets/6502-link.sh", "6502", "{output}", "{objects}"]
 unroll_at_o1 = true
+whole_program = true
 
 [65c02-cc65]
 description = "6502"
@@ -236,6 +237,7 @@ llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["{root}/tools/targets/6502-link.sh", "65c02", "{output}", "{objects}"]
 unroll_at_o1 = true
+whole_program = true
 
 # m68k Linux: -S is gas text, -c an ELF32 relocatable with .text and the data sections; no link line yet.
 # The pin's clang gives the target a 64-bit long double (`[c]` of the description).

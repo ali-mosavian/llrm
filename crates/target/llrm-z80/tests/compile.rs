@@ -2051,9 +2051,10 @@ fn a_slot_that_is_a_stack_is_not_refused() {
 
 /// copy_runs and loop_versioning at -Os gave wrong sums (164226 for 929463):
 /// `sum` kept its loop count in a byte slot stored from `e` and reloaded into
-/// `d`, and `push de` / `pop de` restores `e` into `e`. A byte slot whose
-/// stores and loads use different halves of a pair stays in the frame; a word
-/// may come back in another pair.
+/// `d`, and `push de` / `pop de` restores `e` into `e`. `sum` has stores from
+/// both halves of a pair: such a byte slot stays in the frame (a load into the
+/// other half than the one stored from is a pop and a copy,
+/// `tests/stack_slots.rs`); a word may come back in another pair.
 #[test]
 fn a_byte_stored_from_one_half_of_a_pair_and_loaded_into_the_other_stays_in_the_frame() {
     let ir = include_str!("kernels/ir/stack_slot_other_register.ll");
@@ -2341,7 +2342,9 @@ fn va_start_names_the_first_unnamed_argument_on_the_stack() {
     let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
     for level in [Level::O0, Level::O2, Level::Os] {
         let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(callee.contains("ld e, 4(ix)") && callee.contains("ld d, 5(ix)"), "{level:?}: {callee}");
+        // the word is read from 4(ix), 5(ix), into whichever pair the allocation gives it (the list pointer is a
+        // register since the va_list promotion, no longer a frame slot read through de)
+        assert!(callee.contains(", 4(ix)") && callee.contains(", 5(ix)"), "{level:?}: {callee}");
     }
 }
 

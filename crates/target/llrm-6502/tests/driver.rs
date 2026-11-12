@@ -2609,6 +2609,55 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
     }
 }
 
+/// A long multiply in a 200 trip loop called the compact `__mulsi3` (32 bits
+/// of multiplier a call): mul_constants 20.7M clocks against 16.8M, and
+/// overflow_builtins 720k against 426k with `__mulsi3_fast`. A module links
+/// the speed routine where its multiply sites count three runs
+/// (`hotmultiply`): a loop, or a function called from one; -Os never does.
+#[test]
+fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
+    let looped = module(
+        "define i32 @f(i32 %a, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = mul i32 %s, 1664525\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jsr __mulsi3_fast\n"), "a loop at -O2:\n{text}");
+    let small = assembly(&looped, &Request::new(Level::Os)).unwrap();
+    assert!(small.contains("__mulsi3") && !small.contains("_fast"), "a loop at -Os:\n{small}");
+}
+
+/// `__builtin_mul_overflow` in a loop is `llvm.umul.with.overflow.i32`, no `mul`:
+/// the site count saw no multiply and overflow_builtins kept the compact routine
+/// (720k clocks against 426k).
+#[test]
+fn a_long_multiply_with_overflow_in_a_loop_calls_the_fast_routine_at_speed() {
+    let looped = module(
+        "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)\n\
+         define i32 @f(i32 %a, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %p = call {i32, i1} @llvm.umul.with.overflow.i32(i32 %s, i32 1664525)\n  \
+         %r = extractvalue {i32, i1} %p, 0\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jsr __mulsi3_fast\n"), "{text}");
+}
+
+/// Two functions that call through a pointer both made the label `_ci1`:
+/// ca65 stopped with "Symbol '_ci1' is already defined" on any such module
+/// (tail_calls_edges), so no program with two indirect calls assembled.
+#[test]
+fn indirect_call_return_labels_are_unique_across_functions() {
+    let ir = module(
+        "define i16 @f(ptr %p, i16 %x) {\n  %r = call i16 %p(i16 %x)\n  %s = add i16 %r, 1\n  ret i16 %s\n}\n\
+         define i16 @g(ptr %p, i16 %x) {\n  %r = call i16 %p(i16 %x)\n  %s = add i16 %r, 2\n  ret i16 %s\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let labels: Vec<&str> = text.lines().filter(|l| l.starts_with("_ci") && l.ends_with(':')).collect();
+    assert_eq!(labels.len(), 2, "{text}");
+    assert_ne!(labels[0], labels[1], "{text}");
+}
+
 /// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
 /// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i` called
 /// `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks. At speed
@@ -2905,16 +2954,17 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     }
 }
 
-/// A branch on Z (`ne`) reads the flags `inx` sets: its compare keeps its
-/// place after the step, and the copy of the old counter stays.
+/// A branch on Z (`ne`) reads the flags the step sets: a compare of the old
+/// counter must stay after it. Narrowing turns this loop into a `dex; bne`
+/// down-counter, so only the order (when a compare remains) and the result
+/// are pinned.
 #[test]
 fn a_zero_branch_on_the_old_counter_keeps_its_compare_after_the_step() {
     let ir = counter_loop("ne i16 %i, 63");
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    let (compare, step) = (text.find("cmp #63"), text.find("inx"));
-    assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
-    assert!(step < compare, "the compare moved above the step:\n{text}");
-    assert!(text.contains("stx rc") || text.contains("sty rc"), "{text}");
+    if let (Some(compare), Some(step)) = (text.find("cmp #63"), text.find("inx")) {
+        assert!(step < compare, "the compare moved above the step:\n{text}");
+    }
     assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
 }
 

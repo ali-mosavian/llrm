@@ -53,7 +53,7 @@ fn collected(
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[] };
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false };
     let users = IvUsers::of(&mut se, &cx, header, &env);
     let latch_terminator = {
         let lp = loops.get_loop_for(header).expect("a loop");
@@ -190,5 +190,18 @@ fn an_immediate_is_taken_out_of_a_sum_and_a_recurrence_start() {
         assert_eq!(se.operands(rest)[0].scev, n);
         let (none, same) = extract_immediate(se, cx, n);
         assert_eq!((none, same), (Immediate::ZERO, n));
+    });
+}
+
+/// The premise of LU20: the pin's `getUse` makes the exit test against a
+/// variable bound one recurrence with a start that is not a constant,
+/// `{(-1 + %n),+,-1}` here, so the baseline cost holds one register for it.
+#[test]
+fn an_exit_test_against_a_variable_bound_is_one_recurrence_with_a_variable_start() {
+    collected(STORE, |cx, se, lsr, header, _| {
+        let exit = lsr.uses.iter().find(|lu| lu.kind == Kind::ICmpZero).expect("the exit test");
+        let [reg] = exit.formulae[0].base_regs[..] else { panic!("{:?}", exit.formulae[0]) };
+        let (start, _, _) = se.match_affine_add_rec(reg).expect("a recurrence");
+        assert!(se.as_constant(start).is_none() && se.is_loop_invariant(cx, start, Some(header)), "a variable start");
     });
 }

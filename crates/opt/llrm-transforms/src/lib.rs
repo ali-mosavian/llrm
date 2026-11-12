@@ -152,6 +152,7 @@ pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
 pub mod combine_icmp_intrinsic;
+pub mod combine_icmp_minmax;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;
@@ -257,6 +258,9 @@ pub mod globalbool;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
+pub mod internalize;
+#[cfg(test)]
+mod internalize_tests;
 pub mod globalmerge;
 pub mod globalopt;
 pub mod globalsra;
@@ -317,6 +321,7 @@ pub mod loopvectorizelegality;
 pub mod loopvectorizeplan;
 pub mod loopvectorizeskeleton;
 pub mod looppeel;
+pub mod trial;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopsimplifycfg;

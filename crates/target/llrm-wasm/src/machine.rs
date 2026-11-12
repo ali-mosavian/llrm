@@ -155,6 +155,10 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        true
+    }
+
     /// `i32.clz`, `i32.ctz` and their `i64` forms are one instruction.
     fn shift_loop_counts(&self) -> bool {
         true
@@ -225,6 +229,11 @@ impl Tti for Wasm {
     /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines every site on its cost
     /// and sinks the common call after (switch_header_marker_loop -Os: three `report(const)`).
     fn inline_trial_groups_sites(&self) -> bool {
+        true
+    }
+
+    /// The DAG legalizes odd-width loads and stores (`i24` is a 16-bit and an 8-bit access).
+    fn selects_odd_sized_integers(&self) -> bool {
         true
     }
 

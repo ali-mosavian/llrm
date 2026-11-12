@@ -28,9 +28,7 @@
 //! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
 //! simple, non-extending load, before and after operations are legal (legal
 //! extending load only, as the pin), with the table given by `with_tli` (no
-//! table: only a load nothing else reads); every integer truncate is taken as
-//! free (`isTruncateFree`). Exit: the target's truncate query. Owner sdag-b.
-//! Review 2026-11-27.
+//! table: only a load nothing else reads). Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
@@ -52,6 +50,20 @@ pub enum CombineLevel {
     AfterLegalizeTypes,
     AfterLegalizeVectorOps,
     AfterLegalizeDag,
+}
+
+/// A multiply by a constant as shifts, adds and subtracts of the multiplicand
+/// (and a negate), built by the target's own search
+/// ([`CombineHooks::synth_mul_chain`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MulPlan {
+    /// The multiplicand.
+    Multiplicand,
+    /// The value shifted left by a constant.
+    Shl(Box<MulPlan>, u32),
+    Add(Box<MulPlan>, Box<MulPlan>),
+    Sub(Box<MulPlan>, Box<MulPlan>),
+    Neg(Box<MulPlan>),
 }
 
 /// The machine opcodes of a target's multiply of two half-width operands into
@@ -246,6 +258,19 @@ pub trait CombineHooks {
         false
     }
 
+    /// DEVIATE: the cheapest chain for `x * c` by the target's own prices
+    /// (Bernstein's search), taken where the pin's `2^n +- 1` shape above does
+    /// not apply or costs more. The pin has no such search. None keeps the
+    /// multiply. Owner: llrm-target-m68k (G2). Exit: 2026-12-20, when a second
+    /// target measures it or the pin gains it.
+    fn synth_mul_chain(
+        &self,
+        _vt: EVT,
+        _c: u128,
+    ) -> Option<MulPlan> {
+        None
+    }
+
     /// DEVIATE: [`Self::decompose_mul_by_constant`] with the multiplicand, for
     /// a target whose multiply expansion gets cheaper with what is known of
     /// it (the Z80's byte-lane multiply of a zero-extended byte). The pin's
@@ -291,6 +316,17 @@ pub trait CombineHooks {
     /// is judged.
     fn fold_sra_of_trunc_of_shift(&self) -> bool {
         false
+    }
+
+    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another reader
+    /// takes narrow may be widened for an extension only if the truncate back is free.
+    /// The pin asks the same query as everywhere else; a target may answer it apart.
+    fn extend_uses_truncate_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.is_truncate_free(from, to)
     }
 
     /// `TLI.isTruncateFree(from, to)`: truncating an integer needs no
@@ -2263,6 +2299,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         compares: &mut Vec<u32>,
     ) -> bool {
         let mut copy_to_reg = false;
+        let truncate_free = self.hooks.extend_uses_truncate_free(self.dag.value_type(node), self.dag.value_type(load));
         for &user in others {
             let user_value = SDValue { node: user, res: 0 };
             if op != ISD::AnyExtend && self.dag.opcode(user_value) == ISD::SetCC {
@@ -2289,7 +2326,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
                 continue;
             }
-            // Every integer truncate between these widths is free on x86.
+            // `ExtendUsesToFormExtLoad`: "if truncates aren't free and there
+            // are users we can't extend, it isn't worthwhile."
+            if !truncate_free {
+                return false;
+            }
             if self.dag.opcode(user_value) == ISD::CopyToReg {
                 copy_to_reg = true;
             }
@@ -4245,6 +4286,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(decomposed);
                 }
             }
+            if let Some(plan) = self.hooks.synth_mul_chain(vt, c) {
+                return Some(self.build_mul_plan(&plan, n0, vt));
+            }
         }
         // `(mul (shl x, c1), c2)` is `(mul x, c2 << c1)`.
         if self.dag.opcode(n0) == ISD::Shl {
@@ -4273,6 +4317,35 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The nodes of a [`MulPlan`] over the multiplicand `x`.
+    fn build_mul_plan(
+        &mut self,
+        plan: &MulPlan,
+        x: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        match plan {
+            MulPlan::Multiplicand => x,
+            MulPlan::Shl(inner, by) => {
+                let inner = self.build_mul_plan(inner, x, vt);
+                let amount = self.shift_amount(vt, *by);
+                self.dag.get_node(ISD::Shl, vt, &[inner, amount])
+            }
+            MulPlan::Add(a, b) => {
+                let (a, b) = (self.build_mul_plan(a, x, vt), self.build_mul_plan(b, x, vt));
+                self.dag.get_node(ISD::Add, vt, &[a, b])
+            }
+            MulPlan::Sub(a, b) => {
+                let (a, b) = (self.build_mul_plan(a, x, vt), self.build_mul_plan(b, x, vt));
+                self.dag.get_node(ISD::Sub, vt, &[a, b])
+            }
+            MulPlan::Neg(inner) => {
+                let inner = self.build_mul_plan(inner, x, vt);
+                self.dag.get_negative(inner, vt)
+            }
+        }
     }
 
     /// The half-by-half multiply of `x * y`, where both are known to fit the

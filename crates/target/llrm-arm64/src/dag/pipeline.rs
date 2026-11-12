@@ -39,6 +39,16 @@ pub struct Aarch64Lowering {
 }
 
 impl CombineHooks for Aarch64Lowering {
+    /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)`
+    /// (AArch64ISelLowering.cpp#L18949 at d1106deb71cc): any narrower scalar integer.
+    fn is_truncate_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        !from.is_vector() && !to.is_vector() && from.is_integer() && to.is_integer() && from.size_in_bits() > to.size_in_bits()
+    }
+
     fn has_and_not(
         &self,
         vt: EVT,

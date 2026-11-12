@@ -222,6 +222,8 @@ pub struct LoweringNodes {
     /// The flags a call leaves, read back.
     pub call_flags: Option<ISD>,
     pub port_io: Option<ISD>,
+    /// The flags pushed before a call of an interrupt function.
+    pub push_flags: Option<ISD>,
     pub copy128: Option<ISD>,
     pub move128: Option<ISD>,
     pub zero128: Option<ISD>,
@@ -780,6 +782,7 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            interrupt_call: false,
             variadic_count: None,
             win64_va: false,
             variadic_shadows: Vec::new(),
@@ -829,6 +832,9 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The call `visit_call` is lowering is to an interrupt function, which
+    /// returns by `iret`: `lower_call` pushes the flags it pops.
+    interrupt_call: bool,
     /// The convention of the variadic call being lowered counts its vector
     /// registers in `al` (SysV); Win64 has no count.
     /// The register a variadic call sets to the number of vector registers it
@@ -2164,6 +2170,7 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        self.interrupt_call = info.calling_convention == llrm_mir::opcode::X86_INTR;
         let found = self.full_arch().ok().and_then(|arch| arch.calling().by_number(info.calling_convention));
         self.variadic_count = found
             .and_then(|found| found.variadic_vector_register.as_deref())
@@ -2852,6 +2859,18 @@ impl Builder<'_> {
         }
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);
+        }
+        // The handler is entered as an interrupt enters it, with the flags
+        // pushed for its `iret` (net stack effect none).
+        if std::mem::take(&mut self.interrupt_call) && !sibling {
+            let node = self
+                .dag
+                .get_node_multi(
+                    LoweringNodes::need(self.target.dag.nodes.push_flags, "flags push")?,
+                    &[EVT::OTHER],
+                    &[chain],
+                );
+            chain = SDValue { node: node.node, res: 0 };
         }
         let mut glue: Option<SDValue> = None;
         for (reg, value) in &copies {

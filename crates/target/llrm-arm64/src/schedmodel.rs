@@ -517,8 +517,10 @@ mod tests {
         let model = Arm64Model::generic();
         let bitcast = Arc::new(form("FMOVWSr", vec![held(2)]));
         assert_ne!(model.def_latency(&bitcast), default_def_latency(&bitcast, 3), "FMOVWSr is priced by its row");
-        let mvni = Arc::new(form("MVNIv2i32", vec![imm(0), imm(0)]));
-        assert_eq!(model.def_latency(&mvni), default_def_latency(&mvni, 3), "MVNIv2i32 is unmodeled");
+        // `MOVIv2d_ns` is a hand-selected opcode with a class since #9048;
+        // `MOVIv2i32` only the vector patterns emit.
+        let movi = Arc::new(form("MOVIv2i32", vec![imm(0)]));
+        assert_eq!(model.def_latency(&movi), default_def_latency(&movi, 3), "MOVIv2i32 is unmodeled");
     }
 
     /// AArch64 schedules from both ends and keeps the latency heuristic on

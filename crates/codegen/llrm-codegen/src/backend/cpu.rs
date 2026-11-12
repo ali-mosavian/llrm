@@ -434,12 +434,19 @@ impl Profile {
 
     /// DEVIATE X87-FCMP-AH: whether a compare read from the status word is
     /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
-    /// register-immediate operation, and code is not tuned for size (the test
-    /// is two bytes longer).
+    /// register-immediate operation, code is not tuned for size, and the clock
+    /// saved pays for the two bytes the test adds at the target's speed rate
+    /// (none at -O1, where clocks and bytes are each held; m16's 500 milli-
+    /// clocks a byte makes it a tie, which keeps `sahf`).
     pub fn tests_status_word(&self) -> bool {
+        const EXTRA_BYTES: i64 = 2;
         !self.size
             && !self.min_size
-            && matches!((self.cost("sahf"), self.cost("alu_ri")), (Ok(sahf), Ok(alu)) if alu < sahf)
+            && matches!(
+                (self.cost("sahf"), self.cost("alu_ri")),
+                (Ok(sahf), Ok(alu)) if alu < sahf
+                    && 1000 * (sahf - alu) > EXTRA_BYTES * self.speed_milliclocks_per_byte()
+            )
     }
 
     /// Clocks a byte of code is worth, in thousandths, where code is tuned
@@ -488,9 +495,13 @@ impl Profile {
         let size = self.tail_dup_hot_size?;
         let per_byte = self.speed_milliclocks_per_byte();
         let jump = self.cost("jmp_short").ok()?;
+        // A copied loop latch ends in a branch back that is taken, where the
+        // tail's own branch out of the loop was not.
+        let back = self.cost("jcc").ok()? - self.cost("jcc_not_taken").ok()?;
         (per_byte > 0 && jump > 0).then_some(crate::backend::jumps::placement::HotTailDup {
             size,
             jump_clocks: jump as f64,
+            back_edge_clocks: back.max(0) as f64,
             clocks_per_byte: per_byte as f64 / 1000.0,
         })
     }

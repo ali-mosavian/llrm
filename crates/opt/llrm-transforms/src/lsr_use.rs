@@ -59,7 +59,7 @@
 //! is not, nor are the post-indexed sites in the other LSR modules. A
 //! scalable `Immediate` does not exist (see [`crate::lsr_formula`]).
 
-use llrm_analysis::scev::expr::{Scev, Ty, Type};
+use llrm_analysis::scev::expr::{Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Opcode};
@@ -834,7 +834,10 @@ impl Cost {
             if header != r.l {
                 // One that exists as a phi is free (unless post-indexed
                 // addressing is favored).
-                if is_existing_phi(r.se, r.cx, reg) && !r.tti.preferred_addressing_mode().has_post_indexed() {
+                if (is_existing_phi(r.se, r.cx, reg)
+                    || r.tti.lsr_extension_of_phi_exists() && is_extension_of_existing_phi(r.se, r.cx, reg))
+                    && !r.tti.preferred_addressing_mode().has_post_indexed()
+                {
                     return;
                 }
                 // A sibling's induction variable is not for this loop to add.
@@ -882,6 +885,17 @@ impl Cost {
             {
                 let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
                 self.c.num_iv_muls += r.tti.lsr_written_step_multiplies(c.sext_value() as i64, bits);
+            }
+            // DEVIATE LU20: the loop as written keeps the bound of its exit
+            // test next to the counter; the folded `{-bound,+,1}` counts one.
+            if r.as_written
+                && lu.kind == Kind::ICmpZero
+                && r.tti.lsr_written_exit_bound_is_live()
+                && let Some((start, _, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(start).is_none()
+                && r.se.is_loop_invariant(r.cx, start, Some(r.l))
+            {
+                self.c.num_regs += 1;
             }
             if loop_cost > 0 && self.size && r.tti.lsr_size_order() {
                 self.size_bytes += 3;
@@ -1006,6 +1020,39 @@ pub fn is_existing_phi(
             if own.is_some_and(|own| se.get_effective_scev_type(cx, own) == ty) {
                 return true;
             }
+        }
+    }
+    false
+}
+
+/// DEVIATE LU22 (`Tti::lsr_extension_of_phi_exists`): a phi of the addrec's
+/// loop header narrower than the addrec, whose zero or sign extension is the
+/// addrec. The extension is an instruction the loop already has (`zext i8 j`).
+pub fn is_extension_of_existing_phi(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    ar: Scev,
+) -> bool {
+    let Some(header) = se.addrec_header(ar) else { return false };
+    let ty = se.type_of(ar);
+    let bits = se.get_type_size_in_bits(cx, ty);
+    for inst in cx.function.iter_block(header) {
+        let phi = cx.function.instruction(inst);
+        if phi.opcode != Opcode::Phi {
+            break;
+        }
+        let value = result_of(phi);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let narrow = se.get_scev(cx, value);
+        if se.get_type_size_in_bits(cx, se.type_of(narrow)) >= bits || se.addrec_header(narrow) != Some(header) {
+            continue;
+        }
+        if se.get_zero_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar
+            || se.get_sign_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar
+        {
+            return true;
         }
     }
     false

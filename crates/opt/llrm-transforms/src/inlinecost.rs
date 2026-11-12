@@ -75,6 +75,9 @@
 //!   one gain is `byvalue_struct_address` 147 -> 16. The guard stays.
 //!   The last call of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
+//! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
+//!   callee's instruction with the call site's constant arguments, not only
+//!   a GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot or a global the caller stored a constant to and
 //!   whose callee loads through that parameter, is inlined if the caller,
@@ -89,6 +92,12 @@
 //!   words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a
 //!   load through a pointer argument, so it never sees the loop or the
 //!   arithmetic fold.
+//! - D13 (SZ5, owner x86-m32, exit 2026-11-24; extends D12): at -Os the credit for the
+//!   callee that goes with its last call (`(k - 1) * size > k * call + frame`) is not taken
+//!   in the instruction units; those sites are tried in bytes (SZ2). The units count the
+//!   callee's own instructions, not what a copy carries at the site: QCport `pl_box_axis`
+//!   (9 arguments, floats), 21 units, ~70 B a copy, inlined three times was +181 B. The pin
+//!   has no byte trial; its `OptSizeThreshold` alone decides.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -2087,16 +2096,36 @@ impl<'a> Analyzer<'a> {
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
         let view = self.size_view();
-        llrm_mir::instructioncost::instruction_cost(
+        llrm_mir::instructioncost::instruction_cost_known(
             view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
             self.callee,
             inst,
+            &self.callee.instruction(inst).operands,
             llrm_mir::tti::CostKind::CodeSize,
+            &|operand| self.site_constant_info(operand),
         )
         .value
+    }
+
+    /// What a callee operand is at this site when the call's constant arguments
+    /// fix it (`SimplifiedValues`), for a size priced as the copy would be: a
+    /// shift by 5 is not a library call of a variable amount.
+    ///
+    /// DEVIATE SZ1-SITE (owner m68k-b, exit 2026-11-24): the pin prices only a GEP with
+    /// the site's constants (`isGEPFree`); the byte size view prices every instruction
+    /// the analysis could not fold. Exit: the pin's flat `InstrCost` there, or keep with
+    /// the measured numbers.
+    fn site_constant_info(
+        &self,
+        operand: Operand,
+    ) -> Option<llrm_mir::tti::OperandInfo> {
+        match self.constant(operand)? {
+            Simple::Int(width, bits) => Some(llrm_mir::tti::OperandInfo::constant(bits as i128, width)),
+            _ => None,
+        }
     }
 
     /// The target's code size of the call and the pushes of its arguments,
@@ -2222,7 +2251,13 @@ impl<'a> Analyzer<'a> {
         let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
         // the callee's frame goes once, with the callee
         let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
-        if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call + frame } else { size > call }
+        // D13: where the target says the units undercount a copy (`inline_dying_credit_at_os`),
+        // -Os takes no credit for the callee that goes (a 9-argument float callee, 21 units
+        // against ~70 B a copy, inlined three times was +193 B at x86-m16).
+        let credit = self.site.callee_dies
+            && k >= 2
+            && (self.site.caller_size == CallerSize::Speed || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
+        if credit { (k - 1) * size > k * call + frame } else { size > call }
     }
 
     /// Bytes of the caller's stores into a local that the callee reads only
@@ -2411,7 +2446,14 @@ impl<'a> Analyzer<'a> {
             self.threshold -= self.vector_bonus / 2;
         }
         if llrm_support::debug::enabled("inline") {
-            eprintln!("inline:   size={} call={} k={} dies={}", self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls, self.site.callee_dies);
+            eprintln!(
+                "inline:   size={} call={} frame={} k={} dies={}",
+                self.size_units - self.folded_caller_stores(),
+                self.call_size(),
+                self.callee_frame(llrm_mir::tti::CostKind::CodeSize),
+                self.site.callee_calls,
+                self.site.callee_dies
+            );
         }
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.

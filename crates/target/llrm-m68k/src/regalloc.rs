@@ -165,6 +165,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         root == reg::SP || root == reg::A6
     }
 
+    fn flags_register() -> Option<RegId> {
+        Some(reg::CCR)
+    }
+
     fn hoist_window() -> usize {
         4
     }
@@ -379,7 +383,7 @@ pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_co
     )?;
     let mut body = body;
     for phase in phases.iter_mut() {
-        if matches!(phase.class_name(), "PhiElimination" | "TwoAddress") {
+        if matches!(phase.class_name(), "MachineSink" | "PhiElimination" | "TwoAddress") {
             body = phase.transform(body)?;
         }
     }
@@ -451,6 +455,80 @@ pub fn split_flag_edges(function: &mut MFunction) {
 /// `TwoAddressInstructionPass`'s choice of the tied source.
 pub fn commute_tied(function: &mut MFunction) {
     llrm_spike_mf::commute_tied::<M68kRegisters>(function)
+}
+
+/// A 32-bit value only copies and instructions that take any register touch
+/// is given `XR32`: after `TwoAddress` the tied use reads the copy's
+/// destination, so the source keeps the `DR32` the tied operand gave it at
+/// selection for nothing.
+///
+/// DEVIATE C17 (the pin keeps the class: `constrainRegClass` only narrows):
+/// `fib` -Os joined the add's source copy to the carried `a`, which narrowed to
+/// `DR32`, and with `s` and `i` three values needed the two scratch data
+/// registers: the counter took `d2` (a push and a pop, +4 B against gcc's `a0`
+/// for `a`). Owner: m68k. Exit: 2026-11-28. Off for `Options::PINNED`.
+pub fn relax_copy_only_classes(function: &mut MFunction) -> bool {
+    let mut changed = false;
+    let count = function.classes.len();
+    let mut wanted = vec![Class::Xr32; count];
+    let mut fixed = vec![false; count];
+    let (mut defs, mut uses) = (vec![0u32; count], vec![0u32; count]);
+    for operand in function.blocks.iter().flat_map(|block| &block.insts).flat_map(|inst| &inst.operands) {
+        match operand {
+            Operand::Def(Reg::Virt(v)) => defs[*v as usize] += 1,
+            Operand::Use(Reg::Virt(v)) => uses[*v as usize] += 1,
+            _ => {}
+        }
+    }
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if inst.kind == Kind::Copy {
+            // a copy to or from a byte or word view reads that view of the
+            // value, and an address register has none
+            let partial = inst
+                .operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => {
+                            matches!(function.classes[*v as usize], Class::Dr8 | Class::Dr16)
+                        }
+                        Operand::Def(Reg::Phys(p)) | Operand::Use(Reg::Phys(p)) => REGISTER_INFO.root(*p) != *p,
+                        _ => false,
+                    },
+                );
+            if partial {
+                for operand in &inst.operands {
+                    if let Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) = operand {
+                        fixed[*v as usize] = true;
+                    }
+                }
+            }
+            continue;
+        }
+        for (at, operand) in inst.operands.iter().enumerate() {
+            let (Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v))) = operand else { continue };
+            let v = *v as usize;
+            // a move into an address register leaves the codes alone: a value a
+            // flag setter defines stays in a data register
+            if inst.sets_flags && matches!(operand, Operand::Def(_)) {
+                fixed[v] = true;
+            }
+            match inst.kind {
+                Kind::Op(name) => match crate::mfunc::operand_class(name, at).and_then(|class| wanted[v].meet(class)) {
+                    Some(class) => wanted[v] = class,
+                    None => fixed[v] = true,
+                },
+                Kind::Copy => {}
+            }
+        }
+    }
+    for v in 0..count {
+        if !fixed[v] && defs[v] == 1 && uses[v] == 1 && function.classes[v] == Class::Dr32 && wanted[v] == Class::Xr32 {
+            function.classes[v] = Class::Xr32;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// `MachineCopyPropagation`'s spurious copies; the 8 and 16-bit classes copy

@@ -471,6 +471,7 @@ pub fn compiled_dumping(
     // C's convention.
     with_default_convention(&mut module, default, flags.regcall_default, flags.c_library, format.name() == "omf");
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
+    crate::coerce::small_struct_results_as_scalars(&mut module, bound.target.calling())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.
     llrm_mir::dbgimport::types_and_globals(&mut module);
@@ -502,7 +503,10 @@ pub fn compiled_dumping(
     let bytes = |built: &masm::Module| {
         objbuild::written_in(built, name, layout_of(flags, format), format, objects).ok().map(|object| object.len() as i64)
     };
-    Ok((llrm_codegen::driver::trial::compiled_module_trying(module, name, &options, &bytes)?, format))
+    let unpadded = |built: &masm::Module| {
+        objbuild::unpadded_bytes(built, name, layout_of(flags, format), format, objects).ok()
+    };
+    Ok((llrm_codegen::driver::trial::compiled_module_trying(module, name, &options, &bytes, &unpadded)?, format))
 }
 
 

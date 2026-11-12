@@ -733,6 +733,14 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn unroll_trial_nests_only(&self) -> bool {
+        self.tuning.unroll_trial_nests_only
+    }
+
+    fn inline_dying_credit_at_os(&self) -> bool {
+        self.tuning.inline_dying_credit_at_os
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
@@ -1032,6 +1040,10 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_depth
     }
 
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        self.tuning.ipa_cp_clones_at_speed
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }
@@ -1114,6 +1126,10 @@ impl Tti for X86 {
 
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn rotation_trial_at_size(&self) -> bool {
+        self.tuning.rotation_trial_at_size
     }
 
     fn size_rotation_header_limit(&self) -> Option<u32> {
@@ -1270,6 +1286,16 @@ impl Tti for X86 {
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
     }
 
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, .. } = self.tuning;
+        // a shift-and-add chain is a shift and an add for each term past the first
+        let chain = multiplier.map_or(i64::MAX, |m| 2 * (signed_digits(m) as i64 - 1).max(1));
+        multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
+    }
+
     fn splits_merged_conditions(&self) -> bool {
         self.tuning.split_merged_conditions
     }
@@ -1297,11 +1323,25 @@ impl Tti for X86 {
             _ => false,
         };
         let both_eq = is_eq(query.lhs) && is_eq(query.rhs);
-        match query.logic {
-            Logic::Or if both_eq => CondMerging::SPLIT,
+        // DEVIATE SD103-M32: the `setcc` pair, logic op and `test` a merged
+        // pair costs come off the budget, unless the DAG folds the pair into
+        // one compare (`Tuning::merged_condition_clocks`).
+        let extra = if llrm_mir::jumpmerge::folds_logic_of_setccs(
+            query.context,
+            query.function,
+            query.logic,
+            (query.lhs, query.rhs),
+        ) {
+            0
+        } else {
+            self.tuning.merged_condition_clocks
+        };
+        let params = match query.logic {
+            Logic::Or if both_eq => return CondMerging::SPLIT,
             Logic::And if both_eq => CondMerging { base_cost: 3, likely_bias: 0, unlikely_bias: -1 },
             _ => CondMerging { base_cost: 2, likely_bias: 0, unlikely_bias: -1 },
-        }
+        };
+        if params.base_cost <= extra { CondMerging::SPLIT } else { CondMerging { base_cost: params.base_cost - extra, ..params } }
     }
 
     fn intrinsic_cost(
@@ -1881,4 +1921,19 @@ impl Tti for X86 {
         }
         generic_arithmetic(op, ty, kind, first, second, self)
     }
+}
+
+/// The nonzero digits of `n` in signed-digit (non-adjacent) form: a multiply by
+/// `n` is that many shifted terms added or subtracted.
+fn signed_digits(n: u128) -> u32 {
+    let (mut n, mut count) = (n, 0);
+    while n > 0 {
+        if n & 1 == 1 {
+            // 1 mod 4 takes the digit +1, 3 mod 4 takes -1
+            n = if n & 3 == 1 { n - 1 } else { n + 1 };
+            count += 1;
+        }
+        n >>= 1;
+    }
+    count
 }

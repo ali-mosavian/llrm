@@ -1049,6 +1049,11 @@ impl Collection<'_, '_> {
     /// pin nor gcc builds it: the pin's address uses never name the exit
     /// test's register, and gcc compares against the end instead.
     ///
+    /// The biased bases are new registers the pin's solution does not hold;
+    /// where a base names a global's address each costs the target's setup
+    /// (`Tti::lsr_symbol_base_setup_insns`), which the solution's cost ignores:
+    /// `plan_loop` prices it in the keep rule.
+    ///
     /// Work: one formula for each (zero-ending register, address formula
     /// holding an addrec of this loop), the registers capped at four.
     pub fn generate_end_biased(
