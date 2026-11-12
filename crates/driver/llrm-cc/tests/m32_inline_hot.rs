@@ -11,7 +11,18 @@ use std::process::Command;
 
 #[test]
 fn test_o2_inlines_a_hot_call_the_threshold_refused_when_the_trial_pays() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("inlinehot-{}", std::process::id()));
+    hot_call_is_inlined_at("-O2");
+}
+
+/// The same at -O3: x_sf_div -O3 137429 -> 120942 clk (+657 B), x_sf_add/sub/mul/i2d 10198-12441 clk
+/// each (+528..551 B) once the trial runs there; a 121-program A/B changed nothing else.
+#[test]
+fn test_o3_inlines_a_hot_call_the_threshold_refused_when_the_trial_pays() {
+    hot_call_is_inlined_at("-O3");
+}
+
+fn hot_call_is_inlined_at(level: &str) {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("inlinehot{}-{}", level, std::process::id()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -21,7 +32,7 @@ fn test_o2_inlines_a_hot_call_the_threshold_refused_when_the_trial_pays() {
             "LLRM_LLC",
             std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
         )
-        .args(["-O2", "-w", "-S", "-march=i486", "-mabi=sysv", "-o"])
+        .args([level, "-w", "-S", "-march=i486", "-mabi=sysv", "-o"])
         .arg(dir.join("d.s"))
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/inline_hot.c"))
         .output()
