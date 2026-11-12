@@ -141,6 +141,8 @@ const TIME_SCALE: i64 = 5;
 /// The most a block counts in a callee's time: the trips GCC's loop estimates
 /// stop at.
 const MAX_FREQUENCY: i64 = 10;
+/// `max-completely-peel-times` (params.opt): the most trips the unroller takes whole.
+const MAX_PEEL_TIMES: i128 = 16;
 /// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known
 /// actuals make a loop's bound known.
 const LOOP_HINT_BONUS: i64 = 64;
@@ -614,6 +616,9 @@ fn time_saved(
     // `niter` expression needs every parameter it reads: `chop(0, 64)`'s
     // `for (i = lo; i < hi; ++i)` has "loops with known iterations: 0" with
     // `hi` alone, and recchop -O3 cloned `chop` for the bonus).
+    let number = |operand: &Operand| -> Option<i128> {
+        consts::_operand(&unit, *operand, &values, None)?.n.to_string().parse().ok()
+    };
     let hint = cfg::loops_of(body)
         .iter()
         .any(
@@ -631,9 +636,9 @@ fn time_saved(
                     );
                     // A counter: a loop phi, or one step of it, whose arms from
                     // outside the loop are constant.
-                    let starts_known = |operand: &Operand| {
-                        let Operand::Value(v) = operand else { return false };
-                        let llrm_mir::module::ValueDef::Instruction(made) = body.value(*v).def else { return false };
+                    let starts_known = |operand: &Operand| -> Option<i128> {
+                        let Operand::Value(v) = operand else { return None };
+                        let llrm_mir::module::ValueDef::Instruction(made) = body.value(*v).def else { return None };
                         let phi = if body.instruction(made).opcode == Opcode::Phi {
                             made
                         } else {
@@ -654,17 +659,35 @@ fn time_saved(
                             let mut phis = phis;
                             match (matches!(step.opcode, Opcode::Binary(_)), phis.next(), phis.next()) {
                                 (true, Some(only), None) => only,
-                                _ => return false,
+                                _ => return None,
                             }
                         };
-                        crate::lcssa::arms(body, phi).into_iter().all(|(value, from)| {
-                            one.body.contains(&cfg::id(from)) || consts::_operand(&unit, value, &values, None).is_some()
-                        })
+                        // The counter's start: the one arm from outside the loop.
+                        let mut start = Some(0i128);
+                        for (value, from) in crate::lcssa::arms(body, phi) {
+                            if one.body.contains(&cfg::id(from)) {
+                                continue;
+                            }
+                            start = Some(number(&value)?);
+                        }
+                        start
                     };
                     let moving = |operand: &Operand| {
-                        matches!(operand, Operand::Value(v) if varying.contains(v)) && starts_known(operand)
+                        matches!(operand, Operand::Value(v) if varying.contains(v)).then(|| starts_known(operand)).flatten()
                     };
-                    compared.operands.len() == 2 && ((constant(&compared.operands[0]) && moving(&compared.operands[1])) || (constant(&compared.operands[1]) && moving(&compared.operands[0])))
+                    // DEVIATE IPACP-LOOPS (owner w10, exit 2026-11-24): gcc's
+                    // hint counts any known trip count; here a loop the
+                    // unroller cannot take whole (`MAX_PEEL_TIMES`, gcc's
+                    // `max-completely-peel-times`) is grown by the clone's
+                    // inlining instead: m64 nbody -O2 655 -> 1189 B for 3
+                    // instructions, recpow 1207 -> 3060 B.
+                    let reach = |bound: &Operand, counter: &Operand| {
+                        let (Some(start), Some(end)) = (moving(counter), number(bound)) else { return false };
+                        (end - start).abs() <= MAX_PEEL_TIMES
+                    };
+                    compared.operands.len() == 2
+                        && ((constant(&compared.operands[0]) && reach(&compared.operands[0], &compared.operands[1]))
+                            || (constant(&compared.operands[1]) && reach(&compared.operands[1], &compared.operands[0])))
                 }
             }),
         );

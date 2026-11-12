@@ -951,6 +951,21 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
+/// A known bound the unroller cannot take whole is no reason to copy: gcc's
+/// hint counts it, but m64 nbody -O2 went 655 -> 1189 B and recpow 1207 ->
+/// 3060 B for a loop of 400 trips, so the hint counts up to
+/// `max-completely-peel-times` (16) trips.
+#[test]
+fn test_a_loop_bound_past_the_peel_limit_is_no_reason_to_clone() {
+    let cloned = |trips: &str| {
+        let text = TWO_CONTEXTS.replace("i16 4,", &format!("i16 {trips},")).replace("i16 5,", &format!("i16 {trips},"));
+        let mut module = parsed(&text);
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned("4"), cloned("400")), (true, false));
+}
+
 /// A function only an invoke or a `!callees` list names is still called.
 #[test]
 fn test_a_function_only_an_invoke_calls_is_not_dead() {

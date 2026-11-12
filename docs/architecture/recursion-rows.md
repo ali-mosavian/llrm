@@ -134,8 +134,8 @@ The pin's `FunctionSpecializer` solves, specialises and solves again before the 
 
 ## IPACP-O2 rows (owner w10, exit 2026-11-24)
 
-ipa-cp clones at -O2 on x86-m32, x86-m64 and arm64 (`Tti::ipa_cp_clones_at_speed`; gcc clones at -O3 only), net of clocks + 0.3125 B (arm64: instructions + 0.3 B):
+ipa-cp clones at -O2 on x86-m32, x86-m64 and arm64 (`Tti::ipa_cp_clones_at_speed`; gcc clones at -O3 only), net of clocks + 0.3125 B (arm64: instructions + 0.3 B). The loop hint counts only up to `max-completely-peel-times` trips (IPACP-LOOPS).
 
 - Wins: m32 -O2 queens -12.0 k clk, frames -48 k, quicksort -5.3 k, x_jpeg_fixed -42 k, bintree -1.6 k; m64 queens -O2 -9.4% instructions, -O3 -25%; arm64 queens -8.4 k.
-- Worse, the clone is priced by the loop-hint bonus or loses the merge of its copies' calls: m32 -O2 x_spill_store_order +22.4 k; m64 fib +6.4 k, rectwo +4.9 k, recpow +0.9 k, nbody +0.2 k; arm64 frames +30 k, quicksort +22.
-- Fix: count a loop hint only for a known trip count within the unroller's reach; price a pure tree recursion's clones against the merge of its copies.
+- Worse: m32 -O2 x_spill_store_order +22.4 k (the clone is inlined before the unroll that specialised it per mode); m64 fib +6.4 k, rectwo +4.9 k (a clone per constant cuts the GVN merge of the copies' calls); arm64 frames +30 k.
+- Fix: price a recursion's clones against the merge of its copies; defer a clone's last-call inline past the unroll.
