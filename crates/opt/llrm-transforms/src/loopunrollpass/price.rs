@@ -94,6 +94,33 @@ pub(super) fn full_unroll_pays(
     // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves the
     // rows slower than gcc and clang at the pin's value.
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
+    // DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 the
+    // pin decides a loop inside a loop of known trips by its size alone, as it
+    // decides the nest (below). Priced, the inner loop was vetoed while the
+    // loop around it was unrolled, and its copies were then unrolled unpriced
+    // ("a copy of this run"): fpbench -O3 grew 2,300 B (the pin's order leaves
+    // the outer loop rolled around inner loops it unrolled: 1,412 B).
+    if run.tti.unroll_pin_decides_inner_of_known_trips()
+        && run.options.opt_level >= 3
+        && lp.is_innermost()
+        && lp.get_parent_loop().is_some_and(|parent| {
+            let cx = llrm_analysis::scev::Cx {
+                context: &*run.context,
+                globals: run.globals,
+                metadata: run.metadata,
+                function: &*run.function,
+                layout: run.layout,
+                loops: &analyzed.loops,
+                tree: &analyzed.tree,
+                assumptions: &analyzed.assumptions,
+            };
+            let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
+            trips != 0 && trips <= up.full_unroll_max_count
+        })
+    {
+        why(run, lp, "unpriced unroll: inside a loop of known trips");
+        return true;
+    }
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
         && (!prices_nest || reads_outer_counter(run, se, analyzed, lp, up))
     {

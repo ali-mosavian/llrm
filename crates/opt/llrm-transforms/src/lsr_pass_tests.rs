@@ -832,11 +832,11 @@ fn test_lsr_continues_the_expressions_the_passes_before_it_made() {
     let (context, function) = module.function_mut("f").expect("@f");
     let tti = X86::of_cpu("i486").unwrap();
     let (_, kept) =
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, None);
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, false, None);
     let kept = kept.expect("no edge was split");
     let mut nodes = |held| {
         let before = get(Event::ScevNodes);
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, held);
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, false, held);
         get(Event::ScevNodes) - before
     };
     let (cold, warm) = (nodes(None), nodes(Some(kept)));
@@ -1050,7 +1050,7 @@ exit:
         let mut declared = llrm_mir::passes::Declared::of(&module);
         let (context, function) = module.function_mut("f").expect("@f");
         let tti = X86::of_cpu("i486").unwrap();
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, None);
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, false, None);
         declared.place(&mut module).expect("the declarations");
         printed(&module).split("loop:").nth(1).unwrap().split("exit:").next().unwrap().matches("phi").count()
     };
@@ -1285,7 +1285,7 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
 fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
     let mut module = parsed(&format!("{DOS}{DOT}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert_eq!(after.matches("= phi i16").count(), 1, "{after}");
@@ -1300,7 +1300,7 @@ fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
 fn the_temporaries_of_the_body_count_against_the_registers() {
     let mut module = parsed(&format!("{DOS}{SHELLSORT_INIT}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     // At LU3c the live count is exact at m16, so the offset that ends at zero
@@ -1340,7 +1340,7 @@ b6:
 fn at_size_a_word_copy_keeps_the_counter_and_does_not_double_the_limit() {
     let mut module = parsed(&format!("{DOS}{COPY}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("shl i16"), "{after}");
@@ -1424,7 +1424,7 @@ fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
 fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero() {
     let mut module = parsed(&format!("{DOS}{SUM_OF_COUNTS}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains(", 0\n") && !after.contains("257"), "{after}");
@@ -1462,7 +1462,7 @@ exit:
 fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
     let mut module = parsed(&format!("{DOS}{BLOCK_LOOP}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr"), "{after}");
@@ -1477,7 +1477,7 @@ fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
 fn at_size_a_fitting_solution_does_not_cost_an_instruction_more() {
     let mut module = parsed(include_str!("lsr_stft_rev.ll"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr [ %") && after.contains("@$var_rev, i16 128"), "{after}");
@@ -1541,7 +1541,7 @@ exit:
 fn frame_arrays_share_one_index_under_pressure() {
     let mut module = parsed(&format!("{DOS}{FRAME_LOOP}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("phi ptr"), "{after}");
@@ -1629,7 +1629,7 @@ e:
 ";
     let mut module = parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
