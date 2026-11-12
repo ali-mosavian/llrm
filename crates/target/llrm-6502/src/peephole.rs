@@ -194,6 +194,11 @@ fn run_passes(
     drop_dead_repeat_load(asm);
     zero_cells_with_stz(asm);
     merge_saves_of_a(asm);
+    if known_loads {
+        drop_known_loads(asm);
+    }
+    // after the known loads: a register that holds the literal stores it without a bracket; the loads the
+    // moved pair repeats are known in turn
     sink_save_bracket(asm);
     if known_loads {
         drop_known_loads(asm);
