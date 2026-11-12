@@ -211,6 +211,8 @@ pub fn select_block_with(
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering_with(cpu, carry_chain);
     crate::libcalls::apply(&mut tli, libcalls);
+    // `DAG.shouldOptForSize()`: the routines tuned for size (`set_size_libcall_name`)
+    tli.set_opt_for_size(price == crate::timing::Price::Size);
     let mut lowering = M68kLowering { indexed, short, absolute_data, half_mul: short && super::lowering::prefers_word_multiply(cpu), cpu, price, mul };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,

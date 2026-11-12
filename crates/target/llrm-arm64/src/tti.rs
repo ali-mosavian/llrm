@@ -535,6 +535,15 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE ROTATION-TRIAL and ROTATION-HOT (owner w11, exit 2026-12-05): see `crate::trial`.
+    fn rotation_trial_at_size(&self) -> bool {
+        true
+    }
+
+    fn rotation_hot_at_size(&self) -> bool {
+        true
+    }
+
     /// The inliner counts a callee's growth in cost units, one per instruction,
     /// and prices it as `units * inline_o1_unit_bytes_milli / 1000` bytes: an
     /// arm64 instruction is 4 bytes. (Left at 1000, a unit priced as a byte

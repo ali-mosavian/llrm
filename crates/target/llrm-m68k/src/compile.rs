@@ -601,6 +601,7 @@ pub fn libcalls_for(
 ) -> u8 {
     let kinds = crate::libcalls::chosen(
         module,
+        cpu,
         options.size_libcalls,
         |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
         |name, kinds| {
@@ -733,9 +734,12 @@ fn items_once(
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
-    // call
-    let libcalls = if wants_size && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
-        crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)))
+    // call the counts and shifts
+    let libcalls = if wants_size {
+        let mut kinds =
+            crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)));
+        kinds.retain(|&kind| crate::libcalls::decided_at(kind, cpu));
+        kinds
     } else {
         Vec::new()
     };

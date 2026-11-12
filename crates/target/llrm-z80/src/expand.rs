@@ -76,6 +76,9 @@ struct Printer<'a> {
     /// A reload the next instruction reads from the frame itself: the register
     /// it would have gone to, and the cell.
     folded: Option<(RegId, String)>,
+    /// The same for a word reloaded into a pair that an `and`/`or`/`xor` of
+    /// words reads: the cell of each byte.
+    folded_word: Option<(RegId, [String; 2])>,
     /// Instructions after the current one that were printed with it.
     skip: usize,
     /// Bytes of stack arguments reserved below the frame, while a call is being
@@ -870,7 +873,17 @@ impl Printer<'_> {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
                 let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
                 let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
-                for (d, x, y) in [(dl, al, bl), (dh, ah, bh)] {
+                let cells = match self.folded_word.take() {
+                    Some((one, cells)) if one == self.register(inst, 2)? => Some(cells),
+                    _ => None,
+                };
+                for (lane, (d, x, y)) in [(dl, al, bl), (dh, ah, bh)].into_iter().enumerate() {
+                    if let Some(cells) = &cells {
+                        self.push(format!("ld a, {}", name(x)));
+                        self.push(format!("{mnemonic} a, {}", cells[lane]));
+                        self.push(format!("ld {}, a", name(d)));
+                        continue;
+                    }
                     // a lane known to be 0: `and` is 0, `or`/`xor` the other lane
                     let (zero_x, zero_y) = (self.lane_is_zero(x), self.lane_is_zero(y));
                     if mnemonic == "and" && (zero_x || zero_y) {
@@ -1175,6 +1188,10 @@ impl Printer<'_> {
                     if just_reloaded(&self.out, &loaded) {
                         return Ok(());
                     }
+                }
+                if op == "RELOAD16" && self.reload_is_operand(inst, rest) && slots.iter().all(|slot| slot.ends_with("(ix)")) {
+                    self.folded_word = Some((self.register(inst, 0)?, [slots[0].clone(), slots[1].clone()]));
+                    return Ok(());
                 }
                 for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
@@ -1764,7 +1781,9 @@ impl Printer<'_> {
 
     /// Whether the instruction after a `RELOAD8` is an ALU op or compare that
     /// reads the reloaded byte, which nothing else reads: it may take the frame
-    /// cell as its operand (`sub a, d(ix)`) and the reload goes.
+    /// cell as its operand (`sub a, d(ix)`) and the reload goes. The same for a
+    /// `RELOAD16` and the `and`/`or`/`xor` of words that reads the pair, byte
+    /// by byte.
     fn reload_is_operand(
         &self,
         reload: &Inst,
@@ -1775,7 +1794,7 @@ impl Printer<'_> {
         };
         matches!(
             next.kind,
-            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r")
+            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
         )
             && matches!(
                 next.operands.get(2),
@@ -2108,20 +2127,31 @@ fn layout(
     frame
 }
 
+/// What a word of the frame is pushed from at entry: the pair, and the constant it is loaded with first where the
+/// word starts as one (`entry_pushes`).
+type Pushed = Option<(&'static str, Option<i64>)>;
+
 /// `push ix; ld ix, 0; add ix, sp`, then room for the frame: a `push` per two
 /// bytes (`pushed` names the pair a word of the frame, from the top, is made
-/// by, `af` for the rest), or `iy` as the scratch for a large frame. Nothing
-/// here touches the registers that arguments arrive in.
+/// by, `af` for the rest), or `iy` as the scratch for a large frame. A pair
+/// loaded with a constant is one no argument is held in.
 fn prologue(
     frame: &Frame,
-    pushed: &[Option<&'static str>],
+    pushed: &[Pushed],
 ) -> Vec<String> {
     let mut lines = vec!["push ix".to_owned(), "ld ix, #0".to_owned(), "add ix, sp".to_owned()];
     let pushes = (frame.size + 1) / 2;
     if pushes <= 3 {
-        lines.extend(
-            (0..pushes as usize).map(|word| format!("push {}", pushed.get(word).copied().flatten().unwrap_or("af"))),
-        );
+        for word in 0..pushes as usize {
+            match pushed.get(word).copied().flatten() {
+                Some((pair, Some(value))) => {
+                    lines.push(format!("ld {pair}, #{value}"));
+                    lines.push(format!("push {pair}"));
+                }
+                Some((pair, None)) => lines.push(format!("push {pair}")),
+                None => lines.push("push af".to_owned()),
+            }
+        }
     } else {
         lines.extend([
             "ld iy, #".to_owned() + &format!("{}", -frame.size),
@@ -2136,43 +2166,76 @@ fn prologue(
 /// of the block: a pair into the word it fills, `a` or the high half of a pair
 /// into the high byte of a word (`push af` stores `a` there, and flags that
 /// nothing holds in the low byte). By word from the top of the frame.
+///
+/// A leading store of a constant to a whole word of the frame (`LD16fi`: two `ld d(ix), #n`, 8 B and 38 T)
+/// is `ld rr, #n; push rr` (4 B, 21 T) where a pair is free at entry. DEVIATE: no LLVM pass: the pin's
+/// `X86FrameLowering` pushes only the callee-saved registers. Exit: none; exact, the store stays the first
+/// instruction of the function.
 fn entry_pushes(
     function: &mut MFunction,
     assignment: &Assignment,
     frame: &Frame,
-) -> Vec<Option<&'static str>> {
-    let mut pushed: Vec<Option<&'static str>> = vec![None; (frame.size as usize + 1) / 2];
-    if !frame.active || frame.size > 6 || !function.locals.is_empty() {
+) -> Vec<Pushed> {
+    let mut pushed: Vec<Pushed> = vec![None; (frame.size as usize + 1) / 2];
+    if !frame.active || frame.size > 6 {
         return pushed;
     }
+    let mut free: Option<Vec<RegId>> = None;
     let mut at = 0;
     while at < function.blocks[0].insts.len() {
         let inst = &function.blocks[0].insts[at];
-        let (op, [Operand::Frame(slot), Operand::Use(source)]) = (inst.kind, &inst.operands[..]) else { break };
-        let register = match source {
-            Reg::Virt(v) => assignment.0[*v as usize],
-            Reg::Phys(id) => *id,
-        };
-        let Some(&offset) = frame.offsets.get(slot) else { break };
-        let word = ((-offset - 1) / 2) as usize;
-        let pair = [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair);
-        let by = match (op, pair) {
-            (Kind::Op("SPILL16"), Some(pair)) if offset == -2 * word as i64 - 2 && register == pair => Some(name(pair)),
-            (Kind::Op("SPILL8"), _) if offset == -2 * word as i64 - 1 && register == reg::A => Some("af"),
-            (Kind::Op("SPILL8"), Some(pair))
-                if offset == -2 * word as i64 - 1 && lanes(pair).is_ok_and(|(_, hi)| hi == register) =>
-            {
-                Some(name(pair))
+        if inst.kind == Kind::Op("LD16fi") {
+            let [Operand::Imm(value), Operand::Frame(slot), Operand::Imm(extra)] = inst.operands[..] else { break };
+            let Some(&base) = frame.offsets.get(&slot) else { break };
+            let offset = base + extra;
+            let word = ((-offset - 1) / 2) as usize;
+            if offset >= 0 || offset != -2 * word as i64 - 2 || word >= pushed.len() || pushed[word].is_some() {
+                break;
             }
-            (Kind::Op("SPILL8" | "SPILL16"), _) => None,
-            _ => break,
-        };
-        match by {
-            Some(by) if pushed[word].is_none() => {
-                pushed[word] = Some(by);
-                function.blocks[0].insts.remove(at);
+            let free = free.get_or_insert_with(|| {
+                let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO).live_before::<Z80Registers>(
+                    function,
+                    assignment,
+                    &REGISTER_INFO,
+                    0,
+                    0,
+                );
+                [reg::HL, reg::DE, reg::BC].into_iter().filter(|pair| !live.is_live(&REGISTER_INFO, *pair)).collect()
+            });
+            let Some(&pair) = free.first() else { break };
+            pushed[word] = Some((name(pair), Some(value & 0xFFFF)));
+            function.blocks[0].insts.remove(at);
+            continue;
+        }
+        if function.locals.is_empty() {
+            let (op, [Operand::Frame(slot), Operand::Use(source)]) = (inst.kind, &inst.operands[..]) else { break };
+            let register = match source {
+                Reg::Virt(v) => assignment.0[*v as usize],
+                Reg::Phys(id) => *id,
+            };
+            let Some(&offset) = frame.offsets.get(slot) else { break };
+            let word = ((-offset - 1) / 2) as usize;
+            let pair = [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair);
+            let by = match (op, pair) {
+                (Kind::Op("SPILL16"), Some(pair)) if offset == -2 * word as i64 - 2 && register == pair => Some(name(pair)),
+                (Kind::Op("SPILL8"), _) if offset == -2 * word as i64 - 1 && register == reg::A => Some("af"),
+                (Kind::Op("SPILL8"), Some(pair))
+                    if offset == -2 * word as i64 - 1 && lanes(pair).is_ok_and(|(_, hi)| hi == register) =>
+                {
+                    Some(name(pair))
+                }
+                (Kind::Op("SPILL8" | "SPILL16"), _) => None,
+                _ => break,
+            };
+            match by {
+                Some(by) if pushed[word].is_none() => {
+                    pushed[word] = Some((by, None));
+                    function.blocks[0].insts.remove(at);
+                }
+                _ => at += 1,
             }
-            _ => at += 1,
+        } else {
+            break;
         }
     }
     pushed
@@ -2272,6 +2335,7 @@ pub fn finish(
         tables: Vec::new(),
         reads,
         folded: None,
+        folded_word: None,
         skip: 0,
         call_bytes: 0,
         spill_bytes: 0,
