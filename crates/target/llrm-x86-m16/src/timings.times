@@ -75,6 +75,8 @@ line_fill_clocks       -   =    =    -    -    -    -    -
 # bytes over clocks, and a copied compare-and-branch tail costs both (qlight, grep, 25 c programs at -O2/-O3: -84 B, -3.1M clk).
 tail_dup_placement_threshold 1 1 1 1 1 1 1 1
 pairing                 =    =    =    =    =    =    =    =
+# The -O2 ranking counts data bytes strictly (worse_cells.py DATA_AXES): FF2 makes no new pool cell. recfloat -O2 +4 B data.
+pool_data_strict        1    1    1    1    1    1    1    1
 
 [clocks]
 alu_rr                  =    =    =    =    =    =    =    =   # add/and/or/xor/sub/cmp reg,reg

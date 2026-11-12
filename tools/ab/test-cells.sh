@@ -67,4 +67,14 @@ case $out in *"EMPTY=1 (missing include: 1)"*) ;; *) echo "FAIL: summary lacks t
 out=$(CELLS_INC="-I $d/absent" "$cells" "$d" "$d/list" 2>&1); rc=$?
 [ "$rc" -eq 2 ] || { echo "FAIL: an absent include dir gave rc $rc: $out"; exit 1; }
 case $out in *"include dir"*"absent"*) ;; *) echo "FAIL: absent include dir not named: $out"; exit 1;; esac
+# Regression (2026-11-12): wasm32 `-S` writes the binary, so the text-line instruction count was 0 and every wasm cell read EMPTY. A wasm cell
+# is counted from the object's disassembly and prints its bytes.
+cat > "$d/m.wat" <<'WAT'
+(module (func (export "f") (result i32) i32.const 1 i32.const 2 i32.add))
+WAT
+wat2wasm "$d/m.wat" -o "$d/m.wasm"
+for v in base new; do printf '#!/bin/sh\nfor a in "$@"; do [ "$p" = -o ] && out=$a; p=$a; done\ncp %s "$out"\n# %s\n' "$d/m.wasm" "$v" > "$d/$v/llrm-cc"; chmod +x "$d/$v/llrm-cc"; done
+echo "x wasm32 -O2 $d/p.c" > "$d/list"
+out=$("$cells" "$d" "$d/list" 2>&1)
+case $out in "wasm32 -O2 p.c bytes "[0-9]*" instrs 4 4"*) ;; *) echo "FAIL: a wasm cell is not counted from its object: $out"; exit 1;; esac
 echo ok

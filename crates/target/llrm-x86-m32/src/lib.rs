@@ -168,6 +168,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
+        // DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): see `Tuning::mul_chains_hot_at_size`.
+        mul_chains_hot_at_size: true,
         // DEVIATE LFTR1 (owner w12, review 2026-12-20):
         // see `Tuning::lftr_any_stride`.
         lftr_any_stride: true,

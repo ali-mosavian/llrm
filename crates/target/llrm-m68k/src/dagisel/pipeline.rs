@@ -165,6 +165,12 @@ impl SchedInfo for M68kSched {
         register == pin::CCR
     }
 
+    /// Data registers 0-7 and address registers 0-5: the 14 a value can wait
+    /// in.
+    fn spill_threshold(&self) -> Option<u32> {
+        Some(14)
+    }
+
     /// M68k does not enable the machine scheduler: `createDefaultScheduler`
     /// gives it the ILP list scheduler.
     fn preference(&self) -> Preference {
