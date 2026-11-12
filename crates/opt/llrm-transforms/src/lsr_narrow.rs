@@ -28,7 +28,7 @@ use llrm_mir::tti::AddressingMode;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::Collection;
-use crate::lsr_formula::{Formula, Immediate};
+use crate::lsr_formula::{Formula, Immediate, Symbol};
 use crate::lsr_use::{Cost, Kind, is_legal_use};
 
 /// `ComplexityLimit` (`-lsr-complexity-limit`).
@@ -78,10 +78,10 @@ impl Collection<'_, '_> {
                         // Formulas do not carry their width (PR41034).
                         new_f.base_offset = Immediate(new_f.base_offset.0.wrapping_add(c.sext_value() as i64));
                     } else if let Some(global) = self.global_of(se, reg) {
-                        if f.base_gv.is_some() {
+                        if f.symbol.is_some() {
                             continue;
                         }
-                        new_f.base_gv = Some(global);
+                        new_f.symbol = Some(Symbol::Global(global));
                     } else {
                         continue;
                     }
@@ -140,17 +140,19 @@ impl Collection<'_, '_> {
                 let mut i = 0;
                 while i < self.uses[that].formulae.len() {
                     let lu = &self.uses[that];
-                    if is_legal_use(
-                        self.tti,
-                        lu.min_offset,
-                        lu.max_offset,
-                        lu.kind,
-                        lu.access_ty,
-                        lu.formulae[i].base_gv.is_some(),
-                        lu.formulae[i].base_offset,
-                        lu.formulae[i].has_base_reg,
-                        lu.formulae[i].scale,
-                    ) {
+                    if lu.formulae[i].mode().is_some_and(|mode| {
+                        is_legal_use(
+                            self.tti,
+                            lu.min_offset,
+                            lu.max_offset,
+                            lu.kind,
+                            lu.access_ty,
+                            mode.global,
+                            lu.formulae[i].base_offset,
+                            mode.has_base_reg,
+                            mode.scale,
+                        )
+                    }) {
                         i += 1;
                     } else {
                         self.uses[that].delete_formula(i);
@@ -264,17 +266,19 @@ impl Collection<'_, '_> {
                         // This use's offsets must be legal for all the other's
                         // formulae.
                         if other.formulae.iter().any(|f| {
-                            !is_legal_use(
-                                self.tti,
-                                min,
-                                max,
-                                other.kind,
-                                other.access_ty,
-                                f.base_gv.is_some(),
-                                f.base_offset,
-                                f.has_base_reg,
-                                f.scale,
-                            )
+                            !f.mode().is_some_and(|mode| {
+                                is_legal_use(
+                                    self.tti,
+                                    min,
+                                    max,
+                                    other.kind,
+                                    other.access_ty,
+                                    mode.global,
+                                    f.base_offset,
+                                    mode.has_base_reg,
+                                    mode.scale,
+                                )
+                            })
                         }) {
                             return false;
                         }
@@ -285,7 +289,7 @@ impl Collection<'_, '_> {
                         let other_f = &other.formulae[0];
                         this_f.base_regs == other_f.base_regs
                             && this_f.scaled_reg == other_f.scaled_reg
-                            && this_f.base_gv == other_f.base_gv
+                            && this_f.symbol == other_f.symbol
                             && this_f.scale == other_f.scale
                             && this_f.unfolded_offset == other_f.unfolded_offset
                             && this_f.base_offset == other_f.base_offset

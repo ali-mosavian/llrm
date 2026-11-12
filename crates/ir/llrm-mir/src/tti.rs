@@ -1025,6 +1025,12 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LU30: whether a static alloca in an address is the frame
+    /// register and a displacement, which costs no register (`[bp+si+disp]`).
+    fn frame_slot_is_free_base(&self) -> bool {
+        false
+    }
+
     /// Whether a constant operand of an arithmetic instruction may become a phi
     /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
     /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.

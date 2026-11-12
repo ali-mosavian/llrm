@@ -1144,6 +1144,10 @@ impl Tti for X86 {
         !self.tuning.keep_constant_displacements
     }
 
+    fn frame_slot_is_free_base(&self) -> bool {
+        self.tuning.frame_slot_is_free_base
+    }
+
     fn constant_arith_phi_is_cheap(
         &self,
         optsize: bool,

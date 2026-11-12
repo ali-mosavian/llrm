@@ -42,7 +42,7 @@ use llrm_mir::passes::Declared;
 use llrm_mir::tti::Tti;
 use llrm_mir::types::{Type as MirType, TypeId};
 
-use crate::lsr_formula::Formula;
+use crate::lsr_formula::{Formula, Symbol};
 use crate::lsr_use::{Fixup, Kind, Use, is_am_completely_folded};
 
 /// What was decided for a loop: its uses, each with the formula chosen.
@@ -481,7 +481,7 @@ impl Implement<'_, '_> {
             };
             if lu.kind == Kind::ICmpZero
                 && f.base_regs.len() == 1
-                && f.base_gv.is_none()
+                && f.symbol.is_none()
                 && !f.base_offset.add_unsigned(lf.offset).is_non_zero()
                 && !f.unfolded_offset.is_non_zero()
             {
@@ -492,7 +492,7 @@ impl Implement<'_, '_> {
             }
             if lu.kind == Kind::ICmpZero
                 && f.base_regs.len() == 1
-                && f.base_gv.is_none()
+                && f.symbol.is_none()
                 && !f.unfolded_offset.is_non_zero()
             {
                 original = self.narrow_existing(lf, reg, op_ty_id);
@@ -549,7 +549,7 @@ impl Implement<'_, '_> {
         }
 
         // The global.
-        if let Some(global) = f.base_gv {
+        if let Some(symbol) = f.symbol {
             // Flushed, to keep the expander from hoisting.
             if !ops.is_empty() {
                 let sum = self.add(&ops);
@@ -558,11 +558,16 @@ impl Implement<'_, '_> {
                 ops.clear();
                 ops.push(u);
             }
-            let space = self.env.globals[global.0 as usize].address_space;
-            let pointer = self.context.types.ptr(space);
-            let constant =
-                Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }));
-            let u = self.unknown(constant);
+            let operand = match symbol {
+                Symbol::Global(global) => {
+                    let space = self.env.globals[global.0 as usize].address_space;
+                    let pointer = self.context.types.ptr(space);
+                    Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }))
+                }
+                // A static alloca is in the entry block: it dominates every use.
+                Symbol::Frame(value) => Operand::Value(value),
+            };
+            let u = self.unknown(operand);
             ops.push(u);
         }
 
@@ -622,7 +627,7 @@ impl Implement<'_, '_> {
             if let Operand::Value(v) = self.function.instruction(ci).operands[1] {
                 self.dead.push(v);
             }
-            assert!(f.base_gv.is_none(), "ICmp does not support folding a global value and a scale at the same time!");
+            assert!(f.symbol.is_none(), "ICmp does not support folding a global value and a scale at the same time!");
             if f.scale == -1 {
                 let mut v = icmp_scaled_v.expect("a scaled value");
                 if self.operand_ty(v) != op_ty_id {

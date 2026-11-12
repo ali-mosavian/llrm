@@ -376,6 +376,7 @@ impl Machine for Dos {
             // it (`displacement_sink_pays`), so a long common tail still sinks
             // (`r_recursive_world_node` 194 -> 176).
             keep_constant_displacements: true,
+            frame_slot_is_free_base: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the
