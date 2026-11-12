@@ -4,8 +4,8 @@
 m68k_corpus_matrix.py [--cpus 68000,68020,68040,68060] [--levels O1,O2,O3,Os] [--jobs N] --out DIR [NAME...]
 
 Denominator: the tests/run/c programs (those a `// targets:` line leaves for the CPU, as tools/m68k_exec_sweep.py) plus the bench/*/NAME.c
-programs; a file in both (same bytes) counts once and is reported. Columns, per program, CPU and level: `ours` (llrm-cc -S, relaxing
-branches, gas: as examples/matrix.rs builds it), `gcc` and `clang` (the pin's clang into the pin's llc), both with the shared external flags
+programs; a file in both (same bytes) counts once and is reported. Columns, per program, CPU and level: `ours` (llrm-cc -c, the shipped
+object; its -S text through gas is only the asm-error check), `gcc` and `clang` (the pin's clang into the pin's llc), both with the shared external flags
 (tools/external_flags.py, hash cd1e12d510e4). Bytes are the CODE sections of the object (alignment fill included). No libc is linked, so
 there are NO CLOCKS: the rows leave the field empty and tools/m68k_worse_cells.py judges them on bytes alone.
 
@@ -165,8 +165,12 @@ class Tools:
     def commands(self, compiler: str, cpu: str, level: str, path: str, flags: list[str], out: str) -> list[list[str]]:
         """The command lines of one column, in order: build() runs these and the table header prints them (`path`/`out` are placeholders there)."""
         if compiler == "ours":
-            return [[self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), path, "-o", out + ".s"],
-                    [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".o", out + ".s"]]
+            # the object is the shipped one (`-c`); the `-S` text through gas is a validity check only (asm-error), never measured: gas
+            # assembles `jsr f` as absolute long, 2 B over the pc-relative call llrm-cc emits (select_of_constants 68020 -Os: 20948 B
+            # through gas, 18532 B shipped)
+            return [[self.cc, f"-{level}", "-w", "-c", *flags, "-isystem", str(POSIX), path, "-o", out + ".o"],
+                    [self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), path, "-o", out + ".s"],
+                    [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".gas.o", out + ".s"]]
         if compiler == "gcc":
             return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT,
                      *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags, Path(path).read_text(errors="replace") if Path(path).is_file() else ""), "-isystem", str(POSIX), "-c", path, "-o", out + ".o"]]
@@ -234,15 +238,15 @@ class Tools:
         timed, err = False, ""
         ok = True
         for at, cmd in enumerate(self.commands(compiler, cpu, level, str(path), flags, out)):
-            ok, timed, err = self.run(cmd, env if at == 0 else None)
-            if ok and compiler == "ours" and at == 0:
+            ok, timed, err = self.run(cmd, env if compiler == "ours" and at < 2 else None)
+            if ok and compiler == "ours" and at == 1:
                 Path(out + ".s").write_text(".text\n" + relaxing_branches(Path(out + ".s").read_text()))
             if not ok:
                 break
         obj = Path(out + ".o")
         if not ok:
             reason, cause = failure(compiler, timed, err)
-            if compiler == "ours" and at == 1 and not timed:
+            if compiler == "ours" and at == 2 and not timed:
                 reason = "asm-error"  # llrm-cc produced assembly gas refuses: a compiler bug, not a missing cell
             return None, reason, cause, None
         library, unresolved = self.library(cpu, level, obj, work)

@@ -2499,7 +2499,21 @@ fn decomposed_functions(
                 || selected.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.sized))
         })
         .collect();
-    let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
+    // a function whose alternative is the speed routines or the shift loops (a long divide, a variable 64-bit
+    // shift) is priced by the smaller relative regret at the size levels too: the size routines are a bit a trip
+    // (a divide of a long 6.1k T, 4 to 6x the speed routine's), and bytes first took them where the module stayed
+    // far under its bar in bytes and over it in clocks (loop_interchange, copy_runs, data_int64 -Os)
+    let regret: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            alternatives.iter().any(|(one, source, scheduled)| {
+                one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.wide_alternative))
+            })
+        })
+        .collect();
+    let with_alternative = || (0..either.len()).filter(|at| either[*at].2.is_some());
+    let all_sized = with_alternative().all(|at| size_first[at] && !regret[at]);
+    let regretful = with_alternative().all(|at| size_first[at] && regret[at]);
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2514,7 +2528,9 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] {
+                let better = if size_first[at] && regret[at] {
+                    prefers(Level::O1, price, best)
+                } else if size_first[at] {
                     prefers(Level::Os, price, best)
                 } else if level == Level::O1 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
@@ -2533,8 +2549,14 @@ fn decomposed_functions(
     };
     // a tie keeps the faster form: the alternative at the size levels is the
     // inline form, at the others the all-calls form
-    let module_level = if all_sized { Level::Os } else { level };
-    let (first, second) = if module_level == Level::Os {
+    let module_level = if all_sized {
+        Level::Os
+    } else if regretful {
+        Level::O1
+    } else {
+        level
+    };
+    let (first, second) = if all_sized || regretful {
         (descend(every), descend(HashSet::new()))
     } else {
         (descend(HashSet::new()), descend(every))
