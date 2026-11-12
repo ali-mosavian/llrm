@@ -968,14 +968,15 @@ fn test_a_copy_that_only_makes_a_loop_bound_known_waits_for_o3() {
 
 /// A known bound the unroller cannot take whole is no reason to copy: gcc's
 /// hint counts it, but m64 nbody -O2 went 655 -> 1189 B and recpow 1207 ->
-/// 3060 B for a loop of 400 trips, so the hint counts up to
-/// `max-completely-peel-times` (16) trips.
+/// 3060 B for a loop of 400 trips, so a target's default counts the hint up to
+/// `max-completely-peel-times` (16) trips; a flag given, or -Omax, is gcc's own
+/// (m16 recchop -O3 clones `chop(0, 64)`).
 #[test]
 fn test_a_loop_bound_past_the_peel_limit_is_no_reason_to_clone() {
     let cloned = |trips: &str| {
         let text = TWO_CONTEXTS.replace("i16 4,", &format!("i16 {trips},")).replace("i16 5,", &format!("i16 {trips},"));
         let mut module = parsed(&text);
-        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), cp_peel_limited: true, ..Threshold::none() });
         module.named("g.constprop.1").is_some()
     };
     assert_eq!((cloned("4"), cloned("400")), (true, false));
@@ -1472,7 +1473,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         let (f, h) = (program.modules[0].named("f").unwrap(), program.modules[0].named("h").unwrap());
         let private = private(program, 0);
         let mut state = crate::ipacp::Cloning::default();
-        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, true, &mut state);
+        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false }, &mut state);
         assert_eq!(first.added.len(), 1, "the first round clones fill for row 2");
         let mut analyses = managers(program, &mut ProgramAnalyses::default());
         // What `bare` leaves, without its check that no call stands: the callers
@@ -1486,7 +1487,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         stub.insert(end, llrm_mir::edit::Position::End(entry)).unwrap();
         module.globals[first.added[0].0 as usize].kind = GlobalKind::Function(Box::new(stub));
         analyses[0].changed(first.added[0]);
-        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, true, &mut state);
+        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false }, &mut state);
         let module = &program.modules[0];
         let caller = module.global(h).function().unwrap();
         let target = caller
