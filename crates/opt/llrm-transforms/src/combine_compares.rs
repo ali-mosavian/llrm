@@ -197,7 +197,11 @@ pub fn visit_icmp(
     if let Some(r) = canonicalize_icmp_predicate(c, inst, pred) {
         return r;
     }
-    // OWED: foldICmpWithConstant, foldICmpUsingBoolRange.
+    // OWED: foldICmpWithConstant but the `processUGT_ADDCST_ADD` overflow
+    // idiom, foldICmpUsingBoolRange.
+    if let Some(r) = fold_icmp_phi_of_constants(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_with_dominating_icmp(c, inst, pred, op0, op1) {
         return r;
     }
@@ -808,6 +812,45 @@ fn canonicalize_icmp_predicate(
     let result = c.function.instruction(inst).result?;
     c.freely_invert_all_users_of(Operand::Value(result), None);
     Some(Visit::Changed)
+}
+
+/// `foldICmpWithConstant`'s phi case
+/// ([:1369](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1369)):
+/// `icmp (phi C1, C2, ...), C` is `phi (icmp C1, C), (icmp C2, C), ...`,
+/// whatever else uses the first phi.
+fn fold_icmp_phi_of_constants(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    phi_operand: Operand,
+    rhs: Operand,
+) -> Option<Visit> {
+    let Operand::Constant(rhs) = rhs else { return None };
+    let Operand::Value(value) = phi_operand else { return None };
+    let ValueDef::Instruction(phi) = c.function.value(value).def else { return None };
+    if c.function.instruction(phi).opcode != Opcode::Phi {
+        return None;
+    }
+    let incoming: Vec<(Operand, llrm_mir::module::BlockId)> =
+        pattern::phi_incoming(c.function.instruction(phi)).collect();
+    let mut operands = Vec::new();
+    for (value, from) in incoming {
+        let Operand::Constant(lhs) = value else { return None };
+        let folded = llrm_mir::constantfolding::constant_fold_compare_inst_operands(
+            c.context,
+            c.env.globals,
+            c.env.layout,
+            pred,
+            lhs,
+            rhs,
+        )?;
+        operands.push(Operand::Constant(folded));
+        operands.push(Operand::Block(from));
+    }
+    let ty = c.function.instruction(inst).ty;
+    let new_phi = c.insert_before(phi, Opcode::Phi, ty, operands, Flags::default());
+    let result = c.function.instruction(new_phi).result.expect("a phi has a value");
+    Some(Visit::Replace(Operand::Value(result)))
 }
 
 /// `foldICmpWithDominatingICmp`

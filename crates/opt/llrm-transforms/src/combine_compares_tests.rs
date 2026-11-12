@@ -1031,3 +1031,31 @@ fn an_unsigned_samesign_compare_shares_the_known_sign_between_its_sides() {
     samesign("uge", 127, "  %0 = icmp eq i8 %x, 127\n  ret i1 %0\n");
     samesign("uge", -128, "  ret i1 true\n");
 }
+
+/// `icmp eq (phi [0, 1]), 0` stayed a compare: the loop exit test never became
+/// `phi i1 [true], [false]`, so SimplifyCFG could not thread it and the
+/// two-trip loop was not unrolled at optsize (wasm function_table -Os, +4 B).
+#[test]
+fn test_a_compare_of_a_constant_phi_is_a_phi_of_the_folded_compares() {
+    let text = "declare void @report(i32)
+
+define i32 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ 1, %b1 ]
+  %r = add nuw nsw i32 %i, 7
+  call void @report(i32 %r)
+  %c = icmp eq i32 %i, 0
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i32 0
+}
+";
+    let out = combined(text);
+    assert!(out.contains("phi i1 [ true, %b0 ], [ false, %b1 ]"), "{out}");
+    assert!(!out.contains("icmp"), "{out}");
+    assert!(out.contains("%i = phi i32"), "the integer phi keeps its other user: {out}");
+}
