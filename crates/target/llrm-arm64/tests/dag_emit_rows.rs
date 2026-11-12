@@ -439,9 +439,12 @@ define i32 @f(i32 %n, ...) {\n  %ap = alloca [32 x i8], align 8\n  %cp = alloca 
 #[test]
 fn a_linux_variadic_callee_saves_its_registers_and_fills_the_va_list() {
     let asm = linux_dag(VARIADIC_BODY).expect("the DAG path takes it");
-    for expected in ["stp x1, x2,", "str x7,", "stp q0, q1,", "stp q6, q7,"] {
+    for expected in ["stp x1, x2,", "stp q0, q1,", "stp q6, q7,"] {
         assert!(asm.contains(expected), "no `{expected}` in:\n{asm}");
     }
+    // `x7` is saved alone (`str`) or paired with the next store (`stp x7, ...`,
+    // #9158's LdStLimit).
+    assert!(asm.contains("str x7,") || asm.contains("stp x7,"), "x7 is not saved in:\n{asm}");
     // `gr_offs` -56 (`x1`..`x7` left) and `vr_offs` -128 (`q0`..`q7` all left)
     // are the two 4-byte words of one merged store: `movn x, #55` and `movk
     // #65408, lsl #32`.
