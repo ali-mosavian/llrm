@@ -1131,6 +1131,218 @@ fn a_small_immediate_at_m32_os_is_push_pop() {
     assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
 }
 
+/// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the
+/// bytes, and x_bubble -Os grew 3 B (273 against 270), quicksort 2, switch_sparse 1, jpeg_fixed 16, while the sparse switch
+/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS.
+#[test]
+fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
+    let bubble = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @a = internal global [200 x i32] zeroinitializer, align 4\n\
+                define i32 @bench_x_bubble(i32 %0)  {\n\
+                  %2 = icmp sgt i32 %0, 0\n\
+                  br i1 %2, label %6, label %3\n\
+                3:\n\
+                  %4 = add i32 %0, -1\n\
+                  %5 = icmp sgt i32 %0, 1\n\
+                  br i1 %5, label %16, label %20\n\
+                6:\n\
+                  %7 = phi i32 [ %14, %6 ], [ 0, %1 ]\n\
+                  %8 = phi i32 [ %10, %6 ], [ 12345, %1 ]\n\
+                  %9 = mul i32 %8, 1103515245\n\
+                  %10 = add i32 %9, 12345\n\
+                  %11 = lshr i32 %10, 16\n\
+                  %12 = and i32 %11, 32767\n\
+                  %13 = getelementptr inbounds [4 x i8], ptr @a, i32 %7\n\
+                  store i32 %12, ptr %13, align 4\n\
+                  %14 = add i32 %7, 1\n\
+                  %15 = icmp eq i32 %14, %0\n\
+                  br i1 %15, label %3, label %6\n\
+                16:\n\
+                  %17 = phi i32 [ %35, %33 ], [ %4, %3 ]\n\
+                  %18 = phi i32 [ %34, %33 ], [ 0, %3 ]\n\
+                  %19 = icmp sgt i32 %4, %18\n\
+                  br i1 %19, label %22, label %33\n\
+                20:\n\
+                  %21 = icmp sgt i32 %0, 0\n\
+                  br i1 %21, label %37, label %46\n\
+                22:\n\
+                  %23 = phi i32 [ %26, %31 ], [ 0, %16 ]\n\
+                  %24 = getelementptr inbounds [4 x i8], ptr @a, i32 %23\n\
+                  %25 = load i32, ptr %24, align 4\n\
+                  %26 = add i32 %23, 1\n\
+                  %27 = getelementptr inbounds [4 x i8], ptr @a, i32 %26\n\
+                  %28 = load i32, ptr %27, align 4\n\
+                  %29 = icmp sgt i32 %25, %28\n\
+                  br i1 %29, label %30, label %31\n\
+                30:\n\
+                  store i32 %28, ptr %24, align 4\n\
+                  store i32 %25, ptr %27, align 4\n\
+                  br label %31\n\
+                31:\n\
+                  %32 = icmp eq i32 %26, %17\n\
+                  br i1 %32, label %33, label %22\n\
+                33:\n\
+                  %34 = add i32 %18, 1\n\
+                  %35 = add i32 %17, -1\n\
+                  %36 = icmp eq i32 %34, %4\n\
+                  br i1 %36, label %20, label %16\n\
+                37:\n\
+                  %38 = phi i32 [ %43, %37 ], [ 0, %20 ]\n\
+                  %39 = phi i32 [ %44, %37 ], [ 0, %20 ]\n\
+                  %40 = mul i32 %38, 31\n\
+                  %41 = getelementptr inbounds [4 x i8], ptr @a, i32 %39\n\
+                  %42 = load i32, ptr %41, align 4\n\
+                  %43 = add i32 %42, %40\n\
+                  %44 = add i32 %39, 1\n\
+                  %45 = icmp eq i32 %44, %0\n\
+                  br i1 %45, label %46, label %37\n\
+                46:\n\
+                  %47 = phi i32 [ 0, %20 ], [ %43, %37 ]\n\
+                  ret i32 %47\n\
+                }\n";
+    let sparse = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %0)  {\n\
+                  switch i32 %0, label %6 [\n\
+                    i32 7, label %7\n\
+                    i32 99, label %2\n\
+                    i32 1234, label %3\n\
+                    i32 4001, label %4\n\
+                    i32 77, label %5\n\
+                  ]\n\
+                2:\n\
+                  br label %7\n\
+                3:\n\
+                  br label %7\n\
+                4:\n\
+                  br label %7\n\
+                5:\n\
+                  br label %7\n\
+                6:\n\
+                  br label %7\n\
+                7:\n\
+                  %8 = phi i32 [ 0, %6 ], [ 61, %5 ], [ 52, %2 ], [ 93, %3 ], [ 17, %4 ], [ 31, %1 ]\n\
+                  ret i32 %8\n\
+                }\n";
+    let listing = |text: &str, name: &str, folded: bool| {
+        let build = || compiled(&flags(&["-mabi=sysv", "-Os"]), text, name).unwrap();
+        let (built, _) = if folded { build() } else { llrm_codegen::backend::leaffold::without(build) };
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let (kept, off) = (listing(bubble, "bench_x_bubble", true), listing(bubble, "bench_x_bubble", false));
+    assert_eq!(kept, off, "the fold grew x_bubble and stays: {kept}");
+    let (kept, off) = (listing(sparse, "f", true), listing(sparse, "f", false));
+    assert_ne!(kept, off, "the fold that shrinks the sparse switch is kept: {kept}");
+}
+
+/// IPSCCP's sign-keeping widening (REC5-1) proves the counters that feed a recursive `a % b` non-negative, and the remainder
+/// becomes unsigned: `xor edx, edx; div` against `cdq; idiv`, a byte more at each site (recgcd -Os 100 B, frames 110, recmany
+/// 139, switch 210: 2..5 B over the pin's shape). -Os is bytes-strict, so it keeps the signed divide; -O2 keeps the proof.
+/// DEVIATE REC5-1.
+#[test]
+fn a_remainder_of_counters_at_m32_os_stays_signed() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %n) {\n\
+                entry:\n\
+                %n.addr = alloca i32, align 4\n\
+                %t = alloca i32, align 4\n\
+                %i = alloca i32, align 4\n\
+                store i32 %n, ptr %n.addr, align 4\n\
+                store i32 0, ptr %t, align 4\n\
+                store i32 1, ptr %i, align 4\n\
+                br label %for.cond\n\
+                for.cond:\n\
+                %0 = load i32, ptr %i, align 4\n\
+                %1 = load i32, ptr %n.addr, align 4\n\
+                %cmp = icmp sle i32 %0, %1\n\
+                br i1 %cmp, label %for.body, label %for.end\n\
+                for.body:\n\
+                %2 = load i32, ptr %i, align 4\n\
+                %mul = mul nsw i32 %2, 7\n\
+                %add = add nsw i32 %mul, 3\n\
+                %3 = load i32, ptr %i, align 4\n\
+                %mul1 = mul nsw i32 %3, 5\n\
+                %add2 = add nsw i32 %mul1, 2\n\
+                %call = call i32 @gcd(i32 %add, i32 %add2)\n\
+                %4 = load i32, ptr %i, align 4\n\
+                %add3 = add nsw i32 %4, 90\n\
+                %call4 = call i32 @gcd(i32 %add3, i32 360)\n\
+                %add5 = add nsw i32 %call, %call4\n\
+                %5 = load i32, ptr %t, align 4\n\
+                %add6 = add nsw i32 %5, %add5\n\
+                store i32 %add6, ptr %t, align 4\n\
+                br label %for.inc\n\
+                for.inc:\n\
+                %6 = load i32, ptr %i, align 4\n\
+                %inc = add nsw i32 %6, 1\n\
+                store i32 %inc, ptr %i, align 4\n\
+                br label %for.cond\n\
+                for.end:\n\
+                %7 = load i32, ptr %t, align 4\n\
+                ret i32 %7\n\
+                }\n\
+                define internal i32 @gcd(i32 %a, i32 %b) {\n\
+                entry:\n\
+                %retval = alloca i32, align 4\n\
+                %a.addr = alloca i32, align 4\n\
+                %b.addr = alloca i32, align 4\n\
+                store i32 %a, ptr %a.addr, align 4\n\
+                store i32 %b, ptr %b.addr, align 4\n\
+                %0 = load i32, ptr %b.addr, align 4\n\
+                %cmp = icmp eq i32 %0, 0\n\
+                br i1 %cmp, label %if.then, label %if.end\n\
+                if.then:\n\
+                %1 = load i32, ptr %a.addr, align 4\n\
+                store i32 %1, ptr %retval, align 4\n\
+                br label %return\n\
+                if.end:\n\
+                %2 = load i32, ptr %b.addr, align 4\n\
+                %3 = load i32, ptr %a.addr, align 4\n\
+                %4 = load i32, ptr %b.addr, align 4\n\
+                %rem = srem i32 %3, %4\n\
+                %call = call i32 @gcd(i32 %2, i32 %rem)\n\
+                store i32 %call, ptr %retval, align 4\n\
+                br label %return\n\
+                return:\n\
+                %5 = load i32, ptr %retval, align 4\n\
+                ret i32 %5\n\
+                }\n";
+    let listing = |level: &str| {
+        let (built, _) = compiled(&flags(&["-mabi=sysv", level]), text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let os = listing("-Os");
+    assert!(os.contains("idiv") && !os.contains("\tdiv"), "-Os: {os}");
+    let speed = listing("-O2");
+    assert!(speed.contains("div") && !speed.contains("idiv"), "-O2: {speed}");
+}
+
+/// GVN's load PRE put a load of `*p` into the call path so the join's own load became a phi: a `mov` in the path and
+/// an `add reg, reg` where gcc and the unpre'd code fold the load into the `add` (x_jpeg_fixed -Os +28 B, lru +28 B, x_bubble
+/// -7.9% clk once off). At m32 -Os the load stays in the join, folded; at -O2 PRE still runs. DEVIATE GVN-PRE-OPTSIZE.
+#[test]
+fn load_pre_is_off_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @g()\n\
+                define i32 @f(ptr %p, i32 %c) ATTR {\n\
+                entry:\n  %t = icmp ne i32 %c, 0\n  br i1 %t, label %then, label %else\n\
+                then:\n  %a = load i32, ptr %p\n  br label %join\n\
+                else:\n  call void @g()\n  br label %join\n\
+                join:\n  %x = phi i32 [ %a, %then ], [ 0, %else ]\n  %b = load i32, ptr %p\n  %s = add i32 %x, %b\n  ret i32 %s\n}\n";
+    let listing = |level: &str, attr: &str| {
+        let (built, _) = compiled(&flags(&["-mabi=sysv", level]), &text.replace("ATTR", attr), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let folded = |text: &str| text.lines().any(|line| line.trim_start().starts_with("add ") && line.contains("ptr ["));
+    let os = listing("-Os", "optsize");
+    assert!(folded(&os), "-Os keeps the join's load, folded into the add: {os}");
+    let speed = listing("-O2", "");
+    assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
+}
+
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
 /// `sar; shr; add; sar` sequence. The tip kept `idiv` at -Os: stft_fixed -Os ran 188.9M clk against main's 96.8M (+95%).
 #[test]
@@ -1877,6 +2089,53 @@ fn a_one_byte_struct_result_through_a_function_pointer_comes_back_in_al_too() {
     let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
+const THREE_BYTE_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { [3 x i8] }\n\
+    define void @make(ptr sret(%struct.T) align 1 %out, i16 %a) addrspace(1) noinline {\n  \
+    %b = trunc i16 %a to i8\n  store i8 %b, ptr %out, align 1\n  ret void\n}\n\
+    define i16 @f(i16 %a) addrspace(1) {\n  %t = alloca %struct.T, align 1\n  \
+    call addrspace(1) void @make(ptr sret(%struct.T) align 1 %t, i16 %a)\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+
+/// A struct of 3 bytes comes back through Borland's hidden far pointer, `ss`
+/// and then the offset pushed after the arguments, and DX:AX returns it. clang
+/// writes a near `sret`: the call pushed only an offset, so a BCC callee read
+/// the argument it found as the segment and wrote through a wild pointer
+/// (callconv CFLB/PFLB `r_s3`, `r_s5`, `r_s7`, `r_s8`, `r_s9`, `r_sci`).
+#[test]
+fn a_three_byte_struct_result_goes_through_a_far_pointer_under_borland_cdecl() {
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), THREE_BYTE_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push ss"), "the caller pushes the segment of the result\n{listing}");
+    assert!(listing.contains("add sp, 6"), "offset, segment and the argument leave the stack\n{listing}");
+    assert!(listing.contains("[bp+8]"), "the callee finds its argument above the pointer\n{listing}");
+}
+
+/// The call through a function pointer carries its convention too.
+#[test]
+fn a_three_byte_struct_result_through_a_function_pointer_goes_far_too() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+        target triple = \"i386-unknown-unknown-code16\"\n\
+        %struct.T = type { [3 x i8] }\n\
+        @fp = external global ptr addrspace(1)\n\
+        define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  %p = load ptr addrspace(1), ptr @fp, align 4\n  \
+        call addrspace(1) void %p(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+        %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push ss"), "{listing}");
+}
+
+/// Open Watcom's 16-bit convention passes the result address in SI, near: the
+/// far pointer is Borland's.
+#[test]
+fn a_three_byte_struct_result_stays_near_under_the_watcom_convention() {
+    let (built, _) = compiled(&flags(&["-mabi=watcom", "-m16"]), THREE_BYTE_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("push ss"), "{listing}");
 }
 
 /// `-fno-inline=sum5` named the function as the source does, but the module

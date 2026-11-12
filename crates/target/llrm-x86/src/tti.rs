@@ -1072,6 +1072,10 @@ impl Tti for X86 {
         self.tuning.ipsccp_widen_keeps_sign
     }
 
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign_at_size
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.priced_self_inlining
     }
@@ -1120,12 +1124,20 @@ impl Tti for X86 {
         self.tuning.lsr_size_order
     }
 
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        self.tuning.lsr_users_in_use_list_order
+    }
+
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
     }
 
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn load_pre_off_at_size(&self) -> bool {
+        self.tuning.load_pre_off_at_size
     }
 
     fn rotation_trial_at_size(&self) -> bool {
@@ -1142,6 +1154,14 @@ impl Tti for X86 {
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
+    }
+
+    fn frame_slot_is_free_base(&self) -> bool {
+        self.tuning.frame_slot_is_free_base
+    }
+
+    fn lsr_address_fewest_registers(&self) -> bool {
+        self.tuning.lsr_address_fewest_registers
     }
 
     fn constant_arith_phi_is_cheap(
