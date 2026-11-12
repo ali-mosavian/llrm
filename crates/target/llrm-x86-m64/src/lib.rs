@@ -420,6 +420,9 @@ impl llrm_target::Target for M64 {
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
+                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+                            // `Tti::lsr_users_in_use_list_order`.
+                            lsr_users_in_use_list_order: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
