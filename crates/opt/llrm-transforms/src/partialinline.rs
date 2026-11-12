@@ -43,6 +43,7 @@
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
+use llrm_mir::facts::Fact;
 use llrm_mir::libfunc::LibFunc;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{Attribute, Flags, FloatPredicate, Opcode, Tail};
@@ -189,11 +190,14 @@ fn optimize_sqrt(
     // instruction.
     if let Opcode::Call(info) = unit.function.instruction(call).opcode.clone() {
         let mut info = *info;
-        info.attrs.retain(|one| !matches!(one, Attribute::Memory(_)));
-        info.attrs.retain(|one| !matches!(
-            one,
-            Attribute::Flag(flag) if matches!(flag.as_str(), "readnone" | "readonly" | "writeonly" | "argmemonly" | "inaccessiblememonly")
-        ));
+        // The facts that state what the call touches go by the fact table; the older spellings of a narrower
+        // effect are not facts and go by name.
+        info.attrs.retain(|one| {
+            !matches!(Fact::of_attribute(one), Some(Fact::Memory(_) | Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly))
+        });
+        info.attrs.retain(|one| {
+            !matches!(one, Attribute::Flag(flag) if matches!(flag.as_str(), "argmemonly" | "inaccessiblememonly"))
+        });
         info.attrs.push(Attribute::Memory(vec![(None, "none".to_owned())]));
         unit.function.set_opcode(call, Opcode::Call(Box::new(info)));
     }
