@@ -3818,10 +3818,12 @@ fn emit_with<const STACK: bool>(
         Operand::Block(id) => labels[*id as usize][0].clone(),
         other => unreachable!("{other:?} is not a block"),
     };
+    let mut starts: Vec<Vec<usize>> = Vec::new();
     for (b, block) in function.blocks.iter().enumerate() {
         for label in &labels[block.id as usize] {
             writeln!(out, "{label}:").unwrap();
         }
+        starts.push(Vec::new());
         if b == 0 && spilled > 0 && !has_frame {
             // an argument in `a` that the entry block reads before it writes
             let first = block.insts.first();
@@ -3842,6 +3844,7 @@ fn emit_with<const STACK: bool>(
         }
         let mut repeated = 0;
         for (i, inst) in block.insts.iter().enumerate() {
+            starts[b].push(out.lines.len());
             out.place = inst.origin;
             // the rest of a run of one-bit shifts a loop has emitted
             if repeated > 0 {
@@ -4409,6 +4412,10 @@ fn emit_with<const STACK: bool>(
                 (other, _) => return Err(format!("{other:?} has no expansion")),
             }
         }
+        starts[b].push(out.lines.len());
+    }
+    if std::env::var_os("LLRM_6502_CHECK_FLAGS").is_some() {
+        crate::flagcheck::verify(&function, &starts, &out.lines)?;
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
