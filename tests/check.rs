@@ -232,6 +232,7 @@ fn run_checks(
     root: &Path,
     all: Vec<PathBuf>,
     env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    compile: impl Fn(&[String]) -> std::io::Result<std::process::Output>,
 ) -> Ran {
     let mut done_all = Ran::default();
     for path in all {
@@ -254,7 +255,7 @@ fn run_checks(
                 }
                 // llrm-c's arguments, served by llrm-cc over the pinned clang
                 // (needs the Open Watcom tree, LLRM_CLANG_M16).
-                common::cc::llrm_c().args(&arguments).output()
+                compile(&arguments)
             } else {
                 Command::new(tool(words[0])).args(&arguments).output()
             }
@@ -262,7 +263,9 @@ fn run_checks(
             let output = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
             let name = path.strip_prefix(root).unwrap().display();
             if done.status.success() == must_fail {
-                done_all.failures.push(format!("{name}: `{line}` {}", if must_fail { "succeeded" } else { "failed" }));
+                // The tool's own first line says why: a stale toolchain is one cause, not 114 silent reds.
+                let why = output.lines().find(|one| !one.trim().is_empty()).unwrap_or("no output").trim().to_owned();
+                done_all.failures.push(format!("{name}: `{line}` {}: {why}", if must_fail { "succeeded" } else { "failed" }));
             } else if let Err(why) = filecheck(&output, &for_run(directives(&source), &line)) {
                 done_all.failures.push(format!("{name}: {why}\n{output}"));
             }
@@ -278,13 +281,31 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
     let mut all = Vec::new();
     files(&root, &mut all);
     all.sort();
-    let Ran { ran, failures, skipped } = run_checks(&root, all, common::cc::toolchain_env);
+    let Ran { ran, failures, skipped } = run_checks(&root, all, common::cc::toolchain_env, |arguments| common::cc::llrm_c().args(arguments).output());
     println!("{ran} RUN lines");
     if !skipped.is_empty() {
         println!("SKIPPED llrm-cc RUN lines, toolchain missing (lines per variable): {skipped:?}");
     }
     assert!(ran > 0 || !skipped.is_empty(), "premise: some file under tests/check has a RUN line");
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(failures.is_empty(), "{}", grouped(&failures));
+}
+
+/// The failures with the same cause once, and how many lines it hit: `name: `line` failed: <why>` lines share a `<why>`.
+fn grouped(failures: &[String]) -> String {
+    let mut causes: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    let mut other = Vec::new();
+    for failure in failures {
+        match failure.split_once("` failed: ") {
+            Some((head, why)) if !why.contains('\n') => causes.entry(why).or_default().push(head.split(':').next().unwrap_or(head)),
+            _ => other.push(failure.as_str()),
+        }
+    }
+    let mut out: Vec<String> = causes
+        .into_iter()
+        .map(|(why, names)| format!("{} lines failed alike ({}...): {why}", names.len(), names[..names.len().min(3)].join(", ")))
+        .collect();
+    out.extend(other.iter().map(|one| (*one).to_owned()));
+    out.join("\n")
 }
 
 /// A box without the Open Watcom headers, the pinned clang or the m16 clang failed every `llrm-cc` RUN line (115 on
@@ -296,7 +317,7 @@ fn test_a_missing_toolchain_skips_the_llrm_cc_lines_instead_of_failing_them() {
     let file = dir.join("one.c");
     std::fs::write(&file, "// RUN: llrm-cc -m32 -S %s\n// CHECK: nothing\n").unwrap();
     let none = |_: &str| None;
-    let result = run_checks(&dir, vec![file], none);
+    let result = run_checks(&dir, vec![file], none, |_| unreachable!("a skipped line is not compiled"));
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(result.ran, 0);
     assert!(result.failures.is_empty(), "{:?}", result.failures);
@@ -409,4 +430,35 @@ fn test_an_unset_toolchain_variable_is_named() {
     assert!(common::cc::missing_env(set, false, false).is_empty(), "set to an existing path: nothing missing");
     let gone = |_: &str| Some(std::ffi::OsString::from("/no/such/clang"));
     assert_eq!(common::cc::missing_env(gone, false, true), ["LLRM_PIN_CLANG"], "a path that does not exist counts");
+}
+
+/// A stale cached m16 clang made `llrm-cc` refuse every line with "is not the pinned clang" on its stderr, which the
+/// harness dropped: 114 reds that all said "failed" (2026-11-12). The tool's first line is in the failure, and one cause is
+/// one line of the report.
+#[test]
+fn test_one_toolchain_fault_is_one_line_with_its_message() {
+    let dir = std::env::temp_dir().join(format!("check-stale-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let files: Vec<PathBuf> = (0..3)
+        .map(|n| {
+            let file = dir.join(format!("f{n}.c"));
+            std::fs::write(&file, "// RUN: llrm-cc -m32 -S %s\n// CHECK: x\n").unwrap();
+            file
+        })
+        .collect();
+    let set = |_: &str| Some(std::ffi::OsString::from("/"));
+    let stale = |_: &[String]| {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(std::process::Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: Vec::new(),
+            stderr: b"llrm-cc: /x/clang is not the pinned clang d1106deb\n".to_vec(),
+        })
+    };
+    let result = run_checks(&dir, files, set, stale);
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(result.failures.len(), 3);
+    let report = grouped(&result.failures);
+    assert_eq!(report.lines().count(), 1, "{report}");
+    assert!(report.contains("3 lines failed alike") && report.contains("is not the pinned clang"), "{report}");
 }
