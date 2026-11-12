@@ -278,7 +278,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // no byte rate pays for the ~17 B; x_jpeg_single -O1 inlined it twice).
         // Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
-        // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
+        // DEVIATE REC5-1 (owner w2, exit 2026-11-20), not at -Os:
         // see `Tuning::ipsccp_widen_keeps_sign`.
         ipsccp_widen_keeps_sign: true,
         ..llrm_mir::target::Tuning::PIN
@@ -585,6 +585,10 @@ impl llrm_target::Target for M32 {
         used: llrm_target::routines::Used,
     ) -> Result<llrm_target::routines::Divide, String> {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
+    }
+
+    fn fast_divide_in_loops_at_size(&self) -> bool {
+        true
     }
 
     fn divide_routine_small(

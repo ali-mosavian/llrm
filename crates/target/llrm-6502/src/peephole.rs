@@ -197,6 +197,12 @@ fn run_passes(
     if known_loads {
         drop_known_loads(asm);
     }
+    // after the known loads: a register that holds the literal stores it without a bracket; the loads the
+    // moved pair repeats are known in turn
+    sink_save_bracket(asm);
+    if known_loads {
+        drop_known_loads(asm);
+    }
     hoist_loop_constant(asm);
     sink_step_to_compare(asm);
     drop_zero_compares(asm);
@@ -1587,6 +1593,123 @@ pub fn merge_saves_of_a(asm: &mut Asm) {
         });
         let Some(at) = found else { return };
         asm.lines.drain(at..at + 2);
+    }
+}
+
+/// `pha; lda #n; sta m; pla` (a literal made into a cell while `a` is live)
+/// moved to where `a` is dead: just before the instruction that next loads `a`
+/// without reading it, or the one that loaded the value now live, with only
+/// straight-line code between that touches neither `m` nor the flags a branch
+/// reads. The bracket is then `lda #n; sta m`: `idioms` -O2 made 78 of them
+/// (12 clocks and 5 bytes each against 5 and 4).
+///
+/// The pin's post-RA scheduler (`PostRASchedulerList`) does not move a store
+/// across the live range of a register; this target saves with `pha`/`pla`,
+/// so the move is the pass.
+///
+/// DEVIATE (6502-A-BRACKET): same exit as `merge_saves_of_a`.
+pub fn sink_save_bracket(asm: &mut Asm) {
+    // an instruction that sets `a` from elsewhere than `a`, and so ends its live range
+    let overwrites = |inst: &Inst| match inst.op {
+        Op::Lda => !matches!(inst.operand, Operand::Acc),
+        Op::Txa | Op::Tya | Op::Pla => true,
+        _ => false,
+    };
+    // straight-line code that is no memory access but a plain cell's, none of `m`, and
+    // sets or keeps what a branch would read (there is no branch)
+    let passable = |inst: &Inst, cell: &str| -> bool {
+        use Op::*;
+        let plain = match &inst.operand {
+            Operand::None | Operand::Acc | Operand::Imm(_) => true,
+            Operand::Direct(name) => name != cell,
+            _ => false,
+        };
+        plain
+            && matches!(
+                inst.op,
+                Lda | Ldx
+                    | Ldy
+                    | Sta
+                    | Stx
+                    | Sty
+                    | Adc
+                    | Sbc
+                    | And
+                    | Ora
+                    | Eor
+                    | Cmp
+                    | Cpx
+                    | Cpy
+                    | Asl
+                    | Lsr
+                    | Rol
+                    | Ror
+                    | Inc
+                    | Dec
+                    | Tax
+                    | Tay
+                    | Txa
+                    | Tya
+                    | Inx
+                    | Iny
+                    | Dex
+                    | Dey
+                    | Clc
+                    | Sec
+            )
+    };
+    let mut at = 0;
+    while at + 3 < asm.lines.len() {
+        let [Line::Inst(push), Line::Inst(load), Line::Inst(store), Line::Inst(pull)] = &asm.lines[at..at + 4] else {
+            at += 1;
+            continue;
+        };
+        let bracket = (push.op, load.op, store.op, pull.op) == (Op::Pha, Op::Lda, Op::Sta, Op::Pla)
+            && matches!(load.operand, Operand::Imm(_));
+        let Operand::Direct(cell) = &store.operand else {
+            at += 1;
+            continue;
+        };
+        if !bracket || !cell.starts_with("rc") {
+            at += 1;
+            continue;
+        }
+        let (load, store, cell) = (load.clone(), store.clone(), cell.clone());
+        // after the bracket: to the instruction that ends the live range
+        let mut target = None;
+        for look in at + 4..(at + 4 + 12).min(asm.lines.len()) {
+            let Line::Inst(inst) = &asm.lines[look] else { break };
+            if overwrites(inst) {
+                target = Some((look, true));
+                break;
+            }
+            if !passable(inst, &cell) {
+                break;
+            }
+        }
+        // else before it: back to the instruction that made the value live
+        if target.is_none() {
+            for look in (at.saturating_sub(12)..at).rev() {
+                let Line::Inst(inst) = &asm.lines[look] else { break };
+                if overwrites(inst) {
+                    target = Some((look, false));
+                    break;
+                }
+                if !passable(inst, &cell) {
+                    break;
+                }
+            }
+        }
+        let Some((look, after)) = target else {
+            at += 1;
+            continue;
+        };
+        // `lda #n` changes the zero and sign flags, which the instruction at `look` sets again; it leaves the carry
+        let moved = [Line::Inst(load), Line::Inst(store)];
+        asm.lines.drain(at..at + 4);
+        let into = if after { look - 4 } else { look };
+        asm.lines.splice(into..into, moved);
+        at = 0;
     }
 }
 

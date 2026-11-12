@@ -317,13 +317,15 @@ fn plan_loop(
     // Skip nested loops until we can model them better with formulae: the
     // shadow variables and the exit tests above are made on every loop, as the
     // pin's constructor does before it looks at the nesting.
-    // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop that
-    // has a subloop): where the target prices it (`Tti::reduces_outer_multiply`: the
-    // multiply's clocks against a counter held across the inner loop) and not at
-    // -Os, an outer loop that computes an affine value with a multiply is reduced as
-    // an inner loop is, so `i * 300` feeding the inner loop becomes a counter stepped
-    // by 300. gcc's ivopts does this on every loop (named behaviour only, its code is
-    // not translated). x_cordic -O1: 200 `imul` x 19 clocks.
+    // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop
+    // that has a subloop): where the target prices it
+    // (`Tti::reduces_outer_multiply`: the multiply's clocks against a
+    // counter held across the inner loop) and not at -Os, an outer loop
+    // that computes an affine value with a multiply is reduced as
+    // an inner loop is, so `i * 300` feeding the inner loop becomes a counter
+    // stepped by 300. gcc's ivopts does this on every loop (named behaviour
+    // only, its code is not translated). x_cordic -O1: 200 `imul` x 19
+    // clocks.
     if !lp.is_innermost()
         && !(!size
             && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, layout, function, one.operand, 3)))
@@ -435,7 +437,12 @@ fn plan_loop(
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
                         || spent > saved
                         || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
+        llrm_support::debug!(
+            "lsr",
+            "  pin's space solved: kept {kept} (bytes {} against the pin's {})",
+            cost.bytes,
+            pin_cost.bytes
+        );
         if kept {
             lsr = pin;
             solution = pin_solution;
@@ -545,6 +552,19 @@ pub fn reduced_held(
     if let (Some(scev), true) = (held, stable) {
         session.adopt(scev);
     }
+    // Beyond the pin: a remainder by a constant that the target keeps as a
+    // divide is one instruction (the divide's own remainder); read as
+    // `x - (x / c) * c` it splits into the address's other terms, and the
+    // divide is paid beside a multiply and an induction variable per use.
+    let divide_kept = remainders_kept_as_divides(context, function, outer, size);
+    let mark_opaque = |session: &mut ScevSession, context: &Context, function: &Function| {
+        for &value in &divide_kept {
+            session.ask(context, layout, function, outer, |se, cx| {
+                se.set_opaque(cx, llrm_mir::module::Operand::Value(value), true)
+            });
+        }
+    };
+    mark_opaque(&mut session, context, function);
     // Where the function stood when the expressions were last made current.
     let mut mark = function.mark();
     let headers: Vec<BlockId> = {
@@ -694,6 +714,7 @@ pub fn reduced_held(
                 stable = false;
                 session = new_session(context, function);
                 mark = function.mark();
+                mark_opaque(&mut session, context, function);
             }
         }
         // `Rewriter.replaceCongruentIVs(L, &DT, DeadInsts, &TTI)`: after the
@@ -758,9 +779,36 @@ pub fn reduced_held(
             }
         }
     }
-    if !stable {
+    // The expressions made with those values read as unknown are not handed on.
+    if !stable || !divide_kept.is_empty() {
         return (changed, None);
     }
     session.forget_since_keeping(context, layout, &outer.globals, &outer.metadata, function, mark, true);
     (changed, Some(session.into_scev()))
+}
+
+/// The results of the `urem` and `srem` by a constant that is not a power of
+/// two, on a width where `keeps_division` says the target keeps the divide.
+fn remainders_kept_as_divides(
+    context: &Context,
+    function: &Function,
+    outer: &Outer,
+    size: bool,
+) -> Vec<llrm_mir::module::ValueId> {
+    use llrm_mir::opcode::{BinaryOp, Opcode};
+    let target = outer.target();
+    function
+        .walk()
+        .map(|(_, inst)| function.instruction(inst))
+        .filter(|one| matches!(one.opcode, Opcode::Binary(BinaryOp::URem | BinaryOp::SRem)))
+        .filter(|one| {
+            let Some(llrm_mir::module::Operand::Constant(divisor)) = one.operands.get(1).copied() else { return false };
+            let llrm_mir::context::ConstantKind::Int(divisor) = context.get(divisor).kind else { return false };
+            let Some(bits) = one.result.and_then(|value| context.types.int_bits(function.value(value).ty)) else {
+                return false;
+            };
+            divisor > 1 && !divisor.is_power_of_two() && target.keeps_division(bits, size)
+        })
+        .filter_map(|one| one.result)
+        .collect()
 }
