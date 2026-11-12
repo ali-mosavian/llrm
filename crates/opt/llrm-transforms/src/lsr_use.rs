@@ -1043,7 +1043,17 @@ pub fn is_extension_of_existing_phi(
     cx: &Cx,
     ar: Scev,
 ) -> bool {
-    let Some(header) = se.addrec_header(ar) else { return false };
+    extension_of_existing_phi(se, cx, ar).is_some()
+}
+
+/// The phi `is_extension_of_existing_phi` found, and whether the extension is
+/// a sign extension.
+pub fn extension_of_existing_phi(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    ar: Scev,
+) -> Option<(InstId, bool)> {
+    let header = se.addrec_header(ar)?;
     let ty = se.type_of(ar);
     let bits = se.get_type_size_in_bits(cx, ty);
     for inst in cx.function.iter_block(header) {
@@ -1059,13 +1069,14 @@ pub fn is_extension_of_existing_phi(
         if se.get_type_size_in_bits(cx, se.type_of(narrow)) >= bits || se.addrec_header(narrow) != Some(header) {
             continue;
         }
-        if se.get_zero_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar
-            || se.get_sign_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar
-        {
-            return true;
+        if se.get_zero_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar {
+            return Some((inst, false));
+        }
+        if se.get_sign_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar {
+            return Some((inst, true));
         }
     }
-    false
+    None
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1397
