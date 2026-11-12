@@ -32,6 +32,7 @@ use std::hash::{Hash, Hasher};
 
 use llrm_analysis::globalsaa::embedded;
 use llrm_mir::context::{ConstantKind, GlobalId};
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::module::{GlobalKind, Linkage, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, Opcode, Tail};
@@ -60,7 +61,7 @@ pub fn equivalent(
     right_id: GlobalId,
     right: &Function,
 ) -> bool {
-    Comparator { module, left_id, right_id, left, right, values_left: HashMap::new(), values_right: HashMap::new(), blocks_left: HashMap::new(), blocks_right: HashMap::new(), ahead_left: HashMap::new(), ahead_right: HashMap::new() }
+    Comparator { module, left_id, right_id, left, right, values_left: IdMap::new(), values_right: IdMap::new(), blocks_left: IdMap::new(), blocks_right: IdMap::new(), ahead_left: IdMap::new(), ahead_right: IdMap::new() }
         .compare()
 }
 
@@ -71,13 +72,13 @@ struct Comparator<'a> {
     left: &'a Function,
     right: &'a Function,
     /// A value's serial number on each side (`sn_mapL`, `sn_mapR`).
-    values_left: HashMap<ValueId, u32>,
-    values_right: HashMap<ValueId, u32>,
-    blocks_left: HashMap<BlockId, u32>,
-    blocks_right: HashMap<BlockId, u32>,
+    values_left: IdMap<ValueId, u32>,
+    values_right: IdMap<ValueId, u32>,
+    blocks_left: IdMap<BlockId, u32>,
+    blocks_right: IdMap<BlockId, u32>,
     /// Values read before the walk defines them (a loop's phi input), paired as they were first met.
-    ahead_left: HashMap<ValueId, ValueId>,
-    ahead_right: HashMap<ValueId, ValueId>,
+    ahead_left: IdMap<ValueId, ValueId>,
+    ahead_right: IdMap<ValueId, ValueId>,
 }
 
 impl Comparator<'_> {

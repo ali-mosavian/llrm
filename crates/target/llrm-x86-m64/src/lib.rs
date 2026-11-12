@@ -459,6 +459,12 @@ impl llrm_target::Target for M64 {
                             // `mov m64, imm32`: sign-extended.
                             unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
+                            // DEVIATE INL-O2 RATE at m64 (owner x86-m64, exit 2026-11-24), as x86-m32's:
+                            // a speed caller's inline pays the callee's bytes at the m64 net rate
+                            // (312 milliclocks a byte); gcc's `ipa-inline` takes a copy only where its
+                            // growth is small (shellsort -O2: main took a second 255 B copy of a
+                            // function that stays). -O1 and -Os unchanged.
+                            speed_inline_milliclocks_per_byte: 312,
                             // DEVIATE SD103-M64 (owner x86-m64, exit 2026-11-24), as x86-m32's SD103-M32:
                             // the pin's cost rule, with the price of a merged `a && b` it omits taken
                             // from the table: two `setcc`, a logic op and a `test`, less the branch
@@ -520,6 +526,8 @@ impl llrm_target::Target for M64 {
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
+                            // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
+                            ipa_cp_clones_at_speed: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

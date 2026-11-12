@@ -2617,6 +2617,14 @@ fn lower_int_to_fp(
             let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[src]);
             return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
         }
+        // `LowerUINT_TO_FP`: a 64-bit `u64` to `f32` or `f64` is `Expand`
+        // (`return SDValue()`), the legalizer's signed convert of the halved
+        // value, doubled. The x87 `fild` and its 2^64 fudge below are for the
+        // targets without a signed 64-bit SSE convert (DEVIATE UITOFP-F64:
+        // the pin's `f64` is an SSE2 vector sequence, see `expand_uint_to_fp`).
+        if !signed && in_reg(64) && pointer == EVT::I64 {
+            return None;
+        }
     }
     // DEVIATE SD332 (exit: the pin gains it; re-check at each pin bump): a
     // plain one-use load of an `i16` or `i32` is `fild`ed from its own

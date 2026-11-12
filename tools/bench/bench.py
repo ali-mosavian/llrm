@@ -65,8 +65,8 @@ def physical_defines() -> list[str]:
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
 
 
-# The module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
-DOSERROR_OBJ = llrmbin.ow_tree() / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
+# The source of the module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
+DOSERROR_ASM = llrmbin.ow_tree() / "bld/clib/_dos/a/error086.asm"
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
@@ -452,14 +452,33 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
                             "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
             break
         except dosbatch.BuildError as error:
-            if "__doserror_ is an undefined reference" in str(error) and not extra and DOSERROR_OBJ.exists():
-                extra = ["file", str(DOSERROR_OBJ)]
+            if "__doserror_ is an undefined reference" in str(error) and not extra and DOSERROR_ASM.exists():
+                far = far_doserror(work)
+                if isinstance(far, str):
+                    return far
+                extra = ["file", str(far)]
                 continue
             over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
             if not over or stack <= 4096:
                 return f"build: {error}"
             stack -= -(-int(over.group(1)) // 16) * 16
     return exe, listing
+
+
+def far_doserror(work: Path) -> Path | str:
+    """error086.obj for the medium model: the object in the tree returns near (`defn`, `xrefn`: its `ret` and its call of
+    `__set_errno_dos`), and clibm.lib's callers `call far` it. The first DOS error (a missing file, an open that fails)
+    returned into the stack: stft_single's and jpeg_*'s Watcom rows died with UC_ERR_INSN_INVALID. Assembled again with the
+    far forms (`defp`, `xrefp`), as the library's own big-code routines are."""
+    tree = DOSERROR_ASM.parents[3]  # bld/
+    source = work / "error086.asm"
+    source.write_text(DOSERROR_ASM.read_text().replace("defn ", "defp ").replace("xrefn", "xrefp"))
+    obj = work / "error086.obj"
+    includes = [f"-I{tree / name}" for name in ("clib/_dos/h", "clib/h", "watcom/h", "lib_misc/h", "comp_cfg/h")]
+    done = cpulimit.run([str(OW / "bwasm"), "-q", "-DNDEBUG", str(source), *includes, "-we", f"-fo={obj}", "-mm", "-nt=_TEXT", "-w8", "-cx", "-ee", "-fpc", "-0", "-bt=dos"], 300, capture_output=True, text=True, timeout=native.COMPILE_SECONDS)
+    if done.returncode != 0 or not obj.exists():
+        return "error086: " + (done.stderr or done.stdout).strip()[-300:]
+    return obj
 
 
 def c_source(path: Path) -> bytes:

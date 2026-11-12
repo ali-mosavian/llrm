@@ -951,6 +951,146 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
+/// A copy whose only gain is a known loop bound is gcc's -O3 (`-fipa-cp-clone`
+/// is on there only); at -O2 on a target that copies there, the copy for
+/// `pack_ref`'s four agreed constants kept the caller's mode loop from
+/// unrolling: m32 x_spill_store_order 53,652 -> 76,462 clk.
+#[test]
+fn test_a_copy_that_only_makes_a_loop_bound_known_waits_for_o3() {
+    let cloned = |hints: bool| {
+        let mut module = parsed(TWO_CONTEXTS);
+        let threshold = Threshold { cp_clone: Some(true), cp_hint_clones: hints, ..Threshold::none() };
+        stepped(&mut module, &["f", "g"], 20, threshold);
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned(false), cloned(true)), (false, true));
+}
+
+/// A known bound the unroller cannot take whole is no reason to copy: gcc's
+/// hint counts it, but m64 nbody -O2 went 655 -> 1189 B and recpow 1207 ->
+/// 3060 B for a loop of 400 trips, so the hint counts up to
+/// `max-completely-peel-times` (16) trips.
+#[test]
+fn test_a_loop_bound_past_the_peel_limit_is_no_reason_to_clone() {
+    let cloned = |trips: &str| {
+        let text = TWO_CONTEXTS.replace("i16 4,", &format!("i16 {trips},")).replace("i16 5,", &format!("i16 {trips},"));
+        let mut module = parsed(&text);
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned("4"), cloned("400")), (true, false));
+}
+
+/// `fib(20)` credited clones for 19 and 18 but counted only the first's size:
+/// m64 fib -O2 grew 424 -> 595 B and 12.7 k -> 19.1 k clocks. A chain pays for
+/// every clone it credits (gcc's `prop_size_cost`).
+const BRANCHING: &str = "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %done, label %rec
+
+rec:
+  %a1 = sub i32 %n, 1
+  %a = call i32 @fib(i32 %a1)
+  %b1 = sub i32 %n, 2
+  %b = call i32 @fib(i32 %b1)
+  %m1 = mul i32 %n, %n
+  %m2 = mul i32 %m1, %n
+  %m3 = mul i32 %m2, %n
+  %m4 = mul i32 %m3, %n
+  %m5 = mul i32 %m4, %n
+  %m6 = mul i32 %m5, %n
+  %m7 = mul i32 %m6, %n
+  %m8 = mul i32 %m7, %n
+  %m9 = mul i32 %m8, %n
+  %m10 = mul i32 %m9, %n
+  %m11 = mul i32 %m10, %n
+  %m12 = mul i32 %m11, %n
+  %m13 = mul i32 %m12, %n
+  %m14 = mul i32 %m13, %n
+  %m15 = mul i32 %m14, %n
+  %m16 = mul i32 %m15, %n
+  %m17 = mul i32 %m16, %n
+  %m18 = mul i32 %m17, %n
+  %m19 = mul i32 %m18, %n
+  %m20 = mul i32 %m19, %n
+  %m21 = mul i32 %m20, %n
+  %m22 = mul i32 %m21, %n
+  %m23 = mul i32 %m22, %n
+  %m24 = mul i32 %m23, %n
+  %m25 = mul i32 %m24, %n
+  %m26 = mul i32 %m25, %n
+  %m27 = mul i32 %m26, %n
+  %m28 = mul i32 %m27, %n
+  %m29 = mul i32 %m28, %n
+  %m30 = mul i32 %m29, %n
+  %m31 = mul i32 %m30, %n
+  %m32 = mul i32 %m31, %n
+  %m33 = mul i32 %m32, %n
+  %m34 = mul i32 %m33, %n
+  %m35 = mul i32 %m34, %n
+  %m36 = mul i32 %m35, %n
+  %m37 = mul i32 %m36, %n
+  %m38 = mul i32 %m37, %n
+  %m39 = mul i32 %m38, %n
+  %m40 = mul i32 %m39, %n
+  %m41 = mul i32 %m40, %n
+  %m42 = mul i32 %m41, %n
+  %m43 = mul i32 %m42, %n
+  %m44 = mul i32 %m43, %n
+  %m45 = mul i32 %m44, %n
+  %m46 = mul i32 %m45, %n
+  %m47 = mul i32 %m46, %n
+  %m48 = mul i32 %m47, %n
+  %m49 = mul i32 %m48, %n
+  %m50 = mul i32 %m49, %n
+  %m51 = mul i32 %m50, %n
+  %m52 = mul i32 %m51, %n
+  %m53 = mul i32 %m52, %n
+  %m54 = mul i32 %m53, %n
+  %m55 = mul i32 %m54, %n
+  %m56 = mul i32 %m55, %n
+  %m57 = mul i32 %m56, %n
+  %m58 = mul i32 %m57, %n
+  %m59 = mul i32 %m58, %n
+  %m60 = mul i32 %m59, %n
+  %s0 = add i32 %a, %b
+  %s = add i32 %s0, %m60
+  ret i32 %s
+
+done:
+  ret i32 %n
+}
+
+define i32 @f(i32 %x) {
+b0:
+  %r = call i32 @fib(i32 20)
+  ret i32 %r
+}
+";
+
+#[test]
+fn test_a_branching_recursion_called_once_is_not_cloned_down_a_chain() {
+    let mut module = parsed(BRANCHING);
+    stepped(&mut module, &["f", "fib"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
+}
+
+/// A copy for a context two call sites pass has two callers, so nothing inlines
+/// it back and the calls to one pure callee end up in different functions:
+/// m64 -O2 fib(20) ran fib(16) three times (+50% clk), frames +2%.
+#[test]
+fn test_a_recursion_is_not_copied_for_a_context_several_sites_pass() {
+    let text = BRANCHING.replace(
+        "  %r = call i32 @fib(i32 20)\n  ret i32 %r",
+        "  %r = call i32 @fib(i32 20)\n  %q = call i32 @fib(i32 20)\n  %p = call i32 @fib(i32 20)\n  %u = add i32 %r, %q\n  %t = add i32 %u, %p\n  ret i32 %t",
+    );
+    assert_ne!(text, BRANCHING);
+    let mut module = parsed(&text);
+    stepped(&mut module, &["f", "fib"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
+}
+
 /// A function only an invoke or a `!callees` list names is still called.
 #[test]
 fn test_a_function_only_an_invoke_calls_is_not_dead() {
@@ -1332,7 +1472,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         let (f, h) = (program.modules[0].named("f").unwrap(), program.modules[0].named("h").unwrap());
         let private = private(program, 0);
         let mut state = crate::ipacp::Cloning::default();
-        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, &mut state);
+        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, true, &mut state);
         assert_eq!(first.added.len(), 1, "the first round clones fill for row 2");
         let mut analyses = managers(program, &mut ProgramAnalyses::default());
         // What `bare` leaves, without its check that no call stands: the callers
@@ -1346,7 +1486,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         stub.insert(end, llrm_mir::edit::Position::End(entry)).unwrap();
         module.globals[first.added[0].0 as usize].kind = GlobalKind::Function(Box::new(stub));
         analyses[0].changed(first.added[0]);
-        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, &mut state);
+        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, true, &mut state);
         let module = &program.modules[0];
         let caller = module.global(h).function().unwrap();
         let target = caller
@@ -1358,8 +1498,8 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
     .unwrap();
 }
 
-/// Each level of `down` saves one address, too little to pay for a copy; the
-/// four levels together do, and GCC's `propagate_effects` credits the copy for
+/// Each level of `down` saves a few clocks, too little to pay for a copy; the
+/// four levels, each called four times, do, and GCC's `propagate_effects` credits the copy for
 /// `row = 0` with the ones after it. Priced alone, the copy was refused: queens
 /// got four clones of eight, hanoi2 none.
 const DOWN: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
@@ -1390,38 +1530,19 @@ go:
   %q10 = mul i16 %q9, %r1
   %q11 = mul i16 %q10, %r1
   %q12 = mul i16 %q11, %r1
-  %q13 = mul i16 %q12, %r1
-  %q14 = mul i16 %q13, %r1
-  %q15 = mul i16 %q14, %r1
-  %q16 = mul i16 %q15, %r1
-  %q17 = mul i16 %q16, %r1
-  %q18 = mul i16 %q17, %r1
-  %q19 = mul i16 %q18, %r1
-  %q20 = mul i16 %q19, %r1
-  %q21 = mul i16 %q20, %r1
-  %q22 = mul i16 %q21, %r1
-  %q23 = mul i16 %q22, %r1
-  %q24 = mul i16 %q23, %r1
-  %q25 = mul i16 %q24, %r1
-  %q26 = mul i16 %q25, %r1
-  %q27 = mul i16 %q26, %r1
-  %q28 = mul i16 %q27, %r1
-  %q29 = mul i16 %q28, %r1
-  %q30 = mul i16 %q29, %r1
-  %q31 = mul i16 %q30, %r1
-  %q32 = mul i16 %q31, %r1
-  %q33 = mul i16 %q32, %r1
-  %q34 = mul i16 %q33, %r1
-  %q35 = mul i16 %q34, %r1
-  %q36 = mul i16 %q35, %r1
-  %q37 = mul i16 %q36, %r1
-  %q38 = mul i16 %q37, %r1
-  %q39 = mul i16 %q38, %r1
-  %q40 = mul i16 %q39, %r1
-  %g = add i16 %f, %q40
+  %g = add i16 %f, %q12
   store i16 %g, ptr %p
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %go ], [ %i1, %next ]
+  %more = icmp slt i16 %i, 4
+  br i1 %more, label %next, label %out
+
+next:
   call void @down(i16 %r1, i16 %e)
-  br label %out
+  %i1 = add nsw i16 %i, 1
+  br label %head
 
 out:
   ret void

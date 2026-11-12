@@ -296,6 +296,80 @@ pub enum ImmUser {
     Unknown,
 }
 
+/// One operation of the code LSR's choice leaves behind: its encoded bytes
+/// and its clocks, in thousandths (the clocks are read where a level prices
+/// both axes; 0 = unstated).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OpCost {
+    pub bytes: u32,
+    pub clocks_milli: u32,
+}
+
+impl OpCost {
+    pub const fn bytes(bytes: u32) -> Self {
+        Self { bytes, clocks_milli: 0 }
+    }
+}
+
+/// DEVIATE LSR-SIZE (owner w12): the target's byte table for the code LSR's
+/// formulae leave behind, in the place of the numbers `lsr_use.rs` held.
+/// `None` from [`Tti::lsr_size_model`] is the pin's order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LsrSizeModel {
+    /// A displacement from a global's address.
+    pub disp_global: OpCost,
+    /// A frame slot's displacement, laid out after the pass.
+    pub disp_frame: OpCost,
+    /// A displacement that fits a signed byte.
+    pub disp_short: OpCost,
+    /// Any other nonzero displacement. A zero one is free.
+    pub disp_long: OpCost,
+    /// The add or lea for each register not folded into the address, with
+    /// its immediate.
+    pub base_add: OpCost,
+    /// The step added each trip to a counter.
+    pub iv_step: OpCost,
+    /// A `mov` or `lea` of a register's start in the preheader.
+    pub setup: OpCost,
+    /// Setup instructions counted for one formula, at most.
+    pub setup_cap: u32,
+}
+
+impl LsrSizeModel {
+    /// The bytes of x86's `[reg + disp]`, as `lsr_use.rs` counted them; one
+    /// number (3) for an add, lea or mov with its immediate.
+    pub const X86: Self = Self {
+        disp_global: OpCost::bytes(4),
+        disp_frame: OpCost::bytes(2),
+        disp_short: OpCost::bytes(1),
+        disp_long: OpCost::bytes(4),
+        base_add: OpCost::bytes(3),
+        iv_step: OpCost::bytes(3),
+        setup: OpCost::bytes(3),
+        setup_cap: 4,
+    };
+
+    /// The bytes of one address displacement.
+    pub fn displacement(
+        &self,
+        offset: i64,
+        global: bool,
+        frame: bool,
+    ) -> u32 {
+        if global {
+            self.disp_global.bytes
+        } else if frame {
+            self.disp_frame.bytes
+        } else if offset == 0 {
+            0
+        } else if i8::try_from(offset).is_ok() {
+            self.disp_short.bytes
+        } else {
+            self.disp_long.bytes
+        }
+    }
+}
+
 /// The bytes of the instructions LSR's setup and exit test are made of.
 #[derive(Clone, Copy, Debug)]
 pub struct LsrBytes {
@@ -717,6 +791,13 @@ pub trait Tti {
     /// `CodeSize` in the pin's units, which their thresholds are in.
     fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
         None
+    }
+
+    /// [`Self::inline_size_view`] for a caller lowered for `speed` (-O2,
+    /// -O3), where the target's lowering of an operation is larger than a
+    /// size caller's. The default is the one view.
+    fn inline_size_view_at(&self, _speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+        self.inline_size_view()
     }
 
     /// What the address of a load or store adds to its `CodeSize`, beyond
@@ -1274,6 +1355,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UP1-CALL at -O1: the size-neutral rule above prices a call the
+    /// copies keep as one instruction with its operands, where the pin's
+    /// analysis gives up on a call (gcc's `estimate_num_insns` prices it).
+    fn unroll_o1_prices_calls(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_o1_analyzed_trips`.
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         None
@@ -1465,6 +1553,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE LG1, LG2: `GenerateICmpZeroScales` scales a compare against zero
+    /// by a factor whose product may wrap, where it is still a zero test
+    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as the
+    /// pin has it (wasm). owner: wasm, exit: 2026-12-04.
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        true
+    }
+
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         false
@@ -1499,7 +1595,7 @@ pub trait Tti {
     }
 
     /// DEVIATE IPACP-O3: whether a function is copied for the constants its
-    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone` (on at -O3) does and the
     /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
@@ -1979,11 +2075,11 @@ pub trait Tti {
         key(a) < key(b)
     }
 
-    /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): LSR ranks formulae
-    /// by their bytes first when the function is built for size; false is the
-    /// pin's order at every level.
-    fn lsr_size_order(&self) -> bool {
-        false
+    /// DEVIATE LSR-SIZE (owner w12, exit 2026-11-24): LSR ranks formulae by
+    /// the bytes of this table first when the function is built for size;
+    /// none is the pin's order at every level.
+    fn lsr_size_model(&self) -> Option<LsrSizeModel> {
+        None
     }
 
     /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-30): `replaceCongruentIVs`
@@ -2397,6 +2493,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): whether `IVUsers` makes a
+    /// use of each incoming value of a phi that is a user, where the pin's
+    /// `Processed` check (`IVUsers.cpp` `AddUsersImpl`, "do not recurse into a
+    /// phi twice") keeps the first and drops the rest, so `i*300+21472` and
+    /// `i*300-81472` merging in one phi leave one of the two a multiply chain.
+    /// x_cordic m32 -O3: 100 trips of a 5-instruction chain gcc does not pay.
+    fn lsr_phi_operand_uses(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
@@ -2470,6 +2576,23 @@ pub trait Tti {
         _bits: u32,
     ) -> u32 {
         0
+    }
+
+    /// DEVIATE LU24 (`lsr_solve.rs`): the search's required-register rule
+    /// ("formulae that do not use a register the solution so far could
+    /// share are ignored") is left off for address uses, as the pin does for
+    /// post-indexed targets: the cost model weighs a pointer that steps
+    /// against the index and base add it replaces.
+    fn lsr_address_left_to_cost_model(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU23 (`lsr_use.rs`): in the baseline, an address `gep p, n` of
+    /// a pointer in a register and a counter that is the only phi is a base
+    /// add each trip (`num_base_adds`), not a recurrence of its own. False
+    /// where the add folds into the access (the pin's x86).
+    fn lsr_written_pointer_add_is_base_add(&self) -> bool {
+        false
     }
 
     /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the
@@ -3020,5 +3143,47 @@ mod access_tests {
         };
         Counts(Basic).get_unrolling_preferences_for(&LoopShape { has_calls: true, ..LoopShape::default() }, &mut up);
         assert_eq!(up.max_count, 7);
+    }
+}
+
+#[cfg(test)]
+mod size_model_tests {
+    use super::*;
+
+    /// A table whose every number differs: a displacement read from the wrong
+    /// field, or a literal left behind, shows as the wrong value.
+    const DISTINCT: LsrSizeModel = LsrSizeModel {
+        disp_global: OpCost::bytes(40),
+        disp_frame: OpCost::bytes(20),
+        disp_short: OpCost::bytes(10),
+        disp_long: OpCost::bytes(70),
+        base_add: OpCost::bytes(5),
+        iv_step: OpCost::bytes(6),
+        setup: OpCost::bytes(7),
+        setup_cap: 2,
+    };
+
+    /// Each displacement form is read from its own field; zero is free.
+    #[test]
+    fn a_displacement_is_priced_by_its_form_from_the_table() {
+        let m = DISTINCT;
+        assert_eq!(m.displacement(123, true, false), 40);
+        assert_eq!(m.displacement(0, false, true), 20);
+        assert_eq!(m.displacement(0, false, false), 0);
+        assert_eq!(m.displacement(-128, false, false), 10);
+        assert_eq!(m.displacement(128, false, false), 70);
+    }
+
+    /// x86's table is the numbers `lsr_use.rs` held as literals (0/1/4, 2 for a
+    /// frame slot, 3 per add, step and setup, at most 4 setups): moving them
+    /// into the table changes no x86 object.
+    #[test]
+    fn the_x86_table_is_the_numbers_lsr_held() {
+        let m = LsrSizeModel::X86;
+        assert_eq!(
+            (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes),
+            (4, 2, 1, 4)
+        );
+        assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
     }
 }
