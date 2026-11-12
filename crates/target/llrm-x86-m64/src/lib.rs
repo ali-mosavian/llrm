@@ -453,6 +453,11 @@ impl llrm_target::Target for M64 {
                             // saved. sieve `i <= 31 && i*i < n` merged is `setb; setb; and; cmp 1; jne`.
                             merged_condition_clocks: 2 * prices.operations.set + 2 * prices.operations.add
                                 - prices.operations.branch,
+                            // DEVIATE ROTATION-TRIAL at m64 (owner x86-m64, exit 2026-12-05, as m32's
+                            // #9141): -Os rotates a counted loop whose copied guard does not fold, then
+                            // compiles the module again with those loops unrotated (gcc's `-Os` shape)
+                            // and keeps the smaller object.
+                            rotation_trial_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than
