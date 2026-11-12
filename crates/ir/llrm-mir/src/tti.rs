@@ -676,6 +676,13 @@ pub trait Tti {
         None
     }
 
+    /// [`Self::inline_size_view`] for a caller lowered for `speed` (-O2,
+    /// -O3), where the target's lowering of an operation is larger than a
+    /// size caller's. The default is the one view.
+    fn inline_size_view_at(&self, _speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+        self.inline_size_view()
+    }
+
     /// What the address of a load or store adds to its `CodeSize`, beyond
     /// the access itself (`memory_op_cost`): the bytes of a global's absolute
     /// address, a frame slot's, a displacement or a scaled index. Free: the
