@@ -6,7 +6,10 @@
 //! # How it works
 //! A block of at most 2 instructions (1 at optsize) that cannot fall through
 //! is copied over the `b` of every block whose only exit is that `b`. A block
-//! left with no jumper is dropped later as unreachable.
+//! left with no jumper is dropped later as unreachable. A block that ends in
+//! a conditional branch and a jump (a loop's test) is copied the same way,
+//! only over a jump back to it, so a trip ends in the test (`fib` -O1: the
+//! `b head` of every trip goes).
 //!
 //! Then, in a block that returns, `mov d, s` with `s` a caller-saved register
 //! that nothing reads afterwards, whose last write is an earlier plain
@@ -27,6 +30,11 @@
 //! (`shouldTailDuplicate`, post-RA, not in layout mode) and
 //! [MachineCopyPropagation.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/MachineCopyPropagation.cpp)
 //! (`BackwardCopyPropagateBlock`).
+//!
+//! DEVIATE: the pin copies a block with a way on where its block frequencies
+//! say the copy saves a taken branch (`isProfitableToTailDup`); here a jump
+//! back to the block stands for it, as the loop's latch is the hot jumper.
+//! Exit: 2026-11-24, with the frequency-driven placement.
 //!
 //! DEVIATE: a block with a CFI directive or a jump-table label is not copied
 //! (the pin copies DWARF CFI); the backward propagation only looks in blocks
@@ -105,6 +113,11 @@ pub fn tail_duplicate(
         let Some((insts, locs)) = short.get(&to) else { continue };
         // "Don't duplicate into a fall-through predecessor."
         if at[&to] == index + 1 {
+            continue;
+        }
+        // A block with a way on is worth its copy where the jump closes a
+        // loop: a trip then ends in the test instead of a taken jump.
+        if insts.iter().any(is_conditional) && at[&to] > index {
             continue;
         }
         block.insts.pop();
