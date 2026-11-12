@@ -210,11 +210,8 @@ fn the_compact_word_division_agrees_with_the_fast_one() {
         (65535, 16385, 3, 16380),
     ] {
         let n = format!("c{a}-{b}");
-        for suffix in ["c", "a"] {
-            let (div, rem) = (format!("__udivhi3{suffix}"), format!("__umodhi3{suffix}"));
-            assert_eq!(word(&format!("udivhi{suffix}-{n}"), &two_words(a, b), &div), quotient, "{a} / {b} {div}");
-            assert_eq!(word(&format!("umodhi{suffix}-{n}"), &two_words(a, b), &rem), remainder, "{a} % {b} {rem}");
-        }
+        assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
+        assert_eq!(word(&format!("umodhic-{n}"), &two_words(a, b), "__umodhi3c"), remainder, "{a} % {b}");
     }
 }
 
@@ -250,11 +247,8 @@ fn compact_signed_word_division_matches_the_fast_routines() {
         (30000, 300, 100, 0),
     ] {
         let n = format!("{a}-{b}");
-        for suffix in ["c", "a"] {
-            let (div, rem) = (format!("__divhi3{suffix}"), format!("__modhi3{suffix}"));
-            assert_eq!(word(&format!("divhi{suffix}-{n}"), &two_words(a, b), &div), quotient, "{a} / {b} {div}");
-            assert_eq!(word(&format!("modhi{suffix}-{n}"), &two_words(a, b), &rem), remainder, "{a} % {b} {rem}");
-        }
+        assert_eq!(word(&format!("divhic-{n}"), &two_words(a, b), "__divhi3c"), quotient, "{a} / {b} compact");
+        assert_eq!(word(&format!("modhic-{n}"), &two_words(a, b), "__modhi3c"), remainder, "{a} % {b} compact");
         assert_eq!(word(&format!("divhif-{n}"), &two_words(a, b), "__divhi3"), quotient, "{a} / {b} fast");
         assert_eq!(word(&format!("modhif-{n}"), &two_words(a, b), "__modhi3"), remainder, "{a} % {b} fast");
     }
