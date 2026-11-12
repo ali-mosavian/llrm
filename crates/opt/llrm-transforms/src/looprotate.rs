@@ -835,17 +835,24 @@ fn rotate_loop(
         return None;
     }
     if run.options.guard_must_fold && !guard_folds(run, orig_header, orig_preheader, header_end).folds {
+        // A big function is rotated in both trial compiles.
+        let priced =
+            run.options.rotation_trial && run.function.instruction_count() <= trial::ROTATION_TRIAL_MAX_INSTRUCTIONS;
+        let this = run.this.and_then(|this| run.globals[this.0 as usize].name.as_deref());
         if !header_exit_count_known(run, lp, orig_header) {
-            return None;
-        }
-        // A counted loop: rotated, unless the trial compile leaves it (a big function is rotated in both).
-        if run.options.rotation_trial && run.function.instruction_count() <= trial::ROTATION_TRIAL_MAX_INSTRUCTIONS {
+            // Uncounted: left, unless the ROTATION-HOT compile rotates it.
+            if !(priced && trial::rotates_more()) {
+                if let (true, Some(name)) = (priced, this) {
+                    trial::note_left(name);
+                }
+                return None;
+            }
+        } else if priced {
+            // Counted: rotated, unless the ROTATION-TRIAL compile leaves it.
             if trial::unrotated() {
                 return None;
             }
-            if let Some(this) = run.this
-                && let Some(name) = run.globals[this.0 as usize].name.as_deref()
-            {
+            if let Some(name) = this {
                 if llrm_support::debug::enabled("trial") {
                     eprintln!("trial noted {name}: {} instructions", run.function.instruction_count());
                 }
