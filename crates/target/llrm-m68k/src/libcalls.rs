@@ -36,6 +36,7 @@ use llrm_codegen::backend::libcall_choice::{Candidate, Costs, Member, choose};
 use llrm_codegen::backend::selectiondag::actions::{Action, TargetLowering};
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::MVT;
+use crate::dagisel::hooks::Cpu;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::{BitCount, Intrinsic};
 use llrm_mir::module::{Function, Module, Operand};
@@ -72,9 +73,11 @@ pub enum Kind {
     Shl64,
     Shr64,
     Sar64,
+    Mul64,
 }
 
-const KINDS: [Kind; 7] = [Kind::Ctz64, Kind::Clz64, Kind::Pop32, Kind::Pop64, Kind::Shl64, Kind::Shr64, Kind::Sar64];
+const KINDS: [Kind; 8] =
+    [Kind::Ctz64, Kind::Clz64, Kind::Pop32, Kind::Pop64, Kind::Shl64, Kind::Shr64, Kind::Sar64, Kind::Mul64];
 
 impl Kind {
     pub fn name(self) -> &'static str {
@@ -86,6 +89,7 @@ impl Kind {
             Kind::Shl64 => "Shl64",
             Kind::Shr64 => "Shr64",
             Kind::Sar64 => "Sar64",
+            Kind::Mul64 => "Mul64",
         }
     }
 
@@ -101,6 +105,8 @@ impl Kind {
             Kind::Shl64 => &[(ISD::ShlParts, MVT::I32, Action::Expand)],
             Kind::Shr64 => &[(ISD::SrlParts, MVT::I32, Action::Expand)],
             Kind::Sar64 => &[(ISD::SraParts, MVT::I32, Action::Expand)],
+            // a name, not an action: see [`apply`]
+            Kind::Mul64 => &[],
         }
     }
 }
@@ -165,15 +171,22 @@ fn present(
             Opcode::Call(_) => {
                 let Some(Operand::Constant(id)) = instruction.operands.last().copied() else { continue };
                 let ConstantKind::Global(global) = module.context.get(id).kind else { continue };
-                let Some(Intrinsic::BitCount(count)) = module.global(global).intrinsic() else { continue };
-                match (count, bits(instruction.operands[0])) {
-                    (BitCount::TrailingZeros, Some(64)) => Kind::Ctz64,
-                    (BitCount::LeadingZeros, Some(64)) => Kind::Clz64,
-                    (BitCount::Population, Some(32)) => Kind::Pop32,
-                    (BitCount::Population, Some(64)) => Kind::Pop64,
+                match module.global(global).intrinsic() {
+                    Some(Intrinsic::BitCount(count)) => match (count, bits(instruction.operands[0])) {
+                        (BitCount::TrailingZeros, Some(64)) => Kind::Ctz64,
+                        (BitCount::LeadingZeros, Some(64)) => Kind::Clz64,
+                        (BitCount::Population, Some(32)) => Kind::Pop32,
+                        (BitCount::Population, Some(64)) => Kind::Pop64,
+                        _ => continue,
+                    },
+                    // the wide product the legalizer makes of these is an `i64` multiply
+                    Some(Intrinsic::WithOverflow { op: BinaryOp::Mul, .. })
+                    | Some(Intrinsic::Fixed { divide: false })
+                    | Some(Intrinsic::FixedMul { .. }) => Kind::Mul64,
                     _ => continue,
                 }
             }
+            Opcode::Binary(BinaryOp::Mul) if bits(instruction.operands[0]) == Some(64) => Kind::Mul64,
             // a shift by a constant is expanded in line whatever the choice
             Opcode::Binary(op @ (BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr))
                 if bits(instruction.operands[0]) == Some(64)
@@ -194,12 +207,24 @@ fn present(
     found
 }
 
+/// Whether `kind` is a choice at `cpu`. The counts and shifts are the 68020's
+/// (the 68000 and 68010 always call, M68K-BC1); the product of two `i64`s is
+/// the choice of every CPU without a `mulu.l` that gives 64 bits (68000,
+/// 68010, 68060): the 68020 to the 68040 take it before any call.
+pub fn decided_at(
+    kind: Kind,
+    cpu: Cpu,
+) -> bool {
+    if kind == Kind::Mul64 { !cpu.has_wide_multiply() } else { cpu.at_least(Cpu::M68020) }
+}
+
 /// The kinds to call in this module's size-built functions (`built_for_size`
 /// says which), in `mode`. `bytes_of(name, kinds)` is the bytes of the
 /// function built with `kinds` as calls: the saving of a kind is what the
 /// functions with a site of it lose by it, summed, as measured.
 pub fn chosen(
     module: &Module,
+    cpu: Cpu,
     mode: Mode,
     built_for_size: impl Fn(&Function) -> bool,
     bytes_of: impl Fn(&str, &[Kind]) -> Result<usize, String>,
@@ -209,7 +234,7 @@ pub fn chosen(
             let mut saved: HashMap<Kind, i64> = HashMap::new();
             for (_, global, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
                 let (Some(name), true) = (global.name.as_deref(), built_for_size(function)) else { continue };
-                let here = present(module, function);
+                let here: Vec<Kind> = present(module, function).into_iter().filter(|&kind| decided_at(kind, cpu)).collect();
                 if here.is_empty() || here.len() > MEASURED_KINDS || function.walk().count() > MEASURED_INSTRUCTIONS {
                     continue;
                 }
@@ -223,7 +248,7 @@ pub fn chosen(
             choose(&COSTS, &saved)
         }
         Mode::Inline => Vec::new(),
-        Mode::Call => KINDS.to_vec(),
+        Mode::Call => KINDS.into_iter().filter(|&kind| decided_at(kind, cpu)).collect(),
     };
     // the unit that defines a routine is its body: a call would recurse
     kinds.retain(|kind| {
@@ -248,6 +273,11 @@ pub fn apply(
     for kind in kinds {
         for &(op, vt, action) in kind.actions() {
             tli.set_operation_action(op, vt, action);
+        }
+        if *kind == Kind::Mul64 {
+            // the product of two `i64`s past a `mulu.l` (68000, 68010, 68060):
+            // `expand_mul` calls it in a function built for size
+            tli.set_size_only_libcall_name(ISD::Mul, MVT::I64, "__muldi3");
         }
     }
 }

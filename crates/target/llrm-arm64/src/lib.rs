@@ -36,6 +36,7 @@ pub mod shrinkwrap;
 pub mod sibcall;
 pub mod sinkfold;
 pub mod taildup;
+pub mod trial;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;
