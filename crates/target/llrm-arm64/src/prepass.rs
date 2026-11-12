@@ -662,7 +662,9 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// code; the heuristics guard register pressure). Without it 9 of 36 arm64
 /// -Os cells are bigger and 1 smaller (recpow -4 B; jpeg_fixed +20, stft_single
 /// +24, lru +16, handoff/w15-cse-heur-only-ab-2026-11-10.md). Owner w15.
-/// Exit: 11-30.
+/// Exit: 11-30. Not over a call: a constant shared past one is kept in a
+/// callee-saved register (two more instructions per call level, recpow -Os),
+/// where the pin makes it again after the call.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
     fresh: &HashMap<Reg, usize>,
@@ -728,6 +730,37 @@ fn as_cheap_as_a_move(op: &Op) -> bool {
     }
 }
 
+/// Whether a call runs between the definition of `earlier` (in `from`) and
+/// the operation `at` of `to`, on some path: sharing a constant over it keeps
+/// the value in a callee-saved register or reloads it, where the pin's greedy
+/// makes it again after the call (a rematerializable `MOVi32imm`).
+fn call_between(
+    blocks: &[crate::mfunc::MBlock],
+    cfg: &Cfg,
+    earlier: Reg,
+    from: usize,
+    to: usize,
+    at: usize,
+) -> bool {
+    let is_call = |op: &Op| matches!(op, Op::Call { .. });
+    let defined_at = blocks[from].ops.iter().position(|op| defined(op) == Some(earlier)).unwrap_or(0);
+    if blocks[from].ops[defined_at..].iter().any(is_call) || blocks[to].ops[..at].iter().any(is_call) {
+        return true;
+    }
+    let reach = |start: usize, edges: &[Vec<usize>]| {
+        let mut seen = HashSet::default();
+        let mut pending = vec![start];
+        while let Some(one) = pending.pop() {
+            if seen.insert(one) {
+                pending.extend(edges[one].iter().copied());
+            }
+        }
+        seen
+    };
+    let (after, before) = (reach(from, &cfg.successors), reach(to, &cfg.predecessors));
+    after.intersection(&before).any(|&one| one != from && one != to && blocks[one].ops.iter().any(is_call))
+}
+
 fn cse(
     function: &mut MFunc,
     cfg: &Cfg,
@@ -770,7 +803,16 @@ fn cse(
                     // (`MachineCSE`, `PhysRegDefsReach`).
                     Some(&earlier)
                         if (!setter || flags_dead(&function.blocks[*block].ops, index))
-                            && (optsize
+                            && ((optsize
+                                && !(as_cheap_as_a_move(op)
+                                    && call_between(
+                                        &function.blocks,
+                                        cfg,
+                                        earlier,
+                                        home[&earlier],
+                                        *block,
+                                        index,
+                                    )))
                                 || home.get(&earlier) == Some(block)
                                 || profitable(
                                     &readers,
@@ -1413,6 +1455,64 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!(movzs(2), 0, "{function:#?}");
+    }
+
+    /// recpow -Os: the divisor of `power`'s even path was shared with the
+    /// one after the recursive call, so it lived over the call in `x20`
+    /// (`stp x20, x19` and `ldp x20, x19` where gcc and the pin save one
+    /// register): +9.0% executed instructions at -104 B of headroom.
+    #[test]
+    fn at_optsize_a_constant_is_not_shared_over_a_call() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, e) = (64, 65, 66, 67, 68);
+        function.next_register = 70;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(b, 0), branch_to("loop")].into() },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(a, 5000),
+                    add(d, b, a),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("call"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "call".into(),
+                ops: vec![
+                    Op::Call {
+                        callee: crate::mfunc::Callee::Symbol("g".into()),
+                        uses: Vec::new(),
+                        defs: Vec::new(),
+                        tail: false,
+                    },
+                    branch_to("after"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "after".into(),
+                ops: vec![
+                    movz(c, 5000),
+                    copy(e, c),
+                    add(69, e, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, true);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(movzs(3), 1, "{function:#?}");
     }
 
     /// Heuristic 3: a value a phi reads is not reused in a block that does not
