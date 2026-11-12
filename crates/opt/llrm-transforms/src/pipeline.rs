@@ -1615,6 +1615,7 @@ pub fn recorded(
                     )
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
+                cp_peel_limited: applied.options.inline.cp_clone.is_none(),
                 ..applied.options.inline
             },
             ..applied.options.clone()
