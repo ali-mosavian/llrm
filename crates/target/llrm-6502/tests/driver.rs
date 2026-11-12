@@ -2017,8 +2017,7 @@ fn a_signed_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_sp
          \x20 %r = srem i16 %a, %b\n  %t = lshr i16 %r, 8\n  %u = xor i16 %r, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
     );
     let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    // the compact bit loop, or the aligned one where the module's share of clocks pays for it
-    let compact = |routine: &str| size.contains(&format!("jsr {routine}c")) || size.contains(&format!("jsr {routine}a"));
+    let compact = |routine: &str| size.contains(&format!("jsr {routine}c"));
     assert!(compact("__divhi3") && compact("__modhi3"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(speed.contains("jsr __divhi3\n") && speed.contains("jsr __modhi3\n"), "{speed}");
@@ -2036,7 +2035,7 @@ fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
          \x20 %t = lshr i16 %s, 8\n  %u = xor i16 %s, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
     );
     let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(size.contains("jsr __udivhi3c") || size.contains("jsr __udivhi3a"), "{size}");
+    assert!(size.contains("jsr __udivhi3c"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
     // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B = 0xF7
@@ -3169,13 +3168,12 @@ fn a_product_by_a_byte_calls_the_byte_entry() {
     }
 }
 
-/// The compact word divide loops 16 times whatever the quotient (idiv_loop_os -Os: 2,374,468 clocks against
-/// llvm-mos's 1,083,830, 2026-11-12); the aligned one is 16 B larger and loops for the quotient's bits. A
-/// module takes it where the share of its clocks the divides save is worth the share of its bytes they add:
-/// a divide in a loop (idiv_loop_os), or the module's main work (compound_assignment_types), not one beside
-/// loops that run a thousand times as often (idioms: +16 B for -0.0% clocks).
+/// -Os is strict bytes: a word divide links the compact routine in every
+/// module. The aligned one (16 B larger, quicker for a small quotient) made
+/// k_tosudivax 82 B, a bare `jmp`, against sdcc's 64 and the compact build's
+/// 58, and digits 151 B against 129.
 #[test]
-fn a_module_takes_the_aligned_divide_where_the_clocks_they_save_are_its_own() {
+fn an_os_word_divide_is_the_compact_routine_in_every_module() {
     let divides = |inner: &str, outer: &str| {
         module(&format!(
             "define i16 @f(i16 %a, i16 %b, i16 %n, i16 %m) {{\nentry:\n  %d = or i16 %b, 1\n  br label %outer\n\
@@ -3187,16 +3185,13 @@ fn a_module_takes_the_aligned_divide_where_the_clocks_they_save_are_its_own() {
              out:\n  {outer}\n  ret i16 %r3\n}}"
         ))
     };
-    let in_loop = divides("%r1 = srem i16 %x, %b\n  %y = add i16 %r1, %j\n  %r2 = srem i16 %y, %d", "%r3 = add i16 %t3, 1");
+    let in_loop =
+        divides("%r1 = srem i16 %x, %b\n  %y = add i16 %r1, %j\n  %r2 = srem i16 %y, %d", "%r3 = add i16 %t3, 1");
     let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("jsr __modhi3a"), "{text}");
-    // the same loops with the work in shifts and one divide after them: too small a share of the clocks
-    let beside = divides("%r2 = mul i16 %x, 3", "%r3 = srem i16 %t3, %d");
-    let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("__modhi3c") && !text.contains("__modhi3a"), "{text}");
+    assert!(text.contains("__modhi3c") && !text.contains("__modhi3a"), "a divide in a loop:\n{text}");
     let once = module("define i16 @g(i16 %a, i16 %b) {\n  %r = srem i16 %a, %b\n  ret i16 %r\n}");
     let text = assembly(&once, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("__modhi3a"), "the only work of the module: {text}");
+    assert!(text.contains("__modhi3c") && !text.contains("__modhi3a"), "the only work of the module:\n{text}");
 }
 
 /// At -Os the long multiply is the 32-step compact walk (mul_constants: 42.0M clocks in 200-trip loops, llvm-mos
