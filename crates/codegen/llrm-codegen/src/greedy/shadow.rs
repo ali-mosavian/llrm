@@ -1827,6 +1827,15 @@ mod tests {
         ) -> Option<Arc<Insn>> {
             self.inner.fold_memory_operand(one, reg, cell)
         }
+        fn fold_memory_operand_classed(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &crate::model::ir::Mem,
+            xmm: &dyn Fn(u32) -> bool,
+        ) -> Option<Arc<Insn>> {
+            self.inner.fold_memory_operand_classed(one, reg, cell, xmm)
+        }
         fn fold_copy_member(
             &self,
             one: &Insn,

@@ -79,7 +79,14 @@ impl Collection<'_, '_> {
             // set and try again; it gives up.
             // Favoring post-increment, an address use is left to the cost
             // model: the required registers can mislead it.
-            if !self.tti.preferred_addressing_mode().has_post_indexed() || lu.kind != Kind::Address {
+            // DEVIATE LU24: so is an address use that runs every trip where
+            // the target says its base add costs more than a recurrence (`gep
+            // p, n` against a pointer that steps): a pointer that steps costs
+            // an add on trips that do not use it.
+            if !(self.tti.preferred_addressing_mode().has_post_indexed()
+                || self.tti.lsr_address_left_to_cost_model() && lu.all_fixups_unconditional)
+                || lu.kind != Kind::Address
+            {
                 let mut to_find = f.num_regs().min(req_regs.len());
                 for reg in &req_regs {
                     if f.scaled_reg == Some(*reg) || f.base_regs.contains(reg) {
@@ -147,7 +154,11 @@ impl Collection<'_, '_> {
                         }
                     }
                 }
-                if to_find != 0 {
+                if to_find != 0
+                    && !(lu.kind == Kind::Address
+                        && lu.all_fixups_unconditional
+                        && this.tti.lsr_address_left_to_cost_model())
+                {
                     continue;
                 }
                 let mut new_cost = cur_cost.clone();

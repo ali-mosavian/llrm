@@ -97,6 +97,9 @@ pub struct Tuning {
     /// carries more bytes than its units where an argument is several words (x86-m16:
     /// QCport `pl_box_axis`, 21 units, ~70 B a copy, three copies +181 B).
     pub inline_dying_credit_at_os: bool,
+    /// `Tti::inline_trial_keeps_shrinking_copy`: a priced inline trial keeps a copy that
+    /// leaves the module no larger and saves clocks, though no callee goes with it.
+    pub inline_trial_keeps_shrinking_copy: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -367,11 +370,14 @@ pub struct Tuning {
     /// are instruction bytes, not live values (`Tti::unroll_store_immediate_bits`).
     pub unroll_store_immediate_bits: u32,
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
-    /// `Tti::lsr_size_order`.
+    /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.
     pub lsr_users_in_use_list_order: bool,
+    /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
+    /// `Tti::lsr_phi_operand_uses`.
+    pub lsr_phi_operand_uses: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -435,7 +441,9 @@ pub struct Tuning {
     pub recursive_tre_first: (bool, bool),
     /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
     /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
-    /// (`Tti::ipa_cp_clones_at_speed`).
+    /// (`Tti::ipa_cp_clones_at_speed`). DEVIATE IPACP-O2 (owner w10, exit
+    /// 2026-11-24): and at -O2, where gcc has none: queens m32 151807 ->
+    /// 139804 clk for +293 B, m64 -9.4% instructions for +830 B.
     pub ipa_cp_clones_at_speed: bool,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
@@ -537,6 +545,7 @@ impl Tuning {
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
         inline_dying_credit_at_os: true,
+        inline_trial_keeps_shrinking_copy: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -593,6 +602,7 @@ impl Tuning {
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
         lsr_users_in_use_list_order: false,
+        lsr_phi_operand_uses: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,

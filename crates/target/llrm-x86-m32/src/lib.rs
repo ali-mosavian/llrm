@@ -195,6 +195,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
         lsr_size_order: true,
+        // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
+        lsr_phi_operand_uses: true,
         narrow_divide_live_limit: 4,
         sink_spares_ranges: true,
         promote_va_list: true,
@@ -383,6 +385,13 @@ impl llrm_target::Target for M32 {
     // branching block and the branch goes to the join.
     fn leaf_fold_at_size(&self) -> bool {
         true
+    }
+
+    // DEVIATE UNCHEAP-IMM-M16 (owner x86-m32, exit 2026-11-24): m16 is also
+    // `Not64BitMode` and the pin makes +1/-1 there the same way; it keeps the
+    // default until the m16 owner prices it.
+    fn uncheap_move_immediate_at_size(&self) -> fn(u8, i64) -> bool {
+        llrm_target::x86_uncheap_move_immediate_at_size
     }
 
     // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's

@@ -930,6 +930,53 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         self.dag.get_select(vt, test, x, y)
     }
 
+    /// `ExpandNode` of `UINT_TO_FP`: `TargetLowering::expandUINT_TO_FP`'s
+    /// non-negative case, then `ExpandLegalINT_TO_FP`'s unsigned `i32`/`i64`
+    /// to `f32` and `i64` to `f64`, the algorithm of compiler-rt's
+    /// `__floatundisf`. A value with its top bit set is halved with the lost
+    /// bit folded into bit 0 (so the one rounding is right), converted
+    /// signed and doubled; any other is converted signed as it is. Both
+    /// forms are in the DAG and the select picks.
+    ///
+    /// DEVIATE UITOFP-F64 (exit: the vector DAG nodes land, then x86 takes
+    /// `LowerUINT_TO_FP_i64`): the pin expands `i64` to `f64` through
+    /// `expandUINT_TO_FP`'s bit-cast algorithm here and x86 through its SSE2
+    /// vector sequence first; neither is reachable without vectors, and the
+    /// compiler-rt form of `ExpandLegalINT_TO_FP` is gcc's.
+    ///
+    /// `TargetLowering::expandUINT_TO_FP`:
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L10142>
+    fn expand_uint_to_fp(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (src, dst) = (self.dag.operand(node, 0), self.dag.value_type(node));
+        let src_vt = self.dag.value_type(src);
+        let EVT::Simple(src_mvt) = src_vt else { return None };
+        if !matches!(self.tli.operation_action(ISD::SIntToFp, src_vt), Action::Legal | Action::Custom) {
+            return None;
+        }
+        if self.dag.node(node).flags.0 & SDNodeFlags::NON_NEG.0 != 0 {
+            return Some(self.dag.get_node(ISD::SIntToFp, dst, &[src]));
+        }
+        let single = matches!(src_mvt, MVT::I32 | MVT::I64) && dst == EVT::Simple(MVT::F32);
+        if !single && !(src_mvt == MVT::I64 && dst == EVT::Simple(MVT::F64)) {
+            return None;
+        }
+        let bool_vt = self.tli.types.set_cc_result_type(src_vt);
+        let zero = self.dag.get_constant(0, src_vt);
+        let sign_bit_test = self.dag.get_setcc(bool_vt, src, zero, CondCode::SetLt);
+        let one_bit = self.dag.get_constant(1, EVT::I8);
+        let shifted = self.dag.get_node(ISD::Srl, src_vt, &[src, one_bit]);
+        let one = self.dag.get_constant(1, src_vt);
+        let low = self.dag.get_node(ISD::And, src_vt, &[src, one]);
+        let halved = self.dag.get_node(ISD::Or, src_vt, &[low, shifted]);
+        let sign_cvt = self.dag.get_node(ISD::SIntToFp, dst, &[halved]);
+        let slow = self.dag.get_node(ISD::FAdd, dst, &[sign_cvt, sign_cvt]);
+        let fast = self.dag.get_node(ISD::SIntToFp, dst, &[src]);
+        Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
+    }
+
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
     fn expand_node(
@@ -1014,6 +1061,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
+            ISD::UIntToFp => self.expand_uint_to_fp(node).map(|result| vec![result]),
             ISD::BrJT => Some(vec![self.expand_br_jt(node)]),
             ISD::Undef | ISD::Poison => {
                 // `ExpandNode`: zero of the type.
