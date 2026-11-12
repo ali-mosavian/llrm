@@ -11,7 +11,7 @@ use llrm_codegen::backend::selectiondag::{DagConfig, SDValue, SelectionDAG};
 
 fn legalize(dag: &mut SelectionDAG) -> SDValue {
     let tli = target_lowering();
-    DagLegalizer::new(dag, &tli, &mut MosLowering).run().expect("legalizes");
+    DagLegalizer::new(dag, &tli, &mut MosLowering { widen_products: false }).run().expect("legalizes");
     dag.get_root()
 }
 
