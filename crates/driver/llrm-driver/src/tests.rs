@@ -5430,3 +5430,32 @@ fn a_call_of_an_interrupt_function_pushes_the_flags_first() {
     let at = text.find("call far ptr _isr").expect(&text);
     assert!(text[..at].trim_end().ends_with("pushf"), "{text}");
 }
+
+/// x86-m64 sieve -O2: `i <= 31 && i*i < n` stayed one merged test, `setb; setb; and; cmp 1; jne` (262 B, 13734
+/// instructions against gcc's 177 B, 13215). The pin's budget does not price the `setcc` pair and the logic op;
+/// SD103-M64 takes them off it, as m32's does, and the test is two branches.
+#[test]
+fn a_merged_pair_of_compares_is_two_branches_at_o2_on_m64() {
+    let text = include_str!("tests_data/sieve_merged.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), text, "bench_sieve").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("setb"), "the pair of compares was merged: {listing}");
+}
+
+/// x86-m64 recpow -Os: the square-and-multiply loop RS1 rotates for a guard that does not fold
+/// kept its copy, 204 B of code against gcc's 175 B. ROTATION-TRIAL compiles the module again with
+/// the loop unrotated and keeps the smaller one: 189 B against 204 B rotated.
+#[test]
+fn a_counted_loop_that_is_smaller_unrotated_stays_unrotated_at_os_on_m64() {
+    let text = include_str!("tests_data/recpow_os.ll");
+    let (built, format) = compiled(&flags(&["-m64", "-Os"]), text, "bench_recpow").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
+        &built,
+        "recpow_os.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap();
+    assert!(bytes <= 195, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
+}
