@@ -154,6 +154,12 @@ pub fn target_lowering_with(
     // table entry, then an indirect jump
     set(&[BrJT], &[MVT::Other], Action::Expand);
     set(&[Select, SetCC, SetCCCarry], &int, Action::Custom);
+    // DEVIATE M68K-ABS-SELECT (owner m68k, exit 2026-11-27): `abs` is a
+    // compare and a conditional negate (`tst`, `bpl`, `neg`), as gcc emits it.
+    // The pin keeps `expandABS`, `(x ^ s) - s` for `s = x >>s 31`: a shift by
+    // 31 is a register count on the 68000 (`asr.l` takes 1..8 as an
+    // immediate, 6 + 2n clocks) and ties up a second register.
+    set(&[Abs], &int, Action::Custom);
     set(&[BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[BSwap], &[MVT::I32], Action::Legal);
     set(&[CtTz, CtLz, CtPop], &int, Action::Expand);
@@ -378,6 +384,7 @@ impl Hooks for M68kLowering {
             ISD::SrlParts => Some(lower_shift_right_parts(dag, node, false)),
             ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
             ISD::Select => Some(lower_select(dag, node, self.cpu)),
+            ISD::Abs => Some(lower_abs(dag, node, self.cpu)),
             ISD::BrCond => Some(lower_brcond(dag, node, self.cpu)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
             ISD::JumpTable => Some(super::call::lower_jump_table(dag, node, self.absolute_data)),
@@ -981,6 +988,21 @@ fn lower_shift_right_parts(
 /// `HI`/`LS`, `CC`/`CS`, `NE`/`EQ`, ...
 fn opposite(code: u128) -> u128 {
     code ^ 1
+}
+
+/// `abs x` as `x < 0 ? 0 - x : x`, selected like any other `select`.
+fn lower_abs(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    cpu: Cpu,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let x = dag.operand(node, 0);
+    let zero = dag.get_constant(0, vt);
+    let negated = dag.get_node(ISD::Sub, vt, &[zero, x]);
+    let negative = dag.get_setcc(EVT::I8, x, zero, CondCode::SetLt);
+    let select = dag.get_node(ISD::Select, vt, &[negative, negated, x]);
+    lower_select(dag, select, cpu)
 }
 
 /// `LowerSELECT`, the general case: `CMOV false, true, cc, flags`.
