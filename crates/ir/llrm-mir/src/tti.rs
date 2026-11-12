@@ -929,6 +929,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 an
+    /// innermost loop directly inside a loop of known trips is unrolled by the
+    /// pin's threshold alone, unpriced (see `full_unroll_pays`). False: it is
+    /// priced like any other loop.
+    fn unroll_pin_decides_inner_of_known_trips(&self) -> bool {
+        false
+    }
+
     /// DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): a phi of constants is
     /// folded into the users that fold, in a loop, and through a phi of
     /// constants behind a diamond. A move per edge the fold adds is paid by
@@ -2308,6 +2316,14 @@ pub trait Tti {
         _bits: u32,
     ) -> u32 {
         0
+    }
+
+    /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the
+    /// extension of a phi of that loop (`zext i8 j`) is as free as the phi
+    /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
+    /// formula naming the inner loop's narrowed counter a loser.
+    fn lsr_extension_of_phi_exists(&self) -> bool {
+        false
     }
 
     /// Whether an offset LSR leaves unfolded in an address that has one base

@@ -249,8 +249,14 @@ impl IvUsers {
         // DEVIATE LU19: a width the target declares native (and the layout does
         // not) is for induction variables of that width, not for a narrower
         // one an extension widens: `arr[zext i8 i]` stays an index (`adc
-        // arr,x`), not a 16-bit pointer walk.
-        if !cx.layout.legal_integer(width) && matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt)) {
+        // arr,x`), not a 16-bit pointer walk. Unless an address scales the
+        // extended index (`v[zext i8 j]` of 4-byte elements): that index is a
+        // shift chain per trip, and the pointer walk (`{v,+,4}`) is the form
+        // the pin's LSR reduces it to.
+        if !cx.layout.legal_integer(width)
+            && matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt))
+            && !scaled_by_an_address(cx, result)
+        {
             return false;
         }
         // An ephemeral value is removed later anyway.
@@ -463,4 +469,19 @@ fn find_add_rec_for_loop(
         Kind::Add(operands) => operands.iter().find_map(|op| find_add_rec_for_loop(se, op.scev, l)),
         _ => None,
     }
+}
+
+/// Whether a `getelementptr` takes `value` as an index it scales by more than
+/// one byte.
+fn scaled_by_an_address(
+    cx: &Cx,
+    value: llrm_mir::module::ValueId,
+) -> bool {
+    cx.function.users(value).iter().any(|one| {
+        let gep = cx.function.instruction(one.user);
+        let Opcode::GetElementPtr { source } = gep.opcode else { return false };
+        let indices = vec![None; gep.operands.len() - 1];
+        let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
+        variable.iter().any(|&(at, scale)| scale > 1 && gep.operands[1 + at] == Operand::Value(value))
+    })
 }

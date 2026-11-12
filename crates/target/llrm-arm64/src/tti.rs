@@ -633,6 +633,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): see the
+    /// trait. fpbench -O3: 2,300 B, 1,412 B with the inner loops unrolled by
+    /// the pin's threshold.
+    fn unroll_pin_decides_inner_of_known_trips(&self) -> bool {
+        true
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }
