@@ -143,45 +143,31 @@ fn compiled_module_trying_once(
     options: &Options,
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
     unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
-) -> Result<masm::Module, String> {
-    let leaf = leaf_fold_trial(options);
-    // DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the branching block, the module is
-    // assembled again without the fold and the smaller one kept.
-    let build = |program: &Program, with: &Options| -> Result<masm::Module, String> {
+) -> Result<Variant, String> {
+    let build = |program: Program, with: &Options| -> Result<Variant, String> {
         let _ = crate::backend::leaffold::take_folded();
-        let first = assembled(program, name, with)?;
-        if !leaf || !crate::backend::leaffold::take_folded() {
-            return Ok(first);
-        }
-        let second = crate::backend::leaffold::without(|| assembled(program, name, with))?;
-        let smaller = matches!((unpadded(&first), unpadded(&second)), (Some(a), Some(b)) if b < a);
-        if llrm_support::debug::enabled("trial") {
-            eprintln!("trial leaffold: {}", if smaller { "put back" } else { "kept" });
-        }
-        let chosen = if smaller { second } else { first };
-        stage_files(with, "", &chosen)?;
-        Ok(chosen)
+        let built = assembled(&program, name, with)?;
+        Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded() })
     };
     let Some(kind) = Trial::of(options) else {
-        if !leaf {
-            return compiled_module(module, name, options);
-        }
-        return build(&optimized_program(module, options)?, options);
+        return build(optimized_program(module, options)?, options);
     };
     kind.clear();
     let kept = optimized_program(module.clone(), options)?;
     if !kind.noted() {
-        return build(&kept, options);
+        return build(kept, options);
     }
     let mut again = options.clone();
     again.dump = None;
     let other = kind.compile(|| optimized_program(module, &again))?;
     if matches!(kind, Trial::Rotation(_)) {
-        let (one, two) = (&kept.modules[0], &other.modules[0]);
-        let cut = differing(one, two);
+        let cut = differing(&kept.modules[0], &other.modules[0]);
         if llrm_support::debug::enabled("trial") {
-            let defined =
-                one.globals.iter().filter(|global| global.function().is_some_and(|f| !f.is_declaration())).count();
+            let defined = kept.modules[0]
+                .globals
+                .iter()
+                .filter(|global| global.function().is_some_and(|f| !f.is_declaration()))
+                .count();
             eprintln!("trial unrotated: {} of {defined} functions differ: {cut:?}", cut.len());
         }
         // Pricing the cut twice and assembling the winner costs `2 * cut + all`
@@ -198,23 +184,26 @@ fn compiled_module_trying_once(
                 .map(|(_, function)| function.instruction_count())
                 .sum()
         };
-        if 2 * size(one, Some(&cut)) >= size(one, None) {
-            let first = build(&kept, options)?;
-            let second = build(&other, &again)?;
+        if 2 * size(&kept.modules[0], Some(&cut)) >= size(&kept.modules[0], None) {
+            let first = build(kept, options)?;
+            let second = build(other, &again)?;
             let pays = matches!(
-                (unpadded(&first), unpadded(&second)),
-                (Some(a), Some(b)) if kind.keeps((a, rotation_work(&first, options)), (b, rotation_work(&second, options)))
+                (unpadded(&first.built), unpadded(&second.built)),
+                (Some(a), Some(b)) if kind.keeps((a, rotation_work(&first.built, options)), (b, rotation_work(&second.built, options)))
             );
             if !pays {
                 return Ok(first);
             }
-            stage_files(options, "", &second)?;
+            stage_files(options, "", &second.built)?;
             return Ok(second);
         }
-        let each =
-            |module: &Module, program: &Program| assembled_module(&only(module, &cut), program, name, &again).ok();
-        let (Some(first), Some(second)) = (each(one, &kept), each(two, &other)) else {
-            return build(&kept, options);
+        let each = |program: &Program| {
+            let _ = crate::backend::leaffold::take_folded();
+            let built = assembled_module(&only(&program.modules[0], &cut), program, name, &again).ok()?;
+            Some((built, crate::backend::leaffold::take_folded()))
+        };
+        let (Some((first, first_folded)), Some((second, second_folded))) = (each(&kept), each(&other)) else {
+            return build(kept, options);
         };
         let pays = matches!(
             (unpadded(&first), unpadded(&second)),
@@ -222,27 +211,56 @@ fn compiled_module_trying_once(
         );
         // Where every function differs, the cut module is the module: its masm
         // is the answer.
-        let chosen = if pays { (two, &other, second) } else { (one, &kept, first) };
-        if chosen
-            .0
+        let (chosen, built, folded) = if pays { (other, second, second_folded) } else { (kept, first, first_folded) };
+        if chosen.modules[0]
             .globals
             .iter()
             .filter(|global| global.function().is_some_and(|f| !f.is_declaration()))
             .all(|global| global.name.as_deref().is_some_and(|name| cut.contains(name)))
         {
-            stage_files(options, "", &chosen.2)?;
-            return Ok(chosen.2);
+            stage_files(options, "", &built)?;
+            return Ok(Variant { built, program: chosen, folded });
         }
-        return build(chosen.1, options);
+        return build(chosen, options);
     }
-    let kept = build(&kept, options)?;
-    let other = build(&other, &again)?;
+    let kept = build(kept, options)?;
+    let other = build(other, &again)?;
     let price = |built: &masm::Module| -> Option<(i64, f64)> {
         let work = built.procedures.iter().map(|one| executed::work(&one.body)).sum::<Option<f64>>()?;
         Some((bytes(built)?, work))
     };
-    let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
+    let (Some(kept_price), Some(other_price)) = (price(&kept.built), price(&other.built)) else { return Ok(kept) };
     Ok(if kind.keeps(kept_price, other_price) { other } else { kept })
+}
+
+/// A compiled variant of a module: its code, the program the backend took (the leaf-fold pair assembles it again)
+/// and whether the backend folded a leaf.
+struct Variant {
+    built: masm::Module,
+    program: Program,
+    folded: bool,
+}
+
+/// DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the branching block, the module is
+/// assembled again without the fold and the smaller one kept. Decided once, on the variant the other trials chose,
+/// not in each of them: the pair doubled every variant's assembly.
+fn with_leaf_trial(
+    variant: Variant,
+    name: &str,
+    options: &Options,
+    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+) -> Result<masm::Module, String> {
+    if !variant.folded || !leaf_fold_trial(options) {
+        return Ok(variant.built);
+    }
+    let second = crate::backend::leaffold::without(|| assembled(&variant.program, name, options))?;
+    let smaller = matches!((unpadded(&variant.built), unpadded(&second)), (Some(a), Some(b)) if b < a);
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial leaffold: {}", if smaller { "put back" } else { "kept" });
+    }
+    let chosen = if smaller { second } else { variant.built };
+    stage_files(options, "", &chosen)?;
+    Ok(chosen)
 }
 
 /// Whether the module is assembled with and without LEAF-FOLD-OS: a size build on a target that folds.
@@ -261,7 +279,7 @@ fn compiled_module_with_rotation(
     options: &Options,
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
     unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
-) -> Result<masm::Module, String> {
+) -> Result<Variant, String> {
     let hot = matches!(Trial::of(options), Some(Trial::Rotation(_)))
         && options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.rotation_hot_at_size());
     let _ = trial::take_left();
@@ -291,7 +309,7 @@ fn compiled_module_with_rotation(
             })
             .sum::<Option<f64>>()
     };
-    let pays = match (work(&first), work(&second), unpadded(&first), unpadded(&second)) {
+    let pays = match (work(&first.built), work(&second.built), unpadded(&first.built), unpadded(&second.built)) {
         (Some(was), Some(now), Some(before), Some(after)) => {
             trial::keeps_rotation_hot((was - now).round() as i64, after - before, loops)
         }
@@ -300,15 +318,15 @@ fn compiled_module_with_rotation(
     if llrm_support::debug::enabled("trial") {
         eprintln!(
             "trial rotation-hot: {loops} loops in {left:?}, work {:?} -> {:?}, {:?} -> {:?} bytes: {}",
-            work(&first),
-            work(&second),
-            unpadded(&first),
-            unpadded(&second),
+            work(&first.built),
+            work(&second.built),
+            unpadded(&first.built),
+            unpadded(&second.built),
             if pays { "kept" } else { "put back" }
         );
     }
     let chosen = if pays { second } else { first };
-    stage_files(options, "", &chosen)?;
+    stage_files(options, "", &chosen.built)?;
     Ok(chosen)
 }
 
@@ -330,13 +348,14 @@ pub fn compiled_module_trying(
         .then(|| options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.unroll_trial_at_size()))
         .flatten();
     let Some(limit) = limit.filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) else {
-        return compiled_module_with_rotation(module, name, options, bytes, unpadded);
+        let one = compiled_module_with_rotation(module, name, options, bytes, unpadded)?;
+        return with_leaf_trial(one, name, options, unpadded);
     };
     let _ = trial::take();
     let first = compiled_module_with_rotation(module.clone(), name, options, bytes, unpadded)?;
     let (functions, _) = trial::take();
     if functions.is_empty() {
-        return Ok(first);
+        return with_leaf_trial(first, name, options, unpadded);
     }
     let mut again = options.clone();
     again.dump = None;
@@ -353,18 +372,18 @@ pub fn compiled_module_trying(
             })
             .sum::<Option<f64>>()
     };
-    let pays = match (clocks(&first), clocks(&second), unpadded(&first), unpadded(&second)) {
+    let pays = match (clocks(&first.built), clocks(&second.built), unpadded(&first.built), unpadded(&second.built)) {
         (Some(was), Some(now), Some(before), Some(after)) => {
             trial::keeps_unroll_at_size((was - now).round() as i64, after - before, functions.len())
         }
         _ => false,
     };
     if llrm_support::debug::enabled("trial") {
-        eprintln!("trial unroll-os: {functions:?}, {:?} -> {:?} bytes: {}", unpadded(&first), unpadded(&second), if pays { "kept" } else { "put back" });
+        eprintln!("trial unroll-os: {functions:?}, {:?} -> {:?} bytes: {}", unpadded(&first.built), unpadded(&second.built), if pays { "kept" } else { "put back" });
     }
     let chosen = if pays { second } else { first };
-    stage_files(options, "", &chosen)?;
-    Ok(chosen)
+    stage_files(options, "", &chosen.built)?;
+    with_leaf_trial(chosen, name, options, unpadded)
 }
 
 thread_local! {

@@ -143,6 +143,7 @@ pub fn program(
         program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
         program.modules.iter_mut().for_each(crate::prepare::mark_constant_fills);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_shifts);
+        program.modules.iter_mut().for_each(crate::prepare::mark_wide_divides);
         if matches!(request.level, Level::O1 | Level::Os | Level::Oz) {
             program.modules.iter_mut().for_each(crate::prepare::mark_word_chains);
         }
@@ -248,6 +249,15 @@ pub fn selections_with_alternatives(
             })
         })
     };
+    // A function with a long divide (`prepare::mark_wide_divides`) is also selected with the speed routines in a
+    // function tuned for size (`SPEED_ROUTINES`).
+    let has_divides = |name: &str| -> bool {
+        module.globals.iter().any(|global| {
+            global.function().is_some_and(|one| {
+                global.name.as_deref() == Some(name) && llrm_mir::memory::has(&one.attrs, crate::prepare::WIDE_DIVIDE)
+            })
+        })
+    };
     let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
     let alternatives: Vec<Selected> = names
         .iter()
@@ -258,7 +268,8 @@ pub fn selections_with_alternatives(
             let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
             let fills = has_fills(name);
             let shifts = has_shifts(name);
-            if muls.is_none() && !fills && !shifts {
+            let divides = has_divides(name);
+            if muls.is_none() && !fills && !shifts && !divides {
                 return None;
             }
             let switch = muls.map(|sized| {
@@ -269,9 +280,13 @@ pub fn selections_with_alternatives(
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(shifts));
+            // the alternative is one switch for every reason a function has one: the speed routines ride along only where
+            // nothing else is switched, or the form that decomposes a multiply would also carry the divide's price
+            crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(divides && muls.is_none() && !fills && !shifts));
             let selected = (name.clone(), select(name, false), select(name, true));
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(false));
+            crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
             }
