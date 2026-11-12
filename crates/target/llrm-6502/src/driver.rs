@@ -437,6 +437,7 @@ fn tail(
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
     let data = data_text(module, &program.layout)?;
+    crate::dagisel::function::set_widen_products(matches!(request.level, Level::O2 | Level::O3 | Level::Omax));
     let mut selections = Vec::new();
     let mut from_module = Vec::new();
     // The module each function was selected from: its blocks are the text's.

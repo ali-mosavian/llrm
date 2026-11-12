@@ -151,6 +151,9 @@ pub struct TargetLowering {
     /// The function is built for size: an `i64` divide calls the target's size
     /// routine.
     small_divide: bool,
+    /// DEVIATE DIV-HOT: an `i64` divide in a block that runs more than once a call takes the
+    /// speed routine even where `small_divide` is on.
+    fast_divide_in_loops: bool,
     /// The function is built for size alone (-Os), not -O1 where clocks are
     /// strict too: an `i64` divide by a dword takes the size form that
     /// always does two `div`s.
@@ -201,6 +204,7 @@ impl TargetLowering {
             libcall_for_small_variable_shift: false,
             inline_constant_mul: None,
             small_divide: false,
+            fast_divide_in_loops: false,
             size_only: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
@@ -536,6 +540,17 @@ impl TargetLowering {
 
     pub fn small_divide(&self) -> bool {
         self.small_divide
+    }
+
+    pub fn set_fast_divide_in_loops(
+        &mut self,
+        on: bool,
+    ) {
+        self.fast_divide_in_loops = on;
+    }
+
+    pub fn fast_divide_in_loops(&self) -> bool {
+        self.fast_divide_in_loops
     }
 
     pub fn set_size_only(

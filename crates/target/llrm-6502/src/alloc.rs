@@ -2391,6 +2391,28 @@ pub fn build_with_places(
                     b.copy(to, acc);
                 }
             }
+            // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
+            // words in `__sa` and `__sb`, the product in `__sa`
+            code @ (op::UMULW16 | op::SMULW16) => {
+                let routine = if code == op::UMULW16 { "__umulhisi3" } else { "__mulhisi3" };
+                let acc = Reg::Phys(reg::A);
+                for (to, source) in [("__sa", name(&o[2])?), ("__sb", name(&o[3])?)] {
+                    let (low, high) = b.read_word(source)?;
+                    for (symbol, value) in [(to.to_owned(), low), (format!("{to}+1"), high)] {
+                        b.copy(acc, value);
+                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                    }
+                }
+                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine.to_owned(), 0)]);
+                jsr.call = true;
+                b.push(jsr);
+                let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
+                for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
+                    let symbol = if n == 0 { "__sa".to_owned() } else { format!("__sa+{n}") };
+                    b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
+                    b.copy(to, acc);
+                }
+            }
             op::CMP32 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
                 let (a1, c1) = (name(&o[3])?, name(&o[4])?);

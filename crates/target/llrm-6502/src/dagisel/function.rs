@@ -138,6 +138,21 @@ pub fn select_function(
     select_function_with(module, name, cpu, false)
 }
 
+thread_local! {
+    static WIDEN_PRODUCTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a product of two words is a widening multiply: the two routines
+/// add bytes, so only a level that prices a clock above a byte takes them. Set
+/// by the driver for each compile.
+pub fn set_widen_products(on: bool) {
+    WIDEN_PRODUCTS.with(|f| f.set(on));
+}
+
+pub(super) fn widen_products() -> bool {
+    WIDEN_PRODUCTS.with(|f| f.get())
+}
+
 /// Whether `function` is tuned for size (`optsize` or `minsize`).
 pub fn is_sized(function: &Function) -> bool {
     ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name))

@@ -400,6 +400,11 @@ def SDTMOSLong : SDTypeProfile<2, 4, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCis
                                      SDTCisVT<4, i16>, SDTCisVT<5, i16>]>;
 def SDTMOSLongShift : SDTypeProfile<2, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>,
                                           SDTCisVT<4, i8>]>;
+// A 16 x 16 -> 32 multiply, the operands' extensions to 32 bits left out (GCC's `umulhisi3`/`mulhisi3`, the
+// widening multiply of tree-ssa-math-opts): `__umulhisi3` and `__mulhisi3` read the low words of `__sa`/`__sb`.
+def SDTMOSWiden : SDTypeProfile<2, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>]>;
+def MOSumulw16 : SDNode<"MOSISD::UMULW16", SDTMOSWiden>;
+def MOSsmulw16 : SDNode<"MOSISD::SMULW16", SDTMOSWiden>;
 def MOSmul32 : SDNode<"MOSISD::MUL32", SDTMOSLong>;
 def MOSudiv32 : SDNode<"MOSISD::UDIV32", SDTMOSLong>;
 def MOSsdiv32 : SDNode<"MOSISD::SDIV32", SDTMOSLong>;
@@ -428,6 +433,10 @@ let isCodeGenOnly = 0 in {
       [(set i8:$q, i8:$r, (udivrem i8:$a, i8:$b))]>;
   def UDIVREM16 : MOSInst<(outs Imag16:$q, Imag16:$r), (ins Imag16:$a, Imag16:$b), "udivrem16",
       [(set i16:$q, i16:$r, (udivrem i16:$a, i16:$b))]>;
+  def UMULW16 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$a, Imag16:$b), "umulw16",
+      [(set i16:$dl, i16:$dh, (MOSumulw16 i16:$a, i16:$b))]>;
+  def SMULW16 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$a, Imag16:$b), "smulw16",
+      [(set i16:$dl, i16:$dh, (MOSsmulw16 i16:$a, i16:$b))]>;
   def MUL32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "mul32",
       [(set i16:$dl, i16:$dh, (MOSmul32 i16:$al, i16:$ah, i16:$bl, i16:$bh))]>;
   def UDIV32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "udiv32",
