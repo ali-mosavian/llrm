@@ -389,6 +389,15 @@ impl CombineHooks for X86Lowering<'_> {
         from.is_integer() && to.is_integer() && from.size_in_bits() > to.size_in_bits()
     }
 
+    /// `X86TargetLowering::isZExtFree(EVT, EVT)`: `i32` to `i64` on x86-64.
+    fn is_zext_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.zext_free && from == EVT::I32 && to == EVT::I64
+    }
+
     /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
     /// registers it is returned and passed in.
     fn split_dword_loads(&self) -> bool {
