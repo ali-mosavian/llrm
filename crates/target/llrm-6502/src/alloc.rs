@@ -2880,6 +2880,11 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
             && let Some(compact) = crate::routines::compact_variant(name)
         {
             *name = compact.to_owned();
+            if crate::routines::aligned_divides()
+                && let Some(aligned) = crate::routines::aligned_variant(compact)
+            {
+                *name = aligned.to_owned();
+            }
         }
     }
 }
