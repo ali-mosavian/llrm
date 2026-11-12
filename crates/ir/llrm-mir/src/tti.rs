@@ -1311,6 +1311,11 @@ pub trait Tti {
         false
     }
 
+    /// Drop the local functions that are the same code at -O1 (`MergeLocalFunctions`); no thunk is written.
+    fn merge_local_functions_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::push_imm_at_size`.
     fn push_imm_at_size(&self) -> bool {
         false

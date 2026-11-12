@@ -156,6 +156,12 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
+    /// -O1 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`).
+    fn merge_local_functions_at_o1(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "z80"
     }
