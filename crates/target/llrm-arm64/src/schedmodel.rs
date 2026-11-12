@@ -513,7 +513,7 @@ mod tests {
     /// is hand-selected too, so the model always priced it).
     #[test]
     fn a_scalar_bitcast_has_a_class_and_a_vector_movi_has_none_with_the_vectors_off() {
-        assert!(!crate::machine::vectors_enabled(), "the test runs with LLRM_ARM64_VECTORS unset");
+        assert!(!crate::machine::vectors_enabled(), "the test runs with LLRM_ARM64_VECTORS=0");
         let model = Arm64Model::generic();
         let bitcast = Arc::new(form("FMOVWSr", vec![held(2)]));
         assert_ne!(model.def_latency(&bitcast), default_def_latency(&bitcast, 3), "FMOVWSr is priced by its row");

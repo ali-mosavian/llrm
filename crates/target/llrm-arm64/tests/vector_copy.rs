@@ -19,10 +19,7 @@ fn assembly_with(
     let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
     std::fs::write(&input, format!("{HEAD}{body}")).unwrap();
     let mut llc = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
-    llc.env_remove("LLRM_ARM64_VECTORS");
-    if vectors {
-        llc.env("LLRM_ARM64_VECTORS", "1");
-    }
+    llc.env("LLRM_ARM64_VECTORS", if vectors { "1" } else { "0" });
     let said = llc.args(["-S", "-O2", "-o"]).arg(&output).arg(&input).output().unwrap();
     assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
     String::from_utf8(std::fs::read(&output).unwrap()).unwrap()
@@ -69,7 +66,27 @@ fn an_overlapping_copy_loop_runs_on_q_registers() {
     assert!(!text.contains("ldrh"), "{text}");
 }
 
-/// The same loop with the flag off (the default) stays the scalar `ldrh`/`strh`
+/// With no flag set the pass ran nowhere: the copy loop stayed 1920 scalar
+/// `ldrh` iterations (scroll: 1.19M executed instructions at -O2, 0.47M
+/// vectorized). On is the default; `LLRM_ARM64_VECTORS=0` is the off-switch.
+#[test]
+fn the_vectorizer_runs_with_no_flag_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
+    std::fs::write(&input, format!("{HEAD}{OVERLAPPING_COPY}")).unwrap();
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .env_remove("LLRM_ARM64_VECTORS")
+        .args(["-S", "-O2", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let text = std::fs::read_to_string(&output).unwrap();
+    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
+}
+
+/// The same loop with the flag at `0` stays the scalar `ldrh`/`strh`
 /// loop: no `q` register appears.
 #[test]
 fn the_flag_off_leaves_the_copy_loop_scalar() {
