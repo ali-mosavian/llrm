@@ -1614,6 +1614,7 @@ pub fn recorded(
                         program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_speed()),
                     )
                 })),
+                cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
                 ..applied.options.inline
             },
             ..applied.options.clone()

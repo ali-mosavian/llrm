@@ -134,8 +134,8 @@ The pin's `FunctionSpecializer` solves, specialises and solves again before the 
 
 ## IPACP-O2 rows (owner w10, exit 2026-11-24)
 
-ipa-cp clones at -O2 on x86-m32, x86-m64 and arm64 (`Tti::ipa_cp_clones_at_speed`; gcc clones at -O3 only), net of clocks + 0.3125 B (arm64: instructions + 0.3 B). The loop hint counts only up to `max-completely-peel-times` trips (IPACP-LOOPS).
+ipa-cp clones at -O2 on x86-m32, x86-m64 and arm64 (`Tti::ipa_cp_clones_at_speed`; gcc clones at -O3 only, gcc/opts.cc), net of clocks + 0.3125 B (arm64: instructions + 0.3 B). At -O2 a copy must fold something: one that only makes a loop bound known waits for -O3 (`Threshold::cp_hint_clones`). The loop hint counts only up to `max-completely-peel-times` trips (IPACP-LOOPS). A chain pays for every clone it credits (gcc `prop_size_cost`). IPACP-SHARED: a self-recursive function is not copied for a context several sites pass.
 
-- Wins: m32 -O2 queens -12.0 k clk, frames -48 k, quicksort -5.3 k, x_jpeg_fixed -42 k, bintree -1.6 k; m64 queens -O2 -9.4% instructions, -O3 -25%; arm64 queens -8.4 k.
-- Worse: m32 -O2 x_spill_store_order +22.4 k (the clone is inlined before the unroll that specialised it per mode); m32 -O3 frames +48 k and m64 -O2/-O3 frames +34 k vs release/next or the unchained clones (without the fib(24) chain, nothing merges fib's duplicate pure calls; with it m64 frames wins and m64 fib(20) loses 50%).
-- Fix: price a chain by whether its clones are inlined back into one caller (IPACP-SHARED is the conservative cut); defer a clone's last-call inline past the unroll.
+- Wins (full A/B, 121 m32, 78 m64, 80 arm64 programs): m32 -O2 queens -11.9 k clk, x_jpeg_fixed -42 k, bintree -1.6 k; m64 queens -12.5 k (-O2), -28.4 k (-O3); arm64 queens -8.4 k; none worse at m32 -O2 or m64.
+- Worse, named cause: m32 -O3 frames +48 k (+1.05%) vs release/next, arm64 frames +5 k (+0.4%, +32 B). A copy with two callers is not inlined back and nothing merges the calls to one pure callee in different functions: m64 -O2 fib(20) ran fib(16) three times (+50%). Where release/next copied fib(24) and the clones were inlined back (m32 -O3) it gained 1%; the rule cannot tell them apart before inlining.
+- Fix: price a chain by whether its clones are inlined back into one caller.

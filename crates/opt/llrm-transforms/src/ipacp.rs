@@ -189,6 +189,7 @@ pub fn cloned(
     private: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
     clone: bool,
+    hint_clones: bool,
     state: &mut Cloning,
 ) -> Changed {
     let mut changed = Changed { added: Vec::new(), edited: Vec::new(), unsound: Vec::new() };
@@ -319,48 +320,24 @@ pub fn cloned(
         for context in &contexts {
             let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs);
             let level = state.made.get(&origin).copied().unwrap_or(0);
-            let mut arrivals = BTreeMap::new();
-            let (mut chain, mut chain_size) = chain_benefit(
-                module,
-                layout,
-                name,
-                body,
-                context,
-                &callees,
-                costs,
-                level,
-                &mut BTreeMap::new(),
-                &mut arrivals,
-            );
-            // DEVIATE IPACP-SHARED (owner w10, exit 2026-11-24): gcc credits
-            // every context a function passes to itself. When two clones pass
-            // the same context on (`fib(n - 1)`, `fib(n - 2)`: clone 19 and
-            // clone 18 both call 17), the clones share subproblems: the calls
-            // to one pure callee sit in different functions and nothing merges
-            // them (m64 -O2 fib(20) runs fib(16) three times, +50% clk; arm64
-            // frames +30 k). A chain of single callers is inlined back into one
-            // function; queens' `place(row + 1)` is one.
-            if arrivals.values().any(|&arrived| arrived > 1) {
-                (chain, chain_size) = chain_benefit(
-                    module,
-                    layout,
-                    name,
-                    body,
-                    context,
-                    &callees,
-                    costs,
-                    MAX_CLONES - 1,
-                    &mut BTreeMap::new(),
-                    &mut BTreeMap::new(),
-                );
-            }
+            let (chain, chain_size) =
+                chain_benefit(module, layout, name, body, context, &callees, costs, level, &mut BTreeMap::new());
             let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
             // GCC's `incorporate_penalties`: a function in a cycle with others,
             // not one that calls itself.
             if recursive.contains(&name) && !own {
                 context_benefit = context_benefit * (100 - RECURSION_PENALTY) / 100;
             }
-            let pays = (context_saved > 0 || context_loops)
+            // DEVIATE IPACP-SHARED (owner w10, exit 2026-11-24): gcc credits a
+            // value every call site that passes it. A recursion's context two
+            // sites pass (`fib(n - 1)` here, `fib(n - 2)` there) is one the
+            // copies share: it has two callers, is not inlined back, and the
+            // calls to one pure callee in different functions are merged by
+            // nothing (m64 -O2 fib(20) runs fib(16) three times, +50% clk;
+            // frames +2%). A copy with one caller is inlined into it.
+            let shared = own && sites.len() > 1 && !replaces;
+            let pays = !shared
+                && (context_saved > 0 || (context_loops && hint_clones))
                 && (replaces
                     || (context_benefit * 1000 >= EVAL_THRESHOLD * chain_size
                         && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
@@ -491,9 +468,7 @@ fn chain_benefit(
     costs: &OperationCosts,
     level: usize,
     memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), (i64, i64)>,
-    arrivals: &mut BTreeMap<Vec<Option<ConstantId>>, usize>,
 ) -> (i64, i64) {
-    *arrivals.entry(known.to_vec()).or_default() += 1;
     if let Some(&done) = memo.get(&(known.to_vec(), level)) {
         return done;
     }
@@ -509,7 +484,7 @@ fn chain_benefit(
                 continue;
             }
             let (after, after_size) =
-                chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo, arrivals);
+                chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo);
             let factor = (MAX_CLONES - level) as i64;
             benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
             chain_size = chain_size.saturating_add(after_size);

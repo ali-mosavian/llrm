@@ -951,6 +951,21 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
+/// A copy whose only gain is a known loop bound is gcc's -O3 (`-fipa-cp-clone`
+/// is on there only); at -O2 on a target that copies there, the copy for
+/// `pack_ref`'s four agreed constants kept the caller's mode loop from
+/// unrolling: m32 x_spill_store_order 53,652 -> 76,462 clk.
+#[test]
+fn test_a_copy_that_only_makes_a_loop_bound_known_waits_for_o3() {
+    let cloned = |hints: bool| {
+        let mut module = parsed(TWO_CONTEXTS);
+        let threshold = Threshold { cp_clone: Some(true), cp_hint_clones: hints, ..Threshold::none() };
+        stepped(&mut module, &["f", "g"], 20, threshold);
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned(false), cloned(true)), (false, true));
+}
+
 /// A known bound the unroller cannot take whole is no reason to copy: gcc's
 /// hint counts it, but m64 nbody -O2 went 655 -> 1189 B and recpow 1207 ->
 /// 3060 B for a loop of 400 trips, so the hint counts up to
@@ -991,8 +1006,56 @@ rec:
   %m10 = mul i32 %m9, %n
   %m11 = mul i32 %m10, %n
   %m12 = mul i32 %m11, %n
+  %m13 = mul i32 %m12, %n
+  %m14 = mul i32 %m13, %n
+  %m15 = mul i32 %m14, %n
+  %m16 = mul i32 %m15, %n
+  %m17 = mul i32 %m16, %n
+  %m18 = mul i32 %m17, %n
+  %m19 = mul i32 %m18, %n
+  %m20 = mul i32 %m19, %n
+  %m21 = mul i32 %m20, %n
+  %m22 = mul i32 %m21, %n
+  %m23 = mul i32 %m22, %n
+  %m24 = mul i32 %m23, %n
+  %m25 = mul i32 %m24, %n
+  %m26 = mul i32 %m25, %n
+  %m27 = mul i32 %m26, %n
+  %m28 = mul i32 %m27, %n
+  %m29 = mul i32 %m28, %n
+  %m30 = mul i32 %m29, %n
+  %m31 = mul i32 %m30, %n
+  %m32 = mul i32 %m31, %n
+  %m33 = mul i32 %m32, %n
+  %m34 = mul i32 %m33, %n
+  %m35 = mul i32 %m34, %n
+  %m36 = mul i32 %m35, %n
+  %m37 = mul i32 %m36, %n
+  %m38 = mul i32 %m37, %n
+  %m39 = mul i32 %m38, %n
+  %m40 = mul i32 %m39, %n
+  %m41 = mul i32 %m40, %n
+  %m42 = mul i32 %m41, %n
+  %m43 = mul i32 %m42, %n
+  %m44 = mul i32 %m43, %n
+  %m45 = mul i32 %m44, %n
+  %m46 = mul i32 %m45, %n
+  %m47 = mul i32 %m46, %n
+  %m48 = mul i32 %m47, %n
+  %m49 = mul i32 %m48, %n
+  %m50 = mul i32 %m49, %n
+  %m51 = mul i32 %m50, %n
+  %m52 = mul i32 %m51, %n
+  %m53 = mul i32 %m52, %n
+  %m54 = mul i32 %m53, %n
+  %m55 = mul i32 %m54, %n
+  %m56 = mul i32 %m55, %n
+  %m57 = mul i32 %m56, %n
+  %m58 = mul i32 %m57, %n
+  %m59 = mul i32 %m58, %n
+  %m60 = mul i32 %m59, %n
   %s0 = add i32 %a, %b
-  %s = add i32 %s0, %m12
+  %s = add i32 %s0, %m60
   ret i32 %s
 
 done:
@@ -1013,20 +1076,19 @@ fn test_a_branching_recursion_called_once_is_not_cloned_down_a_chain() {
     assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
 }
 
-/// `down` that also calls itself for `row + 2` shares subproblems between its
-/// clones (`fib(n - 1)`, `fib(n - 2)`): no chain is credited, as for fib on m64
-/// (-O2 +50% clk) and arm64 frames (+30 k) when the calls to one callee ended
-/// up in different clones.
+/// A copy for a context two call sites pass has two callers, so nothing inlines
+/// it back and the calls to one pure callee end up in different functions:
+/// m64 -O2 fib(20) ran fib(16) three times (+50% clk), frames +2%.
 #[test]
-fn test_a_recursion_that_calls_itself_for_two_contexts_is_credited_no_chain() {
-    let text = DOWN.replace(
-        "  call void @down(i16 %r1, i16 %e)\n",
-        "  call void @down(i16 %r1, i16 %e)\n  %r2 = add nsw i16 %row, 2\n  call void @down(i16 %r2, i16 %e)\n",
+fn test_a_recursion_is_not_copied_for_a_context_several_sites_pass() {
+    let text = BRANCHING.replace(
+        "  %r = call i32 @fib(i32 20)\n  ret i32 %r",
+        "  %r = call i32 @fib(i32 20)\n  %q = call i32 @fib(i32 20)\n  %p = call i32 @fib(i32 20)\n  %u = add i32 %r, %q\n  %t = add i32 %u, %p\n  ret i32 %t",
     );
-    assert_ne!(text, DOWN);
+    assert_ne!(text, BRANCHING);
     let mut module = parsed(&text);
-    stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
-    assert!(module.named("down.constprop.1").is_none(), "{}", printed(&module));
+    stepped(&mut module, &["f", "fib"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
 }
 
 /// A function only an invoke or a `!callees` list names is still called.
@@ -1410,7 +1472,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         let (f, h) = (program.modules[0].named("f").unwrap(), program.modules[0].named("h").unwrap());
         let private = private(program, 0);
         let mut state = crate::ipacp::Cloning::default();
-        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, &mut state);
+        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, true, &mut state);
         assert_eq!(first.added.len(), 1, "the first round clones fill for row 2");
         let mut analyses = managers(program, &mut ProgramAnalyses::default());
         // What `bare` leaves, without its check that no call stands: the callers
@@ -1424,7 +1486,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         stub.insert(end, llrm_mir::edit::Position::End(entry)).unwrap();
         module.globals[first.added[0].0 as usize].kind = GlobalKind::Function(Box::new(stub));
         analyses[0].changed(first.added[0]);
-        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, &mut state);
+        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, true, &mut state);
         let module = &program.modules[0];
         let caller = module.global(h).function().unwrap();
         let target = caller
