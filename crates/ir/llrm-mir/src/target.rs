@@ -834,6 +834,13 @@ pub trait Machine {
         false
     }
 
+    /// Whether a call followed by a return can be emitted as a tail call
+    /// (LLVM's `TargetLowering::mayBeEmittedAsTailCall`), which is what makes
+    /// `CodeGenPrepare` copy the return into the call's block. Not wasm.
+    fn may_be_emitted_as_tail_call(&self) -> bool {
+        true
+    }
+
     /// Whether the target has several registers a comparison's result can
     /// be kept in (LLVM's `hasMultipleConditionRegisters`), so that one made
     /// in a block and read by a branch in another is held there. Not where
