@@ -26,7 +26,7 @@ use llrm_dagisel::dag::SDValue;
 use llrm_dagisel::generated::ids::{isd, mvt, x86};
 
 use crate::x86_divrem::copy_results;
-use crate::x86_hooks::{Cpu, X86Hooks};
+use crate::x86_hooks::{Cpu, X86Hooks, significant_bits};
 
 /// Whether the constant `c` has at least as many significant bits as `other`
 /// can have (its width less its known leading zeros): the 486's multiply clocks
@@ -257,4 +257,41 @@ mod tests {
         assert!(!magic_is_wider(10, 32, false, true, 0), "a short constant stays the r/m operand");
         assert!(!magic_is_wider(613_566_757, 32, false, false, 0), "real mode keeps its rule");
     }
+}
+
+/// DEVIATE IMUL-NARROW-SOURCE (owner x86-m32-clocks, exit 2026-11-24): the
+/// operands of a 32-bit `ISD::MUL` in the order the 486 multiplies fastest (the
+/// node that results: it may merge with an equal one).
+/// The multiply ends early on its source operand (`imul r, r/m`: 10 + the bits
+/// of r/m, `smul_multiplier` of the CPU's description), and the pin's selection
+/// takes the operands as the DAG has them, folding a load as the source. Where
+/// the shorter of the two has at most `narrow_multiplier_bits` significant bits
+/// it becomes the second operand, the source of the register form that
+/// [`X86Hooks::is_profitable_to_fold`] then leaves unfolded.
+///
+/// quicksort -O2: `values[i] * ((i & 15) + 1)` ran `imul edx, [esp+ecx*4+..]`
+/// (the loaded value, up to 15 bits, the multiplier: 24603 clocks for 1024
+/// products) where `mov ebx, [..]; imul ebx, edx` costs 13952.
+pub fn order_narrow_multiplier<D: AddrDag>(
+    dag: &mut D,
+    hooks: &X86Hooks,
+    node: u32,
+) -> u32 {
+    let Some(limit) = hooks.narrow_multiplier_bits else { return node };
+    if hooks.options.cpu != Cpu::I486
+        || dag.num_operands(node) != 2
+        || dag.value_type(SDValue::new(node, 0)) != mvt::i32
+    {
+        return node;
+    }
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.opcode(a.node) == isd::Constant || dag.opcode(b.node) == isd::Constant {
+        return node;
+    }
+    let (bits_a, bits_b) = (significant_bits(dag, a), significant_bits(dag, b));
+    if bits_a < bits_b && bits_a <= limit {
+        // The node may merge with an equal one once its operands change.
+        return dag.update_node_operands(node, &[b, a]);
+    }
+    node
 }

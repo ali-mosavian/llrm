@@ -36,7 +36,7 @@ use crate::x86_llrm::{
     llrm_opcode, select_llrm_node,
 };
 use crate::x86_memop128::select_mem128;
-use crate::x86_mul::{select_mul_flags, select_mul_lohi};
+use crate::x86_mul::{order_narrow_multiplier, select_mul_flags, select_mul_lohi};
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
 use crate::x86_test::select_cmp_of_and;
@@ -122,6 +122,10 @@ pub fn select_node<D: AddrDag>(
             if select_cmp_of_and(dag, hooks, node) {
                 return Outcome::Selected;
             }
+        }
+        isd::MUL => {
+            let ordered = order_narrow_multiplier(dag, hooks, node);
+            return selector.select(dag, hooks, ordered);
         }
         isd::SMUL_LOHI | isd::UMUL_LOHI => {
             if select_mul_lohi(dag, hooks, node) {

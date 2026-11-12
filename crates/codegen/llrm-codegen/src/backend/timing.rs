@@ -135,6 +135,35 @@ pub fn multiplier_operand<'a>(cpu: impl Into<ProfileOrName<'a>>) -> Result<Optio
     }
 }
 
+/// DEVIATE IMUL-NARROW-SOURCE: the most significant bits a register operand
+/// may have for a 32-bit `imul r, [m]` to be split into a load and
+/// `imul r, r` with that operand as the source (the multiplier the early-out
+/// reads, where the description says so). The memory operand's length is
+/// unknown and priced at the middle of the range; the split costs a load of
+/// `load_clocks` and `extra_bytes` of code at `milliclocks_per_byte`. None: the
+/// CPU has no early-out on the source, or no length pays.
+pub fn narrow_source_bits<'a>(
+    cpu: impl Into<ProfileOrName<'a>>,
+    load_clocks: i64,
+    extra_bytes: i64,
+    milliclocks_per_byte: i64,
+) -> Result<Option<i64>, String> {
+    let profile = targets::profile(cpu)?;
+    if multiplier_operand(profile)? != Some(MultiplierOperand::Source) {
+        return Ok(None);
+    }
+    let Some(unknown) = multiply_clocks(profile, 4, None)? else { return Ok(None) };
+    let cost = load_clocks * 1000 + extra_bytes * milliclocks_per_byte;
+    let mut best = None;
+    for bits in 3..=32 {
+        let Some(clocks) = multiply_clocks(profile, 4, Some(bits))? else { return Ok(None) };
+        if (unknown - clocks) * 1000 > cost {
+            best = Some(bits);
+        }
+    }
+    Ok(best)
+}
+
 pub fn signed_divide<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     width: i64,
@@ -200,6 +229,18 @@ mod tests {
     fn test_the_486_states_which_operand_its_multiply_reads() {
         assert_eq!(multiplier_operand("486"), Ok(Some(MultiplierOperand::Source)));
         assert_eq!(multiplier_operand("P5"), Ok(None));
+    }
+
+    /// A 486 `imul r, [m]` splits for a register factor of up to 16 bits at
+    /// -O2 (the middle of the range, 28, against 10 + bits plus a load and two
+    /// bytes at 0.3125 clocks), and the P5 has no early-out to read. Callers
+    /// ask nothing where bytes are strict (-O1, -Os).
+    #[test]
+    fn test_the_486_splits_an_imul_for_a_short_register_factor_only_where_it_pays() {
+        // 28 - (10 + bits) > 1 + 0.625  <=>  bits <= 16
+        assert_eq!(narrow_source_bits("486", 1, 2, 312), Ok(Some(16)));
+        assert_eq!(narrow_source_bits("486", 20, 2, 312), Ok(None));
+        assert_eq!(narrow_source_bits("P5", 1, 2, 312), Ok(None));
     }
 
     #[test]

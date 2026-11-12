@@ -1286,7 +1286,18 @@ fn selected_in(
         multiply_early_out,
         address_mode,
     })
-    .with_shared_immediates_in_registers(!machine.tti().is_some_and(|tti| tti.immediate_forms_at_size()));
+    .with_shared_immediates_in_registers(!machine.tti().is_some_and(|tti| tti.immediate_forms_at_size()))
+    // DEVIATE IMUL-NARROW-SOURCE: where bytes are priced at speed (-O2, -O3).
+    .with_narrow_multiplier_bits(
+        (!m16 && !m64 && cpu.optimized && !cpu.bytes_strict())
+            .then(|| {
+                let load = cpu.cost("mov_rm").ok()?;
+                let rate = cpu.speed_milliclocks_per_byte_on(&*machine);
+                llrm_codegen::backend::timing::narrow_source_bits(cpu, load, 2, rate).ok().flatten()
+            })
+            .flatten()
+            .and_then(|bits| u32::try_from(bits).ok()),
+    );
     let selector = Selector::new(if m16 {
         x86_m16::TABLE
     } else if m64 {

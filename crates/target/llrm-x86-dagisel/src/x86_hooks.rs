@@ -82,6 +82,10 @@ pub struct X86Hooks {
     /// `Tuning::register_form_for_shared_immediates`; the pin's behaviour
     /// unless a target states otherwise.
     pub shared_immediates_in_registers: bool,
+    /// DEVIATE IMUL-NARROW-SOURCE (owner x86-m32-clocks, exit 2026-11-24): where the multiply's early out is the r/m
+    /// operand, a register factor of at most this many significant bits keeps that slot, so a load is not folded as
+    /// the multiplier. Set from the target description at -O2/-O3 only; `None` is the pin.
+    pub narrow_multiplier_bits: Option<u32>,
 }
 
 impl X86Hooks {
@@ -148,9 +152,21 @@ fn bits(
     }
 }
 
+/// The bits `v` can have set: its width less the leading zeros it is known to
+/// have (`computeKnownBits(v).countMaxActiveBits()`).
+pub fn significant_bits<D: AddrDag>(
+    dag: &D,
+    v: SDValue,
+) -> u32 {
+    let width = bits(dag, v);
+    let mask = if width >= 64 { u64::MAX } else { (1_u64 << width) - 1 };
+    let unknown = !dag.known_zero_bits(v) & mask;
+    64 - unknown.leading_zeros()
+}
+
 impl X86Hooks {
     pub fn new(options: Options) -> X86Hooks {
-        X86Hooks { options, shared_immediates_in_registers: true }
+        X86Hooks { options, shared_immediates_in_registers: true, narrow_multiplier_bits: None }
     }
 
     /// The target's `register_form_for_shared_immediates`.
@@ -159,6 +175,15 @@ impl X86Hooks {
         on: bool,
     ) -> X86Hooks {
         self.shared_immediates_in_registers = on;
+        self
+    }
+
+    /// DEVIATE IMUL-NARROW-SOURCE (see [`X86Hooks::narrow_multiplier_bits`]).
+    pub fn with_narrow_multiplier_bits(
+        mut self,
+        bits: Option<u32>,
+    ) -> X86Hooks {
+        self.narrow_multiplier_bits = bits;
         self
     }
 
@@ -232,9 +257,36 @@ impl X86Hooks {
                 }
             }
             isd::SHL | isd::SRA | isd::SRL if constant(dag.operand(user, 1)).is_some() => return false,
+            // DEVIATE IMUL-NARROW-SOURCE (owner x86-m32-clocks, exit 2026-11-24):
+            // `imul r, [m]` reads the loaded value as the multiplier, whose
+            // length the 486's clocks follow (10 + its bits: 24.6k clocks for
+            // quicksort's 1024 checksum products against 14.0k with the short
+            // factor in the source). A register operand short enough that the
+            // load and the copy cost less than the clocks they save keeps the
+            // source slot.
+            isd::MUL if self.narrow_multiplier_bits.is_some_and(|limit| self.narrow_operand_beats(dag, n, user, limit)) => {
+                return false;
+            }
             _ => {}
         }
         true
+    }
+
+    /// Whether the other operand of the 32-bit multiply `user` is a register
+    /// value of at most `limit` significant bits, against the loaded `n`
+    /// (whose length nothing states).
+    pub fn narrow_operand_beats<D: AddrDag>(
+        &self,
+        dag: &D,
+        n: SDValue,
+        user: u32,
+        limit: u32,
+    ) -> bool {
+        if dag.value_type(n) != mvt::i32 || dag.num_operands(user) != 2 {
+            return false;
+        }
+        let other = if dag.operand(user, 0) == n { dag.operand(user, 1) } else { dag.operand(user, 0) };
+        dag.opcode(other.node) != isd::Constant && significant_bits(dag, other) <= limit
     }
 
     /// `SelectionDAGISel::IsLegalToFold` ([L2426][legal]): folding `n` into

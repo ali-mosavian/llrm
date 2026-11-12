@@ -1613,6 +1613,94 @@ mod mul_lohi {
     }
 }
 
+/// DEVIATE IMUL-NARROW-SOURCE. quicksort -O2 checksummed `values[i] * ((i & 15) +
+/// 1)` as `imul edx, [values+i*4]`: the loaded value, up to 15 bits, was the
+/// 486's multiplier (24603 clocks for 1024 products); with the short factor in
+/// the source it is 13952.
+mod narrow_multiplier {
+    use llrm_dagisel::dag::LoadExt;
+    use llrm_dagisel::generated::ids::x86;
+    use llrm_dagisel::testing::{Node, TestDag};
+
+    use super::*;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// The i486 table's `IMUL32rr` and `IMUL32rm` (ids.rs names only the one-operand forms).
+    const IMUL32rr: u16 = 1838;
+    const IMUL32rm: u16 = 1827;
+
+    fn hooks(limit: Option<u32>) -> X86Hooks {
+        X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            multiply_early_out: true,
+            address_mode: llrm_dagisel::addr::AddrMode::Flat32,
+        })
+        .with_narrow_multiplier_bits(limit)
+    }
+
+    /// `mul`, the load in operand `at` and `(x & mask)` in the other; the node,
+    /// the load and the masked value.
+    fn product(
+        dag: &mut TestDag,
+        mask: i64,
+        at: usize,
+    ) -> (u32, SDValue, SDValue) {
+        let (p, x) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
+        let load = dag.add(Node {
+            opcode: isd::LOAD,
+            vts: vec![mvt::i32, mvt::Other],
+            ops: vec![SDValue::new(0, 0), p, off],
+            load: Some(LoadExt::NonExt),
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+        let load = SDValue::new(load, 0);
+        let m = dag.make_constant(mask, mvt::i32);
+        let narrow = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[x, m]), 0);
+        let ops = if at == 0 { [load, narrow] } else { [narrow, load] };
+        (dag.node(isd::MUL, &[mvt::i32], &ops), load, narrow)
+    }
+
+    fn selected(
+        limit: Option<u32>,
+        mask: i64,
+        at: usize,
+    ) -> (Vec<u16>, TestDag, SDValue) {
+        let mut dag = TestDag::new();
+        let (node, _, narrow) = product(&mut dag, mask, at);
+        let mut hooks = hooks(limit);
+        select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node);
+        let machine = dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect();
+        (machine, dag, narrow)
+    }
+
+    #[test]
+    fn a_short_register_factor_keeps_the_source_slot_and_the_load_is_not_folded() {
+        for at in [0, 1] {
+            let (machine, dag, narrow) = selected(Some(16), 15, at);
+            assert!(machine.contains(&IMUL32rr) && !machine.contains(&IMUL32rm), "load at {at}: {machine:?}");
+            let imul = dag.nodes.iter().find(|n| !n.dead && n.machine == Some(IMUL32rr)).unwrap();
+            assert_eq!(imul.ops[1], narrow, "the short factor is the source (second) operand, load at {at}");
+        }
+    }
+
+    /// The pin folds the load: with no limit, and where the register factor is
+    /// as wide as the load can be.
+    #[test]
+    fn the_pins_fold_stands_without_a_limit_or_for_a_wide_register_factor() {
+        let (machine, ..) = selected(None, 15, 0);
+        assert!(machine.contains(&IMUL32rm), "no limit: {machine:?}");
+        let (machine, ..) = selected(Some(16), 0x00ff_ffff, 0);
+        assert!(machine.contains(&IMUL32rm), "a 24-bit factor: {machine:?}");
+    }
+}
+
 mod llrm_intrinsics {
     use llrm_dagisel::testing::TestDag;
 
