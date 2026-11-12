@@ -115,6 +115,8 @@ struct Maps {
     /// The `size_libcall_names` whose routine takes a variable amount only: a constant amount keeps the inline
     /// expansion (and, below the type, the shift routine of its halves).
     size_variable_only: HashMap<(ISD, MVT), ()>,
+    /// The `size_libcall_names` called only in a function tuned for size: at speed the expansion stays inline.
+    size_only: HashMap<(ISD, MVT), ()>,
 }
 
 #[derive(Clone)]
@@ -145,6 +147,8 @@ pub struct TargetLowering {
     /// An `i64` shifted by an amount known below the half width is the routine's call, not the inline
     /// expansion the pin makes (SD241): a target whose inline policy is not priced yet keeps the call.
     libcall_for_small_variable_shift: bool,
+    /// A float constant is canonically positive (gcc's `negate_expr_p`): only a negative one is cheap to negate.
+    positive_fp_constants: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
     /// multiply is not the library call outside functions tuned for size.
     inline_constant_mul: Option<fn(u128) -> bool>,
@@ -202,6 +206,7 @@ impl TargetLowering {
             size_shift_call: None,
             force_shift_calls: false,
             libcall_for_small_variable_shift: false,
+            positive_fp_constants: false,
             inline_constant_mul: None,
             small_divide: false,
             fast_divide_in_loops: false,
@@ -301,6 +306,18 @@ impl TargetLowering {
         std::sync::Arc::make_mut(&mut self.maps).size_libcall_names.insert((op, vt), name);
     }
 
+    /// [`Self::set_size_libcall_name`] for a call made in a function tuned for size only: the legalizer's
+    /// [`Self::has_size_libcall_name`] is false at speed.
+    pub fn set_size_only_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.set_size_libcall_name(op, vt, name);
+        std::sync::Arc::make_mut(&mut self.maps).size_only.insert((op, vt), ());
+    }
+
     /// [`Self::set_size_libcall_name`] for a shift by a variable amount only.
     pub fn set_size_variable_libcall_name(
         &mut self,
@@ -330,6 +347,16 @@ impl TargetLowering {
     /// SD241: keep the shift routine for a wide shift by a variable amount known below the half width.
     pub fn set_libcall_for_small_variable_shift(&mut self) {
         self.libcall_for_small_variable_shift = true;
+    }
+
+    /// DEVIATE FP3 (owner x87, exit 2026-11-28): gcc's `negate_expr_p` calls only a negative real constant
+    /// cheap to negate, so `a + y * -K` is `a - y * K` and a pool keeps one cell for `K` and `-K`.
+    pub fn set_positive_fp_constants(&mut self) {
+        self.positive_fp_constants = true;
+    }
+
+    pub fn positive_fp_constants(&self) -> bool {
+        self.positive_fp_constants
     }
 
     pub fn libcall_for_small_variable_shift(&self) -> bool {
@@ -367,6 +394,7 @@ impl TargetLowering {
             vt,
             EVT::Simple(vt) if self.maps.size_libcall_names.contains_key(&(op, vt))
                 && !self.maps.size_variable_only.contains_key(&(op, vt))
+                && (self.opt_for_size || !self.maps.size_only.contains_key(&(op, vt)))
         )
     }
 
@@ -851,6 +879,7 @@ impl TargetLowering {
         } else {
             Self::x86(info, features, ptr, false)
         };
+        t.set_positive_fp_constants();
         // DEVIATE SD542: the pin promotes an `i16` trailing count to `i32` to
         // avoid the 0x66 prefix; at m16 `i16` is the native width and the
         // promoted form is a dword scan plus a dword spill. Owner m16.

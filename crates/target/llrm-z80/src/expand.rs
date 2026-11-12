@@ -76,6 +76,9 @@ struct Printer<'a> {
     /// A reload the next instruction reads from the frame itself: the register
     /// it would have gone to, and the cell.
     folded: Option<(RegId, String)>,
+    /// The same for a word reloaded into a pair that an `and`/`or`/`xor` of
+    /// words reads: the cell of each byte.
+    folded_word: Option<(RegId, [String; 2])>,
     /// Instructions after the current one that were printed with it.
     skip: usize,
     /// Bytes of stack arguments reserved below the frame, while a call is being
@@ -870,7 +873,17 @@ impl Printer<'_> {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
                 let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
                 let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
-                for (d, x, y) in [(dl, al, bl), (dh, ah, bh)] {
+                let cells = match self.folded_word.take() {
+                    Some((one, cells)) if one == self.register(inst, 2)? => Some(cells),
+                    _ => None,
+                };
+                for (lane, (d, x, y)) in [(dl, al, bl), (dh, ah, bh)].into_iter().enumerate() {
+                    if let Some(cells) = &cells {
+                        self.push(format!("ld a, {}", name(x)));
+                        self.push(format!("{mnemonic} a, {}", cells[lane]));
+                        self.push(format!("ld {}, a", name(d)));
+                        continue;
+                    }
                     // a lane known to be 0: `and` is 0, `or`/`xor` the other lane
                     let (zero_x, zero_y) = (self.lane_is_zero(x), self.lane_is_zero(y));
                     if mnemonic == "and" && (zero_x || zero_y) {
@@ -1175,6 +1188,10 @@ impl Printer<'_> {
                     if just_reloaded(&self.out, &loaded) {
                         return Ok(());
                     }
+                }
+                if op == "RELOAD16" && self.reload_is_operand(inst, rest) && slots.iter().all(|slot| slot.ends_with("(ix)")) {
+                    self.folded_word = Some((self.register(inst, 0)?, [slots[0].clone(), slots[1].clone()]));
+                    return Ok(());
                 }
                 for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
@@ -1764,7 +1781,9 @@ impl Printer<'_> {
 
     /// Whether the instruction after a `RELOAD8` is an ALU op or compare that
     /// reads the reloaded byte, which nothing else reads: it may take the frame
-    /// cell as its operand (`sub a, d(ix)`) and the reload goes.
+    /// cell as its operand (`sub a, d(ix)`) and the reload goes. The same for a
+    /// `RELOAD16` and the `and`/`or`/`xor` of words that reads the pair, byte
+    /// by byte.
     fn reload_is_operand(
         &self,
         reload: &Inst,
@@ -1775,7 +1794,7 @@ impl Printer<'_> {
         };
         matches!(
             next.kind,
-            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r")
+            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
         )
             && matches!(
                 next.operands.get(2),
@@ -2272,6 +2291,7 @@ pub fn finish(
         tables: Vec::new(),
         reads,
         folded: None,
+        folded_word: None,
         skip: 0,
         call_bytes: 0,
         spill_bytes: 0,
