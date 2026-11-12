@@ -71,14 +71,14 @@ fn trace(
     read_trace(command, cap, time_limit())
 }
 
-/// Run `command` and collect the pcs of its stderr `exec` lines. A run killed
-/// at `limit` used to be priced as if it had finished: the jpeg_single cells
-/// of 11-09 were prefixes of a 516 M-instruction run (224 M to 311 M, by load).
-fn read_trace(
+/// Run `command`, hand each stderr line to `on_line` until it returns false,
+/// and say whether the run ended by itself: false when `on_line` stopped it or
+/// `limit` killed it.
+fn run_logged(
     mut command: Command,
-    cap: usize,
     limit: std::time::Duration,
-) -> Trace {
+    mut on_line: impl FnMut(&str) -> bool,
+) -> bool {
     use std::io::{BufRead, BufReader};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
@@ -96,23 +96,84 @@ fn read_trace(
             }
         })
     };
-    let mut pcs = Vec::new();
-    let mut capped = false;
+    let mut stopped = false;
     for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-        let Some(fields) = line.split_once('[').and_then(|(_, rest)| rest.split_once(']')) else { continue };
-        if let Some(pc) = fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok()) {
-            pcs.push(pc);
-        }
-        if pcs.len() > cap {
+        if !on_line(&line) {
             child.lock().unwrap().kill().ok();
-            capped = true;
+            stopped = true;
             break;
         }
     }
     child.lock().unwrap().wait().ok();
     finished.send(()).ok();
     watchdog.join().ok();
-    Trace { pcs, complete: !capped && !timed_out.load(Ordering::SeqCst) }
+    !stopped && !timed_out.load(Ordering::SeqCst)
+}
+
+/// The pc of a `Trace` line of qemu's `exec` log.
+fn trace_pc(line: &str) -> Option<u32> {
+    let fields = line.split_once('[').and_then(|(_, rest)| rest.split_once(']'))?;
+    fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok())
+}
+
+/// Run `command` and collect the pcs of its stderr `exec` lines. A run killed
+/// at `limit` used to be priced as if it had finished: the jpeg_single cells
+/// of 11-09 were prefixes of a 516 M-instruction run (224 M to 311 M, by load).
+fn read_trace(
+    command: Command,
+    cap: usize,
+    limit: std::time::Duration,
+) -> Trace {
+    let mut pcs = Vec::new();
+    let complete = run_logged(command, limit, |line| {
+        pcs.extend(trace_pc(line));
+        pcs.len() <= cap
+    });
+    Trace { pcs, complete }
+}
+
+/// The places each execution of a shift by a register moved, in execution
+/// order: `(pc, count register modulo 64)`. The pc trace cannot say what a
+/// count register held when it was loaded from a stack slot, so a second run
+/// logs the cpu state at these pcs only (`-dfilter`). `shifts` maps each such
+/// pc to its count register.
+fn shift_counts(
+    exe: &Path,
+    cpu: &str,
+    shifts: &HashMap<u32, usize>,
+) -> Vec<(u32, u32)> {
+    if shifts.is_empty() {
+        return Vec::new();
+    }
+    let ranges: Vec<String> = shifts.keys().map(|pc| format!("0x{pc:x}+2")).collect();
+    let mut command = Command::new("qemu-m68k");
+    command
+        .args(["-cpu", cpu, "-one-insn-per-tb", "-d", "exec,cpu", "-dfilter", &ranges.join(","), "-D", "/dev/stderr"])
+        .arg(exe);
+    read_shift_counts(command, shifts, time_limit())
+}
+
+fn read_shift_counts(
+    command: Command,
+    shifts: &HashMap<u32, usize>,
+    limit: std::time::Duration,
+) -> Vec<(u32, u32)> {
+    let mut counts = Vec::new();
+    let mut pending: Option<u32> = None;
+    run_logged(command, limit, |line| {
+        if let Some(pc) = trace_pc(line) {
+            pending = Some(pc);
+        } else if let (Some(pc), Some((name, value))) = (pending, line.split_once(" = ")) {
+            let register = shifts.get(&pc).copied().unwrap_or(usize::MAX);
+            if name == format!("D{register}") {
+                let value = value.split_whitespace().next().and_then(|hex| u32::from_str_radix(hex, 16).ok());
+                counts.extend(value.map(|value| (pc, value % 64)));
+                pending = None;
+            }
+        }
+        true
+    });
+    counts
 }
 
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
@@ -234,8 +295,9 @@ impl Total {
     }
 
     /// [`Self::charge`] for the next instruction of a trace: a shift by a
-    /// register is priced at the places its count register holds, when the
-    /// trace fixed them.
+    /// register is priced at `counted` places (what the cpu state held when it
+    /// ran), else at the places its count register holds when the trace fixed
+    /// them.
     pub(crate) fn charge_executed(
         &mut self,
         models: &[Model],
@@ -243,9 +305,10 @@ impl Total {
         text: &str,
         bytes: u32,
         taken: bool,
+        counted: Option<u32>,
         seen: &mut std::collections::HashSet<String>,
     ) {
-        self.charge(models, text, bytes, taken, registers.places_of(text), seen);
+        self.charge(models, text, bytes, taken, counted.or_else(|| registers.places_of(text)), seen);
         registers.execute(text);
     }
 
@@ -299,7 +362,7 @@ mod tests {
     use llrm_m68k::isa::Cpu as Model;
     use llrm_m68k::timing::DataRegisters;
 
-    use super::{Total, parse_listing, qemu_cpu_of, read_trace};
+    use super::{Total, parse_listing, qemu_cpu_of, read_shift_counts, read_trace};
 
     /// A small program's hot loop is inlined into `main`; the default priced
     /// everything but `main`, so a 100-iteration loop read as 0 clocks and an
@@ -352,7 +415,7 @@ mod tests {
             let mut registers = DataRegisters::new();
             let mut seen = std::collections::HashSet::new();
             for text in trace {
-                total.charge_executed(&models, &mut registers, text, 2, false, &mut seen);
+                total.charge_executed(&models, &mut registers, text, 2, false, None, &mut seen);
             }
             total
         };
@@ -364,6 +427,44 @@ mod tests {
         assert!(copied.partial, "an unknown count stays a marked bound");
         let after_call = run(&["moveq #16,%d2", "jsr 0x1000", "lsr.l %d2, %d0"]);
         assert!(after_call.partial, "a call may write any register");
+    }
+
+    /// crc 68000 -O2 was priced +20% (10428 -> 12516 clocks) for a change that
+    /// makes the count of a shift a `moveq` instead of a reload from the
+    /// stack: the reloaded count was priced at 0 places, the `moveq` one at
+    /// its 31. Both run the same shifts.
+    #[test]
+    fn a_shift_count_the_cpu_state_gave_is_priced_whatever_set_the_register() {
+        let models = [Model::M68000];
+        let run = |trace: &[&str], counted: Option<u32>| {
+            let mut total = Total::new(&models);
+            let mut registers = DataRegisters::new();
+            let mut seen = std::collections::HashSet::new();
+            for text in trace {
+                total.charge_executed(&models, &mut registers, text, 2, false, counted, &mut seen);
+            }
+            total
+        };
+        let shift = run(&["asr.l %d5, %d0"], Some(31));
+        assert_eq!(shift.clocks[0], 8 + 2 * 31);
+        let reload = run(&["move.l (76,%sp), %d5", "asr.l %d5, %d0"], Some(31));
+        assert!(!reload.partial, "the count is known");
+        assert_eq!(reload.clocks[0] - shift.clocks[0], run(&["move.l (76,%sp), %d5"], None).clocks[0]);
+        assert!(run(&["move.l (76,%sp), %d5", "asr.l %d5, %d0"], None).partial, "without the state it is a bound");
+    }
+
+    /// The second run logs the cpu state at the shifts only; each record is a
+    /// `Trace` line, then `D<n> = value` among the other registers.
+    #[test]
+    fn the_cpu_state_at_a_shift_gives_the_count_register_modulo_64() {
+        let log = "echo 'Trace 0: 0x7f00 [00000000/00001000/00000000/0]' >&2; \
+            echo 'D0 = 00000001   A0 = 00000000' >&2; echo 'D5 = 0000005f   A5 = 00000000' >&2; \
+            echo 'Trace 0: 0x7f00 [00000000/00001000/00000000/0]' >&2; echo 'D5 = 0000001a   A5 = 0' >&2";
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", log]);
+        let shifts = std::collections::HashMap::from([(0x1000, 5)]);
+        let counts = read_shift_counts(command, &shifts, std::time::Duration::from_secs(30));
+        assert_eq!(counts, [(0x1000, 0x5f % 64), (0x1000, 0x1a)]);
     }
 
     /// jpeg_single's trace (516 M instructions, 200 s) was killed at the 120 s
@@ -414,6 +515,13 @@ pub(crate) fn price(
             },
         );
     let Trace { pcs, complete } = trace(exe, cap, &cpu);
+    // the 68020 and later price a register shift by its size alone
+    let shifts: HashMap<u32, usize> = if models.iter().any(|m| matches!(m, Model::M68000 | Model::M68010)) {
+        at.iter().filter_map(|(pc, (_, text))| Some((*pc, DataRegisters::count_register(text)?))).collect()
+    } else {
+        HashMap::new()
+    };
+    let mut counted = shift_counts(exe, &cpu, &shifts).into_iter();
     let mut total = Total::new(models);
     total.truncated = !complete;
     let mut seen = std::collections::HashSet::new();
@@ -423,6 +531,20 @@ pub(crate) fn price(
     let mut registers = DataRegisters::new();
     let mut after_gap = false;
     for (index, pc) in pcs.iter().enumerate() {
+        // the next logged execution of a counted shift is this one; a pc that
+        // differs means the two runs diverged, and the rest is priced as before
+        let places = if shifts.contains_key(pc) {
+            match counted.next() {
+                Some((at, places)) if at == *pc => Some(places),
+                Some(_) => {
+                    counted = Vec::new().into_iter();
+                    None
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         if !ranges.iter().any(|range| range.contains(pc)) {
             // code the listing does not cover may write any register
             after_gap = true;
@@ -439,7 +561,7 @@ pub(crate) fn price(
             continue;
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
-        total.charge_executed(models, &mut registers, text, *bytes as u32, taken, &mut seen);
+        total.charge_executed(models, &mut registers, text, *bytes as u32, taken, places, &mut seen);
     }
     if std::env::var_os("CYCLES_LISTING").is_some() {
         for (pc, count) in &counts {
