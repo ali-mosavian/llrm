@@ -155,6 +155,8 @@ struct Sequence {
     addresses: Vec<(usize, Vec<usize>, llrm_lir::registers::RegId, i64)>,
     kept: (usize, u32),
     pushed: (usize, u32),
+    /// The cleanup `pushed` includes: owed calls merge theirs.
+    cleanup: (usize, u32),
 }
 
 fn physical(
@@ -742,6 +744,7 @@ fn sequences(
             addresses,
             kept: priced.0,
             pushed: add(priced.1, cost(&cleanup, cpu)?),
+            cleanup: cost(&cleanup, cpu)?,
         });
     }
     // A call area made before a diamond can serve a call on each path: the
@@ -813,10 +816,37 @@ pub fn plan(
             .max()
             .unwrap_or(0)
     };
+    // Whether the cleanup of pushed sequence `earlier` is still owed when `later` pushes: nothing between them
+    // reads the stack pointer as the frame has it (`expand`'s `owed`), so one `adda` pays for both.
+    let owed_across = |earlier: &Sequence, later: &Sequence| -> bool {
+        blocks[earlier.up] == blocks[later.down]
+            && insts[earlier.up + 1..later.down].iter().all(|inst| {
+                !(inst.terminator
+                    || inst.barrier
+                    || matches!(inst.kind, Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN"))
+                    || names_sp(inst, assignment))
+            })
+    };
     let total = |chosen: &[bool]| -> Result<(usize, u32), String> {
         let mut sum = frame_price(widest(chosen))?;
+        let mut run: Option<(&Sequence, i64)> = None;
         for (one, pushed) in found.iter().zip(chosen) {
             sum = add(sum, if *pushed { one.pushed } else { one.kept });
+            if !*pushed {
+                run = None;
+                continue;
+            }
+            // a cleanup merged into the run's: the run's one `adda` is of the bytes together
+            if let Some((last, bytes)) = run.filter(|(last, _)| owed_across(last, one)) {
+                let merged = cost(&crate::expand::sp_adjust(bytes + one.bytes, short), cpu)?;
+                let alone = cost(&crate::expand::sp_adjust(bytes, short), cpu)?;
+                sum = add(sum, merged);
+                sum = (sum.0.saturating_sub(alone.0 + one.cleanup.0), sum.1.saturating_sub(alone.1 + one.cleanup.1));
+                run = Some((one, bytes + one.bytes));
+                let _ = last;
+            } else {
+                run = Some((one, one.bytes));
+            }
         }
         Ok(sum)
     };
