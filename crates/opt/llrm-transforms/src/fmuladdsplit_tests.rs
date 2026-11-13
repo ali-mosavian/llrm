@@ -1,6 +1,7 @@
 //! An `llvm.fmuladd` of a loop whose factors the loop does not write is an
 //! `fmul` before the loop and an `fadd` in it, where the target asks.
 
+use crate::fmuladdsplit::FmuladdSplit;
 use crate::licm::Licm;
 use crate::testing::{parsed, printed};
 
@@ -65,10 +66,15 @@ impl llrm_mir::target::Machine for Fused {
     }
 }
 
-/// `TEXT` through LICM on a target that `splits`.
-fn licmed(splits: bool) -> String {
+/// `TEXT` through the split and LICM on a target that `splits`, `size` being
+/// -Os.
+fn licmed(
+    splits: bool,
+    size: bool,
+) -> String {
     let mut module = parsed(TEXT);
     let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(FmuladdSplit { size });
     passes.add(Licm { apply: true, speculate: true });
     passes.run_module(&mut module, std::rc::Rc::new(Fused(splits))).unwrap_or_else(|error| panic!("{error}"));
     printed(&module)
@@ -80,7 +86,7 @@ fn licmed(splits: bool) -> String {
 /// once, before the loop; a call with a factor the loop changes (`%x`) stays.
 #[test]
 fn an_invariant_product_of_a_fmuladd_leaves_the_loop_where_the_target_asks() {
-    let split = licmed(true);
+    let split = licmed(true, false);
     let (head, body) = split.split_once("loop:").expect("a loop");
     assert!(head.contains("fmul float %r, %k"), "the product is before the loop:\n{split}");
     assert!(!body.contains("fmul float %r, %k"), "and not in it:\n{split}");
@@ -90,7 +96,18 @@ fn an_invariant_product_of_a_fmuladd_leaves_the_loop_where_the_target_asks() {
 /// The pin's order is the target's default: the call stays whole in the loop.
 #[test]
 fn a_fmuladd_stays_whole_where_the_target_does_not_ask() {
-    let kept = licmed(false);
+    let kept = licmed(false, false);
+    let (head, body) = kept.split_once("loop:").expect("a loop");
+    assert!(!head.contains("fmul float"), "{kept}");
+    assert!(body.contains("@llvm.fmuladd.f32(float %r, float %k"), "{kept}");
+}
+
+/// x_ld_to_ulong m32 -Os: the product held across the loop is popped on the way
+/// out, 2 bytes (170 -> 172) the hoist does not repay. Built for size the call
+/// stays whole.
+#[test]
+fn a_fmuladd_stays_whole_in_code_built_for_size() {
+    let kept = licmed(true, true);
     let (head, body) = kept.split_once("loop:").expect("a loop");
     assert!(!head.contains("fmul float"), "{kept}");
     assert!(body.contains("@llvm.fmuladd.f32(float %r, float %k"), "{kept}");

@@ -55,11 +55,22 @@ pub fn split(
         let instruction = function.instruction(call).clone();
         let [a, b, addend, ..] = instruction.operands[..] else { continue };
         let Some(result) = instruction.result else { continue };
-        let product = function.create_instruction(Opcode::Binary(BinaryOp::FMul), instruction.ty, vec![a, b], instruction.flags, None);
+        let product = function.create_instruction(
+            Opcode::Binary(BinaryOp::FMul),
+            instruction.ty,
+            vec![a, b],
+            instruction.flags,
+            None,
+        );
         function.insert(product, llrm_mir::edit::Position::Before(call)).expect("the product stands before the call");
         let product = Operand::Value(function.instruction(product).result.expect("a value"));
-        let sum =
-            function.create_instruction(Opcode::Binary(BinaryOp::FAdd), instruction.ty, vec![product, addend], instruction.flags, None);
+        let sum = function.create_instruction(
+            Opcode::Binary(BinaryOp::FAdd),
+            instruction.ty,
+            vec![product, addend],
+            instruction.flags,
+            None,
+        );
         function.insert(sum, llrm_mir::edit::Position::Before(call)).expect("the sum stands before the call");
         let sum = Operand::Value(function.instruction(sum).result.expect("a value"));
         function.replace_all_uses_with(result, sum);
@@ -107,9 +118,13 @@ fn candidates(
     found
 }
 
-/// The split as a pass of its own, before the first InstCombine: `fmul (sitofp
-/// %r), 2^26` is an integer shift there, where `fmuladd` hid it.
-pub struct FmuladdSplit;
+/// The split as a pass of its own, before the first LICM. Not where
+/// code is built for size: an x87 product held across the loop is popped on
+/// the way out (`fstp st(0)`, a block of its own), 2 bytes the hoist does not
+/// repay (x_ld_to_ulong m32 -Os 170 -> 172 B).
+pub struct FmuladdSplit {
+    pub size: bool,
+}
 
 impl passes::FunctionPass for FmuladdSplit {
     fn name(&self) -> &'static str {
@@ -125,7 +140,7 @@ impl passes::FunctionPass for FmuladdSplit {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if split(unit, analyses) {
+        if !self.size && split(unit, analyses) {
             // Instructions only: no block or edge changes.
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
