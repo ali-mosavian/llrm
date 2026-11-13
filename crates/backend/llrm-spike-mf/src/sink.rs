@@ -130,8 +130,9 @@ struct Sink<'a, T: Target> {
     /// Whether an edge may get a block of its own for an instruction to land
     /// in.
     allow_split: bool,
-    /// Whether a copy or a rematerializable instruction stays where it is.
-    keep_cheap: bool,
+    /// Whether a read-modify-write instruction may sink although it reads its
+    /// own destination.
+    tied_chains: bool,
 }
 
 /// Whether bit `v` of the set is on.
@@ -186,7 +187,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             to_split: Vec::new(),
             live_out: None,
             allow_split: true,
-            keep_cheap: false,
+            tied_chains: false,
         };
         sink.index();
         sink
@@ -242,6 +243,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         def_block: usize,
         break_phi_edge: &mut bool,
         local_use: &mut bool,
+        mut own: usize,
     ) -> bool {
         let uses = &self.uses[reg as usize];
         if uses.is_empty() {
@@ -253,6 +255,10 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         }
         for one in uses {
             if !one.phi && one.at == def_block {
+                if own > 0 {
+                    own -= 1;
+                    continue;
+                }
                 *local_use = true;
                 return false;
             }
@@ -261,6 +267,19 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             }
         }
         true
+    }
+
+    /// The reads of `reg` by `inst` itself: a read-modify-write instruction's
+    /// own read is not a use that keeps it in place.
+    fn own_reads(
+        &self,
+        inst: &Inst,
+        reg: u32,
+    ) -> usize {
+        if !self.tied_chains {
+            return 0;
+        }
+        uses_of(inst).filter(|one| *one == Reg::Virt(reg)).count()
     }
 
     /// `GetAllSortedSuccessors`.
@@ -454,7 +473,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             };
             if matches!(operand, Operand::Def(_)) {
                 let (mut break_phi, mut local) = (false, false);
-                if !self.all_uses_dominated(v, to, block, &mut break_phi, &mut local) {
+                if !self.all_uses_dominated(v, to, block, &mut break_phi, &mut local, 0) {
                     return false;
                 }
             } else {
@@ -492,14 +511,14 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
                 Operand::Def(Reg::Virt(reg)) => {
                     if let Some(to) = found {
                         let mut local = false;
-                        if !self.all_uses_dominated(*reg, to, block, break_phi_edge, &mut local) {
+                        if !self.all_uses_dominated(*reg, to, block, break_phi_edge, &mut local, self.own_reads(inst, *reg)) {
                             return None;
                         }
                         continue;
                     }
                     for candidate in self.sorted_successors(block, parent, cache) {
                         let mut local = false;
-                        if self.all_uses_dominated(*reg, candidate, block, break_phi_edge, &mut local) {
+                        if self.all_uses_dominated(*reg, candidate, block, break_phi_edge, &mut local, self.own_reads(inst, *reg)) {
                             found = Some(candidate);
                             break;
                         }
@@ -744,9 +763,6 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         cache: &mut HashMap<usize, Vec<usize>>,
     ) -> bool {
         let inst = self.function.blocks[block].insts[at].clone();
-        if self.keep_cheap && (inst.kind == Kind::Copy || inst.rematerializable) {
-            return false;
-        }
         if !safe_to_move(&self.function.fixed, &inst, saw_store) {
             return false;
         }
@@ -757,6 +773,22 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         let Some(to) = self.find_succ_to_sink_to(&inst, block, block, &mut break_phi_edge, cache) else {
             return false;
         };
+        // not SSA: a later write of a register it writes would overwrite the
+        // moved one, and a later write of a register it reads would change what
+        // the moved one reads
+        if self.tied_chains {
+            let later = &self.function.blocks[block].insts[at + 1..];
+            let written = |reg: Reg| later.iter().any(|other| defs_of(other).any(|d| d == reg));
+            let many = |d: &Reg| virt(*d).is_some_and(|v| self.def_count[v as usize] > 1);
+            // and another def of the register may reach a join the value is
+            // moved into, ahead of it
+            if defs_of(&inst).filter(many).any(written)
+                || uses_of(&inst).filter(|u| virt(*u).is_some()).any(written)
+                || (defs_of(&inst).any(|d| many(&d)) && self.cfg.preds[to].len() > 1)
+            {
+                return false;
+            }
+        }
         if self.cfg.preds[to].len() > 1 {
             let store = if inst.may_load { self.has_store_between(block, to) } else { true };
             let mut copy = store;
@@ -922,16 +954,26 @@ pub fn machine_sink<T: Target + Jump>(function: &mut MFunction<T::Class>) -> boo
     Sink::<T>::new(function).run()
 }
 
-/// [`machine_sink`] where no edge is split and a copy or a rematerializable
-/// instruction stays. DEVIATE: the pin splits when `PostponeSplitCriticalEdge`
-/// finds it worth it, and sinks a copy or a constant into the one successor
-/// that reads it. Reason: on a target whose jump costs bytes (the 6502's `jmp`
-/// is three) a block made for a one-move instruction costs more than the
-/// move saves on the other path (lz4 grew 16 bytes). Exit: the neutral-LIR
-/// task, with a block-cost hook.
+/// [`machine_sink`] on a function whose phis are already copies (the 6502's):
+/// no edge is split and an instruction may read the register it writes.
+///
+/// DEVIATE SINK-NONSSA-1: no edge is split (the pin splits when
+/// `PostponeSplitCriticalEdge` finds it worth it: on a target whose jump costs
+/// bytes, three on the 6502, a block made for one move cost lz4 16 bytes), and
+/// a read-modify-write instruction sinks although it reads its own
+/// destination (`AllUsesDominatedByBlock` sees SSA, where that read is another
+/// register). Reason: with the phis already copies a counting loop's step,
+/// `v9 = v8; inc v8`, runs before the exit test and keeps the old value live
+/// next to the new one; in the latch the step is `inx` (find at -Os: 19 B to
+/// 13). Mirrors `MachineSinking::SinkInstruction` run as the pin runs it, on
+/// SSA: the step goes to the successor that reads it. Sound on a register
+/// written more than once only where nothing writes it, or the registers the
+/// instruction reads, after it in the block, and the join it moves into has one
+/// predecessor (`tied_chains` guards in `sink_instruction`). Exit: a target that
+/// gives this pass SSA (row SINK-NONSSA-1, above-main-rows.md).
 pub fn machine_sink_in_place<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
     let mut sink = Sink::<T>::new(function);
     sink.allow_split = false;
-    sink.keep_cheap = true;
+    sink.tied_chains = true;
     sink.run()
 }
