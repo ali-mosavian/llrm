@@ -204,6 +204,10 @@ ORNv16i8                 binary   x/x,x         -                        fp_arit
 EORv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                EORv16i8
 NOTv16i8                 unary    x/x           -                        fp_arith   - - - -/-                NOTv16i8
 # ---- vector float arithmetic
+DUPv16i8lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv16i8lane
+DUPv8i16lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv8i16lane
+DUPv4i32lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv4i32lane
+DUPv2i64lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv2i64lane
 FADDv4f32                binary   x/x,x         -                        fp_arith   - - - -/-                FADDv4f32
 FADDv2f64                binary   x/x,x         -                        fp_arith   - - - -/-                FADDv2f64
 FSUBv4f32                binary   x/x,x         -                        fp_arith   - - - -/-                FSUBv4f32

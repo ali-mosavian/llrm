@@ -951,6 +951,14 @@ pub enum Inst {
         rn: Vreg,
         rm: Vreg,
     },
+    /// `dup v.4s, v.s[index]`: one lane of `rn` in every lane of `rd` (a
+    /// scalar float register is lane 0 of its vector register).
+    VectorDupLane {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        index: u8,
+    },
     /// `fneg v.4s, v.4s` and `fabs`; `lanes` is `S4` or `D2`.
     VectorFpUnary {
         op: VectorFpUnary,

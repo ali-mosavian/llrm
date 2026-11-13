@@ -246,6 +246,8 @@ pub(super) fn instructions() -> Vec<Inst> {
         out.push(Inst::VectorShift { op, lanes: Arrangement::H8, rd: v(0), rn: v(1), amount: 3 });
     }
     out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
+    out.push(Inst::VectorDupLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), index: 0 });
+    out.push(Inst::VectorDupLane { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
     for lanes in [Arrangement::S4, Arrangement::D2] {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             out.push(Inst::VectorFpBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
@@ -318,6 +320,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBinary { .. } => "VectorBinary",
         Inst::VectorShift { .. } => "VectorShift",
         Inst::VectorNot { .. } => "VectorNot",
+        Inst::VectorDupLane { .. } => "VectorDupLane",
         Inst::VectorFpBinary { .. } => "VectorFpBinary",
         Inst::VectorFpUnary { .. } => "VectorFpUnary",
         Inst::Svc { .. } => "Svc",
@@ -332,7 +335,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 52] = [
+const ALL: [&str; 53] = [
     "Mark",
     "Label",
     "Cfi",
@@ -377,6 +380,7 @@ const ALL: [&str; 52] = [
     "VectorBinary",
     "VectorShift",
     "VectorNot",
+    "VectorDupLane",
     "VectorFpBinary",
     "VectorFpUnary",
     "Svc",

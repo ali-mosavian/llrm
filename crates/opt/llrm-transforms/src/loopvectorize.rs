@@ -66,7 +66,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_mir::tti::{ArithOp, Ty};
-use llrm_mir::types::{Type, TypeId};
+use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step};
@@ -107,11 +107,18 @@ struct Access {
     stored: Option<Source>,
 }
 
-/// An integer binary operation of the loop, widened lane by lane.
+/// What a widened operation computes: a binary operation, or `fneg`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WideOp {
+    Binary(BinaryOp),
+    FNeg,
+}
+
+/// A binary operation or `fneg` of the loop, widened lane by lane.
 #[derive(Clone, Copy, Debug)]
 struct Operation {
     inst: InstId,
-    op: BinaryOp,
+    op: WideOp,
     flags: Flags,
     element: TypeId,
     operands: [Source; 2],
@@ -146,6 +153,9 @@ fn element_ty(
 ) -> Option<Ty> {
     match cx.context.types.get(ty) {
         Type::Int(bits @ (8 | 16 | 32 | 64)) => Some(Ty::Int(*bits)),
+        // `v4f32`, `v2f64`: the float lanes `FPR128` holds.
+        Type::Float(FloatKind::Float) => Some(Ty::Float),
+        Type::Float(FloatKind::Double) => Some(Ty::Double),
         _ => None,
     }
 }
@@ -219,7 +229,7 @@ fn extract(
                 |one| function.parent(one.user) == Some(header)
                     && match function.instruction(one.user).opcode {
                         Opcode::Store { .. } => one.index == 0,
-                        Opcode::Binary(_) => true,
+                        Opcode::Binary(_) | Opcode::FNeg => true,
                         _ => false,
                     },
             )
@@ -239,10 +249,10 @@ fn extract(
         if let Operand::Constant(c) = operand
             && !matches!(
                 cx.context.get(c).kind,
-                ConstantKind::Int(_) | ConstantKind::Zero
+                ConstantKind::Int(_) | ConstantKind::Float(_) | ConstantKind::Zero
             )
         {
-            return Err(Skipped("An operand constant that is not an integer"));
+            return Err(Skipped("An operand constant that is not an integer or a float"));
         }
         Ok(Source::Splat(operand))
     };
@@ -341,8 +351,8 @@ fn extract(
                     continue;
                 }
                 // `VPWidenRecipe`: an integer operation on widened values and
-                // loop-invariant ones (LVP3). Division traps and has no NEON
-                // lane form; floating point is not widened yet.
+                // loop-invariant ones (LVP3). Integer division traps and has no
+                // NEON lane form; `frem` is a libcall.
                 let arith = match op {
                     BinaryOp::Add => ArithOp::Add,
                     BinaryOp::Sub => ArithOp::Sub,
@@ -353,6 +363,10 @@ fn extract(
                     BinaryOp::And => ArithOp::And,
                     BinaryOp::Or => ArithOp::Or,
                     BinaryOp::Xor => ArithOp::Xor,
+                    BinaryOp::FAdd => ArithOp::FAdd,
+                    BinaryOp::FSub => ArithOp::FSub,
+                    BinaryOp::FMul => ArithOp::FMul,
+                    BinaryOp::FDiv => ArithOp::FDiv,
                     _ => return Err(Skipped("A binary operation the vectorizer does not widen yet")),
                 };
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
@@ -376,7 +390,37 @@ fn extract(
                 }
                 recipes.push(Recipe::Binary { op: arith, lane });
                 widened.push(inst);
-                steps.push(Step::Operation(Operation { inst, op, flags: data.flags, element: data.ty, operands }));
+                steps.push(Step::Operation(Operation {
+                    inst,
+                    op: WideOp::Binary(op),
+                    flags: data.flags,
+                    element: data.ty,
+                    operands,
+                }));
+            }
+            // `VPWidenRecipe` of `fneg`: one widened or loop-invariant operand.
+            Opcode::FNeg => {
+                let value = data.result.expect("an fneg");
+                let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                if used_outside(inst) {
+                    return Err(Skipped("A binary operation used after the loop"));
+                }
+                if !widened_users(value) {
+                    return Err(Skipped("A binary result used other than by a store or a binary operation"));
+                }
+                let operand = source_of(data.operands[0], &widened)?;
+                if matches!(operand, Source::Splat(_)) {
+                    return Err(Skipped("A binary operation of loop-invariant values"));
+                }
+                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane });
+                widened.push(inst);
+                steps.push(Step::Operation(Operation {
+                    inst,
+                    op: WideOp::FNeg,
+                    flags: data.flags,
+                    element: data.ty,
+                    operands: [operand, operand],
+                }));
             }
             Opcode::Binary(BinaryOp::Add) if inst == step => {
                 if used_outside(inst) {
@@ -449,7 +493,7 @@ fn broadcast(
 ) -> Operand {
     if let Operand::Constant(c) = scalar {
         let kind = match context.get(c).kind.clone() {
-            ConstantKind::Int(0) | ConstantKind::Zero => ConstantKind::Zero,
+            ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero => ConstantKind::Zero,
             _ => ConstantKind::Aggregate(vec![c; vf as usize]),
         };
         return Operand::Constant(context.constant(Constant { ty: vector_ty, kind }));
@@ -621,6 +665,7 @@ fn execute(
                 let vector_ty = vector_of(context, operation.element);
                 let mut parts = Vec::new();
                 for part in 0..plan.ic as usize {
+                    let arity = if operation.op == WideOp::FNeg { 1 } else { 2 };
                     let operands = operation
                         .operands
                         .map(
@@ -637,9 +682,12 @@ fn execute(
                             ),
                         );
                     let made = function.create_instruction(
-                        Opcode::Binary(operation.op),
+                        match operation.op {
+                            WideOp::Binary(op) => Opcode::Binary(op),
+                            WideOp::FNeg => Opcode::FNeg,
+                        },
                         vector_ty,
-                        operands.to_vec(),
+                        operands[..arity].to_vec(),
                         operation.flags,
                         None,
                     );

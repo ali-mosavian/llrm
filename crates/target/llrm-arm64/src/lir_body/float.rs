@@ -141,6 +141,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
         Inst::VectorNot { rd, rn } => {
             semantics(Operation::Unary, "NOTv16i8", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
         }
+        Inst::VectorDupLane { lanes, rd, rn, index } => semantics(
+            Operation::Move,
+            format!("DUPv{}lane", lane_name(*lanes)),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+            None,
+        ),
         Inst::VectorFpBinary { op, lanes, rd, rn, rm } => semantics(
             Operation::Binary,
             vector_fp_name(op.mnemonic(), *lanes),
@@ -338,6 +345,16 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let (dest, s) = (what.dests.first(), &what.sources);
     if name == "NOTv16i8" {
         return Some(Inst::VectorNot { rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
+    }
+    for lanes in ARRANGEMENTS {
+        if name == format!("DUPv{}lane", lane_name(lanes)) {
+            return Some(Inst::VectorDupLane {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                index: value_of(&s[1]) as u8,
+            });
+        }
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {
         for op in VECTOR_FP_OPS {

@@ -447,6 +447,10 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let sz = u32::from(*lanes == Arrangement::D2);
             0x4E20_0400 | u << 29 | a << 23 | sz << 22 | vreg(*rm)? << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorDupLane { lanes, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            0x4E00_0400 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorFpUnary { op, lanes, rd, rn } => {
             let (u, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);
