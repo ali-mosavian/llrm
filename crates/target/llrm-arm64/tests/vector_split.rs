@@ -122,3 +122,69 @@ fn a_lane_of_a_vector_built_from_scalars_is_the_scalar() {
     assert_eq!(count(&text, "umov", " x"), 0, "{text}");
     assert_eq!(count(&text, "fmov", " d"), 0, "{text}");
 }
+
+/// A lane of a float vector stored as a scalar was refused (`instruction
+/// extractelement`; then `ST1i32` had no instruction): lane 0 is `str s`, the
+/// others `st1 { v.s }[n]`.
+#[test]
+fn a_stored_lane_of_a_vector_is_st1() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a) {\n\
+         \x20 %x = load <4 x float>, ptr %a, align 16\n\
+         \x20 %y = fadd <4 x float> %x, %x\n\
+         \x20 %p = extractelement <4 x float> %y, i64 2\n\
+         \x20 store float %p, ptr %d, align 4\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "st1", "}[2], ["), 1, "{text}");
+}
+
+/// A vector of float zeros was `CannotSelect("BuildVector")`: the all-zeros
+/// predicate read only integer lanes.
+#[test]
+fn a_float_vector_of_zeros_is_a_movi() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a) {\n\
+         \x20 %x = load <4 x float>, ptr %a, align 16\n\
+         \x20 %y = fadd <4 x float> %x, zeroinitializer\n\
+         \x20 store <4 x float> %y, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(text.contains("movi.2d"), "{text}");
+}
+
+/// `fmuladd` of a splatted scalar was a vector of copies and a plain `fmla`;
+/// the multiplier is a lane (`FMLAv4i32_indexed`).
+#[test]
+fn a_multiply_add_by_a_splat_is_fmla_by_element() {
+    let text = assembly(
+        "declare <4 x float> @llvm.fmuladd.v4f32(<4 x float>, <4 x float>, <4 x float>)\n\
+         define void @f(ptr %d, ptr %a, ptr %b, float %c) {\n\
+         \x20 %x = load <4 x float>, ptr %a, align 16\n\
+         \x20 %z = load <4 x float>, ptr %b, align 16\n\
+         \x20 %i = insertelement <4 x float> poison, float %c, i64 0\n\
+         \x20 %s = shufflevector <4 x float> %i, <4 x float> poison, <4 x i32> zeroinitializer\n\
+         \x20 %m = call <4 x float> @llvm.fmuladd.v4f32(<4 x float> %x, <4 x float> %s, <4 x float> %z)\n\
+         \x20 store <4 x float> %m, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "fmla", ".s[0]"), 1, "{text}");
+}
+
+/// A lane read as an integer (`scvtf s, x`) from a vector in a register is
+/// copied across the register files (`fmov x, d`): `SCVTFUXSri` took the `v`
+/// register as its operand ("operands are not those of its form").
+#[test]
+fn a_vector_lane_converted_as_an_integer_is_moved_to_a_general_register() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a) {\n\
+         \x20 %x = load <2 x i64>, ptr %a, align 16\n\
+         \x20 %y = add <2 x i64> %x, %x\n\
+         \x20 %p = extractelement <2 x i64> %y, i64 0\n\
+         \x20 %f = sitofp i64 %p to float\n\
+         \x20 store float %f, ptr %d, align 4\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "fmov", " x"), 1, "{text}");
+    assert_eq!(count(&text, "scvtf", " s"), 1, "{text}");
+}

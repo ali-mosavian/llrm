@@ -211,6 +211,10 @@ FMLSv2f64                fmuladd x/x,x,x       -                        fp_arith
 DUPv16i8lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv16i8lane
 DUPv8i16lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv8i16lane
 DUPv4i32lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv4i32lane
+FMLAv4i32_indexed        fmuladd  x/x,x,x,i     -                        fp_arith   - - - -/-                FMLAv4i32_indexed
+FMLAv2i64_indexed        fmuladd  x/x,x,x,i     -                        fp_arith   - - - -/-                FMLAv2i64_indexed
+FMLSv4i32_indexed        fmuladd  x/x,x,x,i     -                        fp_arith   - - - -/-                FMLSv4i32_indexed
+FMLSv2i64_indexed        fmuladd  x/x,x,x,i     -                        fp_arith   - - - -/-                FMLSv2i64_indexed
 UMOVvi8                  move     r/x,i         -                        fp_arith   - - - -/-                UMOVvi8
 UMOVvi16                 move     r/x,i         -                        fp_arith   - - - -/-                UMOVvi16
 UMOVvi32                 move     r/x,i         -                        fp_arith   - - - -/-                UMOVvi32
@@ -290,6 +294,10 @@ LDRF8.{pre|post}         move     x,r/m         -                        load   
 LDRF16.{ui|fi|pg|gotpg}  move     x/m           -                        load       - - - -/-                LDRQui
 LDRF16.ro21              move     x/m           -                        load       - - - -/-                LDRQ[roW|roX]
 LDRF16.{pre|post}        move     x,r/m         -                        load       - - - -/-                LDRQ{pre|post}
+ST1i8                    move     -/x,i,m       -                        store      - - - -/-                ST1i8
+ST1i16                   move     -/x,i,m       -                        store      - - - -/-                ST1i16
+ST1i32                   move     -/x,i,m       -                        store      - - - -/-                ST1i32
+ST1i64                   move     -/x,i,m       -                        store      - - - -/-                ST1i64
 STRB.{ui|fi|pg|gotpg}    move     -/r,m         -                        store      - - - -/-                STRBBui
 STRB.ro21                move     -/r,m         -                        store      - - - -/-                STRBB[roW|roX]
 STRB.{pre|post}          move     r/r,m         -                        store      - - - -/-                STRBB{pre|post}

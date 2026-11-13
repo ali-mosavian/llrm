@@ -587,6 +587,19 @@ fn vector_float_compare_select_cast_and_scalarization_costs_are_the_pins() {
             (Some(0), Some(0), Some(0)),
             "{cpu}"
         );
+        // `sitofp <N x i64> to <N x float>` scalarizes (double rounding): a
+        // conversion per lane, the lanes taken out and put in (`opt
+        // -passes=print<cost-model>`: 8, 18, 36, and the same for `uitofp`).
+        assert_eq!(
+            (
+                cast(SIToFP, f(2), i(64, 2)),
+                cast(SIToFP, f(4), i(64, 4)),
+                cast(SIToFP, f(8), i(64, 8)),
+                cast(UIToFP, f(2), i(64, 2))
+            ),
+            (Some(8), Some(18), Some(36), Some(8)),
+            "{cpu}"
+        );
         assert_eq!(
             (cast(FPExt, d(2), f(2)), cast(FPExt, d(4), f(4)), cast(FPTrunc, f(2), d(2)), cast(FPTrunc, f(4), d(4))),
             (Some(1), Some(2), Some(1), Some(2)),

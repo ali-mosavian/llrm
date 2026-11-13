@@ -1005,6 +1005,24 @@ pub enum Inst {
         rn: Gpr,
         index: u8,
     },
+    /// `fmla v.4s, v.4s, v.s[index]`: `rd` is read and written; `lanes` is
+    /// `S4` or `D2`.
+    VectorFmaLane {
+        op: VectorFma,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
+    /// `st1 { v.s }[index], [base]`: one lane of `rt` stored at `[base]`
+    /// (`ST1i32`).
+    VectorStoreLane {
+        lanes: Arrangement,
+        rt: Vreg,
+        index: u8,
+        base: Gpr,
+    },
     /// `umov w, v.s[index]`: one lane of `rn` zero-extended into a general
     /// register (`UMOVvi32`; an `x` register for the 64-bit lane).
     VectorUmov {

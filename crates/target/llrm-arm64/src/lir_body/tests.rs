@@ -248,11 +248,13 @@ pub(super) fn instructions() -> Vec<Inst> {
     out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        out.push(Inst::VectorFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
         out.push(Inst::VectorInsLane { lanes, rd: v(0), rn: v(1), index: 1, src: 0 });
         out.push(Inst::VectorUmov { lanes, rd: Gpr(3), rn: v(1), index: 1 });
+        out.push(Inst::VectorStoreLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
     }
     out.push(Inst::VectorDupLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), index: 0 });
     out.push(Inst::VectorDupLane { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
@@ -339,6 +341,8 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorInsGpr { .. } => "VectorInsGpr",
         Inst::VectorInsLane { .. } => "VectorInsLane",
         Inst::VectorUmov { .. } => "VectorUmov",
+        Inst::VectorStoreLane { .. } => "VectorStoreLane",
+        Inst::VectorFmaLane { .. } => "VectorFmaLane",
         Inst::VectorDupLane { .. } => "VectorDupLane",
         Inst::VectorFpBinary { .. } => "VectorFpBinary",
         Inst::VectorFpUnary { .. } => "VectorFpUnary",
@@ -354,7 +358,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 57] = [
+const ALL: [&str; 59] = [
     "Mark",
     "Label",
     "Cfi",
@@ -403,6 +407,8 @@ const ALL: [&str; 57] = [
     "VectorInsGpr",
     "VectorInsLane",
     "VectorUmov",
+    "VectorStoreLane",
+    "VectorFmaLane",
     "VectorDupLane",
     "VectorFpBinary",
     "VectorFpUnary",

@@ -456,6 +456,26 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
             0x4E00_1C00 | imm5 << 16 | reg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorFmaLane { op, lanes, rd, rn, rm, index } => {
+            let s = u32::from(*op == VectorFma::Sub);
+            let index = u32::from(*index);
+            // single: the index is H:L; double: H alone, L clear
+            let (size, h, l) =
+                if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
+            0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorStoreLane { lanes, rt, index, base } => {
+            let index = u32::from(*index);
+            // Q:S:size is the index, as many bits of it as the lane leaves
+            // (`ST1 (single structure)`)
+            let (opcode, q, s, size) = match lanes {
+                Arrangement::B16 => (0b000, index >> 3, (index >> 2) & 1, index & 3),
+                Arrangement::H8 => (0b010, index >> 2, (index >> 1) & 1, (index & 1) << 1),
+                Arrangement::S4 => (0b100, index >> 1, index & 1, 0b00),
+                Arrangement::D2 => (0b100, index, 0, 0b01),
+            };
+            0x0D00_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
             let q = u32::from(*lanes == Arrangement::D2);

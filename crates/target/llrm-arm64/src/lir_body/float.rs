@@ -158,6 +158,17 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::VectorFmaLane { op, lanes, rd, rn, rm, index } => semantics(
+            Operation::FloatMultiplyAdd,
+            format!(
+                "{}v{}_indexed",
+                op.mnemonic().to_uppercase(),
+                if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }
+            ),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
+            None,
+        ),
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
             semantics(
@@ -402,6 +413,22 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             if name == vector_fp_name(op.mnemonic(), lanes) {
                 return Some(Inst::VectorFma { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) });
             }
+        }
+    }
+    for (lanes, op) in [Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .flat_map(|lanes| [VectorFma::Add, VectorFma::Sub].map(|op| (lanes, op)))
+    {
+        let lane = if lanes == Arrangement::D2 { "2i64" } else { "4i32" };
+        if name == format!("{}v{lane}_indexed", op.mnemonic().to_uppercase()) {
+            return Some(Inst::VectorFmaLane {
+                op,
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[1]),
+                rm: vreg_of(&s[2]),
+                index: value_of(&s[3]) as u8,
+            });
         }
     }
     for lanes in ARRANGEMENTS {

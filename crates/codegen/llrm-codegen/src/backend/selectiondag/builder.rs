@@ -3648,6 +3648,7 @@ impl Builder<'_> {
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::InsertElement => self.visit_insert_element(&instruction)?,
+            Opcode::ExtractElement => self.visit_extract_element(&instruction)?,
             Opcode::ShuffleVector(mask) => self.visit_shuffle_vector(&instruction, mask)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::VaArg => self.visit_va_arg(&instruction)?,
@@ -4172,6 +4173,22 @@ impl Builder<'_> {
         let vt = self.dag.value_type(vector);
         let node = self.dag.get_node(ISD::InsertVectorElt, vt, &[vector, element, index]);
         self.set_value(instruction.result.expect("an insertelement has a result"), node);
+        Ok(())
+    }
+
+    /// `visitExtractElement`: `EXTRACT_VECTOR_ELT` of the vector and the index,
+    /// which is a constant here (a variable index is refused).
+    fn visit_extract_element(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let vector = self.get_value(instruction.operands[0])?;
+        let index = self.get_value(instruction.operands[1])?;
+        let Some(at) = self.dag.constant(index) else { return Err(Refused("an extractelement at a variable index")) };
+        let index = self.dag.get_constant(at, self.target.dag.pointer);
+        let element = self.dag.value_type(vector).element();
+        let node = self.dag.get_node(ISD::ExtractElement, element, &[vector, index]);
+        self.set_value(instruction.result.expect("an extractelement has a result"), node);
         Ok(())
     }
 
