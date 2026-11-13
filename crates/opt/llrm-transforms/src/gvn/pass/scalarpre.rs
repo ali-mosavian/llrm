@@ -137,7 +137,7 @@ impl GvnPass<'_> {
         }
 
         let mut pred_map: Vec<(Option<Operand>, BlockId)> = Vec::new();
-        for pred in self.function.predecessors(current_block).to_vec() {
+        for pred in self.function.edge_predecessors(current_block) {
             // We're not interested in PRE where blocks with predecessors that
             // are not reachable.
             if !self.dt.is_reachable(pred) {
