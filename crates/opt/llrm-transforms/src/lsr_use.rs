@@ -927,7 +927,7 @@ impl Cost {
                 && r.bytes_counted
                 && let Some(m) = r.tti.lsr_size_model()
             {
-                self.size_bytes += m.iv_step.bytes;
+                self.size_bytes += m.step_bytes(r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg)));
             }
             if loop_cost > 0
                 && let Some(m) = r.tti.lsr_bytes()
@@ -985,7 +985,8 @@ impl Cost {
             && let Some(m) = r.tti.lsr_size_model()
         {
             // A `mov` or `lea` of the register's start in the preheader.
-            self.size_bytes += m.setup.bytes * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
+            self.size_bytes += m.setup_bytes(bits) * (self.c.setup_cost - prev_setup).min(m.setup_cap);
         }
         if let Some(m) = r.tti.lsr_bytes() {
             // A local set in the preheader, and a constant for each

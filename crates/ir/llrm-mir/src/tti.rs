@@ -333,6 +333,11 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// Bytes `iv_step` grows by for each byte of the register's width past
+    /// the first: a target with no wide registers (x86) has 0.
+    pub step_per_byte: u32,
+    /// The same for `setup`.
+    pub setup_per_byte: u32,
 }
 
 impl LsrSizeModel {
@@ -347,7 +352,25 @@ impl LsrSizeModel {
         iv_step: OpCost::bytes(3),
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        step_per_byte: 0,
+        setup_per_byte: 0,
     };
+
+    /// The bytes of the step a register of `bits` takes each trip.
+    pub fn step_bytes(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        self.iv_step.bytes + self.step_per_byte * (bits.div_ceil(8).max(1) - 1)
+    }
+
+    /// The bytes of a setup instruction for a register of `bits`.
+    pub fn setup_bytes(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        self.setup.bytes + self.setup_per_byte * (bits.div_ceil(8).max(1) - 1)
+    }
 
     /// The bytes of one address displacement.
     pub fn displacement(
@@ -3209,6 +3232,8 @@ mod size_model_tests {
         iv_step: OpCost::bytes(6),
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        step_per_byte: 8,
+        setup_per_byte: 9,
     };
 
     /// Each displacement form is read from its own field; zero is free.
@@ -3233,5 +3258,15 @@ mod size_model_tests {
             (4, 2, 1, 4)
         );
         assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
+        // no width scaling: a 64-bit step costs what a 32-bit one does
+        assert_eq!((m.step_bytes(8), m.step_bytes(64), m.setup_bytes(8), m.setup_bytes(64)), (3, 3, 3, 3));
+    }
+
+    /// A wide register's step and setup cost more bytes, each from its own field.
+    #[test]
+    fn a_register_steps_and_sets_up_by_its_width() {
+        let m = DISTINCT;
+        assert_eq!((m.step_bytes(8), m.step_bytes(16), m.step_bytes(32)), (6, 14, 30));
+        assert_eq!((m.setup_bytes(8), m.setup_bytes(16), m.setup_bytes(32)), (7, 16, 34));
     }
 }

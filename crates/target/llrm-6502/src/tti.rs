@@ -278,6 +278,38 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    /// DEVIATE LSR-SIZE (owner w12; row 6502-LSR-SIZE): the bytes of the code
+    /// LSR's formulae leave behind, from the emitter's own instruction table.
+    /// A byte counter steps with `inc zp` and starts with `lda #; sta zp`; each
+    /// byte past the first adds `bne`+`inc` and a second `lda #; sta zp`. A
+    /// base add is a 16-bit add of a cell and an immediate. A global's offset
+    /// is the two address bytes of `abs,x`; a short displacement is the `ldy #`
+    /// of `(zp),y`; a frame slot is one (the soft stack is addressed by
+    /// pointer). Stride is not modelled: a pointer stepped by 4 costs 5 B more
+    /// than the by-1 step counted here.
+    fn lsr_size_model(&self) -> Option<LsrSizeModel> {
+        let bytes = |mnemonic: &str, operand: &str| {
+            crate::timing::instruction(crate::dagisel::hooks::Cpu::Mos6502, mnemonic, operand)
+                .map_or(0, |cost| cost.bytes)
+        };
+        let step = bytes("inc", "rc2");
+        let step_more = bytes("bne", "x") + bytes("inc", "rc2");
+        let setup = bytes("lda", "#0") + bytes("sta", "rc2");
+        let add16 = bytes("clc", "") + 2 * (bytes("lda", "rc2") + bytes("adc", "#0") + bytes("sta", "rc2"));
+        Some(LsrSizeModel {
+            disp_global: OpCost::bytes(bytes("lda", "tbl,x") - 1),
+            disp_frame: OpCost::bytes(bytes("ldy", "#0")),
+            disp_short: OpCost::bytes(bytes("ldy", "#0")),
+            disp_long: OpCost::bytes(add16),
+            base_add: OpCost::bytes(add16),
+            iv_step: OpCost::bytes(step),
+            setup: OpCost::bytes(setup),
+            setup_cap: 4,
+            step_per_byte: step_more,
+            setup_per_byte: setup,
+        })
+    }
+
     /// `narrowiv`: a counter of a width the datalayout does not hold (`n8`
     /// only) whose range fits a byte is a byte counter.
     fn narrows_counters(&self) -> bool {
