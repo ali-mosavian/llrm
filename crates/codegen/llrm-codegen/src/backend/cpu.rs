@@ -439,12 +439,13 @@ impl Profile {
     /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
     /// register-immediate operation, code is not tuned for size, and the clock
     /// saved pays for the two bytes the test adds at the target's speed rate
-    /// (none at -O1, where clocks and bytes are each held; m16's 500 milli-
-    /// clocks a byte makes it a tie, which keeps `sahf`).
+    /// (m16's 500 milli-clocks a byte makes it a tie, which keeps `sahf`). Not
+    /// where bytes are held (-O1, size): two bytes there are a worse cell.
     pub fn tests_status_word(&self) -> bool {
         const EXTRA_BYTES: i64 = 2;
         !self.size
             && !self.min_size
+            && !self.bytes_strict()
             && matches!(
                 (self.cost("sahf"), self.cost("alu_ri")),
                 (Ok(sahf), Ok(alu)) if alu < sahf
