@@ -134,14 +134,14 @@ fn codes_are_read(
     insts: &[llrm_spike_mf::Inst],
     at: usize,
 ) -> bool {
-    if !insts[at].sets_flags {
+    if !insts[at].sets_flags() {
         return false;
     }
     for inst in &insts[at + 1..] {
-        if inst.reads_flags {
+        if inst.reads_flags() {
             return true;
         }
-        if inst.sets_flags || inst.call {
+        if inst.sets_flags() || inst.call {
             return false;
         }
     }
