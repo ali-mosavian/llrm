@@ -613,6 +613,9 @@ struct Compare {
     /// (`cmp g; sbc g+1`); `b` names nothing. Kept only when no store, call
     /// or saved flags lie between the compare and the end of its block.
     memory: Option<String>,
+    /// `memory` is indexed by this byte (`cmp g,x`), which must hold what it
+    /// held at the compare.
+    index: Option<(String, u32)>,
     /// Over two words: the high pair, subtracted with the borrow of the first.
     wide: Option<((String, u32), (String, u32))>,
 }
@@ -950,10 +953,17 @@ impl Builder {
         &mut self,
         at: usize,
     ) -> Result<(), Unsupported> {
-        let Some(Compare { a, word, memory: Some(symbol), .. }) = self.pending.clone() else { return Ok(()) };
+        let Some(Compare { a, word, memory: Some(symbol), index, .. }) = self.pending.clone() else { return Ok(()) };
         let cell = format!("{}___cmpm{at}", if word { "w" } else { "v" });
         let acc = Reg::Phys(reg::A);
-        if word {
+        if let Some((index, _)) = index {
+            let (x, i) = (Reg::Phys(reg::X), self.byte(&index)?);
+            self.copy(x, i);
+            self.define(&cell);
+            let d = self.byte(&cell)?;
+            self.push(Inst::new(Kind::Op("LDAX"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0), Operand::Use(x)]));
+            self.copy(d, acc);
+        } else if word {
             let (low, high) = self.write_word(&cell)?;
             for (d, half) in [low, high].into_iter().zip([symbol.clone(), format!("{symbol}+1")]) {
                 self.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
@@ -966,7 +976,7 @@ impl Builder {
             self.copy(d, acc);
         }
         let version = self.version(&cell);
-        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, wide: None });
+        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, index: None, wide: None });
         Ok(())
     }
 
@@ -981,9 +991,12 @@ impl Builder {
         code: i64,
         branch: bool,
     ) -> Result<(), Unsupported> {
-        let Compare { a, b, word, zero, memory, wide } =
+        let Compare { a, b, word, zero, memory, index, wide } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
-        if self.version(&a.0) != a.1 || memory.is_none() && self.version(&b.0) != b.1 {
+        if self.version(&a.0) != a.1
+            || memory.is_none() && self.version(&b.0) != b.1
+            || index.as_ref().is_some_and(|(cell, version)| self.version(cell) != *version)
+        {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
         }
         let acc = Reg::Phys(reg::A);
@@ -1052,6 +1065,7 @@ impl Builder {
         } else {
             let lhs = self.byte(&a.0)?;
             let rhs = match (&memory, self.constants.get(&b.0)) {
+                (Some(symbol), _) if index.is_some() => Operand::Symbol(format!("{symbol},x"), 0),
                 (Some(symbol), _) => Operand::Symbol(symbol.clone(), 0),
                 (None, Some(value)) => Operand::Imm(*value & 0xFF),
                 (None, None) => {
@@ -1066,7 +1080,8 @@ impl Builder {
         // `x`, `y` compares. A select or a set reads `a` as the compare left
         // it, and a word's high byte is subtracted in `a`, so those compare
         // there.
-        let tested = if branch && !word {
+        // `cmp g,x` exists for `a` alone
+        let tested = if branch && !word && index.is_none() {
             self.copy_to_class(lhs[0], Class::COMPARED)
         } else {
             self.copy(acc, lhs[0]);
@@ -1074,6 +1089,11 @@ impl Builder {
         };
         let mut cmp =
             Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(tested), rhs[0].clone()]);
+        if let Some((cell, _)) = &index {
+            let (x, i) = (Reg::Phys(reg::X), self.byte(cell)?);
+            self.copy(x, i);
+            cmp.operands.push(Operand::Use(x));
+        }
         cmp.sets_flags = true;
         self.push(cmp);
         if word {
@@ -2243,6 +2263,7 @@ pub fn build_with_places(
                     word: false,
                     zero: false,
                     memory: None,
+                    index: None,
                     wide: None,
                 });
             }
@@ -2257,6 +2278,24 @@ pub fn build_with_places(
                     word: inst.opcode == op::CMP16M,
                     zero: false,
                     memory: Some(symbol),
+                    index: None,
+                    wide: None,
+                });
+                if !memory_holds_until_flags_are_read(items, at) {
+                    b.load_compared_global(at)?;
+                }
+            }
+            // a global indexed by a byte on the right: the same, with the index kept in `x`
+            op::CMP8MX => {
+                let (a, symbol) = (name(&o[1])?, indexed_address(&o[2], &o[3]).map_err(Unsupported)?);
+                let index = name(&o[4])?;
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (String::new(), 0),
+                    word: false,
+                    zero: false,
+                    memory: Some(symbol),
+                    index: Some((index.to_owned(), b.version(index))),
                     wide: None,
                 });
                 if !memory_holds_until_flags_are_read(items, at) {
@@ -2271,6 +2310,7 @@ pub fn build_with_places(
                     word: true,
                     zero: true,
                     memory: None,
+                    index: None,
                     wide: None,
                 });
             }
@@ -2518,6 +2558,7 @@ pub fn build_with_places(
                     word: true,
                     zero: false,
                     memory: None,
+                    index: None,
                     wide: Some(((a1.to_owned(), b.version(a1)), (c1.to_owned(), b.version(c1)))),
                 });
             }
@@ -2529,6 +2570,7 @@ pub fn build_with_places(
                     word: true,
                     zero: false,
                     memory: None,
+                    index: None,
                     wide: None,
                 });
             }
@@ -3225,7 +3267,7 @@ fn form_text(
         Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")) if operands.len() >= 3 => {
             format!("  {} {}\n", mnemonic.to_lowercase(), second(2))
         }
-        Kind::Op("CMP") if operands.len() == 3 => {
+        Kind::Op("CMP") if operands.len() >= 3 => {
             let compare = match regs[1] {
                 r if r == reg::X => "cpx",
                 r if r == reg::Y => "cpy",
@@ -4276,7 +4318,7 @@ fn emit_with<const STACK: bool>(
                     }
                 }
                 // the register the left side is in decides the opcode
-                (Kind::Op("CMP"), [_, _, _]) => {
+                (Kind::Op("CMP"), [_, _, _, ..]) => {
                     out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {

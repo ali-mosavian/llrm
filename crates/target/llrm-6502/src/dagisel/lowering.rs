@@ -636,7 +636,20 @@ fn equality_operands(
     op1: SDValue,
 ) -> (SDValue, SDValue) {
     let incoming = |value: SDValue| dag.opcode(value) == ISD::CopyFromReg;
-    if incoming(op0) && !incoming(op1) && dag.constant(op1).is_none() { (op1, op0) } else { (op0, op1) }
+    let loaded = |value: SDValue| dag.opcode(value) == ISD::Load;
+    if incoming(op0) && !incoming(op1) && !loaded(op1) && dag.constant(op1).is_none() { (op1, op0) } else { (op0, op1) }
+}
+
+/// A load nothing else reads, not extending, not volatile: `cmp g` and
+/// `cmp g,x` take it from memory.
+fn foldable_load(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.opcode(value) == ISD::Load
+        && value.res == 0
+        && matches!(dag.node(value).data, NodeData::Mem(info) if info.ext.is_none() && !info.volatile && info.ordering.is_none())
+        && dag.has_one_use(value.node)
 }
 
 /// The code a comparison of `op0` with `op1` branches on, and the operands to
@@ -648,6 +661,14 @@ fn translate_cc(
     op1: SDValue,
 ) -> (u128, SDValue, SDValue) {
     use CondCode::*;
+    // `TranslateX86CC`: a foldable load on the left and none on the right
+    // flips the condition, so the load is the memory operand of the compare
+    let (cc, op0, op1) =
+        if foldable_load(dag, op0) && !foldable_load(dag, op1) && dag.constant(op1).is_none() {
+            (cc.swapped_operands(), op1, op0)
+        } else {
+            (cc, op0, op1)
+        };
     let against_zero = dag.is_null_constant(op1);
     // `x > C` is `x >= C + 1`: the constant stays the right-hand side, an
     // immediate of the compare (AArch64's `getAArch64Cmp` adjusts the
