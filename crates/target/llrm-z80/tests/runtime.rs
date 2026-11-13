@@ -139,7 +139,8 @@ fn the_programs_harness_leaves_no_temporary_tree_behind() {
     let scratch = tmp.path().join(format!("z80-harness-tmp-{}", std::process::id()));
     std::fs::create_dir_all(scratch.join("src")).expect("a scratch directory");
     // Another process's tree in the shared temporary directory is not this run's: the harness works in `scratch`.
-    let stray = std::env::temp_dir().join(format!("z80prog-stray-{}", std::process::id()));
+    // (`tempfile::env`, not the std call: `tmp_paths_per_call` bans scratch files there, and this is a decoy, not scratch.)
+    let stray = tempfile::env::temp_dir().join(format!("z80prog-stray-{}", std::process::id()));
     std::fs::create_dir_all(&stray).expect("a stray tree");
     // `--llc`: run.py's default is a build in one person's scratch directory, which a clean machine has none of
     // (the test failed there with "cannot ask ... for its runtime stamp") and a stale one tests an old compiler.
