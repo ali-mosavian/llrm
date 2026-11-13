@@ -5,12 +5,10 @@ use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
-/// The default of a `switch` that is `unreachable` made an empty machine block
-/// that falls into the join and has no predecessor. Shrink wrapping read the
-/// dominator tree of the blocks the entry reaches and panicked ("B must be in
-/// the tree", `domtree.rs:895`): `runtime/qb/dev/host/video.c` (`blend`) did
-/// not compile at any level above O0 on arm64. The pin deletes such blocks
-/// right after selection (`UnreachableMachineBlockElim`).
+/// The default of a `switch` that is `unreachable` made an empty machine block that falls into the join and has no
+/// predecessor. Shrink wrapping read the dominator tree of the blocks the entry reaches and panicked ("B must be in
+/// the tree", `domtree.rs:895`): `runtime/qb/dev/host/video.c` (`blend`) did not compile at any level above O0 on
+/// arm64. The pin deletes such blocks right after selection (`UnreachableMachineBlockElim`).
 #[test]
 fn a_switch_with_an_unreachable_default_compiles() {
     // `runtime/qb/dev/host/video.c`'s `blend`, from clang -Oz.

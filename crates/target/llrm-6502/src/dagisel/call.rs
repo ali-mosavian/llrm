@@ -162,8 +162,7 @@ pub fn lower_call(
         chain = dag.get_token_factor(&stores);
     }
     let mut glue = None;
-    // `a` and `x` last: moving a constant or a byte into a cell goes through
-    // `a`
+    // `a` and `x` last: moving a constant or a byte into a cell goes through `a`
     let (a, x) = (abi::register("a"), abi::register("x"));
     let late = |register: llrm_lir::registers::RegId| u8::from(register == x) + 2 * u8::from(register == a);
     let mut copies: Vec<_> = outs
@@ -197,8 +196,7 @@ pub fn lower_call(
         let vt = dag.value_type(out.value);
         operands.push(dag.get_phys_register(vt, register));
     }
-    // the scheduler's live-register check reads the mask: a call clobbers the
-    // flags
+    // the scheduler's live-register check reads the mask: a call clobbers the flags
     operands.push(dag.get_register_mask_clobbering(&[super::generated::ids::reg::P]));
     operands.extend(glue);
     let call = dag.get_node_multi(CALL, &[EVT::OTHER, EVT::GLUE], &operands);
@@ -309,8 +307,7 @@ impl TargetCalling for MosCalling {
         true
     }
 
-    // The runtime has no routine named `llvm.*`: a call left would bind to
-    // nothing.
+    // The runtime has no routine named `llvm.*`: a call left would bind to nothing.
     fn calls_unlowered_intrinsic(
         &self,
         _name: &str,
@@ -349,8 +346,8 @@ impl TargetCalling for MosCalling {
         lower_return(dag, chain, outs).expect("legal parts")
     }
 
-    /// The unnamed arguments follow the named ones' stack bytes (llvm-mos's
-    /// `VarArgsStackIndex` at `Assigner.StackSize`).
+    /// The unnamed arguments follow the named ones' stack bytes (llvm-mos's `VarArgsStackIndex` at
+    /// `Assigner.StackSize`).
     fn variadic_frame_offset(
         &self,
         named: &[In],

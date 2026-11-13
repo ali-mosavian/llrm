@@ -250,9 +250,8 @@ fn by_destination(
     size: Size,
     mode: Mode,
 ) -> Option<u32> {
-    // Table 10-5 prints `(d16,PC)` and `(d8,PC,Xi*SF)` at the times of
-    // `(d16,An)` and `(d8,An,Xi*SF)`, and Table 10-10 has no PC column: the
-    // PC form is the address form.
+    // Table 10-5 prints `(d16,PC)` and `(d8,PC,Xi*SF)` at the times of `(d16,An)` and
+    // `(d8,An,Xi*SF)`, and Table 10-10 has no PC column: the PC form is the address form.
     let mode = match mode {
         Mode::PcDisp => Mode::Disp,
         Mode::PcIndex => Mode::Index,

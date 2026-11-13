@@ -1,5 +1,4 @@
-//! An instruction whose only results are `a` and the flags, with no reader, is
-//! dropped.
+//! An instruction whose only results are `a` and the flags, with no reader, is dropped.
 
 use std::process::Command;
 
@@ -24,9 +23,8 @@ fn assembly(
     std::fs::read_to_string(out).unwrap()
 }
 
-/// The sign of `off`, widened to 32 bits for `iv + off` whose high word nothing
-/// reads (a shift count is its low bits), was still computed: `ld a, d; add a,
-/// a; sbc a, a` ahead of the loop, its result overwritten at once.
+/// The sign of `off`, widened to 32 bits for `iv + off` whose high word nothing reads (a shift count is its low
+/// bits), was still computed: `ld a, d; add a, a; sbc a, a` ahead of the loop, its result overwritten at once.
 /// Only `start`'s sign fill is left.
 #[test]
 fn the_sign_fill_of_an_unread_high_word_is_not_computed() {

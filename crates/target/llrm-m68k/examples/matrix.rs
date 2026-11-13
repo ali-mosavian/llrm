@@ -1,11 +1,11 @@
 //! `matrix [SET]`: the kernels of `bench/<SET>` (`kernels`, or `library`) built
 //! by this compiler twice (`ours`: `llrm-cc` over the C source, as a user runs
 //! it; `ours-ir`: the backend alone on the kernel's IR), m68k gcc (`$GCC_M68K`)
-//! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O1, O2, O3
-//! and Os for the 68000, 68010, 68020, 68030, 68040 and 68060, run under
-//! `qemu-m68k` and priced as `cycles` does. Prints the competitor-matrix rows:
-//! `target prog level compiler code_bytes clocks instrs note`, tab separated.
-//! An empty field means the instrument has no number; `note` says why.
+//! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O1, O2, O3 and Os
+//! for the 68000, 68010, 68020, 68030, 68040 and 68060, run under `qemu-m68k` and priced as
+//! `cycles` does. Prints the competitor-matrix rows: `target prog level
+//! compiler code_bytes clocks instrs note`, tab separated. An empty field means
+//! the instrument has no number; `note` says why.
 //!
 //! `clang` is the pin's result for the program: its own front end and mid-end
 //! to IR, then its `llc`, so its LSR runs once on its own IR. `ours-ir` and
@@ -64,9 +64,8 @@ fn other_code_sections(listing: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    /// The rewritten listing lost its final newline: gas warned "end of file
-    /// not at end of a line" on every `ours` cell (1056 stderr lines in the
-    /// 11-09 run), and a warning on our output hides a mis-assembled line.
+    /// The rewritten listing lost its final newline: gas warned "end of file not at end of a line" on every
+    /// `ours` cell (1056 stderr lines in the 11-09 run), and a warning on our output hides a mis-assembled line.
     #[test]
     fn rewritten_listing_ends_in_a_newline() {
         assert_eq!(super::relaxing_branches("\tbne\tL1\n\trts\n"), "\tjne\tL1\n\trts\n");
@@ -138,9 +137,8 @@ fn text_bytes(
 }
 
 /// The kernel's C source built by m68k gcc into an object's text.
-/// The shared external-bar flags (`tools/external_flags.py --target none`, hash
-/// cd1e12d510e4); `tools/m68k_column_probe.py` fails when this list and that
-/// file differ. Relocation is ours: none (static), asserted by the same probe.
+/// The shared external-bar flags (`tools/external_flags.py --target none`, hash cd1e12d510e4); `tools/m68k_column_probe.py`
+/// fails when this list and that file differ. Relocation is ours: none (static), asserted by the same probe.
 const EXTERNAL_FLAGS: [&str; 5] = [
     "-fomit-frame-pointer",
     "-fno-stack-protector",
@@ -452,13 +450,7 @@ fn levels() -> Vec<&'static str> {
     match std::env::var("MATRIX_LEVELS") {
         Ok(only) => only
             .split(',')
-            .map(|one| {
-                LEVELS
-                    .iter()
-                    .copied()
-                    .find(|level| *level == one)
-                    .unwrap_or_else(|| panic!("MATRIX_LEVELS: unknown level {one}"))
-            })
+            .map(|one| LEVELS.iter().copied().find(|level| *level == one).unwrap_or_else(|| panic!("MATRIX_LEVELS: unknown level {one}")))
             .collect(),
         Err(_) => LEVELS.to_vec(),
     }

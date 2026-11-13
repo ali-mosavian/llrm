@@ -46,7 +46,10 @@ pub fn module(module: &Module) -> String {
                 },
             ),
     );
-    section(&mut out, module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))));
+    section(
+        &mut out,
+        module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))),
+    );
     section(
         &mut out,
         module
@@ -814,10 +817,8 @@ impl Printer<'_> {
                 format!("{} {}", inst.opcode.mnemonic(), values.join(", "))
             }
             Opcode::ShuffleVector(mask) => {
-                let lanes: Vec<String> = mask
-                    .iter()
-                    .map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") })
-                    .collect();
+                let lanes: Vec<String> =
+                    mask.iter().map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") }).collect();
                 format!("shufflevector {}, {}, <{} x i32> <{}>", typed(0), typed(1), mask.len(), lanes.join(", "))
             }
             Opcode::Alloca { allocated, align, address_space } => {

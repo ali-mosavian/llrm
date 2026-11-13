@@ -4,9 +4,8 @@
 //! language, `runtime/<language>/<language>.toml`, with the files it names
 //! embedded; a language reads what it needs and never asks which target.
 
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
-
 use llrm_support::hash::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 static PARSED: LazyLock<Mutex<HashMap<usize, Result<Arc<toml::Table>, String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::default()));

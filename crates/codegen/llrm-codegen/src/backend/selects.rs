@@ -24,17 +24,16 @@
 //!
 //! DEVIATE S4 (no number): `llvm.{u}{add,sub}.with.overflow` is expanded here
 //! to the operation and `icmp ult`, for the selectors that have no UADDO
-//! (`--isel=old`, shadow): CodeGenPrepare forms the intrinsic on every x86
-//! width (`shouldFormOverflowOp`), and the old selector stopped at
-//! "@llvm.uadd.with.overflow.i16" (nib and qb tests). The pin's legalizer
-//! expands UADDO the same way (`TargetLowering::expandUADDSUBO`). Exit: the old
-//! selector is deleted.
+//! (`--isel=old`, shadow): CodeGenPrepare forms the intrinsic on every x86 width
+//! (`shouldFormOverflowOp`), and the old selector stopped at
+//! "@llvm.uadd.with.overflow.i16" (nib and qb tests). The pin's legalizer expands
+//! UADDO the same way (`TargetLowering::expandUADDSUBO`). Exit: the old selector
+//! is deleted.
 //!
 //! DEVIATE S5 (no number): `llvm.experimental.noalias.scope.decl` is erased
 //! here for the same selectors: no code runs it, and the DAG builder returns
-//! at it (`SelectionDAGBuilder`, `case
-//! Intrinsic::experimental_noalias_scope_decl`). Exit: the old selector is
-//! deleted.
+//! at it (`SelectionDAGBuilder`, `case Intrinsic::experimental_noalias_scope_decl`).
+//! Exit: the old selector is deleted.
 //!
 //! DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 //! CodeGenPrepare's `optimizeSelectInst` forms no branch where
@@ -55,49 +54,49 @@
 //!   model) clocks base -> head: O1 270645 -> 273325 (+1.0%), O2 267647 ->
 //!   270127 (+0.9%), O3 266972 -> 270147 (+1.2%), Os 455460 -> 458620 (+0.7%);
 //!   .text counts 16-B function alignment: f381 and f383 (`select c, 2, -2`
-//!   i64) grow 29 -> 33 B and cross a slot (+16 each; O3: f381-f384, +64); the
-//!   functions that shrink stay in their slot. Cause: base made one diamond for
-//!   both halves in MIR (29 B); the DAG makes two CMOV pseudos and the second
-//!   one's `mov -1` sits between them, so the cascade does not merge them (33
-//!   B). The pin's `f381` is 33 B too (clang -O2 -march=i486), so head is pin
-//!   parity and base was a non-pin win (the MIR one-diamond expansion, which
-//!   the pin does not make). External bars (m32 -march=i486,
+//!   i64) grow 29 -> 33 B and cross a slot (+16 each; O3: f381-f384, +64);
+//!   the functions that shrink stay in their slot. Cause: base made one
+//!   diamond for both halves in MIR (29 B); the DAG makes two CMOV pseudos
+//!   and the second one's `mov -1` sits between them, so the cascade does not
+//!   merge them (33 B). The pin's `f381` is 33 B too (clang -O2 -march=i486),
+//!   so head is pin parity and base was a non-pin win (the MIR one-diamond
+//!   expansion, which the pin does not make). External bars (m32 -march=i486,
 //!   tools/external_flags.py cd1e12d510e4) for f381/f383: gcc 13.4 O1 32 B, O2
 //!   43 B; clang O1 33 B, O2 33 B: head is 1 B over the best at O1, level at
 //!   O2; base (29 B) beat both. Exit 2026-11-12: re-add the one-diamond
-//!   expansion for the select of two i64 constants as a priced DEVIATE (or the
-//!   pass the pin uses to keep `mov -1` out of the first CMOV window). The
-//!   scheduler is right (traced: `MOV32r0` goes first, held by the live
+//!   expansion for the select of two i64 constants as a priced DEVIATE (or
+//!   the pass the pin uses to keep `mov -1` out of the first CMOV window).
+//!   The scheduler is right (traced: `MOV32r0` goes first, held by the live
 //!   EFLAGS). `f409` is its own row, I64SEL-6.
 //! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
-//!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309
-//!   B, `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
+//!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
+//!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
 //!   (O1, +0.28%), 139968 -> 140365 (O2), 139969 -> 140364 (O3); cycles within
 //!   noise, output equal; m32 `word_compares` identical. Cause: SD447 keeps
-//!   `x*257` as `imul` on a tie, so the ADC takes `2*setbe` as an `add` before
-//!   it, the flags are clobbered, the `cmp` is repeated with its load unfolded
-//!   and one more value is live (R15D). Without the multiply the pin emits our
-//!   shape. Evidence: ~/scratch/handoff/m64-mul257-adc-flags-2026-11-09.md.
+//!   `x*257` as `imul` on a tie, so the ADC takes `2*setbe` as an `add`
+//!   before it, the flags are clobbered, the `cmp` is repeated with its load
+//!   unfolded and one more value is live (R15D). Without the multiply the pin
+//!   emits our shape. Evidence: ~/scratch/handoff/m64-mul257-adc-flags-2026-11-09.md.
 //! - I64SEL-3, exit 2026-11-10 18:00Z: m64 `sfm16_float*` -O1 +8 B, -Os +10 B
-//!   (only `__divsf3`: 493 -> 503 B, pin 560 B; register naming and one `mov`).
-//!   Native instructions equal within 1 at O1 and Os (sfm16_float_add O1 128138
-//!   -> 128139, Os 128548 -> 128548), output equal.
+//!   (only `__divsf3`: 493 -> 503 B, pin 560 B; register naming and one
+//!   `mov`). Native instructions equal within 1 at O1 and Os (sfm16_float_add
+//!   O1 128138 -> 128139, Os 128548 -> 128548), output equal.
 //! - I64SEL-4, exit 2026-11-10 18:00Z: m32 `x_sf_cmp64` -Os +1302 executed
-//!   instructions (+1.1% clocks) at equal bytes (`test; js` became `test; jns`,
-//!   a branch layout flip).
+//!   instructions (+1.1% clocks) at equal bytes (`test; js` became
+//!   `test; jns`, a branch layout flip).
 //! - I64SEL-5, owner z80, exit 2026-11-12: z80-sdcc `call_clobbers_flags`
-//!   -O2/-Os .text 602 -> 618 B. Cause: the shared `add (sext i1 c), x` -> `sub
-//!   x, (zext c)` fold (pin `visitADDLikeCommutative`) now fires; `add hl,de`
-//!   (11 T) becomes `ex de,hl; or a,a; sbc hl,bc` (23 T), +12 T per execution
-//!   of the site (static estimate, not measured; ucsim run PASS, the runner
-//!   prints no T).
-//! - I64SEL-6, owner w12 (w9 traces), exit 2026-11-12: `f409` (`x<y ?
-//!   INT64_MIN/2^31 : 0`, m32 -march=i486, symbol size): base 25 B (O1, O2),
-//!   head 30 / 32 B, clang 28 / 28, gcc 32 / 27: over the best external by +2
-//!   (O1) and +5 (O2). Head emits `setl al; and eax,255; shl eax,31`: the CMOV
-//!   diamond comes before the SETCC, FixupSetCC does not fire, MaskByAnd masks.
-//!   Card: ~/scratch/handoff/f409-cmov-before-setcc-2026-11-09.md. Its growth
-//!   is part of I64SEL-1's .text total.
+//!   -O2/-Os .text 602 -> 618 B. Cause: the shared `add (sext i1 c), x` ->
+//!   `sub x, (zext c)` fold (pin `visitADDLikeCommutative`) now fires; `add
+//!   hl,de` (11 T) becomes `ex de,hl; or a,a; sbc hl,bc` (23 T), +12 T per
+//!   execution of the site (static estimate, not measured; ucsim run PASS,
+//!   the runner prints no T).
+//! - I64SEL-6, owner w12 (w9 traces), exit 2026-11-12: `f409` (`x<y ? INT64_MIN/2^31
+//!   : 0`, m32 -march=i486, symbol size): base 25 B (O1, O2), head 30 / 32 B,
+//!   clang 28 / 28, gcc 32 / 27: over the best external by +2 (O1) and +5
+//!   (O2). Head emits `setl al; and eax,255; shl eax,31`: the CMOV diamond
+//!   comes before the SETCC, FixupSetCC does not fire, MaskByAnd masks. Card:
+//!   ~/scratch/handoff/f409-cmov-before-setcc-2026-11-09.md. Its growth is part
+//!   of I64SEL-1's .text total.
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
@@ -234,10 +233,9 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
                 let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
                 match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
-                    (
-                        true,
-                        Some(Intrinsic::WithOverflow { op: op @ (BinaryOp::Add | BinaryOp::Sub), signed: false }),
-                    ) => Some((inst, op)),
+                    (true, Some(Intrinsic::WithOverflow { op: op @ (BinaryOp::Add | BinaryOp::Sub), signed: false })) => {
+                        Some((inst, op))
+                    }
                     _ => None,
                 }
             })
@@ -265,8 +263,7 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 Ok(Operand::Value(function.instruction(made).result.expect("a value")))
             };
             let math = before(function, Opcode::Binary(op), operand_ty, vec![a, b])?;
-            // `a + b` wrapped iff the sum is below `a`; `a - b` iff `a` is
-            // below `b`.
+            // `a + b` wrapped iff the sum is below `a`; `a - b` iff `a` is below `b`.
             let flag = if op == BinaryOp::Add {
                 before(function, Opcode::ICmp(IntPredicate::Ult), bit, vec![math, a])?
             } else {
@@ -769,9 +766,8 @@ entry:
     }
 
     /// #7043's inliner leaves `llvm.experimental.noalias.scope.decl` in the
-    /// body; `--isel=old` refused it ("@main:
-    /// @llvm.experimental.noalias.scope.decl", 18 nib and qb tests). No
-    /// code runs it.
+    /// body; `--isel=old` refused it ("@main: @llvm.experimental.noalias.scope.decl",
+    /// 18 nib and qb tests). No code runs it.
     #[test]
     fn test_a_noalias_scope_declaration_is_erased() {
         let text = "declare void @llvm.experimental.noalias.scope.decl()
@@ -790,9 +786,9 @@ entry:
         assert_eq!(run(&after, "f", arguments, 100).unwrap(), Val::Int { bits: 42, width: 16 });
     }
 
-    /// CodeGenPrepare's `uadd.with.overflow.i16` reached `--isel=old` (nib and
-    /// qb tests, 30 red since #7304): "@llvm.uadd.with.overflow.i16" was
-    /// refused. The sum and the carry, with the same answers.
+    /// CodeGenPrepare's `uadd.with.overflow.i16` reached `--isel=old` (nib and qb
+    /// tests, 30 red since #7304): "@llvm.uadd.with.overflow.i16" was refused.
+    /// The sum and the carry, with the same answers.
     #[test]
     fn test_an_unsigned_overflow_pair_becomes_an_operation_and_a_compare() {
         let text = "declare { i16, i1 } @llvm.uadd.with.overflow.i16(i16, i16)

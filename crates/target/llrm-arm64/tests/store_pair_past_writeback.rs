@@ -9,7 +9,6 @@ use llrm_arm64::machine::Platform;
 
 #[test]
 fn stores_to_different_offsets_of_a_global_pair_past_a_writeback_store() {
-    let asm = driver::assembly(include_str!("data/store_pair_past_writeback.ll"), Platform::Linux, Level::O2)
-        .expect("lowers");
+    let asm = driver::assembly(include_str!("data/store_pair_past_writeback.ll"), Platform::Linux, Level::O2).expect("lowers");
     assert!(asm.lines().any(|line| line.trim().starts_with("stp x") && line.contains("#48]")), "{asm}");
 }

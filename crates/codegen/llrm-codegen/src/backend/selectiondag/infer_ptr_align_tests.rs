@@ -16,11 +16,7 @@ fn load_at(
         space: 0,
         ordering: None,
     };
-    dag.mem_locations.push(MemLocation {
-        pointer: llrm_mir::module::Operand::Block(llrm_mir::module::BlockId(0)),
-        tbaa: None,
-        bytes: 4,
-    });
+    dag.mem_locations.push(MemLocation { pointer: llrm_mir::module::Operand::Block(llrm_mir::module::BlockId(0)), tbaa: None, bytes: 4 });
     let load = dag.get_load(EVT::I32, entry, address, info);
     let root = dag.get_node(ISD::Add, EVT::I32, &[load, load]);
     let store = dag.get_store(SDValue { node: load.node, res: 1 }, root, address, info);

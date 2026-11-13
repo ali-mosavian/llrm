@@ -127,17 +127,7 @@ fn replace_old_op_with_new_op(
     }
     let simplified = {
         let env = c.env;
-        simplify_with_op_replaced_at(
-            c.context,
-            env.globals,
-            env.layout,
-            Some(&env.analyses),
-            c.function,
-            inst,
-            true_val,
-            old,
-            new,
-        )
+        simplify_with_op_replaced_at(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst, true_val, old, new)
     }?;
     let slot = if swapped { 2 } else { 1 };
     let not_undef = |c: &Combiner, value: Operand| is_guaranteed_not_to_be_undef(&query(c, Some(inst)), value, 0);
@@ -149,8 +139,9 @@ fn replace_old_op_with_new_op(
     // If NewOp is a constant and OldOp is not replace iff NewOp doesn't contain
     // undef elements. Make sure that V is always simpler than TrueVal,
     // otherwise we might end up in an infinite loop.
-    let operand_of_true =
-        c.definition_of(true_val).is_some_and(|def| c.function.instruction(def).operands.contains(&simplified));
+    let operand_of_true = c
+        .definition_of(true_val)
+        .is_some_and(|def| c.function.instruction(def).operands.contains(&simplified));
     if new_is_constant || operand_of_true {
         if not_undef(c, new) {
             replace_operand(c, inst, slot, simplified);

@@ -1,8 +1,7 @@
-//! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-mcmodel=small|medium|large]
-//! [-O<n>] [-f[no-]PASS] [-fno-inline=NAME] [--dump DIR] [--size-estimate=FILE]
-//! [-o OUT] FILE.ll`: LLVM IR from clang's front end alone through the mid-end
-//! and the m68k backend to assembly text with `-S`, else to an ELF32
-//! relocatable object (`-c` is the same).
+//! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-mcmodel=small|medium|large] [-O<n>] [-f[no-]PASS] [-fno-inline=NAME] [--dump DIR] [--size-estimate=FILE] [-o OUT]
+//! FILE.ll`: LLVM IR from clang's front end alone through the mid-end and the
+//! m68k backend to assembly text with `-S`, else to an ELF32 relocatable
+//! object (`-c` is the same).
 
 use std::io::Write;
 
@@ -14,8 +13,7 @@ static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
-    let worker =
-        std::thread::Builder::new().stack_size(1 << 30).spawn(|| llrm_support::debug::run_main(run)).expect("a thread");
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(|| llrm_support::debug::run_main(run)).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));
 }
 
@@ -34,9 +32,7 @@ fn run() -> i32 {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
-            other if other.starts_with("--size-estimate=") => {
-                estimates = Some(other["--size-estimate=".len()..].to_owned())
-            }
+            other if other.starts_with("--size-estimate=") => estimates = Some(other["--size-estimate=".len()..].to_owned()),
             "-c" => assembly = false,
             "-g" => debug = true,
             "-o" => output = arguments.next(),
@@ -57,10 +53,10 @@ fn run() -> i32 {
                     return 2;
                 }
             },
-            // DEBT M68K-SANITIZE, owner target-m68k, exit 2026-11-12: the
-            // run-time checks are not built; refused by name, never dropped.
-            // The pin's clang `-fsanitize` stays a reference column (it needs a
-            // ubsan handler stub to link).
+            // DEBT M68K-SANITIZE, owner target-m68k, exit 2026-11-12: the run-time
+            // checks are not built; refused by name, never dropped. The pin's
+            // clang `-fsanitize` stays a reference column (it needs a ubsan
+            // handler stub to link).
             other if other.starts_with("-fsanitize") || other.starts_with("-fno-sanitize") => {
                 eprintln!("llrm-m68k-llc: {other}: sanitizer checks are not implemented at m68k (M68K-SANITIZE)");
                 return 2;
@@ -94,9 +90,7 @@ fn run() -> i32 {
         let lines = driver::cpu_of(&cpu)
             .and_then(|cpu| driver::size_estimates(&text, cpu, level))
             .map(|rows| rows.iter().map(|(name, bytes)| format!("{name}\t{bytes}\n")).collect::<String>());
-        if let Err(why) =
-            lines.and_then(|lines| std::fs::write(path, lines).map_err(|error| format!("{path}: {error}")))
-        {
+        if let Err(why) = lines.and_then(|lines| std::fs::write(path, lines).map_err(|error| format!("{path}: {error}"))) {
             eprintln!("llrm-m68k-llc: {why}");
             return 1;
         }
@@ -104,8 +98,7 @@ fn run() -> i32 {
     let env = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
     let result: Result<Vec<u8>, String> = driver::cpu_of(&cpu).and_then(|cpu| {
         if assembly {
-            driver::assembly_flagged(&text, cpu, level, debug, dump.as_deref().or(env.as_deref()), model, &policy)
-                .map(String::into_bytes)
+            driver::assembly_flagged(&text, cpu, level, debug, dump.as_deref().or(env.as_deref()), model, &policy).map(String::into_bytes)
         } else {
             driver::object_flagged(&text, cpu, level, &input, model, &policy, dump.as_deref().or(env.as_deref()))
         }

@@ -1095,11 +1095,7 @@ pub fn smul_sat<W: Word>(
     if !over {
         return product;
     }
-    if is_negative(a, width) != is_negative(b, width) {
-        sign_bit::<W>(width)
-    } else {
-        sign_bit::<W>(width).wrapping_sub(W::ONE)
-    }
+    if is_negative(a, width) != is_negative(b, width) { sign_bit::<W>(width) } else { sign_bit::<W>(width).wrapping_sub(W::ONE) }
 }
 
 /// `APInt::sadd_ov` at any width.
@@ -1119,10 +1115,7 @@ pub fn ssub_ov<W: Word>(
     width: u32,
 ) -> (W, bool) {
     let difference = a.wrapping_sub(b) & mask::<W>(width);
-    (
-        difference,
-        is_negative(a, width) != is_negative(b, width) && is_negative(difference, width) != is_negative(a, width),
-    )
+    (difference, is_negative(a, width) != is_negative(b, width) && is_negative(difference, width) != is_negative(a, width))
 }
 
 /// `APInt::smul_ov` at any width.

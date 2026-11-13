@@ -1,6 +1,5 @@
-//! Two 64-bit selects on one compare, then a diamond per operand: the second
-//! operand read the first's value (`double` add: 1.5 + 0.25 came out as 0.5,
-//! 2026-11-11). The mid-end IR below is what `swap; unpack; unpack` of
+//! Two 64-bit selects on one compare, then a diamond per operand: the second operand read the first's value
+//! (`double` add: 1.5 + 0.25 came out as 0.5, 2026-11-11). The mid-end IR below is what `swap; unpack; unpack` of
 //! the soft-float add reduces to.
 
 mod common;
@@ -48,8 +47,7 @@ define i16 @probe() {
   ret i16 %t
 }";
 
-/// 0x3FF8.. (1.5) and 0x3FD0.. (0.25): the sum of the two mantissas is 0x0028
-/// in the top word; the bug gave 0x0030.
+/// 0x3FF8.. (1.5) and 0x3FD0.. (0.25): the sum of the two mantissas is 0x0028 in the top word; the bug gave 0x0030.
 #[test]
 fn the_second_of_two_selected_i64_operands_is_not_the_first() {
     let ir = format!("target datalayout = \"{}\"\n{IR}", datalayout());

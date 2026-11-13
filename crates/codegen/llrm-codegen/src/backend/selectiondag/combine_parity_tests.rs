@@ -10,9 +10,9 @@ fn names(body: &str) -> Vec<String> {
     done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
 }
 
-/// `__builtin_parity(unsigned short)` (ctpop.i32 of a zext, and 1) at -O1 -m32
-/// was the whole popcount expansion (21 instructions, 66 B); the pin folds the
-/// one demanded bit of the ctpop to ISD::PARITY and emits `xor cl, ch; setnp`.
+/// `__builtin_parity(unsigned short)` (ctpop.i32 of a zext, and 1) at -O1 -m32 was the whole popcount
+/// expansion (21 instructions, 66 B); the pin folds the one demanded bit of
+/// the ctpop to ISD::PARITY and emits `xor cl, ch; setnp`.
 #[test]
 fn the_low_bit_of_a_population_count_is_the_parity_flag() {
     let seen = names(

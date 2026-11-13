@@ -37,13 +37,13 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use llrm_mir::context::{Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId};
+use llrm_mir::target::GlobalMerge;
+use llrm_mir::types::TypeId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{GlobalKind, GlobalName, GlobalValue, GlobalVariable, Linkage, Module, Operand, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, Flags, Opcode};
-use llrm_mir::target::GlobalMerge;
 use llrm_mir::types::Type;
-use llrm_mir::types::TypeId;
 
 /// A set of globals, by position in the group.
 #[derive(Clone)]
@@ -54,17 +54,11 @@ impl Bits {
         Bits(vec![0; len.div_ceil(64)])
     }
 
-    fn set(
-        &mut self,
-        at: usize,
-    ) {
+    fn set(&mut self, at: usize) {
         self.0[at / 64] |= 1 << (at % 64);
     }
 
-    fn test(
-        &self,
-        at: usize,
-    ) -> bool {
+    fn test(&self, at: usize) -> bool {
         self.0[at / 64] >> (at % 64) & 1 == 1
     }
 
@@ -72,10 +66,7 @@ impl Bits {
         self.0.iter().map(|word| word.count_ones() as usize).sum()
     }
 
-    fn union(
-        &mut self,
-        other: &Bits,
-    ) {
+    fn union(&mut self, other: &Bits) {
         self.0.iter_mut().zip(&other.0).for_each(|(a, b)| *a |= b);
     }
 
@@ -221,14 +212,10 @@ fn candidates(
             continue;
         }
         let key = (bss, global.address_space, section);
-        let slot = *index
-            .entry(key.clone())
-            .or_insert_with(
-                || {
-                    groups.push((key, Vec::new()));
-                    groups.len() - 1
-                },
-            );
+        let slot = *index.entry(key.clone()).or_insert_with(|| {
+            groups.push((key, Vec::new()));
+            groups.len() - 1
+        });
         groups[slot].1.push(GlobalId(at as u32));
     }
     // `Globals` before `BSSGlobals`.
@@ -263,17 +250,13 @@ fn uses(
         for (_, inst) in function.walk() {
             for value in &function.instruction(inst).operands {
                 let Operand::Constant(id) = value else { continue };
-                let found = named
-                    .entry(*id)
-                    .or_insert_with(
-                        || {
-                            let mut found = HashSet::new();
-                            collect(module, *id, &mut HashSet::new(), &mut found);
-                            let mut found: Vec<u32> = found.into_iter().filter(|g| wanted.contains(g)).collect();
-                            found.sort_unstable();
-                            found
-                        },
-                    );
+                let found = named.entry(*id).or_insert_with(|| {
+                    let mut found = HashSet::new();
+                    collect(module, *id, &mut HashSet::new(), &mut found);
+                    let mut found: Vec<u32> = found.into_iter().filter(|g| wanted.contains(g)).collect();
+                    found.sort_unstable();
+                    found
+                });
                 for &target in found.iter() {
                     sites.entry(target).or_default().push(Site { function: at });
                 }
@@ -298,12 +281,7 @@ fn plan_group(
     // FIXME in the pin: better heuristics.
     globals.sort_by_key(|&id| size(id));
     let minsize = |function: usize| match &module.globals[function].kind {
-        GlobalKind::Function(f) => f.attrs.iter().any(|attr| {
-            matches!(
-                attr,
-                Attribute::Flag(name) if name == "minsize" || (options.optsize_counts && name == "optsize")
-            )
-        }),
+        GlobalKind::Function(f) => f.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "minsize" || (options.optsize_counts && name == "optsize"))),
         GlobalKind::Variable(_) => false,
     };
 
@@ -439,34 +417,26 @@ fn apply(
         let first = plan.members[0];
         let (space, section) = {
             let first_global = &module.globals[first.0 as usize];
-            (
-                first_global.address_space,
-                first_global.name.as_deref().map(str::to_owned).and_then(|name| module.sections.get(&name).cloned()),
-            )
+            (first_global.address_space, first_global.name.as_deref().map(str::to_owned).and_then(|name| module.sections.get(&name).cloned()))
         };
         let merged_type = module.context.types.intern(Type::Struct { fields: plan.types.clone(), packed: true });
-        let init =
-            module.context.constant(Constant { ty: merged_type, kind: ConstantKind::Aggregate(plan.inits.clone()) });
+        let init = module.context.constant(Constant { ty: merged_type, kind: ConstantKind::Aggregate(plan.inits.clone()) });
         let name = unique_name(module, "_MergedGlobals");
         let id = GlobalId(module.globals.len() as u32);
-        module
-            .globals
-            .push(
-                GlobalValue {
-                    name: GlobalName::from(name.clone()),
-                    linkage: if options.mach_o { Linkage::Internal } else { Linkage::Private },
-                    visibility: Default::default(),
-                    unnamed_addr: UnnamedAddr::None,
-                    address_space: space,
-                    kind: GlobalKind::Variable(GlobalVariable {
-                        ty: merged_type,
-                        constant: false,
-                        externally_initialized: false,
-                        initializer: Some(init),
-                        align: Some(plan.align),
-                    }),
-                },
-            );
+        module.globals.push(GlobalValue {
+            name: GlobalName::from(name.clone()),
+            linkage: if options.mach_o { Linkage::Internal } else { Linkage::Private },
+            visibility: Default::default(),
+            unnamed_addr: UnnamedAddr::None,
+            address_space: space,
+            kind: GlobalKind::Variable(GlobalVariable {
+                ty: merged_type,
+                constant: false,
+                externally_initialized: false,
+                initializer: Some(init),
+                align: Some(plan.align),
+            }),
+        });
         if let Some(section) = section {
             module.sections.insert(name, section);
         }
@@ -479,8 +449,7 @@ fn apply(
     // Every use becomes the constant `getelementptr inbounds (M, @M, 0, i)`,
     // inside whatever expression named the original.
     let mut memo: HashMap<ConstantId, ConstantId> = HashMap::new();
-    let functions: BTreeSet<usize> =
-        homes.keys().flat_map(|member| sites.get(member).into_iter().flatten().map(|site| site.function)).collect();
+    let functions: BTreeSet<usize> = homes.keys().flat_map(|member| sites.get(member).into_iter().flatten().map(|site| site.function)).collect();
     let (globals, context) = (&mut module.globals, &module.context);
     for at in functions {
         let GlobalKind::Function(function) = &mut globals[at].kind else { continue };
@@ -524,8 +493,7 @@ fn unique_name(
     module: &Module,
     base: &str,
 ) -> String {
-    let taken: HashSet<String> =
-        module.globals.iter().filter_map(|global| global.name.as_deref().map(str::to_owned)).collect();
+    let taken: HashSet<String> = module.globals.iter().filter_map(|global| global.name.as_deref().map(str::to_owned)).collect();
     if !taken.contains(base) {
         return base.to_owned();
     }
@@ -565,11 +533,7 @@ fn rewrite(
         },
         ConstantKind::Aggregate(members) => {
             let rewritten: Vec<ConstantId> = members.iter().map(|&one| rewrite(context, homes, one, memo)).collect();
-            if rewritten == members {
-                id
-            } else {
-                context.constant(Constant { ty, kind: ConstantKind::Aggregate(rewritten) })
-            }
+            if rewritten == members { id } else { context.constant(Constant { ty, kind: ConstantKind::Aggregate(rewritten) }) }
         }
         ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
             let rewritten: Vec<ConstantId> = operands.iter().map(|&one| rewrite(context, homes, one, memo)).collect();
@@ -578,13 +542,7 @@ fn rewrite(
             } else {
                 context.constant(Constant {
                     ty,
-                    kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
-                        source,
-                        inbounds,
-                        nusw,
-                        nuw,
-                        operands: rewritten,
-                    }),
+                    kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands: rewritten }),
                 })
             }
         }

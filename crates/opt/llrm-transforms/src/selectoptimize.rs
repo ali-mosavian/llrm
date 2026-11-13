@@ -49,9 +49,9 @@ use llrm_analysis::occurrence::from_arms;
 use llrm_mir::blockfrequency::{BlockFrequency, BranchProbability, Scaled64};
 use llrm_mir::context::{ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
@@ -575,15 +575,11 @@ impl Analysis<'_> {
                     break;
                 }
                 if !info.auxiliary {
-                    group
-                        .selects
-                        .push(
-                            SelectLike {
-                                inst: next,
-                                inverted: info.inverted,
-                                cond_idx: info.condition_index,
-                            },
-                        );
+                    group.selects.push(SelectLike {
+                        inst: next,
+                        inverted: info.inverted,
+                        cond_idx: info.condition_index,
+                    });
                 }
                 at += 1;
             }
@@ -597,10 +593,7 @@ impl Analysis<'_> {
         select: &SelectLike,
     ) -> bool {
         let ty = self.function.instruction(select.inst).ty;
-        if matches!(
-            self.env.context.types.get(ty),
-            llrm_mir::types::Type::Vector { .. }
-        ) {
+        if matches!(self.env.context.types.get(ty), llrm_mir::types::Type::Vector { .. }) {
             self.target.scalar_cond_vector_select
         } else {
             self.target.scalar_select
@@ -801,15 +794,13 @@ impl Analysis<'_> {
             _ => ArithOp::Or,
         };
         let cost = Ty::of(&self.env.context.types, instruction.ty).map_or(Cost::INVALID, |ty| {
-            self.target
-                .tti
-                .arithmetic_cost(
-                    arith,
-                    ty,
-                    CostKind::Latency,
-                    OperandInfo::ANY,
-                    OperandInfo { constant: true, power_of_two: true, negated_power_of_two: false, value: None },
-                )
+            self.target.tti.arithmetic_cost(
+                arith,
+                ty,
+                CostKind::Latency,
+                OperandInfo::ANY,
+                OperandInfo { constant: true, power_of_two: true, negated_power_of_two: false, value: None },
+            )
         });
         Scaled64::get(cost.value as u64) + cost_of(instruction.operands[1 - select.cond_idx])
     }
@@ -1177,12 +1168,11 @@ pub fn select_optimize(
         return false;
     }
     // Branches are bigger than selects (DEVIATE SO1).
-    if function.attrs.iter().any(|attr| {
-        matches!(
-            attr,
-            llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-        )
-    }) {
+    if function
+        .attrs
+        .iter()
+        .any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+    {
         return false;
     }
     // A group needs a `select` (`treated_like_select`): without one the

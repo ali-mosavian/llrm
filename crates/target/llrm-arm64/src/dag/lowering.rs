@@ -721,9 +721,9 @@ pub fn lower_brcond(
         } else {
             (cond, CondCode::SetNe)
         };
-    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads
-    // the flags of the arithmetic, on the condition that says overflow
-    // (opposite for the inverted bit).
+    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads the
+    // flags of the arithmetic, on the condition that says overflow (opposite
+    // for the inverted bit).
     let overflow = bit(dag, tested).unwrap_or(tested);
     if is_xalu_overflow(dag, overflow)
         && let Some((_, flags, overflowed)) = xalu_flags(dag, overflow.node)
@@ -1112,15 +1112,19 @@ pub fn lower_xalu(
 
 /// `valueToCarryFlag`
 /// ([L4796](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L4796)):
-/// the flags with `C` set from a 0/1 value. Not inverted, `C` is the value;
-/// inverted, `C` is set when it is 0 (a borrow is the absence of a carry).
+/// the flags with `C` set from a 0/1 value. Not inverted, `C` is the value; inverted, `C`
+/// is set when it is 0 (a borrow is the absence of a carry).
 fn value_to_carry_flag(
     dag: &mut SelectionDAG,
     value: SDValue,
     invert: bool,
 ) -> SDValue {
     let vt = dag.value_type(value);
-    let (op0, op1) = if invert { (dag.get_constant(0, vt), value) } else { (value, dag.get_constant(1, vt)) };
+    let (op0, op1) = if invert {
+        (dag.get_constant(0, vt), value)
+    } else {
+        (value, dag.get_constant(1, vt))
+    };
     let subs = dag.get_node_multi(ISD::Target(a64::SUBS), &[vt, EVT::I32], &[op0, op1]);
     SDValue { node: subs.node, res: 1 }
 }

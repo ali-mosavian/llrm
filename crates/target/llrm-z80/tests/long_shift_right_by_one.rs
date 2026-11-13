@@ -24,9 +24,8 @@ fn body(text: &str) -> Vec<&str> {
     text.lines().filter(|l| l.starts_with('\t') && !l.starts_with("\t.")).map(str::trim).collect()
 }
 
-/// `x >> 1` on a `u32` was 14 instructions: `srl h; rr l`, the low bit of the
-/// high word moved through `rrca; and #128; or` into the top of the low word,
-/// then `srl d; rr e`. It is `ld a,e; rra; rr h; rr l; srl d; rr e; ret`:
+/// `x >> 1` on a `u32` was 14 instructions: `srl h; rr l`, the low bit of the high word moved through `rrca; and
+/// #128; or` into the top of the low word, then `srl d; rr e`. It is `ld a,e; rra; rr h; rr l; srl d; rr e; ret`:
 /// that bit goes through the carry.
 #[test]
 fn a_long_shifted_right_by_one_passes_the_bit_through_the_carry() {
@@ -37,8 +36,7 @@ fn a_long_shifted_right_by_one_passes_the_bit_through_the_carry() {
     }
 }
 
-/// A funnel of two words by an amount other than one stays the shifts and an
-/// or.
+/// A funnel of two words by an amount other than one stays the shifts and an or.
 #[test]
 fn a_word_funnel_by_another_amount_still_compiles() {
     let text = assembly(

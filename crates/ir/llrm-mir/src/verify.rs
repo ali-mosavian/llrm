@@ -453,22 +453,17 @@ impl Checker<'_> {
             Opcode::Select if ty(1) != ty(2) || ty(1) != result || !matches!(self.ty(ty(0)), Type::Int(1)) => {
                 self.fail(format!("{at} is ill-typed"))
             }
-            // llvm/lib/IR/Instructions.cpp#L1728
-            // `ExtractElementInst::isValidOperands`
+            // llvm/lib/IR/Instructions.cpp#L1728 `ExtractElementInst::isValidOperands`
             Opcode::ExtractElement
-                if !matches!(
-                    self.ty(ty(0)),
-                    Type::Vector { element, .. } if *element == result
-                ) || !matches!(self.ty(ty(1)), Type::Int(_)) =>
+                if !matches!(self.ty(ty(0)), Type::Vector { element, .. } if *element == result)
+                    || !matches!(self.ty(ty(1)), Type::Int(_)) =>
             {
                 self.fail(format!("{at} is ill-typed"))
             }
             // Instructions.cpp#L1750 `InsertElementInst::isValidOperands`
             Opcode::InsertElement
-                if !matches!(
-                    self.ty(ty(0)),
-                    Type::Vector { element, .. } if *element == ty(1)
-                ) || ty(0) != result
+                if !matches!(self.ty(ty(0)), Type::Vector { element, .. } if *element == ty(1))
+                    || ty(0) != result
                     || !matches!(self.ty(ty(2)), Type::Int(_)) =>
             {
                 self.fail(format!("{at} is ill-typed"))
@@ -684,10 +679,7 @@ impl Checker<'_> {
                 _ => None,
             };
             let ok = if op == CastOp::BitCast {
-                matches!(
-                    (bits(*x), bits(*y)),
-                    (Some(p), Some(q)) if p * u64::from(*m) == q * u64::from(*n)
-                )
+                matches!((bits(*x), bits(*y)), (Some(p), Some(q)) if p * u64::from(*m) == q * u64::from(*n))
             } else {
                 m == n && self.cast(op, *x, *y).is_ok()
             };

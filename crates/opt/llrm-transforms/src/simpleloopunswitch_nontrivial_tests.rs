@@ -285,8 +285,7 @@ out:
 /// A condition of loads the loop does not write was left in the loop and
 /// tested on every trip (partially invariant conditions were not translated:
 /// 2 of the 21 corpus functions the pin unswitches at -O3). A store to
-/// another global leaves two loops; a store to the loaded one on both paths
-/// leaves one.
+/// another global leaves two loops; a store to the loaded one on both paths leaves one.
 #[test]
 fn test_a_header_test_of_loads_nothing_writes_is_unswitched() {
     let inputs: &[&[i128]] = &[&[5, 1], &[5, 6], &[3, 4], &[0, 2]];

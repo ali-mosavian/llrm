@@ -24,8 +24,7 @@ use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, s
 use llrm_m68k::object::{assemble, executable, write_executable};
 use llrm_m68k::timing::{DataRegisters, cost_on, cost_on_counted, from_gnu};
 
-// An explicit path: matrix.rs includes this file as a module, where `mod
-// tempdir;` would look beside it.
+// An explicit path: matrix.rs includes this file as a module, where `mod tempdir;` would look beside it.
 #[path = "tempdir/mod.rs"]
 mod tempdir;
 

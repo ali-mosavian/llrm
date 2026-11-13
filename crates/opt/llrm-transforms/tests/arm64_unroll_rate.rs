@@ -2,7 +2,7 @@
 
 use llrm_arm64::machine::Platform;
 use llrm_arm64::tti::AArch64;
-use llrm_transforms::loopunrollpass::{Options, unroll_function};
+use llrm_transforms::loopunrollpass::{unroll_function, Options};
 
 /// shellsort -O3 at 20 clocks a byte: the 6-trip gap loop was credited a move
 /// for each read of `gap` in its inner loop, run 1,000 times each (12,491
@@ -11,8 +11,7 @@ use llrm_transforms::loopunrollpass::{Options, unroll_function};
 /// stays rolled: one loop of the nest is left with a counter phi of 32.
 #[test]
 fn the_gap_loop_of_a_shellsort_stays_rolled_at_a_low_rate() {
-    let mut program =
-        llrm_arm64::driver::program(include_str!("data/shellsort_o1.ll"), Platform::Linux).expect("parses");
+    let mut program = llrm_arm64::driver::program(include_str!("data/shellsort_o1.ll"), Platform::Linux).expect("parses");
     let layout = program.layout.clone();
     let module = &mut program.modules[0];
     let (context, function) = module.function_mut("bench_shellsort").expect("function");

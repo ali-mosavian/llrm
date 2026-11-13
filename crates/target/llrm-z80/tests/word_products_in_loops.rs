@@ -1,8 +1,6 @@
-//! The product of two zero-extended words in a loop was the `__mulsi3` call at
-//! -O2 when the module links it for its long products: 58 B and 32 steps, half
-//! of them against zero (mul_words_to_long: 222 B, 204576 T). The high half of
-//! a register pair built from two words is known (`BUILD_PAIR`), so the call is
-//! `__umulhisi3`: 143 B, 142854 T.
+//! The product of two zero-extended words in a loop was the `__mulsi3` call at -O2 when the module links it for its long
+//! products: 58 B and 32 steps, half of them against zero (mul_words_to_long: 222 B, 204576 T). The high half of a
+//! register pair built from two words is known (`BUILD_PAIR`), so the call is `__umulhisi3`: 143 B, 142854 T.
 
 use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};

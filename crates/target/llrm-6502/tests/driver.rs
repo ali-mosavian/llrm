@@ -79,9 +79,9 @@ fn a_word_minus_one_borrows_by_branch() {
 }
 
 /// A byte added to an accumulator from a global indexed by a byte loaded the
-/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the
-/// 6502 has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B
-/// against llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
+/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the 6502
+/// has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B against
+/// llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
 #[test]
 fn an_indexed_global_is_the_operand_of_the_add() {
     let ir = module(
@@ -111,9 +111,8 @@ done:
 }
 
 /// `t[(a + b) >> 1]` on bytes is a pointer plus an `i16` whose high byte is
-/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda
-/// (rc),y` (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in
-/// Y.
+/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda (rc),y`
+/// (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in Y.
 #[test]
 fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
     let ir = module(
@@ -166,10 +165,9 @@ fn the_zero_page_override_survives_the_platform_flag() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-/// An unknown `-f` switch was taken as a pass and ignored: `-fno-bogus`
-/// compiled (the wasm session's instrument check, 2026-11-08), so a header flag
-/// the compiler did not know measured as if honored. The switches llrm-cc
-/// forwards must still pass.
+/// An unknown `-f` switch was taken as a pass and ignored: `-fno-bogus` compiled (the wasm
+/// session's instrument check, 2026-11-08), so a header flag the compiler did not know
+/// measured as if honored. The switches llrm-cc forwards must still pass.
 #[test]
 fn an_unknown_f_switch_is_refused() {
     let dir = std::env::temp_dir().join(format!("llrm6502-fsw-{}", std::process::id()));
@@ -185,8 +183,7 @@ fn an_unknown_f_switch_is_refused() {
     let bogus = run("-fno-bogus");
     assert_eq!(bogus.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&bogus.stderr).contains("-fno-bogus"));
-    for known in ["-fno-unroll-loops", "-fno-inline=f", "-fno-second-inline", "-fwrapv", "-fexcess-precision=standard"]
-    {
+    for known in ["-fno-unroll-loops", "-fno-inline=f", "-fno-second-inline", "-fwrapv", "-fexcess-precision=standard"] {
         assert!(run(known).status.success(), "{known} is refused");
     }
     std::fs::remove_dir_all(dir).ok();
@@ -1414,10 +1411,8 @@ define i8 @rem() {
 /// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
 /// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
 /// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
-/// polarity InstCombine happened to pick (`__divsf3` +14 lines). The arms call
-/// different functions: with one callee the pin merges them into `g(2 - c)`,
-/// and the `sbc` that merge leaves read as a compare chain (red on release/next
-/// 5a1802c07e).
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines). The arms call different functions: with one callee the
+/// pin merges them into `g(2 - c)`, and the `sbc` that merge leaves read as a compare chain (red on release/next 5a1802c07e).
 #[test]
 fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
     let branch = |compare: &str, then: &str, other: &str| {
@@ -1434,27 +1429,20 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
 
-/// `side = a < b ? 1 : 2` reaches the DAG as `add (sext c), 2`. The pin turns
-/// it into `sub 2, (zext c)`, which the 6502 builds as a borrow chain:
-/// `phi_slot_unknown_arm` O1 read 5 bytes longer and 0.9% slower with it. The
-/// add stays.
+/// `side = a < b ? 1 : 2` reaches the DAG as `add (sext c), 2`. The pin turns it into `sub 2, (zext c)`, which the 6502
+/// builds as a borrow chain: `phi_slot_unknown_arm` O1 read 5 bytes longer and 0.9% slower with it. The add stays.
 #[test]
 fn an_add_of_a_sign_extended_compare_stays_an_add() {
-    let ir = module(
-        "define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i8\n  %r = add i8 %s, 2\n  ret i8 %r\n}",
-    );
+    let ir = module("define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i8\n  %r = add i8 %s, 2\n  ret i8 %r\n}");
     let text = assembly(&ir, &Request::new(Level::O1)).unwrap();
     assert!(text.contains("adc #2") && !text.contains("sbc"), "the add of a sign-extended compare:\n{text}");
 }
 
-/// Wider than 16 bits the add of a sign-extended compare read its sign bytes
-/// from a cell (`adc rc22`, 3 clk each); the pin's `sub x, (zext c)` ends in
-/// `sbc #0` (2 clk). `compare_to_int64` O1 read 48 clocks slower with the add.
+/// Wider than 16 bits the add of a sign-extended compare read its sign bytes from a cell (`adc rc22`, 3 clk each); the
+/// pin's `sub x, (zext c)` ends in `sbc #0` (2 clk). `compare_to_int64` O1 read 48 clocks slower with the add.
 #[test]
 fn a_wide_add_of_a_sign_extended_compare_takes_the_pins_subtract() {
-    let ir = module(
-        "define i64 @f(i64 %x, i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i64\n  %r = add i64 %s, %x\n  ret i64 %r\n}",
-    );
+    let ir = module("define i64 @f(i64 %x, i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i64\n  %r = add i64 %s, %x\n  ret i64 %r\n}");
     let text = assembly(&ir, &Request::new(Level::O1)).unwrap();
     assert!(text.contains("sbc #0"), "the wide add of a sign-extended compare:\n{text}");
 }
@@ -1755,9 +1743,9 @@ define i8 @sub_overflow() {
 
 /// A 64-bit multiply stays inline on the 6502: it names no size routine for the
 /// product (DEVIATE in `expand_mul`, exit when the call is measured), so
-/// `release/next` makes no `__muldi3` call. #6858 asserted the call and went
-/// red there. The routine in the module is the shift-and-add loop a C library
-/// would hold, and must stay uncalled; the inline path is `__mulsi3` calls.
+/// `release/next` makes no `__muldi3` call. #6858 asserted the call and went red
+/// there. The routine in the module is the shift-and-add loop a C library would
+/// hold, and must stay uncalled; the inline path is `__mulsi3` calls.
 #[test]
 fn a_64_bit_multiply_stays_inline_until_the_call_is_measured() {
     let ir = module(
@@ -1834,11 +1822,10 @@ define i8 @probe() {
     assert_eq!(exit_code_of(&text, "probe"), 96, "{text}");
 }
 
-/// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`)
-/// failed to compile for the 6502 ("CtLzZeroPoison ... convert node to
-/// libcall"): any C program using them was lost. `check` counts the results
-/// that are wrong for 0, 1, 0x80000000 and 0xFFFFFFFF, with and without the
-/// zero-is-poison flag.
+/// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`) failed
+/// to compile for the 6502 ("CtLzZeroPoison ... convert node to libcall"): any C
+/// program using them was lost. `check` counts the results that are wrong for
+/// 0, 1, 0x80000000 and 0xFFFFFFFF, with and without the zero-is-poison flag.
 #[test]
 fn a_32_bit_clz_and_ctz_count_correctly() {
     let ir = module(
@@ -1933,8 +1920,8 @@ fn a_loop_right_after_an_empty_entry_block_is_not_the_entry() {
 
 #[test]
 fn a_pointer_minus_one_borrows_by_branch() {
-    // a backward copy (k_memmove): `--p` was `clc; adc #255; adc #255` through
-    // a pack/unpack, 885 clocks against the hand routine's 418
+    // a backward copy (k_memmove): `--p` was `clc; adc #255; adc #255` through a
+    // pack/unpack, 885 clocks against the hand routine's 418
     let ir = module(
         "@n = global i8 4\n\
          define i8 @g() {\n\
@@ -1965,9 +1952,8 @@ fn a_pointer_minus_one_borrows_by_branch() {
 
 #[test]
 fn the_frame_address_at_offset_zero_is_the_stack_pointer_copied() {
-    // k_itoa's `tmp[n]`: `clc; lda rc0; adc #0; sta; lda rc1; adc #0; sta` (13
-    // B) for the address of the first byte of the frame, a copy of the pair
-    // (8 B)
+    // k_itoa's `tmp[n]`: `clc; lda rc0; adc #0; sta; lda rc1; adc #0; sta` (13 B)
+    // for the address of the first byte of the frame, a copy of the pair (8 B)
     let ir = module(
         "@n = global i8 5\n\
          define i8 @g() {\n\
@@ -2015,13 +2001,10 @@ fn a_zero_filled_variable_is_bss_not_image_bytes() {
     assert!(!text.contains(".byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n  .byte 0,0,0,0"), "{text}");
 }
 
-/// `a / b` and `a % b` of signed words at -Os linked the short-divisor path too
-/// (`__divhi3`: 149 B against SDCC's 131 for a bare divide, `k_tosdivax`): the
-/// signed pair had no compact variant while the unsigned pair did. Each in its
-/// own function: a divide and a remainder of the same operands are one
-/// `__divhi3` and a multiply, so `__modhi3c` is only asked for by a remainder
-/// alone (the first form of this test asserted both calls in one function and
-/// saw no `__modhi3c`).
+/// `a / b` and `a % b` of signed words at -Os linked the short-divisor path too (`__divhi3`: 149 B against SDCC's 131
+/// for a bare divide, `k_tosdivax`): the signed pair had no compact variant while the unsigned pair did. Each in its own
+/// function: a divide and a remainder of the same operands are one `__divhi3` and a multiply, so `__modhi3c` is only
+/// asked for by a remainder alone (the first form of this test asserted both calls in one function and saw no `__modhi3c`).
 #[test]
 fn a_signed_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
     let ir = module(
@@ -2055,12 +2038,11 @@ fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
     assert!(size.contains("jsr __udivhi3c"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
-    // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B =
-    // 0xF7
+    // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B = 0xF7
     for text in [&size, &speed] {
         let linked = format!("{text}\n{}", common::pipeline::reachable_runtime(text));
         assert_eq!(exit_code_of(&linked, "g"), 0xF7, "{linked}");
-    }
+}
 }
 
 #[test]
@@ -2082,9 +2064,9 @@ fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
 
 #[test]
 fn a_word_global_is_loaded_and_stored_by_absolute_address() {
-    // x16basic-c: 270 sites loaded a u16 global through a pointer cell, `ldx
-    // #<(g); ldy #>(g); stx; sty; ldy #0; lda (p),y; ldy #1; lda (p),y` (19
-    // B) where `lda g; ldx g+1` is 5
+    // x16basic-c: 270 sites loaded a u16 global through a pointer cell, `ldx #<(g);
+    // ldy #>(g); stx; sty; ldy #0; lda (p),y; ldy #1; lda (p),y` (19 B) where
+    // `lda g; ldx g+1` is 5
     let ir = module(
         "@w = global i16 300\n@v = global i16 0\n\
          define i8 @g() {\n\
@@ -2214,10 +2196,10 @@ fn a_zero_in_a_callee_saved_cell_is_compared_as_zero() {
     assert!(!text.contains("cmp #0"), "a compare against zero follows a load of the flag:\n{text}");
 }
 
-/// `UMulO` on a word was refused ("convert node to libcall",
-/// `overflow_builtins.c` of tests/run/c): its flag's extension was not lowered.
-/// It computes the product and the carry out of the 16 bits, at the edges (255
-/// * 257 fits, 256 * 256 and 4096 * 16 do not).
+/// `UMulO` on a word was refused ("convert node to libcall", `overflow_builtins.c`
+/// of tests/run/c): its flag's extension was not lowered. It computes the
+/// product and the carry out of the 16 bits, at the edges (255 * 257 fits,
+/// 256 * 256 and 4096 * 16 do not).
 #[test]
 fn an_unsigned_word_multiply_with_overflow_computes_its_value_and_its_flag() {
     let pairs: [(u16, u16); 10] = [
@@ -2248,11 +2230,7 @@ fn an_unsigned_word_multiply_with_overflow_computes_its_value_and_its_flag() {
     for (k, (a, b)) in pairs.iter().enumerate() {
         let (value, overflow) = a.overflowing_mul(*b);
         let want = (value & 0xFF) as i32 ^ (value >> 8) as i32 ^ if overflow { 0x80 } else { 0 };
-        assert_eq!(
-            exit_code_with(&text, &format!("t_um{k}"), llrm_6502::RUNTIME),
-            want,
-            "umul({a}, {b}) = {value}, overflow {overflow}"
-        );
+        assert_eq!(exit_code_with(&text, &format!("t_um{k}"), llrm_6502::RUNTIME), want, "umul({a}, {b}) = {value}, overflow {overflow}");
     }
 }
 
@@ -2359,11 +2337,7 @@ fn a_signed_word_overflow_operation_computes_its_value_and_its_flag() {
         for (k, (a, b)) in pairs.iter().enumerate() {
             let (value, overflow) = rust(*a, *b);
             let want = (value as u16 & 0xFF) as i32 ^ (value as u16 >> 8) as i32 ^ if overflow { 0x80 } else { 0 };
-            assert_eq!(
-                exit_code_with(&text, &format!("t_{op}{k}"), llrm_6502::RUNTIME),
-                want,
-                "{op}({a}, {b}) = {value}, overflow {overflow}"
-            );
+            assert_eq!(exit_code_with(&text, &format!("t_{op}{k}"), llrm_6502::RUNTIME), want, "{op}({a}, {b}) = {value}, overflow {overflow}");
         }
     }
 }
@@ -2640,9 +2614,8 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
 /// of multiplier a call): mul_constants 20.7M clocks against 16.8M, and
 /// overflow_builtins 720k against 426k with `__mulsi3_fast`. A module links
 /// the speed routine where its multiply sites count three runs
-/// (`hotmultiply`): a loop, or a function called from one; at -Os, where the
-/// share of the module's clocks it saves is worth the share of its bytes it
-/// adds (`a_module_takes_the_speed_multiply_...`).
+/// (`hotmultiply`): a loop, or a function called from one; at -Os, where the share of the module's
+/// clocks it saves is worth the share of its bytes it adds (`a_module_takes_the_speed_multiply_...`).
 #[test]
 fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
     let looped = module(
@@ -2656,9 +2629,9 @@ fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
     assert!(small.contains("jsr __mulsi3_fast\n"), "a loop that is the whole module at -Os:\n{small}");
 }
 
-/// `__builtin_mul_overflow` in a loop is `llvm.umul.with.overflow.i32`, no
-/// `mul`: the site count saw no multiply and overflow_builtins kept the compact
-/// routine (720k clocks against 426k).
+/// `__builtin_mul_overflow` in a loop is `llvm.umul.with.overflow.i32`, no `mul`:
+/// the site count saw no multiply and overflow_builtins kept the compact routine
+/// (720k clocks against 426k).
 #[test]
 fn a_long_multiply_with_overflow_in_a_loop_calls_the_fast_routine_at_speed() {
     let looped = module(
@@ -2688,9 +2661,9 @@ fn indirect_call_return_labels_are_unique_across_functions() {
 }
 
 /// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
-/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i`
-/// called `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks.
-/// At speed the 32-bit product is a running sum.
+/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i` called
+/// `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks. At speed
+/// the 32-bit product is a running sum.
 #[test]
 fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
     let ir = module(
@@ -2892,11 +2865,10 @@ fn a_local_past_255_bytes_from_rc0_is_still_reached() {
 /// A long division called the speed routine with the pin-structure wide path
 /// at any site: its 141 bytes (423 clocks at 3 a byte) came into programs that
 /// divide once, cold (`compound_assignment_types`: +139 B for -9 clocks). A
-/// module links it only where its division sites run 3 times (`hotdivision`):
-/// in a loop, or in a function called from one. Elsewhere the routine with the
-/// small wide path (the compact one is 3195 clocks slower on one call); -Os
-/// never has the wide one, and the small one where the module's share of clocks
-/// pays for its bytes (`a_module_takes_the_speed_divide_...`) or where
+/// module links it only where its division sites run 3 times (`hotdivision`): in a loop,
+/// or in a function called from one. Elsewhere the routine with the small wide
+/// path (the compact one is 3195 clocks slower on one call); -Os never has the wide one, and the small one
+/// where the module's share of clocks pays for its bytes (`a_module_takes_the_speed_divide_...`) or where
 /// it is smaller than the compact routine, as the signed pair is.
 #[test]
 fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
@@ -2928,8 +2900,7 @@ fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
 /// A long division whose divisor is known to be a byte (a constant, or a
 /// zero-extended byte) called the general routine and linked the 141 B wide
 /// path with it: `a % 5` cost +141 B for nothing. At speed it calls the byte
-/// entry; a divisor of any width keeps its routine, and -Os never links the
-/// wide path.
+/// entry; a divisor of any width keeps its routine, and -Os never links the wide path.
 #[test]
 fn a_long_division_by_a_known_byte_calls_the_byte_entry_at_speed() {
     for (opcode, routine) in [("udiv", "__udivsi3"), ("sdiv", "__divsi3"), ("urem", "__umodsi3"), ("srem", "__modsi3")]
@@ -3040,9 +3011,11 @@ fn a_constant_pair_select_leaves_no_store_to_a_cell_nothing_reads() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     let body: String = text[text.find("__r_f:").unwrap()..].split(".segment").next().unwrap().to_owned();
     let stores: Vec<&str> = body.lines().filter(|l| l.trim_start().starts_with("st") && l.contains("rc")).collect();
-    // `sta rc5` (the loaded byte kept for the compare) is read; the 255 stores
-    // are not
-    assert!(!body.lines().any(|l| l.trim() == "stx rc2" || l.trim() == "stx rc3"), "stores {stores:?}\n{body}");
+    // `sta rc5` (the loaded byte kept for the compare) is read; the 255 stores are not
+    assert!(
+        !body.lines().any(|l| l.trim() == "stx rc2" || l.trim() == "stx rc3"),
+        "stores {stores:?}\n{body}"
+    );
 }
 
 /// `__cmpdf2`'s NaN test reaches the backend as a compare of `trunc i64 to i63`
@@ -3078,8 +3051,7 @@ define void @copy() {
 }"#,
     );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    let body: Vec<&str> =
-        text.lines().map(str::trim).filter(|line| line.starts_with("lda") || line.starts_with("sta")).collect();
+    let body: Vec<&str> = text.lines().map(str::trim).filter(|line| line.starts_with("lda") || line.starts_with("sta")).collect();
     let second_load = body.iter().rposition(|line| line.starts_with("lda")).unwrap_or(0);
     let first_store = body.iter().position(|line| line.starts_with("sta")).unwrap_or(usize::MAX);
     assert!(first_store < second_load, "both loads came before the first store:\n{text}");
@@ -3139,9 +3111,8 @@ fn volatile_arguments_are_read_in_source_order_at_every_level() {
     }
 }
 
-/// A word pattern over 64 cells was a loop that scaled and added its index on
-/// every trip (`asl`/`rol` of the index, `clc`/`adc` of the base: 17
-/// instructions where a pointer step is 3). `fill_nest` at -O1 ran 429,137
+/// A word pattern over 64 cells was a loop that scaled and added its index on every trip (`asl`/`rol` of the
+/// index, `clc`/`adc` of the base: 17 instructions where a pointer step is 3). `fill_nest` at -O1 ran 429,137
 /// clocks against gcc's 333,596; 70% of them were that loop (2026-11-10).
 #[test]
 fn a_pattern_fill_steps_a_pointer() {
@@ -3175,8 +3146,7 @@ fn a_product_of_two_words_calls_the_widening_multiply() {
         assert!(text.contains(&format!("jsr {routine}")), "{x} * {y}:\n{text}");
         if routine != "__mulsi3" {
             assert!(!text.contains("__mulsi3"), "{x} * {y}:\n{text}");
-            // the two routines add bytes: -O1 keeps the long multiply (-Os
-            // prices it: widen_image.rs)
+            // the two routines add bytes: -O1 keeps the long multiply (-Os prices it: widen_image.rs)
             let text = assembly(&product(x, y), &Request::new(Level::O1)).unwrap();
             assert!(!text.contains("mulhisi3"), "O1 {x} * {y}:\n{text}");
         }
@@ -3224,11 +3194,10 @@ fn an_os_word_divide_is_the_compact_routine_in_every_module() {
     assert!(text.contains("__modhi3c") && !text.contains("__modhi3a"), "the only work of the module:\n{text}");
 }
 
-/// At -Os the long multiply is the 32-step compact walk (mul_constants: 42.0M
-/// clocks in 200-trip loops, llvm-mos 13.6M); `__mulsi3_fast` stops at the
-/// multiplier's last byte and is 19 B larger, linked once. A module takes
-/// it where the share of its clocks it saves is worth the share of its bytes it
-/// adds: multiplies in its loops, not one beside loops of other work.
+/// At -Os the long multiply is the 32-step compact walk (mul_constants: 42.0M clocks in 200-trip loops, llvm-mos
+/// 13.6M); `__mulsi3_fast` stops at the multiplier's last byte and is 19 B larger, linked once. A module takes
+/// it where the share of its clocks it saves is worth the share of its bytes it adds: multiplies in its loops,
+/// not one beside loops of other work.
 #[test]
 fn a_module_takes_the_speed_multiply_where_the_clocks_it_saves_are_its_own() {
     let padding: String = (0..60).map(|k| format!("  store volatile i32 %a, ptr @g{}\n", k % 3)).collect();
@@ -3256,11 +3225,10 @@ fn a_module_takes_the_speed_multiply_where_the_clocks_it_saves_are_its_own() {
     assert!(text.contains("jsr __mulsi3\n") && !text.contains("__mulsi3_fast"), "{text}");
 }
 
-/// At -Os a long divide is the compact 32-step walk (loop_interchange: 13.9M
-/// clocks, llvm-mos 3.3M); the speed routines start at the quotient's first bit
-/// and are larger. A module takes them where the share of its clocks they save
-/// is worth the share of its bytes they add: divides in its loops, not one
-/// beside loops of other work.
+/// At -Os a long divide is the compact 32-step walk (loop_interchange: 13.9M clocks, llvm-mos 3.3M); the speed
+/// routines start at the quotient's first bit and are larger. A module takes them where the share of its
+/// clocks they save is worth the share of its bytes they add: divides in its loops, not one beside loops of
+/// other work.
 #[test]
 fn a_module_takes_the_speed_divide_where_the_clocks_it_saves_are_its_own() {
     let padding: String = (0..60).map(|k| format!("  store volatile i32 %a, ptr @g{}\n", k % 3)).collect();

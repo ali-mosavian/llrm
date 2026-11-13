@@ -625,64 +625,43 @@ impl std::ops::Deref for AttrName {
 }
 
 impl std::hash::Hash for AttrName {
-    fn hash<H: std::hash::Hasher>(
-        &self,
-        state: &mut H,
-    ) {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.text.hash(state)
     }
 }
 
 impl PartialEq for AttrName {
-    fn eq(
-        &self,
-        other: &Self,
-    ) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
 }
 
 impl PartialEq<str> for AttrName {
-    fn eq(
-        &self,
-        other: &str,
-    ) -> bool {
+    fn eq(&self, other: &str) -> bool {
         self.text == other
     }
 }
 
 impl PartialEq<&str> for AttrName {
-    fn eq(
-        &self,
-        other: &&str,
-    ) -> bool {
+    fn eq(&self, other: &&str) -> bool {
         self.text == *other
     }
 }
 
 impl PartialEq<String> for AttrName {
-    fn eq(
-        &self,
-        other: &String,
-    ) -> bool {
+    fn eq(&self, other: &String) -> bool {
         &self.text == other
     }
 }
 
 impl PartialEq<AttrName> for str {
-    fn eq(
-        &self,
-        other: &AttrName,
-    ) -> bool {
+    fn eq(&self, other: &AttrName) -> bool {
         self == other.text
     }
 }
 
 impl PartialEq<AttrName> for &str {
-    fn eq(
-        &self,
-        other: &AttrName,
-    ) -> bool {
+    fn eq(&self, other: &AttrName) -> bool {
         *self == other.text
     }
 }
@@ -700,10 +679,7 @@ impl From<String> for AttrName {
 }
 
 impl std::fmt::Display for AttrName {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.text)
     }
 }

@@ -40,8 +40,7 @@
 //! (`popcnt`), `adc`/`sbb`/`shld`/`shrd`/`lzcnt`/`tzcnt` and the BMI group as
 //! the flag source, the backward scan into a single predecessor and the NF
 //! variants (APX). A zero (`MOV32r0`) between the source and the compare moves
-//! above the source
-//! ([L5640](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L5640)),
+//! above the source ([L5640](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L5640)),
 //! so it can be an `xor`.
 //!
 //! # Example
@@ -63,10 +62,10 @@
 
 mod redundant;
 
+use crate::backend::machinesched::zero_move;
 use std::sync::Arc;
 
 use crate::backend::lanes::Lanes;
-use crate::backend::machinesched::zero_move;
 use crate::backend::precse::flag_lanes;
 use crate::model::ir::{Imm, Loc, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
@@ -611,8 +610,7 @@ fn folded_use(
 /// to fold.
 ///
 /// Not translated: the other instructions `foldMemoryOperand` knows (`imul`,
-/// the extends, the x87 forms, `test r, imm`), a load whose result is read
-/// twice.
+/// the extends, the x87 forms, `test r, imm`), a load whose result is read twice.
 pub fn loads_folded(body: &LirBody) -> LirBody {
     let mut reads: HashMap<u32, usize> = HashMap::default();
     for block in &body.blocks {
@@ -712,8 +710,8 @@ fn load_folded(
         folded.widths.extend(def.widths.iter().copied());
         return Some((folded, load));
     }
-    // `cmp r, imm` of a waiting load is `cmp [m], imm`
-    // (`foldMemoryOperandImpl`: CMP*ri becomes CMP*mi).
+    // `cmp r, imm` of a waiting load is `cmp [m], imm` (`foldMemoryOperandImpl`:
+    // CMP*ri becomes CMP*mi).
     if (what.op, name) == (Operation::Compare, "cmp")
         && one.group.is_none()
         && one.requires.is_empty()

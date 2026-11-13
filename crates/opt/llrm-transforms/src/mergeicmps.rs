@@ -212,10 +212,7 @@ impl Env<'_> {
         }
         let (mut base, mut offset, mut gep) = (address, 0, None);
         if let Some(found) = defining(function, address)
-            && matches!(
-                function.instruction(found).opcode,
-                Opcode::GetElementPtr { .. }
-            )
+            && matches!(function.instruction(found).opcode, Opcode::GetElementPtr { .. })
         {
             if used_outside_of_block(function, found, block) {
                 return None;
@@ -501,22 +498,13 @@ fn is_dereferenceable(
     chain: &Chain,
 ) -> bool {
     let sizes = env.sizes.get_or_init(|| valuetracking::sizes_of(env.context, env.globals, env.layout));
-    chain
-        .merged
-        .iter()
-        .all(
-            |run| {
-                let bytes = u64::from(run.iter().map(|block| block.cmp.size_bits).sum::<u32>() / 8);
-                [run[0].lhs(), run[0].rhs()]
-                    .into_iter()
-                    .all(
-                        |atom| {
-                            let pointer = function.instruction(atom.load).operands[0];
-                            valuetracking::dereferenceable(env.context, env.layout, sizes, function, pointer, bytes)
-                        },
-                    )
-            },
-        )
+    chain.merged.iter().all(|run| {
+        let bytes = u64::from(run.iter().map(|block| block.cmp.size_bits).sum::<u32>() / 8);
+        [run[0].lhs(), run[0].rhs()].into_iter().all(|atom| {
+            let pointer = function.instruction(atom.load).operands[0];
+            valuetracking::dereferenceable(env.context, env.layout, sizes, function, pointer, bytes)
+        })
+    })
 }
 
 /// `getOrderedBlocks`: the chain's blocks from the first, walking up from the
@@ -566,10 +554,7 @@ fn analyze_phi(
     // One incoming value is not a constant: the last block's compare.
     let mut last = None;
     for &(value, block) in &incoming {
-        if matches!(
-            value,
-            Operand::Constant(id) if matches!(env.context.get(id).kind, ConstantKind::Int(_))
-        ) {
+        if matches!(value, Operand::Constant(id) if matches!(env.context.get(id).kind, ConstantKind::Int(_))) {
             continue;
         }
         let compare = defining(function, value)
@@ -681,9 +666,13 @@ fn merge_comparisons(
         let result = Operand::Value(unit.function.instruction(call).result.expect("memcmp returns int"));
         (result, Operand::Constant(unit.context.int(emitter.int, 0)))
     };
-    let equal = unit
-        .function
-        .create_instruction(Opcode::ICmp(IntPredicate::Eq), flag, vec![compare.0, compare.1], Flags::default(), None);
+    let equal = unit.function.create_instruction(
+        Opcode::ICmp(IntPredicate::Eq),
+        flag,
+        vec![compare.0, compare.1],
+        Flags::default(),
+        None,
+    );
     unit.function.insert(equal, Position::End(block)).expect("a new block");
     crate::divrempairs::copy_location(unit.function, first.cmp.cmp, equal);
     let equal_value = Operand::Value(unit.function.instruction(equal).result.expect("a compare's value"));
@@ -810,15 +799,8 @@ impl FunctionPass for MergeICmps {
             .function
             .attrs
             .iter()
-            .any(
-                |attr| matches!(
-                    attr,
-                    Attribute::Flag(name) if name == "optsize" || name == "minsize"
-                ),
-            );
-        let expands = outer.target().tti().is_some_and(|tti| {
-            tti.enable_mem_cmp_expansion(opt_size, true).is_some_and(|options| !options.load_sizes.is_empty())
-        });
+            .any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"));
+        let expands = outer.target().tti().is_some_and(|tti| tti.enable_mem_cmp_expansion(opt_size, true).is_some_and(|options| !options.load_sizes.is_empty()));
         if !expands || !self.routines.iter().any(|routine| routine.standard == "memcmp") {
             return PreservedAnalyses::all();
         }

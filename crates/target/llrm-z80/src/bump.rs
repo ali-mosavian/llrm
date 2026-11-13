@@ -127,10 +127,8 @@ fn apply(
     found: Found,
 ) {
     let Found { flag, copies, add, other, condition, subtract } = found;
-    // A long's high word is in de: both steps are there. A subtract stepped in
-    // hl (the pair its sum was read from) moved it through `ex de, hl`
-    // (long_step_by_one `dec`: 13 B for 7); corpus-wide, none of the 100 cells
-    // grows by it.
+    // A long's high word is in de: both steps are there. A subtract stepped in hl (the pair its sum was read from) moved
+    // it through `ex de, hl` (long_step_by_one `dec`: 13 B for 7); corpus-wide, none of the 100 cells grows by it.
     let stepped = Reg::Phys(reg::DE);
     let flags = Reg::Phys(reg::FLAGS);
     let origin = insts[add].origin;

@@ -1170,8 +1170,7 @@ impl<'a> Solver<'a> {
             Opcode::Store { .. } => self.visit_store(inst),
             // An atomic access is no simple load or store: its result is
             // overdefined and the global it touches is not tracked.
-            // No `visitExtractElement` etc. in
-            // SCCPInstVisitor: `visitInstruction`.
+            // No `visitExtractElement` etc. in SCCPInstVisitor: `visitInstruction`.
             Opcode::LandingPad { .. }
             | Opcode::Atomic(_)
             | Opcode::VaArg

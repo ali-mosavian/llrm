@@ -662,14 +662,13 @@ mod tests {
             // instructions its non-refining simplification went through
             // (`DropFlags`). It grants no flag.
             "combine_select_equivalence.rs",
-            // `strcat`, `strncat` and `strncpy` expand to `inbounds` GEPs of
-            // the destination (`emitStrLenMemCpy`'s `CreateInBoundsGEP`); they
-            // read no flag off an existing instruction.
+            // `strcat`, `strncat` and `strncpy` expand to `inbounds` GEPs of the destination
+            // (`emitStrLenMemCpy`'s `CreateInBoundsGEP`); they read no flag off an existing
+            // instruction.
             "copy.rs",
-            // `lsr_prepare` reads the `nsw`/`nuw` of an integer increment to
-            // know that the float counter it makes beside the conversion counts
-            // the same trips (beyond the pin); the increment is read, never
-            // rewritten.
+            // `lsr_prepare` reads the `nsw`/`nuw` of an integer increment to know that the float
+            // counter it makes beside the conversion counts the same trips (beyond the pin); the
+            // increment is read, never rewritten.
             "lsr_prepare.rs",
             // `zeromerge` makes one `inbounds` GEP per member of the new
             // `alloca` it builds (llrm only); it reads no flag off an

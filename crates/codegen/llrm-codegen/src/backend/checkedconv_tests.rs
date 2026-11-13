@@ -27,9 +27,8 @@ fn answer(
     run(module, "f", vec![Val::Float(FloatKind::Double, x.to_bits())], 10_000).unwrap_or_else(|trap| panic!("{trap:?}"))
 }
 
-/// The expansion gives the intrinsic's answers at the edges of every width, on
-/// the integer (wide) and on the float (none), and leaves no call: a NaN, an
-/// infinity, the first float past each end and the last one in.
+/// The expansion gives the intrinsic's answers at the edges of every width, on the integer (wide) and on the
+/// float (none), and leaves no call: a NaN, an infinity, the first float past each end and the last one in.
 #[test]
 fn an_expanded_checked_conversion_answers_as_the_intrinsic_does() {
     fn wide(bits: u32) -> Option<u32> {
@@ -37,29 +36,10 @@ fn an_expanded_checked_conversion_answers_as_the_intrinsic_does() {
     }
     for (bits, signed) in [(8, true), (16, true), (32, true), (8, false), (16, false), (32, false)] {
         let before = conversion(bits, signed, "double");
-        let (low, high) = if signed {
-            (-(2f64.powi(bits as i32 - 1)), 2f64.powi(bits as i32 - 1))
-        } else {
-            (0.0, 2f64.powi(bits as i32))
-        };
+        let (low, high) = if signed { (-(2f64.powi(bits as i32 - 1)), 2f64.powi(bits as i32 - 1)) } else { (0.0, 2f64.powi(bits as i32)) };
         let inputs = [
-            0.0,
-            1.5,
-            -1.5,
-            -0.5,
-            low,
-            low - 1.0,
-            low - 0.5,
-            low + 0.5,
-            high,
-            high - 1.0,
-            high - 0.5,
-            high + 1.0,
-            f64::NAN,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            1e30,
-            -1e30,
+            0.0, 1.5, -1.5, -0.5, low, low - 1.0, low - 0.5, low + 0.5, high, high - 1.0, high - 0.5, high + 1.0,
+            f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e30, -1e30,
         ];
         for mode in [Some(wide as fn(u32) -> Option<u32>), None] {
             let mut after = before.clone();
@@ -68,26 +48,19 @@ fn an_expanded_checked_conversion_answers_as_the_intrinsic_does() {
             assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{text}");
             assert!(!text.contains("call {"), "i{bits} kept its call:\n{text}");
             for x in inputs {
-                // the interpreter reads a float past the wide integer as
-                // poison; the hardware's answer
-                // (the most negative value, out of range for the narrow one) is
-                // tests/run/nib's to show
+                // the interpreter reads a float past the wide integer as poison; the hardware's answer
+                // (the most negative value, out of range for the narrow one) is tests/run/nib's to show
                 if mode.is_some() && !(x.trunc().abs() < 2f64.powi(if bits <= 16 { 31 } else { 63 })) {
                     continue;
                 }
-                assert_eq!(
-                    answer(&after, x),
-                    answer(&before, x),
-                    "i{bits} signed {signed} wide {} of {x}",
-                    mode.is_some()
-                );
+                assert_eq!(answer(&after, x), answer(&before, x), "i{bits} signed {signed} wide {} of {x}", mode.is_some());
             }
         }
     }
 }
 
-/// The two inputs the check must tell apart, on the wide path: -2^31 fits an
-/// i32 and 2^31 does not, though both leave the low dword 0x80000000.
+/// The two inputs the check must tell apart, on the wide path: -2^31 fits an i32 and 2^31 does not, though both
+/// leave the low dword 0x80000000.
 #[test]
 fn the_wide_check_tells_the_minimum_from_the_first_value_past_the_maximum() {
     let mut module = conversion(32, true, "double");

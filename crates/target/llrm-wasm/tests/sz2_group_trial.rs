@@ -20,9 +20,8 @@ fn the_sites_of_a_staying_callee_are_tried_together_at_os() {
     assert!(!scan.contains("call\tmessage"), "{scan}");
 }
 
-/// -O1 kept the three `message` calls of `scan`: the size bound refused each
-/// site and no trial followed, so the copies that fold into one `report` never
-/// formed (wasm32 -O1, the pin inlines them).
+/// -O1 kept the three `message` calls of `scan`: the size bound refused each site and no trial
+/// followed, so the copies that fold into one `report` never formed (wasm32 -O1, the pin inlines them).
 #[test]
 fn the_sites_of_a_staying_callee_are_tried_together_at_o1() {
     let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/sz2_group_trial.ll");

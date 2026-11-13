@@ -13,9 +13,8 @@ define void @g(ptr %q, ptr %p) {
 }
 ";
 
-/// `store (fptrunc x)` was combined into a truncating store of the `double`,
-/// which the target has no instruction for: no `__truncdfsf2` call, eight bytes
-/// written over a four-byte object.
+/// `store (fptrunc x)` was combined into a truncating store of the `double`, which the target
+/// has no instruction for: no `__truncdfsf2` call, eight bytes written over a four-byte object.
 #[test]
 fn a_double_stored_as_a_float_is_converted_by_the_library_first() {
     for level in [Level::O0, Level::O2] {

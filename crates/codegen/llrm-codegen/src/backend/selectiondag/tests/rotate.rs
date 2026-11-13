@@ -36,8 +36,7 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
     let before: Vec<u32> = SAMPLES.iter().map(|&s| eval(&dag, root, s)).collect();
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false,
-        hot_chains: false,
+        imul_if_smaller: false, hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,

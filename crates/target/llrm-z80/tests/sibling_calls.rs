@@ -9,7 +9,6 @@ use llrm_z80::driver::{Level, Request};
 /// own `ret`, so the call was not seen to be last.
 #[test]
 fn a_call_that_falls_into_the_shared_return_is_a_tail_call() {
-    let asm =
-        text(include_str!("data/sibling_calls_in_a_chain.ll"), "g", 0, &Request::new(Level::O2)).expect("compiles");
+    let asm = text(include_str!("data/sibling_calls_in_a_chain.ll"), "g", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(!asm.contains("call "), "{asm}");
 }

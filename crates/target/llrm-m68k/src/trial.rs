@@ -270,8 +270,7 @@ pub fn prefers_without(
     price: Price,
     cold_clocks: bool,
 ) -> bool {
-    let (Some(with_cost), Some(without_cost)) = (price_of(with, cpu, cold_clocks), price_of(without, cpu, cold_clocks))
-    else {
+    let (Some(with_cost), Some(without_cost)) = (price_of(with, cpu, cold_clocks), price_of(without, cpu, cold_clocks)) else {
         return false;
     };
     match price {

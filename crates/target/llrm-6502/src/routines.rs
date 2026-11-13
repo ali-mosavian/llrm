@@ -27,8 +27,7 @@ pub fn copy_prices() -> CopyPrices {
     }
 }
 
-/// The compact variant of the runtime routine `name`, called at size, if it has
-/// one.
+/// The compact variant of the runtime routine `name`, called at size, if it has one.
 pub fn compact_variant(name: &str) -> Option<&'static str> {
     static TABLE: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
     TABLE
@@ -46,8 +45,8 @@ pub fn compact_variant(name: &str) -> Option<&'static str> {
         .map(|(_, compact)| compact.as_str())
 }
 
-/// The share of its clocks a module must save, in percent, for each percent of
-/// its bytes a speed routine adds at size (`[share] percent_per_percent`).
+/// The share of its clocks a module must save, in percent, for each percent of its bytes a speed routine
+/// adds at size (`[share] percent_per_percent`).
 pub fn share_percent() -> u64 {
     let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
     let table = doc.get("share").and_then(|t| t.as_table()).expect("a [share] table");
@@ -58,13 +57,12 @@ pub fn share_percent() -> u64 {
         .expect("share.percent_per_percent is a count")
 }
 
-/// Whether a call of the runtime routine `name` reads and writes none of the
-/// `rcN` cells: its text and the routines it calls name none (the long
-/// arithmetic works in `__sa`/`__sb`). A store to an argument cell before such
-/// a call is not an argument.
+/// Whether a call of the runtime routine `name` reads and writes none of the `rcN` cells: its text and
+/// the routines it calls name none (the long arithmetic works in `__sa`/`__sb`). A store to an argument
+/// cell before such a call is not an argument.
 ///
-/// The pin's analogue is the call's operand list: only the registers it lists
-/// are read (`MachineInstr::implicit_operands`, `LivePhysRegs`).
+/// The pin's analogue is the call's operand list: only the registers it lists are read
+/// (`MachineInstr::implicit_operands`, `LivePhysRegs`).
 pub fn leaves_cells_alone(name: &str) -> bool {
     use std::collections::HashMap;
     static ANSWERS: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);

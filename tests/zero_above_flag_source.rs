@@ -4,8 +4,8 @@
 mod common;
 
 /// `__fixunssfsi` and the other `fix_*` conversions kept `mov eax, 0` between
-/// `or` and `jne` (3 bytes over the pin's `xor eax, eax` ahead of the `or`);
-/// the pin's `optimizeCompareInstr` moves the `MOV32r0` above the flag source.
+/// `or` and `jne` (3 bytes over the pin's `xor eax, eax` ahead of the `or`); the
+/// pin's `optimizeCompareInstr` moves the `MOV32r0` above the flag source.
 #[test]
 fn a_zero_between_a_flag_source_and_its_branch_is_an_xor_ahead_of_the_source() {
     let scratch = tempfile::tempdir().unwrap();

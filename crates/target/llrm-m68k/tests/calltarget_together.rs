@@ -1,8 +1,7 @@
-//! Three callees called five times each, as pc-relative calls (4 B): alone each
-//! saves 10 B of calls and pays the 6 B `lea` and the 4 B save and restore of
-//! its register, so none was kept; the three share one `movem` (8 B) and save
-//! 30 B for the 18 B of `lea`s. `loop_versioning` came out 8 B larger once
-//! calls were pc-relative, for want of the three being priced together.
+//! Three callees called five times each, as pc-relative calls (4 B): alone each saves 10 B of calls
+//! and pays the 6 B `lea` and the 4 B save and restore of its register, so none was kept; the three
+//! share one `movem` (8 B) and save 30 B for the 18 B of `lea`s. `loop_versioning` came out 8 B
+//! larger once calls were pc-relative, for want of the three being priced together.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

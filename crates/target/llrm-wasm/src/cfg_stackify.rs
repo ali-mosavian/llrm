@@ -24,10 +24,11 @@
 //! L446, `rewriteDepthImmediates` L2595, `fixEndsAtEndOfFunction` L2381), pin
 //! d1106deb71cc.
 
+use llrm_support::hash::HashMap;
+
 use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::BlockId;
-use llrm_support::hash::HashMap;
 
 use crate::cfg::Cfg;
 use crate::dagisel::post_ids::{

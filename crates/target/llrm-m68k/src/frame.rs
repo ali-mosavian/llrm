@@ -91,8 +91,7 @@ pub enum FrameOp {
     Save { registers: Vec<RegId>, base: Base, offset: i64 },
     /// `movem.l (offset, base), regs`
     Restore { registers: Vec<RegId>, base: Base, offset: i64 },
-    /// `BuildStackAlignAND`: `move.l %sp, %d0; and.l #-align, %d0; move.l %d0,
-    /// %sp`
+    /// `BuildStackAlignAND`: `move.l %sp, %d0; and.l #-align, %d0; move.l %d0, %sp`
     AlignSp(i64),
     /// `move.l reg, -(%sp)` for one register, else `movem.l regs, -(%sp)`
     Push { registers: Vec<RegId> },
@@ -182,8 +181,7 @@ impl Layout {
         &self,
         index: usize,
     ) -> (Base, i64) {
-        // the frame pointer's slot sits between the fixed objects and the
-        // locals
+        // the frame pointer's slot sits between the fixed objects and the locals
         let index = if self.has_fp && index >= self.first_local - 1 { index + 1 } else { index };
         self.address_of(index)
     }

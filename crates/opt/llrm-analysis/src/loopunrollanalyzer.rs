@@ -39,9 +39,7 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Linkage, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, IntPredicate, Opcode};
-use llrm_mir::simplify::{
-    simplify_binop_operands, simplify_cast_operand, simplify_icmp_operands, simplify_instruction_operands_at,
-};
+use llrm_mir::simplify::{simplify_binop_operands, simplify_instruction_operands_at, simplify_cast_operand, simplify_icmp_operands};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::AssumptionCache;
 
@@ -373,13 +371,12 @@ impl UnrolledInstAnalyzer {
         self.visit_instruction(env, simplified, inst)
     }
 
-    /// DEVIATE U3 (owner m68k): an `fcmp` or a `select` whose operands the map
-    /// holds is simplified (`simplifyInstructionWithOperands`) where the
-    /// pin's visitor asks ScalarEvolution alone (no `simplifyFCmpInst`
-    /// call, no `visitSelectInst`). gcc's `constant_after_peeling` folds
-    /// every statement whose operands the peeling makes constant: a two-trip
-    /// float loop (float_in_place_update) was priced 15 over its rolled 14
-    /// for want of one `fcmp` and one `select`.
+    /// DEVIATE U3 (owner m68k): an `fcmp` or a `select` whose operands the map holds is simplified
+    /// (`simplifyInstructionWithOperands`) where the pin's visitor asks ScalarEvolution alone
+    /// (no `simplifyFCmpInst` call, no `visitSelectInst`). gcc's `constant_after_peeling` folds
+    /// every statement whose operands the peeling makes constant: a two-trip float loop
+    /// (float_in_place_update) was priced 15 over its rolled 14 for want of one `fcmp` and one
+    /// `select`.
     fn visit_folded(
         &mut self,
         env: &mut Env,

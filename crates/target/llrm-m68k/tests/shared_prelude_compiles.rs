@@ -31,8 +31,7 @@ fn every_fixture_function_compiles_with_the_shared_prelude() {
             .map(|(id, _, _)| module.global(id).name.as_ref().expect("a name").clone())
             .collect();
         for name in names {
-            let base = text_with(&module, &name, Cpu::M68000, Options::default())
-                .unwrap_or_else(|why| panic!("{file} @{name}: base: {why}"));
+            let base = text_with(&module, &name, Cpu::M68000, Options::default()).unwrap_or_else(|why| panic!("{file} @{name}: base: {why}"));
             match text_with(&module, &name, Cpu::M68000, Options { shared_prelude: true, ..Options::default() }) {
                 Ok(shared) => {
                     ok += 1;

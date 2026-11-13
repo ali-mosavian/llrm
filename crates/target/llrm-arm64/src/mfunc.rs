@@ -552,9 +552,8 @@ pub fn sequence_copies(
     out
 }
 
-/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are
-/// deleted, and the phi operands that came from them. Selection makes one for
-/// every IR block, such as the `unreachable` default of a `switch`.
+/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are deleted, and the phi operands that
+/// came from them. Selection makes one for every IR block, such as the `unreachable` default of a `switch`.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/UnreachableBlockElim.cpp>
 pub fn remove_unreachable_blocks(function: &mut MFunc) {
     let count = function.blocks.len();
@@ -579,14 +578,10 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
         .map(|(block, _)| block.label.clone())
         .collect();
     let mut at = 0;
-    function
-        .blocks
-        .retain(
-            |_| {
-                at += 1;
-                reached[at - 1]
-            },
-        );
+    function.blocks.retain(|_| {
+        at += 1;
+        reached[at - 1]
+    });
     for block in &mut function.blocks {
         for op in &mut block.ops {
             if let Op::Phi { incoming, .. } = op {

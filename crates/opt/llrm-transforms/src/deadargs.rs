@@ -217,10 +217,8 @@ fn dead_returns(module: &Module) -> BTreeSet<GlobalId> {
         let mut through = Some(BTreeSet::new());
         'sites: for &(caller, call) in &sites[&id] {
             let function = module.global(caller).function().expect("a caller");
-            if matches!(
-                &function.instruction(call).opcode,
-                Opcode::Call(info) if info.tail == llrm_mir::opcode::Tail::MustTail
-            ) {
+            if matches!(&function.instruction(call).opcode, Opcode::Call(info) if info.tail == llrm_mir::opcode::Tail::MustTail)
+            {
                 through = None;
                 break;
             }

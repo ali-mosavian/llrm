@@ -9,9 +9,8 @@
 //! the attributes the site states for that parameter (`nonnull`,
 //! `dereferenceable`, `dereferenceable_or_null`, `align`, and `range` where the
 //! call has none); a pointer into a parameter's object gets its `readonly` and
-//! `readnone`. A call whose value the callee returns, in the return's block
-//! with nothing that may leave between, gets the return attributes the site
-//! states.
+//! `readnone`. A call whose value the callee returns, in the return's block with
+//! nothing that may leave between, gets the return attributes the site states.
 //!
 //! # Deviations
 //! - IA1 (owner w9, exit 2026-11-30): `nofpclass` is not an attribute here, and
@@ -19,8 +18,8 @@
 //!   throw or not return between the value and the return is any call or
 //!   invoke, not `isGuaranteedToTransferExecutionToSuccessor` (no callee
 //!   attributes at hand).
-//! - A copy is never simplified while it is made (`isSimplified`): the check is
-//!   always false.
+//! - A copy is never simplified while it is made (`isSimplified`): the
+//!   check is always false.
 
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, CastOp, Opcode};
@@ -57,14 +56,10 @@ fn int(
     attrs: &[Attribute],
     name: &str,
 ) -> Option<u64> {
-    attrs
-        .iter()
-        .find_map(
-            |one| match one {
-                Attribute::Int(found, value) if found == name => Some(*value),
-                _ => None,
-            },
-        )
+    attrs.iter().find_map(|one| match one {
+        Attribute::Int(found, value) if found == name => Some(*value),
+        _ => None,
+    })
 }
 
 fn range(attrs: &[Attribute]) -> Option<Attribute> {
@@ -135,8 +130,11 @@ pub fn propagated(
     body: &Function,
     copies: &[InstId],
 ) {
-    let originals: Vec<InstId> =
-        body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret).map(|(_, inst)| inst).collect();
+    let originals: Vec<InstId> = body
+        .walk()
+        .filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret)
+        .map(|(_, inst)| inst)
+        .collect();
     if originals.len() != copies.len() {
         return;
     }
@@ -153,15 +151,12 @@ fn param_attributes(
     copies: &[InstId],
 ) {
     let exact_names = ["nonnull", "dereferenceable", "dereferenceable_or_null", "align"];
-    let has_any = site
-        .arguments
-        .iter()
-        .any(
-            |attrs| flag(attrs, "readnone")
-                || flag(attrs, "readonly")
-                || exact_names.iter().any(|name| flag(attrs, name) || int(attrs, name).is_some())
-                || range(attrs).is_some(),
-        );
+    let has_any = site.arguments.iter().any(|attrs| {
+        flag(attrs, "readnone")
+            || flag(attrs, "readonly")
+            || exact_names.iter().any(|name| flag(attrs, name) || int(attrs, name).is_some())
+            || range(attrs).is_some()
+    });
     if !has_any {
         return;
     }
@@ -172,18 +167,11 @@ fn param_attributes(
         let arguments = inner.argument_attrs.len().min(body.instruction(original).operands.len());
         let mut changed = false;
         for at in 0..arguments {
-            if info
-                .argument_attrs
-                .get(at)
-                .is_some_and(|attrs| attrs.iter().any(|one| matches!(one, Attribute::Type(name, _) if name == "byval")))
-            {
+            if info.argument_attrs.get(at).is_some_and(|attrs| attrs.iter().any(|one| matches!(one, Attribute::Type(name, _) if name == "byval"))) {
                 continue;
             }
             // Don't bother propagating attrs to constants.
-            if matches!(
-                function.instruction(copy).operands.get(at),
-                Some(Operand::Constant(_)) | None
-            ) {
+            if matches!(function.instruction(copy).operands.get(at), Some(Operand::Constant(_)) | None) {
                 continue;
             }
             let passed = body.instruction(original).operands[at];
@@ -248,8 +236,7 @@ fn return_attributes(
     let has_ub = int(stated, "dereferenceable").is_some()
         || int(stated, "dereferenceable_or_null").is_some()
         || ub_flags.iter().any(|name| flag(stated, name));
-    let has_pg =
-        pg_flags.iter().any(|name| flag(stated, name)) || int(stated, "align").is_some() || range(stated).is_some();
+    let has_pg = pg_flags.iter().any(|name| flag(stated, name)) || int(stated, "align").is_some() || range(stated).is_some();
     if !has_ub && !has_pg {
         return;
     }
@@ -264,13 +251,7 @@ fn return_attributes(
             continue;
         }
         let between = body.iter_block(body.parent(def).expect("placed")).skip_while(|&one| one != def).skip(1);
-        if between
-            .take_while(|&one| one != ret)
-            .any(|one| matches!(
-                body.instruction(one).opcode,
-                Opcode::Call(_) | Opcode::Invoke(_)
-            ))
-        {
+        if between.take_while(|&one| one != ret).any(|one| matches!(body.instruction(one).opcode, Opcode::Call(_) | Opcode::Invoke(_))) {
             continue;
         }
         let Opcode::Call(made) = &function.instruction(copy).opcode else { continue };

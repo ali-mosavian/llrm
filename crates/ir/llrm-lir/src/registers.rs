@@ -364,9 +364,8 @@ pub struct Info {
     pub byte_lanes: bool,
     /// The file states `@lanes x86`: x86's lane table is the one it means.
     pub lanes_x86: bool,
-    /// The file states `@lanes none`: its target reads no lanes yet, and
-    /// `lanes::enter` refuses it by name. A file with integer views under
-    /// 32 bits and none of the three lines has no table (`lanes::table_of`).
+    /// The file states `@lanes none`: its target reads no lanes yet, and `lanes::enter` refuses it by name.
+    /// A file with integer views under 32 bits and none of the three lines has no table (`lanes::table_of`).
     pub lanes_none: bool,
     /// The file states `@ties rows`: which operand an instruction ties to its
     /// dest is said by the instruction's row (`^0`), not by its operation
@@ -392,14 +391,12 @@ impl Info {
         bytes: u32,
     ) -> Option<RegId> {
         let want = ((1_i64 << bytes) - 1) << (self.lanes(wide).trailing_zeros() + offset);
-        (0..256)
-            .map(RegId::from_index)
-            .find(
-                |&register| self.known(register)
-                    && self.root(register) == self.root(wide)
-                    && self.lanes(register) == want
-                    && self.bytes(register) == Some(i64::from(bytes)),
-            )
+        (0..256).map(RegId::from_index).find(|&register| {
+            self.known(register)
+                && self.root(register) == self.root(wide)
+                && self.lanes(register) == want
+                && self.bytes(register) == Some(i64::from(bytes))
+        })
     }
 
     /// The register the description calls `name`, in any case.
@@ -683,20 +680,20 @@ impl Info {
     /// The bytes of the target's SSE registers, 0 where it has none: a value
     /// that wide is held in one.
     pub fn xmm_bytes(&self) -> u32 {
-        *self.cache.xmm_bytes.get_or_init(|| {
-            self.entries().find(|(_, one)| one.classes & self.float_class() != 0).map_or(0, |(_, one)| one.bits / 8)
-        })
+        *self
+            .cache
+            .xmm_bytes
+            .get_or_init(
+                || self.entries().find(|(_, one)| one.classes & self.float_class() != 0).map_or(0, |(_, one)| one.bits / 8),
+            )
     }
 
     /// The class scalar floats and vectors live in: `xmm` where the file has
     /// it, else `fpr` (arm64's `v` registers), else none.
     pub fn float_class(&self) -> u32 {
-        *self
-            .cache
-            .float
-            .get_or_init(
-                || if self.entries().any(|(_, one)| one.classes & class::XMM != 0) { class::XMM } else { class::FPR },
-            )
+        *self.cache.float.get_or_init(|| {
+            if self.entries().any(|(_, one)| one.classes & class::XMM != 0) { class::XMM } else { class::FPR }
+        })
     }
 
     /// Whether `register` is in the file's float class.

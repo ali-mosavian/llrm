@@ -9,8 +9,7 @@ pub struct Cpu {
     atoms: BTreeMap<String, AtomRule>,
     dynamic: BTreeMap<String, String>,
     dead_type_prefixes: Vec<String>,
-    /// Types a dead prefix would drop that selection does produce (`[types]
-    /// live`).
+    /// Types a dead prefix would drop that selection does produce (`[types] live`).
     live_types: Vec<String>,
     node_predicates: BTreeMap<String, String>,
 }
@@ -172,9 +171,8 @@ mod tests {
         assert!(!cpu.dead_type("i32") && !cpu.dead_type("f80"));
     }
 
-    /// A `[types] live` entry kept its dead `v` prefix: the arm64 vector loads
-    /// and stores had no pattern ("CannotSelect Store" on a `<8 x i16>`
-    /// copy).
+    /// A `[types] live` entry kept its dead `v` prefix: the arm64 vector loads and stores had no
+    /// pattern ("CannotSelect Store" on a `<8 x i16>` copy).
     #[test]
     fn a_live_type_overrides_a_dead_prefix() {
         let text = TEXT.replace("[types]", "[types]\nlive = [\"v8i16\"]");

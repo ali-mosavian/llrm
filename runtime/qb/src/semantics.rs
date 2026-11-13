@@ -131,9 +131,7 @@ fn meaning(
     };
     let result_bits = match row.get("result_bits") {
         None => None,
-        Some(bits) => {
-            Some(bits.as_integer().and_then(|one| u32::try_from(one).ok()).ok_or("result_bits is not a width")?)
-        }
+        Some(bits) => Some(bits.as_integer().and_then(|one| u32::try_from(one).ok()).ok_or("result_bits is not a width")?),
     };
     let releases = row
         .get("releases")

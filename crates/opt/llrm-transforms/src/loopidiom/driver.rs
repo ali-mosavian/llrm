@@ -124,21 +124,12 @@ impl LoopIdiomRecognize {
         Some(self.run_on_noncountable_loop(run))
     }
 
-    /// Whether the function carries `optsize`, whatever
-    /// `use_lir_code_size_heurs`.
+    /// Whether the function carries `optsize`, whatever `use_lir_code_size_heurs`.
     fn apply_code_size_heuristics_attr(
         &self,
         run: &Run,
     ) -> bool {
-        run.function
-            .attrs
-            .iter()
-            .any(
-                |attr| matches!(
-                    attr,
-                    Attribute::Flag(name) if name == "optsize" || name == "minsize"
-                ),
-            )
+        run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L383

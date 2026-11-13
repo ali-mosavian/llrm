@@ -76,7 +76,11 @@ pub fn casts_branched(
 enum Site {
     /// `select c, K, %v` of integers where `%v` is a conversion nothing else
     /// reads: the conversion goes to the path that does not take `K`.
-    Arm { cast: InstId, select: InstId, constant_is_true: bool },
+    Arm {
+        cast: InstId,
+        select: InstId,
+        constant_is_true: bool,
+    },
     Convert {
         cast: InstId,
         select: InstId,
@@ -168,10 +172,7 @@ fn arm_site(
         return None;
     }
     let constant = |arm: Operand| {
-        matches!(
-            arm,
-            Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_))
-        )
+        matches!(arm, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_)))
     };
     let (constant_is_true, other) = match (constant(yes), constant(no)) {
         (true, false) => (true, no),
@@ -180,10 +181,7 @@ fn arm_site(
     };
     let Operand::Value(value) = other else { return None };
     let ValueDef::Instruction(cast) = function.value(value).def else { return None };
-    (matches!(
-        function.instruction(cast).opcode,
-        Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI)
-    )
+    (matches!(function.instruction(cast).opcode, Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI))
         && function.parent(cast) == Some(block)
         && function.users(value).has_one_use())
     .then_some(Site::Arm { cast, select, constant_is_true })
@@ -439,12 +437,8 @@ impl FunctionPass for SelectArms {
             .outer()
             .target()
             .tti()
-            .is_some_and(
-                |tti| !tti.has_cmov() && tti.sinks_select_arms() && (!size || tti.sinks_select_arms_for_size()),
-            );
-        let fused = |bits: u32, signed: bool| {
-            analyses.outer().target().tti().is_some_and(|tti| tti.has_div_rem_op(bits, signed))
-        };
+            .is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms() && (!size || tti.sinks_select_arms_for_size()));
+        let fused = |bits: u32, signed: bool| analyses.outer().target().tti().is_some_and(|tti| tti.has_div_rem_op(bits, signed));
         if wanted && select_arms_sunk(unit.context, unit.function, &fused) {
             PreservedAnalyses::none()
         } else {
@@ -615,13 +609,17 @@ fn sunk(
         function.insert(back, Position::End(side)).expect("an unplaced instruction");
         (side, Operand::Block(side))
     };
-    // The true arm's block first after `home`: it is the branch's fallthrough,
-    // as `EmitLoweredSelect` places the false copy after the branch to the
-    // join.
+    // The true arm's block first after `home`: it is the branch's fallthrough, as
+    // `EmitLoweredSelect` places the false copy after the branch to the join.
     let (no_from, no_target) = side_of(function, no);
     let (yes_from, yes_target) = side_of(function, yes);
-    let branch =
-        function.create_instruction(Opcode::Br, void, vec![condition, yes_target, no_target], Flags::default(), None);
+    let branch = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![condition, yes_target, no_target],
+        Flags::default(),
+        None,
+    );
     function.insert(branch, Position::End(home)).expect("an unplaced instruction");
     let phi = function.create_instruction(
         Opcode::Phi,

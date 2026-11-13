@@ -3,10 +3,9 @@
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
 
-/// `store (fptrunc x)` was combined into a truncating store of the `double`
-/// that z80 has no instruction for: no `__truncdfsf2` call, eight bytes written
-/// over a four-byte object (`float A = vd; (long)(A * 16)` read 0, twin of
-/// object_extent_loop 2026-11-12).
+/// `store (fptrunc x)` was combined into a truncating store of the `double` that z80 has no
+/// instruction for: no `__truncdfsf2` call, eight bytes written over a four-byte object
+/// (`float A = vd; (long)(A * 16)` read 0, twin of object_extent_loop 2026-11-12).
 #[test]
 fn a_double_stored_as_a_float_is_converted_by_the_library_first() {
     for level in [Level::O0, Level::O2] {

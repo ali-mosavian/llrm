@@ -27,8 +27,8 @@ mod tests;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use llrm_analysis::placealias::Object;
 use llrm_codegen::backend::lanes::{Lanes, enter};
+use llrm_analysis::placealias::Object;
 use llrm_codegen::model::lir::{Insn, LirBlock, LirBody};
 use llrm_codegen::model::memref::MemRef;
 use llrm_codegen::support::hash::IndexMap;
@@ -255,15 +255,10 @@ pub(crate) fn intern(
     symbols: &mut Vec<String>,
     name: &str,
 ) -> i64 {
-    let at = symbols
-        .iter()
-        .position(|each| each == name)
-        .unwrap_or_else(
-            || {
-                symbols.push(name.to_owned());
-                symbols.len() - 1
-            },
-        );
+    let at = symbols.iter().position(|each| each == name).unwrap_or_else(|| {
+        symbols.push(name.to_owned());
+        symbols.len() - 1
+    });
     at as i64
 }
 
@@ -686,8 +681,7 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     let mut body = LirBody::new(function.name.clone(), 0, blocks, IndexMap::default(), IndexMap::default());
     body.registers = Some(Regs(&crate::REGISTER_INFO));
     body.symbols = Arc::new(symbols);
-    // The edge odds, by block position (`at`); the body keeps the numerator
-    // over 2^31.
+    // The edge odds, by block position (`at`); the body keeps the numerator over 2^31.
     for (&(from, to), &(probability, _)) in function.alloc_odds.iter().flatten() {
         body.odds.taken.insert((i64::from(from), i64::from(to)), probability.get_numerator());
     }

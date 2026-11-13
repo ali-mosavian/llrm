@@ -12,11 +12,10 @@ define i64 @f(ptr %p, ptr %o) {
 }
 ";
 
-/// A `zext` of a load that a store also reads was folded into `i64.load32_u`
-/// with the store taking a `i32.wrap_i64` of it. The pin's
-/// `ExtendUsesToFormExtLoad` refuses when truncates are not free (wasm's
-/// are not) and a reader is not a compare: `i32.load` once, `i64.extend_i32_u`.
-/// wide_shift_by_one was +4 B over the pin at -O2, -O3 and -Os.
+/// A `zext` of a load that a store also reads was folded into `i64.load32_u` with the store taking a
+/// `i32.wrap_i64` of it. The pin's `ExtendUsesToFormExtLoad` refuses when truncates are not free (wasm's
+/// are not) and a reader is not a compare: `i32.load` once, `i64.extend_i32_u`. wide_shift_by_one was
+/// +4 B over the pin at -O2, -O3 and -Os.
 #[test]
 fn a_load_another_reader_takes_narrow_is_not_widened_for_a_zext() {
     for level in [Level::O1, Level::O2, Level::Os] {

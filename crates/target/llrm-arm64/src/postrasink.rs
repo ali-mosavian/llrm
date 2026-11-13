@@ -52,10 +52,7 @@ fn mask(registers: &[Reg]) -> u64 {
 }
 
 /// The registers live into each block.
-fn live_in(
-    function: &MFunc,
-    successors: &[Vec<usize>],
-) -> Vec<u64> {
+fn live_in(function: &MFunc, successors: &[Vec<usize>]) -> Vec<u64> {
     let count = function.blocks.len();
     let mut live = vec![0u64; count];
     let mut changed = true;
@@ -87,10 +84,7 @@ fn through(
     for _ in 0..successors.len() {
         let ops = &function.blocks[block].ops;
         match (ops.len(), successors[block].as_slice()) {
-            (1, [only]) if matches!(
-                ops[0],
-                Op::I(crate::mc::inst::Inst::Branch { link: false, .. })
-            ) => block = *only,
+            (1, [only]) if matches!(ops[0], Op::I(crate::mc::inst::Inst::Branch { link: false, .. })) => block = *only,
             _ => break,
         }
     }
@@ -108,8 +102,10 @@ pub fn run(function: &mut MFunc) {
         return;
     }
     // The graph the copies move over: edge blocks seen through.
-    let seen: Vec<Vec<usize>> =
-        successors.iter().map(|next| next.iter().map(|&one| through(function, &successors, one)).collect()).collect();
+    let seen: Vec<Vec<usize>> = successors
+        .iter()
+        .map(|next| next.iter().map(|&one| through(function, &successors, one)).collect())
+        .collect();
     let mut predecessors = vec![0usize; count];
     for next in seen.iter().flatten() {
         predecessors[*next] += 1;
@@ -185,8 +181,5 @@ fn single_live_in(
         }
     }
     let found = found?;
-    successors
-        .iter()
-        .all(|&next| next == found || sinkable.contains(&next) || live[next] & register == 0)
-        .then_some(found)
+    successors.iter().all(|&next| next == found || sinkable.contains(&next) || live[next] & register == 0).then_some(found)
 }

@@ -25,9 +25,9 @@
 //!   b.ne L
 //! ```
 //!
-//! Not translated: `cmp x, #imm` after an identical `subs`
-//! (`canInstrSubstituteCmpInstr`), `adc`/`sbc` as the maker, and the `C`/`V`
-//! readers the pin allows after an `adds`/`subs` whose flags prove them.
+//! Not translated: `cmp x, #imm` after an identical `subs` (`canInstrSubstituteCmpInstr`),
+//! `adc`/`sbc` as the maker, and the `C`/`V` readers the pin allows after an `adds`/`subs` whose
+//! flags prove them.
 
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
@@ -36,9 +36,11 @@ use crate::mfunc::{MFunc, Op};
 /// The register `op` compares with zero (`cmp x, #0`), and its width.
 fn compared_with_zero(op: &Op) -> Option<Gpr> {
     match op {
-        Op::I(Inst::AddSubImm {
-            op: AddSub { subtract: true, set_flags: true }, rd: Gpr::R31, rn, imm12: 0, ..
-        }) if rn.is_virtual() => Some(*rn),
+        Op::I(Inst::AddSubImm { op: AddSub { subtract: true, set_flags: true }, rd: Gpr::R31, rn, imm12: 0, .. })
+            if rn.is_virtual() =>
+        {
+            Some(*rn)
+        }
         _ => None,
     }
 }
@@ -47,21 +49,20 @@ fn compared_with_zero(op: &Op) -> Option<Gpr> {
 /// in a way this pass does not follow.
 fn flag_reader(op: &Op) -> Option<Option<Cond>> {
     match op {
-        Op::I(Inst::BranchCond { cond, .. } | Inst::CondSelect { cond, .. } | Inst::CondCompare { cond, .. }) => {
-            Some(Some(*cond))
-        }
+        Op::I(
+            Inst::BranchCond { cond, .. } | Inst::CondSelect { cond, .. } | Inst::CondCompare { cond, .. },
+        ) => Some(Some(*cond)),
         Op::I(Inst::FpSelect { cond, .. }) => Some(Some(*cond)),
         _ => None,
     }
 }
 
-/// `convertToFlagSettingOpc`: the instruction that does `op` and sets the
-/// flags.
+/// `convertToFlagSettingOpc`: the instruction that does `op` and sets the flags.
 fn flag_setting_form(op: &mut Op) -> bool {
     match op {
-        Op::I(Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. })
-            if !op.set_flags =>
-        {
+        Op::I(
+            Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. },
+        ) if !op.set_flags => {
             op.set_flags = true;
             true
         }
@@ -89,10 +90,7 @@ fn convertible(op: &Op) -> bool {
 
 /// Whether `op` reads the flags with a condition other than N or Z.
 fn reads_beyond_nz(op: &Op) -> bool {
-    !matches!(
-        flag_reader(op),
-        None | Some(Some(Cond::Eq | Cond::Ne | Cond::Mi | Cond::Pl))
-    )
+    !matches!(flag_reader(op), None | Some(Some(Cond::Eq | Cond::Ne | Cond::Mi | Cond::Pl)))
 }
 
 /// `counts[i]` of the first `i` operations that `is` holds for.
@@ -145,13 +143,9 @@ pub fn run(function: &mut MFunc) {
             debug_assert!(done, "a convertible maker converts");
         }
         let mut index = 0;
-        block
-            .ops
-            .retain(
-                |_| {
-                    index += 1;
-                    !dropped[index - 1]
-                },
-            );
+        block.ops.retain(|_| {
+            index += 1;
+            !dropped[index - 1]
+        });
     }
 }

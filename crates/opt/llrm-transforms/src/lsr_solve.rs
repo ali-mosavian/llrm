@@ -267,12 +267,11 @@ impl Collection<'_, '_> {
             // DEVIATE LU14: `SolveRecurse` requires of a use the registers the
             // uses before it chose, so a cheaper combination that starts with
             // a later use is never rated (rcflip's RAMP loop: 4 instructions
-            // against 2 with the uses the other way round). The uses are also
-            // taken in the opposite order, and its solution kept
-            // where it costs less by the target's comparator; a tie
-            // keeps the pin's order. A target opts in
-            // (`lsr_solves_both_use_orders`). Cost: one more search
-            // per instance.
+            // against 2 with the uses the other way round). The uses are also taken
+            // in the opposite order, and its solution kept where it costs less
+            // by the target's comparator; a tie keeps the pin's order. A
+            // target opts in (`lsr_solves_both_use_orders`). Cost: one more
+            // search per instance.
             if self.uses.len() > 1 && !solution.is_empty() && self.tti.lsr_solves_both_use_orders() {
                 let (other, other_cost) = self.search(se, &reversed);
                 // It must save an instruction over the first order's solution
@@ -314,8 +313,7 @@ impl Collection<'_, '_> {
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         // DEVIATE LU15: a loop with an address keeps the solution that
         // reduces it, where the target says so.
-        let spared =
-            self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
+        let spared = self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
         if self.baseline_cost.is_less(self.tti, &solution_cost)
             && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
                 || spills && self.tti.lsr_drops_spilling_solution())

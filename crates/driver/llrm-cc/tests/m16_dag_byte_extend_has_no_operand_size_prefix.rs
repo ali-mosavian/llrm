@@ -26,8 +26,5 @@ fn a_byte_extended_to_a_word_uses_the_16_bit_form_at_m16() {
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let listing = std::fs::read_to_string(dir.join("c.s")).unwrap();
     assert!(!listing.contains("movsx e") && !listing.contains("movzx e"), "a 32-bit register extend:\n{listing}");
-    assert!(
-        listing.contains("movsx ax, byte") || listing.contains("movsx cx, byte"),
-        "expected a 16-bit movsx:\n{listing}"
-    );
+    assert!(listing.contains("movsx ax, byte") || listing.contains("movsx cx, byte"), "expected a 16-bit movsx:\n{listing}");
 }

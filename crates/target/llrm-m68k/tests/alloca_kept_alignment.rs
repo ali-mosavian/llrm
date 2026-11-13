@@ -21,12 +21,8 @@ fn an_object_aligned_past_what_the_frame_keeps_is_not_assumed_aligned() {
     for cpu in ["68000", "68020"] {
         for level in [Level::O1, Level::O2, Level::Os] {
             let out = assembly(MASKED, cpu_of(cpu).unwrap(), level).expect("compiles");
-            // clamped to 4, only bit 2 of the address is unknown: `ptr & 7` is
-            // `ptr & 4`, not 0
-            assert!(
-                out.contains("and.l") && !out.contains("moveq\t#0, %d0"),
-                "{cpu} {level:?}: `ptr & 7` folded:\n{out}"
-            );
+            // clamped to 4, only bit 2 of the address is unknown: `ptr & 7` is `ptr & 4`, not 0
+            assert!(out.contains("and.l") && !out.contains("moveq\t#0, %d0"), "{cpu} {level:?}: `ptr & 7` folded:\n{out}");
         }
     }
 }

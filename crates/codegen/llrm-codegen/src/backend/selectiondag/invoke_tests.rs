@@ -23,19 +23,10 @@ fn an_invoke_is_a_call_then_a_branch_to_the_normal_block() {
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let build = |info: &mut FunctionLoweringInfo, block| {
-        build_block(
-            &module,
-            function,
-            &layout,
-            &BuilderTarget::for_pointer_bits(16),
-            &llrm_x86_m16::M16,
-            &convention,
-            info,
-            block,
-        )
-        .unwrap_or_else(|why| panic!("{}", why.0))
-        .dag
-        .dump()
+        build_block(&module, function, &layout, &BuilderTarget::for_pointer_bits(16), &llrm_x86_m16::M16, &convention, info, block)
+            .unwrap_or_else(|why| panic!("{}", why.0))
+            .dag
+            .dump()
     };
     let blocks: Vec<_> = function.layout().to_vec();
     let entry = build(&mut info, blocks[0]);

@@ -37,16 +37,7 @@ fn lowered_call_mask() -> Vec<u16> {
     let entry = dag.entry_node();
     let a = dag.get_register(EVT::I32, 1);
     let callee = dag.get_global_address(EVT::I32, 7, 0);
-    let argument = Out {
-        value: a,
-        ext: Ext::Any,
-        pointer: false,
-        arg_vt: EVT::I32,
-        split: false,
-        variadic: false,
-        sret: false,
-        byval: None,
-    };
+    let argument = Out { value: a, ext: Ext::Any, pointer: false, arg_vt: EVT::I32, split: false, variadic: false, sret: false, byval: None };
     M68kCalling::default().lower_call(&mut dag, entry, callee, &[argument], &[]);
     let masks: Vec<Vec<u16>> = dag
         .nodes()

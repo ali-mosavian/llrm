@@ -17,9 +17,9 @@ pub mod registers;
 pub mod routines;
 pub mod runtime;
 pub mod schedule;
-pub mod testing;
 pub mod timings;
 pub mod tune;
+pub mod testing;
 
 use std::rc::Rc;
 
@@ -56,16 +56,14 @@ pub struct StringRegisters {
     pub tail: RegId,
 }
 
-/// The registers a string instruction (`rep movs`, `rep stos`) uses, each by
-/// its root: the view of the pointer's width is the operand (`cx`, `ecx`,
-/// `rcx`).
+/// The registers a string instruction (`rep movs`, `rep stos`) uses, each by its
+/// root: the view of the pointer's width is the operand (`cx`, `ecx`, `rcx`).
 #[derive(Clone, Copy, Debug)]
 pub struct StringRoots {
     pub count: RegId,
     pub source: RegId,
     pub destination: RegId,
-    /// The data register a store or compare is made through (`al`, `ax`, `eax`,
-    /// `rax`).
+    /// The data register a store or compare is made through (`al`, `ax`, `eax`, `rax`).
     pub accumulator: RegId,
 }
 
@@ -835,10 +833,9 @@ pub trait Target {
         false
     }
 
-    /// DEVIATE DIV-HOT: where a size build takes the size divide, an `i64`
-    /// divide in a loop takes the speed routine. The size routine is a bit
-    /// a round, some 600 instructions slower; the module pays the speed
-    /// one's extra bytes once.
+    /// DEVIATE DIV-HOT: where a size build takes the size divide, an `i64` divide in a loop
+    /// takes the speed routine. The size routine is a bit a round, some 600 instructions
+    /// slower; the module pays the speed one's extra bytes once.
     fn fast_divide_in_loops_at_size(&self) -> bool {
         false
     }
@@ -1111,8 +1108,7 @@ pub struct FrameRegisters {
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
-    /// The locals' base takes the widest object's alignment
-    /// (`frame_object_aligned`).
+    /// The locals' base takes the widest object's alignment (`frame_object_aligned`).
     pub object_aligned: bool,
     /// The bytes below the stack pointer a leaf function's locals may use
     /// without a `sub`; 0 where the ABI has no red zone.

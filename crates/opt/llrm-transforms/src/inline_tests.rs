@@ -1113,10 +1113,9 @@ b1:
     }
 }
 
-/// REC-9 asked `walk()` of the callee at every call site; the set is found
-/// once. Only a function with exactly one call of itself is linear: a tree
-/// (two) and a mutual recursion (none to itself) are not, and neither is a
-/// plain function.
+/// REC-9 asked `walk()` of the callee at every call site; the set is found once.
+/// Only a function with exactly one call of itself is linear: a tree (two) and a
+/// mutual recursion (none to itself) are not, and neither is a plain function.
 #[test]
 fn test_linear_recursive_holds_the_functions_with_one_self_call() {
     let module = parsed(

@@ -55,8 +55,7 @@ pub struct FixupLeas {
     pub slow_3ops: bool,
     pub slow_incdec: bool,
     pub size: bool,
-    /// DEVIATE M16-LEA-1: split an in-place `lea` where the encoder says the
-    /// split is shorter.
+    /// DEVIATE M16-LEA-1: split an in-place `lea` where the encoder says the split is shorter.
     pub shrink_in_place: bool,
 }
 
@@ -251,8 +250,7 @@ pub fn opt_two_addr_lea(
 /// `67 66` (`lea eax,[eax+edx+1]` is 6 B, `add eax,edx; inc eax` 5 B). In
 /// place only: with a live source the split needs a copy.
 ///
-/// [pin]:
-/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupLEAs.cpp#L752
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupLEAs.cpp#L752
 pub fn shorter_in_place_split(
     regs: Regs,
     bits: u32,
@@ -284,7 +282,11 @@ pub fn shorter_in_place_split(
         })
     };
     let steps = [
-        step(Operation::Binary, names.add, vec![Loc::Reg(*d), Loc::Reg(Reg { register: other, width: d.width })]),
+        step(
+            Operation::Binary,
+            names.add,
+            vec![Loc::Reg(*d), Loc::Reg(Reg { register: other, width: d.width })],
+        ),
         match offset {
             1 | -1 => step(Operation::Unary, if offset == 1 { names.inc } else { names.dec }, vec![Loc::Reg(*d)]),
             _ => step(
@@ -930,9 +932,7 @@ mod tests {
             let b = block(vec![lea], vec![]);
             let dead: DeadAfter = [(id(&b.insns[0]), arithmetic_flags())].into_iter().collect();
             shorter_in_place_split(regs(), 16, &b, 0, &dead).map(|made| {
-                made.iter()
-                    .map(|one| one.what.as_ref().unwrap().name.as_deref().unwrap().to_owned())
-                    .collect::<Vec<_>>()
+                made.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().unwrap().to_owned()).collect::<Vec<_>>()
             })
         };
         let names = |parts: &[&str]| Some(parts.iter().map(|one| one.to_string()).collect::<Vec<_>>());

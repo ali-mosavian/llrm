@@ -68,8 +68,8 @@ pub trait SchedulingModel {
     ) -> u32;
 
     /// Whether a def that nothing in the region reads holds its latency to
-    /// the region end (`ScheduleDAGInstrs::buildSchedGraph`'s edge to
-    /// `ExitSU`). DEVIATE SB3: off by default; x86 has not measured it.
+    /// the region end (`ScheduleDAGInstrs::buildSchedGraph`'s edge to `ExitSU`).
+    /// DEVIATE SB3: off by default; x86 has not measured it.
     fn exit_edges(&self) -> bool {
         false
     }

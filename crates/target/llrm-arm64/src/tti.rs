@@ -474,8 +474,8 @@ impl Tti for AArch64 {
         true
     }
 
-    /// `Tti::opt_size_inline_guard_yields_to_negative_cost`: where the pin's
-    /// own cost is below zero it counts the inline as shrinking the caller.
+    /// `Tti::opt_size_inline_guard_yields_to_negative_cost`: where the pin's own
+    /// cost is below zero it counts the inline as shrinking the caller.
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }

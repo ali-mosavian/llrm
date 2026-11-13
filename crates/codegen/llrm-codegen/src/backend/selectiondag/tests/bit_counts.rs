@@ -46,8 +46,7 @@ fn legalized_by(
         tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: true,
             sse2: false,
@@ -144,8 +143,7 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,

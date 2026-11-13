@@ -2926,10 +2926,7 @@ impl<'a> TypeLegalizer<'a> {
         if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
             && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
             && !self.product_fits(lhs, rhs, bits)
-            && ![lhs, rhs]
-                .into_iter()
-                .filter_map(|one| self.dag.constant(one))
-                .any(|c| self.tli.multiply_by_constant_stays_inline(c))
+            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
         {
             let vt = self.dag.value_type(value);
@@ -3218,9 +3215,8 @@ impl<'a> TypeLegalizer<'a> {
         };
         // A dword divisor's size form always does two `div`s: -Os only, -O1
         // keeps the clocks.
-        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that
-        // runs more than once a call the speed routine, whose bytes the
-        // module pays once.
+        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that runs more than once a
+        // call the speed routine, whose bytes the module pays once.
         let hot = self.tli.fast_divide_in_loops() && self.dag.config().block_frequency > 1.0;
         let small = (self.tli.small_divide() && (wide || self.tli.size_only()) && !hot)
             .then(|| arch.divide_routine_small(signed, wide, used).ok())

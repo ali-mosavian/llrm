@@ -33,8 +33,7 @@ fn lowered(
         &mut X86Lowering {
             multiply_early_out: None,
             share_products: false,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             cmov,
             sse2: false,
             min_size: false,
@@ -161,8 +160,7 @@ fn x86_runs_the_pin_combines_the_corpus_judged_better() {
     let hooks = X86Lowering {
         multiply_early_out: None,
         share_products: false,
-        imul_if_smaller: false,
-        hot_chains: false,
+        imul_if_smaller: false, hot_chains: false,
         cmov: true,
         sse2: false,
         min_size: false,
@@ -192,8 +190,7 @@ fn m16_distributes_a_multiply_of_a_sum_only_for_size() {
     let flat = X86Lowering {
         multiply_early_out: None,
         share_products: false,
-        imul_if_smaller: false,
-        hot_chains: false,
+        imul_if_smaller: false, hot_chains: false,
         cmov: true,
         sse2: false,
         min_size: false,
@@ -232,8 +229,7 @@ fn x86_narrows_a_mask_over_a_frozen_extending_load() {
     super::pin_folds::masked_frozen_extload(&mut dag);
     let mut x86 = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false,
-        hot_chains: false,
+        imul_if_smaller: false, hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,

@@ -14,8 +14,7 @@ pub use llrm_dagisel::predicates::*;
 /// so it does not depend on which of them was selected first; the threshold
 /// is the encoding table's bytes, not 2.
 ///
-/// DEVIATE Z80-IMM-USES (owner llrm-target-z80, exit 2026-11-30): see
-/// docs/working/above-main-rows.md.
+/// DEVIATE Z80-IMM-USES (owner llrm-target-z80, exit 2026-11-30): see docs/working/above-main-rows.md.
 pub fn imm_stored_in_immediate_form<D: Dag, H: Hooks<D>>((dag, hooks, v): (&D, &H, SDValue)) -> bool {
     let users = hooks.uses_at_selection_start(v.node).unwrap_or(if dag.node_has_one_use(v.node) { 1 } else { 2 });
     crate::expand::immediate_store_is_not_longer(users)

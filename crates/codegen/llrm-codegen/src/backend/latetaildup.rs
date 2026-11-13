@@ -146,9 +146,8 @@ fn tail_duplicate(
             continue;
         }
         if chosen.contains(&place) {
-            // A predecessor with no instruction at all (it only falls into the
-            // tail) is given a stand-in at its own place to anchor
-            // the copy's addresses.
+            // A predecessor with no instruction at all (it only falls into the tail) is
+            // given a stand-in at its own place to anchor the copy's addresses.
             let jump = old
                 .insns
                 .iter()
@@ -160,9 +159,8 @@ fn tail_duplicate(
                 .cloned()
                 .or_else(|| old.insns.last().cloned())
                 .unwrap_or_else(|| Arc::new(Insn::new(old.at, Some((old.at, old.at)), None, Vec::new(), Vec::new())));
-            // A predecessor that falls into the tail has no jump to drop: its
-            // last instruction stays (it was lost, `add eax, 32` of
-            // __clzdi2).
+            // A predecessor that falls into the tail has no jump to drop: its last
+            // instruction stays (it was lost, `add eax, 32` of __clzdi2).
             let jumps = operation(&jump) == Some(Operation::Jump)
                 && jump.what.as_ref().is_some_and(|what| what.target == Some(tail.at));
             let mut insns: Vec<Arc<Insn>> = old
@@ -418,10 +416,9 @@ mod tests {
         assert_eq!(names(at(&done, 1)), ["mov", "mov", "jmp"]);
         assert!(done.blocks.iter().any(|block| block.at == 3), "block 0 still reaches the tail");
     }
-    /// sfm16_float_i2f `-m64 -O1` (any of six softfloat helpers together): a
-    /// predecessor with no instruction that only falls into the tail was
-    /// chosen to take the copy and the compile panicked with "a block with
-    /// an instruction". It takes the copy like the other arm.
+    /// sfm16_float_i2f `-m64 -O1` (any of six softfloat helpers together): a predecessor with no
+    /// instruction that only falls into the tail was chosen to take the copy and the compile
+    /// panicked with "a block with an instruction". It takes the copy like the other arm.
     #[test]
     fn test_an_empty_predecessor_that_falls_into_the_tail_takes_the_copy() {
         let shape = body(vec![

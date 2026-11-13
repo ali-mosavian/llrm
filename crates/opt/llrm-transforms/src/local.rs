@@ -1245,8 +1245,7 @@ fn same_node(
     a: MetadataId,
     b: MetadataId,
 ) -> bool {
-    // A node this pass made is not in `metadata` yet: it is itself and no
-    // other.
+    // A node this pass made is not in `metadata` yet: it is itself and no other.
     match (metadata.get(a.0 as usize), metadata.get(b.0 as usize)) {
         _ if a == b => true,
         (Some(x), Some(y)) => !x.distinct && !y.distinct && x == y,

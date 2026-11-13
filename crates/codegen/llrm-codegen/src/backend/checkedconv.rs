@@ -1,5 +1,5 @@
-//! Expands `llvm.experimental.fp{to}{s,u}i.checked`, a float taken to an
-//! integer together with whether it fits, before instruction selection.
+//! Expands `llvm.experimental.fp{to}{s,u}i.checked`, a float taken to an integer together
+//! with whether it fits, before instruction selection.
 //!
 //! # How it works
 //! Where the target converts into an integer wider than the result
@@ -38,7 +38,7 @@ use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Module, Operand};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use super::expansion;
@@ -111,15 +111,20 @@ fn expand(
         None => {
             let cast = if signed { CastOp::FPToSI } else { CastOp::FPToUI };
             let value = make(function, inst, Opcode::Cast(cast), value_ty, vec![x])?;
-            let (minimum, maximum) =
-                if signed { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) };
+            let (minimum, maximum) = if signed {
+                (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+            } else {
+                (0, (1i128 << bits) - 1)
+            };
             // An f32 holds no value strictly between -2^31 - 1 and -2^31.
-            let (lower, strict) =
-                if matches!(context.types.get(from), Type::Float(FloatKind::Float)) && bits == 32 && signed {
-                    (minimum, false)
-                } else {
-                    (minimum - 1, true)
-                };
+            let (lower, strict) = if matches!(context.types.get(from), Type::Float(FloatKind::Float))
+                && bits == 32
+                && signed
+            {
+                (minimum, false)
+            } else {
+                (minimum - 1, true)
+            };
             let [lower, upper] = [lower, maximum + 1].map(|bound| float_constant(context, from, bound));
             let [lower, upper] = [lower?, upper?];
             let above = make(

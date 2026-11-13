@@ -27,13 +27,6 @@ fn a_zero_test_of_a_masked_i32_is_a_shift() {
         let text = listing(source, flags);
         assert!(!text.contains("67108863") && !text.contains("2147483647"), "{flags:?}: {text}");
         assert!(text.contains("shl e") && text.contains(", 6\n"), "{flags:?}: {text}");
-        assert!(
-            text.lines().any(|l| l.trim().starts_with("add e")
-                && l.trim()
-                    .split_once(" ")
-                    .map(|(_, r)| r.split(", ").collect::<Vec<_>>())
-                    .is_some_and(|v| v[0] == v[1])),
-            "{text}"
-        );
+        assert!(text.lines().any(|l| l.trim().starts_with("add e") && l.trim().split_once(" ").map(|(_, r)| r.split(", ").collect::<Vec<_>>()).is_some_and(|v| v[0] == v[1])), "{text}");
     }
 }

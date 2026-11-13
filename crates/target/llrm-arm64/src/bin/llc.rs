@@ -6,8 +6,7 @@
 //! instructions as text; `-O<n>`: the mid-end's level, -O2 by default, as
 //! clang's `-O` of the same IR; `--no-opt`: no mid-end, for IR that is already
 //! optimized; `-f[no-]PASS`: a mid-end pass as gcc names it,
-//! `-fno-unroll-loops`; `--isel=dag`: accepted, the only selector). The
-//! platform is the module's `target triple`.
+//! `-fno-unroll-loops`; `--isel=dag`: accepted, the only selector). The platform is the module's `target triple`.
 
 use llrm_arm64::driver;
 
@@ -38,8 +37,7 @@ fn run() -> i32 {
                 llrm_env::preset("LLRM_EXP_INLINETRACE");
             }
             "--no-opt" => level = driver::Level::O0,
-            // `llrm-cc` forwards `--isel=` to every target's llc: the DAG path
-            // is the only selector.
+            // `llrm-cc` forwards `--isel=` to every target's llc: the DAG path is the only selector.
             "--isel=dag" => {}
             other if other.starts_with("--isel=") => {
                 eprintln!("llrm-arm64-llc: {other}: the DAG path is the only selector (--isel=dag)");

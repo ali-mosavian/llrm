@@ -57,8 +57,7 @@ fn section(
     }
 }
 
-/// (name, sh_flags, sh_entsize) of each section header of a little-endian ELF64
-/// file.
+/// (name, sh_flags, sh_entsize) of each section header of a little-endian ELF64 file.
 fn headers(bytes: &[u8]) -> Vec<(String, u64, u64)> {
     let word =
         |at: usize, width: usize| bytes[at..at + width].iter().rev().fold(0u64, |sum, &b| sum << 8 | u64::from(b));
@@ -95,8 +94,7 @@ fn a_constant_section_is_read_only_and_mergeable_with_its_entry_size() {
         frames: Vec::new(),
     };
     let found = headers(&write::<Plain>(&object).unwrap());
-    let of =
-        |name: &str| found.iter().find(|one| one.0 == name).cloned().unwrap_or_else(|| panic!("no {name}: {found:?}"));
+    let of = |name: &str| found.iter().find(|one| one.0 == name).cloned().unwrap_or_else(|| panic!("no {name}: {found:?}"));
     assert_eq!(of(".rodata.cst8"), (".rodata.cst8".to_owned(), 0x12, 8));
     assert_eq!(of(".rodata.cst4"), (".rodata.cst4".to_owned(), 0x12, 4));
 }
@@ -128,8 +126,7 @@ fn a_relocation_to_a_constant_entry_names_the_entrys_own_symbol() {
         frames: Vec::new(),
     };
     let bytes = write::<Plain>(&object).unwrap();
-    let word =
-        |at: usize, width: usize| bytes[at..at + width].iter().rev().fold(0u64, |sum, &b| sum << 8 | u64::from(b));
+    let word = |at: usize, width: usize| bytes[at..at + width].iter().rev().fold(0u64, |sum, &b| sum << 8 | u64::from(b));
     let (table, size, number) = (word(0x28, 8) as usize, word(0x3A, 2) as usize, word(0x3C, 2) as usize);
     // The `.rela.text` section: type SHT_RELA (4).
     let rela = (0..number).map(|index| table + index * size).find(|&at| word(at + 4, 4) == 4).unwrap();

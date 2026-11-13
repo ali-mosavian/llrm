@@ -11,9 +11,7 @@ fn hoisted(text: &str) -> String {
     let mut module = parsed(&format!("{HEAD}{text}"));
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(ConstantHoisting);
-    manager
-        .run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos { constant_hoisting: true, ..Default::default() }))
-        .unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos { constant_hoisting: true, ..Default::default() })).unwrap();
     printed(&module)
 }
 

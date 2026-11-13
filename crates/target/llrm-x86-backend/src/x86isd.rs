@@ -130,17 +130,11 @@ pub struct X86Names;
 pub static NAMES: X86Names = X86Names;
 
 impl TargetNodeNames for X86Names {
-    fn name(
-        &self,
-        code: u16,
-    ) -> Option<&'static str> {
+    fn name(&self, code: u16) -> Option<&'static str> {
         private_name(code)
     }
 
-    fn pin_id(
-        &self,
-        code: u16,
-    ) -> Option<u16> {
+    fn pin_id(&self, code: u16) -> Option<u16> {
         let name = private_name(code)?.strip_prefix("X86ISD::")?;
         Some(llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX))
     }
@@ -155,7 +149,10 @@ mod tests {
     #[test]
     fn test_names_and_pin_ids_survive_the_move() {
         assert_eq!(NAMES.name(1), Some("X86ISD::CALL"));
-        assert_eq!(NAMES.pin_id(1), llrm_dagisel::generated::ids::x86isd_id("CALL"));
+        assert_eq!(
+            NAMES.pin_id(1),
+            llrm_dagisel::generated::ids::x86isd_id("CALL")
+        );
         assert_eq!(NAMES.pin_id(9999), None);
     }
 }

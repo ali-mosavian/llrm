@@ -574,7 +574,11 @@ fn _refolded(
             bytes > 0 || (bytes == 0 && saved > 0)
         } else {
             let rate = cpu.speed_milliclocks_per_byte();
-            if rate == 0 { saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0) } else { saved + bytes * rate > 0 }
+            if rate == 0 {
+                saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
+            } else {
+                saved + bytes * rate > 0
+            }
         };
         if !pays {
             continue;

@@ -37,12 +37,7 @@ enum Known {
 /// step's price is taken off the bound before the smaller target is searched,
 /// and what is found is kept per target, so no target is searched twice for
 /// the same bound. Every option shrinks the target, so the search ends.
-pub(super) fn synth(
-    t: i64,
-    limit: i64,
-    memo: &mut Memo,
-    ops: &Ops,
-) -> Option<(Chain, i64)> {
+pub(super) fn synth(t: i64, limit: i64, memo: &mut Memo, ops: &Ops) -> Option<(Chain, i64)> {
     if t < 1 || limit <= 0 {
         return None;
     }
@@ -62,11 +57,7 @@ pub(super) fn synth(
     let mut try_step = |from: i64, steps: &[((&'static str, i64), i64)], memo: &mut Memo, bound: &mut i64| {
         let price: i64 = steps.iter().map(|&(_, p)| p).sum();
         // The copy that seeds a chain not starting with a `lea`.
-        let seed = if ops.seeded && from == 1 && !matches!(steps.first(), Some(((("lea" | "flea"), _), _))) {
-            ops.mov
-        } else {
-            0
-        };
+        let seed = if ops.seeded && from == 1 && !matches!(steps.first(), Some(((("lea" | "flea"), _), _))) { ops.mov } else { 0 };
         let price = price + seed;
         if let Some((mut chain, cost)) = synth(from, *bound - price, memo, ops) {
             chain.extend(steps.iter().map(|&(step, _)| step));
@@ -80,24 +71,15 @@ pub(super) fn synth(
         try_step(t >> m, &[(("shl", m), (ops.shift)(m))], memo, &mut bound);
     } else {
         let odd_part = |n: i64| n >> n.trailing_zeros();
-        // The largest `2^m +- 1` (m >= 2) below `t` that divides it is the only
-        // factor tried.
-        let factor = (2..=62)
-            .rev()
-            .find_map(
-                |m| [true, false]
-                    .into_iter()
-                    .find_map(
-                        |plus| {
-                            let factor = (1i64 << m) + if plus { 1 } else { -1 };
-                            (factor < t && t % factor == 0).then_some((m, plus, factor))
-                        },
-                    ),
-            );
-        // The neighbour with the smaller odd part goes first, the factor
-        // between the two.
-        let (near, far) =
-            if odd_part(t + 1) < odd_part(t - 1) { (Way::Above, Way::Below) } else { (Way::Below, Way::Above) };
+        // The largest `2^m +- 1` (m >= 2) below `t` that divides it is the only factor tried.
+        let factor = (2..=62).rev().find_map(|m| {
+            [true, false].into_iter().find_map(|plus| {
+                let factor = (1i64 << m) + if plus { 1 } else { -1 };
+                (factor < t && t % factor == 0).then_some((m, plus, factor))
+            })
+        });
+        // The neighbour with the smaller odd part goes first, the factor between the two.
+        let (near, far) = if odd_part(t + 1) < odd_part(t - 1) { (Way::Above, Way::Below) } else { (Way::Below, Way::Above) };
         let ways = [near, Way::Factor, Way::BelowLea, far];
         for way in ways {
             match way {

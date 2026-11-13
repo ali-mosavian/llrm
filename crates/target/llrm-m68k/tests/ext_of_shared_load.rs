@@ -10,11 +10,9 @@ define i32 @f(ptr %p, ptr %o) {
 }
 ";
 
-/// Once the extending-load fold asked whether a truncate is free (the pin's
-/// `ExtendUsesToFormExtLoad`), m68k, whose data registers hold the narrow value
-/// in their low word, stopped widening a load that a store also reads: the load
-/// became `move.w` + `and.l #65535` (`mul_words_to_long` +4 B, `pattern_fill`
-/// -Os +2 B).
+/// Once the extending-load fold asked whether a truncate is free (the pin's `ExtendUsesToFormExtLoad`), m68k, whose
+/// data registers hold the narrow value in their low word, stopped widening a load that a store also reads: the
+/// load became `move.w` + `and.l #65535` (`mul_words_to_long` +4 B, `pattern_fill` -Os +2 B).
 #[test]
 fn a_zext_of_a_load_a_store_also_reads_is_still_one_move_into_a_cleared_register() {
     for level in [Level::O2, Level::Os] {

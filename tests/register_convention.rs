@@ -209,8 +209,7 @@ fn a_variadic_function_on_a_flat_target_makes_a_full_width_list_pointer() {
         "int f(int a, int b, ...)\n{\n    __builtin_va_list ap;\n    __builtin_va_start(ap, b);\n    int c = __builtin_va_arg(ap, int);\n    __builtin_va_end(ap);\n    return c;\n}\n",
     );
     let lines = procedure(&text, "f_");
-    // #8029 keeps a one-pointer list in a register: the list folds away and `c`
-    // is read from the first variadic slot.
+    // #8029 keeps a one-pointer list in a register: the list folds away and `c` is read from the first variadic slot.
     assert!(lines.iter().any(|one| one == "mov eax, dword ptr [esp+12]"), "{lines:?}");
     assert!(!lines.iter().any(|one| one.starts_with("lea ax,") || one.starts_with("mov word ptr")), "{lines:?}");
 }

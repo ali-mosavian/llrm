@@ -1443,11 +1443,9 @@ entry:
     assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
 }
 
-/// The carry out of a 128-bit unsigned add was the constant false: the
-/// combiner's "cannot overflow" test summed the two operands' possible maxima
-/// in a `u128`, which wraps at 128 bits and read as "fits".
-/// `llvm.uadd.with.overflow.i128` compiled to `add; adc` and `xor eax, eax`
-/// (u128 max + 1 reported no overflow).
+/// The carry out of a 128-bit unsigned add was the constant false: the combiner's "cannot overflow" test summed the two
+/// operands' possible maxima in a `u128`, which wraps at 128 bits and read as "fits". `llvm.uadd.with.overflow.i128`
+/// compiled to `add; adc` and `xor eax, eax` (u128 max + 1 reported no overflow).
 #[test]
 fn an_m64_128_bit_unsigned_add_keeps_its_carry_out() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
@@ -1486,12 +1484,10 @@ entry:
     assert!(names.iter().all(|n| n != "ucomiss" && !n.starts_with('j')), "{names:?}");
 }
 
-/// A signed saturating subtract compared `x - y` through a second `sub` that
-/// kept its difference (and a `test` of it), beside the `sub` whose overflow
-/// selects: `mov rax, rdi; sub rax, rsi; setns cl; ..; sub rdi, rsi; cmovno`
-/// where the pin has `cmp rdi, rsi; setns cl; ..; sub; cmovno` (sat_builtins
-/// m64 -O1 +28 B). `EmitTest` takes `SSUBO`'s flags as an `X86ISD::SUB`'s,
-/// whose unread difference the peephole makes a `cmp`.
+/// A signed saturating subtract compared `x - y` through a second `sub` that kept its difference (and a `test` of
+/// it), beside the `sub` whose overflow selects: `mov rax, rdi; sub rax, rsi; setns cl; ..; sub rdi, rsi; cmovno`
+/// where the pin has `cmp rdi, rsi; setns cl; ..; sub; cmovno` (sat_builtins m64 -O1 +28 B). `EmitTest` takes
+/// `SSUBO`'s flags as an `X86ISD::SUB`'s, whose unread difference the peephole makes a `cmp`.
 #[test]
 fn an_m64_signed_saturating_subtract_compares_with_a_cmp_beside_its_one_sub() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
@@ -1511,8 +1507,7 @@ define i64 @f(i64 %a, i64 %b) {
     assert_eq!((count("sub"), count("cmp"), count("test")), (1, 1, 0), "{names:?}");
 }
 
-/// The unsigned form: the borrow and the zero difference are read from one
-/// `cmp`, not a `sub` that keeps its difference.
+/// The unsigned form: the borrow and the zero difference are read from one `cmp`, not a `sub` that keeps its difference.
 #[test]
 fn an_m64_unsigned_subtract_with_borrow_and_zero_test_is_one_cmp() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
@@ -1539,10 +1534,8 @@ define i64 @f(i64 %a, i64 %b) {
     assert_eq!((count("sub"), count("cmp"), count("test")), (0, 1, 0), "{names:?}");
 }
 
-/// `ctlz(x)` with a defined zero took `bsr; cmove; xor` at m64:
-/// `hasBitScanPassThrough` (is64Bit) lets the `bsr` keep its destination when
-/// `x` is zero, so a constant preloaded there is the answer (bitcount_u32 -O1,
-/// +7 B).
+/// `ctlz(x)` with a defined zero took `bsr; cmove; xor` at m64: `hasBitScanPassThrough` (is64Bit) lets the `bsr`
+/// keep its destination when `x` is zero, so a constant preloaded there is the answer (bitcount_u32 -O1, +7 B).
 #[test]
 fn an_m64_ctlz_with_a_defined_zero_is_a_bsr_with_no_cmov() {
     let names = m64_names(
@@ -1559,8 +1552,7 @@ declare i32 @llvm.ctlz.i32(i32, i1)
     assert!(names.iter().all(|n| !n.starts_with("cmov")), "{names:?}");
 }
 
-/// The same for `cttz(x)`: `bsf` passes its destination through, so no compare
-/// and no `cmove` (bitcount_u32 -O1).
+/// The same for `cttz(x)`: `bsf` passes its destination through, so no compare and no `cmove` (bitcount_u32 -O1).
 #[test]
 fn an_m64_cttz_with_a_defined_zero_is_a_bsf_with_no_cmov() {
     let names = m64_names(

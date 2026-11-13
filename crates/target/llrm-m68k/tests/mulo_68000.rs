@@ -1,6 +1,5 @@
-//! `mulu.l` and `muls.l` are 68020 instructions. A 32-bit multiply with
-//! overflow selected them at every CPU, so the 68000 build of
-//! `overflow_builtins` did not assemble ("statement ignored", 5 cells).
+//! `mulu.l` and `muls.l` are 68020 instructions. A 32-bit multiply with overflow selected them at
+//! every CPU, so the 68000 build of `overflow_builtins` did not assemble ("statement ignored", 5 cells).
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

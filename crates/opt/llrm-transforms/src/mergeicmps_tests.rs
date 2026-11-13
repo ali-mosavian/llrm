@@ -86,8 +86,7 @@ done:
     };
     let off = through(false);
     let on = through(true);
-    // ExpandMemCmp follows the merge: the 4-byte `memcmp` becomes one i32
-    // compare.
+    // ExpandMemCmp follows the merge: the 4-byte `memcmp` becomes one i32 compare.
     assert!(off.matches("load i16").count() == 4 && !off.contains("load i32"), "{off}");
     assert!(on.matches("load i32").count() == 2 && !on.contains("load i16"), "{on}");
 }

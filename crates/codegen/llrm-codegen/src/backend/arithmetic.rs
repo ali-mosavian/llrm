@@ -9,8 +9,8 @@
 //!
 //! `cheapest_chain` is the cheapest sequence of `shl`, `add`, `sub`, `lea`
 //! and copies. Horner chains over binary and signed digits give a first
-//! bound. Then `synth` searches (Bernstein 1986, branch and bound): an even `t`
-//! is a shift of `t >> m`; an odd `t` is `t-1` or `t+1` plus or minus the
+//! bound. Then `synth` searches (Bernstein 1986, branch and bound): an even `t` is
+//! a shift of `t >> m`; an odd `t` is `t-1` or `t+1` plus or minus the
 //! source; a factor `2^m +- 1` is `cur + cur<<m` or `cur<<m - cur`, one
 //! `lea` for a scale of 2, 4 or 8. The search stops at the best cost so far
 //! and remembers what it found per `t`. A negative multiplier is the chain
@@ -29,8 +29,8 @@
 //! Results are kept in the profile, as a multiply is asked about again and
 //! again.
 //!
-//! DEVIATE M1 (owner anyisa/w10, exit 2026-12-01; AM-M1, priced): the pin's X86
-//! does a scalar constant multiply by `combineMul`
+//! DEVIATE M1 (owner anyisa/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
+//! by `combineMul`
 //! ([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
 //! and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power
 //! of two) and shifts and adds for 2^n +- 1, otherwise `imul`; ours searches
@@ -259,8 +259,7 @@ pub fn cheapest_narrow_chain<'a>(
     chains(number, cpu, false)
 }
 
-/// The chain of `number`: of its magnitude negated, or, for a negative `t` (`a
-/// * -7` is `a
+/// The chain of `number`: of its magnitude negated, or, for a negative `t` (`a * -7` is `a
 /// - a*8`), of `1 - number` shifted and taken from the source.
 fn chains<'a>(
     number: i64,
@@ -307,11 +306,8 @@ fn unremembered_chains(
     let up = 1 - number;
     let m = i64::from(up.trailing_zeros());
     let q = up >> m;
-    let shifted = if q == 1 {
-        Some((Vec::new(), cost(target, "mov_rr")?))
-    } else {
-        positive_chains_ranked(q, target, with_lea, bytes)?
-    };
+    let shifted =
+        if q == 1 { Some((Vec::new(), cost(target, "mov_rr")?)) } else { positive_chains_ranked(q, target, with_lea, bytes)? };
     if let Some((mut parts, price)) = shifted {
         parts.extend([("shl", m), ("rsub", 0)]);
         consider(parts, price + shift(target, m)? + alu);
@@ -467,8 +463,7 @@ fn positive_chains_ranked<'a>(
         seeded: bytes.is_some(),
     };
     let limit = best.as_ref().map_or(i64::MAX / 4, |(parts, price)| weigh(parts, *price));
-    let synthesized =
-        chain_search::synth(number, limit, &mut chain_search::Memo::default(), &ops).map(|(parts, _)| parts);
+    let synthesized = chain_search::synth(number, limit, &mut chain_search::Memo::default(), &ops).map(|(parts, _)| parts);
     if let Some(parts) = synthesized {
         let price = clocks(&parts)?;
         if best.as_ref().is_none_or(|(kept_parts, kept)| weigh(&parts, price) < weigh(kept_parts, *kept)) {
@@ -514,10 +509,9 @@ struct Ops<'a> {
     /// A `lea` of `base + index*scale`, where the target has the scale.
     lea: &'a dyn Fn(i64) -> Option<i64>,
     /// Whether the copy that seeds a chain not starting with a `lea` is
-    /// counted, as `chains` counts it in a chain's clocks. A clocks-only
-    /// ranking leaves it out; a ranking by (clocks, bytes) must count it,
-    /// or a chain with a seed looks as cheap as one without and the search
-    /// keeps the shorter, slower one.
+    /// counted, as `chains` counts it in a chain's clocks. A clocks-only ranking
+    /// leaves it out; a ranking by (clocks, bytes) must count it, or a chain with a seed looks as cheap as one
+    /// without and the search keeps the shorter, slower one.
     seeded: bool,
 }
 
@@ -530,10 +524,7 @@ mod tests {
     /// 1986 paper now; the chains it finds are the same.
     #[test]
     fn test_the_search_names_no_gcc_source() {
-        for (file, text) in [
-            ("arithmetic.rs", include_str!("arithmetic.rs")),
-            ("chain_search.rs", include_str!("arithmetic/chain_search.rs")),
-        ] {
+        for (file, text) in [("arithmetic.rs", include_str!("arithmetic.rs")), ("chain_search.rs", include_str!("arithmetic/chain_search.rs"))] {
             let production = text.split("#[cfg(test)]\nmod tests {").next().unwrap();
             for name in ["gcc-mirror", "expmed", "synth_mult", "alg_hash", "gcc.gnu"] {
                 assert!(!production.contains(name), "{file} names {name}");
@@ -579,10 +570,7 @@ mod tests {
             let Some((old, old_clocks)) = unremembered_chains(number, profile, true, None).unwrap() else { continue };
             let bytes = Some(Bytes { arch, width: 4 });
             let (new, new_clocks) = unremembered_chains(number, profile, true, bytes).unwrap().expect("one was found");
-            assert!(
-                new_clocks <= old_clocks,
-                "x{number}: {new:?} ({new_clocks}) is slower than {old:?} ({old_clocks})"
-            );
+            assert!(new_clocks <= old_clocks, "x{number}: {new:?} ({new_clocks}) is slower than {old:?} ({old_clocks})");
             let (old_bytes, new_bytes) = (chain_bytes(&old, 4, arch), chain_bytes(&new, 4, arch));
             if new_bytes < old_bytes {
                 shorter += 1;

@@ -1,35 +1,29 @@
 //! A frame addressed from SP, not from IX.
 //!
 //! # How it works
-//! The IX frame costs `push ix; ld ix,#0; add ix,sp` (8 B, 44 T) and `ld sp,ix;
-//! pop ix` on every return, whatever the function touches in it. Without it the
-//! frame objects and stack arguments lie where SP puts them: `ld iy,#k; add
-//! iy,sp` (6 B, 29 T) sets a base for a run of accesses with no call (IY is
-//! call-clobbered) and no label in between, and `pop iy` (or one `add iy,sp`)
-//! undoes the frame. The pushes since entry are tracked by name, so a label
-//! reached with two different depths keeps the IX frame. Carry is saved around
-//! `add iy,sp` where a later instruction may read it.
+//! The IX frame costs `push ix; ld ix,#0; add ix,sp` (8 B, 44 T) and `ld sp,ix; pop ix` on every
+//! return, whatever the function touches in it. Without it the frame objects and stack arguments
+//! lie where SP puts them: `ld iy,#k; add iy,sp` (6 B, 29 T) sets a base for a run of accesses
+//! with no call (IY is call-clobbered) and no label in between, and `pop iy` (or one `add iy,sp`)
+//! undoes the frame. The pushes since entry are tracked by name, so a label reached with two
+//! different depths keeps the IX frame. Carry is saved around `add iy,sp` where a later
+//! instruction may read it.
 //!
-//! The form stays only where the function is no larger and no slower, loops
-//! weighted, than with IX (`price_emitted`). A label reached through a jump
-//! table must lie at the depth of the dispatch. The caller pops stack arguments
-//! (`cleanup = "caller"`), so a call leaves the depth as it found it; the
-//! epilogue is followed by `ret` or a tail `jp`, neither of which reads flags,
-//! so `add iy,sp` there needs no carry guard.
+//! The form stays only where the function is no larger and no slower, loops weighted, than with
+//! IX (`price_emitted`). A label reached through a jump table must lie at the depth of the dispatch.
+//! The caller pops stack arguments (`cleanup = "caller"`), so a call leaves the depth as it found it; the epilogue
+//! is followed by `ret` or a tail `jp`, neither of which reads flags, so `add iy,sp` there needs no carry guard.
 //!
-//! DEVIATE: a pass over the printed lines, not a frame lowering that knows its
-//! own form. Pin counterpart: `X86FrameLowering::hasFP` and
-//! `eliminateFrameIndex` choose between a frame pointer and SP-relative slots;
-//! the z80 has no SP-relative addressing, so the base is rebuilt.
-//! Exit 2026-11-24 (owner z80): the choice made in `Frame`, before the lines
-//! are printed.
+//! DEVIATE: a pass over the printed lines, not a frame lowering that knows its own form. Pin
+//! counterpart: `X86FrameLowering::hasFP` and `eliminateFrameIndex` choose between a frame
+//! pointer and SP-relative slots; the z80 has no SP-relative addressing, so the base is rebuilt.
+//! Exit 2026-11-24 (owner z80): the choice made in `Frame`, before the lines are printed.
 
 use crate::expand::{Line, price_emitted};
 
 const PROLOGUE: [&str; 3] = ["push ix", "ld ix, #0", "add ix, sp"];
 
-/// The `d` of every `d(ix)` in `text`, with the byte range of the whole
-/// operand.
+/// The `d` of every `d(ix)` in `text`, with the byte range of the whole operand.
 fn displacements(text: &str) -> Vec<(usize, usize, i64)> {
     let mut found = Vec::new();
     for (close, _) in text.match_indices("(ix)") {
@@ -74,35 +68,15 @@ fn carry_live(rest: &[Line]) -> bool {
         let op = mnemonic(text);
         let carry_condition = matches!(condition(text), Some("c" | "nc"));
         if carry_condition
-            || matches!(
-                op,
-                "adc" | "sbc" | "rla" | "rra" | "rl" | "rr" | "daa" | "ccf"
-            )
+            || matches!(op, "adc" | "sbc" | "rla" | "rra" | "rl" | "rr" | "daa" | "ccf")
             || text == "push af"
         {
             return true;
         }
         let sets_carry = matches!(
             op,
-            "cp" | "sub"
-                | "and"
-                | "or"
-                | "xor"
-                | "adc"
-                | "sbc"
-                | "neg"
-                | "scf"
-                | "rl"
-                | "rr"
-                | "rlc"
-                | "rrc"
-                | "sla"
-                | "sra"
-                | "srl"
-                | "rla"
-                | "rra"
-                | "rlca"
-                | "rrca"
+            "cp" | "sub" | "and" | "or" | "xor" | "adc" | "sbc" | "neg" | "scf" | "rl" | "rr" | "rlc" | "rrc" | "sla" | "sra"
+                | "srl" | "rla" | "rra" | "rlca" | "rrca"
         ) || text.starts_with("add a")
             || text.starts_with("add hl");
         if sets_carry {
@@ -115,8 +89,8 @@ fn carry_live(rest: &[Line]) -> bool {
     false
 }
 
-/// The bytes of stack the function has pushed since its prologue at each point,
-/// rewritten into SP-relative accesses; `None` where the IX frame has to stay.
+/// The bytes of stack the function has pushed since its prologue at each point, rewritten into
+/// SP-relative accesses; `None` where the IX frame has to stay.
 fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
     let texts: Vec<Option<&str>> = lines
         .iter()
@@ -125,8 +99,7 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
             _ => None,
         })
         .collect();
-    // IY may be used only by the big-frame prologue `ld iy,#-n; add iy,sp; ld
-    // sp,iy`
+    // IY may be used only by the big-frame prologue `ld iy,#-n; add iy,sp; ld sp,iy`
     for text in texts.iter().flatten() {
         if text.contains("iy") && !(text.starts_with("ld iy, #-") || *text == "add iy, sp" || *text == "ld sp, iy") {
             return None;
@@ -147,14 +120,12 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
         }
     }
     let mut out: Vec<Line> = Vec::with_capacity(lines.len() + 8);
-    // bytes pushed since entry; a local is at SP + pushed + d, an argument at
-    // SP + pushed + d - 2
+    // bytes pushed since entry; a local is at SP + pushed + d, an argument at SP + pushed + d - 2
     let mut pushed: i64 = 0;
     // the displacement the live IY stands for, if any
     let mut base: Option<i64> = None;
     let mut label_depth: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
-    // the depth at each `jp (rr)` and the labels of the `.dw` entries it may
-    // reach
+    // the depth at each `jp (rr)` and the labels of the `.dw` entries it may reach
     let mut dispatches: Vec<i64> = Vec::new();
     let mut entries: Vec<&str> = Vec::new();
     let mut at = 0;
@@ -213,8 +184,7 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
             "push af" | "push bc" | "push de" | "push hl" => pushed += 2,
             "pop af" | "pop bc" | "pop de" | "pop hl" => pushed -= 2,
             "ld sp, iy" if at >= 2 && texts[at - 2].is_some_and(|prior| prior.starts_with("ld iy, #-")) => {
-                pushed +=
-                    -texts[at - 2].and_then(|prior| prior.split('#').nth(1)).and_then(|n| n.parse::<i64>().ok())?;
+                pushed += -texts[at - 2].and_then(|prior| prior.split('#').nth(1)).and_then(|n| n.parse::<i64>().ok())?;
             }
             _ if text.starts_with("ex (sp)") => {}
             _ if text.starts_with("ld sp,")
@@ -291,12 +261,8 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
     Some(out)
 }
 
-/// The function with its frame on SP where that is no larger and no faster to
-/// run than IX's.
-pub fn without_ix(
-    lines: Vec<Line>,
-    speed: bool,
-) -> Vec<Line> {
+/// The function with its frame on SP where that is no larger and no faster to run than IX's.
+pub fn without_ix(lines: Vec<Line>, speed: bool) -> Vec<Line> {
     let Some(candidate) = rewritten(&lines) else { return lines };
     let (bytes, clocks) = price_emitted(&lines, speed);
     let (new_bytes, new_clocks) = price_emitted(&candidate, speed);
@@ -318,35 +284,13 @@ mod tests {
     #[test]
     fn a_frame_touched_once_is_addressed_from_sp() {
         let lines = texts(&[
-            "push ix",
-            "ld ix, #0",
-            "add ix, sp",
-            "push af",
-            "push af",
-            "ld -2(ix), l",
-            "ld -1(ix), h",
-            "ld l, -2(ix)",
-            "ld h, -1(ix)",
-            "ld sp, ix",
-            "pop ix",
-            "ret",
+            "push ix", "ld ix, #0", "add ix, sp", "push af", "push af", "ld -2(ix), l", "ld -1(ix), h", "ld l, -2(ix)",
+            "ld h, -1(ix)", "ld sp, ix", "pop ix", "ret",
         ]);
         let out = rewritten(&lines).expect("rewritten");
         assert_eq!(
             out,
-            texts(&[
-                "push af",
-                "push af",
-                "ld iy, #2",
-                "add iy, sp",
-                "ld 0(iy), l",
-                "ld 1(iy), h",
-                "ld l, 0(iy)",
-                "ld h, 1(iy)",
-                "pop iy",
-                "pop iy",
-                "ret"
-            ])
+            texts(&["push af", "push af", "ld iy, #2", "add iy, sp", "ld 0(iy), l", "ld 1(iy), h", "ld l, 0(iy)", "ld h, 1(iy)", "pop iy", "pop iy", "ret"])
         );
     }
 
@@ -356,9 +300,8 @@ mod tests {
         assert!(rewritten(&lines).is_none());
     }
 
-    /// A case block that pushes a call's arguments and returns through `ld sp,
-    /// ix` leaves the depth high; the next label, reached only through the
-    /// table, is entered at the dispatch's depth.
+    /// A case block that pushes a call's arguments and returns through `ld sp, ix` leaves the depth high; the next
+    /// label, reached only through the table, is entered at the dispatch's depth.
     #[test]
     fn a_label_reached_through_a_table_at_another_depth_keeps_the_ix_frame() {
         let lines = vec![

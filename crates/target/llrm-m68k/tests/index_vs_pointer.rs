@@ -61,10 +61,7 @@ fn a_stack_array_read_up_and_down_is_two_pointers_not_a_pointer_and_an_index() {
         for level in [Level::O1, Level::O2] {
             let out = assembly(IR, cpu_of(cpu).unwrap(), level).expect("compiles");
             let indexed: Vec<&str> = out.lines().filter(|l| l.contains(",%sp,%d")).collect();
-            assert!(
-                indexed.is_empty(),
-                "{cpu} {level:?}: an indexed stack address where a pointer costs the same registers:\n{out}"
-            );
+            assert!(indexed.is_empty(), "{cpu} {level:?}: an indexed stack address where a pointer costs the same registers:\n{out}");
         }
     }
 }

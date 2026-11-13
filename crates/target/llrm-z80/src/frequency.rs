@@ -29,7 +29,12 @@ pub fn block_frequencies(
     flat: bool,
 ) -> Vec<(u32, f64)> {
     let bpi = BranchProbabilityInfo::of(
-        BpiModule { context: &module.context, declarations: &module.globals, metadata: &module.metadata, layout },
+        BpiModule {
+            context: &module.context,
+            declarations: &module.globals,
+            metadata: &module.metadata,
+            layout,
+        },
         function,
     );
     let frequencies = if flat {

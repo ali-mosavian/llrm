@@ -21,7 +21,6 @@
 //! `combine` (its `visit`, the `FCmp` opcode).
 
 use llrm_mir::context::{Constant, ConstantKind};
-use llrm_mir::fpclass::FC_NAN;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{FloatPredicate, Opcode};
 use llrm_mir::types::Type;
@@ -32,6 +31,7 @@ use llrm_mir::valuetracking::range::{SelectPatternFlavor, match_select_pattern};
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{get_complexity, match_symmetric_pair, query, replace_operand};
 use crate::floatfold::float;
+use llrm_mir::fpclass::FC_NAN;
 
 /// `visitFCmpInst`.
 pub fn visit_fcmp(
@@ -81,7 +81,8 @@ pub fn visit_fcmp(
             | FloatPredicate::Uno
             | FloatPredicate::False
             | FloatPredicate::True
-    ) && let Some((x, y)) = match_symmetric_pair(&query(c, Some(inst)), op0, op1)
+    )
+        && let Some((x, y)) = match_symmetric_pair(&query(c, Some(inst)), op0, op1)
     {
         replace_operand(c, inst, 0, x);
         replace_operand(c, inst, 1, y);
@@ -114,8 +115,7 @@ pub fn visit_fcmp(
     if used_only_by_min_max_select(c, inst) {
         return if changed { Visit::Changed } else { Visit::None };
     }
-    // The sign of 0.0 is ignored by fcmp: fcmp Pred X, -0.0 --> fcmp Pred X,
-    // 0.0
+    // The sign of 0.0 is ignored by fcmp: fcmp Pred X, -0.0 --> fcmp Pred X, 0.0
     if let Some((_, value)) = float(c.context, op1)
         && value == 0.0
         && value.is_sign_negative()

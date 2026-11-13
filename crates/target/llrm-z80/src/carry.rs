@@ -19,9 +19,9 @@
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::reg;
 
-/// A copy of one virtual register into another of a class the source's meets,
-/// each defined once, is read through its source: the high word of a long added
-/// to itself (`x + x`) is copied after the low word's add, and the matcher
+/// A copy of one virtual register into another of a class the source's meets, each
+/// defined once, is read through its source: the high word of a long added to
+/// itself (`x + x`) is copied after the low word's add, and the matcher
 /// takes only operands made before it.
 fn read_through_copies(function: &mut MFunction) -> bool {
     let mut defs = std::collections::HashMap::<u32, usize>::new();
@@ -42,8 +42,7 @@ fn read_through_copies(function: &mut MFunction) -> bool {
     let mut alias = std::collections::HashMap::<u32, u32>::new();
     for block in &function.blocks {
         for inst in &block.insts {
-            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) =
-                (inst.kind, &inst.operands[..])
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) = (inst.kind, &inst.operands[..])
                 && defs.get(to) == Some(&1)
                 && defs.get(from) == Some(&1)
                 && <crate::regalloc::Z80Registers as llrm_spike_mf::Target>::meet(
@@ -71,12 +70,7 @@ fn read_through_copies(function: &mut MFunction) -> bool {
             }
         }
         for inst in &mut block.insts {
-            if inst.kind == Kind::Copy
-                && matches!(
-                    inst.operands[..],
-                    [Operand::Def(Reg::Virt(to)), _] if alias.contains_key(&to)
-                )
-            {
+            if inst.kind == Kind::Copy && matches!(inst.operands[..], [Operand::Def(Reg::Virt(to)), _] if alias.contains_key(&to)) {
                 continue;
             }
             for operand in &mut inst.operands {
@@ -140,8 +134,7 @@ struct Found {
     added: Option<u32>,
     /// A copy made between the low op and the high add, moved up with the pair.
     hoist: Option<usize>,
-    /// Loads of the high words' operands made after the low op, moved up with
-    /// the pair.
+    /// Loads of the high words' operands made after the low op, moved up with the pair.
     lifted: Vec<usize>,
     /// The compare, the condition byte and its widening.
     carry: [usize; 3],
@@ -276,32 +269,21 @@ fn recognised(
         // plain value: a long grown by a widened word has no high addend
         let wanted = if subtract { Kind::Op("SUB16") } else { Kind::Op("ADD16") };
         // An operand made after the low op by a load of a constant or a frame
-        // slot moves up with the pair, if nothing between the two places
-        // stores, calls or has an effect: the pin's
-        // `MachineInstr::isSafeToMove` with `SawStore` over the range,
-        // and in the pin's DAG the operands of the high `UADDO_CARRY`
-        // are scheduled freely, not fixed before the low one.
+        // slot moves up with the pair, if nothing between the two places stores,
+        // calls or has an effect: the pin's `MachineInstr::isSafeToMove` with
+        // `SawStore` over the range, and in the pin's DAG the operands of the
+        // high `UADDO_CARRY` are scheduled freely, not fixed before the low one.
         let liftable = |v: u32| -> Option<usize> {
             let at = insts.iter().position(|i| defines(i, Reg::Virt(v)))?;
             let made = &insts[at];
-            let loads = made
-                .operands
-                .iter()
-                .all(
-                    |o| match o {
-                        Operand::Def(r) => *r == Reg::Virt(v),
-                        Operand::Use(_) | Operand::Block(_) => false,
-                        Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => true,
-                    },
-                );
+            let loads = made.operands.iter().all(|o| match o {
+                Operand::Def(r) => *r == Reg::Virt(v),
+                Operand::Use(_) | Operand::Block(_) => false,
+                Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => true,
+            });
             let calm = |i: &Inst| !i.may_store && !i.call && !i.side_effects && !i.terminator;
-            (at > low_out
-                && loads
-                && calm(made)
-                && !made.sets_flags()
-                && !made.reads_flags()
-                && insts[low_out + 1..at].iter().all(calm))
-            .then_some(at)
+            (at > low_out && loads && calm(made) && !made.sets_flags() && !made.reads_flags() && insts[low_out + 1..at].iter().all(calm))
+                .then_some(at)
         };
         let chain = (|| {
             if commuted {

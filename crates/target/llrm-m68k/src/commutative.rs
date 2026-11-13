@@ -143,13 +143,8 @@ impl Flow {
         result: u32,
         source: u32,
     ) -> bool {
-        let out: Vec<RegId> = self
-            .closure(&self.copies_of, result)
-            .iter()
-            .filter_map(|r| self.phys_out.get(r))
-            .flatten()
-            .copied()
-            .collect();
+        let out: Vec<RegId> =
+            self.closure(&self.copies_of, result).iter().filter_map(|r| self.phys_out.get(r)).flatten().copied().collect();
         self.closure(&self.copied_from, source)
             .iter()
             .filter_map(|r| self.phys_in.get(r))

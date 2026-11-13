@@ -36,9 +36,8 @@
 //! # DEVIATEs
 //! 1. No `FunctionSpecializer`
 //!    ([L161](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L161),
-//!    on wherever ipsccp runs in the pin bar LTO pre-link):
-//!    [`crate::sccpsolver`] DEVIATE 2. Exit: none while it specialises nothing
-//!    on the corpus (pin, 202 files, O2 and O3, 2026-11-07).
+//!    on wherever ipsccp runs in the pin bar LTO pre-link): [`crate::sccpsolver`] DEVIATE 2. Exit: none while it
+//!    specialises nothing on the corpus (pin, 202 files, O2 and O3, 2026-11-07).
 //! 2. The solve is per module of a program, and
 //!    `canTrackArgumentsInterprocedurally`
 //!    ([L133](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L133))
@@ -113,9 +112,7 @@ use crate::sccpsolver::{ModuleEnv, Results, Solver, is_replaceable_constant};
 
 /// `runIPSCCP` over each module of `program`; the bodies it changed.
 pub fn run_ipsccp(program: &mut Program) -> BTreeSet<Defined> {
-    solved_each(program, false, |program, at| {
-        Rc::new(Outer::of(&program.modules[at], Some(Rc::clone(&program.target))))
-    })
+    solved_each(program, false, |program, at| Rc::new(Outer::of(&program.modules[at], Some(Rc::clone(&program.target)))))
 }
 
 /// [`run_ipsccp`], each module's outer view the one `modules` holds. The
@@ -543,28 +540,21 @@ impl Calls {
         module: &Module,
         callee: GlobalId,
     ) -> Vec<(GlobalId, InstId)> {
-        let all = self
-            .0
-            .get_or_insert_with(
-                || {
-                    #[cfg(test)]
-                    SCANS.with(|count| count.set(count.get() + 1));
-                    let mut all: llrm_support::hash::HashMap<GlobalId, Vec<(GlobalId, InstId)>> = Default::default();
-                    for (id, _, function) in module.functions() {
-                        for (_, inst) in function.walk() {
-                            if matches!(
-                                function.instruction(inst).opcode,
-                                Opcode::Call(_) | Opcode::Invoke(_)
-                            )
-                                && let Some(named) = llrm_mir::memory::callee(&module.context, function, inst)
-                            {
-                                all.entry(named).or_default().push((id, inst));
-                            }
-                        }
+        let all = self.0.get_or_insert_with(|| {
+            #[cfg(test)]
+            SCANS.with(|count| count.set(count.get() + 1));
+            let mut all: llrm_support::hash::HashMap<GlobalId, Vec<(GlobalId, InstId)>> = Default::default();
+            for (id, _, function) in module.functions() {
+                for (_, inst) in function.walk() {
+                    if matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+                        && let Some(named) = llrm_mir::memory::callee(&module.context, function, inst)
+                    {
+                        all.entry(named).or_default().push((id, inst));
                     }
-                    all
-                },
-            );
+                }
+            }
+            all
+        });
         all.get(&callee).cloned().unwrap_or_default()
     }
 }

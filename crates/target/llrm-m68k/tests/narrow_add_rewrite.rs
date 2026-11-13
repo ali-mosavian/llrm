@@ -3,10 +3,10 @@
 //! and 8 on the 68000). The rewrite must keep the register and the codes a
 //! later row reads.
 
+use llrm_m68k::driver::{Level, assembly, cpu_of};
 use llrm_m68k::dagisel::generated::instrinfo;
 use llrm_m68k::dagisel::generated::m68k_m68000::MACHINE_OPCODES;
 use llrm_m68k::dagisel::local;
-use llrm_m68k::driver::{Level, assembly, cpu_of};
 use llrm_m68k::mfunc::{Class, MFunction, op_inst};
 use llrm_m68k::narrow_add::narrow_adds;
 use llrm_m68k::regalloc::Assignment;
@@ -25,11 +25,7 @@ fn imm_row(
 
 fn constant(value: i64) -> Inst {
     let code = MACHINE_OPCODES.iter().find(|(_, one)| *one == "MOVI32ri").map(|(code, _)| *code).expect("MOVI32ri");
-    op_inst(
-        "MOVI32ri",
-        instrinfo::desc(code).expect("described"),
-        vec![Operand::Def(Reg::Virt(0)), Operand::Imm(value)],
-    )
+    op_inst("MOVI32ri", instrinfo::desc(code).expect("described"), vec![Operand::Def(Reg::Virt(0)), Operand::Imm(value)])
 }
 
 fn and_self() -> Inst {
@@ -57,9 +53,7 @@ fn rewritten(mut function: MFunction) -> Vec<Vec<&'static str>> {
     function
         .blocks
         .iter()
-        .map(|block| {
-            block.insts.iter().map(|inst| if let Kind::Op(name) = inst.kind { name } else { "COPY" }).collect()
-        })
+        .map(|block| block.insts.iter().map(|inst| if let Kind::Op(name) = inst.kind { name } else { "COPY" }).collect())
         .collect()
 }
 
@@ -87,8 +81,7 @@ fn an_unbounded_register_stays_long() {
 }
 
 /// `0x7FF0 + 0x20 = 0x8010`: the word add sets N where the long add does not,
-/// so a branch on the codes after it keeps the long add; below 0x8000 it does
-/// not.
+/// so a branch on the codes after it keeps the long add; below 0x8000 it does not.
 #[test]
 fn a_later_reader_of_the_codes_blocks_a_sum_in_the_top_half_only() {
     let top = vec![imm_row("AND32di", 0x7FF0), imm_row("ADD32di", 0x20), branch(0)];
@@ -108,8 +101,7 @@ fn an_entry_block_that_loops_back_starts_with_no_bound() {
     assert_eq!(rewritten(function(vec![body, tail]))[0], vec!["ADD32di"]);
 }
 
-/// hex printed `add.l #87,%d2` after `and.l`: 6 B and 16 clk for the word add's
-/// 4 and 8.
+/// hex printed `add.l #87,%d2` after `and.l`: 6 B and 16 clk for the word add's 4 and 8.
 #[test]
 fn hex_adds_its_digit_base_with_a_word_add() {
     for cpu in ["68000", "68020"] {

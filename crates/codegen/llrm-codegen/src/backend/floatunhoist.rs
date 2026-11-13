@@ -125,11 +125,9 @@ fn unhoisted_if_any(
     body: LirBody,
     prices: &Prices,
 ) -> LirBody {
-    let has_candidate = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .any(|one| one.what.as_ref().is_some_and(|what| name_is(what, "fld")) && _loads_memory(one.what.as_ref()));
+    let has_candidate = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
+        one.what.as_ref().is_some_and(|what| name_is(what, "fld")) && _loads_memory(one.what.as_ref())
+    });
     if has_candidate { unhoisted(&body, prices) } else { body }
 }
 

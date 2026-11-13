@@ -126,8 +126,7 @@ fn print_method(
     let kind = method.trim_end_matches("Mem").trim_start_matches("print").trim_end_matches(char::is_numeric);
     Ok(match kind {
         "Operand" => print_operand(inst, at)?,
-        // `printImmediate`: a symbol in an immediate slot is `#sym` (the
-        // address), bare `sym` is the memory at it.
+        // `printImmediate`: a symbol in an immediate slot is `#sym` (the address), bare `sym` is the memory at it.
         "Immediate" => match operand(inst, at)? {
             Operand::Symbol(name, addend) => format!("#{}", symbol(name, *addend)),
             _ => print_operand(inst, at)?,

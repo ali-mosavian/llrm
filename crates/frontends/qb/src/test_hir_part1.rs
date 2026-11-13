@@ -415,8 +415,7 @@ fn test_qb_numeric_procedure_emits_a_fresh_far_pascal_object() {
     let (segment, offset) = public["ADDONE"];
     let image = omf::segment_image(&records, segment, segments[segment as usize].as_ref().unwrap().1);
     let procedure = &image[offset as usize..];
-    // `mov bp, sp` is `89 e5`, the pin's register-to-register form (#7550), not
-    // `8b ec`.
+    // `mov bp, sp` is `89 e5`, the pin's register-to-register form (#7550), not `8b ec`.
     let statement_table = procedure[3..].windows(3).position(|bytes| bytes == [0x55, 0x89, 0xe5]).map(|at| at + 3);
     assert!(statement_table.is_some_and(|at| at > 0));
     assert!(procedure[..statement_table.unwrap()].ends_with(&[0xca, 0x04, 0x00]));

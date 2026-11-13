@@ -3,10 +3,7 @@
 use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
-fn body(
-    level: Level,
-    name: &str,
-) -> String {
+fn body(level: Level, name: &str) -> String {
     let asm = driver::assembly(include_str!("data/global_merge.ll"), Platform::Linux, level).expect("lowers");
     let mut lines = asm.lines().skip_while(|line| *line != format!("{name}:"));
     let first = lines.next().expect("the function is there");

@@ -123,8 +123,7 @@ pub fn known_bits(
 }
 
 /// `computeKnownBits(Op, Depth)`: the walk starts `depth` operands down, so it
-/// stops at `MaxRecursionDepth` sooner (the pin's callers pass their own
-/// depth).
+/// stops at `MaxRecursionDepth` sooner (the pin's callers pass their own depth).
 pub fn known_bits_at(
     dag: &SelectionDAG,
     value: SDValue,
@@ -220,8 +219,7 @@ fn walk(
             let zero = inner.zero | (all & !mask(asserted.min(width)));
             KnownBits { zero, one: inner.one & !zero, width }
         }
-        // `computeKnownBits`, `BUILD_PAIR`: the low half's bits below the high
-        // half's.
+        // `computeKnownBits`, `BUILD_PAIR`: the low half's bits below the high half's.
         ISD::BuildPair if dag.config().known_bits_of_build_pair && width % 2 == 0 => {
             let (low, high) = (operand(0), operand(1));
             let half = width / 2;

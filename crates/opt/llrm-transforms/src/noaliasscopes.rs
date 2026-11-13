@@ -142,14 +142,10 @@ pub(crate) fn cloned_and_adapted(
             if !replaced {
                 continue;
             }
-            let id = *lists
-                .entry(members.clone())
-                .or_insert_with(
-                    || {
-                        let operands = members.iter().map(|&one| MetadataOperand::Node(one)).collect();
-                        declared.node(MetadataNode { distinct: false, operands })
-                    },
-                );
+            let id = *lists.entry(members.clone()).or_insert_with(|| {
+                let operands = members.iter().map(|&one| MetadataOperand::Node(one)).collect();
+                declared.node(MetadataNode { distinct: false, operands })
+            });
             function.set_metadata(inst, kind, Some(id));
         }
     }

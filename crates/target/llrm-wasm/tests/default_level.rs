@@ -10,9 +10,8 @@ fn assembly(level: Option<&str>) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// `llrm-wasm-llc` without `-O` ran at -O0 while the pin's `llc` runs -O2: a
-/// comparison "ours vs pin llc on the same IR" with no flag compared 209268 B
-/// with 172620 B and chased a phantom gap.
+/// `llrm-wasm-llc` without `-O` ran at -O0 while the pin's `llc` runs -O2: a comparison "ours vs
+/// pin llc on the same IR" with no flag compared 209268 B with 172620 B and chased a phantom gap.
 #[test]
 fn the_default_level_is_the_pins_o2() {
     let (default, o2, o0) = (assembly(None), assembly(Some("-O2")), assembly(Some("-O0")));

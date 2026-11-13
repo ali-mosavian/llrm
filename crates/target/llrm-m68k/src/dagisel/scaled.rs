@@ -14,8 +14,8 @@
 //! DEVIATE: the pin has no scaled index (its `ARII` operand has none, only
 //! `PCIBD` declares one), so it prints `lsl.l #2, %d1; move.l (0,%a0,%d1), %d0`
 //! for the one `move.l (%a0,%d1.l*4), %d0` gcc -m68020 uses. Reason: best of
-//! gcc and clang is the goal. Exit: review 2026-11-20. Only the 68020 and later
-//! select these rows; the 68000 and 68010 have no scale field.
+//! gcc and clang is the goal. Exit: review 2026-11-20. Only the 68020 and later select
+//! these rows; the 68000 and 68010 have no scale field.
 
 use std::sync::LazyLock;
 

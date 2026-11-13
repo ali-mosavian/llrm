@@ -216,8 +216,7 @@ impl M68k {
                         forms.push((clocks + copy_clocks, 2 + copy_bytes));
                     }
                 }
-                if let Some(clocks) = self.clocks(&format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 })
-                {
+                if let Some(clocks) = self.clocks(&format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 }) {
                     forms.push((clocks + copy_clocks, if long { 6 } else { 4 } + copy_bytes));
                 }
                 let signed = if long { value as u32 as i32 } else { 0 };
@@ -246,10 +245,8 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it):
-    /// `va_list` is `char *`, so `va_start` is a store of the first
-    /// variadic argument's address and the list lives in a register, as gcc has
-    /// it.
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
     fn promote_va_list(&self) -> bool {
         true
     }
@@ -264,11 +261,10 @@ impl Tti for M68k {
         true
     }
 
-    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k
-    /// runs: legal 1, custom 2, expanded `SingleCallCost`, by the table the
-    /// lowering itself
-    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An
-    /// intrinsic that translation does not reach keeps the trait's price.
+    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k runs:
+    /// legal 1, custom 2, expanded `SingleCallCost`, by the table the lowering itself
+    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An intrinsic
+    /// that translation does not reach keeps the trait's price.
     fn intrinsic_cost(
         &self,
         name: &str,
@@ -399,10 +395,8 @@ impl Tti for M68k {
         crate::timing::byte_milliclocks(self.cpu)
     }
 
-    /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond
-    /// (`EmitLoweredSelect`); the 68000 family has no conditional move. The
-    /// speculation of a branch into selects then takes the limit of targets
-    /// without one (condtocond D3).
+    /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond (`EmitLoweredSelect`); the 68000 family has no conditional move. The
+    /// speculation of a branch into selects then takes the limit of targets without one (condtocond D3).
     fn has_cmov(&self) -> bool {
         false
     }
@@ -436,11 +430,7 @@ impl Tti for M68k {
     /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
     /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
     /// range check, the dispatch and a word a case.
-    fn switch_code_size(
-        &self,
-        clusters: u64,
-        table: u64,
-    ) -> i64 {
+    fn switch_code_size(&self, clusters: u64, table: u64) -> i64 {
         if !self.code_size_bytes {
             return 0;
         }
@@ -455,9 +445,8 @@ impl Tti for M68k {
         true
     }
 
-    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the
-    /// CPU has no 32-bit divide instruction (68000, 68010) the divide is a
-    /// libcall, and `divu.w` (16 bits) is one instruction.
+    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the CPU has no 32-bit divide
+    /// instruction (68000, 68010) the divide is a libcall, and `divu.w` (16 bits) is one instruction.
     fn range_narrowing_width(&self) -> Option<u32> {
         let has_long_divide = self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020);
         (!has_long_divide).then_some(16)
@@ -491,10 +480,7 @@ impl Tti for M68k {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
     }
 
-    fn inline_size_view_at(
-        &self,
-        speed: bool,
-    ) -> Option<Rc<dyn Tti>> {
+    fn inline_size_view_at(&self, speed: bool) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, speed_lowering: speed, ..*self }))
     }
 
@@ -570,19 +556,19 @@ impl Tti for M68k {
     ///
     /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
     /// index-versus-pointer cost via Tti (no per-program patch):
-    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`. O1
-    ///   cells leaving the bar (clocks, executed): bintree 68000 +1784
-    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000 +68
-    ///   (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless cost the
-    ///   same clocks.
-    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12):
-    ///   pin-faithful. The pin's LSR picks the single IV with a compare for
-    ///   double_to_uint64's loops (`llc -print-after=loop-reduce`); our earlier
-    ///   two-IV end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os,
-    ///   68020 O1 +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B
-    ///   against gcc 330 and clang 386, so below the bar. Closes through the
-    ///   LSR size model (the exit compare's `moveq`+`cmp` is in `insns`, which
-    ///   the registers-first order ignores).
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
+    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
+    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
+    ///   cost the same clocks.
+    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12): pin-faithful.
+    ///   The pin's LSR picks the single IV with a compare for double_to_uint64's
+    ///   loops (`llc -print-after=loop-reduce`); our earlier two-IV
+    ///   end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os, 68020 O1
+    ///   +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B against
+    ///   gcc 330 and clang 386, so below the bar. Closes through the LSR size
+    ///   model (the exit compare's `moveq`+`cmp` is in `insns`, which the
+    ///   registers-first order ignores).
     fn frame_address_is_free(&self) -> bool {
         true
     }
@@ -750,13 +736,7 @@ impl Tti for M68k {
         right: OperandInfo,
     ) -> Cost {
         if kind == CostKind::CodeSize && self.code_size_bytes {
-            return crate::sizes::arithmetic(
-                op,
-                ty,
-                right,
-                self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020),
-                self.speed_lowering,
-            );
+            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020), self.speed_lowering);
         }
         // A quotient by a constant is the magic multiply the DAG makes of it:
         // its clocks, not one operation's (SZ2-TRIPS: the unsigned and the
@@ -813,16 +793,13 @@ impl M68k {
         if matches!(wide, Action::Legal | Action::Custom | Action::Promote) {
             return true;
         }
-        [left, right]
-            .into_iter()
-            .any(
-                |operand| operand.power_of_two
-                    || operand.negated_power_of_two
-                    || operand
-                        .value
-                        .and_then(|value| i64::try_from(value).ok())
-                        .is_some_and(|value| self.constant_product_is_chains(value)),
-            )
+        [left, right].into_iter().any(|operand| {
+            operand.power_of_two
+                || operand.negated_power_of_two
+                || operand.value.and_then(|value| i64::try_from(value).ok()).is_some_and(|value| {
+                    self.constant_product_is_chains(value)
+                })
+        })
     }
 }
 

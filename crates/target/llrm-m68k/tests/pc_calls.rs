@@ -1,7 +1,6 @@
-//! `jsr h` of a function the same file defines was 6 B (absolute long); `jsr
-//! (h,%pc)` is 4 B and needs no relocation (memory_expansion: 528 such calls, 1
-//! KB). The displacement is 16 bits, so a module with more than 28 KB of code
-//! keeps the absolute call.
+//! `jsr h` of a function the same file defines was 6 B (absolute long); `jsr (h,%pc)` is 4 B and
+//! needs no relocation (memory_expansion: 528 such calls, 1 KB). The displacement is 16 bits, so a
+//! module with more than 28 KB of code keeps the absolute call.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -35,8 +34,7 @@ fn a_call_of_a_function_the_file_defines_is_pc_relative() {
     }
 }
 
-/// `n` small functions, then `top`, which calls the first (kept out of line,
-/// not a tail call).
+/// `n` small functions, then `top`, which calls the first (kept out of line, not a tail call).
 fn module_of(n: usize) -> String {
     let mut ir = String::from(DATALAYOUT);
     for k in 0..n {
@@ -51,8 +49,7 @@ fn module_of(n: usize) -> String {
     ir
 }
 
-/// 18 B a function: 1000 are 18 KB, in reach; 2500 are 45 KB, past
-/// `pccall::REACH` (28 KB).
+/// 18 B a function: 1000 are 18 KB, in reach; 2500 are 45 KB, past `pccall::REACH` (28 KB).
 #[test]
 fn a_module_within_reach_is_pc_relative_and_one_past_it_keeps_absolute_calls() {
     let cpu = cpu_of("68000").unwrap();
@@ -62,8 +59,7 @@ fn a_module_within_reach_is_pc_relative_and_one_past_it_keeps_absolute_calls() {
     assert!(far.contains("jsr\tg0") && !far.contains("(g0,%pc)"), "45 KB of code is not");
 }
 
-/// `h(x) = x ^ 100000`, `f(n) = h(h(n)) + 1`: the displacement of `jsr (h,%pc)`
-/// reaches `h` (n = 5).
+/// `h(x) = x ^ 100000`, `f(n) = h(h(n)) + 1`: the displacement of `jsr (h,%pc)` reaches `h` (n = 5).
 #[test]
 fn a_pc_relative_call_reaches_its_callee() {
     use llrm_m68k::compile::{Options, items_with};

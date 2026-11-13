@@ -79,8 +79,7 @@ fn the_expansion_reverses_the_bits() {
             &tli,
             &mut X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
-                hot_chains: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: true,
                 sse2: false,

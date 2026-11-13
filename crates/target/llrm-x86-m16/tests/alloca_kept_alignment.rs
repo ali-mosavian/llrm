@@ -1,7 +1,5 @@
-//! m16 frames keep 2 bytes (`kept_stack_align`) and accept an `alloca` up to 32
-//! (`max_alloca_align`): the optimizer does not assume the alignment a frame
-//! does not give, and an object past 32 is refused by name
-//! (KNOWN-WRONG-ALIGN-M16).
+//! m16 frames keep 2 bytes (`kept_stack_align`) and accept an `alloca` up to 32 (`max_alloca_align`): the optimizer does not assume the
+//! alignment a frame does not give, and an object past 32 is refused by name (KNOWN-WRONG-ALIGN-M16).
 
 use std::rc::Rc;
 
@@ -21,8 +19,7 @@ fn compile(body: &str) -> Result<String, String> {
 
 const MASKED: &str = "define i16 @f() {\n  %a = alloca double, align 8\n  store double 1.0, ptr %a, align 2\n  %i = ptrtoint ptr %a to i16\n  %m = and i16 %i, 7\n  ret i16 %m\n}\n";
 
-/// `alloca double, align 8` stored at align 2: `ptr & 7` folded to 0 (the
-/// promised 8), the frame gave an even address.
+/// `alloca double, align 8` stored at align 2: `ptr & 7` folded to 0 (the promised 8), the frame gave an even address.
 #[test]
 fn an_aligned_double_is_not_assumed_aligned_past_what_the_frame_keeps() {
     let text = compile(MASKED).expect("compiles");

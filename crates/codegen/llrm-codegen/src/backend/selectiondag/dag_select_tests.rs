@@ -151,8 +151,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &tli,
             &mut X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
-                hot_chains: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,
@@ -246,8 +245,7 @@ fn the_combiner_runs_between_the_legalizers() {
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -375,8 +373,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         let (mut lowering, mut hooks) = (
             X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
-                hot_chains: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,

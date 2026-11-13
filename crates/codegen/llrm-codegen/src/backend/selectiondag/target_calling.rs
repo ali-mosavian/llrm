@@ -140,11 +140,10 @@ pub struct TargetIntrinsic {
     pub chained: bool,
 }
 
-/// The target-independent `LowerVASTART` of the pin's stack-walking targets
-/// (M68k's `LowerVASTART`, AVR's, MSP430's): store the address of the first
-/// variadic argument's fixed object (`VarArgsFrameIndex`) through the list.
-/// `pointer` is the target's pointer type, `align` the list's alignment in
-/// bytes. `None` where the function has no variadic frame index.
+/// The target-independent `LowerVASTART` of the pin's stack-walking targets (M68k's `LowerVASTART`, AVR's, MSP430's):
+/// store the address of the first variadic argument's fixed object (`VarArgsFrameIndex`) through the list.
+/// `pointer` is the target's pointer type, `align` the list's alignment in bytes. `None` where the function has no
+/// variadic frame index.
 pub fn lower_vastart_frame_index(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -186,9 +185,8 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
-    /// Whether a caller with a `byval` parameter makes no tail call (the pin's
-    /// `isEligibleForTailCallOptimization`: the parameter is a pointer into
-    /// the argument area a tail call would reuse).
+    /// Whether a caller with a `byval` parameter makes no tail call (the pin's `isEligibleForTailCallOptimization`:
+    /// the parameter is a pointer into the argument area a tail call would reuse).
     fn byval_parameter_blocks_tail_call(&self) -> bool {
         false
     }

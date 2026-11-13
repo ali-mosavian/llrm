@@ -3,13 +3,14 @@
 //! pipeline and backend to an object. The target is the one whose `llvm_triple`
 //! the module's `target triple` names, or the `-m` flag's.
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use llrm_codegen::backend::{masm, objbuild};
 use llrm_codegen::driver::flags::{Flags, write_output};
 use llrm_target::Target;
+
+use std::borrow::Cow;
 
 use crate::Bound;
 
@@ -471,11 +472,7 @@ pub fn compiled_dumping(
     with_default_convention(&mut module, default, flags.regcall_default, flags.c_library, format.name() == "omf");
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     crate::coerce::small_struct_results_as_scalars(&mut module, bound.target.calling())?;
-    crate::coerce::far_result_pointers(
-        &mut module,
-        bound.target.calling(),
-        bound.target.layout().spaces.roles.clone(),
-    )?;
+    crate::coerce::far_result_pointers(&mut module, bound.target.calling(), bound.target.layout().spaces.roles.clone())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.
     llrm_mir::dbgimport::types_and_globals(&mut module);
@@ -505,12 +502,9 @@ pub fn compiled_dumping(
     options.libcalls.extend(soft_float_calls(default, format.name()));
     let objects = bound.target.objects();
     let bytes = |built: &masm::Module| {
-        objbuild::written_in(built, name, layout_of(flags, format), format, objects)
-            .ok()
-            .map(|object| object.len() as i64)
+        objbuild::written_in(built, name, layout_of(flags, format), format, objects).ok().map(|object| object.len() as i64)
     };
-    // A bytes-strict target's trials compare the code the instructions fill
-    // (`Tti::unroll_trial_bytes_strict`).
+    // A bytes-strict target's trials compare the code the instructions fill (`Tti::unroll_trial_bytes_strict`).
     let flat = options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.unroll_trial_bytes_strict());
     let unpadded = |built: &masm::Module| {
         objbuild::unpadded_split(built, name, layout_of(flags, format), format, objects, flat)
@@ -519,6 +513,7 @@ pub fn compiled_dumping(
     };
     Ok((llrm_codegen::driver::trial::compiled_module_trying(module, name, &options, &bytes, &unpadded)?, format))
 }
+
 
 /// The C library's rounding routines, in the convention and spelling a call
 /// the source declared would have: what `llvm.floor` and its family become
@@ -693,12 +688,10 @@ fn options_for(
         // 32-bit object calls libgcc's i64 divide routines, as the pin does;
         // the inline routine stays where the runtime lists none (DOS).
         if format == "elf" && bound.target.layout().mode == 32 {
-            options
-                .libcalls
-                .extend(
-                    ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3"]
-                        .map(|name| (name.to_owned(), number, pattern.replace('*', name))),
-                );
+            options.libcalls.extend(
+                ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3"]
+                    .map(|name| (name.to_owned(), number, pattern.replace('*', name))),
+            );
         }
         if let Some(names) = stated {
             options.pipeline.library =

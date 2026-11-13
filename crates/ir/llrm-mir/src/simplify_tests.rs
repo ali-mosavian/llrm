@@ -114,8 +114,8 @@ fn logic() {
 
 /// wasm32 known_loads_walks: `select n, (y|n), false` was not `n`, so
 /// FoldSelectWithAndOrCond found nothing to fold and the unrolled chain kept
-/// an or and a logical and per iteration (r3, a reduction of it: 312 B against
-/// the pin's 303). The i1 identities of `simplifySelectInst`, each.
+/// an or and a logical and per iteration (r3, a reduction of it: 312 B against the pin's 303). The i1 identities of
+/// `simplifySelectInst`, each.
 #[test]
 fn a_select_of_bools_that_is_one_of_its_operands_or_a_constant() {
     let q = "  %q = icmp eq i16 %y, 0\n";
@@ -1323,8 +1323,8 @@ fn the_difference_of_two_offsets_from_one_global_is_their_distance() {
     assert_eq!(simplified(text, "r").as_deref(), Some("12"));
 }
 
-/// `simplifySelectWithEquivalence` through a cast: `x == 0 ? 0 : trunc(ctpop
-/// x)` is the `trunc`. Guards the flag-free case: only the flagged one needed
+/// `simplifySelectWithEquivalence` through a cast: `x == 0 ? 0 : trunc(ctpop x)`
+/// is the `trunc`. Guards the flag-free case: only the flagged one needed
 /// `foldSelectValueEquivalence` (wasm32 `ones64` +6 B).
 #[test]
 fn a_select_guarding_a_count_through_a_trunc_is_the_count() {

@@ -48,12 +48,10 @@ fn a_counter_in_b_prices_below_one_in_c() {
     assert!(b.0 < c.0 && b.1 < c.1, "b {b:?} c {c:?}");
 }
 
-/// byval_struct -O1 took the allocation with the 41-trip counter in `c` (`dec
-/// c; jr nz`, 339 B and 11925 T) over the one with `djnz` (340 B and 11842 T):
-/// +83 T for -1 B, priced as a gain. Since #9031 (LSR meets IV users in program
-/// order again) that loop also stores its own index, so `b` is taken and the
-/// counter is `c` (279 B, 9706 T, from 294 B, 10399 T); the counter alone, the
-/// shape the price decides, keeps `djnz`.
+/// byval_struct -O1 took the allocation with the 41-trip counter in `c` (`dec c; jr nz`, 339 B and 11925 T) over the
+/// one with `djnz` (340 B and 11842 T): +83 T for -1 B, priced as a gain. Since #9031 (LSR meets IV users in program
+/// order again) that loop also stores its own index, so `b` is taken and the counter is `c` (279 B, 9706 T, from
+/// 294 B, 10399 T); the counter alone, the shape the price decides, keeps `djnz`.
 #[test]
 fn a_counted_loop_keeps_its_djnz_at_o1() {
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
@@ -139,7 +137,11 @@ loop:\n  %i = phi i16 [ 0, %entry ], [ %in, %loop ]\n  %s = phi i16 [ 0, %entry 
 exit:\n  ret i16 %sn\n}";
 
 fn busiest(flat_loop_trips: bool) -> f64 {
-    let request = Request { passes: vec!["-fno-unroll-loops".into()], flat_loop_trips, ..Request::new(Level::O1) };
+    let request = Request {
+        passes: vec!["-fno-unroll-loops".into()],
+        flat_loop_trips,
+        ..Request::new(Level::O1)
+    };
     let lines = llrm_z80::compile::weighted_lines(SUM_41, "f", &request).expect("compiles");
     lines.iter().filter(|(line, _)| matches!(line, Line::Inst(_))).map(|(_, weight)| *weight).fold(0.0, f64::max)
 }
@@ -168,9 +170,12 @@ fn flat_loop_trips_leave_the_pins_thirty_two() {
 /// loop.
 #[test]
 fn the_join_of_a_select_weighs_the_block_it_was_cut_from() {
-    let lines =
-        llrm_z80::compile::weighted_lines(include_str!("kernels/ir/sum_nonzero.ll"), "sum", &Request::new(Level::O1))
-            .expect("compiles");
+    let lines = llrm_z80::compile::weighted_lines(
+        include_str!("kernels/ir/sum_nonzero.ll"),
+        "sum",
+        &Request::new(Level::O1),
+    )
+    .expect("compiles");
     let insts: Vec<(&str, f64)> = lines
         .iter()
         .filter_map(|(line, weight)| match line {
@@ -195,8 +200,7 @@ fn the_join_of_a_select_weighs_the_block_it_was_cut_from() {
 #[test]
 fn a_block_made_by_a_pass_takes_the_flow_into_it() {
     set_frequencies(&[(1, 64.0), (4, 40.0)]);
-    let priced =
-        price_in_loops(&lines_of(&["L0_1:", "inc hl", "jr z, L0_9", "L0_4:", "inc de", "L0_9:", "inc bc", "ret"]));
+    let priced = price_in_loops(&lines_of(&["L0_1:", "inc hl", "jr z, L0_9", "L0_4:", "inc de", "L0_9:", "inc bc", "ret"]));
     set_frequencies(&[]);
     // (6 + 12) * 64 + 6 * 40 + (6 + 10) * 64
     assert_eq!(priced.1, 2416, "{priced:?}");

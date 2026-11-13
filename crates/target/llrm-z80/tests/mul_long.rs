@@ -111,44 +111,30 @@ fn a_function_keeps_the_call_when_the_shifts_pull_in_more_runtime_than_the_routi
     );
 }
 
-/// call_keeps -O2 priced the all-calls form as a gain (-368 B for 1115 of 11124
-/// priced clocks) and ran +5970 T of 57813: the static loop weights run about
-/// 5x under the measured ones, so a rate of 1 B = 3 T misjudged it.
-/// -O1 compares forms by relative regret, which the scale does not touch, and
-/// takes the routines; -O2 keeps the shifts and adds inline.
+/// call_keeps -O2 priced the all-calls form as a gain (-368 B for 1115 of 11124 priced clocks) and ran +5970 T
+/// of 57813: the static loop weights run about 5x under the measured ones, so a rate of 1 B = 3 T misjudged it.
+/// -O1 compares forms by relative regret, which the scale does not touch, and takes the routines; -O2 keeps the
+/// shifts and adds inline.
 #[test]
 fn the_routines_replace_long_shifts_and_multiplies_at_o1_and_not_at_o2() {
     let calls = |level| {
-        let asm = llrm_z80::compile::text(
-            include_str!("data/call_keeps.ll"),
-            "churn",
-            0,
-            &llrm_z80::driver::Request::new(level),
-        )
-        .expect("compiles");
-        (
-            asm.matches("call __ashlsi3").count() + asm.matches("call __lshrsi3").count(),
-            asm.matches("call __mulsi3").count(),
-        )
+        let asm = llrm_z80::compile::text(include_str!("data/call_keeps.ll"), "churn", 0, &llrm_z80::driver::Request::new(level))
+            .expect("compiles");
+        (asm.matches("call __ashlsi3").count() + asm.matches("call __lshrsi3").count(), asm.matches("call __mulsi3").count())
     };
     let (o1, o2) = (calls(llrm_z80::driver::Level::O1), calls(llrm_z80::driver::Level::O2));
-    // The long shifts are inline at O1 too since `add hl, hl; adc hl, hl`
-    // carries in the flag (they cost the regret-based comparison less there
-    // than the routine); the multiplies are still the routine.
+    // The long shifts are inline at O1 too since `add hl, hl; adc hl, hl` carries in the flag (they cost the
+    // regret-based comparison less there than the routine); the multiplies are still the routine.
     assert!(o1.1 > 0, "O1 calls the multiply routine: {o1:?}");
     assert_eq!(o2.0, 0, "O2 keeps the shifts inline: {o2:?}");
 }
 
-/// div_constants_long -O1 took `call __ashlsi3` for xorshift steps (-14 B, +10%
-/// T measured): the module's static clocks were a hot loop elsewhere, so each
-/// step's 500 T of routine were nothing and the routine, linked once for the
-/// steps, paid its bytes. The module price keeps the calls here; each step's
-/// own bytes and clocks inline it.
+/// div_constants_long -O1 took `call __ashlsi3` for xorshift steps (-14 B, +10% T measured): the module's static
+/// clocks were a hot loop elsewhere, so each step's 500 T of routine were nothing and the routine, linked once for the
+/// steps, paid its bytes. The module price keeps the calls here; each step's own bytes and clocks inline it.
 #[test]
 fn small_long_shift_functions_beside_a_hot_loop_stay_inline_at_o1() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n".to_owned()
-        + include_str!("data/shift_steps_beside_hot_loop.ll");
-    let asm = llrm_z80::compile::text(&ir, "step1", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::O1))
-        .expect("compiles");
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n".to_owned() + include_str!("data/shift_steps_beside_hot_loop.ll");
+    let asm = llrm_z80::compile::text(&ir, "step1", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::O1)).expect("compiles");
     assert!(!asm.contains("call __ashlsi3") && !asm.contains("call __lshrsi3"), "{asm}");
 }

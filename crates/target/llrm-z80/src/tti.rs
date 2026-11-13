@@ -130,23 +130,19 @@ impl Default for Z80Tti {
     }
 }
 
-/// A byte of code is worth 3 T at -O2 and -O3 (the rate the program table is
-/// judged at), in thousandths of a clock.
+/// A byte of code is worth 3 T at -O2 and -O3 (the rate the program table is judged at), in thousandths of a clock.
 pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 impl Tti for Z80Tti {
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it):
-    /// `va_list` is `char *`, so `va_start` is a store of the first
-    /// variadic argument's address and the list lives in a register, as SDCC
-    /// has it.
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as SDCC has it.
     fn promote_va_list(&self) -> bool {
         true
     }
 
-    /// `va_arg` is an IR instruction on this target's clang. The z80 aligns
-    /// nothing past a byte (`a:8`) and sets no minimum stack-argument
-    /// alignment, so the selector's `expandVAArg` steps by the value's size:
-    /// slot 1 writes exactly that.
+    /// `va_arg` is an IR instruction on this target's clang. The z80 aligns nothing past a byte (`a:8`) and sets no
+    /// minimum stack-argument alignment, so the selector's `expandVAArg` steps by the value's size: slot 1 writes
+    /// exactly that.
     fn va_arg_slot(&self) -> Option<u32> {
         Some(1)
     }
@@ -157,17 +153,14 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// DEVIATE MERGEFUNC-OS (owner z80, exit 2026-11-24; x86 joins it):
-    /// `MergeFunctions` is off in the pin's pipeline; at -Os/-Oz two
-    /// functions of one body are one (shl_long_by_one: `twice` and
-    /// `twice_signed`).
+    /// DEVIATE MERGEFUNC-OS (owner z80, exit 2026-11-24; x86 joins it): `MergeFunctions` is off in the pin's
+    /// pipeline; at -Os/-Oz two functions of one body are one (shl_long_by_one: `twice` and `twice_signed`).
     fn merge_functions_at_size(&self) -> bool {
         true
     }
 
-    /// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): a local function that
-    /// is the same code as another is dropped at -O1 too: fewer bytes, the
-    /// same clocks (shl_long_by_one `twice_signed`).
+    /// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
+    /// -O1 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`).
     fn merge_local_functions_at_o1(&self) -> bool {
         true
     }
@@ -189,9 +182,8 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// `long i < 12` compares four bytes a test where a byte would do
-    /// (`narrowiv`; div_constants_short -Oz: -1189 B of 9887 with the
-    /// counter an `int`).
+    /// `long i < 12` compares four bytes a test where a byte would do (`narrowiv`;
+    /// div_constants_short -Oz: -1189 B of 9887 with the counter an `int`).
     fn narrows_counters(&self) -> bool {
         true
     }
@@ -366,12 +358,11 @@ impl Tti for Z80Tti {
     }
 
     /// `memset.pattern` is 4 in the pin ("the cost of the `memset_pattern16`
-    /// libcall"), but this target has no such routine:
-    /// `PreISelIntrinsicLowering` expands it into a loop after inlining has
-    /// priced it. In code size it is that loop: a guard on the count, the
-    /// pointers, a store a byte of the pattern, the test and the branch
-    /// back (a 2-word store inlined twice was +82 B at -Os while the
-    /// callees stayed).
+    /// libcall"), but this target has no such routine: `PreISelIntrinsicLowering`
+    /// expands it into a loop after inlining has priced it. In code size it is
+    /// that loop: a guard on the count, the pointers, a store a byte of the
+    /// pattern, the test and the branch back (a 2-word store inlined twice was
+    /// +82 B at -Os while the callees stayed).
     ///
     /// DEVIATE: other kinds keep the pin's 4. Reason: the unroller and the
     /// speed bound are tuned on it. Exit: price the loop's clocks.
@@ -383,21 +374,11 @@ impl Tti for Z80Tti {
         kind: CostKind,
     ) -> Cost {
         const MEMSET_PATTERN: &str = "llvm.experimental.memset.pattern";
-        let pattern =
-            name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.'));
+        let pattern = name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.'));
         if let (true, CostKind::CodeSize, Some(Ty::Int(bits))) = (pattern, kind, args.get(1).copied()) {
             let (skeleton, _) = sum(&[
-                "ld b;c",
-                "or b",
-                "jr nz;e",
-                "ld hl;nn",
-                "add hl;bc",
-                "ld b;c",
-                "ld b;c",
-                "or b",
-                "sbc hl;bc",
-                "add hl;bc",
-                "jr nz;e",
+                "ld b;c", "or b", "jr nz;e", "ld hl;nn", "add hl;bc", "ld b;c", "ld b;c", "or b", "sbc hl;bc",
+                "add hl;bc", "jr nz;e",
             ]);
             let (each_byte, _) = sum(&["ld (hl);b", "inc bc"]);
             let (each_word, _) = sum(&["ld bc;nn"]);
@@ -405,47 +386,35 @@ impl Tti for Z80Tti {
             return Cost::of(skeleton + each_byte * bytes + each_word * ((bytes + 1) / 2));
         }
         let _ = ret;
-        if llrm_mir::tti::is_free_intrinsic(name) {
-            Cost::FREE
-        } else {
-            llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID)
-        }
+        if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 
-    /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table
-    /// is judged at: an inline that costs more bytes than its call saves
-    /// clocks is refused (a callee that stays and is copied into its one
-    /// caller).
+    /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
+    /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         SPEED_MILLICLOCKS_PER_BYTE
     }
 
-    /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll
-    /// is made at -O2/-O3 where the clocks it saves repay its bytes at the
-    /// same rate, in place of the pin's threshold alone (0).
-    /// Audited 2026-11-13: rate 0 and this rate give identical bytes and T on
-    /// all 124 `tests/run/c` programs at -O1/-O2/-O3/-Os/-Oz, so the price
-    /// refuses nothing there; it guards loops the corpus lacks. A rate of 10^9
-    /// unrolls none (the control).
+    /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll is made at -O2/-O3 where the clocks it
+    /// saves repay its bytes at the same rate, in place of the pin's threshold alone (0).
+    /// Audited 2026-11-13: rate 0 and this rate give identical bytes and T on all 124 `tests/run/c` programs at -O1/-O2/-O3/-Os/-Oz,
+    /// so the price refuses nothing there; it guards loops the corpus lacks. A rate of 10^9 unrolls none (the control).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         SPEED_MILLICLOCKS_PER_BYTE
     }
 
-    /// The same rate for every speed decision that trades bytes for clocks
-    /// (peeling, the combiner, the inliner's walk, loop idioms, the
-    /// backend's byte-for-clock choices): one place, not an inliner-only 3000.
+    /// The same rate for every speed decision that trades bytes for clocks (peeling, the combiner, the inliner's
+    /// walk, loop idioms, the backend's byte-for-clock choices): one place, not an inliner-only 3000.
     fn speed_milliclocks_per_byte(&self) -> i64 {
         SPEED_MILLICLOCKS_PER_BYTE
     }
 
-    /// A loop whose bound the call's constants fix unrolls and folds in the
-    /// copy, which the call's latency does not show (loop_fusion -O3 39,020
-    /// T became 299,430 T without it). DEVIATE Z80-RATE (owner z80, exit
-    /// 2026-11-21): the rate sees the call's latency and no other gain of a
-    /// copy. Two cells stay net worse at 1 B = 3 T: loop_fusion -O2
-    /// (`clear` kept as 11 calls, +40,010 T for -869 B; the copies would
-    /// meet the overwriting loops) and memmove_overlap -O3 (`fill` kept, +718 T
-    /// for -100 B; the estimate saves 57 clocks, the copies fold more).
+    /// A loop whose bound the call's constants fix unrolls and folds in the copy, which the call's latency does not
+    /// show (loop_fusion -O3 39,020 T became 299,430 T without it).
+    /// DEVIATE Z80-RATE (owner z80, exit 2026-11-21): the rate sees the call's latency and no other gain of a copy.
+    /// Two cells stay net worse at 1 B = 3 T: loop_fusion -O2 (`clear` kept as 11 calls, +40,010 T for -869 B; the
+    /// copies would meet the overwriting loops) and memmove_overlap -O3 (`fill` kept, +718 T for -100 B; the estimate
+    /// saves 57 clocks, the copies fold more).
     fn inline_hints_known_loop_bound(&self) -> bool {
         true
     }
@@ -454,17 +423,14 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// DEVIATE Z80-ROT (owner z80, exit 2026-11-21): -Oz keeps a counted loop
-    /// proven to run bottom-tested (`djnz`, no test above the body), as the
-    /// gcc tail rotate did until its deletion (#8017): 27 -Oz cells grew, sum4
-    /// +4 B.
+    /// DEVIATE Z80-ROT (owner z80, exit 2026-11-21): -Oz keeps a counted loop proven to run bottom-tested (`djnz`, no
+    /// test above the body), as the gcc tail rotate did until its deletion (#8017): 27 -Oz cells grew, sum4 +4 B.
     fn rotation_free_guard_at_minsize(&self) -> bool {
         true
     }
 
-    /// -O1 keeps the size bound's refusals but tries them as -Os does: a copy
-    /// that folds (struct_odd_sizes: `fives` -40, refused, 131 B over SDCC)
-    /// leaves the caller smaller and faster.
+    /// -O1 keeps the size bound's refusals but tries them as -Os does: a copy that folds (struct_odd_sizes: `fives`
+    /// -40, refused, 131 B over SDCC) leaves the caller smaller and faster.
     fn inline_trials_at_o1(&self) -> bool {
         true
     }
@@ -623,11 +589,9 @@ impl Tti for Z80Tti {
         second: OperandInfo,
     ) -> Cost {
         use ArithOp::*;
-        // `BasicTTIImpl::getArithmeticInstrCost` hands every kind but
-        // throughput to the base class's unit costs, so the
-        // loop unroller and SimplifyCFG (`SizeAndLatency`) weigh an add and a
-        // 32-bit multiply alike. DEVIATE: code size, latency and
-        // throughput keep the z80 forms below.
+        // `BasicTTIImpl::getArithmeticInstrCost` hands every kind but throughput to the base class's unit costs, so the
+        // loop unroller and SimplifyCFG (`SizeAndLatency`) weigh an add and a 32-bit multiply alike.
+        // DEVIATE: code size, latency and throughput keep the z80 forms below.
         if kind == CostKind::SizeAndLatency {
             return match op {
                 UDiv | URem | SDiv | SRem | FDiv | FRem => Cost::EXPENSIVE,

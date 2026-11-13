@@ -4,9 +4,9 @@
 //!
 //! # How it works
 //! [`sites`] walks each block with the upper bound of every data register's
-//! unsigned value: `move.l #imm`, `and.l`, `lsr.l`, a zero extension and a copy
-//! give one, anything else that writes the register forgets it, a call forgets
-//! all. A block with one predecessor starts from that predecessor's end (to
+//! unsigned value: `move.l #imm`, `and.l`, `lsr.l`, a zero extension and a copy give
+//! one, anything else that writes the register forgets it, a call forgets all.
+//! A block with one predecessor starts from that predecessor's end (to
 //! [`CHAIN_DEPTH`] blocks back); any other starts with nothing known. The row
 //! is a site when `bound + immediate` fits the word: the upper half is zero
 //! before and after, so `addi.w` leaves the register as `add.l` does. The word
@@ -52,8 +52,7 @@ pub struct Site {
 }
 
 impl Site {
-    /// The rewrite would be sound: the codes are the same, or nothing reads
-    /// them.
+    /// The rewrite would be sound: the codes are the same, or nothing reads them.
     pub fn sound(&self) -> bool {
         self.codes_equal || self.codes_read == Some(0)
     }
@@ -98,8 +97,7 @@ fn step(
         return;
     }
     let new = match (inst.kind, &inst.operands[..]) {
-        // `MOVI32ri` is the constant load selection emits (`MOVQ` is only made
-        // when the text is expanded)
+        // `MOVI32ri` is the constant load selection emits (`MOVQ` is only made when the text is expanded)
         (Kind::Op("MOV32ri" | "MOVI32ri"), [Operand::Def(_), Operand::Imm(k)])
             if (0..=i64::from(u32::MAX)).contains(k) =>
         {
@@ -190,8 +188,7 @@ fn for_each_row(
     }
 }
 
-/// The `add.l #imm` rows (an immediate above `addq`'s) that a word add would
-/// do.
+/// The `add.l #imm` rows (an immediate above `addq`'s) that a word add would do.
 pub fn sites(
     function: &MFunction,
     assignment: &Assignment,
@@ -227,8 +224,7 @@ pub fn narrow_adds(
 ) {
     let Some(desc) = local::code_of("ADD16di").and_then(local::desc) else { return };
     for site in sites(function, assignment).into_iter().filter(Site::sound) {
-        let [Operand::Def(def), Operand::Use(base), Operand::Imm(k)] =
-            function.blocks[site.block].insts[site.at].operands[..]
+        let [Operand::Def(def), Operand::Use(base), Operand::Imm(k)] = function.blocks[site.block].insts[site.at].operands[..]
         else {
             continue;
         };

@@ -54,8 +54,8 @@ use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::{Type, TypeId};
-use llrm_mir::valuetracking::guarantee::SmallSet;
 use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
+use llrm_mir::valuetracking::guarantee::SmallSet;
 use llrm_mir::valuetracking::signbits::{compute_max_significant_bits, compute_num_sign_bits};
 use llrm_mir::valuetracking::{Query, known, nonzero};
 
@@ -518,8 +518,7 @@ fn can_evaluate_truncated(
     ty: TypeId,
     cxt: InstId,
 ) -> bool {
-    let mut evaluator =
-        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     // Whether all users of the many-use values were visited is asked last,
     // outside the recursion.
     evaluator.can_evaluate(v, ty, Pred::Truncated) && evaluator.all_pending_visited()
@@ -534,8 +533,7 @@ fn can_evaluate_sextd(
 ) -> bool {
     // The context instruction is read by the truncating predicates only.
     let Some(cxt) = def_of(c, v) else { return can_always_evaluate_in_type(c, v, ty) };
-    let mut evaluator =
-        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     evaluator.can_evaluate(v, ty, Pred::SExtd) && evaluator.all_pending_visited()
 }
 

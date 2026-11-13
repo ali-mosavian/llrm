@@ -76,10 +76,7 @@ exit:
 }
 ";
 
-fn reduced(
-    size: bool,
-    bytes_strict: bool,
-) -> String {
+fn reduced(size: bool, bytes_strict: bool) -> String {
     let mut module = llrm_mir::parse::module(SWAP).unwrap_or_else(|why| panic!("{why:?}"));
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(LoopStrengthReduce { size, bytes_strict });
@@ -88,8 +85,8 @@ fn reduced(
 }
 
 /// The swap loop's end-biased form saves a loop instruction (2 against 3) for
-/// one byte of setup (24 against 23). -O1 kept it on the instruction, as it
-/// kept quicksort's (27 B for one instruction, 286 B against a 268 B bar).
+/// one byte of setup (24 against 23). -O1 kept it on the instruction, as it kept
+/// quicksort's (27 B for one instruction, 286 B against a 268 B bar).
 #[test]
 fn o1_refuses_end_biased_that_saves_an_instruction_for_a_byte() {
     let speed = reduced(false, false);

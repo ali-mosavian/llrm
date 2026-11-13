@@ -20,8 +20,7 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
             &tli,
             &mut X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
-                hot_chains: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,

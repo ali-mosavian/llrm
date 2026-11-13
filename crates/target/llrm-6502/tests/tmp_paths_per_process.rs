@@ -1,7 +1,6 @@
-//! A test that wrote into a fixed temp directory raced with the same test in
-//! another session (m68k `llc_flags::excess_precision`, 2026-11-09: another
-//! run's half-written `f.ll`). Scratch directories are `tempfile::tempdir()`s
-//! or carry the process id and a call counter.
+//! A test that wrote into a fixed temp directory raced with the same test in another session
+//! (m68k `llc_flags::excess_precision`, 2026-11-09: another run's half-written `f.ll`).
+//! Scratch directories are `tempfile::tempdir()`s or carry the process id and a call counter.
 
 #[test]
 fn scratch_paths_in_tests_are_not_fixed() {

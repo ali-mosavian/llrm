@@ -104,10 +104,9 @@ fn values_that_need_nine_walks_still_settle() {
     assert_eq!(known(text), text.replacen("b7:\n  lda #0\n  ldy #0\n", "b7:\n  lda #0\n  tay\n", 1));
 }
 
-/// k_isspace's `(c - 9) < 5` of an `int`: `ldy #0 … sta rc4; tya; ora rc4` is
-/// the load of `rc4` that `a` holds already, so the `ora`, the `tya` and the
-/// `ldy` were 3 B and 5 clocks of nothing (the `ldy` goes too when `y` is dead
-/// at the return) (46 B, 75 clocks at -O2).
+/// k_isspace's `(c - 9) < 5` of an `int`: `ldy #0 … sta rc4; tya; ora rc4` is the
+/// load of `rc4` that `a` holds already, so the `ora`, the `tya` and the `ldy`
+/// were 3 B and 5 clocks of nothing (the `ldy` goes too when `y` is dead at the return) (46 B, 75 clocks at -O2).
 #[test]
 fn an_or_of_a_known_zero_is_the_load_of_its_operand() {
     use llrm_6502::peephole::run;
@@ -116,7 +115,6 @@ fn an_or_of_a_known_zero_is_the_load_of_its_operand() {
     run(&mut asm);
     let out = asm.text();
     assert!(!out.contains("tya") && !out.contains("ora rc4\n  cmp"), "{out}");
-    // the `sta rc4` that fed the `ora` is dead once the `ora` is gone: copy
-    // propagation (default on) drops it, the pass off keeps it
+    // the `sta rc4` that fed the `ora` is dead once the `ora` is gone: copy propagation (default on) drops it, the pass off keeps it
     assert!(out.contains("cmp #5\n"), "{out}");
 }

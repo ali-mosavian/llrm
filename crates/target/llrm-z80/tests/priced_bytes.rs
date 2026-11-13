@@ -1,18 +1,15 @@
-//! The estimate a choice between two builds reads (`expand::price`,
-//! `price_emitted`) is the assembled size.
+//! The estimate a choice between two builds reads (`expand::price`, `price_emitted`) is the assembled size.
 
 use llrm_z80::compile::effective;
 use llrm_z80::driver::{Level, Request};
 use llrm_z80::expand::{Line, price};
 
-/// switch_peeled_table, from clang -Oz. The estimate priced `add hl,hl` at 2 B
-/// (1 assembled), so the -Os build, whose loop shifts through five of them,
-/// came out equal to -Oz at 251 B; -Oz kept 250 B against the 246 B of -Os.
+/// switch_peeled_table, from clang -Oz. The estimate priced `add hl,hl` at 2 B (1 assembled), so the -Os build, whose
+/// loop shifts through five of them, came out equal to -Oz at 251 B; -Oz kept 250 B against the 246 B of -Os.
 const IR: &str = include_str!("data/oz_best_of_estimate.ll");
 
-/// Each instruction with the bytes sdasz80 gives it. The table had no row for
-/// the accumulator forms (`ld a,(de)` read as `ld b,(de)`), `add hl,hl`, `ld
-/// (nn),bc` or `xor (hl)`, and priced each missing form at 2 B.
+/// Each instruction with the bytes sdasz80 gives it. The table had no row for the accumulator forms (`ld a,(de)` read
+/// as `ld b,(de)`), `add hl,hl`, `ld (nn),bc` or `xor (hl)`, and priced each missing form at 2 B.
 #[test]
 fn an_instruction_is_priced_at_its_assembled_bytes() {
     let rows = [
@@ -26,8 +23,7 @@ fn an_instruction_is_priced_at_its_assembled_bytes() {
         ("ld (_sum), de", 4),
         ("ld (_dst+7), a", 3),
         ("ld a, (_src+9)", 3),
-        // forms the old key already priced: the accumulator in the table's own
-        // spelling
+        // forms the old key already priced: the accumulator in the table's own spelling
         ("add a, a", 1),
         ("adc a, b", 1),
         ("sbc a, a", 1),

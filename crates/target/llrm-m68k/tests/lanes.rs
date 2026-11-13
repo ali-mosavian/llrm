@@ -5,8 +5,7 @@ use llrm_codegen::backend::peephole::_lanes;
 use llrm_lir::registers::Regs;
 use llrm_m68k::{REGISTER_INFO, reg};
 
-/// The file said `@lanes none`, and the shared prelude (`tolir`) entering the
-/// lanes panicked in 8 tests.
+/// The file said `@lanes none`, and the shared prelude (`tolir`) entering the lanes panicked in 8 tests.
 #[test]
 fn the_byte_and_word_views_of_a_data_register_are_its_low_lanes() {
     let regs = Regs(&REGISTER_INFO);

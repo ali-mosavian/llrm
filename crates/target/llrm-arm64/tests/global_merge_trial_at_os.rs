@@ -36,10 +36,9 @@ fn the_trial_keeps_the_arrays_apart_when_that_executes_less_at_os() {
     assert!(adrps(true) >= 6);
 }
 
-/// Pricing walks every function of a compile (`to_lir` and `executed`): a
-/// module nothing was noted in is compiled once, unpriced. Before, nbody -Os
-/// (no loop to rotate, no merge) compiled 2.5x slower with the trials on than
-/// off, for pricing a module no trial used.
+/// Pricing walks every function of a compile (`to_lir` and `executed`): a module nothing was noted in is
+/// compiled once, unpriced. Before, nbody -Os (no loop to rotate, no merge) compiled 2.5x slower with the
+/// trials on than off, for pricing a module no trial used.
 #[test]
 fn a_module_nothing_was_noted_in_is_not_priced_at_os() {
     use llrm_arm64::driver::{self, Level};
@@ -54,10 +53,9 @@ fn a_module_nothing_was_noted_in_is_not_priced_at_os() {
     assert!(llrm_arm64::trial::priced() > before, "premise: a module that noted a merge is priced");
 }
 
-/// The model's frequencies are estimates. jpeg_fixed -Os: unmerging modelled
-/// 0.004% less work (14,241,593,806 -> 14,241,052,075) and the harness counted
-/// 5,497 instructions more; the model's gain there is noise, and nbody_fixed's
-/// 0.3% (683,286 -> 681,179, harness -1.3%) is not.
+/// The model's frequencies are estimates. jpeg_fixed -Os: unmerging modelled 0.004% less work
+/// (14,241,593,806 -> 14,241,052,075) and the harness counted 5,497 instructions more; the model's
+/// gain there is noise, and nbody_fixed's 0.3% (683,286 -> 681,179, harness -1.3%) is not.
 #[test]
 fn a_modelled_gain_under_the_noise_margin_does_not_unmerge() {
     use llrm_arm64::trial::{Price, keeps_unmerged};

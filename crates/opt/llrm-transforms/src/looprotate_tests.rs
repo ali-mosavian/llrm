@@ -660,8 +660,7 @@ fn test_the_size_header_limit_of_m32_is_four() {
     assert_eq!(super::header_limit(true, false, &*m32, &*tti), 16);
 }
 
-/// `rotated` as the pass is configured for an -Os build of `m32`: what the
-/// target's tuning states.
+/// `rotated` as the pass is configured for an -Os build of `m32`: what the target's tuning states.
 fn rotated_as_m32_at_size(text: &str) -> bool {
     let m32 = crate::indvars::tests::m32();
     let tti = m32.tti().unwrap();
@@ -683,9 +682,8 @@ fn rotated_as_m32_at_size(text: &str) -> bool {
     rotate_function(&mut module, "f", &*tti, options).expect("rotates")
 }
 
-/// m32 -Os rotated a loop that stops on a loaded value, copying a compare and a
-/// branch above it that no value decides: x_jpeg_fixed 2995 B (gcc 2805), 17
-/// kernels larger than with RS1 (-296 B). The target's tuning states RS1; a
+/// m32 -Os rotated a loop that stops on a loaded value, copying a compare and a branch above it that no value decides:
+/// x_jpeg_fixed 2995 B (gcc 2805), 17 kernels larger than with RS1 (-296 B). The target's tuning states RS1; a
 /// counted loop is still rotated.
 #[test]
 fn test_m32_size_builds_leave_a_loop_whose_guard_does_not_fold() {
@@ -695,8 +693,7 @@ fn test_m32_size_builds_leave_a_loop_whose_guard_does_not_fold() {
     assert!(m32.tti().unwrap().rotation_guard_must_fold_at_size());
 }
 
-/// `rotated` as -Oz: the pin copies no header instruction; `free_guard` waives
-/// that for a header that folds away.
+/// `rotated` as -Oz: the pin copies no header instruction; `free_guard` waives that for a header that folds away.
 fn rotated_at_minsize(
     text: &str,
     free_guard: bool,
@@ -720,10 +717,9 @@ fn rotated_at_minsize(
     rotate_function(&mut module, "f", &tti, options).expect("rotates")
 }
 
-/// z80 sum4 -Oz lost its `djnz` when the gcc tail rotate went (#8017): a
-/// four-trip loop stayed top-tested, 27 -Oz cells grew. A loop whose copied
-/// header folds away in the preheader is rotated at -Oz where the target says
-/// so; a header that leaves code (an unfolded guard) is not.
+/// z80 sum4 -Oz lost its `djnz` when the gcc tail rotate went (#8017): a four-trip loop stayed top-tested, 27 -Oz
+/// cells grew. A loop whose copied header folds away in the preheader is rotated at -Oz where the target says so; a
+/// header that leaves code (an unfolded guard) is not.
 #[test]
 fn test_minsize_rotates_a_loop_whose_copied_header_folds_away_only() {
     let folded = COUNTED.replace("%n)", "%y)").replace("i16 %i, %n", "i16 %i, 4");
@@ -734,11 +730,10 @@ fn test_minsize_rotates_a_loop_whose_copied_header_folds_away_only() {
     assert!(!rotated_at_minsize(&wide, true), "a counter wider than a register keeps its test above the body");
 }
 
-/// ROTATION-TRIAL: the counted loop RS1 rotates is noted for the driver's
-/// second compile, which leaves it unrotated. x86-m32 x_prefix -Os kept five
-/// rotated loops at 136 B kernel; gcc's unrotated shape is 2 B less a loop (124
-/// B with the loops left, 12 B smaller). Without the target's opt-in the second
-/// compile changes nothing.
+/// ROTATION-TRIAL: the counted loop RS1 rotates is noted for the driver's second compile, which
+/// leaves it unrotated. x86-m32 x_prefix -Os kept five rotated loops at 136 B kernel; gcc's
+/// unrotated shape is 2 B less a loop (124 B with the loops left, 12 B smaller). Without the
+/// target's opt-in the second compile changes nothing.
 #[test]
 fn test_a_trial_leaves_a_counted_loop_rs1_rotates() {
     let _ = crate::trial::take_rotated();
@@ -753,10 +748,9 @@ fn test_a_trial_leaves_a_counted_loop_rs1_rotates() {
     assert!(crate::trial::take_rotated().is_empty());
 }
 
-/// ROTATION-TRIAL on a function of over 4096 instructions: known_loads_walks.c
-/// -Os (one 6219-instruction `main`) compiled 2.27x as long for a trial it
-/// lost. A big function is not noted and the trial compile rotates its counted
-/// loop as the first.
+/// ROTATION-TRIAL on a function of over 4096 instructions: known_loads_walks.c -Os (one 6219-instruction
+/// `main`) compiled 2.27x as long for a trial it lost. A big function is not noted and the trial compile
+/// rotates its counted loop as the first.
 #[test]
 fn test_a_big_function_is_rotated_in_the_trial_too_and_not_noted() {
     let padding: String = (0..4200).map(|at| format!("  %p{at} = add i16 %n, {at}\n")).collect();

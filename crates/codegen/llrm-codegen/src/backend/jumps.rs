@@ -333,12 +333,7 @@ fn aligned(
         let before = &blocks[place - 1];
         let enters = before.succ.contains(&at);
         if !enters || busy.edge(before.at, at) <= here * COLD {
-            blocks[place] = LirBlock {
-                align: cpu.loop_alignment,
-                max_skip: cpu.loop_max_skip,
-                ..blocks[place].clone().into_inner()
-            }
-            .into();
+            blocks[place] = LirBlock { align: cpu.loop_alignment, max_skip: cpu.loop_max_skip, ..blocks[place].clone().into_inner() }.into();
         }
     }
     body.with_blocks(blocks)

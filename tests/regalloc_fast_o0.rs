@@ -109,8 +109,11 @@ fn early_tail_duplication_runs_at_o1_and_not_at_o0() {
 #[test]
 fn o0_stores_an_argument_straight_from_its_register() {
     let scratch = tempfile::tempdir().unwrap();
-    std::fs::write(scratch.path().join("a.c"), "int f(int a, long b, int c)\n{\n    return a + (int)b + c;\n}\n")
-        .unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int f(int a, long b, int c)\n{\n    return a + (int)b + c;\n}\n",
+    )
+    .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .current_dir(scratch.path())
@@ -119,9 +122,7 @@ fn o0_stores_an_argument_straight_from_its_register() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-    let stored = |register: &str| {
-        asm.lines().any(|line| line.contains("ptr [rbp-") && line.trim_end().ends_with(&format!(", {register}")))
-    };
+    let stored = |register: &str| asm.lines().any(|line| line.contains("ptr [rbp-") && line.trim_end().ends_with(&format!(", {register}")));
     assert!(stored("edi") && stored("rsi") && stored("edx"), "{asm}");
 }
 

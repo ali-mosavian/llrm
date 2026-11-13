@@ -99,12 +99,11 @@ fn immediate_store(
 /// `and.l #15, %d2` where a data register is dead is `moveq #15, %dN; and.l
 /// %dN, %d2`: 4 bytes and 12 clocks on the 68000 for 6 and 16. Likewise `or`,
 /// `sub`, `cmp`, a store to memory (`move.l #5, (4,%sp)` is `moveq #5, %dN;
-/// move.l %dN, (4,%sp)`, 6 bytes for 8, 20 clocks for 24) and an `add` past
-/// `addq`'s 1 to 8, with an immediate a `moveq` makes (-128 to 127). The
-/// register is one nothing reads from there on, and the callee-saved ones only
-/// where the function already uses them, so no spill, copy or save is added.
-/// The register row leaves the condition codes the immediate row did (`moveq`
-/// sets N and Z, the operation sets all again).
+/// move.l %dN, (4,%sp)`, 6 bytes for 8, 20 clocks for 24) and an `add` past `addq`'s 1 to 8, with an immediate a `moveq`
+/// makes (-128 to 127). The register is one nothing reads from there on, and
+/// the callee-saved ones only where the function already uses them, so no
+/// spill, copy or save is added. The register row leaves the condition codes
+/// the immediate row did (`moveq` sets N and Z, the operation sets all again).
 ///
 /// DEVIATE: the pin's patterns take the immediate form, as
 /// `constant_into_destination`. Reason: best of gcc and clang is the goal; gcc

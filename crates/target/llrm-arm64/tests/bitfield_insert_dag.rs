@@ -5,11 +5,9 @@ use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
-/// `getUsefulBits` compared the user's opcode with the machine opcode as the
-/// matcher stores it, complemented, so it never saw the byte store that reads
-/// only 8 bits. The `and w10, w10, #0x80` of the kept operand stayed: llc has
-/// `ldrb; ldrb; bfxil w9, w8, #0, #7; strb` and the DAG path had an `and` more
-/// (seen first in `copysign` of `fp128`).
+/// `getUsefulBits` compared the user's opcode with the machine opcode as the matcher stores it, complemented, so it
+/// never saw the byte store that reads only 8 bits. The `and w10, w10, #0x80` of the kept operand stayed: llc has
+/// `ldrb; ldrb; bfxil w9, w8, #0, #7; strb` and the DAG path had an `and` more (seen first in `copysign` of `fp128`).
 #[test]
 fn a_byte_store_makes_the_bits_above_it_not_useful_to_the_insert() {
     let ir = format!(

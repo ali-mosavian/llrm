@@ -1,9 +1,7 @@
-//! `LLRM_CHECK_CAPTURES` with `LLRM_CHECK_ORDER` panicked ("frame objects
-//! captured by a use that the facts say never escape ... Some(\"place\")") on
-//! bench/{bintree,queens,quicksort}.nib: a re-run of the function passes
-//! (`pipeline::rerun`) audited its facts against the module copy an earlier
-//! pass took, not against the callees' bodies as they stood. It failed
-//! pgo.yml's identity check on 6 of 1363 objects.
+//! `LLRM_CHECK_CAPTURES` with `LLRM_CHECK_ORDER` panicked ("frame objects captured by a use that the facts say never escape ...
+//! Some(\"place\")") on bench/{bintree,queens,quicksort}.nib: a re-run of the function passes (`pipeline::rerun`) audited its facts
+//! against the module copy an earlier pass took, not against the callees' bodies as they stood. It failed pgo.yml's identity check
+//! on 6 of 1363 objects.
 
 use std::path::Path;
 use std::process::Command;

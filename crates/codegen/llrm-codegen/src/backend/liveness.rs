@@ -231,17 +231,10 @@ fn worked_out(
         let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
         return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
     }
-    // `ADJCALLSTACKDOWN`/`UP`: `implicit-def dead $eflags`. Without this the
-    // flags of the instruction before one read as live, and a two-address
-    // `add` kept its copy where the pin makes a `lea`.
-    if one
-        .what
-        .as_ref()
-        .is_some_and(|what| matches!(
-            what.name.as_deref(),
-            Some("call_frame_setup" | "call_frame_destroy")
-        ))
-    {
+    // `ADJCALLSTACKDOWN`/`UP`: `implicit-def dead $eflags`. Without this the flags
+    // of the instruction before one read as live, and a two-address `add` kept its
+    // copy where the pin makes a `lea`.
+    if one.what.as_ref().is_some_and(|what| matches!(what.name.as_deref(), Some("call_frame_setup" | "call_frame_destroy"))) {
         let mut writes = Lanes::new();
         writes.include(_flag_lanes(0xFFFF_FFFF));
         return Some(Effect { reads: Lanes::new(), writes, moved: Vec::new() });

@@ -98,9 +98,8 @@ mod tests {
     /// (shellsort -O2 +25% clocks against clang).
     #[test]
     fn a_frame_cell_with_a_wide_index_reads_the_index_at_m64() {
-        use llrm_lir::registers::RegId;
-
         use crate::model::ir::{Addr, Reg, Space};
+        use llrm_lir::registers::RegId;
         let mut cell = Mem::new(Some(Addr::new(Space::Frame, -128)), 2);
         cell.through = RegId::BP;
         cell.index = Some(Held { value: 40, width: 8, offset: 0 });

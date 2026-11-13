@@ -1,8 +1,8 @@
-//! x86-64: the call-frame pair writes the flags and reads none (`implicit-def
-//! dead $eflags`). Taken for an instruction with no effect table, it read them:
-//! the flags of the `sub` before a call were live, and `fib(n - 1)` was `mov
-//! edi, ebp; dec edi` where the pin makes `lea edi, [rbp-1]` (jpeg_fixed -O2
-//! 8324 B against 8131 B, fib -Os 77 B against 72 B). Needs `LLRM_LLC`.
+//! x86-64: the call-frame pair writes the flags and reads none (`implicit-def dead $eflags`).
+//! Taken for an instruction with no effect table, it read them: the flags of the `sub` before a
+//! call were live, and `fib(n - 1)` was `mov edi, ebp; dec edi` where the pin makes
+//! `lea edi, [rbp-1]` (jpeg_fixed -O2 8324 B against 8131 B, fib -Os 77 B against 72 B).
+//! Needs `LLRM_LLC`.
 
 use std::process::Command;
 

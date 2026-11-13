@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use llrm_m68k::callpush::plan;
-use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{self, Level};
+use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::mfunc::{Inst, Kind, Operand, Reg};
 use llrm_m68k::reg;
 use llrm_m68k::regalloc::Assignment;

@@ -1,5 +1,4 @@
-//! -O0 selects with FastISel (`backend::selectiondag::fastisel`) unless
-//! `LLRM_FAST_ISEL=0`.
+//! -O0 selects with FastISel (`backend::selectiondag::fastisel`) unless `LLRM_FAST_ISEL=0`.
 
 use std::process::Command;
 
@@ -35,10 +34,7 @@ fn built(
 fn fast_isel_on_main_alone_leaves_the_dag_object() {
     // m64 takes `main` since the SysV call and global-address selectors
     let (_, report, _) = built("x86_64-linux", "-O0", true);
-    assert!(
-        report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast")),
-        "x86_64: {report}"
-    );
+    assert!(report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast")), "x86_64: {report}");
     let target = "x86_32-linux";
     let (dag, _, _) = built(target, "-O0", false);
     let (fast, report, _) = built(target, "-O0", true);
@@ -142,11 +138,7 @@ fn fast_isel_takes_a_call_and_a_divide_at_m32() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "h fast" || line == "_h fast"),
-        "h not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("idiv") && asm.contains("call"), "{asm}");
 }
@@ -201,11 +193,7 @@ fn fast_isel_takes_an_array_walk_at_m32() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "sum fast" || line == "_sum fast"),
-        "sum not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "sum fast" || line == "_sum fast"), "sum not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// An unsigned divide and remainder left `h` to the DAG at m32 (FastISel took
@@ -257,11 +245,7 @@ fn fast_isel_takes_the_integer_core_at_m64() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "h fast" || line == "_h fast"),
-        "h not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// A multiply left every function that had one to the DAG ("fast declined at
@@ -286,8 +270,7 @@ fn fast_isel_takes_a_multiply_at_m32_and_m64() {
     }
 }
 
-/// At m64 a call left its caller to the DAG; `urem_eq.c` and `array.c` end in
-/// `printf`. Fixed and variadic callee, integer arguments.
+/// At m64 a call left its caller to the DAG; `urem_eq.c` and `array.c` end in `printf`. Fixed and variadic callee, integer arguments.
 #[test]
 fn fast_isel_takes_a_call_at_m64() {
     let scratch = tempfile::tempdir().unwrap();
@@ -308,11 +291,7 @@ fn fast_isel_takes_a_call_at_m64() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "h fast" || line == "_h fast"),
-        "h not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("call") && asm.contains("mov al, 0"), "{asm}");
 }
@@ -322,8 +301,11 @@ fn fast_isel_takes_a_call_at_m64() {
 #[test]
 fn fast_isel_takes_a_global_array_element_at_m64() {
     let scratch = tempfile::tempdir().unwrap();
-    std::fs::write(scratch.path().join("a.c"), "int a[64];\nint h(int i)\n{\n    a[i] = i;\n    return a[i];\n}\n")
-        .unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int a[64];\nint h(int i)\n{\n    a[i] = i;\n    return a[i];\n}\n",
+    )
+    .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_FAST_ISEL", "1")
@@ -336,11 +318,7 @@ fn fast_isel_takes_a_global_array_element_at_m64() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "h fast" || line == "_h fast"),
-        "h not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("movsx"), "{asm}");
 }
@@ -392,18 +370,13 @@ fn fast_isel_takes_the_i64_core_at_m64() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "h fast" || line == "_h fast"),
-        "h not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("qword ptr [rbp-") && asm.contains("imul rax"), "{asm}");
 }
 
 /// At m64 `zext`/`trunc` between `i32` and `i64` and an `i64` divide left the
-/// function to the DAG ("fast declined at Cast"); `urem_eq.c`'s `main` mixes
-/// them.
+/// function to the DAG ("fast declined at Cast"); `urem_eq.c`'s `main` mixes them.
 #[test]
 fn fast_isel_takes_widening_and_i64_divide_at_m64() {
     let scratch = tempfile::tempdir().unwrap();
@@ -424,18 +397,13 @@ fn fast_isel_takes_widening_and_i64_divide_at_m64() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "h fast" || line == "_h fast"),
-        "h not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("div rcx") || asm.contains("div r"), "{asm}");
 }
 
 /// An `i64` argument or result left a caller to the DAG ("fast declined at
-/// Call"): `main` of `urem_eq.c` and `array.c` calls `printf("%ld")` and
-/// `report(long)`.
+/// Call"): `main` of `urem_eq.c` and `array.c` calls `printf("%ld")` and `report(long)`.
 #[test]
 fn fast_isel_takes_i64_call_arguments_and_results_at_m64() {
     let scratch = tempfile::tempdir().unwrap();
@@ -456,11 +424,7 @@ fn fast_isel_takes_i64_call_arguments_and_results_at_m64() {
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
-    assert!(
-        report.lines().any(|line| line == "h fast" || line == "_h fast"),
-        "h not taken: {report}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("mov rdi, rax") || asm.contains("mov rdi,"), "{asm}");
 }
@@ -486,17 +450,13 @@ fn fast_isel_multiplies_by_a_constant_with_an_immediate() {
         let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
         assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
         let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-        assert!(
-            asm.contains("shl") && asm.lines().any(|line| line.contains("imul") && line.trim_end().ends_with(", 3")),
-            "{target}: {asm}"
-        );
+        assert!(asm.contains("shl") && asm.lines().any(|line| line.contains("imul") && line.trim_end().ends_with(", 3")), "{target}: {asm}");
     }
 }
 
 /// A one-use load right before its user was loaded into a register first
 /// (`mov rax, [b]; mov rcx, [b]; add rcx, rax`), where the pin folds it
-/// (`mov rax, [b]; add rax, [b]`): `llrm_wide` of `wc_mixed.c`, 49 B against
-/// 32.
+/// (`mov rax, [b]; add rax, [b]`): `llrm_wide` of `wc_mixed.c`, 49 B against 32.
 #[test]
 fn fast_isel_folds_a_load_into_the_instruction_after_it() {
     for target in ["x86_32-linux", "x86_64-linux"] {
@@ -522,14 +482,12 @@ fn fast_isel_folds_a_load_into_the_instruction_after_it() {
 
 /// A `volatile` load or store left its function to the DAG ("fast declined at
 /// Store { volatile: true }"): the pin selects them like any other, only never
-/// folding the load. 14 of `div_constants_long.c`'s functions, +458 B over
-/// clang.
+/// folding the load. 14 of `div_constants_long.c`'s functions, +458 B over clang.
 #[test]
 fn fast_isel_takes_volatile_accesses_and_never_folds_a_volatile_load() {
     for target in ["x86_32-linux", "x86_64-linux"] {
         let scratch = tempfile::tempdir().unwrap();
-        std::fs::write(scratch.path().join("a.c"), "int h(int a)\n{\n    volatile int v = a;\n    return a + v;\n}\n")
-            .unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a)\n{\n    volatile int v = a;\n    return a + v;\n}\n").unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", target)
             .env("LLRM_FAST_ISEL", "1")
@@ -543,10 +501,7 @@ fn fast_isel_takes_volatile_accesses_and_never_folds_a_volatile_load() {
         let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
         assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
         let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-        assert!(
-            !asm.lines().any(|line| line.trim_start().starts_with("add") && line.contains("ptr [")),
-            "{target}: a volatile load was folded: {asm}"
-        );
+        assert!(!asm.lines().any(|line| line.trim_start().starts_with("add") && line.contains("ptr [")), "{target}: a volatile load was folded: {asm}");
     }
 }
 
@@ -576,8 +531,7 @@ fn fast_isel_leaves_an_intrinsic_call_to_the_dag() {
 }
 
 /// A shift by a constant left its function to the DAG ("fast declined at
-/// Binary(Shl)"): `next` of `div_constants_long.c`, the shifts of
-/// `mulconst_i64.c`.
+/// Binary(Shl)"): `next` of `div_constants_long.c`, the shifts of `mulconst_i64.c`.
 #[test]
 fn fast_isel_takes_shifts_by_a_constant() {
     for target in ["x86_32-linux", "x86_64-linux"] {
@@ -627,10 +581,8 @@ fn fast_isel_materializes_a_wide_constant_with_movabs() {
     assert!(asm.contains("20015998343868") || asm.to_uppercase().contains("123456789ABC"), "{asm}");
 }
 
-/// FastISel selects `llvm.lifetime.start`/`end` to nothing at -O0
-/// (`FastISel::selectIntrinsicCall`). Ours declined at the call and sent the
-/// whole function to the DAG path: 13 of 14 functions of div_constants_short,
-/// +62 M Ir with the flag on.
+/// FastISel selects `llvm.lifetime.start`/`end` to nothing at -O0 (`FastISel::selectIntrinsicCall`). Ours declined at the
+/// call and sent the whole function to the DAG path: 13 of 14 functions of div_constants_short, +62 M Ir with the flag on.
 #[test]
 fn fast_isel_takes_a_function_with_lifetime_markers() {
     let scratch = tempfile::tempdir().unwrap();
@@ -656,9 +608,8 @@ fn fast_isel_takes_a_function_with_lifetime_markers() {
     assert!(report.lines().any(|line| line == "marked fast"), "{report}");
 }
 
-/// A `memset` or `memcpy` of an aggregate left its function to the DAG (126 of
-/// 494 functions of the tests/run/c corpus declined first at one): the pin
-/// makes them library calls.
+/// A `memset` or `memcpy` of an aggregate left its function to the DAG (126 of 494 functions of
+/// the tests/run/c corpus declined first at one): the pin makes them library calls.
 #[test]
 fn fast_isel_takes_memset_and_memcpy_as_library_calls() {
     for target in ["x86_32-linux", "x86_64-linux"] {
@@ -685,9 +636,8 @@ fn fast_isel_takes_memset_and_memcpy_as_library_calls() {
     }
 }
 
-/// Every function looked its opcodes up by name again (about 4 M instructions
-/// each): on the 225 functions of `memory_expansion` a FastISel compile cost
-/// 1709 M instructions, the DAG's 839 M.
+/// Every function looked its opcodes up by name again (about 4 M instructions each): on the 225
+/// functions of `memory_expansion` a FastISel compile cost 1709 M instructions, the DAG's 839 M.
 #[test]
 fn fast_isel_looks_its_opcodes_up_once_per_compile() {
     let scratch = tempfile::tempdir().unwrap();
@@ -709,9 +659,8 @@ fn fast_isel_looks_its_opcodes_up_once_per_compile() {
     assert_eq!(log.matches("fast names built").count(), 1, "{log}");
 }
 
-/// A struct passed by value was passed as the pointer to it: `variadic.c` ran
-/// with -O0 and FastISel printed -1880545068 where the DAG printed 567. The
-/// caller is left to the DAG.
+/// A struct passed by value was passed as the pointer to it: `variadic.c` ran with -O0 and FastISel printed
+/// -1880545068 where the DAG printed 567. The caller is left to the DAG.
 #[test]
 fn fast_isel_leaves_a_struct_argument_to_the_dag() {
     for target in ["x86_32-linux", "x86_64-linux"] {
@@ -735,10 +684,9 @@ fn fast_isel_leaves_a_struct_argument_to_the_dag() {
     }
 }
 
-/// One block FastISel cannot take sent the whole function to the DAG (322 of
-/// 494 functions of the tests/run/c corpus, 745 of 3041 blocks): now only that
-/// block goes, and a phi and a value read in another block cross through
-/// registers.
+/// One block FastISel cannot take sent the whole function to the DAG (322 of 494 functions of the
+/// tests/run/c corpus, 745 of 3041 blocks): now only that block goes, and a phi and a value read in
+/// another block cross through registers.
 #[test]
 fn fast_isel_takes_the_blocks_it_can_of_a_function() {
     for target in ["x86_32-linux", "x86_64-linux"] {
@@ -763,15 +711,13 @@ fn fast_isel_takes_the_blocks_it_can_of_a_function() {
     }
 }
 
-/// A block that starts with a phi was declined ("a value another block reads
-/// that is not a register value: Phi"): 241 blocks of the tests/run/c corpus,
-/// `h` took 3 of its 4 blocks.
+/// A block that starts with a phi was declined ("a value another block reads that is not a register
+/// value: Phi"): 241 blocks of the tests/run/c corpus, `h` took 3 of its 4 blocks.
 #[test]
 fn fast_isel_takes_the_block_a_phi_starts() {
     for target in ["x86_32-linux", "x86_64-linux"] {
         let scratch = tempfile::tempdir().unwrap();
-        std::fs::write(scratch.path().join("a.c"), "int h(int a, int b)\n{\n    return a ? b + 1 : b + 2;\n}\n")
-            .unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a, int b)\n{\n    return a ? b + 1 : b + 2;\n}\n").unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", target)
             .env("LLRM_FAST_ISEL", "1")
@@ -787,9 +733,8 @@ fn fast_isel_takes_the_block_a_phi_starts() {
     }
 }
 
-/// `char` and `short` values (loads, stores, extensions, truncations,
-/// parameters) sent their function to the DAG: 145 + 145 loads, 86 truncs and
-/// 57 parameters of the tests/run/c corpus.
+/// `char` and `short` values (loads, stores, extensions, truncations, parameters) sent their function to the DAG:
+/// 145 + 145 loads, 86 truncs and 57 parameters of the tests/run/c corpus.
 #[test]
 fn fast_isel_takes_char_and_short_values() {
     for target in ["x86_32-linux", "x86_64-linux"] {
@@ -814,10 +759,9 @@ fn fast_isel_takes_char_and_short_values() {
     }
 }
 
-/// The pin folds a GEP into the access that uses it and a load into the compare
-/// after it (`X86SelectAddress`, `tryToFoldLoad`); FastISel emitted `lea` +
-/// load and `mov` + `cmp` (`div_constants_short` `.text` 10569 B against the
-/// pin's 9576 B).
+/// The pin folds a GEP into the access that uses it and a load into the compare after it
+/// (`X86SelectAddress`, `tryToFoldLoad`); FastISel emitted `lea` + load and `mov` + `cmp` (`div_constants_short`
+/// `.text` 10569 B against the pin's 9576 B).
 #[test]
 fn fast_isel_folds_an_address_and_a_load_into_the_access() {
     for (target, base) in [("x86_32-linux", "ebp"), ("x86_64-linux", "rbp")] {
@@ -840,26 +784,20 @@ fn fast_isel_folds_an_address_and_a_load_into_the_access() {
         let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
         assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
         let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-        assert!(
-            asm.contains(&format!("cmp dword ptr [{base}-")) && asm.contains(", 8"),
-            "{target}: no cmp on memory: {asm}"
-        );
+        assert!(asm.contains(&format!("cmp dword ptr [{base}-")) && asm.contains(", 8"), "{target}: no cmp on memory: {asm}");
         assert!(asm.contains("*4-") && !asm.contains("lea "), "{target}: the element address was made apart: {asm}");
-        // `n` is a local at m64, its own argument slot at m32 (argument copy
-        // elision)
+        // `n` is a local at m64, its own argument slot at m32 (argument copy elision)
         let slot = |sign: &str| asm.contains(&format!("imul eax, dword ptr [{base}{sign}"));
         assert!(slot("-") || slot("+"), "{target}: the load was not folded into the imul: {asm}");
     }
 }
 
-/// A `short` read and widened was a `mov ax, [m]` and a `movsx` (6 B); the pin
-/// folds the load: `movsx eax, word ptr [m]`.
+/// A `short` read and widened was a `mov ax, [m]` and a `movsx` (6 B); the pin folds the load: `movsx eax, word ptr [m]`.
 #[test]
 fn fast_isel_folds_a_narrow_load_into_its_extension() {
     for target in ["x86_32-linux", "x86_64-linux"] {
         let scratch = tempfile::tempdir().unwrap();
-        std::fs::write(scratch.path().join("a.c"), "int h(short *p, unsigned char *q)\n{\n    return *p + *q;\n}\n")
-            .unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(short *p, unsigned char *q)\n{\n    return *p + *q;\n}\n").unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", target)
             .env("LLRM_FAST_ISEL", "1")
@@ -878,9 +816,8 @@ fn fast_isel_folds_a_narrow_load_into_its_extension() {
     }
 }
 
-/// `0 - *p` read the operand into a register before the `sub` (the fold wanted
-/// a register on the left): the pin folds the load whatever the left operand is
-/// (`abs` of `builtins_table`, +11% `.text`).
+/// `0 - *p` read the operand into a register before the `sub` (the fold wanted a register on the left):
+/// the pin folds the load whatever the left operand is (`abs` of `builtins_table`, +11% `.text`).
 #[test]
 fn fast_isel_folds_a_load_whose_left_operand_is_a_constant() {
     for target in ["x86_32-linux", "x86_64-linux"] {
@@ -903,9 +840,8 @@ fn fast_isel_folds_a_load_whose_left_operand_is_a_constant() {
     }
 }
 
-/// The pin's -O0 selects with FastISel; ours kept the DAG unless asked (`-O0`
-/// compiles cost 3261 M instructions on the 61-program corpus against 3021 M).
-/// With no environment variable `five` is selected by FastISel.
+/// The pin's -O0 selects with FastISel; ours kept the DAG unless asked (`-O0` compiles cost 3261 M instructions
+/// on the 61-program corpus against 3021 M). With no environment variable `five` is selected by FastISel.
 #[test]
 fn fast_isel_is_the_default_at_o0() {
     for target in ["x86_64-linux", "x86_32-linux"] {
@@ -925,15 +861,17 @@ fn fast_isel_is_the_default_at_o0() {
     }
 }
 
-/// `*p += x` read `*p` into a register and added: only a load on the right
-/// folded. The pin commutes a commutative operation to fold a load on the left,
-/// the one just before it (`foldMemoryOperand`): `add r, [m]`.
+/// `*p += x` read `*p` into a register and added: only a load on the right folded. The pin commutes a
+/// commutative operation to fold a load on the left, the one just before it (`foldMemoryOperand`): `add r, [m]`.
 #[test]
 fn fast_isel_folds_a_load_that_is_the_first_operand_of_a_commutative_operation() {
     for target in ["x86_32-linux", "x86_64-linux"] {
         let scratch = tempfile::tempdir().unwrap();
-        std::fs::write(scratch.path().join("a.c"), "void h(int *p, int x)\n{\n    *p += x;\n    *p &= x;\n}\n")
-            .unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "void h(int *p, int x)\n{\n    *p += x;\n    *p &= x;\n}\n",
+        )
+        .unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", target)
             .env("LLRM_FAST_ISEL", "1")
@@ -948,17 +886,13 @@ fn fast_isel_folds_a_load_that_is_the_first_operand_of_a_commutative_operation()
         assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
         let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
         for form in ["add e", "and e"] {
-            assert!(
-                asm.lines().any(|line| line.trim_start().starts_with(form) && line.contains("dword ptr [")),
-                "{target}: no `{form}` on memory: {asm}"
-            );
+            assert!(asm.lines().any(|line| line.trim_start().starts_with(form) && line.contains("dword ptr [")), "{target}: no `{form}` on memory: {asm}");
         }
     }
 }
 
-/// A zero was `mov eax, 0` at -O0 (5 B): the pin's `ExpandPostRAPseudos` makes
-/// `xor eax, eax` (2 B) where the flags are dead, and ours ran no such pass at
-/// -O0 (`Peephole` was left out whole): 7 `xor` in the pin's
+/// A zero was `mov eax, 0` at -O0 (5 B): the pin's `ExpandPostRAPseudos` makes `xor eax, eax` (2 B) where the
+/// flags are dead, and ours ran no such pass at -O0 (`Peephole` was left out whole): 7 `xor` in the pin's
 /// `div_constants_short` against none.
 #[test]
 fn o0_makes_a_zero_with_xor_on_both_selectors() {
@@ -991,10 +925,7 @@ fn the_decline_reason_is_made_for_the_isel_channel_and_names_the_instruction() {
     std::fs::write(scratch.path().join("a.c"), "int h(int x)\n{\n    return (int)(x * 1.5);\n}\n").unwrap();
     let said = |channel: Option<&str>| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
-        command
-            .env("LLRM_CC_TARGET", "x86_32-linux")
-            .current_dir(scratch.path())
-            .args(["-O0", "-c", "a.c", "-o", "a.o"]);
+        command.env("LLRM_CC_TARGET", "x86_32-linux").current_dir(scratch.path()).args(["-O0", "-c", "a.c", "-o", "a.o"]);
         if let Some(channel) = channel {
             command.env("LLRM_DEBUG", channel);
         }
@@ -1086,10 +1017,7 @@ fn fast_isel_takes_global_accesses_at_m32() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
     for name in ["f", "at", "where"] {
-        assert!(
-            report.lines().any(|line| line == format!("{name} fast") || line == format!("_{name} fast")),
-            "{name} not taken: {report}"
-        );
+        assert!(report.lines().any(|line| line == format!("{name} fast") || line == format!("_{name} fast")), "{name} not taken: {report}");
     }
 }
 

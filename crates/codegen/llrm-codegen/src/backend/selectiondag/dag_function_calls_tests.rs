@@ -263,8 +263,8 @@ fn an_i64_divide_carries_the_routines_code_at_its_call() {
     assert_eq!(done.inline.get(&at), Some(&routine.code));
 }
 
-/// m32 -Os tests/run/c/int64_division was +329 B over the pin: the object
-/// carried the inline `$div64_u` routine (213 B) where the pin calls libgcc's
+/// m32 -Os tests/run/c/int64_division was +329 B over the pin: the object carried
+/// the inline `$div64_u` routine (213 B) where the pin calls libgcc's
 /// `__udivdi3`. Where the runtime lists the routine (hosted ELF), the call is
 /// to it, no inline code travels, and the arguments are four dwords on the
 /// stack; DOS (no listing) keeps the routine.
@@ -809,9 +809,8 @@ declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg)
 #[test]
 fn a_fixed_point_divide_is_selected() {
     let made = names(SDIV_FIX).unwrap_or_else(|why| panic!("{why}"));
-    // the numerator shifted up, the 64-bit divide and remainder as one helper
-    // call (DEVIATE DIVREM-HELPER: the routine returns both; the pin's x86
-    // makes two)
+    // the numerator shifted up, the 64-bit divide and remainder as one helper call
+    // (DEVIATE DIVREM-HELPER: the routine returns both; the pin's x86 makes two)
     assert!(made.iter().any(|name| name == "shld"), "{made:?}");
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 1, "{made:?}");
 }

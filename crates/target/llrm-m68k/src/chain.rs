@@ -30,9 +30,10 @@
 //! `AArch64LoadStoreOpt::findMatchingUpdateInsnForward`, which merges a
 //! separate update instead, and `auto_inc_dec` in gcc.
 
+use llrm_support::hash::HashSet;
+
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
-use llrm_support::hash::HashSet;
 
 use crate::dagisel::hooks::Cpu;
 use crate::dagisel::local;

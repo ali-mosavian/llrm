@@ -12,7 +12,10 @@ const SOURCE: &str = "static int fib(int n) { if (n < 2) return n; return fib(n 
 
 #[test]
 fn a_function_the_walk_flags_for_deferred_tail_recursion_elimination_is_told_changed() {
-    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
+    assert!(
+        llrm_cc::ow_present(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
     assert!(
         std::env::var_os("LLRM_PIN_CLANG").is_some(),
         "LLRM_PIN_CLANG is not set: this test needs it and does not skip"

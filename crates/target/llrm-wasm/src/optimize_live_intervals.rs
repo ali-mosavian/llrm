@@ -23,7 +23,6 @@
 //! `LiveInterval.cpp`: `ConnectedVNInfoEqClasses::Classify`.
 
 use std::collections::BTreeSet;
-
 use llrm_support::hash::HashMap;
 
 use crate::mir::{Function, IMPLICIT_DEF, Operand, VReg};

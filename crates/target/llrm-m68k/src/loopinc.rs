@@ -16,8 +16,8 @@
 //! puts the increment beside a load only when nothing else reads the old
 //! pointer. gcc's `auto_inc_dec` rewrites the later uses as displacements.
 //! Reason: bytes and clocks on every loop that steps a pointer past a
-//! conditional store (`partition`, `copy`). Owner m68k. Exit: 2026-11-14 (lands
-//! or goes). Off for `Options::PINNED`.
+//! conditional store (`partition`, `copy`). Owner m68k. Exit: 2026-11-14 (lands or
+//! goes). Off for `Options::PINNED`.
 //!
 //! # See also
 //! `AArch64LoadStoreOpt::findMatchingUpdateInsnForward`, `auto_inc_dec` in

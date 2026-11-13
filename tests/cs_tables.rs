@@ -9,10 +9,7 @@ fn listing(source: &str) -> String {
     listing_at("-O2", source)
 }
 
-fn listing_at(
-    level: &str,
-    source: &str,
-) -> String {
+fn listing_at(level: &str, source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("t.c"), source).unwrap();
     let output = common::cc::llrm_c()
@@ -48,8 +45,8 @@ fn test_a_switch_lookup_table_is_not_in_data() {
     assert!(text.contains("byte ptr cs:G$"), "the table is not read through cs: {text}");
 }
 
-/// At -Os the move cost +1 B per load site (QCport -Os grew, user rule: no
-/// growth), so the table stays in `_DATA`; -O1 and up still move it.
+/// At -Os the move cost +1 B per load site (QCport -Os grew, user rule: no growth), so the
+/// table stays in `_DATA`; -O1 and up still move it.
 #[test]
 fn test_a_switch_lookup_table_stays_in_data_at_os_and_moves_at_o1() {
     let os = listing_at("-Os", LOOKUP);

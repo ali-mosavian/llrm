@@ -495,9 +495,6 @@ fn test_ranges_wider_than_128_bits_multiply_and_divide() {
     assert_eq!(a.multiply(&b, 0), Range::new(256, w(6), w(13)));
     assert_eq!(a.udiv(&b), Range::new(256, w(1), w(3)));
     let high = w(1) << 200;
-    assert_eq!(
-        Range::single(256, high).multiply(&Range::single(256, w(3)), 0),
-        Range::single(256, high.wrapping_add(high).wrapping_add(high))
-    );
+    assert_eq!(Range::single(256, high).multiply(&Range::single(256, w(3)), 0), Range::single(256, high.wrapping_add(high).wrapping_add(high)));
     assert_eq!(Range::new(256, w(16), w(26)).sqrt_floor(), Range::new(256, w(4), w(6)));
 }

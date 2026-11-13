@@ -34,39 +34,25 @@ struct Search {
     memo: HashMap<u64, Option<(MulPlan, Cost)>>,
 }
 
-fn plus(
-    a: Cost,
-    b: Cost,
-) -> Cost {
+fn plus(a: Cost, b: Cost) -> Cost {
     (a.0 + b.0, a.1 + b.1)
 }
 
 impl Search {
     /// What the search minimizes: bytes then clocks at `-Os`, else clocks plus
     /// bytes at the CPU's byte price.
-    fn key(
-        &self,
-        cost: Cost,
-    ) -> (i64, i64) {
+    fn key(&self, cost: Cost) -> (i64, i64) {
         crate::timing::order(self.cpu, self.price == Price::Size, cost.1, cost.0 as u32)
     }
 
-    fn consider(
-        &self,
-        best: &mut Option<(MulPlan, Cost)>,
-        plan: MulPlan,
-        cost: Cost,
-    ) {
+    fn consider(&self, best: &mut Option<(MulPlan, Cost)>, plan: MulPlan, cost: Cost) {
         if best.as_ref().is_none_or(|(_, held)| self.key(cost) < self.key(*held)) {
             *best = Some((plan, cost));
         }
     }
 
     /// `x * t` in a register of its own, `x` kept.
-    fn best(
-        &mut self,
-        t: u64,
-    ) -> Option<(MulPlan, Cost)> {
+    fn best(&mut self, t: u64) -> Option<(MulPlan, Cost)> {
         if let Some(known) = self.memo.get(&t) {
             return known.clone();
         }
@@ -78,10 +64,7 @@ impl Search {
         found
     }
 
-    fn search(
-        &mut self,
-        t: u64,
-    ) -> Option<(MulPlan, Cost)> {
+    fn search(&mut self, t: u64) -> Option<(MulPlan, Cost)> {
         let cpu = self.cpu;
         let copy = one(cpu, "move.l %d0, %d1", 2);
         let arithmetic = one(cpu, "add.l %d1, %d0", 2);
@@ -156,12 +139,7 @@ fn library_multiply(cpu: Cpu) -> Cost {
 
 /// The cheapest chain for `x * c` in `bits` bits that beats the multiply
 /// under `price`, or None.
-pub fn plan(
-    cpu: Cpu,
-    price: Price,
-    bits: u32,
-    c: u128,
-) -> Option<MulPlan> {
+pub fn plan(cpu: Cpu, price: Price, bits: u32, c: u128) -> Option<MulPlan> {
     if bits != 32 {
         return None;
     }
@@ -177,11 +155,7 @@ pub fn plan(
     found
 }
 
-fn searched(
-    cpu: Cpu,
-    price: Price,
-    c: u32,
-) -> Option<MulPlan> {
+fn searched(cpu: Cpu, price: Price, c: u32) -> Option<MulPlan> {
     let negative = c >> 31 == 1;
     let magnitude = u64::from(if negative { c.wrapping_neg() } else { c });
     if magnitude < 2 {
@@ -189,8 +163,11 @@ fn searched(
     }
     let mut search = Search { cpu, price, memo: HashMap::new() };
     let (plan, cost) = search.best(magnitude)?;
-    let (plan, cost) =
-        if negative { (MulPlan::Neg(Box::new(plan)), plus(cost, one(cpu, "neg.l %d0", 2))) } else { (plan, cost) };
+    let (plan, cost) = if negative {
+        (MulPlan::Neg(Box::new(plan)), plus(cost, one(cpu, "neg.l %d0", 2)))
+    } else {
+        (plan, cost)
+    };
     let incumbent = if cpu.at_least(Cpu::M68020) { multiply(cpu) } else { library_multiply(cpu) };
     price.beats(cpu, cost, incumbent).then_some(plan)
 }
@@ -199,10 +176,7 @@ fn searched(
 mod tests {
     use super::*;
 
-    fn value(
-        plan: &MulPlan,
-        x: u32,
-    ) -> u32 {
+    fn value(plan: &MulPlan, x: u32) -> u32 {
         match plan {
             MulPlan::Multiplicand => x,
             MulPlan::Shl(inner, by) => value(inner, x).wrapping_shl(*by),

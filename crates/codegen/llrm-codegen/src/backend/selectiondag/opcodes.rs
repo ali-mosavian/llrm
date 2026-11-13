@@ -254,11 +254,7 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     let mut found = None;
     for prefix in ARITHMETIC.iter().chain(&MOVES) {
         if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
-            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") {
-                format!("{}_x", prefix.to_ascii_lowercase())
-            } else {
-                prefix.to_ascii_lowercase()
-            };
+            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") { format!("{}_x", prefix.to_ascii_lowercase()) } else { prefix.to_ascii_lowercase() };
             // The longest prefix wins (`ANDNPS` is not `ANDPS`).
             if found
                 .as_ref()

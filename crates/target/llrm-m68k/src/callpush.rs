@@ -459,9 +459,7 @@ fn address_of(
     let nearest = |before: usize| {
         (0..before)
             .rev()
-            .take_while(|&i| {
-                blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP")
-            })
+            .take_while(|&i| blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP"))
             .find(|&i| defines(insts[i], src, assignment))
     };
     let add = nearest(store)?;
@@ -506,15 +504,10 @@ fn address_of(
             return None;
         }
         if i < store {
-            let names_root = other
-                .operands
-                .iter()
-                .any(
-                    |operand| match operand {
-                        Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
-                        _ => false,
-                    },
-                );
+            let names_root = other.operands.iter().any(|operand| match operand {
+                Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
+                _ => false,
+            });
             if names_root || (other.reads_flags() && !other.call) {
                 return None;
             }
@@ -654,19 +647,14 @@ fn sequences(
                 let Some((producers, base, offset)) = address_of(insts, assignment, blocks, store, call, src) else {
                     continue;
                 };
-                let made = producers
-                    .iter()
-                    .try_fold(
-                        (0, 0),
-                        |sum, &i| {
-                            let operands = priced_operands(insts[i], assignment)?;
-                            let opcode = match insts[i].kind {
-                                Kind::Copy => "MOV32rr",
-                                Kind::Op(name) => name,
-                            };
-                            cost(&mc::Inst { opcode, operands }, cpu).ok().map(|one| add(sum, one))
-                        },
-                    );
+                let made = producers.iter().try_fold((0, 0), |sum, &i| {
+                    let operands = priced_operands(insts[i], assignment)?;
+                    let opcode = match insts[i].kind {
+                        Kind::Copy => "MOV32rr",
+                        Kind::Op(name) => name,
+                    };
+                    cost(&mc::Inst { opcode, operands }, cpu).ok().map(|one| add(sum, one))
+                });
                 if let (Some(made), Ok(pea)) = (made, cost(&address_push(base, offset), cpu))
                     && cheaper(pea, add(made, pushed), price, cpu)
                 {
@@ -760,8 +748,7 @@ fn sequences(
     // second call's cleanup has no call area of its own to claim it, and its
     // arguments are stored into the area the first call's sequence would have
     // pushed away. That area stays. The call may be laid out before the area's
-    // `ADJCALLSTACKDOWN` (a rotated loop), so the order of the two says
-    // nothing.
+    // `ADJCALLSTACKDOWN` (a rotated loop), so the order of the two says nothing.
     for (up, _) in insts
         .iter()
         .enumerate()

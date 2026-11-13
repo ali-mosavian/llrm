@@ -8,17 +8,16 @@
 //! - DEVIATE M1 (owner w2, exit 2026-11-30): `mergeAttributesAndFlags` and
 //!   `copyFlags` are not translated: the intrinsic gets `align 1` and nothing
 //!   of the call's attributes, flags or metadata, and the arguments are not
-//!   annotated `nonnull`/`dereferenceable`
-//!   (`annotateNonNullAndDereferenceable`).
+//!   annotated `nonnull`/`dereferenceable` (`annotateNonNullAndDereferenceable`).
 //! - DEVIATE M3 (owner w2, exit 2026-12-01): the pin marks `memccpy`
 //!   unavailable on Windows outside MinGW (TargetLibraryInfo.cpp#L387) and on
-//!   PlayStation, `mempcpy` on PlayStation only (#L801-L802, the `isPS()` block
-//!   from #L692). The triple is not visible here (`libfunc.rs` DEVIATE 1): a
-//!   target's `Library` states it, and those targets state none, so a user's
-//!   own `memccpy` there is rewritten. Exit: the Windows `Library`.
-//! - DEVIATE M2 (owner w2, exit 2026-11-30): a pointer in a non-default address
-//!   space is left as the call (the pin's intrinsic is overloaded on it; the
-//!   table here names the default space only).
+//!   PlayStation, `mempcpy` on PlayStation only (#L801-L802, the `isPS()`
+//!   block from #L692). The triple is not visible here (`libfunc.rs` DEVIATE
+//!   1): a target's `Library` states it, and those targets state none, so a
+//!   user's own `memccpy` there is rewritten. Exit: the Windows `Library`.
+//! - DEVIATE M2 (owner w2, exit 2026-11-30): a pointer in a non-default
+//!   address space is left as the call (the pin's intrinsic is overloaded on
+//!   it; the table here names the default space only).
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
@@ -153,9 +152,13 @@ fn end_of(
 ) -> Operand {
     let i8 = unit.context.types.int(8);
     let ty = unit.function.operand_type(unit.context, dst).expect("a typed pointer");
-    let made = unit
-        .function
-        .create_instruction(Opcode::GetElementPtr { source: i8 }, ty, vec![dst, count], Flags::INBOUNDS, None);
+    let made = unit.function.create_instruction(
+        Opcode::GetElementPtr { source: i8 },
+        ty,
+        vec![dst, count],
+        Flags::INBOUNDS,
+        None,
+    );
     unit.function.insert(made, Position::Before(site.call)).expect("a placed gep");
     Operand::Value(unit.function.instruction(made).result.expect("a pointer"))
 }
@@ -206,8 +209,7 @@ pub(super) fn mem_c_cpy(
     let args = arguments(unit, site);
     let [dst, src, stop, count] = args[..] else { return None };
     let ty = unit.function.instruction(site.call).ty;
-    let unused =
-        unit.function.instruction(site.call).result.is_none_or(|result| unit.function.users(result).is_empty());
+    let unused = unit.function.instruction(site.call).result.is_none_or(|result| unit.function.users(result).is_empty());
     // memccpy(d, d, c, n) with the result unused is nothing.
     if unused && dst == src {
         return Some(Rewrite::Value(dst));

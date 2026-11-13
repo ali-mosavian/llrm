@@ -1,8 +1,6 @@
-//! The 6502 states what its frames keep (`Machine::kept_stack_align` 1,
-//! `max_alloca_align` 2). Unset, the mid-end took an `alloca ... align 2` at
-//! its word: it folded `ptr & 1` to 0 for a local on an odd frame (a one-byte
-//! frame above it), where the address is odd (2026-11-09: on sim65 `use` saw
-//! bit 0 = 1 while `probe` returned 0).
+//! The 6502 states what its frames keep (`Machine::kept_stack_align` 1, `max_alloca_align` 2). Unset, the mid-end took an
+//! `alloca ... align 2` at its word: it folded `ptr & 1` to 0 for a local on an odd frame (a one-byte frame above it),
+//! where the address is odd (2026-11-09: on sim65 `use` saw bit 0 = 1 while `probe` returned 0).
 
 mod common;
 
@@ -77,10 +75,8 @@ seen: .res 1
     assert_eq!(common::run_with("alloca-align-two", main, &extra), 0);
 }
 
-/// The clamp left `load/store ... align 2` on an `align 1` object: the access
-/// claimed an alignment nothing has, a load of it could not be speculated, and
-/// `c >= '0' && c <= '9'` kept two branches (isdigit 28 -> 50 bytes,
-/// `tti::a_range_test_of_a_word_...`).
+/// The clamp left `load/store ... align 2` on an `align 1` object: the access claimed an alignment nothing has, a load of it could not be
+/// speculated, and `c >= '0' && c <= '9'` kept two branches (isdigit 28 -> 50 bytes, `tti::a_range_test_of_a_word_...`).
 #[test]
 fn an_access_to_a_clamped_local_states_what_the_local_keeps() {
     let ir = format!(

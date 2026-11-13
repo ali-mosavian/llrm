@@ -210,8 +210,8 @@ pub fn spliced(
     Spliced { copies, block, entry, returns: returned_from }
 }
 
-/// The copy's entry joined to the block that branches to it, as
-/// `InlineFunction` splices CalleeEntry into OrigBB and erases the branch
+/// The copy's entry joined to the block that branches to it, as `InlineFunction`
+/// splices CalleeEntry into OrigBB and erases the branch
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L3556>).
 /// Made when every user of the entry block is done with it. Nothing changes
 /// if `entry` has another predecessor or opens with a phi.

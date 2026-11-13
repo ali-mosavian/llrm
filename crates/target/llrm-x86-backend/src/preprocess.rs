@@ -288,8 +288,11 @@ pub fn move_callee_loads(
             continue;
         }
         let opcode = dag.opcode(call);
-        let call_ok = opcode == super::x86isd::CALL && !facts.slow_two_mem_ops && !facts.slow_indirect_call;
-        let tail_ok = opcode == super::x86isd::TC_RETURN && (facts.is_64 || !facts.position_independent);
+        let call_ok = opcode == super::x86isd::CALL
+            && !facts.slow_two_mem_ops
+            && !facts.slow_indirect_call;
+        let tail_ok = opcode == super::x86isd::TC_RETURN
+            && (facts.is_64 || !facts.position_independent);
         if !call_ok && !tail_ok || dag.node(call).ops.len() < 2 {
             continue;
         }

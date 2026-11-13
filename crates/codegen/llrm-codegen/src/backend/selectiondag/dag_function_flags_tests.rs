@@ -384,7 +384,10 @@ fn a_wide_add_of_one_is_an_add_and_an_adc_not_an_inc_and_a_byte_round_trip() {
         .filter_map(|i| i.what.as_ref())
         .filter_map(|w| w.name.as_deref().map(str::to_owned))
         .collect();
-    assert!(names.iter().any(|n| n == "adc") && !names.iter().any(|n| n == "sete" || n == "inc"), "{names:?}");
+    assert!(
+        names.iter().any(|n| n == "adc") && !names.iter().any(|n| n == "sete" || n == "inc"),
+        "{names:?}"
+    );
 }
 
 const WIDE_SELECT_OF_CONSTANTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"

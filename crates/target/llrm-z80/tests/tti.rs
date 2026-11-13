@@ -66,9 +66,8 @@ fn calls_cost_more_and_every_operation_is_priced() {
     assert!(arith(UDiv, Ty::Int(16), CostKind::Latency) > arith(Mul, Ty::Int(16), CostKind::Latency));
 }
 
-/// The inliner had its own 3000 and the unroll had none (0: the pin's threshold
-/// alone), so a byte was worth 3 T to one decision and nothing to another. One
-/// constant feeds every speed decision.
+/// The inliner had its own 3000 and the unroll had none (0: the pin's threshold alone), so a byte was worth 3 T to one
+/// decision and nothing to another. One constant feeds every speed decision.
 #[test]
 fn one_rate_prices_every_speed_decision() {
     use llrm_mir::tti::Tti;

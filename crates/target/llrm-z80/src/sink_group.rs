@@ -80,15 +80,8 @@ fn sink_one(function: &mut MFunction) -> bool {
             let dominated = dominated_by(function, &next, s);
             let Some(group) = closed_group(function, b, &dominated, &defs, &uses) else { continue };
             if std::env::var_os("LLRM_Z80_SINK_WHY").is_some() {
-                eprintln!(
-                    "sink: bb{} -> bb{}: {:?}",
-                    function.blocks[b].id,
-                    function.blocks[s].id,
-                    group
-                        .iter()
-                        .map(|&at| (function.blocks[b].insts[at].kind, function.blocks[b].insts[at].operands.clone()))
-                        .collect::<Vec<_>>()
-                );
+                eprintln!("sink: bb{} -> bb{}: {:?}", function.blocks[b].id, function.blocks[s].id,
+                    group.iter().map(|&at| (function.blocks[b].insts[at].kind, function.blocks[b].insts[at].operands.clone())).collect::<Vec<_>>());
             }
             let mut moved = Vec::with_capacity(group.len());
             for &at in group.iter().rev() {
@@ -161,9 +154,8 @@ fn closed_group(
         }
     }
     let chosen: Vec<usize> = (0..end).filter(|&at| group[at]).collect();
-    // what the pin's MachineSink moves one instruction at a time is not this
-    // pass's: a group is here for the flag chain it holds together (a
-    // reader of the flags and, by `keeps`, the setter it reads)
+    // what the pin's MachineSink moves one instruction at a time is not this pass's: a group is here for the
+    // flag chain it holds together (a reader of the flags and, by `keeps`, the setter it reads)
     chosen.iter().any(|&at| insts[at].reads_flags()).then_some(chosen)
 }
 
@@ -179,8 +171,7 @@ fn keeps(
     uses: &HashMap<u32, Vec<(usize, usize)>>,
 ) -> bool {
     let inst = &insts[at];
-    // the status flags are no operand: an instruction `sets_flags` or
-    // `reads_flags`
+    // the status flags are no operand: an instruction `sets_flags` or `reads_flags`
     if inst.sets_flags() {
         for (n, later) in insts.iter().enumerate().skip(at + 1) {
             if later.reads_flags() {
@@ -203,8 +194,7 @@ fn keeps(
     for operand in &inst.operands {
         match operand {
             Operand::Def(Reg::Virt(v)) => {
-                // a two-address step defines its register twice: every write is
-                // the group's
+                // a two-address step defines its register twice: every write is the group's
                 if !defs.get(v).is_some_and(|all| all.iter().all(|&(block, n)| block == b && n < end && group[n])) {
                     return false;
                 }
@@ -229,8 +219,7 @@ fn keeps(
                 }
             }
             Operand::Def(phys @ Reg::Phys(_)) => {
-                // the next instruction to touch it, the branch included, must
-                // write it, or none
+                // the next instruction to touch it, the branch included, must write it, or none
                 for (n, later) in insts.iter().enumerate().skip(at + 1) {
                     if later.operands.iter().any(|o| matches!(o, Operand::Use(r) if overlap(*r, *phys))) {
                         if n >= end || !group[n] {
@@ -245,11 +234,9 @@ fn keeps(
             }
             Operand::Use(phys @ Reg::Phys(_)) => {
                 // what it reads was written by an earlier member of the group
-                let writer = insts[..at]
-                    .iter()
-                    .rposition(
-                        |earlier| earlier.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlap(*r, *phys))),
-                    );
+                let writer = insts[..at].iter().rposition(|earlier| {
+                    earlier.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlap(*r, *phys)))
+                });
                 if !writer.is_some_and(|w| group[w]) {
                     return false;
                 }

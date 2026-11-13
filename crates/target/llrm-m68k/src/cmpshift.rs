@@ -57,10 +57,8 @@ fn reusable(
     let mut found = None;
     for (index, before) in insts[..at].iter().enumerate().rev() {
         if matches!(before.kind, Kind::Op("LSR32di"))
-            && matches!(
-                before.operands[..],
-                [Operand::Def(_), Operand::Use(Reg::Virt(src)), Operand::Imm(s)] if src == v && i64::from(shift) == s
-            )
+            && matches!(before.operands[..], [Operand::Def(_), Operand::Use(Reg::Virt(src)), Operand::Imm(s)]
+                if src == v && i64::from(shift) == s)
         {
             found = Some(index);
             break;

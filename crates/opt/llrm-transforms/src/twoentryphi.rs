@@ -342,15 +342,9 @@ pub fn folded(
     // D5. The pin does not price the selects against the threshold; where a
     // select is a branch, folding runs the arms' code on both paths and still
     // branches, so the selects count.
-    let optsize = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
+    let optsize = function.attrs.iter().any(
+        |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
+    );
     let extra = Cost::of(spec.tti.select_branch_extra(optsize));
     if (!spec.tti.has_cmov() || extra.value > 0) && !hoist.is_empty() {
         let selects = edges::phis(function, block).iter().fold(Cost::FREE, |all, &phi| {

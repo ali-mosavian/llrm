@@ -12,11 +12,7 @@ fn compiled(level: &str) -> String {
     compiled_for(level, "x86_32-linux", &["-mabi=sysv"])
 }
 
-fn compiled_for(
-    level: &str,
-    row: &str,
-    abi: &[&str],
-) -> String {
+fn compiled_for(level: &str, row: &str, abi: &[&str]) -> String {
     // one directory per call: the tests run in parallel and shared `d.s` raced
     static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -46,9 +42,7 @@ fn function<'a>(
     name: &str,
 ) -> Vec<&'a str> {
     // Watcom rows spell a symbol with a trailing underscore
-    let spelled = |line: &str, tail: &str| {
-        [name.to_owned(), format!("{name}_")].iter().any(|one| line.trim() == format!("{one} {tail}"))
-    };
+    let spelled = |line: &str, tail: &str| [name.to_owned(), format!("{name}_")].iter().any(|one| line.trim() == format!("{one} {tail}"));
     let start = asm.lines().position(|line| spelled(line, "proc near")).expect("the function");
     asm.lines().skip(start).take_while(|line| !spelled(line, "endp")).map(str::trim).collect()
 }
@@ -68,17 +62,15 @@ fn test_a_leaf_frame_has_no_cell_for_the_omitted_frame_register() {
     }
 }
 
-/// A 486 pops in 4 clocks: `push eax` / `pop ecx` only where the 4 B matter
-/// (-Os); `sub esp, 4` / `add esp, 4` elsewhere (FRAMESLOT-PRICE,
-/// tests/check/c/m32_one_slot_frame_by_price.c).
+/// A 486 pops in 4 clocks: `push eax` / `pop ecx` only where the 4 B matter (-Os); `sub esp, 4` / `add esp, 4` elsewhere
+/// (FRAMESLOT-PRICE, tests/check/c/m32_one_slot_frame_by_price.c).
 #[test]
 fn test_a_one_slot_leaf_frame_is_push_and_pop_where_the_bytes_matter() {
     for level in ["-O1", "-O2", "-Os"] {
         let asm = compiled(level);
         for (name, pops) in [("one", "pop ecx"), ("narrow", "pop eax"), ("none", "pop eax")] {
             let body = function(&asm, name);
-            // the pop is the pin's first dead caller-saved register
-            // (findDeadCallerSavedReg)
+            // the pop is the pin's first dead caller-saved register (findDeadCallerSavedReg)
             let (open, close) = if level == "-Os" { ("push eax", pops) } else { ("sub esp, 4", "add esp, 4") };
             assert!(
                 body.contains(&open) && body.contains(&close),
@@ -89,10 +81,9 @@ fn test_a_one_slot_leaf_frame_is_push_and_pop_where_the_bytes_matter() {
     }
 }
 
-/// bq32 -O1+ printed "Out of DATA" for a READ loop of 60 items: the runtime's
-/// `B$RDI2` ended its one-slot frame with `pop ecx`, which loaded ECX with the
-/// pushed argument, and the caller (watcall32 keeps ecx) held its loop counter
-/// there. A convention that preserves ecx gets `add esp, 4`.
+/// bq32 -O1+ printed "Out of DATA" for a READ loop of 60 items: the runtime's `B$RDI2` ended its one-slot frame with `pop ecx`, which
+/// loaded ECX with the pushed argument, and the caller (watcall32 keeps ecx) held its loop counter there. A convention that
+/// preserves ecx gets `add esp, 4`.
 #[test]
 fn test_a_one_slot_frame_does_not_pop_into_a_register_the_convention_keeps() {
     for level in ["-O1", "-O2", "-Os"] {

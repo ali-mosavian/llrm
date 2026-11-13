@@ -1,7 +1,5 @@
-//! A frame touched in a few runs is addressed from SP: `push ix; ld ix,#0; add
-//! ix,sp` and `ld sp,ix; pop ix` cost 12 B and 68 T a call for a function that
-//! reads one stack argument (variadic `walk`, `value_of_valueless`: 103 B -> 79
-//! B).
+//! A frame touched in a few runs is addressed from SP: `push ix; ld ix,#0; add ix,sp` and `ld sp,ix; pop ix` cost 12 B
+//! and 68 T a call for a function that reads one stack argument (variadic `walk`, `value_of_valueless`: 103 B -> 79 B).
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};

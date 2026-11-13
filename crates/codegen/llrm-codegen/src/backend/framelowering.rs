@@ -27,13 +27,13 @@
 //!   add esp,12; pop edi; pop esi; pop ebp
 //! ```
 //!
-//! DEVIATE FL-1 (no number, owner object-refactor): Windows and SEH, funclets,
-//! the tail call return-address reserve, a Swift async context, the red zone,
-//! the stack probe and DWARF CFI are not translated: none applies to i486.
+//! DEVIATE FL-1 (no number, owner object-refactor): Windows and SEH, funclets, the tail
+//! call return-address reserve, a Swift async context, the red zone, the
+//! stack probe and DWARF CFI are not translated: none applies to i486.
 //!
-//! DEVIATE FL-2 (no number, owner object-refactor): `mergeSPUpdates` and
-//! `mergeSPAdd`, which fold an adjacent stack update into this one, are not
-//! translated: a function of the frame alone sees no neighbour.
+//! DEVIATE FL-2 (no number, owner object-refactor): `mergeSPUpdates` and `mergeSPAdd`,
+//! which fold an adjacent stack update into this one, are not translated: a
+//! function of the frame alone sees no neighbour.
 //!
 //! DEVIATE CG7 (slot table row 80): `masm::parts` calls this for the flat
 //! m32 frames built at entry (`saved_first`); every other frame (16-bit, the

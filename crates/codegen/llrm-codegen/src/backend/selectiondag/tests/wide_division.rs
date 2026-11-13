@@ -28,8 +28,8 @@ fn quotient_on(
     quotient_in(arch, op, narrow, small, size_only, None)
 }
 
-/// `quotient_on` in a block of `frequency` over the entry's, for a target that
-/// takes the speed routine in loops at size (`Some`).
+/// `quotient_on` in a block of `frequency` over the entry's, for a target that takes the
+/// speed routine in loops at size (`Some`).
 fn quotient_in(
     arch: &dyn llrm_target::Target,
     op: ISD,
@@ -169,8 +169,9 @@ fn an_i64_quotient_and_remainder_of_the_same_operands_are_one_call() {
     let low = dag.get_node(ISD::Truncate, EVT::I32, &[sum]);
     dag.set_root(low);
     TypeLegalizer::new(&mut dag, &tli).with_target(&llrm_x86_m32::M32).run().unwrap();
-    let calls =
-        (0..dag.node_count() as u32).filter(|&node| dag.opcode(SDValue { node, res: 0 }) == x86isd::CALL).count();
+    let calls = (0..dag.node_count() as u32)
+        .filter(|&node| dag.opcode(SDValue { node, res: 0 }) == x86isd::CALL)
+        .count();
     assert_eq!(calls, 1, "one call makes the quotient and the remainder");
 }
 
@@ -183,9 +184,9 @@ fn only_m16_takes_the_size_divide_at_o1() {
     assert!(!llrm_x86_m32::M32.small_divide_at_o1());
 }
 
-/// DEVIATE DIV-HOT: a bit-a-round `i64` divide in a loop at m32 -Os ran
-/// 2,503,700 clocks in x_int64_division (libgcc's: 460,640) and 530,760 in
-/// x_ll_div (239,757). In a loop the speed routine; once a call the size one.
+/// DEVIATE DIV-HOT: a bit-a-round `i64` divide in a loop at m32 -Os ran 2,503,700 clocks in
+/// x_int64_division (libgcc's: 460,640) and 530,760 in x_ll_div (239,757). In a loop the
+/// speed routine; once a call the size one.
 #[test]
 fn an_i64_divide_in_a_loop_at_size_takes_the_speed_routine() {
     let name = |frequency| call_of(&quotient_in(&llrm_x86_m32::M32, ISD::UDiv, false, true, true, Some(frequency)).0).0;

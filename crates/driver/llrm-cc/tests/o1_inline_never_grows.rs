@@ -1,7 +1,7 @@
-//! m32 -O1 (INL-O1): a growing inline stays only where the call's clocks pay
-//! for its bytes at the O1 rate. The pin's threshold copied every soft-float
-//! helper into each site: sfm16_dbg 24,284 B against 23,372 B priced. Needs the
-//! Open Watcom tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
+//! m32 -O1 (INL-O1): a growing inline stays only where the call's clocks pay for
+//! its bytes at the O1 rate. The pin's threshold copied every soft-float helper
+//! into each site: sfm16_dbg 24,284 B against 23,372 B priced. Needs the Open
+//! Watcom tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,7 +14,10 @@ fn compile(
     source: &str,
     flag: &str,
 ) -> (String, u64) {
-    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
+    assert!(
+        llrm_cc::ow_present(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
     assert!(
         std::env::var_os("LLRM_CLANG_M16").is_some(),
         "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
@@ -40,7 +43,10 @@ fn compile(
     };
     run("-S", "d.s");
     run("-c", "d.o");
-    (std::fs::read_to_string(dir.join("d.s")).unwrap(), std::fs::metadata(dir.join("d.o")).unwrap().len())
+    (
+        std::fs::read_to_string(dir.join("d.s")).unwrap(),
+        std::fs::metadata(dir.join("d.o")).unwrap().len(),
+    )
 }
 
 #[test]
@@ -54,8 +60,8 @@ fn test_m32_o1_straight_line_helpers_are_priced_not_all_copied() {
 /// The inliner's growth is in size units, one per instruction, and a callee's
 /// bytes are 3.5 to 5 times that: compared with a per-byte rate it let
 /// `sf_cmp_bits` (about 70 B) into each of eight comparison wrappers
-/// (sfm16_float 23,432 B against gcc's smaller object and 22,748 B with the
-/// unit scaled).
+/// (sfm16_float 23,432 B against gcc's smaller object and 22,748 B with the unit
+/// scaled).
 #[test]
 fn test_m32_o1_growth_is_priced_in_bytes_not_size_units() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -206,10 +212,7 @@ int main(void)
 }
 "#;
     let (listing, _) = compile("folds", source, "-O1");
-    let calls = listing
-        .lines()
-        .filter(|line| line.contains("call") && (line.contains("below") || line.contains("from")))
-        .count();
+    let calls = listing.lines().filter(|line| line.contains("call") && (line.contains("below") || line.contains("from"))).count();
     assert_eq!(calls, 0, "constant arguments fold the loops: the sites are inlined, not called:\n{listing}");
 }
 

@@ -549,9 +549,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
-        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds
-        // CTTZ_ZERO_POISON): the value as is, the routine's `int`
-        // result sign-extended or truncated to the node's type.
+        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds CTTZ_ZERO_POISON): the value as is, the
+        // routine's `int` result sign-extended or truncated to the node's type.
         if matches!(op, ISD::CtLzZeroPoison | ISD::CtPop | ISD::CtTzZeroPoison) {
             let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
             let int = EVT::integer(self.tli.types.int_size());
@@ -954,10 +953,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let (src, dst) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let src_vt = self.dag.value_type(src);
         let EVT::Simple(src_mvt) = src_vt else { return None };
-        if !matches!(
-            self.tli.operation_action(ISD::SIntToFp, src_vt),
-            Action::Legal | Action::Custom
-        ) {
+        if !matches!(self.tli.operation_action(ISD::SIntToFp, src_vt), Action::Legal | Action::Custom) {
             return None;
         }
         if self.dag.node(node).flags.0 & SDNodeFlags::NON_NEG.0 != 0 {
@@ -1178,8 +1174,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             // `expandVAArg`: load the list pointer, round it up to the
             // type's ABI alignment when that exceeds the minimum stack
-            // argument alignment (`getMinStackArgumentAlignment`), step it by
-            // the type's allocation size, store it back and load the value.
+            // argument alignment (`getMinStackArgumentAlignment`), step it by the
+            // type's allocation size, store it back and load the value.
             ISD::VAArg => {
                 let vt = self.dag.value_type(node);
                 let (chain, list) = (self.dag.operand(node, 0), self.dag.operand(node, 1));

@@ -1,5 +1,4 @@
-//! A long decremented by one borrows into its high word by a zero test and a
-//! `jr` over `dec rr`.
+//! A long decremented by one borrows into its high word by a zero test and a `jr` over `dec rr`.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
@@ -11,9 +10,8 @@ define i32 @dec(i32 %x) {
 }
 ";
 
-/// long_step_by_one `dec` took the borrow in `hl`: `ld c, l; ld b, h; ...; ex
-/// de, hl; jr nz; dec hl; ex de, hl; dec bc; ld l, c; ld h, b` (13 B, SDCC's
-/// whole function 7). The high word is in `de` and steps there.
+/// long_step_by_one `dec` took the borrow in `hl`: `ld c, l; ld b, h; ...; ex de, hl; jr nz; dec hl; ex de, hl; dec bc;
+/// ld l, c; ld h, b` (13 B, SDCC's whole function 7). The high word is in `de` and steps there.
 #[test]
 fn a_long_decrement_steps_its_high_word_in_de() {
     for level in [Level::O1, Level::Os, Level::Oz] {

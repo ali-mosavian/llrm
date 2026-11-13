@@ -26,8 +26,10 @@ fn a_byte_argument_is_in_a_before_the_call() {
 
 #[test]
 fn two_byte_arguments_are_in_a_and_x_before_the_call() {
-    let lines =
-        body("declare void @h(i8, i8)\ndefine void @k_two() {\n  call void @h(i8 7, i8 9)\n  ret void\n}\n", "k_two");
+    let lines = body(
+        "declare void @h(i8, i8)\ndefine void @k_two() {\n  call void @h(i8 7, i8 9)\n  ret void\n}\n",
+        "k_two",
+    );
     let call = lines.iter().position(|l| l.starts_with("jsr h") || l.starts_with("jmp h")).expect("a call");
     assert!(lines[..call].contains(&"lda #7".to_owned()) && lines[..call].contains(&"ldx #9".to_owned()), "{lines:?}");
 }

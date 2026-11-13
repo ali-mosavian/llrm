@@ -117,11 +117,10 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
-    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE
-    /// FPTOINT-CHECKED): the float toward zero as an integer of the
-    /// result's width, and whether it fits that integer (NaN and a float
-    /// past the range do not). The value is unspecified where it does not
-    /// fit, and no instruction faults.
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
+    /// the float toward zero as an integer of the result's width, and whether
+    /// it fits that integer (NaN and a float past the range do not). The value
+    /// is unspecified where it does not fit, and no instruction faults.
     FpToIntChecked {
         signed: bool,
     },
@@ -170,9 +169,8 @@ pub enum Intrinsic {
     Trap,
     /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
     DebugTrap,
-    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1
-    /// kind(%eax), %eax` on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not
-    /// translated.
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
+    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
     UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
@@ -1134,10 +1132,7 @@ pub fn is_wide_divide(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.")
-        || name.starts_with("llrm.ia16.")
-        || name.starts_with("llrm.noalias")
-        || name.starts_with("llrm.vararg.")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
@@ -1343,7 +1338,12 @@ impl Intrinsic {
         if lane(&spec.returns) && !returns_ok(&mut matches) {
             return Err("Intrinsic has incorrect return type!".to_owned());
         }
-        if !spec.parameters.iter().zip(parameters).filter(|(slot, _)| lane(slot)).all(|(slot, ty)| matches(*slot, *ty))
+        if !spec
+            .parameters
+            .iter()
+            .zip(parameters)
+            .filter(|(slot, _)| lane(slot))
+            .all(|(slot, ty)| matches(*slot, *ty))
         {
             return Err("Intrinsic has incorrect argument type!".to_owned());
         }

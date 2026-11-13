@@ -672,11 +672,13 @@ b0:
 /// instructions to the pin's 18).
 #[test]
 fn test_a_double_stored_whole_and_read_by_halves_is_widened_and_promoted() {
-    let after = managed(&mut parsed(&format!("{X64}{F}")), Sroa);
+    let after = managed(
+        &mut parsed(&format!("{X64}{F}")),
+        Sroa,
+    );
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
-    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and
-    // isel moves the double through the stack (float_bits -Os m32 132 -> 68
-    // B).
+    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and isel
+    // moves the double through the stack (float_bits -Os m32 132 -> 68 B).
     let after = sroa(F);
     assert!(!after.contains("alloca"), "{after}");
 }

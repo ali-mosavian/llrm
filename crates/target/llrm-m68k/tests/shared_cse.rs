@@ -1,7 +1,7 @@
 //! `bench_sieve` (the pin's -O2 IR): the `ret` phi takes 0 from the entry and
 //! from the block after the clear, and the sum from the loop. The pin's
-//! `MachineCSE` makes the two zeros one (`moveq #0,%d2` in the entry, one
-//! exit); the m68k driver had no CSE, so each early return kept its own
+//! `MachineCSE` makes the two zeros one (`moveq #0,%d2` in the entry, one exit);
+//! the m68k driver had no CSE, so each early return kept its own
 //! `moveq #0,%d0; bra exit` block (59 lines against 53).
 
 use llrm_m68k::compile::{Options, text_with};

@@ -68,10 +68,10 @@ pub fn ordinal_of(one: &Insn) -> usize {
     one.numbered.map_or((one.at / 2) as usize, |n| n as usize)
 }
 
-/// For each instruction of `block`: whether a later one reads the target's
-/// flags register by name before another writes it (a `sets_flags` instruction
-/// or a named write). Empty answers where there is no flags register or the
-/// mode models none.
+/// For each instruction of `block`: whether a later one reads the target's flags
+/// register by name before another writes it (a `sets_flags` instruction or a
+/// named write). Empty answers where there is no flags register or the mode
+/// models none.
 fn flags_read_after<T: Target>(
     block: &crate::mfunc::Block,
     ssa_pins: bool,
@@ -296,19 +296,18 @@ impl<T: Target> Converted<T> {
         let before = self.body.registers.replace(registers);
         let allocatable = self.body.clone();
         self.body = self.with_effects(function, registers);
-        let scheduled =
-            llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
-                let mut model =
-                    llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|set| set.len() as u32).collect());
-                for value in 1..=known {
-                    if pins.contains_key(&value) || !counted(value) {
-                        continue;
-                    }
-                    let class = function.classes[value as usize - 1];
-                    model.count(value, 1, std::rc::Rc::from(sets_of::<T>(&sets, class)));
+        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
+            let mut model =
+                llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|set| set.len() as u32).collect());
+            for value in 1..=known {
+                if pins.contains_key(&value) || !counted(value) {
+                    continue;
                 }
-                model
-            });
+                let class = function.classes[value as usize - 1];
+                model.count(value, 1, std::rc::Rc::from(sets_of::<T>(&sets, class)));
+            }
+            model
+        });
         // What allocation reads is the original instruction, in the order the
         // scheduler chose.
         // By identity: the coalescer's clones of an instruction share its `at`.
@@ -641,8 +640,7 @@ fn convert<T: Target>(
         // of an i64 result copied before the select, read by the `RET`).
         // Otherwise a read of it is refused (a merge needs a phi).
         if ssa_pins && at != 0 {
-            let before: Vec<&IndexMap<RegId, u32>> =
-                predecessors[at].iter().filter_map(|p| exits[*p].as_ref()).collect();
+            let before: Vec<&IndexMap<RegId, u32>> = predecessors[at].iter().filter_map(|p| exits[*p].as_ref()).collect();
             if before.len() == predecessors[at].len() {
                 if let Some((first, rest)) = before.split_first() {
                     made.current = first
@@ -1140,8 +1138,7 @@ impl<T: Target> Made<'_, T> {
         let (mut target, mut symbol) = (None, false);
         // Reads before writes: a physical register read and rewritten by one
         // instruction is read as it was.
-        // where each operand stands in `sources` / `dests`, for the pairs it
-        // ties
+        // where each operand stands in `sources` / `dests`, for the pairs it ties
         let mut source_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
         let mut dest_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
         for (index, operand) in inst.operands.iter().enumerate() {
@@ -1264,9 +1261,9 @@ impl<T: Target> Made<'_, T> {
             Kind::Copy => COPY,
             Kind::Op(name) => name,
         };
-        // `implicit-def $ccr`: the flags a later instruction of the block reads
-        // by name (`CCR_SAVE`) are the value this one leaves. Last in
-        // the lists, so the operands before it keep their numbers.
+        // `implicit-def $ccr`: the flags a later instruction of the block reads by
+        // name (`CCR_SAVE`) are the value this one leaves. Last in the lists, so
+        // the operands before it keep their numbers.
         if self.ssa_pins
             && self.flags_wanted
             && inst.sets_flags()
@@ -1278,9 +1275,8 @@ impl<T: Target> Made<'_, T> {
             delivers.push((held, flags));
             dests.push(Loc::Held(held));
         }
-        // the machine instruction's own tied operands, in the lists' numbering:
-        // a dropped operand (a reserved register) moves the ones after
-        // it
+        // the machine instruction's own tied operands, in the lists' numbering: a
+        // dropped operand (a reserved register) moves the ones after it
         let tied = (!inst.ties.is_empty()).then(|| {
             inst.ties.iter().filter_map(|&(def, used)| Some((source_at[used]?, dest_at[def]?))).collect::<Vec<_>>()
         });
@@ -2533,13 +2529,8 @@ pub fn from_ssa<T: Target>(
     }
     let known = original.classes.len() as u32;
     // what each instruction read before the stage, by its place
-    let before: llrm_support::hash::HashMap<i64, &Insn> = converted
-        .body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .map(|insn| (ordinal_of(insn) as i64, &**insn))
-        .collect();
+    let before: llrm_support::hash::HashMap<i64, &Insn> =
+        converted.body.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (ordinal_of(insn) as i64, &**insn)).collect();
     // a value another replaces, found from the readers the stage rewrote
     let mut renamed: IndexMap<u32, u32> = IndexMap::default();
     let mut note = |from: u32, to: u32| -> Result<(), String> {
@@ -3360,8 +3351,11 @@ mod form_tests {
     /// ops). The form's numbers are those of the operands it was made from.
     #[test]
     fn a_read_renamed_after_the_form_was_made_keeps_its_form() {
-        let form =
-            Semantics { dests: vec![held(3)], sources: vec![held(1), held(2)], ..Semantics::new(Operation::Binary) };
+        let form = Semantics {
+            dests: vec![held(3)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
         // Operands when the form was made: defs [3], uses [1, 2]; the body's
         // values are one more than the registers, the read now being v9's.
         let got = renumbered(&form, vec![3], vec![1, 2], &[4], &[2, 10]).expect("the form stays");

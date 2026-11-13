@@ -1,5 +1,4 @@
-//! The hand-written f32 and f64 compares (config/6502/cmp32.s, cmp64.s) against
-//! the host's float compare.
+//! The hand-written f32 and f64 compares (config/6502/cmp32.s, cmp64.s) against the host's float compare.
 
 use std::path::Path;
 use std::process::Command;

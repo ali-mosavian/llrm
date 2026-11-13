@@ -1,5 +1,4 @@
-//! Two functions of one body are one function at -Os and -Oz
-//! (`MergeFunctions`).
+//! Two functions of one body are one function at -Os and -Oz (`MergeFunctions`).
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
@@ -22,9 +21,8 @@ fn callees(level: Level) -> Vec<String> {
     out.lines().filter_map(|line| line.trim().strip_prefix("call ")).map(str::to_owned).collect()
 }
 
-/// shl_long_by_one -Os kept `twice` and `twice_signed`, two copies of `add hl,
-/// hl; rl e; rl d; ret`: 150 B against SDCC's 147. Both calls name one
-/// function.
+/// shl_long_by_one -Os kept `twice` and `twice_signed`, two copies of `add hl, hl; rl e; rl d; ret`: 150 B against
+/// SDCC's 147. Both calls name one function.
 #[test]
 fn two_functions_of_one_body_are_one_at_the_size_levels() {
     for level in [Level::Os, Level::Oz] {
@@ -35,8 +33,7 @@ fn two_functions_of_one_body_are_one_at_the_size_levels() {
     }
 }
 
-/// Above the size levels the copies stay: a merged body is a call to a shared
-/// name, never faster.
+/// Above the size levels the copies stay: a merged body is a call to a shared name, never faster.
 #[test]
 fn the_speed_levels_keep_both() {
     let calls = callees(Level::O2);
@@ -44,9 +41,8 @@ fn the_speed_levels_keep_both() {
     assert!(twice.len() < 2 || twice[0] != twice[1], "{calls:?}");
 }
 
-/// shl_long_by_one -O1 kept `twice` and `twice_signed` (151 B against SDCC's
-/// 147): a local function of the same body as another is dropped at -O1 too,
-/// where no thunk is written (a thunk saves bytes and costs a `jmp`).
+/// shl_long_by_one -O1 kept `twice` and `twice_signed` (151 B against SDCC's 147): a local function of the same body
+/// as another is dropped at -O1 too, where no thunk is written (a thunk saves bytes and costs a `jmp`).
 #[test]
 fn at_o1_a_local_duplicate_is_dropped_and_an_external_one_is_not_thunked() {
     let calls = callees(Level::O1);

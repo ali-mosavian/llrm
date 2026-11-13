@@ -1,7 +1,6 @@
-//! A shared stage hosted on the SSA function (`host_ssa`) hands back what it
-//! was given when it changes nothing. A round trip that altered a function
-//! would make every stage hosted through it look like a regression of the
-//! stage.
+//! A shared stage hosted on the SSA function (`host_ssa`) hands back what it was
+//! given when it changes nothing. A round trip that altered a function would
+//! make every stage hosted through it look like a regression of the stage.
 
 use llrm_lir::registers::Regs;
 use llrm_m68k::dagisel::function::select_function;
@@ -40,12 +39,8 @@ impl llrm_codegen::model::passes::LIRTransform for DropOne {
         let entry = &body.blocks[0];
         let mut insns: Vec<_> = entry.insns.iter().cloned().collect();
         insns.remove(0);
-        let blocks: Vec<_> = body
-            .blocks
-            .iter()
-            .enumerate()
-            .map(|(at, block)| if at == 0 { block.with_insns(insns.clone()) } else { block.clone() })
-            .collect();
+        let blocks: Vec<_> =
+            body.blocks.iter().enumerate().map(|(at, block)| if at == 0 { block.with_insns(insns.clone()) } else { block.clone() }).collect();
         Ok(body.with_blocks(blocks))
     }
 }
@@ -71,11 +66,8 @@ fn a_stage_that_changes_nothing_hands_the_function_back_unchanged() {
     for (file, text) in FIXTURES {
         let mut module = llrm_mir::parse::module(text).unwrap_or_else(|why| panic!("{file}: {why}"));
         llrm_mir::parse::upgrade_lifetimes(&mut module);
-        let names: Vec<String> = module
-            .functions()
-            .filter(|(_, _, one)| !one.is_declaration())
-            .map(|(id, _, _)| module.global(id).name.as_ref().expect("a defined function has a name").clone())
-            .collect();
+        let names: Vec<String> =
+            module.functions().filter(|(_, _, one)| !one.is_declaration()).map(|(id, _, _)| module.global(id).name.as_ref().expect("a defined function has a name").clone()).collect();
         for name in names {
             for cpu in [Cpu::M68000, Cpu::M68020] {
                 let blocks = select_function(&module, &name, cpu).unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
@@ -92,8 +84,7 @@ fn a_stage_that_changes_nothing_hands_the_function_back_unchanged() {
 }
 
 /// The instrument: the comparison above does see a stage that removes an
-/// instruction, so "unchanged" is a finding and not the comparison's blind
-/// spot.
+/// instruction, so "unchanged" is a finding and not the comparison's blind spot.
 #[test]
 fn a_stage_that_removes_an_instruction_is_seen() {
     let mut module = llrm_mir::parse::module(include_str!("fixtures/sieve_pin_o2.ll")).expect("parses");
@@ -101,7 +92,6 @@ fn a_stage_that_removes_an_instruction_is_seen() {
     let blocks = select_function(&module, "bench_sieve", Cpu::M68000).expect("selects");
     let mut function = emit("bench_sieve", &blocks).expect("emits");
     expand_cmov(&mut function).expect("expands");
-    let back = host_ssa::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO), |_| Box::new(DropOne))
-        .expect("round trip");
+    let back = host_ssa::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO), |_| Box::new(DropOne)).expect("round trip");
     assert_ne!(format!("{function:?}"), format!("{back:?}"));
 }

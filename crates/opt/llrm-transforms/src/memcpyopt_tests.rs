@@ -474,10 +474,9 @@ impl llrm_mir::passes::FunctionPass for AsksForMemorySsa {
     }
 }
 
-/// MemCpyOpt keeps the graph its updater edited
-/// (`PA.preserve<MemorySSAAnalysis>()`); it was dropped, and the next pass
-/// built it again: memexp -O2 built 613 memory graphs, 57 of them after a
-/// memcpyopt that had kept one right.
+/// MemCpyOpt keeps the graph its updater edited (`PA.preserve<MemorySSAAnalysis>()`);
+/// it was dropped, and the next pass built it again: memexp -O2 built 613
+/// memory graphs, 57 of them after a memcpyopt that had kept one right.
 #[test]
 fn test_a_memcpyopt_that_changed_the_body_keeps_the_memory_graph() {
     let before = body(&[memcpy("@b", "@a", 16), memcpy("@c", "@b", 16)]);

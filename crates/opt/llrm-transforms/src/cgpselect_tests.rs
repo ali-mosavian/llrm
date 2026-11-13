@@ -213,8 +213,8 @@ b0:
     for what in ["mul i32", "add i32 %m", "lshr i32"] {
         assert!(text.find(what).expect(what) > branch, "{what} after the branch: {text}");
     }
-    // The true arm's block follows the branch, as the pin's lowered select
-    // places it (x_collatz -O3 +1196 clocks with the false arm first).
+    // The true arm's block follows the branch, as the pin's lowered select places it
+    // (x_collatz -O3 +1196 clocks with the false arm first).
     assert!(text.find("add i32 %m").unwrap() < text.find("lshr i32").unwrap(), "{text}");
 }
 

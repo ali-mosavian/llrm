@@ -83,8 +83,8 @@ fn a_sysv_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_16() {
 
 /// Only the call and the frame's end take the wider alignment, not each
 /// object: a 24-byte array and a double lie on their own 8, and the frame is
-/// the pin's 44 (+4 for the return address = 48), not the 60 an object cap of
-/// 16 gave.
+/// the pin's 44 (+4 for the return address = 48), not the 60 an object cap of 16
+/// gave.
 #[test]
 fn a_wider_call_alignment_does_not_widen_the_objects_of_the_frame() {
     let text = listing(

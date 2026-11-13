@@ -3200,9 +3200,8 @@ fn a_load_into_x_is_dead_before_a_call_that_does_not_take_x() {
     assert_eq!(asm.text(), code("walk"));
 }
 
-/// A branch on the zero or sign between `ldx m` and its `txa` reads the flags
-/// the load set: deleting the load leaves it testing whatever came before
-/// (found by reading, 2026-11-13). A carry branch does not read them.
+/// A branch on the zero or sign between `ldx m` and its `txa` reads the flags the load set: deleting the
+/// load leaves it testing whatever came before (found by reading, 2026-11-13). A carry branch does not read them.
 #[test]
 fn a_zero_branch_between_the_load_and_its_transfer_keeps_the_load() {
     use llrm_6502::peephole::load_straight_into_a;
@@ -3216,11 +3215,7 @@ fn a_zero_branch_between_the_load_and_its_transfer_keeps_the_load() {
     let mut asm = Asm::parse(&code("bcs"));
     asm.no_x_result = true;
     load_straight_into_a(&mut asm);
-    assert_eq!(
-        asm.text(),
-        "  sta rc4\n  bcs out\n  lda rc7\n  sta rc5\n  rts\nout:\n  rts\n",
-        "a carry branch does not"
-    );
+    assert_eq!(asm.text(), "  sta rc4\n  bcs out\n  lda rc7\n  sta rc5\n  rts\nout:\n  rts\n", "a carry branch does not");
 }
 
 /// The same for `y`: PTRSTEP, `ldy rc3; lda rc2; cmp rc4; bne; tya; cmp rc5`
@@ -3372,12 +3367,10 @@ mod post_ra {
         assert!(copies(&f).is_empty(), "the copy into y goes: {:?}", copies(&f));
     }
 
-    /// div_constants_short at -Os (2026-11-12): a narrowed 12-trip counter in
-    /// `a` steps with `clc; adc #1`, which clears the carry the compare of
-    /// its old value set. The compare moved above it, `bcs` read the step's
-    /// carry, and the loop ran 256 trips (239 wrong quotients). On the 6502
-    /// the step in `a` stays above the compare; the 65C02's `inc a` leaves the
-    /// carry.
+    /// div_constants_short at -Os (2026-11-12): a narrowed 12-trip counter in `a` steps with
+    /// `clc; adc #1`, which clears the carry the compare of its old value set. The compare moved
+    /// above it, `bcs` read the step's carry, and the loop ran 256 trips (239 wrong quotients).
+    /// On the 6502 the step in `a` stays above the compare; the 65C02's `inc a` leaves the carry.
     #[test]
     fn a_step_in_the_accumulator_keeps_the_compare_below_it_unless_it_leaves_the_carry() {
         let cmp = || {

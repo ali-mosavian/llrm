@@ -10,7 +10,10 @@ const SOURCE: &str = "typedef unsigned int u32; typedef unsigned long long u64;\
 
 #[test]
 fn an_adc_never_reads_the_flags_of_a_mul_or_logical_op() {
-    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
+    assert!(
+        llrm_cc::ow_present(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
     assert!(
         std::env::var_os("LLRM_CLANG_M16").is_some(),
         "LLRM_CLANG_M16 is not set: this test needs it and does not skip"

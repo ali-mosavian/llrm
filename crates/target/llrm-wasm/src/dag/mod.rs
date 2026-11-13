@@ -44,8 +44,7 @@ pub(crate) fn value_type(
     }
 }
 
-/// An `i128` or an `f128` (softened to the `i128` of its bits): two `i64`
-/// parts.
+/// An `i128` or an `f128` (softened to the `i128` of its bits): two `i64` parts.
 pub(crate) fn is_wide(ty: &Type) -> bool {
     matches!(ty, Type::Int(128) | Type::Float(FloatKind::F128))
 }

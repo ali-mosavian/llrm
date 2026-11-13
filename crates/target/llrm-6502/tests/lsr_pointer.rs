@@ -116,10 +116,10 @@ fn an_outer_loops_row_address_steps_by_the_row_size_and_calls_no_multiply() {
     }
 }
 
+
 /// word_compares at -O2: with a narrowed `i8` counter the loop kept
 /// `gep v, zext(j)` and paid `zext; asl; rol; adc` per trip where a pointer
-/// phi steps by 4 (LU19 kept the extended index out of LSR whatever the element
-/// size, 2026-11-12).
+/// phi steps by 4 (LU19 kept the extended index out of LSR whatever the element size, 2026-11-12).
 const NARROW_INDEX: &str = "@v = global [16 x i32] zeroinitializer\n\
     define i32 @f() {\nentry:\n  br label %l\n\
     l:\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %j = phi i8 [0, %entry], [%j1, %l]\n  \

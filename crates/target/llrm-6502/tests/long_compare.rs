@@ -18,14 +18,13 @@ fn text(
 
 /// `n >= d` of a division loop was the compare of the high words, the compare
 /// of the low words, and their xors or-ed to pick between them: 16 `sbc` and
-/// 8 `eor`/`ora` for the 8 `sbc` of the chain (and one to make the bit) (the
-/// divide runs 4516 B and 8786 clk against llvm-mos's 2291 and 3970).
+/// 8 `eor`/`ora` for the 8 `sbc` of the chain (and one to make the bit) (the divide runs 4516 B and
+/// 8786 clk against llvm-mos's 2291 and 3970).
 #[test]
 fn an_unsigned_compare_of_longs_is_one_chain() {
     let body = "define i1 @ge(i64 %n, i64 %d) {\n  %c = icmp uge i64 %n, %d\n  ret i1 %c\n}";
     let t = text("ge", body);
-    // 8 of the chain, 1 to make the bit
-    assert_eq!(t.matches("sbc").count(), 9, "{t}");
+    assert_eq!(t.matches("sbc").count(), 9, "{t}"); // 8 of the chain, 1 to make the bit
     assert_eq!(t.matches("ora").count(), 0, "{t}");
 }
 

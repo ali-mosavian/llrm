@@ -19,12 +19,12 @@
 //! # Limits
 //! DEVIATE IU1: unless the target asks for use-list order
 //! (`Tti::lsr_users_in_use_list_order`), users of a value are visited in
-//! descending program order, not use-list order. Use-list order is edit
-//! history; the pin's order on parsed IR is the only reproducible one, and it
-//! breaks ties in LSR's register choice. Cost (IU1-COST): one map of the layout
-//! per loop and a block's instruction numbers, where the pin has none (it was a
-//! map of every instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's
-//! order. Owner: w-5. Review: 2026-11-19.
+//! descending program order, not use-list order. Use-list order is edit history; the pin's order on parsed
+//! IR is the only reproducible one, and it breaks ties in LSR's register
+//! choice. Cost (IU1-COST): one map of the layout per loop and a block's
+//! instruction numbers, where the pin has none (it was a map of every
+//! instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's order.
+//! Owner: w-5. Review: 2026-11-19.
 //!
 //! DEVIATE: whether an instruction is safe to speculate and whether it is
 //! ephemeral are asked of the caller (`Env`), which holds what they need.
@@ -34,9 +34,9 @@ use std::cell::RefCell;
 
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::context::ConstantKind;
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::valuetracking::pattern::phi_incoming;
 
@@ -209,14 +209,8 @@ impl IvUsers {
     ) -> Self {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
-        let mut users = Self {
-            l,
-            uses: Vec::new(),
-            processed: IdSet::with_capacity(cx.function.instruction_count()),
-            phi_uses: IdSet::with_capacity(0),
-            ordered: 0,
-            use_list_order: env.use_list_order,
-        };
+        let mut users =
+            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), phi_uses: IdSet::with_capacity(0), ordered: 0, use_list_order: env.use_list_order };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -500,25 +494,20 @@ fn scaled_by_a_user(
     cx: &Cx,
     value: llrm_mir::module::ValueId,
 ) -> bool {
-    cx.function
-        .users(value)
-        .iter()
-        .any(
-            |one| {
-                let user = cx.function.instruction(one.user);
-                match user.opcode {
-                    Opcode::GetElementPtr { source } => {
-                        let indices = vec![None; user.operands.len() - 1];
-                        let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
-                        variable.iter().any(|&(at, scale)| scale > 1 && user.operands[1 + at] == Operand::Value(value))
-                    }
-                    Opcode::Binary(op @ (BinaryOp::Mul | BinaryOp::Shl)) => {
-                        let [Operand::Value(a), Operand::Constant(c)] = user.operands[..] else { return false };
-                        let ConstantKind::Int(by) = cx.context.get(c).kind else { return false };
-                        a == value && (op == BinaryOp::Shl || by > 1)
-                    }
-                    _ => false,
-                }
-            },
-        )
+    cx.function.users(value).iter().any(|one| {
+        let user = cx.function.instruction(one.user);
+        match user.opcode {
+            Opcode::GetElementPtr { source } => {
+                let indices = vec![None; user.operands.len() - 1];
+                let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
+                variable.iter().any(|&(at, scale)| scale > 1 && user.operands[1 + at] == Operand::Value(value))
+            }
+            Opcode::Binary(op @ (BinaryOp::Mul | BinaryOp::Shl)) => {
+                let [Operand::Value(a), Operand::Constant(c)] = user.operands[..] else { return false };
+                let ConstantKind::Int(by) = cx.context.get(c).kind else { return false };
+                a == value && (op == BinaryOp::Shl || by > 1)
+            }
+            _ => false,
+        }
+    })
 }

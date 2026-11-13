@@ -89,10 +89,8 @@ b0:
     assert_eq!(far_stores(&after), 1, "{after}");
 }
 
-/// The walk's promotion mark is removed from every function before the second
-/// IPSCCP; the analyses that list declarations kept it on the functions the
-/// solver did not restate (`LLRM_CHECK_MODULES`: "@ADDNODE kept ...
-/// Flag(llrm-promoted-in-walk), afresh without it").
+/// The walk's promotion mark is removed from every function before the second IPSCCP; the analyses that list declarations kept it on
+/// the functions the solver did not restate (`LLRM_CHECK_MODULES`: "@ADDNODE kept ... Flag(llrm-promoted-in-walk), afresh without it").
 #[test]
 fn the_walks_promotion_mark_is_told_removed_to_the_analyses() {
     let mut module = parsed(include_str!("fixtures/bintree_before_ipo.ll"));

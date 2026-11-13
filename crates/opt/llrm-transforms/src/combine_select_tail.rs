@@ -29,8 +29,8 @@
 
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
-use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::pattern;
+use llrm_mir::valuetracking::Query;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::query;
@@ -123,8 +123,7 @@ pub(crate) fn nested_selects(
         alt
     } else if let Some(alt) = commutative_logical(c, inst, cond, is_and, |q, o| pattern::not(q, o) == Some(inner_cond))
     {
-        // `cond` holds the negated inner condition: its own value stands for
-        // it.
+        // `cond` holds the negated inner condition: its own value stands for it.
         let negated = {
             let q = query(c, Some(inst));
             let (a, b) = if is_and { pattern::logical_and(&q, cond)? } else { pattern::logical_or(&q, cond)? };

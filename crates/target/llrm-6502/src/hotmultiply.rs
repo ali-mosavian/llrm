@@ -38,8 +38,8 @@ pub fn hot(module: &Module) -> bool {
     runs(module) >= MIN_RUNS
 }
 
-/// The static runs of the 32-bit multiplies of `module`: 10 per level of loop
-/// depth, times the runs of the function.
+/// The static runs of the 32-bit multiplies of `module`: 10 per level of loop depth, times the runs of
+/// the function.
 pub fn runs(module: &Module) -> f64 {
     let calls = call_weights(module);
     let mut runs = 0.0;

@@ -143,8 +143,7 @@ fn divided(
     } else {
         Mode { bits: 16, segmented: true, address_bytes: 2, wide: true }
     };
-    // flat code normalizes the divisor with one bsr; real mode keeps the shift
-    // loop (a 386 bsr is 10+3n clocks)
+    // flat code normalizes the divisor with one bsr; real mode keeps the shift loop (a 386 bsr is 10+3n clocks)
     let wide = if bits == 32 { WIDE_BSR } else { WIDE };
     let source = match (signed, wide_divisor) {
         (false, true) => [CHECK, NARROW, wide, "done:\n"].concat(),

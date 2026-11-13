@@ -947,10 +947,8 @@ pub fn is_guaranteed_to_transfer_execution_to_successor(
         return false;
     }
     // Only these can throw, not return or be volatile: the rest transfer.
-    if !matches!(
-        opcode,
-        Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume | Opcode::Load { .. } | Opcode::Store { .. }
-    ) {
+    if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume | Opcode::Load { .. } | Opcode::Store { .. })
+    {
         return true;
     }
     transfers_by_effects(q, inst)

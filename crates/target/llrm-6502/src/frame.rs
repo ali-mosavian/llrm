@@ -79,10 +79,9 @@ pub fn layout(function: &Function) -> Layout {
     Layout { stack_size, objects, saved: function.saved.clone(), first_save, reserved_call_frame }
 }
 
-/// The largest `alloca` alignment accepted: what clang's msp430 layout (the
-/// front end this target runs) gives an `int` or a `long`. One past
-/// [`STACK_ALIGN`]: such an object is clamped to what the frame keeps, a larger
-/// one is refused by name (`Machine::max_alloca_align`).
+/// The largest `alloca` alignment accepted: what clang's msp430 layout (the front end this target runs) gives an `int`
+/// or a `long`. One past [`STACK_ALIGN`]: such an object is clamped to what the frame keeps, a larger one is refused
+/// by name (`Machine::max_alloca_align`).
 pub const MAX_ALLOCA_ALIGN: u64 = 2;
 
 fn adjust(bytes: i64) -> MInst {
@@ -175,8 +174,7 @@ impl Layout {
 
 #[cfg(test)]
 mod stack_facts {
-    /// The datalayout named no stack alignment, so a pass raising a local to
-    /// its type's preferred alignment had no bound.
+    /// The datalayout named no stack alignment, so a pass raising a local to its type's preferred alignment had no bound.
     #[test]
     fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
         let layout = crate::LAYOUT

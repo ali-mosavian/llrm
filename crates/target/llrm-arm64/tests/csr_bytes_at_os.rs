@@ -11,12 +11,7 @@ use llrm_arm64::machine::Platform;
 #[test]
 fn a_value_made_from_a_register_is_not_priced_as_remade() {
     let asm = driver::assembly(include_str!("data/paths_os.ll"), Platform::Linux, Level::Os).expect("lowers");
-    let paths: Vec<&str> = asm
-        .lines()
-        .skip_while(|line| *line != "paths:")
-        .skip(1)
-        .take_while(|line| !line.ends_with(':') || line.starts_with(".L"))
-        .collect();
+    let paths: Vec<&str> = asm.lines().skip_while(|line| *line != "paths:").skip(1).take_while(|line| !line.ends_with(':') || line.starts_with(".L")).collect();
     let spills = paths.iter().filter(|line| line.trim().starts_with("str ") && line.contains("[sp]")).count();
     assert_eq!(spills, 0, "{asm}");
 }

@@ -25,14 +25,14 @@
 //!
 //! DEVIATE F2 (owner x87, exit 2026-11-29): at -O1, -Os and -Oz the pair after
 //! an x87 compare stays when its result is required in the register the status
-//! word takes (`fnstsw ax`: a return value at m32). `fnstsw ax` holds EAX, so
-//! the zero lands in another register and a copy follows: `xor ecx,ecx; fcomp;
-//! fnstsw ax; sahf; seta cl; mov eax,ecx` (7 B) for `seta al; movzx eax,al` (6
-//! B), and the register it took is clobbered for the callers of a
-//! private-convention function: tests/run/c/fcmp_all -Os m32 5436 -> 5564 B
-//! (+128) since the compare writes the flags (#8200); -O1 grew 5883 -> 6011 B
-//! alike. Any other result keeps the pin's form (`xor; seta`, 1 B less). -O2
-//! and -O3, which price bytes against clocks, keep the pin's form.
+//! word takes (`fnstsw ax`: a return value at m32). `fnstsw ax` holds EAX, so the zero lands in another register
+//! and a copy follows: `xor ecx,ecx; fcomp; fnstsw ax; sahf; seta cl; mov
+//! eax,ecx` (7 B) for `seta al; movzx eax,al` (6 B), and the register it took
+//! is clobbered for the callers of a private-convention function:
+//! tests/run/c/fcmp_all -Os m32 5436 -> 5564 B (+128) since the compare writes
+//! the flags (#8200); -O1 grew 5883 -> 6011 B alike. Any other result keeps the
+//! pin's form (`xor; seta`, 1 B less). -O2 and -O3, which price bytes against
+//! clocks, keep the pin's form.
 //!
 //! # Example
 //! `int f(int a, int b) { return a < b; }` at `-m32`, `ISEL_DUMP=1`.
@@ -65,11 +65,9 @@ use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
 pub struct FixupSetCc {
-    /// -O1, -Os and -Oz, which gate every metric alone
-    /// (`!Profile::speed_rate`).
+    /// -O1, -Os and -Oz, which gate every metric alone (`!Profile::speed_rate`).
     pub strict: bool,
-    /// Where an x87 compare leaves the status word
-    /// (`RegisterClasses::status_word`).
+    /// Where an x87 compare leaves the status word (`RegisterClasses::status_word`).
     pub status_word: Option<llrm_lir::registers::RegId>,
 }
 
@@ -348,16 +346,8 @@ mod tests {
         const AX: Option<llrm_lir::registers::RegId> = Some(llrm_lir::registers::RegId::AX);
         let rewritten = ["mov", "fcomp", "seta"];
         assert_eq!(names(fixed_for(&body("fcomp", true), false, AX)), rewritten, "-O2: the pin's form");
-        assert_eq!(
-            names(fixed_for(&body("fcomp", true), true, AX)),
-            ["fcomp", "seta", "movzx"],
-            "strict, a return: kept"
-        );
-        assert_eq!(
-            names(fixed_for(&body("fcomp", false), true, AX)),
-            rewritten,
-            "strict, not a return: the pin's form"
-        );
+        assert_eq!(names(fixed_for(&body("fcomp", true), true, AX)), ["fcomp", "seta", "movzx"], "strict, a return: kept");
+        assert_eq!(names(fixed_for(&body("fcomp", false), true, AX)), rewritten, "strict, not a return: the pin's form");
         assert_eq!(names(fixed_for(&body("cmp", true), true, AX)), ["mov", "cmp", "seta"], "an integer compare");
         assert_eq!(names(fixed_for(&body("fcomp", true), true, None)), rewritten, "a target without a status word");
     }

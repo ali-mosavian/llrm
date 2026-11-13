@@ -75,8 +75,8 @@ const BEGIN_GROUP: u8 = 1;
 const END_GROUP: u8 = 2;
 const RETIRE_OOO: u8 = 4;
 
-/// A distinct class as generated: spans `(at, len)` into the model's pools,
-/// which models share.
+/// A distinct class as generated: spans `(at, len)` into the model's pools, which
+/// models share.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassRow {
     pub num_micro_ops: u16,
@@ -115,8 +115,7 @@ pub enum SchedClass {
     /// The model marks a write of the opcode `Unsupported`: the CPU does not
     /// run it (LSE atomics).
     Unsupported,
-    /// Index in `SchedModel::class_rows`; classes with the same numbers share a
-    /// row.
+    /// Index in `SchedModel::class_rows`; classes with the same numbers share a row.
     Resolved(u16),
     /// `len` arms from `at` in `SchedModel::variant_arms`.
     Variant { at: u16, len: u8 },

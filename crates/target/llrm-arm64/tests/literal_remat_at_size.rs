@@ -47,17 +47,17 @@ fn a_constant_one_that_feeds_a_shift_is_not_copied_from_a_saved_register_at_each
     let text = driver::assembly(include_str!("data/one_constant_across_calls_os.ll"), Platform::Linux, Level::Os)
         .expect("lowers");
     assert!(text.matches("bl w").count() >= 5, "premise: the calls are there:\n{text}");
-    let copies: Vec<&str> =
-        text.lines().filter(|line| (19..=28).any(|n| line.trim() == format!("orr x0, xzr, x{n}, lsl #0"))).collect();
+    let copies: Vec<&str> = text
+        .lines()
+        .filter(|line| (19..=28).any(|n| line.trim() == format!("orr x0, xzr, x{n}, lsl #0")))
+        .collect();
     assert!(copies.is_empty(), "the constant is copied out of a saved register:\n{text}");
 }
 
-/// queens `place` -Os (248 B against clang's 240): the `-row` that starts the
-/// inner loop's counter stayed hoisted out of the column loop and lived across
-/// the recursive call in a seventh callee-saved register (one more save and
-/// restore, 8 B). The pin remakes it at the phi copy (`reMaterializeDef`:
-/// AArch64 flags every `ADD`/`SUB` `isReMaterializable` and `isAsCheapAsAMove`;
-/// the reads need only be live there).
+/// queens `place` -Os (248 B against clang's 240): the `-row` that starts the inner loop's counter stayed
+/// hoisted out of the column loop and lived across the recursive call in a seventh callee-saved register
+/// (one more save and restore, 8 B). The pin remakes it at the phi copy (`reMaterializeDef`: AArch64 flags
+/// every `ADD`/`SUB` `isReMaterializable` and `isAsCheapAsAMove`; the reads need only be live there).
 #[test]
 fn a_negated_loop_invariant_is_made_again_in_the_loop_instead_of_held_in_a_saved_register() {
     use llrm_arm64::driver::{self, Level};

@@ -311,12 +311,10 @@ impl Target for M68k {
 
 #[cfg(test)]
 mod stack_facts_tests {
-    /// The pin's string, from its `opt -mtriple=m68k-unknown-linux-gnu`: S16 is
-    /// two bytes, the frames keep four (M68K-STACK-ALIGN).
+    /// The pin's string, from its `opt -mtriple=m68k-unknown-linux-gnu`: S16 is two bytes, the frames keep four (M68K-STACK-ALIGN).
     const PIN: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 
-    /// An `S` above what the frames keep lets a pass raise an alloca past the
-    /// frame's alignment: silent misalignment.
+    /// An `S` above what the frames keep lets a pass raise an alloca past the frame's alignment: silent misalignment.
     #[test]
     fn the_datalayout_states_a_stack_alignment_the_frames_keep_and_the_pin_has() {
         llrm_target::testing::assert_stack_facts(
@@ -327,8 +325,7 @@ mod stack_facts_tests {
         );
     }
 
-    /// The check itself: an `S` above the kept alignment must be refused, so a
-    /// green run above means something.
+    /// The check itself: an `S` above the kept alignment must be refused, so a green run above means something.
     #[test]
     #[should_panic(expected = "S above what the frames keep")]
     fn a_stack_alignment_above_what_the_frames_keep_is_refused() {

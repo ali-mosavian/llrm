@@ -15,8 +15,7 @@ fn after(code: &str) -> String {
 /// 4 of `lda (b),y; eor (a),y`.
 #[test]
 fn two_indirect_operands_need_no_temporary() {
-    let before =
-        "  ldy #0\nl:\n  lda (rc2),y\n  sta rc16\n  lda (rc4),y\n  eor rc16\n  sta out\n  iny\n  bne l\n  rts\n";
+    let before = "  ldy #0\nl:\n  lda (rc2),y\n  sta rc16\n  lda (rc4),y\n  eor rc16\n  sta out\n  iny\n  bne l\n  rts\n";
     let want = "  ldy #0\nl:\n  lda (rc4),y\n  eor (rc2),y\n  sta out\n  iny\n  bne l\n  rts\n";
     assert_eq!(after(before), want);
 }
@@ -45,9 +44,9 @@ fn after_a_byte(code: &str) -> String {
     asm.text()
 }
 
-/// `__divdf3` at -O2 read a spilled byte through `y` into a cell, `ldy s_f_6;
-/// sty rc16; sbc rc16` (the -Os code is `sbc s_f_6`): 61 clocks a trip of its
-/// restoring loop, +4457 clocks a division.
+/// `__divdf3` at -O2 read a spilled byte through `y` into a cell, `ldy s_f_6; sty
+/// rc16; sbc rc16` (the -Os code is `sbc s_f_6`): 61 clocks a trip of its restoring
+/// loop, +4457 clocks a division.
 #[test]
 fn an_operand_loaded_through_y_into_a_cell_is_the_operand() {
     let before = "  lda rc2\n  sec\n  ldy s_f_6\n  sty rc16\n  sbc rc16\n  sta out\n  rts\n";
@@ -107,8 +106,8 @@ fn a_call_ends_a_scratch_cell_and_reads_an_argument_cell() {
     assert_eq!(after_a_byte(argument), argument);
 }
 
-/// A global byte is not a spill slot: `buf+2+1` and `buf+3` name one byte, and
-/// a store spelled the second way changed what the first reads. memmove_overlap
+/// A global byte is not a spill slot: `buf+2+1` and `buf+3` name one byte, and a
+/// store spelled the second way changed what the first reads. memmove_overlap
 /// -O2 read the new value (WRONG) after the copy to the cell was folded away.
 #[test]
 fn a_global_byte_stored_by_another_spelling_keeps_the_copy() {

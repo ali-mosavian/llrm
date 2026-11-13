@@ -1345,8 +1345,7 @@ fn compute_unroll_and_jam_count(
         llrm_support::debug!("unroll-jam", "no loop invariant loads");
         return (0, false);
     }
-    // UJ3: a divisor of a known trip count leaves no remainder copy of the
-    // nest.
+    // UJ3: a divisor of a known trip count leaves no remainder copy of the nest.
     if options.on && run.tti.unroll_jam_exact_count() && info.outer_trip_count > 1 && count > 1 {
         if let Some(exact) = (2..=count).rev().find(|d| info.outer_trip_count % d == 0) {
             count = exact;

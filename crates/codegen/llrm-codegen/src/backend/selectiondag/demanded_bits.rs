@@ -84,9 +84,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.add_to_worklist(node.node);
         self.replace_value(old, new);
         self.add_to_worklist_with_users(new.node);
-        // `CommitTargetLoweringOpt` is `CombineTo`: the replaced node goes, or
-        // it stays a reader of its operands (a load with a second use
-        // is not folded).
+        // `CommitTargetLoweringOpt` is `CombineTo`: the replaced node goes, or it
+        // stays a reader of its operands (a load with a second use is not folded).
         self.dag.delete_dead(old.node);
         self.queue_survivors();
         true
@@ -150,13 +149,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !self.dag.has_one_use(op.node) {
             return Ok(());
         }
-        // DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05),
-        // `known_zero_narrowing`: the pin sizes by the demanded bits
-        // alone, so an `or` of two bytes read as a word was done as a
-        // word; the bits known zero above the narrow type come
-        // back as a zero extension. An `and` keeps the pin's sizing: its zeros
-        // come from its own mask, and `zext(and8(trunc x, c))` folds
-        // back into the `and`.
+        // DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05), `known_zero_narrowing`:
+        // the pin sizes by the demanded bits alone, so an `or` of two bytes read as
+        // a word was done as a word; the bits known zero above the narrow type come
+        // back as a zero extension. An `and` keeps the pin's sizing: its zeros come
+        // from its own mask, and `zext(and8(trunc x, c))` folds back into the `and`.
         let by_known_zero = self.hooks.known_zero_narrowing() && self.dag.opcode(op) != ISD::And;
         let live = if by_known_zero { demanded & !known_bits(self.dag, op).zero } else { demanded };
         let size = (128 - live.leading_zeros()).max(1);
@@ -747,9 +744,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 known_bits_at(self.dag, op, depth)
             }
             // `SimplifyDemandedBits` of `CTPOP` (TargetLowering.cpp#L2478): one
-            // demanded bit is the parity, taken before operation legalization
-            // (this DAG has no vector types: the pin's scalar-only limit
-            // holds).
+            // demanded bit is the parity, taken before operation legalization (this
+            // DAG has no vector types: the pin's scalar-only limit holds).
             ISD::CtPop if demanded == 1 && !legal_operations => {
                 let new = self.dag.get_node(ISD::Parity, vt, &[self.dag.operand(op, 0)]);
                 return Self::combine_to(tlo, op, new);
@@ -772,8 +768,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // [L3175]: "Avoid folding to a constant if any OpaqueConstant is
         // involved": a hoisted constant (`bitcast iN C`) stays a register.
         //
-        // [L3175]:
-        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L3175
+        // [L3175]: https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L3175
         let opaque_operand = self.dag.node(op).ops.iter().any(|&operand| self.dag.is_opaque(operand));
         if demanded & !(known.zero | known.one) == 0 && self.dag.constant(op).is_none() && !opaque_operand {
             let vt = self.dag.value_type(op);

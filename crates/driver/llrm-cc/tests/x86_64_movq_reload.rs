@@ -1,8 +1,7 @@
-//! x86-64 -O2: the bits of a `double` kept across a call stopped the compile
-//! with "Semantics(op=EXTEND, name='movq')": the spiller folded the reload of
-//! the xmm source of `movq r64, xmm` into `movq r64, [slot]`, which has no
-//! encoding (the pin's fold tables hold only the store form of that move).
-//! Needs `LLRM_LLC`.
+//! x86-64 -O2: the bits of a `double` kept across a call stopped the compile with
+//! "Semantics(op=EXTEND, name='movq')": the spiller folded the reload of the xmm
+//! source of `movq r64, xmm` into `movq r64, [slot]`, which has no encoding (the
+//! pin's fold tables hold only the store form of that move). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

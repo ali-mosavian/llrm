@@ -1,8 +1,7 @@
-//! 6502-UNROLL-O1: with `-funroll-loops` (the rows' default at -O1) a full
-//! unroll is made only where it does not grow the code, and a loop the plain
-//! walk refuses is unrolled on trial when the function then costs no more bytes
-//! and no more clocks. The bare flag grew byval_struct +178 B, frameless +27 B,
-//! loop_fusion +10 B at -O1, which is strict on bytes (2026-11-10).
+//! 6502-UNROLL-O1: with `-funroll-loops` (the rows' default at -O1) a full unroll is made only where
+//! it does not grow the code, and a loop the plain walk refuses is unrolled on trial when the
+//! function then costs no more bytes and no more clocks. The bare flag grew byval_struct +178 B,
+//! frameless +27 B, loop_fusion +10 B at -O1, which is strict on bytes (2026-11-10).
 
 mod common;
 
@@ -15,8 +14,7 @@ fn o1(ir: &str) -> String {
     assembly(&ir, &request).unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// Ten trips of a 32-bit store: unrolled it is 41 `sta` against the loop's 9
-/// (169 lines against 73).
+/// Ten trips of a 32-bit store: unrolled it is 41 `sta` against the loop's 9 (169 lines against 73).
 #[test]
 fn an_o1_unroll_does_not_grow_a_store_loop() {
     let text = o1("define void @fill(ptr %a) {\nentry:\n  br label %l\nl:\n  %i = phi i16 [0, %entry], [%i1, %l]\n  \
@@ -26,9 +24,8 @@ fn an_o1_unroll_does_not_grow_a_store_loop() {
     assert!(stores < 20, "{stores} stores: the loop was unrolled at -O1\n{text}");
 }
 
-/// float_in_place_update: a two-trip loop of soft-float calls with a `report`
-/// in it, 9441 B at -O1 against 19 B at -Os where the trial unroll folds it.
-/// The trial now runs at -O1 and keeps it.
+/// float_in_place_update: a two-trip loop of soft-float calls with a `report` in it, 9441 B at -O1
+/// against 19 B at -Os where the trial unroll folds it. The trial now runs at -O1 and keeps it.
 #[test]
 fn a_float_loop_the_trial_folds_is_unrolled_at_o1() {
     let text = o1("declare void @report(i32)\ndefine i16 @main() {\n  br label %1\n1:\n  \
@@ -42,9 +39,8 @@ fn a_float_loop_the_trial_folds_is_unrolled_at_o1() {
     assert!(!text.contains("jsr __"), "the soft-float calls stay: {} lines\n{text}", text.lines().count());
 }
 
-/// `-funroll-loops` also turned on peeling at -O1: known_loads_walks grew +4 B
-/// (6502) and +47 B (65C02) for 94k clocks fewer. The peeled iteration is a
-/// second indirect store (its constant folded).
+/// `-funroll-loops` also turned on peeling at -O1: known_loads_walks grew +4 B (6502) and +47 B
+/// (65C02) for 94k clocks fewer. The peeled iteration is a second indirect store (its constant folded).
 #[test]
 fn an_o1_loop_is_not_peeled() {
     let text = o1("define void @f(ptr %a, i8 %inv, i8 %n) {\nentry:\n  br label %l\nl:\n  \
@@ -55,9 +51,8 @@ fn an_o1_loop_is_not_peeled() {
     assert_eq!(stores, 1, "the first iteration was peeled\n{text}");
 }
 
-/// #9101 made every target's -O1 trial nest-only: float_in_place_update's lone
-/// loop stayed rolled, 19 B -> 9441 B. The 6502 trial takes any loop under its
-/// size.
+/// #9101 made every target's -O1 trial nest-only: float_in_place_update's lone loop stayed rolled,
+/// 19 B -> 9441 B. The 6502 trial takes any loop under its size.
 #[test]
 fn the_6502_unroll_trial_is_not_limited_to_nests() {
     let tti = llrm_6502::driver::machine().tti().expect("a Tti");
@@ -65,10 +60,9 @@ fn the_6502_unroll_trial_is_not_limited_to_nests() {
     assert!(!tti.unroll_trial_nests_only());
 }
 
-/// #9334 gave -Os the x86-m32 size bar, which the 6502 states none of: its -Os
-/// trial noted nothing and float_in_memory_loop went 21 B -> 4,988 B,
-/// byval_struct 51 B -> 466 B (33 cells, 2026-11-12). float_in_place_update's
-/// loop must fold at -Os as it does at -O1.
+/// #9334 gave -Os the x86-m32 size bar, which the 6502 states none of: its -Os trial noted nothing and
+/// float_in_memory_loop went 21 B -> 4,988 B, byval_struct 51 B -> 466 B (33 cells, 2026-11-12).
+/// float_in_place_update's loop must fold at -Os as it does at -O1.
 #[test]
 fn a_float_loop_the_trial_folds_is_unrolled_at_os() {
     let ir = format!(

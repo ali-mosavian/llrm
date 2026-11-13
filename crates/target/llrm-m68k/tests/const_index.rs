@@ -1,8 +1,6 @@
-//! A store at `d + 650` made a register of the 650 (`move.w #650, %a1; move.l
-//! #x, (0,%a0,%a1)`, 12 B): the pin's `ARII` matches before `ARID`, and a
-//! constant past the 8-bit displacement became the index. `move.l #x,
-//! (650,%a0)` is 8 B and needs no register (memory_expansion: eight such stores
-//! per memset).
+//! A store at `d + 650` made a register of the 650 (`move.w #650, %a1; move.l #x, (0,%a0,%a1)`, 12 B):
+//! the pin's `ARII` matches before `ARID`, and a constant past the 8-bit displacement became the index.
+//! `move.l #x, (650,%a0)` is 8 B and needs no register (memory_expansion: eight such stores per memset).
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

@@ -7,11 +7,11 @@
 //! and drop the tie copy.
 //!
 //! DEVIATE: kills come from block liveness over virtual registers, not
-//! `LiveIntervals`; `SrcRegMap`/`DstRegMap` are rebuilt per instruction from
-//! the block (a copy from a physical register not clobbered since, and the
-//! single copy of the result into one) rather than kept as the pin scans;
-//! chains follow copies only, not tied uses; `hasCommutePreference` is not
-//! asked (M68k has none). Reason: the spike has no analysis manager. Exit: the
+//! `LiveIntervals`; `SrcRegMap`/`DstRegMap` are rebuilt per instruction from the
+//! block (a copy from a physical register not clobbered since, and the single
+//! copy of the result into one) rather than kept as the pin scans; chains
+//! follow copies only, not tied uses; `hasCommutePreference` is not asked
+//! (M68k has none). Reason: the spike has no analysis manager. Exit: the
 //! neutral-LIR task.
 //!
 //! [`commute_accumulator`] makes the same choice for a commutable instruction
@@ -171,17 +171,12 @@ impl Facts {
                 }
                 Reg::Phys(phys) => {
                     let root = T::root(phys);
-                    let clobbered = insts[only + 1..at]
-                        .iter()
-                        .any(
-                            |inst| (inst.call && T::caller_saved().iter().any(|&one| T::overlaps(one, root)))
-                                || inst.operands.iter().any(|o| {
-                                    matches!(
-                                        o,
-                                        Operand::Def(Reg::Phys(q)) if T::overlaps(T::root(*q), root)
-                                    )
-                                }),
-                        );
+                    let clobbered = insts[only + 1..at].iter().any(|inst| {
+                        (inst.call && T::caller_saved().iter().any(|&one| T::overlaps(one, root)))
+                            || inst.operands.iter().any(
+                                |o| matches!(o, Operand::Def(Reg::Phys(q)) if T::overlaps(T::root(*q), root)),
+                            )
+                    });
                     return (!clobbered).then_some(phys);
                 }
             }

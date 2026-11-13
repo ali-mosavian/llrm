@@ -38,7 +38,8 @@ pub(crate) fn select_fcmp_unordered_swap(
     let cond = query(c, None).instruction_of(sel.cond).map(|(_, one)| one.clone())?;
     let Opcode::FCmp(pred) = cond.opcode else { return None };
     let [lhs, rhs] = cond.operands[..] else { return None };
-    let same_pair = (lhs == sel.if_true && rhs == sel.if_false) || (lhs == sel.if_false && rhs == sel.if_true);
+    let same_pair =
+        (lhs == sel.if_true && rhs == sel.if_false) || (lhs == sel.if_false && rhs == sel.if_true);
     if !same_pair || !has_one_use(c, sel.cond) || !pred.is_unordered() {
         return None;
     }

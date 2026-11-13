@@ -62,8 +62,7 @@ fn the_x86_pipeline_passes_o0_to_the_combiner() {
         let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
         let mut lowering = X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,

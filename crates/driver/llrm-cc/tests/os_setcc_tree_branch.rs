@@ -1,6 +1,6 @@
 //! m32 -Os (SETCC-TREE-BRANCH): `m + (r > 4 || (r == 4 && odd))` was two
-//! `setcc`, an `or`, a `movzx` and an `add` (sf32_pack: 258 B, gcc 233 B); it
-//! is two compares that jump over an `inc`. Needs `LLRM_OW` and the m16 clang
+//! `setcc`, an `or`, a `movzx` and an `add` (sf32_pack: 258 B, gcc 233 B); it is
+//! two compares that jump over an `inc`. Needs `LLRM_OW` and the m16 clang
 //! (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
@@ -48,14 +48,14 @@ fn compile(
     };
     run("-S", "d.s");
     run("-c", "d.o");
-    (std::fs::read_to_string(dir.join("d.s")).unwrap(), std::fs::metadata(dir.join("d.o")).unwrap().len())
+    (
+        std::fs::read_to_string(dir.join("d.s")).unwrap(),
+        std::fs::metadata(dir.join("d.o")).unwrap().len(),
+    )
 }
 
 #[test]
 fn test_m32_os_a_sum_of_two_compares_is_jumps_not_setcc() {
     let (listing, _) = compile("round", SOURCE, "-Os");
-    assert!(
-        !listing.lines().any(|line| line.trim_start().starts_with("set")),
-        "the compares are materialised:\n{listing}"
-    );
+    assert!(!listing.lines().any(|line| line.trim_start().starts_with("set")), "the compares are materialised:\n{listing}");
 }

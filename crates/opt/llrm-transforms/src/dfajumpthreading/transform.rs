@@ -437,8 +437,8 @@ impl TransformDfa<'_, '_, '_> {
             function.remap_instruction(inst, &map);
         }
 
-        // `identifyNoAliasScopesToClone` and `cloneAndAdaptNoAliasScopes` of
-        // the copy (DFAJumpThreading.cpp:1262).
+        // `identifyNoAliasScopesToClone` and `cloneAndAdaptNoAliasScopes` of the
+        // copy (DFAJumpThreading.cpp:1262).
         let scopes = crate::noaliasscopes::declared_scopes(function, copies.iter().copied());
         crate::noaliasscopes::cloned_and_adapted(function, &scopes, &copies, "dfa", unit.metadata, &mut *unit.declared);
 

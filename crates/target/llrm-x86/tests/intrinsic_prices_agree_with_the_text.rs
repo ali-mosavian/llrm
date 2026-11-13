@@ -73,9 +73,8 @@ fn test_every_intrinsic_the_corpus_meets_has_a_price() {
     }
 }
 
-/// Long mode read the i486 rows: `ctlz.i64` cost 10 at x86-64 where the pin
-/// says 3, and 2 for the zero-poison call, so SimplifyCFG refused to turn `x ?
-/// clzl(x) : 64` into a select (bitcount_u64).
+/// Long mode read the i486 rows: `ctlz.i64` cost 10 at x86-64 where the pin says 3, and 2 for the zero-poison call, so
+/// SimplifyCFG refused to turn `x ? clzl(x) : 64` into a select (bitcount_u64).
 #[test]
 fn test_x86_64_prices_a_64_bit_count_from_its_own_rows() {
     let kind = CostKind::SizeAndLatency;

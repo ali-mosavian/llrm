@@ -1,16 +1,11 @@
-//! x86-64 -O1 takes `-funroll-loops` (DEVIATE UNROLL-O1) where code never
-//! grows: a two-trip double loop that folds is unrolled on trial
-//! (float_in_place_update.c: 145 B, gcc 28), and a loop that would only be
-//! copied is not (a 64-trip dot product grew 125 -> 246 B when the pin's
-//! partial unroll ran). Needs `LLRM_LLC`.
+//! x86-64 -O1 takes `-funroll-loops` (DEVIATE UNROLL-O1) where code never grows: a two-trip double loop that folds
+//! is unrolled on trial (float_in_place_update.c: 145 B, gcc 28), and a loop that would only be copied is not (a
+//! 64-trip dot product grew 125 -> 246 B when the pin's partial unroll ran). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
 
-fn compile(
-    source: &str,
-    mode: &str,
-) -> std::path::PathBuf {
+fn compile(source: &str, mode: &str) -> std::path::PathBuf {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("unroll-o1-{}-{source}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

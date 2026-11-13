@@ -385,14 +385,9 @@ pub(crate) fn is_writable_object(
         ValueDef::Argument(at) => {
             let attrs = function.parameter_attrs.get(at as usize).map(Vec::as_slice).unwrap_or_default();
             let named = |wanted: &str| {
-                attrs
-                    .iter()
-                    .any(
-                        |one| matches!(
-                            one,
-                            Attribute::Flag(name) | Attribute::Type(name, _) if name == wanted
-                        ),
-                    )
+                attrs.iter().any(|one| {
+                    matches!(one, Attribute::Flag(name) | Attribute::Type(name, _) if name == wanted)
+                })
             };
             named("byval") || (named("writable") && llrm_mir::facts::Fact::NoAlias.stated_by(attrs))
         }

@@ -22,19 +22,17 @@
 //! | `memcpy` of n bytes | a `mov r,[m]; mov [m],r` pair per dword (6), `rep movsl` form (20) from 4 pairs | |
 //! | direct call | `call rel32`, a push per argument, `add esp,n` | 5 + 2 each + 3 |
 //!
-//! In long mode (`quad`) every price is the shared x86-64 table's
-//! ([`crate::encoding`]). A 16-bit operation takes the 66h prefix, a value of
-//! 64 bits is its pieces and a carry. The query sees an operation's operands
-//! only as far as `OperandInfo` says, so a variable-length copy and a constant
-//! one are priced alike.
-
-use llrm_mir::tti::{AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, MemoryOp, OperandInfo, Ty};
+//! In long mode (`quad`) every price is the shared x86-64 table's ([`crate::encoding`]). A 16-bit operation takes the 66h prefix, a value of 64 bits is its pieces
+//! and a carry. The query sees an operation's operands only as far as
+//! `OperandInfo` says, so a variable-length copy and a constant one are priced
+//! alike.
 
 use crate::encoding::{self, Base, Mem, Width};
+use llrm_mir::tti::{AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, MemoryOp, OperandInfo, Ty};
 
-/// The pieces of a value of `ty` in the integer registers (32 bits wide, 64 in
-/// long mode: `quad`), and the prefix bytes it takes: the 66h of a 16-bit one,
-/// the REX.W of a 64-bit one in long mode, the F2/F3 and 0Fh of an SSE scalar.
+/// The pieces of a value of `ty` in the integer registers (32 bits wide, 64 in long mode: `quad`), and the
+/// prefix bytes it takes: the 66h of a 16-bit one, the REX.W of a 64-bit one in long mode, the F2/F3 and 0Fh of
+/// an SSE scalar.
 fn pieces(
     ty: Ty,
     quad: bool,
@@ -96,21 +94,12 @@ fn quad_arithmetic(
             parts * (encoding::alu_rr(Width::B32, false) + encoding::shift(width, false, 0, false))
                 + if parts > 1 { 10 } else { 0 }
         }
-        Mul if power => {
-            encoding::shift(width, true, 2, false)
-                + if right.negated_power_of_two { encoding::unary(width, false) } else { 0 }
-        }
+        Mul if power => encoding::shift(width, true, 2, false) + if right.negated_power_of_two { encoding::unary(width, false) } else { 0 },
         Mul if parts > 1 => 15,
         Mul if right.constant => encoding::imul_ri(width, value, false),
         Mul => encoding::imul_rr(width, false),
         SDiv | UDiv | SRem | URem if parts > 1 => 22,
-        SDiv | UDiv | SRem | URem if right.constant => {
-            if power {
-                8
-            } else {
-                16
-            }
-        }
+        SDiv | UDiv | SRem | URem if right.constant => if power { 8 } else { 16 },
         SDiv | UDiv | SRem | URem => {
             let extend = if matches!(op, SDiv | SRem) { encoding::sign_extend_accumulator(width) } else { 2 };
             encoding::alu_rr(width, false)
@@ -131,13 +120,7 @@ pub fn arithmetic(
 ) -> Cost {
     use ArithOp::*;
     if ty.is_float() || ty == Ty::X87 {
-        return Cost::of(if op == FRem {
-            25
-        } else if quad && ty != Ty::X87 {
-            4
-        } else {
-            2
-        });
+        return Cost::of(if op == FRem { 25 } else if quad && ty != Ty::X87 { 4 } else { 2 });
     }
     if quad {
         return Cost::of(quad_arithmetic(op, ty, right));
@@ -145,7 +128,9 @@ pub fn arithmetic(
     let (parts, prefix) = pieces(ty, quad);
     let power = right.power_of_two || right.negated_power_of_two;
     Cost::of(match op {
-        Add | Sub | And | Or | Xor => parts * if right.constant { 2 + immediate_bytes(right, ty) } else { 2 } + prefix,
+        Add | Sub | And | Or | Xor => {
+            parts * if right.constant { 2 + immediate_bytes(right, ty) } else { 2 } + prefix
+        }
         Shl | LShr | AShr if right.constant => {
             parts * if right.value == Some(1) { 2 } else { 3 } + if parts > 1 { 2 } else { 0 } + prefix
         }
@@ -155,13 +140,7 @@ pub fn arithmetic(
         Mul if right.constant => 2 + immediate_bytes(right, ty) + prefix,
         Mul => 3 + prefix,
         SDiv | UDiv | SRem | URem if parts > 1 => 22,
-        SDiv | UDiv | SRem | URem if right.constant => {
-            if power {
-                8
-            } else {
-                16
-            }
-        }
+        SDiv | UDiv | SRem | URem if right.constant => if power { 8 } else { 16 },
         SDiv | UDiv | SRem | URem => 5 + prefix + if matches!(op, SRem | URem) { 2 } else { 0 },
         _ => 2,
     })
@@ -239,8 +218,7 @@ pub fn memory(
     Cost::of(2 * parts + prefix + immediate)
 }
 
-/// Bytes a phi or a branch takes: a register copy (`mov r,r`), and a short
-/// jump.
+/// Bytes a phi or a branch takes: a register copy (`mov r,r`), and a short jump.
 pub fn control_flow(_phi: bool) -> Cost {
     Cost::of(2)
 }
@@ -254,11 +232,8 @@ pub fn address(
     let index = i64::from(form.indexed);
     let displacement = i64::from(form.displacement_bytes);
     Cost::of(match form.base {
-        // Long mode reaches a global through `rip`; an index needs a `lea` of
-        // it first.
-        AddressBase::Global if quad => {
-            4 + index * (encoding::lea(Width::B64, &Mem::new(Base::Rip, false, 0), false) + 1)
-        }
+        // Long mode reaches a global through `rip`; an index needs a `lea` of it first.
+        AddressBase::Global if quad => 4 + index * (encoding::lea(Width::B64, &Mem::new(Base::Rip, false, 0), false) + 1),
         AddressBase::Global => 4 + index,
         AddressBase::Frame => 1 + displacement.max(1),
         AddressBase::Register => displacement + index,
@@ -346,8 +321,7 @@ mod tests {
 
     #[test]
     fn a_long_mode_product_of_two_quads_is_one_imul_not_the_dword_machines_pieces() {
-        // The dword table priced `product(a, b) = a * b + 1` at 15 + 6 bytes:
-        // the inliner refused it at -O1.
+        // The dword table priced `product(a, b) = a * b + 1` at 15 + 6 bytes: the inliner refused it at -O1.
         let price = |quad| {
             let mul = arithmetic(ArithOp::Mul, Ty::Int(64), OperandInfo::ANY, quad);
             let add = arithmetic(ArithOp::Add, Ty::Int(64), OperandInfo::constant(1, 64), quad);
@@ -360,8 +334,7 @@ mod tests {
 
     #[test]
     fn a_long_mode_dword_compare_is_two_bytes_and_a_cmov_select_three_not_the_quad_tables_three_and_four() {
-        // The fitted quad table priced `cmp r32,r32` at 3 and `cmovcc r32,r32`
-        // at 3 + the REX it does not have.
+        // The fitted quad table priced `cmp r32,r32` at 3 and `cmovcc r32,r32` at 3 + the REX it does not have.
         assert_eq!(cmp_sel(CmpSel::ICmp, Ty::Int(32), true, true), Cost::of(2));
         assert_eq!(cmp_sel(CmpSel::Select, Ty::Int(32), true, true), Cost::of(3));
         assert_eq!(cmp_sel(CmpSel::Select, Ty::Int(64), true, true), Cost::of(4));

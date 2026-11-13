@@ -138,15 +138,12 @@ fn the_programs_harness_leaves_no_temporary_tree_behind() {
     let tmp = tempfile::tempdir().unwrap();
     let scratch = tmp.path().join(format!("z80-harness-tmp-{}", std::process::id()));
     std::fs::create_dir_all(scratch.join("src")).expect("a scratch directory");
-    // Another process's tree in the shared temporary directory is not this
-    // run's: the harness works in `scratch`. (`tempfile::env`, not the std
-    // call: `tmp_paths_per_call` bans scratch files there, and this is a decoy,
-    // not scratch.)
+    // Another process's tree in the shared temporary directory is not this run's: the harness works in `scratch`.
+    // (`tempfile::env`, not the std call: `tmp_paths_per_call` bans scratch files there, and this is a decoy, not scratch.)
     let stray = tempfile::env::temp_dir().join(format!("z80prog-stray-{}", std::process::id()));
     std::fs::create_dir_all(&stray).expect("a stray tree");
-    // `--llc`: run.py's default is a build in one person's scratch directory,
-    // which a clean machine has none of (the test failed there with "cannot
-    // ask ... for its runtime stamp") and a stale one tests an old compiler.
+    // `--llc`: run.py's default is a build in one person's scratch directory, which a clean machine has none of
+    // (the test failed there with "cannot ask ... for its runtime stamp") and a stale one tests an old compiler.
     let done = Command::new("python3")
         .args(["-I", &format!("{dir}/tests/programs/run.py"), "--llc", env!("CARGO_BIN_EXE_llrm-z80-llc"), "--src"])
         .arg(scratch.join("src"))
@@ -190,9 +187,8 @@ fn the_programs_of_this_crate_run_and_print_what_c_does() {
     assert!(done.status.success() && all, "{text}");
 }
 
-/// `bench/` programs run whole on ucsim through the crate's compiler, so a pass
-/// that moves clocks (#9540's phi order: frames +9.2M T for +13 B) is measured
-/// by T-states, not by object bytes alone. A bench program that stops linking
+/// `bench/` programs run whole on ucsim through the crate's compiler, so a pass that moves clocks (#9540's phi order:
+/// frames +9.2M T for +13 B) is measured by T-states, not by object bytes alone. A bench program that stops linking
 /// or running leaves no row, and the whole-program T of every cell with it.
 #[test]
 fn a_bench_program_gets_a_whole_program_row_of_bytes_and_t_states() {
@@ -207,33 +203,14 @@ fn a_bench_program_gets_a_whole_program_row_of_bytes_and_t_states() {
     let done = Command::new("python3")
         .args(["-I", &format!("{dir}/tests/programs/sweep.py"), env!("CARGO_BIN_EXE_llrm-z80-llc")])
         .arg(&out)
-        .args([
-            "--clang",
-            &clang,
-            "--ours-only",
-            "--no-softfloat",
-            "--no-library-checks",
-            "--jobs",
-            "1",
-            "--src",
-            &format!("{dir}/../../../bench/recchop"),
-            "recchop",
-        ])
+        .args(["--clang", &clang, "--ours-only", "--no-softfloat", "--no-library-checks", "--jobs", "1", "--src", &format!("{dir}/../../../bench/recchop"), "recchop"])
         .env("TMPDIR", tmp.path())
         .output()
         .expect("python3 runs");
     let rows = std::fs::read_to_string(&out).unwrap_or_default();
     let cols: Vec<&str> = rows.lines().next().unwrap_or("").split('\t').collect();
-    let measured = cols.len() == 4
-        && cols[1] == "ours"
-        && cols[2].parse::<u64>().is_ok_and(|b| b > 0)
-        && cols[3].parse::<u64>().is_ok_and(|t| t > 0);
-    assert!(
-        measured,
-        "no row: {rows:?}\n{}{}",
-        String::from_utf8_lossy(&done.stdout),
-        String::from_utf8_lossy(&done.stderr)
-    );
+    let measured = cols.len() == 4 && cols[1] == "ours" && cols[2].parse::<u64>().is_ok_and(|b| b > 0) && cols[3].parse::<u64>().is_ok_and(|t| t > 0);
+    assert!(measured, "no row: {rows:?}\n{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
 }
 
 /// The corpus byte counts charge a program for the runtime routines it reaches.

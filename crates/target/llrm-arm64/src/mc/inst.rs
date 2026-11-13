@@ -443,10 +443,7 @@ impl VectorOp {
 
     /// Whether the operation is the bitwise `.16b` form whatever the lanes.
     pub fn is_logical(self) -> bool {
-        matches!(
-            self,
-            VectorOp::And | VectorOp::Bic | VectorOp::Orr | VectorOp::Orn | VectorOp::Eor
-        )
+        matches!(self, VectorOp::And | VectorOp::Bic | VectorOp::Orr | VectorOp::Orn | VectorOp::Eor)
     }
 }
 
@@ -593,10 +590,7 @@ impl ImmShape {
 impl Fill {
     /// Whether it writes all 128 bits; `movi d` and the `.2s` forms write 64.
     pub fn is_quad(&self) -> bool {
-        !matches!(
-            self,
-            Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
-        )
+        !matches!(self, Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. })
     }
 }
 

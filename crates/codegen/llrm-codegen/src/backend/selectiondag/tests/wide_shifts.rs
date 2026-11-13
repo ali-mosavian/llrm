@@ -122,8 +122,7 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -200,11 +199,9 @@ fn a_shift_by_an_amount_known_below_the_half_width_has_no_select_and_no_funnel()
     }
 }
 
-/// z80 and 6502 called `__ashldi3` for an `i64` shifted by `n & 31` before the
-/// pin's inline expansion was translated; the inline one grew
-/// call_cleanup_keeps_pair by 1146 B (6502 -O2) and 192 B (z80 -O2). A target
-/// that sets `libcall_for_small_variable_shift` keeps the call, one that does
-/// not shifts inline.
+/// z80 and 6502 called `__ashldi3` for an `i64` shifted by `n & 31` before the pin's inline expansion was
+/// translated; the inline one grew call_cleanup_keeps_pair by 1146 B (6502 -O2) and 192 B (z80 -O2). A target
+/// that sets `libcall_for_small_variable_shift` keeps the call, one that does not shifts inline.
 #[test]
 fn a_target_keeping_the_shift_routine_calls_it_for_an_amount_known_small() {
     use super::super::legalize_dag::Hooks;
@@ -447,6 +444,7 @@ fn product_calls(size_routine: bool) -> Vec<(&'static str, usize)> {
     TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
     calls.0
 }
+
 
 /// A target that names a size routine for the `i64` product calls it: one
 /// `__muldi3` of two operands, not 445 lines and four `__mulsi3` calls.

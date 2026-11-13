@@ -1413,8 +1413,7 @@ impl<'d> SplitEditor<'d> {
         let mut seen: Vec<(InstrKey, bool, bool, ValueLanes)> = Vec::new();
         for op in cx.lis.operands(parent_reg) {
             let (read, define) = (op.reads_reg, op.is_def || !op.reads_reg);
-            // A def that keeps the rest of the value reads the lanes it does
-            // not name.
+            // A def that keeps the rest of the value reads the lanes it does not name.
             let lanes = match (read, op.is_def) {
                 (false, _) => ValueLanes(0),
                 (true, true) => ValueLanes(!op.lanes.0),

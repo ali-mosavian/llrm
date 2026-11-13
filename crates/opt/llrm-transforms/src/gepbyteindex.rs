@@ -3,24 +3,22 @@
 //! # How it works
 //! `getelementptr inbounds [4 x i8], ptr @g, i16 (zext i8 %x)` is `@g + 4 * %x`
 //! in a word. An `inbounds` access stays inside its object, so where `@g` is no
-//! larger than the target's one-instruction index reach
-//! (`Tti::address_index_max`, the 6502's `abs,x`: 255) the offset is a byte:
-//! `%x * 4` does not wrap in `i8`, and a trip that would wrap is poison
-//! already. The `gep` becomes `gep inbounds i8, ptr @g, i16 (zext (mul nuw i8
-//! %x, 4))`, plus a `gep` of the constant part of its indices, so isel finds
-//! `global + zext i8` and forms `lda g,x`, not a 16-bit shift and add in a
-//! pointer pair.
+//! larger than the target's one-instruction index reach (`Tti::address_index_max`,
+//! the 6502's `abs,x`: 255) the offset is a byte: `%x * 4` does not wrap in
+//! `i8`, and a trip that would wrap is poison already. The `gep` becomes
+//! `gep inbounds i8, ptr @g, i16 (zext (mul nuw i8 %x, 4))`, plus a `gep` of
+//! the constant part of its indices, so isel finds `global + zext i8` and forms
+//! `lda g,x`, not a 16-bit shift and add in a pointer pair.
 //!
 //! Only a `gep` with one variable index, the zero extension of a byte, and
 //! constant others; a scale of 1 is already a byte index. O(1) per `gep`.
 //!
 //! DEVIATE GEP-BYTE-INDEX (no pin pass narrows by object extent: InstCombine's
 //! `shl (zext X), C -> zext (shl X, C)` needs known-zero high bits of `X`
-//! (`visitShl`, InstCombineShifts.cpp#L1175), and the DAG's
-//! `SimplifyDemandedBits` cannot narrow an address index whose bits are all
-//! demanded; the extent is the one `getBaseObjectSize` reads for
-//! `llvm.objectsize`; owner llrm-target-6502, exit 2026-11-30: the 6502 backend
-//! narrows an address index from the object).
+//! (`visitShl`, InstCombineShifts.cpp#L1175), and the DAG's `SimplifyDemandedBits`
+//! cannot narrow an address index whose bits are all demanded; the extent is the
+//! one `getBaseObjectSize` reads for `llvm.objectsize`; owner llrm-target-6502,
+//! exit 2026-11-30: the 6502 backend narrows an address index from the object).
 //!
 //! # Example
 //! ```text
@@ -167,12 +165,16 @@ fn rewrite(
         function.insert(inst, Position::Before(gep)).expect("a position before the address");
         Operand::Value(function.instruction(inst).result.expect("a value"))
     };
-    let scale =
-        Operand::Constant(context.constant(Constant { ty: i8, kind: ConstantKind::Int(u128::from(candidate.scale)) }));
+    let scale = Operand::Constant(context.constant(Constant { ty: i8, kind: ConstantKind::Int(u128::from(candidate.scale)) }));
     let product = make(function, Opcode::Binary(BinaryOp::Mul), i8, vec![candidate.byte, scale], Flags::NUW);
     let index = make(function, Opcode::Cast(CastOp::ZExt), candidate.index, vec![product], Flags::default());
-    let mut address =
-        make(function, Opcode::GetElementPtr { source: i8 }, ty, vec![candidate.base, index], Flags::INBOUNDS);
+    let mut address = make(
+        function,
+        Opcode::GetElementPtr { source: i8 },
+        ty,
+        vec![candidate.base, index],
+        Flags::INBOUNDS,
+    );
     if candidate.constant != 0 {
         debug_assert!(width >= 16);
         let constant = Operand::Constant(

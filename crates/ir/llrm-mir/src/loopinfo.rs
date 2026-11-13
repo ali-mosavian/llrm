@@ -789,8 +789,7 @@ impl<B: BlockNumber> LoopInfo<B> {
     /// The order a loop pass manager visits the loops in: it pushes
     /// `getLoopsInReverseSiblingPreorder` on its worklist and pops from the
     /// back, so inner loops come before their parents and siblings in program
-    /// order
-    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L248).
+    /// order (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L248).
     pub fn get_loops_in_visit_order(&self) -> Vec<Loop<'_, B>> {
         let mut found = self.get_loops_in_reverse_sibling_preorder();
         found.reverse();

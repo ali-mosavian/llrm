@@ -15,9 +15,9 @@
 //! - `llrm-wasm`, which applies the grouping to its machine code after
 //!   selection (`color_frame`).
 
-/// DEVIATE SC1 (owner target-wasm): the pin's StackColoring runs on MIR after
-/// selection and merges the frame objects its LIFETIME_START/END pseudos bound;
-/// this groups the allocas on the IR, with the old selector's rule, before the
+/// DEVIATE SC1 (owner target-wasm): the pin's StackColoring runs on MIR after selection
+/// and merges the frame objects its LIFETIME_START/END pseudos bound; this
+/// groups the allocas on the IR, with the old selector's rule, before the
 /// objects are made. Same frames on the shapes measured ((4,4) -> (4,2)); exit:
 /// the MIR-level pass over the markers the DAG builder keeps.
 ///

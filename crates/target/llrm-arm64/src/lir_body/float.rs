@@ -304,8 +304,7 @@ fn dup_name(arrangement: Arrangement) -> &'static str {
     }
 }
 
-/// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the lanes as the pin's opcode names
-/// spell them.
+/// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the lanes as the pin's opcode names spell them.
 fn lane_name(lanes: Arrangement) -> &'static str {
     match lanes {
         Arrangement::B16 => "16i8",
@@ -335,10 +334,7 @@ const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
 ];
 
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
-fn vector_op_name(
-    op: VectorOp,
-    lanes: Arrangement,
-) -> String {
+fn vector_op_name(op: VectorOp, lanes: Arrangement) -> String {
     let stem = op.mnemonic().to_uppercase();
     let lanes = if op.is_logical() { "16i8" } else { lane_name(lanes) };
     format!("{stem}v{lanes}")
@@ -405,13 +401,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 && (!op.is_logical() || lanes == Arrangement::B16)
                 && !(op == VectorOp::Mul && lanes == Arrangement::D2)
             {
-                return Some(Inst::VectorBinary {
-                    op,
-                    lanes,
-                    rd: vreg_of(dest?),
-                    rn: vreg_of(&s[0]),
-                    rm: vreg_of(&s[1]),
-                });
+                return Some(Inst::VectorBinary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]), rm: vreg_of(&s[1]) });
             }
         }
     }

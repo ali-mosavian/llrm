@@ -51,30 +51,21 @@ declare void @llvm.va_start.p0(ptr)
 declare void @llvm.va_end.p0(ptr)
 "#;
 
-/// The list is `char *` and `va_start` stores one address through it. It stayed
-/// a stack slot (`lea (-4,%sp),%sp`, a store and a load per `va_arg`: `sum` -Os
-/// 52 B against gcc's 22); it is a register now.
+/// The list is `char *` and `va_start` stores one address through it. It stayed a stack slot (`lea (-4,%sp),%sp`, a
+/// store and a load per `va_arg`: `sum` -Os 52 B against gcc's 22); it is a register now.
 #[test]
 fn the_va_list_of_a_summing_loop_stays_out_of_the_stack_frame() {
     for cpu in ["68000", "68020"] {
         for level in [Level::O1, Level::O2, Level::Os] {
             let out = assembly(LOOP, cpu_of(cpu).unwrap(), level).expect("compiles");
-            assert!(
-                !out.contains("(0, %sp)") && !out.contains("(0,%sp)"),
-                "{cpu} {level:?}: the list is in memory:\n{out}"
-            );
-            assert!(
-                !out.contains("-4, %sp") && !out.contains("subq.l\t#4, %sp"),
-                "{cpu} {level:?}: a frame slot:\n{out}"
-            );
+            assert!(!out.contains("(0, %sp)") && !out.contains("(0,%sp)"), "{cpu} {level:?}: the list is in memory:\n{out}");
+            assert!(!out.contains("-4, %sp") && !out.contains("subq.l\t#4, %sp"), "{cpu} {level:?}: a frame slot:\n{out}");
         }
     }
 }
 
-/// The `store` that writes the stepped list pointer back was created with the
-/// `va_arg`'s value type, not `void`, so it defined a dead `i32`
-/// (x86-m32-bytes' review of the first F2 head). No stage of the mid-end may
-/// hold a store with a result.
+/// The `store` that writes the stepped list pointer back was created with the `va_arg`'s value type, not `void`, so it
+/// defined a dead `i32` (x86-m32-bytes' review of the first F2 head). No stage of the mid-end may hold a store with a result.
 #[test]
 fn the_pointer_store_a_va_arg_becomes_has_no_result() {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("va-stages-{}", std::process::id()));

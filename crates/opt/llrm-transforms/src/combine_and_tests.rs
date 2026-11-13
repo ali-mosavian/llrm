@@ -248,10 +248,8 @@ fn recurrence(op: &str) -> String {
     printed(&module)
 }
 
-/// `b = b & c` in a loop, `c` invariant: `b0 & c` after any trip (`opt`
-/// agrees). The loop kept the recurrence, so a loop that only repeats it
-/// (`known_loads_walks`, `b = c & b` under `i51`) stayed: +55 B at wasm32 -O1
-/// against the pin, which deletes it.
+/// `b = b & c` in a loop, `c` invariant: `b0 & c` after any trip (`opt` agrees). The loop kept the recurrence, so a loop that
+/// only repeats it (`known_loads_walks`, `b = c & b` under `i51`) stayed: +55 B at wasm32 -O1 against the pin, which deletes it.
 #[test]
 fn an_and_recurrence_with_an_invariant_step_is_and_of_start_and_step() {
     let got = recurrence("and");
@@ -267,12 +265,9 @@ fn an_or_recurrence_with_an_invariant_step_is_or_of_start_and_step() {
     assert!(got.contains("or i8 %b0, %c"), "{got}");
 }
 
-/// `p = phi [a, r]; q = phi [b, r]; r = p & q` in one block:
-/// `foldBinOpIntoSelectOrPhi` (:2784) makes `r` a phi of the `and` of each
-/// incoming pair, which `r & r` then folds (`opt` agrees: `a & b` in the entry,
-/// no `and` in the loop). `visitAnd` skipped that call: the pair stayed, and `b
-/// = c & b; c = b` under a loop (`known_loads_walks`, `i49`) cost +128 B at
-/// wasm32 -O3 (432 B to the pin's 289 B).
+/// `p = phi [a, r]; q = phi [b, r]; r = p & q` in one block: `foldBinOpIntoSelectOrPhi` (:2784) makes `r` a phi of the `and` of each
+/// incoming pair, which `r & r` then folds (`opt` agrees: `a & b` in the entry, no `and` in the loop). `visitAnd` skipped that call: the pair
+/// stayed, and `b = c & b; c = b` under a loop (`known_loads_walks`, `i49`) cost +128 B at wasm32 -O3 (432 B to the pin's 289 B).
 #[test]
 fn an_and_of_two_phis_of_one_block_fed_by_it_folds_into_one_phi() {
     let text = "define i8 @f(i8 %a, i8 %b, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i.next, %loop ]\n  \

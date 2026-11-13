@@ -50,10 +50,7 @@ impl Ap {
         value: i128,
     ) -> Self {
         if width > 128 {
-            return Self::from_word(
-                width,
-                U256::from_limbs([value as u128, if value < 0 { u128::MAX } else { 0 }, 0, 0]),
-            );
+            return Self::from_word(width, U256::from_limbs([value as u128, if value < 0 { u128::MAX } else { 0 }, 0, 0]));
         }
         Self::new(width, value as u128)
     }
@@ -422,10 +419,7 @@ impl Ap {
         other: Self,
     ) -> (Self, bool) {
         if self.width > 128 {
-            let (value, over) = {
-                let (product, carry) = self.word().overflowing_mul(other.word());
-                (product, carry || product > apint::mask::<U256>(self.width))
-            };
+            let (value, over) = { let (product, carry) = self.word().overflowing_mul(other.word()); (product, carry || product > apint::mask::<U256>(self.width)) };
             return (Self::from_word(self.width, value), over);
         }
         let (product, over) = self.bits.overflowing_mul(other.bits);
@@ -452,10 +446,7 @@ impl Ap {
         other: Self,
     ) -> (Self, bool) {
         if self.width > 128 {
-            let (value, over) = {
-                let (sum, carry) = self.word().overflowing_add(other.word());
-                (sum, carry || sum > apint::mask::<U256>(self.width))
-            };
+            let (value, over) = { let (sum, carry) = self.word().overflowing_add(other.word()); (sum, carry || sum > apint::mask::<U256>(self.width)) };
             return (Self::from_word(self.width, value), over);
         }
         let (sum, over) = self.bits.overflowing_add(other.bits);

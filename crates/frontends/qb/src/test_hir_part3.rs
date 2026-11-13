@@ -2408,8 +2408,8 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
     // in one slot" is an expectation, not a pin measurement: pin llc at code16
     // parks two counters on this function and four on a loop of this shape
     // (2026-11-09, ~/scratch/handoff/plasma-ra-park-card-2026-11-09.md; both
-    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the
-    // bound from a pin greedy run on our MIR.
+    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the bound
+    // from a pin greedy run on our MIR.
     let slots: BTreeSet<&str> =
         regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
     assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");

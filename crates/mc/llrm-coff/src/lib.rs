@@ -18,8 +18,7 @@ const SYM_CLASS_EXTERNAL: u8 = 2;
 const SYM_CLASS_STATIC: u8 = 3;
 const SYM_CLASS_FILE: u8 = 103;
 const SYM_CLASS_WEAK_EXTERNAL: u8 = 105;
-/// The linker falls back to the default symbol where no strong definition
-/// exists.
+/// The linker falls back to the default symbol where no strong definition exists.
 const IMAGE_WEAK_EXTERN_SEARCH_ALIAS: u32 = 3;
 const SYM_TYPE_FUNCTION: u16 = 0x20;
 const SYM_ABSOLUTE: i16 = -1;
@@ -258,10 +257,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // Each object symbol's index in the table: a weak definition outside a
     // COMDAT is three entries, the weak external, its aux and its default.
     let in_comdat = |one: &llrm_object::Symbol| {
-        matches!(
-            one.definition,
-            Definition::Defined { section, .. } if object.comdats.iter().any(|comdat| comdat.section == section)
-        )
+        matches!(one.definition, Definition::Defined { section, .. }
+            if object.comdats.iter().any(|comdat| comdat.section == section))
     };
     let weak_alone = |one: &llrm_object::Symbol| {
         one.binding == Binding::Weak && matches!(one.definition, Definition::Defined { .. }) && !in_comdat(one)
@@ -273,19 +270,17 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     }
     // The name the defaults of weak externals end with: the first strong
     // external symbol in a section, else the first in a COMDAT.
-    let unique: Option<&str> = [false, true]
-        .into_iter()
-        .find_map(
-            |comdat| object
-                .symbols
-                .iter()
-                .find(|one| {
-                    matches!(one.definition, Definition::Defined { .. })
-                        && (one.binding == Binding::Public || (in_comdat(one) && one.binding == Binding::Weak))
-                        && in_comdat(one) == comdat
-                })
-                .map(|one| one.name.as_str()),
-        );
+    let unique: Option<&str> = [false, true].into_iter().find_map(|comdat| {
+        object
+            .symbols
+            .iter()
+            .find(|one| {
+                matches!(one.definition, Definition::Defined { .. })
+                    && (one.binding == Binding::Public || (in_comdat(one) && one.binding == Binding::Weak))
+                    && in_comdat(one) == comdat
+            })
+            .map(|one| one.name.as_str())
+    });
 
     // Sections' bytes and relocation entries.
     let mut images: Vec<Vec<u8>> = Vec::new();
@@ -323,8 +318,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         // are zeros.
         let comdat = object.comdats.iter().find(|one| one.section == index);
         put32(&mut table, comdat.map_or(0, |_| jam_crc(&images[index])));
-        // As the pin's writer: the section's own number, or the associated
-        // one's.
+        // As the pin's writer: the section's own number, or the associated one's.
         put16(&mut table, comdat.and_then(|one| one.associated).unwrap_or(index) as u16 + 1);
         table.extend([comdat.map_or(0, |one| one.selection as u8), 0, 0, 0]);
     }
@@ -431,10 +425,9 @@ mod tests {
     use super::jam_crc;
 
     /// The checksums the pin writes for two COMDAT sections (llc d1106deb71,
-    /// `x86_64-pc-windows-msvc`): `mov eax, ecx; ret` and `mov eax, [rip+0];
-    /// ret`. A CRC started from all ones, as JamCRC is specified, gave
-    /// 0xef14c8ae for the first and the linker saw two definitions as
-    /// different.
+    /// `x86_64-pc-windows-msvc`): `mov eax, ecx; ret` and `mov eax, [rip+0]; ret`.
+    /// A CRC started from all ones, as JamCRC is specified, gave 0xef14c8ae
+    /// for the first and the linker saw two definitions as different.
     #[test]
     fn a_comdat_checksum_starts_from_zero_as_the_pin_writes_it() {
         assert_eq!(jam_crc(&[0x89, 0xC8, 0xC3]), 0xEFAA_EE43);

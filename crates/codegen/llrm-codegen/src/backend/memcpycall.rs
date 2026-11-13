@@ -113,9 +113,8 @@ pub fn expanded(
     if !any {
         return Ok(());
     }
-    // The routine's result is dropped, as `getMemcpy`'s void `RetTy` has it: a
-    // copy ending the function is then a sibling call (the caller's void
-    // return matches).
+    // The routine's result is dropped, as `getMemcpy`'s void `RetTy` has it: a copy ending the function is then a
+    // sibling call (the caller's void return matches).
     let (pointer, word, returns) = {
         let types = &module.context.types;
         (types.ptr(0), types.int(32), types.void())
@@ -154,8 +153,7 @@ pub fn expanded(
                 Operand::Value(function.instruction(made).result.expect("a value"))
             }
         };
-        // `EmitTargetCodeForMemcpy`'s `isTailCall`: the call is a tail call as
-        // the intrinsic was.
+        // `EmitTargetCodeForMemcpy`'s `isTailCall`: the call is a tail call as the intrinsic was.
         let tail = match &instruction.opcode {
             Opcode::Call(original) => original.tail,
             _ => Default::default(),

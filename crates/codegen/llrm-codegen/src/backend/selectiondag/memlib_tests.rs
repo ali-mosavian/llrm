@@ -238,11 +238,9 @@ fn a_64_byte_memmove_at_m64_moves_four_16_byte_pieces() {
     assert_eq!(dump.matches("LLRM_MOVE128").count(), 1, "{dump}");
 }
 
-/// The memory_expansion Os cell grew 31 B once `memmove` of 64 bytes became the
-/// pin's four `movups` pairs (31 B) where gcc -Os and the library call are `mov
-/// edx, 64; jmp memmove` (10 B): tuned for size on x86-64 a constant copy whose
-/// pieces take more bytes than the call is the call, and a 16-byte one (one
-/// pair, 8 B) stays inline.
+/// The memory_expansion Os cell grew 31 B once `memmove` of 64 bytes became the pin's four `movups` pairs (31 B) where
+/// gcc -Os and the library call are `mov edx, 64; jmp memmove` (10 B): tuned for size on x86-64 a constant copy whose
+/// pieces take more bytes than the call is the call, and a 16-byte one (one pair, 8 B) stays inline.
 #[test]
 fn a_constant_copy_for_size_at_m64_is_a_call_where_the_pieces_take_more_bytes() {
     let tuning = llrm_mir::target::Tuning {
@@ -250,8 +248,7 @@ fn a_constant_copy_for_size_at_m64_is_a_call_where_the_pieces_take_more_bytes() 
         ..llrm_mir::target::Tuning::PIN
     };
     let tti = llrm_x86::tti::X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
-    let target =
-        BuilderTarget::for_pointer_bits(64).with_libcalls(&["memcpy", "memmove"]).with_tti(Some(std::rc::Rc::new(tti)));
+    let target = BuilderTarget::for_pointer_bits(64).with_libcalls(&["memcpy", "memmove"]).with_tti(Some(std::rc::Rc::new(tti)));
     let text = |bytes: u64, call: &str| {
         format!(
             "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
@@ -296,10 +293,9 @@ fn a_variable_copy_is_rep_movs_at_speed_where_the_tuning_says_so() {
     assert!(after.contains("REP_MOVS") && !after.contains("'memcpy'"), "{after}");
 }
 
-/// x_jpeg_single -O1 at m32: `next()` inlined twice into `getbit` with the
-/// refill's variable copy as an inline `rep movs` (about 30 B each against a
-/// call's 13), the cell 1762 B over the best external. MEM-1 trades bytes for
-/// clocks at -O2/-O3 only: -O1 keeps the call.
+/// x_jpeg_single -O1 at m32: `next()` inlined twice into `getbit` with the refill's variable
+/// copy as an inline `rep movs` (about 30 B each against a call's 13), the cell 1762 B over
+/// the best external. MEM-1 trades bytes for clocks at -O2/-O3 only: -O1 keeps the call.
 #[test]
 fn a_variable_copy_stays_a_call_where_bytes_are_strict() {
     let mut tuning = llrm_mir::target::Tuning::PIN;

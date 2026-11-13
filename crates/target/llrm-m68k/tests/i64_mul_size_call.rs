@@ -1,8 +1,8 @@
 //! A module built for size calls `__muldi3` for its `i64` products when the
-//! calls save more than the routine costs (134 B at the 68000):
-//! int64_divmod_edges -Os was 1354 B of 16-bit partial products against gcc's
-//! 838. One site stays inline (sfm16_float -Os: -64 B in the object, +72 B
-//! linked). Speed keeps the partial products.
+//! calls save more than the routine costs (134 B at the 68000): int64_divmod_edges
+//! -Os was 1354 B of 16-bit partial products against gcc's 838. One site stays
+//! inline (sfm16_float -Os: -64 B in the object, +72 B linked). Speed keeps the
+//! partial products.
 
 use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;

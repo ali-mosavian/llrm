@@ -627,9 +627,8 @@ pub fn libcalls_for(
         options.size_libcalls,
         |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
         |name, kinds| {
-            // The price is one build: a call against a loop differs by far more
-            // than a trial moves, and each trial set costs several
-            // builds (x2.65 compile time).
+            // The price is one build: a call against a loop differs by far more than a
+            // trial moves, and each trial set costs several builds (x2.65 compile time).
             let options = Options {
                 libcalls: Some(crate::libcalls::mask(kinds)),
                 shared_cse: false,

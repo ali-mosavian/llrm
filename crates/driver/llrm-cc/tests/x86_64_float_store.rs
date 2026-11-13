@@ -1,6 +1,5 @@
-//! x86-64 `-fexcess-precision=standard`: an integer converted to float or
-//! double was stored to the stack and loaded back (a rounding the x87 needs and
-//! scalar SSE does not), 5-6 B per conversion, int_compared_with_float.c
+//! x86-64 `-fexcess-precision=standard`: an integer converted to float or double was stored to the stack and
+//! loaded back (a rounding the x87 needs and scalar SSE does not), 5-6 B per conversion, int_compared_with_float.c
 //! +32 B against clang. Needs `LLRM_LLC`.
 
 use std::path::Path;

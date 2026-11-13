@@ -119,26 +119,23 @@ pub struct Options {
     /// `CodeSize` of the branches the rotation removes, the loop-closing jump
     /// and the header's exit test.
     pub priced_at_size: bool,
-    /// DEVIATE RS1 (size builds, target opt-in, owners m64 and arm64, exit
-    /// 2026-11-20): a loop is rotated only if the copied exit test folds in
-    /// the preheader. gcc's `ch_base::copy_headers` copies at `-Os` only
-    /// when the code does not grow; an unfolded guard is a compare and a
-    /// branch against the one jump the rotation removes.
+    /// DEVIATE RS1 (size builds, target opt-in, owners m64 and arm64, exit 2026-11-20):
+    /// a loop is rotated only if the copied exit test folds in the
+    /// preheader. gcc's `ch_base::copy_headers` copies at `-Os` only when the
+    /// code does not grow; an unfolded guard is a compare and a branch
+    /// against the one jump the rotation removes.
     pub guard_must_fold: bool,
-    /// DEVIATE ROTATION-TRIAL (size builds, target opt-in, owner
-    /// greedy-os-causes, exit 2026-12-05): a counted loop whose copied
-    /// guard does not fold, which RS1 still rotates, is left as it is in
-    /// the driver's second compile and the smaller object
-    /// is kept (`trial`). gcc's `ch_base::copy_headers` leaves such a loop
-    /// unrotated at -Os; whether that pays depends on what the later passes
-    /// do with the loop, which only the finished code shows (x_prefix -12
-    /// B, x_transpose +34 B).
+    /// DEVIATE ROTATION-TRIAL (size builds, target opt-in, owner greedy-os-causes, exit
+    /// 2026-12-05): a counted loop whose copied guard does not fold, which RS1 still
+    /// rotates, is left as it is in the driver's second compile and the smaller object
+    /// is kept (`trial`). gcc's `ch_base::copy_headers` leaves such a loop unrotated
+    /// at -Os; whether that pays depends on what the later passes do with the loop,
+    /// which only the finished code shows (x_prefix -12 B, x_transpose +34 B).
     pub rotation_trial: bool,
-    /// DEVIATE Z80-ROT (-Oz, target opt-in, owner z80, exit 2026-11-21): the
-    /// pin's minsize limit of no copied instruction is waived for a loop
-    /// whose copied header folds away in the preheader, guard and all: the
-    /// copy costs no byte and the loop-closing jump goes (gcc's
-    /// `ch_base::copy_headers` at -Os).
+    /// DEVIATE Z80-ROT (-Oz, target opt-in, owner z80, exit 2026-11-21): the pin's
+    /// minsize limit of no copied instruction is waived for a loop whose copied
+    /// header folds away in the preheader, guard and all: the copy costs no byte
+    /// and the loop-closing jump goes (gcc's `ch_base::copy_headers` at -Os).
     pub free_guard: bool,
     /// `RotationOnly`: no `simplifyLoopLatch`.
     pub rotation_only: bool,
@@ -729,35 +726,26 @@ fn guard_folds(
     Guard { folds, remains }
 }
 
-/// Whether no header phi is wider than the target's widest native integer:
-/// rotating keeps a counter and its successor live together at the loop's end,
-/// which costs a register pair a word of the counter (z80 -Oz, 32-bit counters:
-/// div_constants +535 B).
+/// Whether no header phi is wider than the target's widest native integer: rotating keeps a
+/// counter and its successor live together at the loop's end, which costs a register
+/// pair a word of the counter (z80 -Oz, 32-bit counters: div_constants +535 B).
 fn phis_fit_a_register(
     run: &Run,
     orig_header: BlockId,
 ) -> bool {
     let widest = run.layout.largest_legal_integer();
-    run.function
-        .iter_block(orig_header)
-        .all(
-            |inst| {
-                let operation = run.function.instruction(inst);
-                operation.opcode != Opcode::Phi
-                    || !matches!(
-                        run.context.types.get(operation.ty),
-                        llrm_mir::types::Type::Int(width) if *width > widest
-                    )
-            },
-        )
+    run.function.iter_block(orig_header).all(|inst| {
+        let operation = run.function.instruction(inst);
+        operation.opcode != Opcode::Phi
+            || !matches!(run.context.types.get(operation.ty), llrm_mir::types::Type::Int(width) if *width > widest)
+    })
 }
 
 /// What [`guard_folds`] found.
 struct Guard {
     /// The exit test is a constant in the preheader.
     folds: bool,
-    /// Some copied header instruction does not simplify away: the copy leaves
-    /// code.
+    /// Some copied header instruction does not simplify away: the copy leaves code.
     remains: bool,
 }
 
@@ -1037,7 +1025,14 @@ fn rotate_loop(
         );
         let tail: Vec<InstId> =
             run.function.iter_block(orig_preheader).skip_while(|&inst| inst != first_copy).collect();
-        crate::noaliasscopes::cloned_and_adapted(run.function, &scopes, &tail, "pre.rot", run.metadata, run.declared);
+        crate::noaliasscopes::cloned_and_adapted(
+            run.function,
+            &scopes,
+            &tail,
+            "pre.rot",
+            run.metadata,
+            run.declared,
+        );
     }
 
     // Along with all the other instructions, the header's terminator was cloned
@@ -1268,10 +1263,9 @@ pub struct LoopRotate {
     pub size: bool,
     /// `CheckExitCount`.
     pub check_exit_count: bool,
-    /// The slot that follows the other loop passes (the unroll refuses a
-    /// rotated loop, LSR picks worse counters for one: switch_empty_cases
-    /// -Oz 45 B became 76 B rotated before it): at -Oz only, the loops
-    /// whose copied header folds away (`Options::free_guard`).
+    /// The slot that follows the other loop passes (the unroll refuses a rotated loop, LSR
+    /// picks worse counters for one: switch_empty_cases -Oz 45 B became 76 B rotated before
+    /// it): at -Oz only, the loops whose copied header folds away (`Options::free_guard`).
     pub free_guard: bool,
 }
 

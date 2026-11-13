@@ -13,9 +13,8 @@
 //! allocation already made: no second allocation.
 //!
 //! DEVIATE Z80-ARGPUSH-SPILL (owner z80-argpush, exit 2026-11-16): the pin
-//! folds the reload into `push m`
-//! (`X86CallFrameOptimization::canFoldIntoRegPush`); the Z80 has no push from
-//! memory.
+//! folds the reload into `push m` (`X86CallFrameOptimization::canFoldIntoRegPush`);
+//! the Z80 has no push from memory.
 //!
 //! Complexity: one backward scan per stored word, O(n) per frame.
 
@@ -73,25 +72,15 @@ pub(crate) fn store_spilled(
     };
     let touches = |inst: &Inst, pair: RegId| {
         let (lo, hi) = lanes(pair).expect("a pair");
-        inst.operands
-            .iter()
-            .any(
-                |operand| match operand {
-                    Operand::Def(r) | Operand::Use(r) => [pair, lo, hi].contains(&physical(*r)),
-                    _ => false,
-                },
-            )
+        inst.operands.iter().any(|operand| match operand {
+            Operand::Def(r) | Operand::Use(r) => [pair, lo, hi].contains(&physical(*r)),
+            _ => false,
+        })
     };
-    let frame_slot = |inst: &Inst| {
-        inst.operands
-            .iter()
-            .find_map(
-                |operand| match operand {
-                    Operand::Frame(slot) => Some(*slot),
-                    _ => None,
-                },
-            )
-    };
+    let frame_slot = |inst: &Inst| inst.operands.iter().find_map(|operand| match operand {
+        Operand::Frame(slot) => Some(*slot),
+        _ => None,
+    });
     let mut spilled = Vec::new();
     for &store in stores {
         let Some(Operand::Use(value)) = insts[store].operands.first() else { continue };
@@ -100,17 +89,14 @@ pub(crate) fn store_spilled(
         let Some(reload) = (0..store).rev().find(|&at| touches(&insts[at], pair)) else { continue };
         let Kind::Op("RELOAD16") = insts[reload].kind else { continue };
         let Some(slot) = frame_slot(&insts[reload]) else { continue };
-        // and the pair is dead after the store: the next mention defines it
-        // whole
-        let dead = insts[store + 1..]
-            .iter()
-            .find(|inst| touches(inst, pair))
-            .is_some_and(
-                |inst| inst.operands.iter().all(|operand| !matches!(operand, Operand::Use(r) if physical(*r) == pair))
-                    && inst.operands.iter().any(|operand| matches!(operand, Operand::Def(r) if physical(*r) == pair)),
-            );
+        // and the pair is dead after the store: the next mention defines it whole
+        let dead = insts[store + 1..].iter().find(|inst| touches(inst, pair)).is_some_and(|inst| {
+            inst.operands.iter().all(|operand| !matches!(operand, Operand::Use(r) if physical(*r) == pair))
+                && inst.operands.iter().any(|operand| matches!(operand, Operand::Def(r) if physical(*r) == pair))
+        });
         // the slot is written once and read once in the whole function
-        let mentions: Vec<usize> = (0..insts.len()).filter(|&at| frame_slot(&insts[at]) == Some(slot)).collect();
+        let mentions: Vec<usize> =
+            (0..insts.len()).filter(|&at| frame_slot(&insts[at]) == Some(slot)).collect();
         let spill = mentions.iter().copied().find(|&at| matches!(insts[at].kind, Kind::Op("SPILL16")));
         let (Some(spill), true, 2) = (spill, dead, mentions.len()) else { continue };
         let Some(Operand::Use(source)) = insts[spill].operands.get(1) else { continue };
@@ -123,17 +109,14 @@ pub(crate) fn store_spilled(
         return None;
     }
     let first = spilled.iter().map(|word| word.spill).min()?.min(open);
-    // the area opens earlier: nothing in between may depend on the stack
-    // pointer
-    let in_the_way = insts[first..open]
-        .iter()
-        .any(
-            |inst| inst.call
-                || matches!(
-                    inst.kind,
-                    Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP" | "PEEKP" | "STSP8")
-                ),
-        );
+    // the area opens earlier: nothing in between may depend on the stack pointer
+    let in_the_way = insts[first..open].iter().any(|inst| {
+        inst.call
+            || matches!(
+                inst.kind,
+                Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP" | "PEEKP" | "STSP8")
+            )
+    });
     if in_the_way {
         return None;
     }
@@ -152,8 +135,11 @@ pub(crate) fn store_spilled(
     let words = stores.len() as i64;
     let (push, reload, store) =
         (cost(&["push bc"]), cost(&["ld c, -2(ix)", "ld b, -1(ix)"]), cost(&["ld -2(ix), c", "ld -1(ix), b"]));
-    let reserve =
-        if *bytes / 2 < 8 { add((0, 0), push, *bytes / 2) } else { cost(&["ld iy, #-18", "add iy, sp", "ld sp, iy"]) };
+    let reserve = if *bytes / 2 < 8 {
+        add((0, 0), push, *bytes / 2)
+    } else {
+        cost(&["ld iy, #-18", "add iy, sp", "ld sp, iy"])
+    };
     let held = words - spilled.len() as i64;
     // store form less push form
     let delta = add(add(reserve, add(store, push, -1), held), add(reload, push, 1), -(spilled.len() as i64));

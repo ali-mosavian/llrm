@@ -214,8 +214,7 @@ fn a_narrowed_shift_takes_the_targets_amount_type() {
     dag.set_root(root);
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false,
-        hot_chains: false,
+        imul_if_smaller: false, hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,
@@ -372,8 +371,7 @@ fn and_mask_under_a_shift(m16: bool) -> Option<u128> {
     dag.set_root(root);
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false,
-        hot_chains: false,
+        imul_if_smaller: false, hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,

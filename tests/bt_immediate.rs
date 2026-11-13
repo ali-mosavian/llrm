@@ -15,9 +15,8 @@ fn listing(
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// `f64` add/sub tested bit 56 as `mov rcx, 72057594037927936; and rcx, rdx;
-/// je` (13 bytes) where the pin has `bt rdx, 56; jae` (5): +50 B in
-/// lib/fp/f64/add_sub.c.
+/// `f64` add/sub tested bit 56 as `mov rcx, 72057594037927936; and rcx, rdx; je`
+/// (13 bytes) where the pin has `bt rdx, 56; jae` (5): +50 B in lib/fp/f64/add_sub.c.
 #[test]
 fn a_high_bit_of_an_i64_is_tested_with_bt() {
     let source = "long f(unsigned long a, unsigned long b) { return ((a + b) & (1UL << 56)) == 0 ? a : b; }\n";

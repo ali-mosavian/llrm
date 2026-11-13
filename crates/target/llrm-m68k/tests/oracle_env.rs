@@ -1,6 +1,5 @@
-//! The oracle tests' environment: an unset `GCC_M68K` fails the test and says
-//! what to set; an explicit `M68K_ISA_SKIP_ORACLE=1` skips it with a visible
-//! line (it was a bare "GCC_M68K is not set" panic in 13 copies).
+//! The oracle tests' environment: an unset `GCC_M68K` fails the test and says what to set; an explicit
+//! `M68K_ISA_SKIP_ORACLE=1` skips it with a visible line (it was a bare "GCC_M68K is not set" panic in 13 copies).
 
 mod support;
 

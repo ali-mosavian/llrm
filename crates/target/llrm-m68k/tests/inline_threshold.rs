@@ -23,8 +23,8 @@ fn a_loop_inlines_a_callee_the_call_latency_pays_for() {
 }
 
 /// switch_peeled_table -O1: `pick`, an external callee of one site with a
-/// seven-compare switch, was inlined (68000 174 -> 224 B). The size view
-/// counted its switch as one branch, so SZ1 read the copy as no growth.
+/// seven-compare switch, was inlined (68000 174 -> 224 B). The size view counted
+/// its switch as one branch, so SZ1 read the copy as no growth.
 const PICK: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
 define i32 @pick(i32 %m, i32 %fall) {\n\
 entry:\n  switch i32 %m, label %d [ i32 192, label %a i32 193, label %f i32 194, label %b i32 195, label %f i32 196, label %c i32 219, label %e ]\n\

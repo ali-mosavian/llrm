@@ -30,9 +30,8 @@ fn a_function_with_no_locals_has_no_frame_at_m16() {
     }
 }
 
-/// -Os opened a frame with locals as `push bp; mov bp, sp; sub sp, N` (7 B for
-/// N over 127): sieve was 5 B above Open Watcom, which uses the 4-byte `enter
-/// N, 0`.
+/// -Os opened a frame with locals as `push bp; mov bp, sp; sub sp, N` (7 B for N over 127): sieve was 5 B above Open Watcom, which
+/// uses the 4-byte `enter N, 0`.
 #[test]
 fn a_size_frame_with_locals_opens_with_enter_at_m16() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");

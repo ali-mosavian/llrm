@@ -1,30 +1,23 @@
-//! Whether two functions are the same code: the equivalence of LLVM's
-//! `FunctionComparator`, and the hash that buckets functions before any pair is
-//! compared.
+//! Whether two functions are the same code: the equivalence of LLVM's `FunctionComparator`, and the hash that
+//! buckets functions before any pair is compared.
 //!
 //! # How it works
 //! A translation of LLVM
 //! [`FunctionComparator.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/FunctionComparator.cpp)
-//! at d1106deb71cc. `compare` (L1041) walks both functions from the entry, a
-//! block pair at a time, taking the successor pairs in order (L1041-L1081).
-//! Values are equal by serial number: an argument by its position, an
-//! instruction or a block by the order the walk met it (`cmpValues`, L903), so
-//! two bodies that differ in names and in layout but not in shape compare
-//! equal. A constant is equal to itself (the context interns them), and the
-//! address of the function being compared is equal to the address of the other
-//! (`cmpValuesAllowingSelfRef`, L887), so two directly recursive copies of one
-//! function match. `function_hash` is `FunctionComparator::functionHash`
-//! (L1): the function type, the block and instruction counts and each
-//! instruction's opcode, so it never separates two functions `equivalent` would
-//! join.
+//! at d1106deb71cc. `compare` (L1041) walks both functions from the entry, a block pair at a time, taking the
+//! successor pairs in order (L1041-L1081). Values are equal by serial number: an argument by its position, an
+//! instruction or a block by the order the walk met it (`cmpValues`, L903), so two bodies that differ in names
+//! and in layout but not in shape compare equal. A constant is equal to itself (the context interns them), and the
+//! address of the function being compared is equal to the address of the other (`cmpValuesAllowingSelfRef`, L887),
+//! so two directly recursive copies of one function match. `function_hash` is `FunctionComparator::functionHash`
+//! (L1): the function type, the block and instruction counts and each instruction's opcode, so it never separates
+//! two functions `equivalent` would join.
 //!
 //! # Deviation
-//! DEVIATE MERGEFUNC-CMP (owner x86-m32, exit 2026-11-30): the pin answers a
-//! three-way order (`int`) so that a `std::set` can sort functions; this
-//! answers a symmetric yes/no, and the caller buckets by `function_hash` and
-//! compares a function against one representative of each class in its bucket.
-//! The pin's order is only a means to the same classes. A function with an
-//! instruction the comparison does not know is equal to nothing: a
+//! DEVIATE MERGEFUNC-CMP (owner x86-m32, exit 2026-11-30): the pin answers a three-way order (`int`) so that a
+//! `std::set` can sort functions; this answers a symmetric yes/no, and the caller buckets by `function_hash` and
+//! compares a function against one representative of each class in its bucket. The pin's order is only a means to
+//! the same classes. A function with an instruction the comparison does not know is equal to nothing: a
 //! missed merge, never a wrong one.
 //!
 //! # Example
@@ -60,8 +53,7 @@ pub fn function_hash(function: &Function) -> u64 {
     state.finish()
 }
 
-/// Whether `left` and `right`, bodies of the globals `left_id` and `right_id`,
-/// are the same code.
+/// Whether `left` and `right`, bodies of the globals `left_id` and `right_id`, are the same code.
 pub fn equivalent(
     module: &Module,
     left_id: GlobalId,
@@ -69,20 +61,8 @@ pub fn equivalent(
     right_id: GlobalId,
     right: &Function,
 ) -> bool {
-    Comparator {
-        module,
-        left_id,
-        right_id,
-        left,
-        right,
-        values_left: IdMap::new(),
-        values_right: IdMap::new(),
-        blocks_left: IdMap::new(),
-        blocks_right: IdMap::new(),
-        ahead_left: IdMap::new(),
-        ahead_right: IdMap::new(),
-    }
-    .compare()
+    Comparator { module, left_id, right_id, left, right, values_left: IdMap::new(), values_right: IdMap::new(), blocks_left: IdMap::new(), blocks_right: IdMap::new(), ahead_left: IdMap::new(), ahead_right: IdMap::new() }
+        .compare()
 }
 
 struct Comparator<'a> {
@@ -96,8 +76,7 @@ struct Comparator<'a> {
     values_right: IdMap<ValueId, u32>,
     blocks_left: IdMap<BlockId, u32>,
     blocks_right: IdMap<BlockId, u32>,
-    /// Values read before the walk defines them (a loop's phi input), paired as
-    /// they were first met.
+    /// Values read before the walk defines them (a loop's phi input), paired as they were first met.
     ahead_left: IdMap<ValueId, ValueId>,
     ahead_right: IdMap<ValueId, ValueId>,
 }
@@ -128,8 +107,7 @@ impl Comparator<'_> {
             if succ_left.len() != succ_right.len() {
                 return false;
             }
-            // in order: the first successor is compared first (a stack, pushed
-            // reversed)
+            // in order: the first successor is compared first (a stack, pushed reversed)
             let mut next = Vec::new();
             for (&sl, &sr) in succ_left.iter().zip(succ_right.iter()) {
                 match met.get(&sl) {
@@ -152,13 +130,8 @@ impl Comparator<'_> {
         self.left.layout().len() == self.right.layout().len() && met.len() == self.left.layout().len()
     }
 
-    /// Two blocks are the same when they were numbered together, or neither was
-    /// numbered (`cmpValues` numbers a block on first sight).
-    fn pair_blocks(
-        &mut self,
-        l: BlockId,
-        r: BlockId,
-    ) -> bool {
+    /// Two blocks are the same when they were numbered together, or neither was numbered (`cmpValues` numbers a block on first sight).
+    fn pair_blocks(&mut self, l: BlockId, r: BlockId) -> bool {
         match (self.blocks_left.get(&l), self.blocks_right.get(&r)) {
             (Some(m), Some(n)) => m == n,
             (None, None) => {
@@ -171,8 +144,7 @@ impl Comparator<'_> {
         }
     }
 
-    /// The function type, the convention and every attribute (`cmpAttrs`,
-    /// L122).
+    /// The function type, the convention and every attribute (`cmpAttrs`, L122).
     fn same_signature(&self) -> bool {
         let (l, r) = (self.left, self.right);
         l.ty == r.ty
@@ -184,13 +156,8 @@ impl Comparator<'_> {
             && l.parameters().len() == r.parameters().len()
     }
 
-    /// `cmpBasicBlocks` (L949): the instructions in order, each by
-    /// `cmpOperations` and its operands.
-    fn same_block(
-        &mut self,
-        l: BlockId,
-        r: BlockId,
-    ) -> bool {
+    /// `cmpBasicBlocks` (L949): the instructions in order, each by `cmpOperations` and its operands.
+    fn same_block(&mut self, l: BlockId, r: BlockId) -> bool {
         let left: Vec<InstId> = self.left.iter_block(l).collect();
         let right: Vec<InstId> = self.right.iter_block(r).collect();
         if left.len() != right.len() {
@@ -202,8 +169,7 @@ impl Comparator<'_> {
             }
             let (x, y) = (self.left.instruction(a).result, self.right.instruction(b).result);
             if let (Some(x), Some(y)) = (x, y) {
-                // a value already read ahead must be defined here on both
-                // sides, or on neither
+                // a value already read ahead must be defined here on both sides, or on neither
                 if self.ahead_left.get(&x).is_some_and(|&paired| paired != y)
                     || self.ahead_right.get(&y).is_some_and(|&paired| paired != x)
                 {
@@ -217,13 +183,8 @@ impl Comparator<'_> {
         true
     }
 
-    /// `cmpOperations` (L652): the operation, the types, the flags, the
-    /// metadata and the operand count; then the operands.
-    fn same_instruction(
-        &mut self,
-        a: InstId,
-        b: InstId,
-    ) -> bool {
+    /// `cmpOperations` (L652): the operation, the types, the flags, the metadata and the operand count; then the operands.
+    fn same_instruction(&mut self, a: InstId, b: InstId) -> bool {
         let (x, y) = (self.left.instruction(a), self.right.instruction(b));
         if x.opcode != y.opcode || x.ty != y.ty || x.flags != y.flags || x.operands.len() != y.operands.len() {
             return false;
@@ -234,18 +195,13 @@ impl Comparator<'_> {
         if kept(&x.metadata) != kept(&y.metadata) {
             return false;
         }
-        // an instruction that holds a function's address as a callee or operand
-        // is handled by `same_operand`
+        // an instruction that holds a function's address as a callee or operand is handled by `same_operand`
         x.operands.iter().zip(&y.operands).all(|(&p, &q)| self.same_operand(p, q))
             && matches!(x.opcode, Opcode::Phi) == matches!(y.opcode, Opcode::Phi)
     }
 
     /// `cmpValues` (L903).
-    fn same_operand(
-        &mut self,
-        p: Operand,
-        q: Operand,
-    ) -> bool {
+    fn same_operand(&mut self, p: Operand, q: Operand) -> bool {
         match (p, q) {
             (Operand::Constant(c), Operand::Constant(d)) => c == d || self.same_constant(c, d),
             (Operand::Block(c), Operand::Block(d)) => self.pair_blocks(c, d),
@@ -253,8 +209,7 @@ impl Comparator<'_> {
                 let (m, n) = (self.values_left.get(&a), self.values_right.get(&b));
                 match (m, n) {
                     (Some(m), Some(n)) => m == n,
-                    // a value the walk defines later (a loop's phi input):
-                    // paired now, checked where it is defined
+                    // a value the walk defines later (a loop's phi input): paired now, checked where it is defined
                     (None, None) => {
                         matches!(self.left.value(a).def, ValueDef::Instruction(_))
                             && matches!(self.right.value(b).def, ValueDef::Instruction(_))
@@ -268,13 +223,8 @@ impl Comparator<'_> {
         }
     }
 
-    /// Two values neither side has defined yet are the same value when they
-    /// were paired before, or neither was.
-    fn pair_ahead(
-        &mut self,
-        a: ValueId,
-        b: ValueId,
-    ) -> bool {
+    /// Two values neither side has defined yet are the same value when they were paired before, or neither was.
+    fn pair_ahead(&mut self, a: ValueId, b: ValueId) -> bool {
         match (self.ahead_left.get(&a), self.ahead_right.get(&b)) {
             (Some(&p), Some(&q)) => p == b && q == a,
             (None, None) => {
@@ -286,36 +236,23 @@ impl Comparator<'_> {
         }
     }
 
-    /// The address of one function against the address of the other
-    /// (`cmpValuesAllowingSelfRef`, L887); otherwise equal ids.
-    fn same_constant(
-        &self,
-        c: llrm_mir::context::ConstantId,
-        d: llrm_mir::context::ConstantId,
-    ) -> bool {
+    /// The address of one function against the address of the other (`cmpValuesAllowingSelfRef`, L887); otherwise equal ids.
+    fn same_constant(&self, c: llrm_mir::context::ConstantId, d: llrm_mir::context::ConstantId) -> bool {
         let (x, y) = (self.module.context.get(c), self.module.context.get(d));
         x.ty == y.ty
-            && matches!(
-                (&x.kind, &y.kind),
-                (ConstantKind::Global(a), ConstantKind::Global(b)) if *a == self.left_id && *b == self.right_id
-            )
+            && matches!((&x.kind, &y.kind), (ConstantKind::Global(a), ConstantKind::Global(b)) if *a == self.left_id && *b == self.right_id)
     }
 }
 
-/// LLVM's `MergeFunctions`
-/// ([MergeFunctions.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/MergeFunctions.cpp)):
+/// LLVM's `MergeFunctions` ([MergeFunctions.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/MergeFunctions.cpp)):
 /// the functions of a module that are the same code become one.
 ///
-/// Of a class of equivalent functions the first external one (else the first)
-/// is kept. A local one nothing takes the address of (or whose address is
-/// `unnamed_addr`) is dropped and every reference goes to the kept one; any
-/// other becomes a thunk, a tail call of the kept one with its own arguments
-/// (`writeThunk`). A thunk is a `jmp` once lowered.
+/// Of a class of equivalent functions the first external one (else the first) is kept. A local one nothing takes the address of
+/// (or whose address is `unnamed_addr`) is dropped and every reference goes to the kept one; any other becomes a thunk, a tail
+/// call of the kept one with its own arguments (`writeThunk`). A thunk is a `jmp` once lowered.
 ///
-/// DEVIATE MERGEFUNC-ALIAS (owner x86-m32, exit 2026-11-30): the pin writes an
-/// alias where the target allows one; this writes a thunk. DEVIATE
-/// MERGEFUNC-ROUNDS: merging can make two callers equal, so the pass repeats
-/// while it merges (the pin's `Deferred`).
+/// DEVIATE MERGEFUNC-ALIAS (owner x86-m32, exit 2026-11-30): the pin writes an alias where the target allows one; this writes a
+/// thunk. DEVIATE MERGEFUNC-ROUNDS: merging can make two callers equal, so the pass repeats while it merges (the pin's `Deferred`).
 pub struct MergeFunctions;
 
 impl ProgramPass for MergeFunctions {
@@ -323,11 +260,7 @@ impl ProgramPass for MergeFunctions {
         "mergefunc"
     }
 
-    fn run(
-        &mut self,
-        program: &mut Program,
-        analyses: &mut ProgramAnalyses,
-    ) -> Result<(), String> {
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let mut changed = false;
         for module in &mut program.modules {
             while merge_functions(module, true) {
@@ -341,11 +274,9 @@ impl ProgramPass for MergeFunctions {
     }
 }
 
-/// `MergeFunctions` at a level that allows no trade (-O1): the local functions
-/// nothing takes the address of are dropped, the rest stay. A thunk saves bytes
-/// and costs a `jmp` a call, so only a drop is a win on both axes.
-/// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): the pin runs no
-/// `MergeFunctions` at all.
+/// `MergeFunctions` at a level that allows no trade (-O1): the local functions nothing takes the address of are
+/// dropped, the rest stay. A thunk saves bytes and costs a `jmp` a call, so only a drop is a win on both axes.
+/// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): the pin runs no `MergeFunctions` at all.
 pub struct MergeLocalFunctions;
 
 impl ProgramPass for MergeLocalFunctions {
@@ -353,11 +284,7 @@ impl ProgramPass for MergeLocalFunctions {
         "mergefunc-local"
     }
 
-    fn run(
-        &mut self,
-        program: &mut Program,
-        analyses: &mut ProgramAnalyses,
-    ) -> Result<(), String> {
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let mut changed = false;
         for module in &mut program.modules {
             while merge_functions(module, false) {
@@ -371,20 +298,13 @@ impl ProgramPass for MergeLocalFunctions {
     }
 }
 
-/// `isEligibleForMerging` (L1): a body that is the module's own and may be
-/// replaced.
-fn eligible(
-    module: &Module,
-    id: GlobalId,
-) -> bool {
+/// `isEligibleForMerging` (L1): a body that is the module's own and may be replaced.
+fn eligible(module: &Module, id: GlobalId) -> bool {
     let global = module.global(id);
     let Some(function) = global.function() else { return false };
     let name = global.name.as_deref().unwrap_or("");
     !function.is_declaration()
-        && matches!(
-            global.linkage,
-            Linkage::External | Linkage::Internal | Linkage::Private
-        )
+        && matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private)
         && !name.starts_with("llvm.")
         && !function.attrs.iter().any(|a| matches!(a, Attribute::Flag(n) if n == "optnone" || n == "naked"))
 }
@@ -413,9 +333,7 @@ fn address_taken(module: &Module) -> BTreeSet<GlobalId> {
                         let callee = matches!(inst.opcode, Opcode::Call(_)).then(|| inst.operands.len() - 1);
                         for (at, &operand) in inst.operands.iter().enumerate() {
                             let Operand::Constant(constant) = operand else { continue };
-                            if Some(at) == callee
-                                && matches!(module.context.get(constant).kind, ConstantKind::Global(_))
-                            {
+                            if Some(at) == callee && matches!(module.context.get(constant).kind, ConstantKind::Global(_)) {
                                 continue;
                             }
                             embedded(&module.context, constant, &mut taken);
@@ -429,10 +347,7 @@ fn address_taken(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// One round: whether any function was dropped or turned into a thunk.
-fn merge_functions(
-    module: &mut Module,
-    thunks_allowed: bool,
-) -> bool {
+fn merge_functions(module: &mut Module, thunks_allowed: bool) -> bool {
     let mut buckets: HashMap<u64, Vec<GlobalId>> = HashMap::new();
     for index in 0..module.globals.len() as u32 {
         let id = GlobalId(index);
@@ -446,14 +361,10 @@ fn merge_functions(
         let mut here: Vec<Vec<GlobalId>> = Vec::new();
         for id in ids {
             let function = module.global(id).function().expect("a function");
-            let class = here
-                .iter_mut()
-                .find(
-                    |class| {
-                        let head = class[0];
-                        equivalent(module, head, module.global(head).function().expect("a function"), id, function)
-                    },
-                );
+            let class = here.iter_mut().find(|class| {
+                let head = class[0];
+                equivalent(module, head, module.global(head).function().expect("a function"), id, function)
+            });
             match class {
                 Some(class) => class.push(id),
                 None => here.push(vec![id]),
@@ -491,39 +402,22 @@ fn merge_functions(
     changed
 }
 
-/// A body that is only its terminator (`ret`, `unreachable`) is no larger than
-/// the `jmp` that would replace it: value_of_valueless grew 15 -> 17 B at m32
-/// -Os. A body with any instruction beyond that is kept to the A/B: `call` plus
-/// `ret` of two arguments is pushes, a call and a pop where the thunk is one
-/// `jmp` (sfm16 `__gtsf2`, 16 B against 5 B), so a count of two or three
-/// instructions does not say the thunk is no smaller. The pin has no such
-/// check; this is part of DEVIATE MERGEFUNC-OS.
-fn outweighs_thunk(
-    module: &Module,
-    id: GlobalId,
-) -> bool {
+/// A body that is only its terminator (`ret`, `unreachable`) is no larger than the `jmp` that would replace it: value_of_valueless
+/// grew 15 -> 17 B at m32 -Os. A body with any instruction beyond that is kept to the A/B: `call` plus `ret` of two arguments is
+/// pushes, a call and a pop where the thunk is one `jmp` (sfm16 `__gtsf2`, 16 B against 5 B), so a count of two or three
+/// instructions does not say the thunk is no smaller. The pin has no such check; this is part of DEVIATE MERGEFUNC-OS.
+fn outweighs_thunk(module: &Module, id: GlobalId) -> bool {
     let function = module.global(id).function().expect("a function");
     function.layout().iter().map(|&block| function.iter_block(block).count()).sum::<usize>() > 1
 }
 
-fn is_variadic(
-    module: &Module,
-    id: GlobalId,
-) -> bool {
+fn is_variadic(module: &Module, id: GlobalId) -> bool {
     let function = module.global(id).function().expect("a function");
-    matches!(
-        module.context.types.get(function.ty),
-        Type::Function { variadic: true, .. }
-    )
+    matches!(module.context.types.get(function.ty), Type::Function { variadic: true, .. })
 }
 
-/// Whether `id` already is `write_thunk(id, keep)`'s result: a call of `keep`
-/// and a return.
-fn is_thunk_to(
-    module: &Module,
-    id: GlobalId,
-    keep: GlobalId,
-) -> bool {
+/// Whether `id` already is `write_thunk(id, keep)`'s result: a call of `keep` and a return.
+fn is_thunk_to(module: &Module, id: GlobalId, keep: GlobalId) -> bool {
     let function = module.global(id).function().expect("a function");
     let [block] = function.layout() else { return false };
     let insts: Vec<_> = function.iter_block(*block).collect();
@@ -531,19 +425,11 @@ fn is_thunk_to(
     let call = function.instruction(call);
     matches!(call.opcode, Opcode::Call(_))
         && matches!(function.instruction(ret).opcode, Opcode::Ret)
-        && matches!(
-            call.operands.last(),
-            Some(&Operand::Constant(c)) if matches!(module.context.get(c).kind, ConstantKind::Global(g) if g == keep)
-        )
+        && matches!(call.operands.last(), Some(&Operand::Constant(c)) if matches!(module.context.get(c).kind, ConstantKind::Global(g) if g == keep))
 }
 
-/// `writeThunk` (L1): the body of `id` becomes a tail call of `keep` with
-/// `id`'s arguments.
-fn write_thunk(
-    module: &mut Module,
-    id: GlobalId,
-    keep: GlobalId,
-) {
+/// `writeThunk` (L1): the body of `id` becomes a tail call of `keep` with `id`'s arguments.
+fn write_thunk(module: &mut Module, id: GlobalId, keep: GlobalId) {
     let callee = Operand::Constant(module.reference(keep));
     let function = module.global(id).function().expect("a function");
     let (ty, convention, attrs) = (function.ty, function.calling_convention, function.parameter_attrs.clone());

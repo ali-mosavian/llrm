@@ -98,12 +98,10 @@ pub fn arithmetic(
         }
         ArithOp::Mul => 2,
         ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem if wide => libcall(parts * 2),
-        ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem if matches!(ty, Ty::Int(bits) if bits > 16) => {
-            if cpu_has_long_muldiv {
-                4
-            } else {
-                libcall(2)
-            }
+        ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
+            if matches!(ty, Ty::Int(bits) if bits > 16) =>
+        {
+            if cpu_has_long_muldiv { 4 } else { libcall(2) }
         }
         ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem => 4,
         // soft float: a call
@@ -198,10 +196,12 @@ pub fn constant_division_clocks(
     }
     let width = if long { "l" } else { "w" };
     let multiply = if signed { "muls" } else { "mulu" };
-    // (form, bytes): the instructions of the lowering, a representative
-    // divisor's.
+    // (form, bytes): the instructions of the lowering, a representative divisor's.
     let mut forms: Vec<(String, u32)> = if long {
-        vec![("move.l #1717986919, %d0".into(), 6), (format!("{multiply}.l %d0, %d1:%d2"), 4)]
+        vec![
+            ("move.l #1717986919, %d0".into(), 6),
+            (format!("{multiply}.l %d0, %d1:%d2"), 4),
+        ]
     } else {
         vec![(format!("{multiply}.w #171, %d1"), 4), ("moveq #10, %d0".into(), 2)]
     };
@@ -218,15 +218,8 @@ pub fn constant_division_clocks(
     if rem {
         // the quotient times the divisor by shifts and adds, subtracted
         forms.extend(
-            [
-                "move.l %d1, %d2",
-                "lsl.l #2, %d2",
-                "add.l %d1, %d2",
-                "add.l %d2, %d2",
-                "add.l %d1, %d2",
-                "sub.l %d2, %d3",
-            ]
-            .map(|text| (text.to_string(), 2)),
+            ["move.l %d1, %d2", "lsl.l #2, %d2", "add.l %d1, %d2", "add.l %d2, %d2", "add.l %d1, %d2", "sub.l %d2, %d3"]
+                .map(|text| (text.to_string(), 2)),
         );
     }
     forms

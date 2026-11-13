@@ -14,10 +14,9 @@
 //! compare and `trunc nuw` cases are not found (it finds less).
 //!
 //! DEVIATE 2 (temporary): the folds that need another family's helper are left
-//! out, named where they stood: `~(A & B) & (A | B)`, the `select (~a | c)`,
-//! `(c & b)`, `(a | c)` and `(c & ~b)` forms (`getFreelyInverted`),
-//! `isCheckForZeroAndMulWithOverflow`, the implied-condition simplifications
-//! and `FoldOrOfLogicalAnds`.
+//! out, named where they stood: `~(A & B) & (A | B)`, the `select (~a | c)`, `(c & b)`, `(a | c)` and
+//! `(c & ~b)` forms (`getFreelyInverted`), `isCheckForZeroAndMulWithOverflow`,
+//! the implied-condition simplifications and `FoldOrOfLogicalAnds`.
 //!
 //! DEVIATE 3: `prof` branch weights are dropped where the arms swap.
 //!

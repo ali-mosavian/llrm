@@ -25,8 +25,8 @@
 //! |---|---|---|
 //! | [`removeUndefIntroducingPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9230) | `removed` | MIRROR; D1 |
 //!
-//! - D1. (retired) the pass is given the module's declarations, so a
-//!   conditional branch keeps the `llvm.assume` of its guarding condition.
+//! - D1. (retired) the pass is given the module's declarations, so a conditional
+//!   branch keeps the `llvm.assume` of its guarding condition.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
@@ -48,8 +48,7 @@ fn made_unreachable(
     function.insert(end, llrm_mir::edit::Position::End(block)).expect("a placed block");
 }
 
-/// `Builder.CreateAssumption(cond)` before `at`, with `CreateNot` first when
-/// `negated`.
+/// `Builder.CreateAssumption(cond)` before `at`, with `CreateNot` first when `negated`.
 fn assumed(
     context: &mut Context,
     declared: &mut Declared,
@@ -127,8 +126,7 @@ pub fn removed(
                     } else {
                         let void = function.instruction(last).ty;
                         let to = if *taken == block { *other } else { *taken };
-                        // Preserves the guarding condition, which no dominating
-                        // condition may give.
+                        // Preserves the guarding condition, which no dominating condition may give.
                         assumed(context, declared, function, last, operands[0], *taken == block);
                         function.erase(last).expect("a terminator defines nothing");
                         let jump = function.create_instruction(

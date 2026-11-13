@@ -1,7 +1,6 @@
 //! `matrix` ran all 22 programs at four CPUs and four compilers under qemu, or
 //! none: re-measuring a few cells cost the whole run. `MATRIX_PROGS` names the
-//! programs; a name no program has must stop the run, not print an empty
-//! matrix.
+//! programs; a name no program has must stop the run, not print an empty matrix.
 
 use llrm_m68k::kernels::{keep_named, library_table, table};
 

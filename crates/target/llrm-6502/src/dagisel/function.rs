@@ -12,20 +12,21 @@
 //! calls) needs none. Reason: frame objects wait for the 6502 machine function.
 //! Exit: M4.
 
+use llrm_support::hash::HashMap;
+
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
+use llrm_codegen::backend::selectiondag::{DagConfig, SelectionDAG};
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
-use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
-use llrm_codegen::backend::selectiondag::{DagConfig, SelectionDAG};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
-use llrm_support::hash::HashMap;
 
 use super::call::{CALL, MosCalling, RET_GLUE};
 use super::hooks::Cpu;
@@ -40,8 +41,7 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
-        // the builder refuses what the machine refuses (6502-ALLOCA-ALIGN,
-        // driver.rs)
+        // the builder refuses what the machine refuses (6502-ALLOCA-ALIGN, driver.rs)
         max_alloca_align: Some(crate::frame::MAX_ALLOCA_ALIGN),
         jump_tables: false,
         string_instructions: false,
@@ -61,14 +61,10 @@ pub fn builder_target() -> BuilderTarget {
         // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
         // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
-        // DEVIATE 6502-SEXT-BOOL-ADD (owner 6502, exit 2026-12-15): the pin
-        // turns `add (sext i1 c), x` into
-        // `sub x, (zext i1 c)` (`visitADDLikeCommutative`), which here is
-        // an `sbc` chain; a word compared with its bound gained an `ldx #255`
-        // and a swapped `cmp` from it
-        // (`a_compare_against_a_word_boundary_...`). The add stays up to 16
-        // bits; wider, the sign bytes of the add read a cell (`adc rc22`, 3
-        // clk) where the pin's `sbc #0` is 2.
+        // DEVIATE 6502-SEXT-BOOL-ADD (owner 6502, exit 2026-12-15): the pin turns `add (sext i1 c), x` into
+        // `sub x, (zext i1 c)` (`visitADDLikeCommutative`), which here is an `sbc` chain; a word compared with its bound
+        // gained an `ldx #255` and a swapped `cmp` from it (`a_compare_against_a_word_boundary_...`). The add stays up to
+        // 16 bits; wider, the sign bytes of the add read a cell (`adc rc22`, 3 clk) where the pin's `sbc #0` is 2.
         dag: DagConfig { sext_bool_add_max_bits: 16, ..BuilderTarget::for_pointer_bits(16).dag },
         ..BuilderTarget::for_pointer_bits(16)
     }
@@ -125,10 +121,7 @@ impl Selection {
             .iter()
             .flat_map(|one| one.units.iter().flat_map(move |unit| unit.nodes.iter().map(move |&n| (one, n))))
             .filter(|(one, node)| {
-                matches!(
-                    one.dag.nodes()[*node as usize].opcode,
-                    ISD::Machine(code) if code as u16 == op::MUL32
-                )
+                matches!(one.dag.nodes()[*node as usize].opcode, ISD::Machine(code) if code as u16 == op::MUL32)
             })
             .count()
     }
@@ -147,14 +140,12 @@ pub fn select_function(
     select_function_with(module, name, cpu, false)
 }
 
-/// Where a product of two words is a widening multiply (two routines that add
-/// bytes).
+/// Where a product of two words is a widening multiply (two routines that add bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Widen {
     /// Nowhere.
     Off,
-    /// In functions not tuned for size: a level that prices a clock above a
-    /// byte.
+    /// In functions not tuned for size: a level that prices a clock above a byte.
     Unsized,
     /// Everywhere: the module-level trial of 6502-WIDEN-IMAGE.
     Always,

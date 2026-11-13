@@ -6,17 +6,11 @@ use std::sync::OnceLock;
 
 pub trait TargetNodeNames: Sync + Send {
     /// The node's name, or none for a code the target does not know.
-    fn name(
-        &self,
-        code: u16,
-    ) -> Option<&'static str>;
+    fn name(&self, code: u16) -> Option<&'static str>;
 
     /// The pin's number of a private `code`, or none for a code that already
     /// is the pin's.
-    fn pin_id(
-        &self,
-        code: u16,
-    ) -> Option<u16>;
+    fn pin_id(&self, code: u16) -> Option<u16>;
 }
 
 static INSTALLED: OnceLock<&'static dyn TargetNodeNames> = OnceLock::new();
@@ -32,7 +26,9 @@ pub fn installed() -> Option<&'static dyn TargetNodeNames> {
 
 /// `getTargetNodeName`, or `Target#code` when no target knows the code.
 pub fn name(code: u16) -> String {
-    installed().and_then(|names| names.name(code)).map_or_else(|| format!("Target#{code}"), str::to_owned)
+    installed()
+        .and_then(|names| names.name(code))
+        .map_or_else(|| format!("Target#{code}"), str::to_owned)
 }
 
 #[cfg(test)]

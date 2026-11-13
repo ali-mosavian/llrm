@@ -77,11 +77,10 @@ fn the_slot_in_the_most_conflicts_goes_back_to_the_frame() {
     assert_eq!(by_conflicts.pushed, [0, 1, 2]);
 }
 
-/// x87_arguments -O2 (with the soft-float bitcast split of #8590) was REFUSED
-/// "a pushed spill inside the stack arguments of a call": the whole-function
-/// stack form made every spill a `push`/`pop`, those between the pushes of
-/// a call's arguments included, and the printer cannot place them. They stay
-/// slots; outside the arguments the same spill is a stack.
+/// x87_arguments -O2 (with the soft-float bitcast split of #8590) was REFUSED "a pushed spill inside the stack
+/// arguments of a call": the whole-function stack form made every spill a `push`/`pop`, those between the pushes of
+/// a call's arguments included, and the printer cannot place them. They stay slots; outside the arguments the same
+/// spill is a stack.
 #[test]
 fn a_spill_inside_the_stack_arguments_of_a_call_stays_a_slot() {
     let adjust = |kind, bytes| Inst::new(Kind::Op(kind), vec![Operand::Imm(bytes)]);
@@ -100,9 +99,8 @@ fn a_spill_inside_the_stack_arguments_of_a_call_stays_a_slot() {
     assert_eq!(outside.blocks[0].insts[2].kind, Kind::Op("PUSHP"));
 }
 
-/// A byte saved from `e` and reloaded into `d` came back through `pop de` as it
-/// was in `d`: the frameless form pushed and popped a pair whatever half each
-/// access named (memory_expansion `ref_fill` -Os stored 0 for 123).
+/// A byte saved from `e` and reloaded into `d` came back through `pop de` as it was in `d`: the frameless form
+/// pushed and popped a pair whatever half each access named (memory_expansion `ref_fill` -Os stored 0 for 123).
 #[test]
 fn a_byte_slot_saved_from_one_half_and_reloaded_into_the_other_stays_a_slot() {
     let mut f = MFunction::new("f");
@@ -126,12 +124,7 @@ fn a_byte_loaded_into_the_other_half_of_a_pair_is_a_pop_and_a_copy() {
     let load = || Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Phys(reg::B)), Operand::Frame(0)]);
     let body = |tail: Inst| {
         let mut f = MFunction::new("f");
-        let insts = vec![
-            save(),
-            Inst::new(Kind::Op("DEF"), vec![Operand::Def(Reg::Phys(reg::E)), Operand::Imm(0)]),
-            load(),
-            tail,
-        ];
+        let insts = vec![save(), Inst::new(Kind::Op("DEF"), vec![Operand::Def(Reg::Phys(reg::E)), Operand::Imm(0)]), load(), tail];
         f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
         f
     };
@@ -180,21 +173,16 @@ fn a_slot_that_needs_a_copy_never_takes_another_slot_from_the_stack() {
     assert_eq!(f.blocks[0].insts[1].kind, Kind::Op("SPILL8"));
 }
 
-/// switch_peeled_table -O1: two words saved around a call and read back in the
-/// order they were saved left the first one in the IX frame (`ld -2(ix), c` ...
-/// `ld c, -2(ix)`, 12 B and a frame of 13 B) where reads in the reverse order
-/// make both a `push`/`pop`.
+/// switch_peeled_table -O1: two words saved around a call and read back in the order they were saved left the
+/// first one in the IX frame (`ld -2(ix), c` ... `ld c, -2(ix)`, 12 B and a frame of 13 B) where reads in the
+/// reverse order make both a `push`/`pop`.
 #[test]
 fn words_saved_in_order_and_read_in_order_are_read_in_reverse_so_both_pop() {
     let save = |slot, from| Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(slot), Operand::Use(Reg::Phys(from))]);
     let read = |slot, into| Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(Reg::Phys(into)), Operand::Frame(slot)]);
     let body = || {
         let mut f = MFunction::new("f");
-        f.blocks = vec![Block {
-            id: 0,
-            insts: vec![save(0, reg::BC), save(1, reg::DE), read(0, reg::BC), read(1, reg::DE)],
-            phis: Vec::new(),
-        }];
+        f.blocks = vec![Block { id: 0, insts: vec![save(0, reg::BC), save(1, reg::DE), read(0, reg::BC), read(1, reg::DE)], phis: Vec::new() }];
         f
     };
     let crossed = stack_slot_report_by(&mut body(), &Assignment(Vec::new()), false, false);

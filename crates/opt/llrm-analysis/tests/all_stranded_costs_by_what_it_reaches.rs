@@ -9,8 +9,8 @@
 //! the body.
 
 use llrm_analysis::noreturn::all_stranded;
-use llrm_mir::dense::IdSet;
 use llrm_support::alloc_count::{Counting, counted};
+use llrm_mir::dense::IdSet;
 
 #[global_allocator]
 static COUNTING: Counting = Counting;
@@ -47,9 +47,6 @@ fn allocations(returns: usize) -> (usize, usize) {
 #[test]
 fn test_the_first_question_grows_by_doubling_and_a_repeat_allocates_nothing_for_the_body() {
     let ((first_small, again_small), (first_large, again_large)) = (allocations(4), allocations(400));
-    assert!(
-        first_large <= first_small + 8,
-        "first question: {first_small} allocations with 4 returns, {first_large} with 400"
-    );
+    assert!(first_large <= first_small + 8, "first question: {first_small} allocations with 4 returns, {first_large} with 400");
     assert!(again_large <= again_small + 2, "repeat: {again_small} allocations with 4 returns, {again_large} with 400");
 }

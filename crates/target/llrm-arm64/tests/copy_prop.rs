@@ -22,32 +22,24 @@ fn a_value_copied_out_and_straight_back_is_copied_once() {
 fn a_copy_of_the_zero_register_is_made_again_not_copied_from_one_shared_zero() {
     let asm = driver::assembly(include_str!("data/zero_spill.ll"), Platform::Linux, Level::O1).expect("lowers");
     let lines: Vec<&str> = asm.lines().map(str::trim).collect();
-    let first =
-        lines.iter().find_map(|line| line.strip_prefix("orr ")?.strip_suffix(", xzr, xzr, lsl #0")).expect("a zero");
+    let first = lines.iter().find_map(|line| line.strip_prefix("orr ")?.strip_suffix(", xzr, xzr, lsl #0")).expect("a zero");
     let shared = format!(", xzr, {first}, lsl #0");
     assert!(!lines.iter().any(|line| line.starts_with("orr ") && line.ends_with(&shared)), "{asm}");
 }
 
 /// A zero accumulator that spills before it is first used was made in a
 /// register and stored (`orr x9, xzr, xzr; str x9, [sp, N]`): the pin folds the
-/// spill of a copy from `xzr` into `str xzr` (`foldMemoryOperandImpl`); two of
-/// them pair into `stp`.
+/// spill of a copy from `xzr` into `str xzr` (`foldMemoryOperandImpl`); two of them pair into `stp`.
 #[test]
 fn a_spilled_zero_is_stored_from_the_zero_register() {
     let asm = driver::assembly(include_str!("data/zero_spill.ll"), Platform::Linux, Level::O1).expect("lowers");
     let lines: Vec<&str> = asm.lines().map(str::trim).collect();
-    assert!(
-        lines.iter().any(|line| line.starts_with("str xzr, [sp") || line.starts_with("stp xzr, xzr, [sp")),
-        "{asm}"
-    );
-    let zeroed = lines
-        .windows(2)
-        .any(
-            |pair| pair[0]
-                .strip_prefix("orr ")
-                .and_then(|rest| rest.strip_suffix(", xzr, xzr, lsl #0"))
-                .is_some_and(|reg| pair[1].starts_with(&format!("str {reg}, [sp"))),
-        );
+    assert!(lines.iter().any(|line| line.starts_with("str xzr, [sp") || line.starts_with("stp xzr, xzr, [sp")), "{asm}");
+    let zeroed = lines.windows(2).any(|pair| {
+        pair[0].strip_prefix("orr ").and_then(|rest| rest.strip_suffix(", xzr, xzr, lsl #0")).is_some_and(|reg| {
+            pair[1].starts_with(&format!("str {reg}, [sp"))
+        })
+    });
     assert!(!zeroed, "{asm}");
 }
 

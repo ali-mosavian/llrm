@@ -1098,7 +1098,9 @@ fn test_a_target_that_declines_keeps_the_compare_of_a_constant_phi() {
     assert!(!out.contains("phi i1"), "{out}");
 }
 
-fn division_compare_on(keep: bool) -> String {
+fn division_compare_on(
+    keep: bool,
+) -> String {
     let text = "define i1 @f(i16 %v, ptr %p) {
   %q = udiv i16 %v, 10
   store i16 %q, ptr %p
@@ -1138,8 +1140,7 @@ fn test_a_compare_of_a_shared_quotient_stays_a_compare_of_the_quotient_where_kep
     assert!(pin.contains("%v, 99"), "{pin}");
 }
 
-/// The quotient has no other use: the range test saves the divide, on every
-/// target.
+/// The quotient has no other use: the range test saves the divide, on every target.
 #[test]
 fn test_a_compare_of_an_unshared_quotient_is_a_range_test_even_where_kept() {
     let text = "define i1 @f(i16 %v) {

@@ -1,12 +1,11 @@
-//! Reads the pin's `X86GenFastISel.inc` (`llvm-tblgen -gen-fast-isel`) into
-//! rows.
+//! Reads the pin's `X86GenFastISel.inc` (`llvm-tblgen -gen-fast-isel`) into rows.
 //!
 //! # How it works
 //! Each `fastEmit_<ISD>_<OP>_MVT_<vt>_<shape>` function becomes one row: the
 //! result type it accepts and its arms, each an optional subtarget condition,
 //! an opcode and a register class, in the pin's order. A top-level dispatcher
-//! (`fastEmit_ISD_ADD_rr`) is counted and left out: it is derived from the
-//! rows. A function of any other form is counted as unread, never dropped.
+//! (`fastEmit_ISD_ADD_rr`) is counted and left out: it is derived from the rows.
+//! A function of any other form is counted as unread, never dropped.
 //!
 //! # Used by
 //! Nothing yet (step 1 of the FastISel generator).
@@ -53,8 +52,7 @@ pub struct Rows {
     pub arms: Vec<Arm>,
 }
 
-/// Namespace, operation, source type, result type (empty when the body tests
-/// `RetVT`), shape.
+/// Namespace, operation, source type, result type (empty when the body tests `RetVT`), shape.
 type Key = (String, String, String, String, Shape);
 
 #[derive(Default)]
@@ -105,9 +103,9 @@ impl Table {
             for arm in &rows.arms {
                 let take = match &arm.cond {
                     None => true,
-                    // An atom the CPU file does not state, or one decided at
-                    // run time, leaves the whole row to the DAG: a later arm
-                    // may not be taken past an arm that might have been.
+                    // An atom the CPU file does not state, or one decided at run time,
+                    // leaves the whole row to the DAG: a later arm may not be taken
+                    // past an arm that might have been.
                     Some(text) => match predicate::parse(text).and_then(|e| e.decide(&|atom| cpu.verdict(atom))) {
                         Ok(Decided::Yes) => true,
                         Ok(Decided::No) => false,
@@ -181,18 +179,14 @@ fn unwrap(text: &str) -> &str {
     let mut text = text.trim();
     while text.starts_with('(') && text.ends_with(')') {
         let mut depth = 0;
-        let closes_last = text
-            .char_indices()
-            .all(
-                |(at, c)| {
-                    match c {
-                        '(' => depth += 1,
-                        ')' => depth -= 1,
-                        _ => {}
-                    }
-                    depth > 0 || at == text.len() - 1
-                },
-            );
+        let closes_last = text.char_indices().all(|(at, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth > 0 || at == text.len() - 1
+        });
         if !closes_last {
             break;
         }
@@ -211,8 +205,7 @@ fn inst(line: &str) -> Option<(String, String)> {
     Some((opcode.to_owned(), class.to_owned()))
 }
 
-/// The arms and result type of one function body, or `None` for a form not
-/// read.
+/// The arms and result type of one function body, or `None` for a form not read.
 fn body(lines: &[&str]) -> Option<(Option<String>, Vec<Arm>)> {
     let mut ret = None;
     let mut arms = Vec::new();
@@ -262,8 +255,7 @@ pub fn parse(text: &str) -> Result<Table, String> {
             return Err(format!("{name}: no closing brace"));
         }
         at = end + 1;
-        // A body that switches on `RetVT` only picks among functions of their
-        // own.
+        // A body that switches on `RetVT` only picks among functions of their own.
         let switches = lines[start..end].iter().any(|l| l.contains("switch (RetVT"));
         if head.contains("override") || head.contains("(MVT VT,") || switches {
             table.dispatchers += 1;
@@ -305,8 +297,8 @@ impl Chosen {
         self.undecided
     }
 
-    /// The rows as Rust source: `(namespace, op, vt, ret, shape, opcode,
-    /// class)` sorted by key, for binary search.
+    /// The rows as Rust source: `(namespace, op, vt, ret, shape, opcode, class)`
+    /// sorted by key, for binary search.
     pub fn render(
         &self,
         cpu: &str,
@@ -319,12 +311,7 @@ impl Chosen {
             .picked
             .iter()
             .map(|((ns, op, vt, ret, shape), arm)| {
-                format!(
-                    "    (\"{ns}\", \"{op}\", \"{vt}\", \"{ret}\", {}, \"{}\", \"{}\"),",
-                    shape.code(),
-                    arm.opcode,
-                    arm.class
-                )
+                format!("    (\"{ns}\", \"{op}\", \"{vt}\", \"{ret}\", {}, \"{}\", \"{}\"),", shape.code(), arm.opcode, arm.class)
             })
             .collect();
         rows.sort();

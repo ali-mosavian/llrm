@@ -390,18 +390,14 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
     for (code_section, offset, size, index) in own {
         let Some((name, bytes)) = unwind_of(&object, &frames, (code_section, offset, size, index))? else { continue };
         let xdata = object.sections.len();
-        object
-            .symbols
-            .push(
-                Symbol {
-                    name: format!("$unwind${name}"),
-                    binding: Binding::Local,
-                    definition: Definition::Defined { section: xdata, offset: 0 },
-                    size: 0,
-                    group: None,
-                    visibility: Default::default(),
-                },
-            );
+        object.symbols.push(Symbol {
+            name: format!("$unwind${name}"),
+            binding: Binding::Local,
+            definition: Definition::Defined { section: xdata, offset: 0 },
+            size: 0,
+            group: None,
+            visibility: Default::default(),
+        });
         let unwind_symbol = object.symbols.len() - 1;
         let rva = Fix::image_relative(4);
         let relocs = vec![
@@ -412,15 +408,11 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
         object.sections.push(section(".xdata", bytes, Vec::new()));
         object.sections.push(section(".pdata", vec![0; 12], relocs));
         for at in [xdata, xdata + 1] {
-            object
-                .comdats
-                .push(
-                    Comdat {
-                        section: at,
-                        selection: Selection::Associative,
-                        associated: Some(code_section),
-                    },
-                );
+            object.comdats.push(Comdat {
+                section: at,
+                selection: Selection::Associative,
+                associated: Some(code_section),
+            });
         }
     }
     let functions = shared;

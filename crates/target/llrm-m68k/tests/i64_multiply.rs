@@ -1,9 +1,8 @@
 //! A 64-bit multiply with no widening multiply reaches the library-call step
 //! of the type legalizer (`ExpandIntRes_MUL`); `make_lib_call` named no
-//! register for an 8-byte result and panicked ("RetCC_M68k_C names a
-//! register"), so `x_fixmul` stopped compiling. The hook now returns the result
-//! as two words (`d0`, `d1`), as for a divide or a float conversion; it
-//! compiles.
+//! register for an 8-byte result and panicked ("RetCC_M68k_C names a register"),
+//! so `x_fixmul` stopped compiling. The hook now returns the result as two
+//! words (`d0`, `d1`), as for a divide or a float conversion; it compiles.
 
 use llrm_m68k::compile::{Options, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;

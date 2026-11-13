@@ -7,8 +7,8 @@
 //! with no memory operand does in the pin.
 //!
 //! DEVIATE MS6-ONE-MMO (owner arm64-phi, 2026-11-09): one operand per
-//! instruction; the pin's list of up to `getMemOperandAACheckLimit` pairs is
-//! one pair. Exit: a target with a two-operand access.
+//! instruction; the pin's list of up to `getMemOperandAACheckLimit` pairs is one
+//! pair. Exit: a target with a two-operand access.
 
 use llrm_analysis::aa::AliasResult;
 use llrm_analysis::placealias::{Object, alias_of};
@@ -26,9 +26,9 @@ pub struct MemRef {
 
 impl MemRef {
     /// `MemOperandsHaveAlias` (MachineInstr.cpp#L1473) with `AA` answering by
-    /// the objects alone (`placealias::alias_of`): the same object overlaps
-    /// where the byte ranges do, an unknown width or offset overlaps;
-    /// different objects are apart when the kinds or names are.
+    /// the objects alone (`placealias::alias_of`): the same object overlaps where
+    /// the byte ranges do, an unknown width or offset overlaps; different
+    /// objects are apart when the kinds or names are.
     #[must_use]
     pub fn may_alias(
         &self,

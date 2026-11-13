@@ -10,8 +10,8 @@
 //! path: the loads and what feeds them are copied before the loop, and the loop
 //! is unswitched on the copy.
 //!
-//! DEVIATE SU12 (owner w9, exit: MemorySSA is passed to the pass): the pin
-//! walks the uses of each load's defining `MemoryAccess`, up to `MSSAThreshold`
+//! DEVIATE SU12 (owner w9, exit: MemorySSA is passed to the pass): the pin walks
+//! the uses of each load's defining `MemoryAccess`, up to `MSSAThreshold`
 //! accesses, for a `MemoryDef` on the path that may modify the location. Here
 //! every store, call and atomic in the path's blocks is asked of the alias
 //! query, with no cap. The answer is the same where MemorySSA is precise, and
@@ -61,10 +61,7 @@ pub(super) fn has_partial_iv_condition(
     let Operand::Value(cond) = branch.operands[0] else { return None };
     let cond_inst = super::def_of(run, Operand::Value(cond))?;
     let cond_end = run.function.instruction(cond_inst);
-    if !matches!(
-        cond_end.opcode,
-        Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Cast(CastOp::Trunc)
-    )
+    if !matches!(cond_end.opcode, Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Cast(CastOp::Trunc))
         || !lp.contains(run.function.parent(cond_inst)?)
     {
         return None;

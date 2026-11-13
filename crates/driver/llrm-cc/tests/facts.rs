@@ -65,14 +65,8 @@ fn defines(name: &str) -> Option<(Vec<String>, Vec<String>)> {
     Some(found)
 }
 
-fn of<'a>(
-    defines: &'a [String],
-    function: &str,
-) -> &'a str {
-    defines
-        .iter()
-        .find(|line| line.contains(&format!("@{function}(")))
-        .unwrap_or_else(|| panic!("{function}: {defines:?}"))
+fn of<'a>(defines: &'a [String], function: &str) -> &'a str {
+    defines.iter().find(|line| line.contains(&format!("@{function}("))).unwrap_or_else(|| panic!("{function}: {defines:?}"))
 }
 
 /// C99 6.7.3.1: the three restrict parameters of `add` reach the backend

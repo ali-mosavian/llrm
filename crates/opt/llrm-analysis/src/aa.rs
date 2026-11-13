@@ -1060,11 +1060,10 @@ mod tests {
     fn reading_attributes_resolves_no_flag_names() {
         use llrm_mir::counts::{Event, get};
         use llrm_mir::opcode::Attribute;
-        let attrs: Vec<Attribute> =
-            ["nounwind", "mustprogress", "nofree", "readonly", "willreturn", "noalias", "nocapture"]
-                .into_iter()
-                .map(|name| Attribute::Flag(name.into()))
-                .collect();
+        let attrs: Vec<Attribute> = ["nounwind", "mustprogress", "nofree", "readonly", "willreturn", "noalias", "nocapture"]
+            .into_iter()
+            .map(|name| Attribute::Flag(name.into()))
+            .collect();
         let before = get(Event::FlagNamesResolved);
         for _ in 0..1000 {
             let _ = MemoryEffects::of_attrs(&attrs);

@@ -107,8 +107,7 @@ pub fn rewritten_in(
 ) -> bool {
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
-        let mut headers: Vec<BlockId> =
-            env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
+        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
@@ -208,8 +207,7 @@ fn rewrite_loop_exit_values(
     // count SCEV can compute never reaches here; one it cannot is taken to run
     // 31 times, the pin's static back-edge weight (124:4), so the loop stays.
     let wide_mul_calls = outer.target().tti().is_some_and(|tti| tti.sizes_exit_values());
-    let size =
-        if size { layout.pointer(0).bits < layout.largest_legal_integer() || wide_mul_calls } else { wide_mul_calls };
+    let size = if size { layout.pointer(0).bits < layout.largest_legal_integer() || wide_mul_calls } else { wide_mul_calls };
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let declarations: &Declarations = &outer.globals;
     let mut rewrite_phi_set: Vec<RewritePhi> = Vec::new();

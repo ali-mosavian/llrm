@@ -1,8 +1,7 @@
-//! m32: a strength-reduced index into an over-aligned local of a realigned
-//! frame is addressed from the stack pointer. It stayed `[ebp + esi]`, esi from
-//! -32: the array overlapped the saved registers and lay off its 16-byte
-//! alignment (over_aligned_local_after_even_pushes -O1 printed 5 for 250),
-//! 2026-11-09.
+//! m32: a strength-reduced index into an over-aligned local of a realigned frame
+//! is addressed from the stack pointer. It stayed `[ebp + esi]`, esi from -32:
+//! the array overlapped the saved registers and lay off its 16-byte alignment
+//! (over_aligned_local_after_even_pushes -O1 printed 5 for 250), 2026-11-09.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;

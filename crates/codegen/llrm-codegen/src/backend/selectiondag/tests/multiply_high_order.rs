@@ -35,8 +35,7 @@ fn magic_first(early_out: Option<bool>) -> Vec<bool> {
     dag.set_root(outer);
     let mut hooks = X86Lowering {
         multiply_early_out: early_out,
-        imul_if_smaller: false,
-        hot_chains: false,
+        imul_if_smaller: false, hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,

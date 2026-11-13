@@ -38,12 +38,11 @@ use llrm_codegen::backend::libcall_choice::{Candidate, Costs, Member, choose};
 use llrm_codegen::backend::selectiondag::actions::{Action, TargetLowering};
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::MVT;
+use crate::dagisel::hooks::Cpu;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::{BitCount, Intrinsic};
 use llrm_mir::module::{Function, Module, Operand};
 use llrm_mir::opcode::{BinaryOp, Opcode};
-
-use crate::dagisel::hooks::Cpu;
 
 /// How a build chooses: by bytes (the default), or one way for everything
 /// (`Options::size_libcalls`, which the size table is measured with).
@@ -182,8 +181,7 @@ fn present(
                         (BitCount::Population, Some(64)) => Kind::Pop64,
                         _ => continue,
                     },
-                    // the wide product the legalizer makes of these is an `i64`
-                    // multiply
+                    // the wide product the legalizer makes of these is an `i64` multiply
                     Some(Intrinsic::WithOverflow { op: BinaryOp::Mul, .. })
                     | Some(Intrinsic::Fixed { divide: false })
                     | Some(Intrinsic::FixedMul { .. }) => Kind::Mul64,

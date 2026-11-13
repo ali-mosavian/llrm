@@ -383,10 +383,7 @@ pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_co
     )?;
     let mut body = body;
     for phase in phases.iter_mut() {
-        if matches!(
-            phase.class_name(),
-            "MachineSink" | "PhiElimination" | "TwoAddress"
-        ) {
+        if matches!(phase.class_name(), "MachineSink" | "PhiElimination" | "TwoAddress") {
             body = phase.transform(body)?;
         }
     }

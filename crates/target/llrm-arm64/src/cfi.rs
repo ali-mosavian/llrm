@@ -6,9 +6,10 @@
 //! row is written wherever the code changes the state or enters a block in
 //! another one.
 
+use llrm_support::hash::HashMap;
+
 use llrm_debug::FrameRow;
 use llrm_object::assembler::Cfi;
-use llrm_support::hash::HashMap;
 
 use crate::frame::Lowered;
 use crate::layout::label_of;

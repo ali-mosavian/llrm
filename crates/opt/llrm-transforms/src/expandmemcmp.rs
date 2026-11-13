@@ -21,18 +21,15 @@
 //! becomes `load i64` of both, `icmp ne`, `zext` to `i32`, and the `icmp eq`.
 //!
 //! # Deviations
-//! - DEVIATE E1 (exit 2026-12-31, pin permalink
-//!   [L778](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L778)):
+//! - DEVIATE E1 (exit 2026-12-31, pin permalink [L778](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L778)):
 //!   the pin's `int` is 32 bits. Here it is the call's own type, and a two-byte
 //!   compare in a 16-bit `int` cannot be a subtraction (it wraps), so it takes
 //!   the `ucmp` path. Exit: a pin with a 16-bit `int`.
-//! - DEVIATE E2 (exit 2026-12-31, pin permalink
-//!   [L414](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L414)):
+//! - DEVIATE E2 (exit 2026-12-31, pin permalink [L414](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L414)):
 //!   a load at an offset from a constant global is not folded here (the pin's
 //!   offset is a constant expression); the `getelementptr` index has the
 //!   pointer's index width, not `i64`.
-//! - DEVIATE E3 (exit 2026-12-31, pin permalink
-//!   [L1061](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L1061)):
+//! - DEVIATE E3 (exit 2026-12-31, pin permalink [L1061](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L1061)):
 //!   `SimplifyInstructionsInBlock` is not run; the combine that follows cleans
 //!   the expansion. Dominators are not kept (no `DomTreeUpdater`).
 //! - DEVIATE E4: the profile-guided `shouldOptimizeForSize` is false (no
@@ -66,7 +63,11 @@ fn common_alignment(
     align: u64,
     offset: u64,
 ) -> u64 {
-    if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) }
+    if offset == 0 {
+        align
+    } else {
+        align.min(1 << offset.trailing_zeros())
+    }
 }
 
 /// The two pointers' known common alignment, and what the target allows
@@ -347,7 +348,11 @@ impl Emitter<'_, '_> {
         bits: u32,
     ) -> Operand {
         let ty = self.int(bits);
-        if self.type_of(value) == ty { value } else { self.put(Opcode::Cast(CastOp::ZExt), ty, vec![value]) }
+        if self.type_of(value) == ty {
+            value
+        } else {
+            self.put(Opcode::Cast(CastOp::ZExt), ty, vec![value])
+        }
     }
 
     fn binary(
@@ -871,14 +876,10 @@ fn arg_alignment(
     let known = valuetracking::alignment(unit.context, unit.layout, globals, unit.function, instruction.operands[arg]);
     let stated = match &instruction.opcode {
         Opcode::Call(info) => info.argument_attrs.get(arg).and_then(|attrs| {
-            attrs
-                .iter()
-                .find_map(
-                    |one| match one {
-                        Attribute::Int(name, bytes) if name == "align" => Some(*bytes),
-                        _ => None,
-                    },
-                )
+            attrs.iter().find_map(|one| match one {
+                Attribute::Int(name, bytes) if name == "align" => Some(*bytes),
+                _ => None,
+            })
         }),
         _ => None,
     };
@@ -979,12 +980,12 @@ impl FunctionPass for ExpandMemCmp {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let sanitized = ["sanitize_address", "sanitize_memory", "sanitize_thread", "sanitize_hwaddress"];
-        if unit.function.attrs.iter().any(|attr| {
-            matches!(
-                attr,
-                Attribute::Flag(name) if sanitized.contains(&name.as_str())
-            )
-        }) {
+        if unit
+            .function
+            .attrs
+            .iter()
+            .any(|attr| matches!(attr, Attribute::Flag(name) if sanitized.contains(&name.as_str())))
+        {
             return PreservedAnalyses::all();
         }
         let outer = analyses.outer().clone();
@@ -1015,7 +1016,11 @@ impl FunctionPass for ExpandMemCmp {
         for (call, is_bcmp) in calls {
             changed |= expand_mem_cmp(unit, &outer.globals, &*tti, call, is_bcmp);
         }
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if changed {
+            PreservedAnalyses::none()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 

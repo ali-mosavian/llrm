@@ -1,5 +1,4 @@
-//! `memset`, `memcpy` and `memmove` return their destination in A:X on the 6502
-//! runtime.
+//! `memset`, `memcpy` and `memmove` return their destination in A:X on the 6502 runtime.
 
 use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
@@ -7,10 +6,7 @@ use llrm_6502::select::function_text;
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8";
 
-fn compile(
-    ir: &str,
-    name: &str,
-) -> String {
+fn compile(ir: &str, name: &str) -> String {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
     let module = llrm_mir::parse::module(&text).expect("parses");
     let selection = select_function(&module, name, Cpu::Mos6502).expect("selects");

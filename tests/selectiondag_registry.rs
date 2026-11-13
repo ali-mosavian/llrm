@@ -35,8 +35,7 @@ fn tracked(pattern: &str) -> Vec<Source> {
 
 /// Numbers a `///` or `//` comment names as `DEVIATE SDn` with no registry row,
 /// found when the test began to read those comments (2026-11-07): a ratchet,
-/// each to get its row and leave this list; a number not here needs its row at
-/// once.
+/// each to get its row and leave this list; a number not here needs its row at once.
 const UNREGISTERED: &[u32] = &[];
 
 /// A number outside its owner's block: SD44..SD99 are closed, SD100.. go
@@ -77,9 +76,8 @@ fn problems_with(
     let row = Regex::new(r"^\|\s*SD(\d+)\s*\|\s*([\w-]+)\s*\|").unwrap();
     let bold = Regex::new(r"^\s*[-*]\s+\*\*SD(\d+)\*\*").unwrap();
     let deviate = Regex::new(r"^//!\s*(?:[-*]\s+\*\*SD(\d+)\*\*|DEVIATE\s+SD(\d+):)").unwrap();
-    // A `///` or `//` comment that opens with `DEVIATE SDn` is a use of the
-    // number, not a declaration (many sites repeat one), but the number
-    // needs its row.
+    // A `///` or `//` comment that opens with `DEVIATE SDn` is a use of the number, not a declaration
+    // (many sites repeat one), but the number needs its row.
     let mention = Regex::new(r"^\s*///?\s*DEVIATE\s+SD(\d+)").unwrap();
     let mut out = Vec::new();
 
@@ -130,10 +128,7 @@ fn problems_with(
     }
     for (id, place) in &mentioned {
         if !rows.contains_key(id) && !declared.contains_key(id) && !unregistered.contains(id) {
-            out.push(format!(
-                "SD{id} is named by a DEVIATE comment at {place} but has no row in the registry of {}",
-                plan.path
-            ));
+            out.push(format!("SD{id} is named by a DEVIATE comment at {place} but has no row in the registry of {}", plan.path));
         }
     }
 
@@ -235,14 +230,11 @@ fn references_are_not_declarations() {
 #[test]
 fn a_comment_naming_a_number_with_no_row_is_reported() {
     let plan = source("plan.md", PLAN_TEXT);
-    let code = [source(
-        "a.rs",
-        "    /// DEVIATE SD3: no row
+    let code = [source("a.rs", "    /// DEVIATE SD3: no row
     // DEVIATE SD4: no row either
     // DEVIATE SD1: has one
     // DEVIATE SD440: on the ratchet
-",
-    )];
+")];
     let found = problems_with(&plan, &code, &[], &[440]);
     assert!(found.iter().any(|problem| problem.contains("SD3") && problem.contains("a.rs:1")), "{found:?}");
     assert!(found.iter().any(|problem| problem.contains("SD4") && problem.contains("a.rs:2")), "{found:?}");

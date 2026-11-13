@@ -19,19 +19,19 @@
 //! loop from outside. A block whose predecessors all have several successors
 //! lowers identical phis through one register.
 //!
-//! DEVIATE PHI-SHARE (owner x87, exit 2026-11-29;
-//! `Profile::share_congruent_phis`, off: the pin's rule): the pin lowers
-//! identical phis through one register (`LoweredPHIs`), and only where every
-//! edge is critical. A loop's header phis and the zero-trip join after it
-//! differ in the preheader alone: the pin copies every carried value into two
-//! registers at the latch, and with an empty preheader kept (CodeGenPrepare
-//! protects it) that is 22 copies for ten live values. Here a phi in another
-//! block that reads the same value as an earlier one from each predecessor they
-//! share takes that phi's register; only its other predecessors get a copy.
-//! x87rotate m16 -Os 612 -> 568 B, m32 -Os 644 -> 612. Only x87 values share: a
-//! copy of one is a stack rotation or a spill round trip the coalescer cannot
-//! remove, while an integer copy is one clock and coalesces, so sharing there
-//! only lengthens the live range (m16 fib O2 +1.3% clocks, mergesort +15 B).
+//! DEVIATE PHI-SHARE (owner x87, exit 2026-11-29; `Profile::share_congruent_phis`,
+//! off: the pin's rule): the pin lowers identical phis through one register
+//! (`LoweredPHIs`), and only where every edge is critical. A loop's header
+//! phis and the zero-trip join after it differ in the preheader alone: the
+//! pin copies every carried value into two registers at the latch, and with
+//! an empty preheader kept (CodeGenPrepare protects it) that is 22 copies for
+//! ten live values. Here a phi in another block that reads the same value as
+//! an earlier one from each predecessor they share takes that phi's register;
+//! only its other predecessors get a copy. x87rotate m16 -Os 612 -> 568 B,
+//! m32 -Os 644 -> 612. Only x87 values share: a copy of one is a stack
+//! rotation or a spill round trip the coalescer cannot remove, while an
+//! integer copy is one clock and coalesces, so sharing there only lengthens
+//! the live range (m16 fib O2 +1.3% clocks, mergesort +15 B).
 //!
 //! No deviation for a phi that reads from a block outside the body: LLVM's phis
 //! list only predecessors in their function, so it is an error here too (the
@@ -173,8 +173,7 @@ fn edges_to_split(
 
 #[cfg(test)]
 thread_local! {
-    /// Blocks looked at as predecessors of a block with phis, over
-    /// one `lowered`.
+    /// Blocks looked at as predecessors of a block with phis, over one `lowered`.
     pub(crate) static PREDECESSORS_LOOKED_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -273,8 +272,7 @@ pub fn lowered_with(
     for block in &body.blocks {
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
-        // `AllEdgesCritical`: walks the block's own predecessors, and only
-        // where there are phis.
+        // `AllEdgesCritical`: walks the block's own predecessors, and only where there are phis.
         let all_critical = !block.phis.is_empty()
             && predecessors.get(&block.at).is_some_and(|found| {
                 found.len() >= 2
@@ -299,38 +297,26 @@ pub fn lowered_with(
             };
             let reused = if all_critical { lowered_phis.get(&key).copied() } else { None };
             let sharing = if reused.is_none() && share {
-                phi.incoming
-                    .iter()
-                    .find_map(
-                        |pair| shared
-                            .get(pair)?
-                            .iter()
-                            .copied()
-                            .find(
-                                |reg| {
-                                    let (writes, readers, held) = &regs[reg];
-                                    *held == width
-                                        && width == X87_WIDTH
-                                        && !readers.contains(&block.at)
-                                        && phi.incoming.iter().all(|&(pre, source)| {
-                                            !undefined.contains(&source)
-                                                && writes.iter().all(|&(at, other)| at != pre || other == source)
-                                        })
-                                },
-                            ),
-                    )
+                phi.incoming.iter().find_map(|pair| {
+                    shared.get(pair)?.iter().copied().find(|reg| {
+                        let (writes, readers, held) = &regs[reg];
+                        *held == width
+                            && width == X87_WIDTH
+                            && !readers.contains(&block.at)
+                            && phi.incoming.iter().all(|&(pre, source)| {
+                                !undefined.contains(&source)
+                                    && writes.iter().all(|&(at, other)| at != pre || other == source)
+                            })
+                    })
+                })
             } else {
                 None
             };
-            let incoming = reused
-                .or(sharing)
-                .unwrap_or_else(
-                    || {
-                        let made = next;
-                        next += 1;
-                        made
-                    },
-                );
+            let incoming = reused.or(sharing).unwrap_or_else(|| {
+                let made = next;
+                next += 1;
+                made
+            });
             if all_critical && reused.is_none() && sharing.is_none() {
                 lowered_phis.insert(key, incoming);
             }
@@ -870,12 +856,10 @@ mod tests {
         assert_eq!(copies(&now.blocks[3]).len(), 1, "{:?}", copies(&now.blocks[3]));
     }
 
-    /// `AllEdgesCritical` scanned every block of the body for the predecessors
-    /// of every block that has two or more, phis or not
-    /// (`PHIElimination.cpp` L332-338 walks only the block's own
-    /// predecessors, and only for a block that starts with a phi):
-    /// memory_expansion -O2 spent 29 M Ir in `lowered`, quadratic in the
-    /// blocks.
+    /// `AllEdgesCritical` scanned every block of the body for the predecessors of every
+    /// block that has two or more, phis or not (`PHIElimination.cpp` L332-338 walks only
+    /// the block's own predecessors, and only for a block that starts with a phi):
+    /// memory_expansion -O2 spent 29 M Ir in `lowered`, quadratic in the blocks.
     #[test]
     fn test_the_predecessors_of_a_block_with_phis_are_not_found_by_scanning_the_body() {
         const DIAMONDS: i64 = 100;
@@ -884,14 +868,7 @@ mod tests {
             let (head, left, right, join) = (3 * k, 3 * k + 1, 3 * k + 2, 3 * k + 3);
             let (x, y) = (10 + 2 * k as u32, 11 + 2 * k as u32);
             let phi = Phi { result: 1000 + k as u32, incoming: vec![(left, x), (right, y)] };
-            let phis = if k == 0 {
-                vec![]
-            } else {
-                vec![Phi {
-                    result: 999 + k as u32,
-                    incoming: vec![(head - 2, 10 + 2 * (k as u32 - 1)), (head - 1, 11 + 2 * (k as u32 - 1))],
-                }]
-            };
+            let phis = if k == 0 { vec![] } else { vec![Phi { result: 999 + k as u32, incoming: vec![(head - 2, 10 + 2 * (k as u32 - 1)), (head - 1, 11 + 2 * (k as u32 - 1))] }] };
             blocks.push(block(head, vec![branch(right), jump(left)], &[left, right], phis));
             blocks.push(block(left, vec![def(x), jump(join)], &[join], vec![]));
             blocks.push(block(right, vec![def(y), jump(join)], &[join], vec![]));

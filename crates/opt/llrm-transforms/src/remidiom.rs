@@ -19,10 +19,8 @@
 //! 1` becomes `(x + 1) - (x / c) * c` once LSR picks the counter `x + 1`); the
 //! fold then adds `k` to the remainder.
 //!
-//! The same tree with the counter added after the subtraction, `a + (C - (x /
-//! c)
-//! * c)` (LSR's `i % 97 + 2` over the counter `i + 40`: `C` = 3, then `-41`),
-//!   is
+//! The same tree with the counter added after the subtraction, `a + (C - (x / c)
+//! * c)` (LSR's `i % 97 + 2` over the counter `i + 40`: `C` = 3, then `-41`), is
 //! `x % c + (k + C)` for `a` = `x + k`; the pin's fold does not see it either.
 //!
 //! DEVIATE REM1: the pin has this fold in the DAG (`foldRemainderIdiom`,
@@ -80,9 +78,8 @@ struct Idiom {
     left: Operand,
     /// `left + (x / c) * c` with `left` = `k - x`: the result is `k - x % c`.
     negated: bool,
-    /// `C - (x / c) * c` read by an `add` of a counter (`sub` is that `add`):
-    /// the inner subtraction and its constant `C`, which joins the
-    /// remainder's offset.
+    /// `C - (x / c) * c` read by an `add` of a counter (`sub` is that `add`): the inner subtraction and its
+    /// constant `C`, which joins the remainder's offset.
     inner: Option<(InstId, u128)>,
 }
 
@@ -136,8 +133,7 @@ fn matched(
         return None;
     }
     let &[mut left, mut product] = &one.operands[..] else { return None };
-    // `a + (C - q * c)`: LSR adds the counter after the subtraction, whose left
-    // operand is the constant.
+    // `a + (C - q * c)`: LSR adds the counter after the subtraction, whose left operand is the constant.
     let mut inner = None;
     let mut one = one;
     let mut sub = sub;
@@ -232,7 +228,8 @@ fn offset_of(
         return Some(0);
     }
     let session = session.get_or_insert_with(|| ScevSession::of(context, function, outer));
-    let (left, dividend, narrow, wide, negated) = (idiom.left, idiom.dividend, idiom.narrow, idiom.wide, idiom.negated);
+    let (left, dividend, narrow, wide, negated) =
+        (idiom.left, idiom.dividend, idiom.narrow, idiom.wide, idiom.negated);
     session.ask(context, layout, function, outer, |se, cx| {
         let wanted = se.get_scev(cx, dividend);
         let wanted =
@@ -317,8 +314,11 @@ fn replace(
     if offset != 0 || idiom.negated {
         let ty = function.instruction(idiom.sub).ty;
         let k = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Int(offset) }));
-        let (opcode, operands) =
-            if idiom.negated { (BinaryOp::Sub, vec![k, result]) } else { (BinaryOp::Add, vec![result, k]) };
+        let (opcode, operands) = if idiom.negated {
+            (BinaryOp::Sub, vec![k, result])
+        } else {
+            (BinaryOp::Add, vec![result, k])
+        };
         let shifted = function.create_instruction(Opcode::Binary(opcode), ty, operands, Flags::default(), None);
         function.insert(shifted, Position::Before(idiom.sub)).expect("a position before the subtraction");
         result = Operand::Value(function.instruction(shifted).result.expect("an add has a value"));

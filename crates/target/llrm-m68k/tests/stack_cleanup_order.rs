@@ -1,7 +1,7 @@
-//! Regression: the first call's cleanup (`addq.l #8, %sp`) ran after the second
-//! call's arguments were pushed, popped them, and the second call read the
-//! first call's arguments (struct_with_i64 -O1 on the 68000: `y.a * 100000`
-//! came out as `x.a * 1000`, 2036 for 201036; compare_to_int64 -O2: `4 2` for
+//! Regression: the first call's cleanup (`addq.l #8, %sp`) ran after the second call's
+//! arguments were pushed, popped them, and the second call read the first
+//! call's arguments (struct_with_i64 -O1 on the 68000: `y.a * 100000` came out
+//! as `x.a * 1000`, 2036 for 201036; compare_to_int64 -O2: `4 2` for
 //! `39196 4901`). The carry of the 64-bit add is a diamond between the two
 //! calls, and the pushes were made above it.
 
@@ -62,16 +62,11 @@ fn calls_read_their_own_arguments(text: &str) -> Result<(), String> {
 fn popped(line: &str) -> Option<usize> {
     let rest = line.strip_prefix("addq.l\t#").or_else(|| line.strip_prefix("adda.l\t#"))?;
     let (bytes, to) = rest.split_once(", ")?;
-    (to == "%sp")
-        .then(|| bytes.parse().ok())
-        .flatten()
-        .or_else(
-            || {
-                let rest = line.strip_prefix("lea\t(")?;
-                let (bytes, _) = rest.split_once(",%sp)")?;
-                bytes.parse().ok()
-            },
-        )
+    (to == "%sp").then(|| bytes.parse().ok()).flatten().or_else(|| {
+        let rest = line.strip_prefix("lea\t(")?;
+        let (bytes, _) = rest.split_once(",%sp)")?;
+        bytes.parse().ok()
+    })
 }
 
 #[test]

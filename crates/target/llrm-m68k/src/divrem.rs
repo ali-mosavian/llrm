@@ -82,8 +82,7 @@ pub fn remainders_from_quotients(function: &mut MFunction) {
                 let Kind::Op(name) = inst.kind else { return None };
                 let [Operand::Def(product), x, y] = &inst.operands[..] else { return None };
                 let (x, y) = (virt(x)?, virt(y)?);
-                let times =
-                    name == MULTIPLY && ((x == quotient && same(y, divisor)) || (y == quotient && same(x, divisor)));
+                let times = name == MULTIPLY && ((x == quotient && same(y, divisor)) || (y == quotient && same(x, divisor)));
                 times.then_some((*product, at + 1 + offset))
             }) else {
                 at += 1;
@@ -130,10 +129,8 @@ fn drop_dead_copies(function: &mut MFunction) {
         for block in &mut function.blocks {
             let before = block.insts.len();
             block.insts.retain(|inst| {
-                !matches!(
-                    (&inst.kind, &inst.operands[..]),
-                    (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(_))]) if uses[*to as usize] == 0
-                )
+                !matches!((&inst.kind, &inst.operands[..]),
+                    (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(_))]) if uses[*to as usize] == 0)
             });
             removed |= block.insts.len() != before;
         }

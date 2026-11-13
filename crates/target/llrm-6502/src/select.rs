@@ -195,9 +195,8 @@ pub fn module_text(
             }
         }
     }
-    // at size the long divisions are the compact 32-step walk; the speed family
-    // with the small wide path stops at the quotient's first bit: the
-    // module's choice by the share of its clocks it saves
+    // at size the long divisions are the compact 32-step walk; the speed family with the small wide path
+    // stops at the quotient's first bit: the module's choice by the share of its clocks it saves
     let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
     let compact_division = |text: &str| {
         ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
@@ -955,14 +954,12 @@ fn lower(
     }
 }
 
-/// At size the speed multiply (`hotmultiply::FAST_BYTES` more, linked once) is
-/// the module's choice by the share of its clocks it saves against the share of
-/// its bytes it adds (`mulimage::pays_by_share`): the static runs of its
-/// multiplies times what a call saves, against the module priced as it stands.
+/// At size the speed multiply (`hotmultiply::FAST_BYTES` more, linked once) is the module's choice by the
+/// share of its clocks it saves against the share of its bytes it adds (`mulimage::pays_by_share`): the
+/// static runs of its multiplies times what a call saves, against the module priced as it stands.
 ///
-/// DEVIATE 6502-MUL-OS (owner llrm-target-6502, exit 2026-11-24): the pin's
-/// `__mulsi3` is one routine. mul_constants -Os ran 200-trip loops of the
-/// 32-trip compact walk, 42.0M clocks against llvm-mos's 13.6M.
+/// DEVIATE 6502-MUL-OS (owner llrm-target-6502, exit 2026-11-24): the pin's `__mulsi3` is one routine.
+/// mul_constants -Os ran 200-trip loops of the 32-trip compact walk, 42.0M clocks against llvm-mos's 13.6M.
 fn fast_multiply_pays_at_size(
     module: &Module,
     parts: &[(&str, &Selection)],
@@ -973,16 +970,14 @@ fn fast_multiply_pays_at_size(
     Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::FAST_BYTES as i64), clocks, bytes))
 }
 
-/// The module as it stands, in estimated clocks and bytes
-/// (`weights::run_cost`).
+/// The module as it stands, in estimated clocks and bytes (`weights::run_cost`).
 fn priced(
     module: &Module,
     parts: &[(&str, &Selection)],
     texts: &[String],
 ) -> Result<(u64, u64), String> {
     let Some((_, first)) = parts.first() else { return Ok((0, 0)) };
-    let layout =
-        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
     let weights: Vec<Vec<u64>> = names
         .iter()
@@ -994,13 +989,11 @@ fn priced(
     crate::weights::run_cost(first.cpu, &names, texts, &weights)
 }
 
-/// At size the speed long divisions (the small wide path, bytes by the image
-/// they link) are the module's choice by the share of its clocks they save
-/// against the share of its bytes they add.
+/// At size the speed long divisions (the small wide path, bytes by the image they link) are the module's
+/// choice by the share of its clocks they save against the share of its bytes they add.
 ///
-/// DEVIATE 6502-DIV-OS (owner llrm-target-6502, exit 2026-11-24): the pin's
-/// `__udivXi3` is one routine, and it starts at the quotient's first bit.
-/// loop_interchange -Os ran 13.9M clocks against llvm-mos's 3.3M.
+/// DEVIATE 6502-DIV-OS (owner llrm-target-6502, exit 2026-11-24): the pin's `__udivXi3` is one routine, and
+/// it starts at the quotient's first bit. loop_interchange -Os ran 13.9M clocks against llvm-mos's 3.3M.
 fn fast_division_pays_at_size(
     module: &Module,
     parts: &[(&str, &Selection)],

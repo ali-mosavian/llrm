@@ -21,8 +21,7 @@ fn a_store_loop_called_from_six_sites_is_not_copied_into_each_site_at_os() {
 #[test]
 fn small_helpers_of_a_large_caller_are_tried_inline_at_os() {
     let asm = driver::assembly(include_str!("data/jpeg_fixed_os.ll"), Platform::Linux, Level::Os).expect("lowers");
-    let kept: Vec<&str> =
-        ["tmul"].into_iter().filter(|name| asm.lines().any(|line| *line == format!("{name}:"))).collect();
+    let kept: Vec<&str> = ["tmul"].into_iter().filter(|name| asm.lines().any(|line| *line == format!("{name}:"))).collect();
     assert!(kept.is_empty(), "left as functions: {kept:?}");
 }
 
@@ -52,19 +51,15 @@ fn a_callee_the_trial_rejected_is_not_tried_again_in_the_same_caller() {
         } else if let Some((_, callee)) = rest.rsplit_once("call(s) to '").filter(|_| line.contains("SZ2 trial of")) {
             trials += 1;
             let callee = callee.split('\'').next().unwrap();
-            assert!(
-                !rejected.contains(&(caller.to_owned(), callee.to_owned())),
-                "{caller} tried {callee} again:\n{log}"
-            );
+            assert!(!rejected.contains(&(caller.to_owned(), callee.to_owned())), "{caller} tried {callee} again:\n{log}");
         }
     }
     assert!(trials > 0, "premise: trials run\n{log}");
 }
 
-/// jpeg_fixed -Os: every SZ2 trial ran the whole simplifier list over a
-/// 600-instruction caller, 2.95 G instructions to compile it against 1.38 G
-/// before the trial existed. The trial's copy goes through the cleanup list
-/// (1.39 G); `tmul` is still inlined.
+/// jpeg_fixed -Os: every SZ2 trial ran the whole simplifier list over a 600-instruction caller,
+/// 2.95 G instructions to compile it against 1.38 G before the trial existed. The trial's copy
+/// goes through the cleanup list (1.39 G); `tmul` is still inlined.
 #[test]
 fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
     let dir = tempfile::tempdir().unwrap();

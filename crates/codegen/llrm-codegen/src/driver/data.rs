@@ -200,9 +200,8 @@ impl Placed {
                 built.data.push((name, part));
             }
         }
-        // The rule of the llc path, `getKindForGlobal`: a variable of zeros in
-        // the data space is uninitialised data (a frontend's `[0] * N`
-        // is `zeroinitializer` all the same).
+        // The rule of the llc path, `getKindForGlobal`: a variable of zeros in the data space is
+        // uninitialised data (a frontend's `[0] * N` is `zeroinitializer` all the same).
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/TargetLoweringObjectFile.cpp#L246-L285
         zero_to_bss(built, module, data_space, false, segment_bytes.is_some());
         match constants {
@@ -247,13 +246,11 @@ pub fn zero_to_bss(
     if bss.is_empty() {
         return;
     }
-    // A COMDAT's extent indexes `bss` by position: it stays in the order it was
-    // made.
+    // A COMDAT's extent indexes `bss` by position: it stays in the order it was made.
     if pack && !built.comdats.values().any(|one| matches!(&one.extent, Some((segment, _)) if segment == "_BSS")) {
         bss = packed(bss);
     }
-    // A frontend's own `_BSS` (a variable it declared there) takes them too:
-    // one segment.
+    // A frontend's own `_BSS` (a variable it declared there) takes them too: one segment.
     if let Some(at) = built.data.iter().position(|(segment, _)| segment == "_BSS") {
         built.data[at].1.extend(bss);
         return;
@@ -264,10 +261,9 @@ pub fn zero_to_bss(
     built.data.push(("_BSS".to_owned(), bss));
 }
 
-/// `objects` (an optional `align`, a label, a fill each) by decreasing
-/// alignment, the ones whose size is not a multiple of it last in their class,
-/// so no `align` pads: GNU ld's `--sort-common` (descending). The sort is
-/// stable.
+/// `objects` (an optional `align`, a label, a fill each) by decreasing alignment, the ones whose size
+/// is not a multiple of it last in their class, so no `align` pads: GNU ld's `--sort-common`
+/// (descending). The sort is stable.
 fn packed(objects: Vec<masm::Datum>) -> Vec<masm::Datum> {
     use masm::Datum;
     let mut parts: Vec<Vec<Datum>> = Vec::new();
@@ -280,10 +276,8 @@ fn packed(objects: Vec<masm::Datum>) -> Vec<masm::Datum> {
         parts.last_mut().expect("an object starts with an align or a label").push(datum);
     }
     let key = |part: &Vec<Datum>| {
-        let align =
-            part.iter().find_map(|one| if let Datum::Align(masm::Align { to }) = one { Some(*to) } else { None });
-        let size: i64 =
-            part.iter().map(|one| if let Datum::Fill(masm::Fill { size, .. }) = one { *size } else { 0 }).sum();
+        let align = part.iter().find_map(|one| if let Datum::Align(masm::Align { to }) = one { Some(*to) } else { None });
+        let size: i64 = part.iter().map(|one| if let Datum::Fill(masm::Fill { size, .. }) = one { *size } else { 0 }).sum();
         let align = align.unwrap_or(1);
         (std::cmp::Reverse(align), size % align != 0)
     };
@@ -539,9 +533,8 @@ mod tests {
         assert_eq!(built.data.len(), 1, "no _BSS for a variable with no label");
     }
 
-    /// m16 jpeg_single: a 1-byte variable before an `align 2` one padded a byte
-    /// of `.data?` (+1 B of static against bcc). The odd-sized one goes
-    /// after the even, and the unaligned last.
+    /// m16 jpeg_single: a 1-byte variable before an `align 2` one padded a byte of `.data?`
+    /// (+1 B of static against bcc). The odd-sized one goes after the even, and the unaligned last.
     #[test]
     fn test_bss_objects_are_packed_by_decreasing_alignment() {
         let object = |name: &str, align: Option<i64>, size: i64| {

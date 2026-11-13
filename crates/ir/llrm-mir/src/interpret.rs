@@ -623,18 +623,13 @@ impl<'m> Machine<'m> {
                     FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
                 }
                 .trunc();
-                let Some(width) = self.types().fields(returns).and_then(|fields| self.types().int_bits(fields[0]))
-                else {
+                let Some(width) = self.types().fields(returns).and_then(|fields| self.types().int_bits(fields[0])) else {
                     return Ok(Val::Poison);
                 };
-                let (low, high) = if signed {
-                    (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
-                } else {
-                    (0.0, 2f64.powi(width as i32))
-                };
+                let (low, high) =
+                    if signed { (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1)) } else { (0.0, 2f64.powi(width as i32)) };
                 let fits = x.is_finite() && x >= low && x < high;
-                let value =
-                    if fits { Val::Int { bits: (x as i128 as u128) & mask(width), width } } else { Val::Poison };
+                let value = if fits { Val::Int { bits: (x as i128 as u128) & mask(width), width } } else { Val::Poison };
                 Val::Aggregate(vec![value, Val::Int { bits: u128::from(fits), width: 1 }])
             }
             Intrinsic::LRint | Intrinsic::LLRint => {
@@ -669,9 +664,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => {
-                return unsupported("a trap: the program stops");
-            }
+            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => return unsupported("a trap: the program stops"),
             Intrinsic::MemSetPattern => {
                 let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else {
                     return undefined("a pattern fill of a poison address or count");

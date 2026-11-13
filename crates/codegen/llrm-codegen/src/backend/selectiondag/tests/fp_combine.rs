@@ -256,10 +256,9 @@ fn integers_are_built_as_binary128() {
     assert_eq!(fp_value::negate(F128, 0), Some(1 << 127));
 }
 
-/// m16 stft_single: `next = c * K1 - s * K2` reached the pool as `fadd (fmul c
-/// K1), (fmul s -K2)`, two cells for `K2` and `-K2` (+4 B of data against bcc).
-/// A target with positive constants makes it `fsub`; one without keeps the
-/// pin's `fadd`.
+/// m16 stft_single: `next = c * K1 - s * K2` reached the pool as `fadd (fmul c K1), (fmul s -K2)`, two
+/// cells for `K2` and `-K2` (+4 B of data against bcc). A target with positive constants makes it
+/// `fsub`; one without keeps the pin's `fadd`.
 #[test]
 fn a_multiply_by_a_negative_constant_is_a_subtract_of_the_positive_one_where_constants_are_positive() {
     let tli_for = |positive: bool| {

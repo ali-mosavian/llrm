@@ -13,8 +13,7 @@
 //!
 //! DEVIATE: the pin has no scaled index, so it keeps the shift and the
 //! register it needs. Reason: best of gcc and clang is the goal; gcc
-//! -m68020 scales. Exit: review 2026-11-20. 68020 and later only, from the
-//! caller.
+//! -m68020 scales. Exit: review 2026-11-20. 68020 and later only, from the caller.
 
 use llrm_spike_mf::{Kind, Operand, Reg};
 

@@ -28,8 +28,7 @@ use super::generated::m68k_m68000::MACHINE_OPCODES;
 pub const FIRST: u16 = 0xF600;
 
 /// The rows: name, mnemonic and the opcode's top nibble.
-const ROWS: [(&str, &str, u64); 2] =
-    [("ADDA16r", "adda.w\t$src, $dst", 0b1101), ("SUBA16r", "suba.w\t$src, $dst", 0b1001)];
+const ROWS: [(&str, &str, u64); 2] = [("ADDA16r", "adda.w\t$src, $dst", 0b1101), ("SUBA16r", "suba.w\t$src, $dst", 0b1001)];
 
 pub fn code_of(name: &str) -> Option<u16> {
     ROWS.iter().position(|row| row.0 == name).map(|at| FIRST + at as u16)

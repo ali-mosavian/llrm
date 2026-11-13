@@ -79,9 +79,18 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let is_rotate = left_arg == right_arg;
         let (Some(c1), Some(c2)) = (self.dag.constant(left_amount), self.dag.constant(right_amount)) else {
             let masked = left_mask.is_some() || right_mask.is_some();
-            return self.match_variable_rotate(left_arg, right_arg, left_amount, right_amount, masked).or_else(|| {
-                self.match_variable_funnel(left_arg, right_arg, left_amount, right_amount, masked, (has_fshl, has_fshr))
-            });
+            return self
+                .match_variable_rotate(left_arg, right_arg, left_amount, right_amount, masked)
+                .or_else(|| {
+                    self.match_variable_funnel(
+                        left_arg,
+                        right_arg,
+                        left_amount,
+                        right_amount,
+                        masked,
+                        (has_fshl, has_fshr),
+                    )
+                });
         };
         if c1 + c2 != bits {
             return None;
@@ -203,17 +212,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         if elt.is_power_of_two() {
             let last = u128::from(elt - 1);
-            // (or (shl x0, y), (srl (srl x1, 1), (xor y, 31))) -> (fshl x0, x1,
-            // y)
+            // (or (shl x0, y), (srl (srl x1, 1), (xor y, 31))) -> (fshl x0, x1, y)
             if let Some(x) = self.shifted_by_one_or_folded(n1, ISD::Srl)
                 && self.is_xor_with(right_inner, left_inner, last)
                 && self.fp_op_legal_or_custom(ISD::FShl, vt)
             {
                 return Some(self.dag.get_node(ISD::FShl, vt, &[n0, x, left_amount]));
             }
-            // (or (shl (shl x0, 1), (xor y, 31)), (srl x1, y)) -> (fshr x0, x1,
-            // y) (or (shl (add x0, x0), (xor y, 31)), (srl x1, y))
-            // -> (fshr x0, x1, y)
+            // (or (shl (shl x0, 1), (xor y, 31)), (srl x1, y)) -> (fshr x0, x1, y)
+            // (or (shl (add x0, x0), (xor y, 31)), (srl x1, y)) -> (fshr x0, x1, y)
             if let Some(x) = self.shifted_by_one_or_folded(n0, ISD::Shl).or_else(|| self.doubled(n0))
                 && self.is_xor_with(left_inner, right_inner, last)
                 && self.fp_op_legal_or_custom(ISD::FShr, vt)
@@ -229,8 +236,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         None
     }
 
-    /// `m_c_BinOp(op, m_Value(X), m_One())`: the operand of `op` shifting by
-    /// one.
+    /// `m_c_BinOp(op, m_Value(X), m_One())`: the operand of `op` shifting by one.
     fn shifted_by_one(
         &self,
         value: SDValue,
@@ -240,15 +246,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             .then(|| self.dag.operand(value, 0))
     }
 
-    /// [`Self::shifted_by_one`], or a constant the shift by one was folded
-    /// into.
+    /// [`Self::shifted_by_one`], or a constant the shift by one was folded into.
     ///
-    /// DEVIATE SD242: the pin matches the unfolded shape only, so a constant
-    /// `x1` loses the `shld`. A folded `srl` is `x1 >> 1` for an `x1` whose
-    /// low bit never reaches the result (the shift by `xor y, w-1` leaves
-    /// at most `w-1` bits of it); a folded `shl` likewise. That bit is
-    /// free, so the constant is the one the DAG already holds, shared with its
-    /// other users.
+    /// DEVIATE SD242: the pin matches the unfolded shape only, so a constant `x1` loses the
+    /// `shld`. A folded `srl` is `x1 >> 1` for an `x1` whose low bit never reaches the
+    /// result (the shift by `xor y, w-1` leaves at most `w-1` bits of it); a folded `shl` likewise.
+    /// That bit is free, so the constant is the one the DAG already holds, shared with its other users.
     fn shifted_by_one_or_folded(
         &mut self,
         value: SDValue,
@@ -260,15 +263,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(value);
         let bits = vt.size_in_bits();
         let folded = self.dag.constant(value)?;
-        // the bit the fold dropped is free: take the constant another user
-        // already holds
+        // the bit the fold dropped is free: take the constant another user already holds
         let candidates = match op {
             ISD::Srl if folded >> (bits - 1) == 0 => [folded << 1, folded << 1 | 1],
             ISD::Shl if folded & 1 == 0 => [folded >> 1, folded >> 1 | 1 << (bits - 1)],
             _ => return None,
         };
-        let unfolded =
-            candidates.into_iter().find(|&c| self.dag.find_constant(c, vt).is_some()).unwrap_or(candidates[0]);
+        let unfolded = candidates.into_iter().find(|&c| self.dag.find_constant(c, vt).is_some()).unwrap_or(candidates[0]);
         Some(self.dag.get_constant(unfolded, vt))
     }
 

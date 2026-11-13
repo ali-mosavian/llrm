@@ -1,7 +1,6 @@
-//! m32: `__builtin_frame_address(0)` was a call to the symbol
-//! `llvm.frameaddress.p0` and the assembler panicked ("no entry found for key",
-//! assemble.rs:401), 2026-11-09. Until the intrinsic is lowered it is refused
-//! by name, never a panic or a call to a symbol.
+//! m32: `__builtin_frame_address(0)` was a call to the symbol `llvm.frameaddress.p0`
+//! and the assembler panicked ("no entry found for key", assemble.rs:401), 2026-11-09.
+//! Until the intrinsic is lowered it is refused by name, never a panic or a call to a symbol.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;

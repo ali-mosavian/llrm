@@ -706,14 +706,9 @@ fn tied_pairs(
         return if ties(what) { vec![(0, 0)] } else { Vec::new() };
     };
     let name = what.name.as_deref().unwrap_or("");
-    let mut pairs = what
-        .tied
-        .clone()
-        .unwrap_or_else(
-            || (regs.effects)(name, what.dests.len(), what.sources.len())
-                .first()
-                .map_or_else(Vec::new, |row| row.ties.to_vec()),
-        );
+    let mut pairs = what.tied.clone().unwrap_or_else(|| {
+        (regs.effects)(name, what.dests.len(), what.sources.len()).first().map_or_else(Vec::new, |row| row.ties.to_vec())
+    });
     // the first pair first: it is the one the commuter and the three-address
     // forms know
     pairs.sort_by_key(|&(source, dest)| (source, dest) != (0, 0));

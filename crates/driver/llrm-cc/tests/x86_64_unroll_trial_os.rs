@@ -1,6 +1,5 @@
-//! x86-64 -Os: a two-trip loop of a double that folds when unrolled stayed a
-//! loop (138 B; gcc peels it to 19 B, float_in_place_update.c). The -Os unroll
-//! trial (DEVIATE UNROLL-OS-TRIAL) is on at m64 and keeps the unroll where the
+//! x86-64 -Os: a two-trip loop of a double that folds when unrolled stayed a loop (138 B; gcc peels it to 19 B,
+//! float_in_place_update.c). The -Os unroll trial (DEVIATE UNROLL-OS-TRIAL) is on at m64 and keeps the unroll where the
 //! object is smaller. Needs `LLRM_LLC`.
 
 use std::path::Path;
@@ -26,9 +25,8 @@ fn a_two_trip_double_loop_that_folds_is_unrolled_at_x86_64_os() {
     assert!(!text.contains("divsd"), "the loop stayed rolled:\n{text}");
 }
 
-/// An unroll that only removes a 16 B constant table grew the code 88 -> 98 B:
-/// the trial counted data as code (`call_cleanup_keeps_pair.c`). The strict
-/// trial compares code alone.
+/// An unroll that only removes a 16 B constant table grew the code 88 -> 98 B: the trial counted data as code
+/// (`call_cleanup_keeps_pair.c`). The strict trial compares code alone.
 #[test]
 fn an_unroll_that_only_drops_constants_is_not_kept_at_x86_64_os() {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");

@@ -21,8 +21,7 @@ fn a_jump_table_branch_loads_the_entry_and_branches_to_it() {
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -71,8 +70,7 @@ fn an_i64_jump_table_branch_adds_the_sign_extended_offset_to_the_table() {
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
-            hot_chains: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,

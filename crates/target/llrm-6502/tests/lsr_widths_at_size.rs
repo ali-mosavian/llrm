@@ -1,6 +1,5 @@
-//! LSR's native 16-bit widths hold at -Os too: the gate `native_widths: if size
-//! { &[] }` left strnlen's loop with an index and a counter at -Os (69 B
-//! against 50 B with the pointer IV).
+//! LSR's native 16-bit widths hold at -Os too: the gate `native_widths: if size { &[] }` left strnlen's loop
+//! with an index and a counter at -Os (69 B against 50 B with the pointer IV).
 
 use llrm_transforms::lsr_pass::LoopStrengthReduce;
 

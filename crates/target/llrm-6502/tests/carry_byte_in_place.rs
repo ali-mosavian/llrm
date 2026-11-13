@@ -1,5 +1,5 @@
-//! `carry_stays_in_the_flag` and `arithmetic_chain_in_a` rewrite only where
-//! nothing reads what the rewrite changes.
+//! `carry_stays_in_the_flag` and `arithmetic_chain_in_a` rewrite only where nothing
+//! reads what the rewrite changes.
 
 use llrm_6502::asm::Asm;
 use llrm_6502::peephole_cells::{arithmetic_chain_in_a, carry_stays_in_the_flag};
@@ -12,14 +12,11 @@ fn carry(text: &str) -> String {
     asm.text()
 }
 
-/// The shape the pass is for: the carry waits in `x` while work that never
-/// reads it runs.
+/// The shape the pass is for: the carry waits in `x` while work that never reads it runs.
 #[test]
 fn a_carry_byte_nobody_reads_goes() {
     assert_eq!(
-        carry(
-            "  lda #0\n  rol a\n  tax\n  lda rc4\n  sta rc5\n  txa\n  lsr a\n  lda rc6\n  adc rc7\n  sta rc2\n  rts\n"
-        ),
+        carry("  lda #0\n  rol a\n  tax\n  lda rc4\n  sta rc5\n  txa\n  lsr a\n  lda rc6\n  adc rc7\n  sta rc2\n  rts\n"),
         "  lda rc4\n  sta rc5\n  lda rc6\n  adc rc7\n  sta rc2\n  rts\n"
     );
 }
@@ -38,8 +35,7 @@ fn a_store_of_the_carry_byte_in_x_keeps_it() {
     assert_eq!(carry(text), text);
 }
 
-/// `lsr a` left Z set and N clear; the rewrite left the work's flags to the
-/// `beq`.
+/// `lsr a` left Z set and N clear; the rewrite left the work's flags to the `beq`.
 #[test]
 fn a_zero_branch_after_the_shift_keeps_it() {
     let text = "  lda #0\n  rol a\n  tax\n  lda rc4\n  sta rc5\n  txa\n  lsr a\n  beq out\n  lda rc6\n  sta rc2\nout:\n  lda rc7\n  sta rc2\n  rts\n";

@@ -233,8 +233,7 @@ pub fn simplified_and_extended_in(
 ) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
-        let mut headers: Vec<BlockId> =
-            env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
+        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
@@ -1174,10 +1173,7 @@ fn visit_masked_extensions(
         .users(result)
         .into_iter()
         .map(|used| used.user)
-        .filter(|&user| matches!(
-            e.function.instruction(user).opcode,
-            Opcode::Cast(CastOp::SExt | CastOp::ZExt)
-        ))
+        .filter(|&user| matches!(e.function.instruction(user).opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)))
         .collect();
     for cast in casts {
         visit_iv_cast(e, cast, wi);
@@ -1217,11 +1213,10 @@ fn visit_iv_cast(
     // ADD is required to increment the induction variable. We could compute
     // more comprehensively the cost of all instructions on the induction
     // variable when necessary.
-    // DEVIATE 18: no widening past the pointer's index width where that is
-    // under 32 bits (the 16-bit targets): their arithmetic on a wider type
-    // costs more, and `n32` states `i32` legal there, so the X86 model
-    // prices the add alike. A 32-bit pointer with a legal `i64` (wasm32)
-    // widens a counter to `i64`, as the pin.
+    // DEVIATE 18: no widening past the pointer's index width where that is under
+    // 32 bits (the 16-bit targets): their arithmetic on a wider type costs more,
+    // and `n32` states `i32` legal there, so the X86 model prices the add alike.
+    // A 32-bit pointer with a legal `i64` (wasm32) widens a counter to `i64`, as the pin.
     let index_bits = e.layout.pointer(0).index_bits;
     if width > index_bits && index_bits < 32 {
         return;

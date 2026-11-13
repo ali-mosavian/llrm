@@ -5,9 +5,8 @@ use llrm_codegen::backend::peephole::_lanes;
 use llrm_lir::registers::Regs;
 use llrm_z80::{REGISTER_INFO, reg};
 
-/// The file stated no `@lanes` line and read x86's table: `h` and `l` were two
-/// unrelated x86 registers, every pinned z80 instruction had no effect (94 of
-/// 94 in `three`) and the scheduler ordered nothing.
+/// The file stated no `@lanes` line and read x86's table: `h` and `l` were two unrelated x86 registers, every
+/// pinned z80 instruction had no effect (94 of 94 in `three`) and the scheduler ordered nothing.
 #[test]
 fn the_two_bytes_of_a_pair_are_its_two_lanes() {
     let regs = Regs(&REGISTER_INFO);

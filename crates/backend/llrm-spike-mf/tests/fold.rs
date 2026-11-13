@@ -260,18 +260,14 @@ fn a_copy_that_sets_flags_stays_below_the_branch_that_reads_them() {
     assert_eq!(first_block(&function), names(&["compare", "set", "branch 2"]));
 }
 
-/// The shared greedy put a spill after a block's conditional branch
-/// (`spill_store_order`, `pack_ref`). `analyze` reads the terminators after the
-/// last non-terminator, saw none, and the fall-through block was merged into a
-/// block whose branch still named it: `tailmerge` died at a stale
-/// label far from the cause. A non-terminator after a terminator is refused
-/// where the block is read, as the pin's MachineVerifier does ("Non-terminator
-/// instruction after the first terminator").
+/// The shared greedy put a spill after a block's conditional branch (`spill_store_order`, `pack_ref`). `analyze` reads the terminators after the
+/// last non-terminator, saw none, and the fall-through block was merged into a block whose branch still named it: `tailmerge` died at a stale
+/// label far from the cause. A non-terminator after a terminator is refused where the block is read, as the pin's MachineVerifier does
+/// ("Non-terminator instruction after the first terminator").
 #[test]
 #[should_panic(expected = "non-terminator after a terminator")]
 fn a_block_with_an_instruction_after_its_branch_is_refused() {
-    let mut function =
-        layout(vec![vec![terminator("branch", false, Some(2)), op("spill", vec![])], vec![ret()], vec![halt()]]);
+    let mut function = layout(vec![vec![terminator("branch", false, Some(2)), op("spill", vec![])], vec![ret()], vec![halt()]]);
     branch_fold::<Two>(&mut function);
 }
 

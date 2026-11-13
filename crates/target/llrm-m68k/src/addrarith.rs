@@ -25,8 +25,9 @@
 //! # See also
 //! `M68kInstrInfo::copyPhysReg`, which is what the copies become.
 
-use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 use llrm_support::hash::HashSet;
+
+use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
 use crate::REGISTER_INFO;
 use crate::dagisel::hooks::Cpu;
@@ -50,10 +51,7 @@ enum Use {
 /// rewrite only removes the use of the copy it deletes and defines a register
 /// no one else uses, so the table stays right for the registers it is asked
 /// about.
-fn uses_by_register(
-    function: &MFunction,
-    compare_in_address: bool,
-) -> Vec<Vec<Use>> {
+fn uses_by_register(function: &MFunction, compare_in_address: bool) -> Vec<Vec<Use>> {
     let mut all: Vec<Vec<Use>> = (0..function.classes.len()).map(|_| Vec::new()).collect();
     let mut deferred: Vec<(usize, usize, Vec<u32>)> = Vec::new();
     let mut copy_of: Vec<Option<u32>> = vec![None; function.classes.len()];
@@ -69,9 +67,7 @@ fn uses_by_register(
             }
         }
         for inst in &block.insts {
-            if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(c))]) =
-                (&inst.kind, &inst.operands[..])
-            {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(c))]) = (&inst.kind, &inst.operands[..]) {
                 copy_of[*d as usize] = Some(*c);
             }
             for (index, operand) in inst.operands.iter().enumerate() {
@@ -84,9 +80,9 @@ fn uses_by_register(
                             Use::Address
                         }
                         // a compare's destination: `cmpa.l` follows allocation
-                        // (`addrcmp::compare_in_address_register`); it counts
-                        // as an address use when the compare's other register
-                        // is a pointer, settled below once every use is known
+                        // (`addrcmp::compare_in_address_register`); it counts as
+                        // an address use when the compare's other register is a
+                        // pointer, settled below once every use is known
                         (Kind::Op(name), operands) if compare_in_address && cmpa::dest_of(name) == Some(index) => {
                             let others: Vec<u32> = operands
                                 .iter()
@@ -123,18 +119,14 @@ fn pointer_like(
     v: u32,
     depth: u32,
 ) -> bool {
-    let through_uses = uses[v as usize]
-        .iter()
-        .any(
-            |one| match one {
-                Use::Address => true,
-                Use::Copy(to) => {
-                    function.classes[*to as usize] == Class::Ar32
-                        || (depth > 0 && pointer_like(uses, copy_of, function, *to, depth - 1))
-                }
-                _ => false,
-            },
-        );
+    let through_uses = uses[v as usize].iter().any(|one| match one {
+        Use::Address => true,
+        Use::Copy(to) => {
+            function.classes[*to as usize] == Class::Ar32
+                || (depth > 0 && pointer_like(uses, copy_of, function, *to, depth - 1))
+        }
+        _ => false,
+    });
     through_uses
         || copy_of[v as usize].is_some_and(|from| {
             function.classes[from as usize] == Class::Ar32
@@ -259,12 +251,7 @@ fn address_copy(
     let insts = &function.blocks[b].insts;
     let copy = insts[..at]
         .iter()
-        .rposition(
-            |one| matches!(
-                &one.operands[..],
-                [Operand::Def(Reg::Virt(def)), _] if *def == x
-            ),
-        )?;
+        .rposition(|one| matches!(&one.operands[..], [Operand::Def(Reg::Virt(def)), _] if *def == x))?;
     let Kind::Copy = insts[copy].kind else { return None };
     let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
     if uses[x as usize].len() != 1 {
@@ -383,8 +370,7 @@ fn rewrite_indexed(
         return None;
     }
     let desc = local::desc(local::code_of("LEA32f")?)?;
-    let operands =
-        vec![Operand::Def(Reg::Virt(d)), Operand::Imm(0), Operand::Use(base), Operand::Use(Reg::Virt(index))];
+    let operands = vec![Operand::Def(Reg::Virt(d)), Operand::Imm(0), Operand::Use(base), Operand::Use(Reg::Virt(index))];
     let mut inst: Inst = op_inst("LEA32f", desc, operands);
     inst.sets_flags = false;
     function.classes[d as usize] = Class::Ar32;

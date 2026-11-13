@@ -40,11 +40,10 @@ fn the_68020_keeps_muls_l_at_size_and_takes_the_chain_where_clocks_are_priced() 
         assert!(out.contains("muls.l"), "68020 -Os x*{c}: a longer chain:\n{out}");
     }
     // -O2 prices clocks beside bytes: shifts and an add against a 40-odd clock
-    // multiply. -O1 stands on the pin's chain unless the multiply is no worse
-    // in bytes and in clocks: `x * 9` at -O1 read `moveq #9; muls.l` (43
-    // clocks) where the pin's clang has shifts and an add (byte_multiply,
-    // shift_int64_variable, select_of_constants: 43 68020 O1 cells with a
-    // multiply the best column does not execute).
+    // multiply. -O1 stands on the pin's chain unless the multiply is no worse in
+    // bytes and in clocks: `x * 9` at -O1 read `moveq #9; muls.l` (43 clocks)
+    // where the pin's clang has shifts and an add (byte_multiply, shift_int64_variable,
+    // select_of_constants: 43 68020 O1 cells with a multiply the best column does not execute).
     for level in [Level::O1, Level::O2] {
         for c in [3, 9, 127] {
             let out = compile("68020", level, c);

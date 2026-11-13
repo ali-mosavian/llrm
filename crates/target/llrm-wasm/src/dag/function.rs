@@ -285,8 +285,7 @@ pub fn select_function(
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);
-        // A phi of two registers (an `i128`, an `f128`) is updated part by
-        // part: the k-th source goes to the k-th register of the phi
+        // A phi of two registers (an `i128`, an `f128`) is updated part by part: the k-th source goes to the k-th register of the phi
         let mut seen: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
         let mut phis = Vec::new();
         for &(phi, src) in &built.phi_updates {
@@ -475,10 +474,8 @@ fn static_frame(
 mod stack_natural_alignment_tests {
     use super::*;
 
-    /// Every target's datalayout names the stack alignment its frames keep, or
-    /// the passes that raise an alloca to its type's preferred
-    /// alignment have no bound. wasm declares S128 (the pin's string) and keeps
-    /// 16.
+    /// Every target's datalayout names the stack alignment its frames keep, or the passes that raise an alloca to its type's preferred
+    /// alignment have no bound. wasm declares S128 (the pin's string) and keeps 16.
     #[test]
     fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
         // The pin clang's strings (d1106deb71cc), not ours read back.

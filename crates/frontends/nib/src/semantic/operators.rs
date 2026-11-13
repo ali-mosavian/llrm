@@ -320,8 +320,7 @@ impl<'a> FunctionCompiler<'a> {
         let operand = required(value, span)?;
         let result = self.value(target);
         if op == "truncate" && self.unsafe_depth == 0 {
-            // The conversion says whether it fit; the target decides how it
-            // finds out.
+            // The conversion says whether it fit; the target decides how it finds out.
             let fits = self.value(TypeName::Bool);
             self.emit("truncate_checked", vec![result, fits], vec![operand], None);
             self.panic_unless(hir::Operand::Value(fits), rt::ERROR_CONVERT);

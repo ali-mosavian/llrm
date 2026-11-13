@@ -43,10 +43,9 @@ fn the_later_switch_wins() {
     assert!(text(&["-fwhole-program", "-fno-whole-program"], Level::O2).contains("scale:"));
 }
 
-/// A global nothing stores to is a constant once it is internal, and its load
-/// folds, as under LTO (the pin runs `InternalizePass` before `GlobalOpt`). It
-/// was internalized after the mid-end: data_int64 -O2 called `__divdi3` on
-/// `neg` for 1,235 B where 66 B fold (2026-11-12).
+/// A global nothing stores to is a constant once it is internal, and its load folds, as under LTO
+/// (the pin runs `InternalizePass` before `GlobalOpt`). It was internalized after the mid-end:
+/// data_int64 -O2 called `__divdi3` on `neg` for 1,235 B where 66 B fold (2026-11-12).
 #[test]
 fn a_global_nothing_stores_to_folds_into_its_loads() {
     let ir = format!(

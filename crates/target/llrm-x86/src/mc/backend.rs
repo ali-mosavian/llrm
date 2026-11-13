@@ -125,10 +125,10 @@ mod tests {
         assert_eq!(nops(0, 1, false), Vec::<u8>::new());
     }
 
-    /// A 486 or Pentium has no `nopl`: a pad of 11 bytes was eleven `nop`s,
-    /// eleven clocks each time x_matmul_f -O2 fell into its k loop (1,604
-    /// executed in a run). It is `lea esi,[esi+0]` forms now, 7 bytes an
-    /// instruction as GNU as writes them: 2 instructions for 11 bytes.
+    /// A 486 or Pentium has no `nopl`: a pad of 11 bytes was eleven `nop`s, eleven
+    /// clocks each time x_matmul_f -O2 fell into its k loop (1,604 executed in a
+    /// run). It is `lea esi,[esi+0]` forms now, 7 bytes an instruction as GNU as
+    /// writes them: 2 instructions for 11 bytes.
     #[test]
     fn a_pad_without_nopl_is_a_few_long_no_operations() {
         assert_eq!(nops(1, 1, false), [0x90]);

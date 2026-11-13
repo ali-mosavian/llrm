@@ -34,8 +34,8 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
-    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies;
-    /// stated cost x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
+    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies; stated cost
+    /// x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
     /// instructions a block may hold above the pin's bound and still be copied
     /// when the clocks of the jump the copy saves, over the block's executions,
     /// outweigh the bytes of the copy at the speed rate (gcc's `copy_bb_p`,
@@ -61,19 +61,18 @@ pub struct CpuTable {
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
     /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
     pub post_ra_tail_duplicate: bool,
-    /// Runs of equal literal stores outside loops share a register at -O2/-O3
-    /// too, where the bytes outweigh the clock of loading it (DEVIATE ISS1,
-    /// owner x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never.
-    /// Off: the pin's `MOV32mi`s.
+    /// Runs of equal literal stores outside loops share a register at -O2/-O3 too, where
+    /// the bytes outweigh the clock of loading it (DEVIATE ISS1, owner
+    /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
+    /// `MOV32mi`s.
     pub share_literal_stores: bool,
-    /// Constant-pool bytes are a strict axis of the target's ranking: a fold
-    /// that makes a new pool cell is off (DEVIATE FF2, `floatfold.rs`).
+    /// Constant-pool bytes are a strict axis of the target's ranking: a fold that makes a new pool cell is off
+    /// (DEVIATE FF2, `floatfold.rs`).
     pub pool_data_strict: bool,
     /// At `-Os` a register set to 1 is `xor r,r; inc r` (three bytes, the pin's
     /// `MOV32r1`: `OptForSize, Not64BitMode`, [X86InstrCompiler.td#L335]).
     ///
-    /// [X86InstrCompiler.td#L335]:
-    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L335
+    /// [X86InstrCompiler.td#L335]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L335
     pub size_one_is_xor_inc: bool,
     /// A select of two constants on a CPU with no `cmov` is a branch, not
     /// `setcc` and arithmetic on its flag (DEVIATE SELB, owner x86-m32,

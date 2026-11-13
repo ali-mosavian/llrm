@@ -1,10 +1,10 @@
 //! `unroll_function` on loops the interpreter runs, before and after.
 
 use llrm_mir::module::Module;
-use llrm_mir::target::OperationCosts;
 use llrm_x86::tti::X86;
 
 use super::{Options, unroll_function, unroll_function_on};
+use llrm_mir::target::OperationCosts;
 use crate::testing::{parsed, printed, results};
 
 /// @f's loops, the way the loop pass manager hands them over: simplified, LCSSA
@@ -89,9 +89,8 @@ fn test_the_unrolled_copies_hold_no_arithmetic_on_constants() {
     assert!(!text.contains("add i16 0, 1") && !text.contains("icmp slt i16 1, 4"), "{text}");
 }
 
-/// A loop holding `llvm.fshl` was "not computed" to the unroller (no price for
-/// the call), so it stayed rolled: 6502 `rotate_small` -O2 5861 B against 912 B
-/// once it folds.
+/// A loop holding `llvm.fshl` was "not computed" to the unroller (no price for the call), so it
+/// stayed rolled: 6502 `rotate_small` -O2 5861 B against 912 B once it folds.
 #[test]
 fn test_a_loop_holding_a_funnel_shift_is_sized_and_unrolled() {
     let mut module = parsed(
@@ -1410,8 +1409,8 @@ done:
     assert!(!runtime_unrolled_text(text, true));
 }
 
-/// histo -O2/-O3 (`++counts[(data[i] * 7 + seed) & 255]`): the store of one
-/// trip was read as feeding the next trip's load because both name the same SSA
+/// histo -O2/-O3 (`++counts[(data[i] * 7 + seed) & 255]`): the store of one trip
+/// was read as feeding the next trip's load because both name the same SSA
 /// address, a chain of 7 that the loop does not have. Its partial unroll was
 /// vetoed, +7% instructions. The address changes every trip.
 #[test]
@@ -1441,21 +1440,12 @@ done:
     assert!(runtime_unrolled_text(text, true), "vetoed for a chain through an address that moves");
 }
 
-/// SandyBridge's resources as the x86-64 `[schedule]` states them, for the
-/// operations a loop of integer arithmetic, loads and stores is made of:
-/// micro-ops over the issue width, the three ALU ports, the multiplier port,
-/// the two load/store address ports, the store-data port and the branch port.
+/// SandyBridge's resources as the x86-64 `[schedule]` states them, for the operations a loop of integer
+/// arithmetic, loads and stores is made of: micro-ops over the issue width, the three ALU ports, the
+/// multiplier port, the two load/store address ports, the store-data port and the branch port.
 fn sandy_bridge_throughput() -> llrm_mir::target::Throughput {
     use llrm_mir::target::{Resource, Throughput};
-    let costs = |add, multiply, load, store, branch, mv| OperationCosts {
-        add,
-        multiply,
-        load,
-        store,
-        branch,
-        r#move: mv,
-        ..OperationCosts::default()
-    };
+    let costs = |add, multiply, load, store, branch, mv| OperationCosts { add, multiply, load, store, branch, r#move: mv, ..OperationCosts::default() };
     Throughput {
         latency: costs(1000, 4000, 5000, 1000, 1000, 1000),
         resources: vec![
@@ -1470,28 +1460,19 @@ fn sandy_bridge_throughput() -> llrm_mir::target::Throughput {
 }
 
 /// A 16-trip fill of a global byte array whose value folds in every copy
-/// (`(i + 1) * 179 + 85 + zero`, the multiply and add of the counter), unrolled
-/// whole at `-O2` with the unroll priced at 600 milliclocks a byte (the test's
-/// knob: 55 B added; 87 clocks saved at a clock an instruction, about 20 on a
-/// core with the SandyBridge resources); with that core's throughput model, or
-/// without any; whether the loop is gone.
-fn fill_unrolled(
-    throughput: bool,
-    call: bool,
-) -> bool {
+/// (`(i + 1) * 179 + 85 + zero`, the multiply and add of the counter), unrolled whole at `-O2` with the unroll
+/// priced at 600 milliclocks a byte (the test's knob: 55 B added; 87 clocks saved at a clock an instruction,
+/// about 20 on a core with the SandyBridge resources); with that core's throughput model, or without any;
+/// whether the loop is gone.
+fn fill_unrolled(throughput: bool, call: bool) -> bool {
     fill_unrolled_at(throughput, call, 600)
 }
 
 /// `fill_unrolled` at `rate` milliclocks a byte.
-fn fill_unrolled_at(
-    throughput: bool,
-    call: bool,
-    rate: i64,
-) -> bool {
+fn fill_unrolled_at(throughput: bool, call: bool, rate: i64) -> bool {
     let (callee, first, folded, stored) = if call {
-        // Called twice, so not an inline candidate of the loop's own metrics
-        // (one live use is): the inliner decides it once the copies
-        // make the argument a constant.
+        // Called twice, so not an inline candidate of the loop's own metrics (one live use is): the inliner decides it
+        // once the copies make the argument a constant.
         let steps: String = (1..=120).map(|step| format!("  %y{step} = mul i32 %y{}, 7\n", step - 1)).collect();
         (
             format!("define internal i32 @g(i32 %y0) {{\n{steps}  ret i32 %y120\n}}\n"),
@@ -1538,33 +1519,20 @@ done:
     !printed(&module).contains("%i = phi")
 }
 
-/// The control: a rate that no saving repays keeps the loop rolled where 600
-/// unrolls it, so the rate is read at all.
+/// The control: a rate that no saving repays keeps the loop rolled where 600 unrolls it, so the rate is read at all.
 #[test]
 fn test_an_absurd_rate_keeps_a_loop_rolled_that_a_real_one_unrolls() {
     assert!(fill_unrolled_at(false, false, 600), "premise: unrolled at 600");
     assert!(!fill_unrolled_at(false, false, 1_000_000_000), "a billion milliclocks a byte repays nothing");
 }
 
-/// The unroll pass on `@f` of `module` for x86-64 at `rate` milliclocks a byte
-/// (the test's knob), with or without the SandyBridge throughput model.
-fn unroll_on_core(
-    module: &mut Module,
-    throughput: bool,
-    target_unrolling: bool,
-    opt_level: u32,
-    immediate_bits: u32,
-    rate: i64,
-) {
+/// The unroll pass on `@f` of `module` for x86-64 at `rate` milliclocks a byte (the test's knob), with or without
+/// the SandyBridge throughput model.
+fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool, opt_level: u32, immediate_bits: u32, rate: i64) {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(module).expect("closes");
-    let tuning = llrm_mir::target::Tuning {
-        unroll_milliclocks_per_byte: rate,
-        unroll_promotion_fits_registers: true,
-        unroll_store_immediate_bits: immediate_bits,
-        ..llrm_mir::target::Tuning::PIN
-    };
+    let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: rate, unroll_promotion_fits_registers: true, unroll_store_immediate_bits: immediate_bits, ..llrm_mir::target::Tuning::PIN };
     let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
     let options = Options {
         opt_level,
@@ -1597,42 +1565,29 @@ fn unroll_on_core(
     unroll_function_on(module, "f", &tti, options, target).expect("unrolls");
 }
 
-/// huffman_decode -O2 at m64: a 16-trip fill of folded constants was priced
-/// "saves 97 clk" at one clock a folded instruction and unrolled, +208 B for 23
-/// clocks run (paired, 13 blocks, ratio spread 1.5%). Its trip is bound by the
-/// issue width and the ALU ports, not by a chain: the folded instructions free
-/// issue slots, about a clock for the three removed, so the 55 B stay rolled at
-/// 600 milliclocks a byte.
+/// huffman_decode -O2 at m64: a 16-trip fill of folded constants was priced "saves 97 clk" at one clock a
+/// folded instruction and unrolled, +208 B for 23 clocks run (paired, 13 blocks, ratio spread 1.5%). Its
+/// trip is bound by the issue width and the ALU ports, not by a chain: the folded instructions free issue
+/// slots, about a clock for the three removed, so the 55 B stay rolled at 600 milliclocks a byte.
 #[test]
 fn test_a_fill_of_folded_constants_is_unrolled_only_where_the_core_is_priced_serially() {
     assert!(fill_unrolled(false, false), "premise: priced at a clock an instruction, the unroll pays");
-    assert!(
-        !fill_unrolled(true, false),
-        "the SandyBridge resources: the folded instructions free issue slots, not clocks"
-    );
+    assert!(!fill_unrolled(true, false), "the SandyBridge resources: the folded instructions free issue slots, not clocks");
 }
 
-/// dot -O3 m64: the 40-trip loop around `dot(a, b)` (a function the inliner
-/// takes next) was priced by the core's resources at "saves 0 clk", kept
-/// rolled, and `dot` stayed unfolded: +306 B and 87 -> 170 clocks a call. A
-/// trip that calls it is outside the model; the serial price decides, as
-/// before.
+/// dot -O3 m64: the 40-trip loop around `dot(a, b)` (a function the inliner takes next) was priced by the core's
+/// resources at "saves 0 clk", kept rolled, and `dot` stayed unfolded: +306 B and 87 -> 170 clocks a call. A
+/// trip that calls it is outside the model; the serial price decides, as before.
 #[test]
 fn test_a_loop_calling_a_function_the_inliner_takes_is_priced_serially_on_a_core_with_resources() {
     assert!(fill_unrolled(false, true), "premise: priced serially, the unroll pays");
     assert!(fill_unrolled(true, true), "the callee folds on the copies' constants: not a trip the resources show");
 }
 
-/// A local array of `ty` filled by one loop from its counter (`step` times it)
-/// and read by the next: the fill loop (`%i`) after the unroll pass at -O3, on
-/// a core with the SandyBridge throughput model and a store immediate of
-/// `immediate_bits` signed bits (0: none). The reader multiplies by a
-/// loop-invariant argument.
-fn array_fill_unrolled(
-    ty: &str,
-    step: u64,
-    immediate_bits: u32,
-) -> bool {
+/// A local array of `ty` filled by one loop from its counter (`step` times it) and read by the next: the fill loop
+/// (`%i`) after the unroll pass at -O3, on a core with the SandyBridge throughput model and a store immediate of
+/// `immediate_bits` signed bits (0: none). The reader multiplies by a loop-invariant argument.
+fn array_fill_unrolled(ty: &str, step: u64, immediate_bits: u32) -> bool {
     let conv = match ty {
         "i64" => "zext i32 %i to i64",
         "i16" => "trunc i32 %i to i16",
@@ -1675,35 +1630,27 @@ done:
     !printed(&module).contains("%i = phi")
 }
 
-/// dot -O3 m64: `b[i] = 70 - 2 * i` over 48 trips, read by the 40-trip loop
-/// that follows, was priced "saves 24 clk,
-/// adds 330 B" and kept rolled: the 48 constants were counted as 48 live values
-/// for 16 registers, though a stored constant is an immediate of the reader,
-/// not a register. The array stayed in memory, the reader's loop stayed rolled,
-/// and the function grew 817 -> 1123 B (87 -> 170 clk).
+/// dot -O3 m64: `b[i] = 70 - 2 * i` over 48 trips, read by the 40-trip loop that follows, was priced "saves 24 clk,
+/// adds 330 B" and kept rolled: the 48 constants were counted as 48 live values for 16 registers, though a stored
+/// constant is an immediate of the reader, not a register. The array stayed in memory, the reader's loop stayed
+/// rolled, and the function grew 817 -> 1123 B (87 -> 170 clk).
 #[test]
 fn test_a_local_array_filled_with_constants_is_unrolled_for_the_reader_that_folds_it() {
-    assert!(
-        array_fill_unrolled("i32", 7, 32),
-        "constants stored to a local array are immediates in the reader, not registers"
-    );
+    assert!(array_fill_unrolled("i32", 7, 32), "constants stored to a local array are immediates in the reader, not registers");
     assert!(array_fill_unrolled("i16", 7, 32), "a narrower constant is an immediate as well");
     assert!(array_fill_unrolled("i64", 7, 32), "an i64 constant in the sign-extended imm32 range is an immediate");
 }
 
-/// The same fill where the constant is not an immediate: 48 live values for the
-/// registers, the fill stays rolled.
+/// The same fill where the constant is not an immediate: 48 live values for the registers, the fill stays rolled.
 #[test]
 fn test_a_fill_of_constants_the_store_cannot_take_as_immediates_keeps_counting_registers() {
     assert!(!array_fill_unrolled("i64", 1 << 33, 32), "an i64 beyond imm32 is loaded into a register first");
     assert!(!array_fill_unrolled("i32", 7, 0), "a target with no store immediate (arm64) is unchanged");
 }
 
-/// memfuncs_runtime arm64 -O2/-O3: a call in a loop named a callee the pipeline
-/// had declared after the pass's snapshot of the module (an id past
-/// `run.globals`); pricing the trip indexed it and the compiler panicked ("the
-/// len is 14 but the index is 14"), where the parent compiled it. The trip is
-/// priced, not a crash.
+/// memfuncs_runtime arm64 -O2/-O3: a call in a loop named a callee the pipeline had declared after the pass's snapshot
+/// of the module (an id past `run.globals`); pricing the trip indexed it and the compiler panicked ("the len is 14
+/// but the index is 14"), where the parent compiled it. The trip is priced, not a crash.
 #[test]
 fn test_a_loop_calling_a_callee_declared_after_the_snapshot_is_priced_not_a_crash() {
     let mut module = parsed(
@@ -1772,15 +1719,11 @@ b2:
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(&mut module).expect("closes");
-    let tti = X86::of_cpu("i486")
-        .expect("a cpu")
-        .with_tuning(
-            llrm_mir::target::Tuning {
-                unroll_threshold: Some(32),
-                unroll_max_percent_threshold_boost: Some(400),
-                ..llrm_mir::target::Tuning::PIN
-            },
-        );
+    let tti = X86::of_cpu("i486").expect("a cpu").with_tuning(llrm_mir::target::Tuning {
+        unroll_threshold: Some(32),
+        unroll_max_percent_threshold_boost: Some(400),
+        ..llrm_mir::target::Tuning::PIN
+    });
     let options = Options {
         opt_level: 2,
         opt_size: false,

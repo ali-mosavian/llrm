@@ -64,8 +64,7 @@ impl Combiner<'_> {
         let Some(cases) = cases else { return Visit::None };
         let one_use = self.has_one_use(cond);
 
-        // switch (X + C) case K: -> switch (X) case K - C; likewise C - X, X ^
-        // C.
+        // switch (X + C) case K: -> switch (X) case K - C; likewise C - X, X ^ C.
         let invertible: Option<(Operand, Box<dyn Fn(u128) -> u128>)> = if let Some((_, _, x, c)) =
             pattern::binary(&q, cond, BinaryOp::Add)
             && let Some((c, _)) = q.int_constant(c)
@@ -109,11 +108,9 @@ impl Combiner<'_> {
                 };
                 let shifted: Vec<u128> = cases
                     .iter()
-                    .map(
-                        |&case| {
-                            if nsw { (signed(case, width) >> amount) as u128 & mask(width) } else { case >> amount }
-                        },
-                    )
+                    .map(|&case| {
+                        if nsw { (signed(case, width) >> amount) as u128 & mask(width) } else { case >> amount }
+                    })
                     .collect();
                 self.set_cases(switch, ty, &shifted);
                 replace_operand(self, switch, 0, new_cond);

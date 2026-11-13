@@ -1,5 +1,4 @@
-//! Both paths of a branch starting with the same instructions run them before
-//! it.
+//! Both paths of a branch starting with the same instructions run them before it.
 
 use llrm_6502::asm::Asm;
 use llrm_6502::peephole::{branch_over_jump, hoist_common_successor_code};
@@ -44,11 +43,7 @@ fn a_constant_the_loop_never_changes_is_loaded_before_it() {
     assert_eq!(asm.text(), "  lda rc8\n  ldy #0\nl:\n  lda (rc2),y\n  sta (rc20),y\n  dex\n  bne l\n  rts\n");
     let mut asm = Asm::parse("  sty rc4\nentry:\nl:\n  ldy #0\n  lda (rc2),y\n  dex\n  bne l\n  rts\n");
     hoist_loop_constant(&mut asm);
-    assert_eq!(
-        asm.text(),
-        "  sty rc4\n  ldy #0\nentry:\nl:\n  lda (rc2),y\n  dex\n  bne l\n  rts\n",
-        "a label nothing names is stepped over"
-    );
+    assert_eq!(asm.text(), "  sty rc4\n  ldy #0\nentry:\nl:\n  lda (rc2),y\n  dex\n  bne l\n  rts\n", "a label nothing names is stepped over");
     let writes = "  lda rc8\nl:\n  ldy #0\n  lda (rc2),y\n  iny\n  bne l\n  rts\n";
     let mut asm = Asm::parse(writes);
     hoist_loop_constant(&mut asm);
@@ -111,9 +106,9 @@ fn a_load_before_a_label_is_dropped_when_the_flags_are_set_again_after_it() {
     assert_eq!(asm.text(), read, "a branch after the label reads the flags the load set");
 }
 
-/// `lz4`'s entry: `lda rc16; sta rc20; lda rc17; sta rc21` led both successors
-/// of `lda rc6; ora rc7; bne` (the loads write the flag the branch reads, so
-/// the copy stayed twice: 8 B). It runs before the loads that make the flag.
+/// `lz4`'s entry: `lda rc16; sta rc20; lda rc17; sta rc21` led both successors of
+/// `lda rc6; ora rc7; bne` (the loads write the flag the branch reads, so the copy
+/// stayed twice: 8 B). It runs before the loads that make the flag.
 #[test]
 fn a_copy_both_paths_start_with_goes_before_the_flag_setup() {
     let before = "  lda rc6\n  ora rc7\n  bne b83\nb85:\n  lda rc16\n  sta rc20\n  lda rc17\n  sta rc21\n  lda rc20\n  rts\nb83:\n  lda rc16\n  sta rc20\n  lda rc17\n  sta rc21\nb2:\n  ldy #0\n  lda (rc2),y\n  rts\n";
@@ -121,8 +116,8 @@ fn a_copy_both_paths_start_with_goes_before_the_flag_setup() {
     assert_eq!(run(before), after);
 }
 
-/// The copy cannot pass a setup that reads a cell it stores, and `a` or the
-/// flags must not be read after it.
+/// The copy cannot pass a setup that reads a cell it stores, and `a` or the flags
+/// must not be read after it.
 #[test]
 fn a_copy_stays_when_the_setup_reads_what_it_stores_or_a_successor_reads_a_or_the_flags() {
     let reads_stored = "  lda rc6\n  ora rc20\n  bne b83\nb85:\n  lda rc16\n  sta rc20\n  lda rc20\n  rts\nb83:\n  lda rc16\n  sta rc20\n  lda rc20\n  rts\n";

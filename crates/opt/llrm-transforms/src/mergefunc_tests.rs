@@ -1,19 +1,14 @@
-//! Two functions are the same code when their bodies match; a differing
-//! constant, operation or shape separates them.
+//! Two functions are the same code when their bodies match; a differing constant, operation or shape separates them.
 
 use llrm_mir::passes::PassManager;
 use llrm_mir::program::Program;
 
-use super::{MergeFunctions, MergeLocalFunctions, equivalent, function_hash};
+use super::{equivalent, function_hash, MergeFunctions, MergeLocalFunctions};
 use crate::testing::{parsed, printed};
 
 const HEAD: &str = "target datalayout = \"e-p:32:32-i32:32-i64:32-n8:16:32\"\n\n";
 
-fn same(
-    text: &str,
-    a: &str,
-    b: &str,
-) -> bool {
+fn same(text: &str, a: &str, b: &str) -> bool {
     let module = parsed(&format!("{HEAD}{text}"));
     let (ia, ib) = (module.named(a).unwrap(), module.named(b).unwrap());
     let (fa, fb) = (module.global(ia).function().unwrap(), module.global(ib).function().unwrap());
@@ -49,8 +44,7 @@ b0:
 }
 ";
 
-/// gcc folds `__gtsf2` into `jmp __gesf2` and ours kept 16 B: two bodies that
-/// differ in names only are one.
+/// gcc folds `__gtsf2` into `jmp __gesf2` and ours kept 16 B: two bodies that differ in names only are one.
 #[test]
 fn test_bodies_that_differ_in_names_only_are_equivalent() {
     assert!(same(ADD, "a", "b"));
@@ -67,8 +61,7 @@ fn test_a_differing_operation_is_not_equivalent() {
     assert!(!same(ADD, "a", "d"));
 }
 
-/// Two directly recursive copies call themselves: the address of each is the
-/// other's.
+/// Two directly recursive copies call themselves: the address of each is the other's.
 #[test]
 fn test_two_recursive_copies_are_equivalent() {
     let text = "define i32 @a(i32 %x) {
@@ -93,8 +86,7 @@ b0:
     assert!(!same(text, "b", "c"), "a call to another function is not the function's own address");
 }
 
-/// A loop's phi reads a value defined later in the walk: the pairing is checked
-/// where it is defined.
+/// A loop's phi reads a value defined later in the walk: the pairing is checked where it is defined.
 #[test]
 fn test_loops_with_matching_phis_are_equivalent_and_swapped_ones_are_not() {
     let text = "define i32 @a(i32 %n) {
@@ -151,8 +143,8 @@ fn defined(text: &str) -> usize {
     text.lines().filter(|one| one.starts_with("define")).count()
 }
 
-/// gcc folded `__gtsf2` into `jmp __gesf2` and ours kept both 16 B bodies: two
-/// external copies stay two names, the second a tail call of the first.
+/// gcc folded `__gtsf2` into `jmp __gesf2` and ours kept both 16 B bodies: two external copies stay two names,
+/// the second a tail call of the first.
 #[test]
 fn test_an_external_copy_becomes_a_tail_call_of_the_first() {
     let after = merged(
@@ -175,8 +167,7 @@ b0:
     assert!(after.contains("tail call i32 @a(i32 %0)"), "@b is a thunk of @a:\n{after}");
 }
 
-/// A local copy nothing takes the address of goes, and its caller calls the
-/// kept one.
+/// A local copy nothing takes the address of goes, and its caller calls the kept one.
 #[test]
 fn test_a_local_copy_is_dropped_and_its_callers_call_the_kept_one() {
     let after = merged(
@@ -231,9 +222,8 @@ b0:
     assert_eq!(defined(&after), 3);
 }
 
-/// value_of_valueless grew 15 -> 17 B at m32 -Os: two exported `ret` bodies
-/// became a `jmp`, which is longer than the `ret`. A body that is only its
-/// terminator stays.
+/// value_of_valueless grew 15 -> 17 B at m32 -Os: two exported `ret` bodies became a `jmp`, which is longer than the `ret`.
+/// A body that is only its terminator stays.
 #[test]
 fn test_a_bare_return_is_not_replaced_by_a_thunk() {
     let after = merged(
@@ -251,9 +241,8 @@ b0:
     assert!(!after.contains("tail call"), "a bare return stays a body:\n{after}");
 }
 
-/// A guard that kept every body of two instructions lost the sfm16 merge (-46 B
-/// became -14 B): `call` plus `ret` with an argument of its own is pushes, a
-/// call and a pop, where the thunk is one `jmp`.
+/// A guard that kept every body of two instructions lost the sfm16 merge (-46 B became -14 B): `call` plus `ret` with an argument
+/// of its own is pushes, a call and a pop, where the thunk is one `jmp`.
 #[test]
 fn test_a_call_and_a_return_with_a_constant_argument_is_replaced_by_a_thunk() {
     let after = merged(
@@ -275,8 +264,8 @@ b0:
     assert!(after.contains("tail call i32 @a(i32 %0)"), "@b is a thunk of @a:\n{after}");
 }
 
-/// shl_long_by_one -O1 (z80) kept two local copies; the -O1 pass drops them,
-/// and writes no thunk for an exported copy (a thunk is a `jmp` more per call).
+/// shl_long_by_one -O1 (z80) kept two local copies; the -O1 pass drops them, and writes no thunk for an exported copy
+/// (a thunk is a `jmp` more per call).
 #[test]
 fn test_the_o1_pass_drops_a_local_copy_and_thunks_no_external_one() {
     let run = |text: &str| {
@@ -288,9 +277,7 @@ fn test_the_o1_pass_drops_a_local_copy_and_thunks_no_external_one() {
         printed(&program.modules[0])
     };
     let body = |linkage: &str, name: &str| {
-        format!(
-            "define {linkage} i32 @{name}(i32 %x) {{\nb0:\n  %t = add i32 %x, 1\n  %r = mul i32 %t, 3\n  ret i32 %r\n}}\n\n"
-        )
+        format!("define {linkage} i32 @{name}(i32 %x) {{\nb0:\n  %t = add i32 %x, 1\n  %r = mul i32 %t, 3\n  ret i32 %r\n}}\n\n")
     };
     let local = run(&format!("{}{}", body("internal", "a"), body("internal", "b")));
     assert_eq!(defined(&local), 1, "one local copy stays:\n{local}");

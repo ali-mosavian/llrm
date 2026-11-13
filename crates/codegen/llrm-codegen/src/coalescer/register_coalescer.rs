@@ -41,8 +41,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use llrm_lir::valuelanes::ValueLanes;
-
 use super::joinvals::JoinVals;
 use super::pair::{CoalescerEnv, CoalescerPair, full_copy};
 use crate::backend::twoaddr::commutative;
@@ -52,6 +50,7 @@ use crate::liveness::liverangecalc::Operand;
 use crate::liveness::slotindex::{InstrKey, SlotIndex};
 use crate::model::ir::{Held, Loc};
 use crate::model::lir::Insn;
+use llrm_lir::valuelanes::ValueLanes;
 use crate::support::hash::{HashMap, HashSet};
 
 /// Whether `one` does nothing but define its values: a copy or a definition
@@ -298,15 +297,7 @@ pub fn join_copy(
         current_erased.insert(copy);
     }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(
-        lis,
-        state,
-        cp.src_reg(),
-        cp.dst_reg(),
-        cp.is_partial().then_some(cp.lane_offset()),
-        None,
-        false,
-    );
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None, false);
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
@@ -375,9 +366,7 @@ fn join_lane(
 ) -> JoinResult {
     // A def of `src` that names lanes of its own, or keeps the rest of it,
     // would need its lanes shifted too: left alone.
-    if has_lane_defs(lis, cp.src_reg())
-        || lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def)
-    {
+    if has_lane_defs(lis, cp.src_reg()) || lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def) {
         return JoinResult::Rejected;
     }
     let copy_at = lis.indexes.get_instruction_index(copy);
@@ -414,9 +403,7 @@ fn keep_joined_lanes_through_undef_defs(
     let mut keys: Vec<InstrKey> = lis
         .operands(dst)
         .iter()
-        .filter(|operand| {
-            operand.is_def && !operand.reads_reg && operand.lanes != Operand::ALL && lis.has_instr(operand.instr)
-        })
+        .filter(|operand| operand.is_def && !operand.reads_reg && operand.lanes != Operand::ALL && lis.has_instr(operand.instr))
         .map(|operand| operand.instr)
         .collect();
     keys.sort_unstable();
@@ -425,14 +412,11 @@ fn keep_joined_lanes_through_undef_defs(
     for key in keys {
         let at = lis.indexes.get_instruction_index(key);
         let old = Arc::clone(lis.instr(key));
-        let mine = old
-            .def_lanes
-            .iter()
-            .filter(|(value, _)| *value == dst)
-            .fold(None, |all: Option<ValueLanes>, (_, lanes)| Some(all.map_or(*lanes, |a| a.union(*lanes))));
+        let mine = old.def_lanes.iter().filter(|(value, _)| *value == dst).fold(None, |all: Option<ValueLanes>, (_, lanes)| {
+            Some(all.map_or(*lanes, |a| a.union(*lanes)))
+        });
         let Some(mine) = mine else { continue };
-        let live_other =
-            lis.interval(dst).sub_ranges().iter().any(|sub| !sub.lanes.overlaps(mine) && sub.range.live_at(&at));
+        let live_other = lis.interval(dst).sub_ranges().iter().any(|sub| !sub.lanes.overlaps(mine) && sub.range.live_at(&at));
         if live_other {
             let block = lis.indexes.get_mbb_from_index(&at);
             let mut made = (*old).clone();
@@ -457,18 +441,12 @@ fn lanes_overlap(
     b: &LiveRange,
     copy_at: &SlotIndex,
 ) -> bool {
-    a.segments
-        .iter()
-        .any(
-            |x| b.segments
-                .iter()
-                .any(
-                    |y| {
-                        let start = std::cmp::max(&x.start, &y.start);
-                        start < std::cmp::min(&x.end, &y.end) && !SlotIndex::is_same_instr(start, copy_at)
-                    },
-                ),
-        )
+    a.segments.iter().any(|x| {
+        b.segments.iter().any(|y| {
+            let start = std::cmp::max(&x.start, &y.start);
+            start < std::cmp::min(&x.end, &y.end) && !SlotIndex::is_same_instr(start, copy_at)
+        })
+    })
 }
 
 /// `joinVirtRegs`.
@@ -555,9 +533,7 @@ fn update_reg_defs_uses(
             let at = lis.indexes.get_instruction_index(key);
             // the lanes a copy keeps are not read when this instruction
             // defines them itself: another lane of `dst` was joined here first
-            let reads = (keeps_rest && !old.defines.contains(&dst))
-                || old.uses.contains(&src)
-                || lis.interval(dst).live_at(&at);
+            let reads = (keeps_rest && !old.defines.contains(&dst)) || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
             if reads && !renamed.partial_defs.contains(&dst) {
                 let mut made = (*renamed).clone();
                 made.partial_defs.push(dst);
@@ -570,13 +546,7 @@ fn update_reg_defs_uses(
             // stands after the defs of `dst` that come before it
             let at = old.defines.iter().position(|v| *v == src).unwrap_or(0);
             let before = old.defines[..at].iter().filter(|v| **v == dst).count();
-            let place = made
-                .def_lanes
-                .iter()
-                .enumerate()
-                .filter(|(_, (v, _))| *v == dst)
-                .nth(before)
-                .map_or(made.def_lanes.len(), |(i, _)| i);
+            let place = made.def_lanes.iter().enumerate().filter(|(_, (v, _))| *v == dst).nth(before).map_or(made.def_lanes.len(), |(i, _)| i);
             made.def_lanes.insert(place, (dst, lanes));
             renamed = Arc::new(made);
         }

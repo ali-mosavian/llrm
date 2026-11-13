@@ -79,12 +79,10 @@ fn an_i64_cttz_selects_between_the_halves() {
     assert_eq!(dag.constant(dag.operand(other, 1)), Some(32));
 }
 
-/// `clz`, `ctz` and `popcount` of an `i64` marked `LibCall` were split into
-/// halves anyway (m68k `clzll_ctzll_64` -Os: 216 and 162 B inline against 114 B
-/// of shared `__clzdi2`/`__clzsi2`): the pin's `ExpandIntRes_CTPOP` takes the
-/// routine when the action says `LibCall` (DEVIATE BC1 extends that to the
-/// zero-poison clz and ctz). One call of the `i64` routine, no split; the
-/// default still splits.
+/// `clz`, `ctz` and `popcount` of an `i64` marked `LibCall` were split into halves anyway (m68k `clzll_ctzll_64`
+/// -Os: 216 and 162 B inline against 114 B of shared `__clzdi2`/`__clzsi2`): the pin's `ExpandIntRes_CTPOP` takes the
+/// routine when the action says `LibCall` (DEVIATE BC1 extends that to the zero-poison clz and ctz). One call of the
+/// `i64` routine, no split; the default still splits.
 #[test]
 fn a_wide_count_marked_libcall_is_one_call_to_the_wide_routine() {
     use super::super::legalize_dag::Hooks;
@@ -110,9 +108,7 @@ fn a_wide_count_marked_libcall_is_one_call_to_the_wide_routine() {
             Some(dag.get_register(ret, 90))
         }
     }
-    for (op, name) in
-        [(ISD::CtPop, "__popcountdi2"), (ISD::CtLzZeroPoison, "__clzdi2"), (ISD::CtTzZeroPoison, "__ctzdi2")]
-    {
+    for (op, name) in [(ISD::CtPop, "__popcountdi2"), (ISD::CtLzZeroPoison, "__clzdi2"), (ISD::CtTzZeroPoison, "__ctzdi2")] {
         for libcall in [true, false] {
             let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
             if libcall {

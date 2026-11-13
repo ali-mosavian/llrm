@@ -25,12 +25,13 @@
 
 mod opcodes;
 
+use llrm_support::hash::HashMap;
+
 use llrm_elf::{Machine, Relocation};
 use llrm_object::assembler::AsmBackend;
 use llrm_object::{
     Binding, Definition, Fix, FixupKind, FixupKindInfo, Object, Reloc, Role, Section, Symbol, Target, Unsupported,
 };
-use llrm_support::hash::HashMap;
 pub use opcodes::OPCODES;
 
 /// `EM_MOS` (llvm-mos `ELF.h`).

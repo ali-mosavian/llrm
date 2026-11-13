@@ -43,10 +43,9 @@ pub enum TypeAction {
     /// A float with no register class (`TypeSoftenFloat`): it travels as the
     /// integer of its width and its operations are library calls.
     SoftenFloat,
-    /// A vector type no register class holds (`TypeScalarizeVector` and its
-    /// split/widen kin; the DEVIATE SD13 subset only names it): the builder
-    /// never creates such a value, it lowers a vector IR type this way only
-    /// where the target lists the vector as a register class.
+    /// A vector type no register class holds (`TypeScalarizeVector` and its split/widen kin; the
+    /// DEVIATE SD13 subset only names it): the builder never creates such a value, it lowers a
+    /// vector IR type this way only where the target lists the vector as a register class.
     ScalarizeVector,
 }
 
@@ -74,8 +73,7 @@ pub struct TargetLoweringInfo {
     /// `f128` has a register class (AArch64 `FPR128`), no arithmetic: its
     /// operations are library calls on `q` registers.
     legal_f128: bool,
-    /// The vector types a register class holds (`addRegisterClass(MVT::v16i8,
-    /// &X86::VR128RegClass)`).
+    /// The vector types a register class holds (`addRegisterClass(MVT::v16i8, &X86::VR128RegClass)`).
     vectors: Vec<MVT>,
 }
 
@@ -222,9 +220,8 @@ impl TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32, MVT::I64], false)
     }
 
-    /// m64 with `hasSSE2()`: the integer vectors join `VR128`
-    /// (`X86ISelLowering.cpp`, the SSE2 arm: `addRegisterClass(MVT::v16i8,
-    /// ...)` and the other three).
+    /// m64 with `hasSSE2()`: the integer vectors join `VR128` (`X86ISelLowering.cpp`, the SSE2 arm:
+    /// `addRegisterClass(MVT::v16i8, ...)` and the other three).
     pub fn x86_64_sse2() -> TargetLoweringInfo {
         TargetLoweringInfo::new(
             &[MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
@@ -339,9 +336,8 @@ mod tests {
         assert_eq!(soft.type_conversion(EVT::I32), (TypeAction::Legal, EVT::I32));
     }
 
-    /// A vector type is legal only where a register class holds it: SSE2 m64
-    /// yes, every other target scalarizes (so no other target ever builds a
-    /// vector value).
+    /// A vector type is legal only where a register class holds it: SSE2 m64 yes, every other target
+    /// scalarizes (so no other target ever builds a vector value).
     #[test]
     fn a_vector_type_is_legal_only_with_a_register_class() {
         let v = EVT::Simple(MVT::V16I8);

@@ -5,10 +5,9 @@ use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
-/// No mid-end ran at -O0, so the intrinsic reached the selector, which refused
-/// it ("intrinsic call llvm.is.constant.i32") and sent 26 runtime/qb programs
-/// and `tests/run/c/builtins_table.c` to the hand selector. The pin lowers it
-/// before selection at every level.
+/// No mid-end ran at -O0, so the intrinsic reached the selector, which refused it ("intrinsic call
+/// llvm.is.constant.i32") and sent 26 runtime/qb programs and `tests/run/c/builtins_table.c` to the hand selector.
+/// The pin lowers it before selection at every level.
 #[test]
 fn is_constant_is_lowered_before_the_dag_at_o0() {
     let ir = format!(
@@ -20,8 +19,7 @@ define i32 @f(i32 %x) {{\n  %c = call i1 @llvm.is.constant.i32(i32 %x)\n  %r = z
     assert!(asm.contains("xzr") && !asm.contains("is.constant"), "{asm}");
 }
 
-/// The same for `llvm.objectsize`, which the pin answers "unknown" (-1 or 0)
-/// for a pointer it knows nothing of.
+/// The same for `llvm.objectsize`, which the pin answers "unknown" (-1 or 0) for a pointer it knows nothing of.
 #[test]
 fn objectsize_is_lowered_before_the_dag_at_o0() {
     let ir = format!(
@@ -31,11 +29,9 @@ define i64 @f(ptr %p) {{\n  %n = call i64 @llvm.objectsize.i64.p0(ptr %p, i1 fal
     driver::assembly(&ir, Platform::Linux, false).expect("the DAG path lowers llvm.objectsize at -O0");
 }
 
-/// `llvm.experimental.memset.pattern` reached the DAG at -O0 for the same
-/// reason, and the memset expansion
-/// panicked ("a target with string instructions names their registers",
-/// memops.rs:2024): `memset_pattern` at -O0 did not build.
-/// PreISelIntrinsicLowering runs at every level.
+/// `llvm.experimental.memset.pattern` reached the DAG at -O0 for the same reason, and the memset expansion
+/// panicked ("a target with string instructions names their registers", memops.rs:2024): `memset_pattern` at
+/// -O0 did not build. PreISelIntrinsicLowering runs at every level.
 #[test]
 fn memset_pattern_is_expanded_before_the_dag_at_o0() {
     let ir = format!(

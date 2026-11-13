@@ -8,11 +8,7 @@ use std::process::Command;
 #[test]
 fn a_leaf_with_a_frame_register_has_no_sub_rsp() {
     let scratch = tempfile::tempdir().unwrap();
-    std::fs::write(
-        scratch.path().join("a.c"),
-        "int leaf(int a, long b)\n{\n    long c = a + b;\n    return (int)c * 3;\n}\n",
-    )
-    .unwrap();
+    std::fs::write(scratch.path().join("a.c"), "int leaf(int a, long b)\n{\n    long c = a + b;\n    return (int)c * 3;\n}\n").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .current_dir(scratch.path())

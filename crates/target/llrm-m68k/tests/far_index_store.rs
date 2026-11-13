@@ -1,8 +1,6 @@
-//! `store i8 9, (buf + k + 500)` with `buf` a PC-relative local symbol had no
-//! pattern: `select_arii` refused the constant 500 as an index (for `ARID` to
-//! take it), but `ARID` takes one base register, and `buf + k` is two.
-//! `x_strlen` failed to compile at every level (`CannotSelect(Store)`);
-//! `scroll` at -O0 and -Oz.
+//! `store i8 9, (buf + k + 500)` with `buf` a PC-relative local symbol had no pattern: `select_arii` refused the
+//! constant 500 as an index (for `ARID` to take it), but `ARID` takes one base register, and `buf + k` is two.
+//! `x_strlen` failed to compile at every level (`CannotSelect(Store)`); `scroll` at -O0 and -Oz.
 
 use std::path::Path;
 use std::process::Command;

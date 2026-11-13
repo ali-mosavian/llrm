@@ -200,11 +200,11 @@ pub(crate) fn split_edge(
     block: usize,
 ) {
     let new = pred + 1;
-    // `pred` may fall into the block laid out after it: the new block now
-    // stands there, so the fall-through needs its own jump (the block moves
-    // up by one).
-    let falls_into =
-        f.blocks[pred].last().is_some_and(|last| !last.is_barrier()) && pred + 1 < f.blocks.len() && pred + 1 != block;
+    // `pred` may fall into the block laid out after it: the new block now stands
+    // there, so the fall-through needs its own jump (the block moves up by one).
+    let falls_into = f.blocks[pred].last().is_some_and(|last| !last.is_barrier())
+        && pred + 1 < f.blocks.len()
+        && pred + 1 != block;
     let shift = |b: &mut u32| {
         if *b as usize >= new {
             *b += 1;
@@ -245,8 +245,7 @@ pub(crate) fn split_edge(
         }
     }
     if falls_into {
-        f.blocks[pred as usize]
-            .push(Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(new_id + 1)]));
+        f.blocks[pred as usize].push(Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(new_id + 1)]));
     }
     f.blocks.insert(new, vec![Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(target)])]);
     f.succs.insert(new, vec![block]);

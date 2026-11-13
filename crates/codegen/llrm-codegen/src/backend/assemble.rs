@@ -163,9 +163,8 @@ const HUGE_SPACE: u32 = 3;
 /// selector: what the tests of this crate are written for.
 /// The register a one-slot frame's `pop` takes at the returns of `body`: the
 /// first of `order` that no return takes a result in (the convention's
-/// `returned` registers, and any a return pins) and the function does not save,
-/// as `X86RegisterInfo::findDeadCallerSavedReg` walks the register class at the
-/// `RET` (its result registers are the live-outs, the saved ones are
+/// `returned` registers, and any a return pins) and the function does not save, as `X86RegisterInfo::findDeadCallerSavedReg` walks the register class
+/// at the `RET` (its result registers are the live-outs, the saved ones are
 /// restored before it). `None` where every register is live.
 fn dead_pop(
     order: &[RegId],
@@ -176,12 +175,11 @@ fn dead_pop(
     let live: Vec<RegId> = returned
         .iter()
         .map(|register| register.full_register())
-        .chain(
-            body.insns()
-                .iter()
-                .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Return))
-                .flat_map(|one| one.requires.iter().map(|(_, register)| register.full_register()).collect::<Vec<_>>()),
-        )
+        .chain(body
+        .insns()
+        .iter()
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Return))
+        .flat_map(|one| one.requires.iter().map(|(_, register)| register.full_register()).collect::<Vec<_>>()))
         .chain(saved.iter().map(|(whole, _)| whole.full_register()))
         .collect();
     order.iter().copied().find(|register| !live.contains(&register.full_register()))
@@ -230,14 +228,12 @@ pub fn assembled_by(
     // pool's start offset in `.data` is where the others end.
     let mut staying_end = 0_i64;
     let mut far_data = Vec::new();
-    // Private constants of no alignment (string literals) go after every
-    // aligned datum: the pin gives them their own mergeable
-    // `.rodata.str1.1` section, so an odd-sized one never pads what follows
-    // it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single
-    // +2).
+    // Private constants of no alignment (string literals) go after every aligned datum: the pin
+    // gives them their own mergeable `.rodata.str1.1` section, so an odd-sized one never pads what
+    // follows it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single +2).
     let mut unaligned_tail: Vec<codetables::Table> = Vec::new();
-    // Off when tuned for size: each load site costs the `cs:` byte, which the
-    // moved table's data bytes do not repay (QCport -Os grew).
+    // Off when tuned for size: each load site costs the `cs:` byte, which the moved table's
+    // data bytes do not repay (QCport -Os grew).
     let reads_in_code = cpu.target().tuning().read_only_in_code && !cpu.size;
     let mut aligned_tables: Vec<codetables::Table> = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
@@ -245,16 +241,15 @@ pub fn assembled_by(
     let mut data_publics = Vec::new();
     let mut weak: BTreeSet<String> = BTreeSet::new();
     let is_weak = |linkage: Linkage| {
-        matches!(
-            linkage,
-            Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr
-        )
+        matches!(linkage, Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr)
     };
     let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
-    let (facts, order) =
-        calleefacts::CalleeFacts::of_binding(module, cpu.target().tti().is_some_and(|tti| tti.ipra_binds_local()));
+    let (facts, order) = calleefacts::CalleeFacts::of_binding(
+        module,
+        cpu.target().tti().is_some_and(|tti| tti.ipra_binds_local()),
+    );
     let target = Target {
         facts: &facts,
         cpu,
@@ -281,10 +276,9 @@ pub fn assembled_by(
         }
     }
     let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
-    // DEVIATE SD231 (owner x86-m32, review 2026-11-27): a routine one site
-    // calls is pasted there, as the old selector does: its procedure, call
-    // and return cost more than it saves. The pin has no such routine (a
-    // libcall in the library).
+    // DEVIATE SD231 (owner x86-m32, review 2026-11-27): a routine one site calls is pasted there, as the old
+    // selector does: its procedure, call and return cost more than it saves.
+    // The pin has no such routine (a libcall in the library).
     let mut sites: IndexMap<String, usize> = IndexMap::default();
     for made in done.values() {
         for (at, callee) in &made.calls {
@@ -505,8 +499,7 @@ pub fn assembled_by(
                 // Copies of returns and split tails only make code better: -O0
                 // has neither.
                 let procedure = if !cpu.optimized {
-                    let procedure =
-                        masm::Procedure { body: LirBody { unwrapped: true, ..procedure.body }, ..procedure };
+                    let procedure = masm::Procedure { body: LirBody { unwrapped: true, ..procedure.body }, ..procedure };
                     if let Some(why) = masm::realign_refusal(&procedure) {
                         return Err(why);
                     }
@@ -556,8 +549,7 @@ pub fn assembled_by(
         procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
     let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
-    // A flat ELF object keeps the pool in mergeable sections, with no gap to
-    // fill.
+    // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
     let entries = pool.borrow();
     let pooled = if flat_elf {
         crate::backend::constpool::wide_first(entries.entries())
@@ -588,9 +580,8 @@ pub fn assembled_by(
         // `align` would still raise the segment to dword, and the linker pads
         // the next module's data up to it (+2 B in the linked exe of nine
         // programs at m16 -Os).
-        // A flat ELF object keeps a constant of 4, 8, 16 or 32 bytes in the
-        // pin's read-only mergeable section of its size, not in the
-        // writable data.
+        // A flat ELF object keeps a constant of 4, 8, 16 or 32 bytes in the pin's
+        // read-only mergeable section of its size, not in the writable data.
         if flat_elf && matches!(bytes.len(), 4 | 8 | 16 | 32) {
             let section = sectioned.entry(format!(".rodata.cst{}", bytes.len())).or_default();
             if section.is_empty() {
@@ -978,8 +969,7 @@ fn machined_once(
     let far = far_frame(&first, sp);
     // An over-aligned local lies on its alignment below the aligned top: a
     // layout that moves objects would break it.
-    // Built only where it has fewer far cells than the first layout, which is
-    // told by counting them.
+    // Built only where it has fewer far cells than the first layout, which is told by counting them.
     let ordered = if far > 0
         && first.body.over_aligned.is_empty()
         && crate::backend::relayout::far_ordered(&first, &frame, sp).is_none_or(|ordered| ordered < far)
@@ -1009,8 +999,7 @@ fn machined_once(
     // layout.
     // Built only where it has fewer far cells, which is told by counting them.
     let check = llrm_support::env_flag!("LLRM_CHECK_FRAME");
-    let worth =
-        check || crate::backend::relayout::far_again(&first, &frame, spilled, sp).is_none_or(|again| again < far);
+    let worth = check || crate::backend::relayout::far_again(&first, &frame, spilled, sp).is_none_or(|again| again < far);
     let laid = if worth {
         timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled))
     } else {
@@ -1402,8 +1391,7 @@ fn staged(
     let pop_order = target.arch.frame_slot_pop_order();
     if let Some((push, _)) = registers.slot_scratch.filter(|_| !pop_order.is_empty()) {
         // No dead register: the pin's `emitSPUpdate` adjusts with `add`.
-        registers.slot_scratch =
-            dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
+        registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
     }
     registers.align = target.facts.stack_alignment(target.arch, name);
     registers.object_align = target.facts.object_alignment(target.arch, name);
@@ -1434,11 +1422,7 @@ fn staged(
         && !crate::backend::framefree::has_fp(
             &body,
             &registers,
-            &pops
-                .iter()
-                .map(|(at, bytes)| (*at, *bytes))
-                .chain(body.call_pops.iter().map(|(at, bytes)| (*at, *bytes)))
-                .collect(),
+            &pops.iter().map(|(at, bytes)| (*at, *bytes)).chain(body.call_pops.iter().map(|(at, bytes)| (*at, *bytes))).collect(),
             // Tuned for size any inline code keeps the frame register until
             // masm has compared the two forms; x87 register operations alone
             // do not otherwise.
@@ -1501,10 +1485,10 @@ fn staged(
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
     // DEVIATE D14 (owner frame / x86-m32, review 2026-11-27, exit none while
-    // slot coloring shares them): the pin gives each rounding store and reload
-    // its own `CreateStackTemporary` and no lifetime marker, so neither
-    // StackColoring nor StackSlotColoring shares them; here they are spill
-    // slots, which `slots_colored` shares.
+    // slot coloring shares them): the pin gives each rounding store and reload its own
+    // `CreateStackTemporary` and no lifetime marker, so neither StackColoring
+    // nor StackSlotColoring shares them; here they are spill slots, which
+    // `slots_colored` shares.
     if temporaries > 0 && frame.native.is_none() {
         frame.floor = -depth;
     }
@@ -1567,8 +1551,7 @@ fn phased(
         if phase.class_name() == "Prologue" {
             continue;
         }
-        // The pin's -O0 has no BranchFolder, and what FastISel selects has no
-        // jump to the next block.
+        // The pin's -O0 has no BranchFolder, and what FastISel selects has no jump to the next block.
         if staged.fast && !target.cpu.optimized && phase.class_name() == "ControlFlow" {
             continue;
         }
@@ -1725,10 +1708,8 @@ fn select_in_pool(
     }
 }
 
-/// Whether `convention` keeps `register` for its caller: a one-slot frame's
-/// `pop` into it would hand the caller back the pushed value
-/// (`findDeadCallerSavedReg` picks only caller-saved registers; x86 has no
-/// register convention keeping ecx, watcall32 does).
+/// Whether `convention` keeps `register` for its caller: a one-slot frame's `pop` into it would hand the caller back the pushed value
+/// (`findDeadCallerSavedReg` picks only caller-saved registers; x86 has no register convention keeping ecx, watcall32 does).
 fn keeps(
     arch: &dyn llrm_target::Target,
     convention: &llrm_target::calling::Convention,

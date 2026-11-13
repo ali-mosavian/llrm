@@ -1,7 +1,7 @@
-//! The state a target's driver and a pass share for a trial compile: the module
-//! is compiled again with one decision of the pass reversed, and the driver
-//! keeps whichever result it prices smaller or cheaper. Two trials use it,
-//! UNROLL-TRIAL and ROTATION-TRIAL.
+//! The state a target's driver and a pass share for a trial compile: the module is
+//! compiled again with one decision of the pass reversed, and the driver keeps
+//! whichever result it prices smaller or cheaper. Two trials use it, UNROLL-TRIAL and
+//! ROTATION-TRIAL.
 //!
 //! DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
 //! state the target's driver and the pass share for a trial unroll.
@@ -30,11 +30,10 @@ thread_local! {
     /// The functions with a loop that ROTATION-TRIAL rotated and a trial may
     /// leave unrotated.
     static ROTATED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// The loops ROTATION-TRIAL noted, counted apart from the functions they
-    /// are in.
+    /// The loops ROTATION-TRIAL noted, counted apart from the functions they are in.
     static ROTATED_LOOPS: Cell<usize> = const { Cell::new(0) };
-    /// Set while the trial compile of ROTATION-HOT runs: a loop whose copied
-    /// guard does not fold and whose trips are not counted is rotated as well.
+    /// Set while the trial compile of ROTATION-HOT runs: a loop whose copied guard does not fold and whose
+    /// trips are not counted is rotated as well.
     static MORE: Cell<bool> = const { Cell::new(false) };
     /// The functions, and loops together, ROTATION-HOT left unrotated.
     static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
@@ -77,16 +76,14 @@ pub fn take() -> (Vec<String>, u64) {
     ELIGIBLE.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Puts back what [`take`] returned, for the compile whose candidates they
-/// were.
+/// Puts back what [`take`] returned, for the compile whose candidates they were.
 pub fn restore(noted: (Vec<String>, u64)) {
     ELIGIBLE.with(|list| *list.borrow_mut() = noted);
 }
 
-/// Whether a trial unroll is kept at -O1, where each axis is strict: it adds no
-/// bytes (`added` <= 0) and costs no work (`saved` >= 0, work being what the
-/// code is expected to execute). The one rule of every target's -O1 trial
-/// (DEVIATE UNROLL-TRIAL, 6502-UNROLL-O1, UNROLL-O1-TRIAL).
+/// Whether a trial unroll is kept at -O1, where each axis is strict: it adds no bytes (`added`
+/// <= 0) and costs no work (`saved` >= 0, work being what the code is expected to execute). The
+/// one rule of every target's -O1 trial (DEVIATE UNROLL-TRIAL, 6502-UNROLL-O1, UNROLL-O1-TRIAL).
 pub fn keeps_at_o1(
     saved: i64,
     added: i64,
@@ -94,10 +91,10 @@ pub fn keeps_at_o1(
     added <= 0 && saved >= 0
 }
 
-/// DEVIATE ROTATION-TRIAL (beyond the pin; gcc's `-Os` leaves a counted loop
-/// whose guard does not fold unrotated, `ch_base::copy_headers`; owner
-/// greedy-os-causes, exit 2026-12-05): whether the trial compile that leaves
-/// such loops unrotated is running.
+/// DEVIATE ROTATION-TRIAL (beyond the pin; gcc's `-Os` leaves a counted loop whose
+/// guard does not fold unrotated, `ch_base::copy_headers`; owner greedy-os-causes,
+/// exit 2026-12-05): whether the trial compile that leaves such loops unrotated is
+/// running.
 pub fn unrotated() -> bool {
     UNROTATED.with(Cell::get)
 }
@@ -110,8 +107,8 @@ pub fn with_unrotated<T>(body: impl FnOnce() -> T) -> T {
     value
 }
 
-/// Notes that `function` has a counted loop of an unfolded guard that was
-/// rotated and a trial may leave as it was.
+/// Notes that `function` has a counted loop of an unfolded guard that was rotated
+/// and a trial may leave as it was.
 pub(crate) fn note_rotated(function: &str) {
     ROTATED_LOOPS.with(|count| count.set(count.get() + 1));
     ROTATED.with(|list| {
@@ -137,10 +134,9 @@ pub fn take_rotated() -> Vec<String> {
     ROTATED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// DEVIATE ROTATION-HOT (beyond the pin; owner x86-m32, exit 2026-11-24):
-/// whether the trial compile that also rotates the loops of an unfolded guard
-/// and uncounted trips is running. The pin rotates them at -Os; RS1 leaves
-/// them, and the finished code decides which pays (hot loops: fewer executed
+/// DEVIATE ROTATION-HOT (beyond the pin; owner x86-m32, exit 2026-11-24): whether the trial compile
+/// that also rotates the loops of an unfolded guard and uncounted trips is running. The pin rotates them
+/// at -Os; RS1 leaves them, and the finished code decides which pays (hot loops: fewer executed
 /// instructions for a few bytes).
 pub fn rotates_more() -> bool {
     MORE.with(Cell::get)
@@ -154,8 +150,7 @@ pub fn with_more_rotation<T>(body: impl FnOnce() -> T) -> T {
     value
 }
 
-/// Notes that `function` has a loop RS1 left unrotated that
-/// [`with_more_rotation`] would rotate.
+/// Notes that `function` has a loop RS1 left unrotated that [`with_more_rotation`] would rotate.
 pub(crate) fn note_left(function: &str) {
     LEFT.with(|list| {
         let mut list = list.borrow_mut();
@@ -171,13 +166,12 @@ pub fn take_left() -> (Vec<String>, usize) {
     LEFT.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare
-/// and a jump), where the target (`Tti::rotation_hot_bytes_per_loop`) does not
-/// say.
+/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare and a jump), where the
+/// target (`Tti::rotation_hot_bytes_per_loop`) does not say.
 pub const ROTATION_HOT_BYTES_PER_LOOP: i64 = 4;
 
-/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the
-/// code by no more than `bytes` for each loop it rotated.
+/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the code by no more than
+/// `bytes` for each loop it rotated.
 pub fn keeps_rotation_hot(
     saved: i64,
     added: i64,
@@ -187,24 +181,22 @@ pub fn keeps_rotation_hot(
     saved > 0 && added <= bytes * loops as i64
 }
 
-/// A function of more instructions than this is not priced twice: the second
-/// compile of a big function costs more than the loops in it can save
-/// (known_loads_walks.c -Os: one 6219-instruction `main`, 2.27x the
-/// compile time, put back). The functions the trial leaves unrotated hold up to
-/// 2038 (x_jpeg_fixed -Os, -213 B), so 1024 gave that away.
+/// A function of more instructions than this is not priced twice: the second compile of a big function
+/// costs more than the loops in it can save (known_loads_walks.c -Os: one 6219-instruction `main`, 2.27x the
+/// compile time, put back). The functions the trial leaves unrotated hold up to 2038
+/// (x_jpeg_fixed -Os, -213 B), so 1024 gave that away.
 pub const ROTATION_TRIAL_MAX_INSTRUCTIONS: usize = 4096;
 
-/// Whether the unrotated trial is kept at -Os, where bytes are the one strict
-/// axis: it is smaller. A tie keeps the pass's own result.
+/// Whether the unrotated trial is kept at -Os, where bytes are the one strict axis: it
+/// is smaller. A tie keeps the pass's own result.
 pub fn keeps_at_size(added: i64) -> bool {
     added < 0
 }
 
-/// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is
-/// smaller, or it grows by at most `ROTATION_HOT_BYTES_PER_LOOP` for each
-/// function the trial took and the code runs less. `bytes_strict`
-/// (`Tuning::unroll_trial_bytes_strict`): bytes are the one axis at -Os, so
-/// only the smaller object is kept.
+/// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is smaller, or it grows by
+/// at most `ROTATION_HOT_BYTES_PER_LOOP` for each function the trial took and the code runs less.
+/// `bytes_strict` (`Tuning::unroll_trial_bytes_strict`): bytes are the one axis at -Os, so only the
+/// smaller object is kept.
 pub fn keeps_unroll_at_size(
     saved: i64,
     added: i64,
@@ -259,14 +251,12 @@ pub fn only(
     cut
 }
 
-/// DEVIATE OS-INLINE-TRIAL (beyond the pin; owner 6502-c, exit 2026-12-05): a
-/// call site the -Os byte model refused within its own error, to be inlined in
-/// a second compile and kept if the finished functions of its chain are
-/// smaller. The model is fit to the bytes the backend writes
-/// (`Tti::opt_size_inline_trial_by_bytes`) and is within 25% of them for two
-/// functions in three, so a copy it refuses by less than that is the backend's
-/// to decide. `caller` and `callees` are names: the compile is deterministic up
-/// to the site, so the same site is found again.
+/// DEVIATE OS-INLINE-TRIAL (beyond the pin; owner 6502-c, exit 2026-12-05): a call site the -Os
+/// byte model refused within its own error, to be inlined in a second compile and kept if the
+/// finished functions of its chain are smaller. The model is fit to the bytes the backend writes
+/// (`Tti::opt_size_inline_trial_by_bytes`) and is within 25% of them for two functions in three, so
+/// a copy it refuses by less than that is the backend's to decide. `caller` and `callees` are names:
+/// the compile is deterministic up to the site, so the same site is found again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Site {
     pub caller: String,
@@ -319,12 +309,11 @@ pub fn take_refused() -> Vec<Site> {
     REFUSED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Which of the sites' groups the finished code keeps: sites that share a
-/// function (a caller or a callee) are one group, kept whole if the bytes of
-/// its functions are fewer in the second compile (`other`) than in the first
-/// (`kept`; a function a compile does not define is 0). A group whose
-/// caller one compile did not define is not priced: another inline took it, and
-/// its bytes went with that. Returns one flag per site.
+/// Which of the sites' groups the finished code keeps: sites that share a function (a caller or a
+/// callee) are one group, kept whole if the bytes of its functions are fewer in the second compile
+/// (`other`) than in the first (`kept`; a function a compile does not define is 0). A group whose
+/// caller one compile did not define is not priced: another inline took it, and its bytes went
+/// with that. Returns one flag per site.
 pub fn accepted(
     sites: &[Site],
     kept: &std::collections::BTreeMap<String, i64>,
@@ -343,8 +332,7 @@ pub fn accepted(
     let roots: Vec<usize> = (0..sites.len()).map(|one| root(&group, one)).collect();
     (0..sites.len())
         .map(|site| {
-            let members: Vec<&Site> =
-                (0..sites.len()).filter(|one| roots[*one] == roots[site]).map(|one| &sites[one]).collect();
+            let members: Vec<&Site> = (0..sites.len()).filter(|one| roots[*one] == roots[site]).map(|one| &sites[one]).collect();
             if members.iter().any(|one| !kept.contains_key(&one.caller) || !other.contains_key(&one.caller)) {
                 return false;
             }
@@ -391,9 +379,8 @@ mod inline_tests {
         Site { caller: caller.to_owned(), callees: callees.iter().map(|one| (*one).to_owned()).collect() }
     }
 
-    /// memcpy_libcall -Os: the model read the copies of `same` as +52 B, the
-    /// backend writes -58 B once `same` is gone. The chain's functions are
-    /// priced together; the callee's bytes leave with it.
+    /// memcpy_libcall -Os: the model read the copies of `same` as +52 B, the backend writes -58 B once
+    /// `same` is gone. The chain's functions are priced together; the callee's bytes leave with it.
     #[test]
     fn a_chain_whose_functions_are_fewer_bytes_is_kept_with_its_callee_gone() {
         let sites = [site("main", &["same"])];
@@ -403,8 +390,8 @@ mod inline_tests {
         assert_eq!(accepted(&sites, &kept, &bytes(&[("main", 380)])), [false], "a tie or more is put back");
     }
 
-    /// Two callers of one callee are one group: priced apart, each would count
-    /// the callee's bytes as its own saving.
+    /// Two callers of one callee are one group: priced apart, each would count the callee's bytes as
+    /// its own saving.
     #[test]
     fn callers_of_one_callee_are_priced_as_one_group() {
         let sites = [site("a", &["h"]), site("b", &["h"])];
@@ -415,8 +402,7 @@ mod inline_tests {
         assert_eq!(accepted(&sites, &kept, &cheaper), [true, true]);
     }
 
-    /// A caller another inline absorbed has no bytes of its own in one compile:
-    /// that is not a saving.
+    /// A caller another inline absorbed has no bytes of its own in one compile: that is not a saving.
     #[test]
     fn a_caller_a_compile_does_not_define_is_not_priced() {
         let sites = [site("line", &["kernel"])];
@@ -475,9 +461,8 @@ mod moved_tests {
 mod unroll_keep_tests {
     use super::*;
 
-    /// x86_64 -Os kept an unroll that grew long_double_union_pun by 13 B (53 ->
-    /// 66; clang 53) because the code ran less: the one strict axis at -Os
-    /// is bytes. A target that says so keeps only the smaller object.
+    /// x86_64 -Os kept an unroll that grew long_double_union_pun by 13 B (53 -> 66; clang 53) because the code ran
+    /// less: the one strict axis at -Os is bytes. A target that says so keeps only the smaller object.
     #[test]
     fn a_bytes_strict_unroll_trial_keeps_only_a_smaller_object() {
         assert!(keeps_unroll_at_size(10, 3, 1, false), "m32 keeps a few bytes for less work");

@@ -396,10 +396,7 @@ end:
 fn test_loops_are_visited_in_program_order_inner_first() {
     let mut text = String::from("define i32 @g(i32 %n) {\nentry:\n  br label %h0\n");
     for i in 0..4 {
-        let (from, next) = (
-            if i == 0 { "entry".to_string() } else { format!("m{}", i - 1) },
-            if i == 3 { "x".to_string() } else { format!("h{}", i + 1) },
-        );
+        let (from, next) = (if i == 0 { "entry".to_string() } else { format!("m{}", i - 1) }, if i == 3 { "x".to_string() } else { format!("h{}", i + 1) });
         text += &format!(
             "h{i}:\n  %i{i} = phi i32 [ 0, %{from} ], [ %j{i}, %h{i} ]\n  %j{i} = add nsw i32 %i{i}, 1\n  %c{i} = icmp slt i32 %j{i}, %n\n  br i1 %c{i}, label %h{i}, label %m{i}\nm{i}:\n  br label %{next}\n"
         );

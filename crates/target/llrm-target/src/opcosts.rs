@@ -331,17 +331,7 @@ mod tests {
     /// evaluations, 66 M of tiny600's 4 236 M instructions. One per table.
     #[test]
     fn test_the_byte_costs_of_a_table_are_evaluated_once() {
-        let text = format!(
-            "{ALL}[bytes]\n{}\n",
-            [
-                "a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd",
-                "fl", "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv"
-            ]
-            .iter()
-            .map(|one| format!("{one} = 4"))
-            .collect::<Vec<_>>()
-            .join("\n")
-        );
+        let text = format!("{ALL}[bytes]\n{}\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
         let description = Description::parse(&text).unwrap();
         let before = EVALUATIONS.with(|count| count.get());
         for _ in 0..50 {
