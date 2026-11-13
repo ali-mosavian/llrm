@@ -319,7 +319,8 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))?;
+        let narrow = !options.strict && !size_build(module, name, options);
+        optimized = mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow)?;
         &optimized
     } else {
         module
@@ -605,7 +606,20 @@ pub fn libcalls_for(
         options.size_libcalls,
         |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
         |name, kinds| {
-            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            // The price is one build: a call against a loop differs by far more than a
+            // trial moves, and each trial set costs several builds (x2.65 compile time).
+            let options = Options {
+                libcalls: Some(crate::libcalls::mask(kinds)),
+                shared_cse: false,
+                tail_duplicate: false,
+                return_dup: false,
+                class_split: false,
+                compare_destinations: false,
+                global_copies: false,
+                relax_classes: false,
+                remat_constants: false,
+                ..options
+            };
             items_with(module, name, cpu, options).map(|items| items_bytes(&items))
         },
     );
@@ -734,7 +748,7 @@ fn items_once(
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
-    // call the counts and shifts
+    // call the counts; their variable shifts are chosen like the 68020's
     let libcalls = if wants_size {
         let mut kinds =
             crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)));
@@ -1169,12 +1183,32 @@ pub fn mid_end_for(
     mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
+/// [`mid_end_for`], narrowing multiplies where `narrow_multiplies`.
+pub fn mid_end_for_narrowing(
+    module: &Module,
+    cpu: Cpu,
+    narrow_multiplies: bool,
+) -> Result<Module, String> {
+    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies)
+}
+
 /// [`mid_end`] with another target description: what a test compares the
 /// m68k one with.
 pub fn mid_end_described_by(
     module: &Module,
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
+) -> Result<Module, String> {
+    mid_end_narrowing(module, tti, machine, false)
+}
+
+/// [`mid_end_described_by`], narrowing the multiplies the range proves narrow
+/// (`narrow_multiplies`: -O2 and -O3, not for size).
+pub fn mid_end_narrowing(
+    module: &Module,
+    tti: &dyn llrm_mir::tti::Tti,
+    machine: Option<Rc<dyn llrm_mir::target::Machine>>,
+    narrow_multiplies: bool,
 ) -> Result<Module, String> {
     MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
@@ -1197,6 +1231,11 @@ pub fn mid_end_described_by(
             llrm_transforms::exitne::strengthened(context, &layout, function, &outer);
         }
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
+        // after it: it folds `zext (trunc iv)` back into the counter
+        let for_size = has(&function.attrs, "optsize") || has(&function.attrs, "minsize");
+        if let (true, false, Some(limit)) = (narrow_multiplies, for_size, tti.range_narrowing_width()) {
+            llrm_transforms::narrowrange::multiplies_narrowed(context, &layout, function, &outer, limit);
+        }
         // the ids the pass handed out for declarations name nothing until they
         // are placed
         declared.place(&mut module)?;

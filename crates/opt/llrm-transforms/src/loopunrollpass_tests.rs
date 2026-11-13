@@ -1465,6 +1465,11 @@ fn sandy_bridge_throughput() -> llrm_mir::target::Throughput {
 /// about 20 on a core with the SandyBridge resources); with that core's throughput model, or without any;
 /// whether the loop is gone.
 fn fill_unrolled(throughput: bool, call: bool) -> bool {
+    fill_unrolled_at(throughput, call, 600)
+}
+
+/// `fill_unrolled` at `rate` milliclocks a byte.
+fn fill_unrolled_at(throughput: bool, call: bool, rate: i64) -> bool {
     let (callee, first, folded, stored) = if call {
         // Called twice, so not an inline candidate of the loop's own metrics (one live use is): the inliner decides it
         // once the copies make the argument a constant.
@@ -1510,8 +1515,15 @@ done:
 }}
 "
     ));
-    unroll_on_core(&mut module, throughput, !call, 2, 0, 600);
+    unroll_on_core(&mut module, throughput, !call, 2, 0, rate);
     !printed(&module).contains("%i = phi")
+}
+
+/// The control: a rate that no saving repays keeps the loop rolled where 600 unrolls it, so the rate is read at all.
+#[test]
+fn test_an_absurd_rate_keeps_a_loop_rolled_that_a_real_one_unrolls() {
+    assert!(fill_unrolled_at(false, false, 600), "premise: unrolled at 600");
+    assert!(!fill_unrolled_at(false, false, 1_000_000_000), "a billion milliclocks a byte repays nothing");
 }
 
 /// The unroll pass on `@f` of `module` for x86-64 at `rate` milliclocks a byte (the test's knob), with or without
@@ -1722,4 +1734,55 @@ b2:
         inliner_follows: true,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
+}
+
+/// `n` run-time loops in a row behind one guard, as the pipeline hands them to
+/// the unroll (`for (i = 0; i < n; i++) { s += v[i] * 3; v[i] = s ^ 1; }`), a
+/// sum carried from one to the next.
+fn runtime_loops(n: usize) -> String {
+    let mut text = String::from(
+        "@v = global [64 x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {\nentry:\n  %g = icmp sgt i32 %n, 0\n  br i1 %g, label %ph0, label %end\n\n",
+    );
+    for k in 0..n {
+        let before = if k == 0 { "0".to_owned() } else { format!("%u{}", k - 1) };
+        let after = if k + 1 == n { "end".to_owned() } else { format!("ph{}", k + 1) };
+        text += &format!(
+            "ph{k}:\n  %t{k} = zext nneg i32 %n to i64\n  br label %b{k}\n\nb{k}:\n  %i{k} = phi i64 [ 0, %ph{k} ], [ %in{k}, %b{k} ]\n  %s{k} = phi i32 [ %u{k}, %b{k} ], [ {before}, %ph{k} ]\n  %p{k} = getelementptr inbounds nuw [4 x i8], ptr @v, i64 %i{k}\n  %v{k} = load i32, ptr %p{k}\n  %m{k} = mul nsw i32 %v{k}, {}\n  %u{k} = add nsw i32 %m{k}, %s{k}\n  %e{k} = xor i32 %u{k}, {}\n  store i32 %e{k}, ptr %p{k}\n  %in{k} = add nuw nsw i64 %i{k}, 1\n  %x{k} = icmp eq i64 %in{k}, %t{k}\n  br i1 %x{k}, label %{after}, label %b{k}\n\n",
+            3 + k % 5,
+            k + 1
+        );
+    }
+    text + &format!("end:\n  %r = phi i32 [ 0, %entry ], [ %u{}, %b{} ]\n  ret i32 %r\n}}\n", n - 1, n - 1)
+}
+
+/// The trip counts the run-time unroll of `n` loops in a row works out.
+fn runtime_unroll_counts(n: usize) -> usize {
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    let mut module = parsed(&runtime_loops(n));
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("x86-64").expect("a cpu");
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+        inliner_follows: true,
+    };
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "premise: the loops are unrolled");
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// The unroll threw its expressions away after each run-time unrolled loop, so
+/// each loop after it worked out the trip counts of all those before it again:
+/// 8 loops cost 51 counts, 16 cost 167, 32 cost 591. The pin's one
+/// `ScalarEvolution` lives on through the pass, and `forgetTopmostLoop` drops
+/// the loop it unrolled: 4x the loops, about 4x the counts.
+#[test]
+fn the_trip_counts_a_run_time_unroll_works_out_grow_with_the_loops_not_their_square() {
+    let (small, large) = (runtime_unroll_counts(8), runtime_unroll_counts(32));
+    assert!(large < 6 * small, "8 loops: {small} counts, 32 loops: {large}");
 }

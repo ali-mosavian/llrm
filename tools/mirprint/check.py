@@ -67,14 +67,17 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "f.mir"
         path.write_text(mir)
-        pin = subprocess.run([str(LLC), "-mtriple=i486-unknown-linux-gnu", "-mcpu=i486", "-mattr=-sse,-sse2,-mmx", "-O2",
+        wide = "-m64" in flags  # x86-64: the quadword forms, no i486 feature list
+        target = ["-mtriple=x86_64-unknown-linux-gnu"] if wide else ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486", "-mattr=-sse,-sse2,-mmx"]
+        pin = subprocess.run([str(LLC), *target, "-O2",
                               "-start-before=greedy", "-stop-after=virtregrewriter", "-x", "mir", str(path), "-o", "-"],
                              capture_output=True, text=True)
     if pin.returncode:
         print("the pin refused the MIR:", pin.stderr[:600])
         return 1
-    stores = len(re.findall(r"MOV32mr %stack\.", pin.stdout))
-    reloads = len(re.findall(r"[A-Z0-9]+32rm %stack\.", pin.stdout))
+    word = "64" if "-m64" in flags else "32"
+    stores = len(re.findall(rf"MOV{word}mr %stack\.", pin.stdout))
+    reloads = len(re.findall(rf"[A-Z0-9]+{word}rm %stack\.", pin.stdout))
     arguments = len(re.findall(r"%fixed-stack\.", pin.stdout))
     dump = subprocess.run([llrm_c(), *flags, "-S", "-o", "/dev/null", source], capture_output=True, text=True,
                           env={**os.environ, "ISEL_DUMP": "1"})

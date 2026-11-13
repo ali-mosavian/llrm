@@ -15,7 +15,12 @@
 #define SF_SHR_STICKY_ADD sf_shr_sticky64
 #define SF_ROUND3 sf_round3_64
 #define SF_PACK sf64_pack
+#ifdef SF_UNPACK_SHARED /* one decode in unpack.c for every operation, as sf64_pack is for the encode */
+uint64_t sf64_unpack(uint64_t a, int *e);
+#define SF_UNPACK sf64_unpack
+#else
 #define SF_UNPACK SF_N(unpack)
+#endif
 #include "../macros.inc"
 /* Encoding is a shared function (pack.c), as sf32_pack is: an inline copy in every operation costs more than the call. */
 uint64_t sf64_pack(uint64_t sign, int e, uint64_t m);
