@@ -57,7 +57,7 @@ impl PatternContext for Context {
         name: &str,
     ) -> bool {
         match name {
-            "SHA3" => !self.generic,
+            "SHA3" | "FullFP16" | "LSE" | "CRC" | "AES" | "SHA2" | "RCPC" | "RDM" => !self.generic,
             other => unreachable!("the table leaves {other} to the CPU, which this does not know"),
         }
     }
