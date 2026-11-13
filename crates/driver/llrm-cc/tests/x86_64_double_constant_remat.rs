@@ -1,7 +1,8 @@
-//! x86-64: a double constant read from the pool and used on both sides of a call is read again, not spilled. The
-//! rematerialization predicate knew `movsd` but the scalar double load is `movsd_x`, so the constant was stored to the
-//! stack and reloaded (`movsd xmm1, [pool]; mov [rsp], xmm1 ... mulsd xmm0, [rsp]`); the pin reads the pool twice.
-//! Needs `LLRM_LLC`.
+//! x86-64: a double constant read from the pool and used on both sides of a call is read again, not spilled, and the
+//! load folds into the multiply after the call. The remat predicate knew `movsd` but the scalar double load is
+//! `movsd_x`, so the constant was stored to the stack and reloaded (`mulsd xmm0, [rsp]`, soft_double_add_sub -O1
+//! `main` 113 B against the pin's 107); remade alone it was a load beside the multiply (115 B), where the pin
+//! (`canFoldAsLoad`) folds it: `mulsd xmm0, [pool]`. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -24,6 +25,7 @@ fn a_double_constant_used_across_a_call_is_read_from_the_pool_again_at_x86_64() 
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let text = std::fs::read_to_string(&asm).unwrap();
     let body = text.split("f proc near").nth(1).and_then(|rest| rest.split("f endp").next()).expect("an f body");
-    let pooled = body.lines().filter(|line| line.contains("mulsd") && line.contains("$K")).count();
-    assert_eq!(pooled, 2, "the constant is read from the pool at both multiplies:\n{body}");
+    let multiplies: Vec<&str> = body.lines().filter(|line| line.contains("mulsd")).collect();
+    assert!(multiplies.iter().all(|line| !line.contains("[rsp")), "the constant was read back from the stack:\n{body}");
+    assert!(multiplies.iter().any(|line| line.contains("$K")), "no multiply reads the pool operand:\n{body}");
 }
