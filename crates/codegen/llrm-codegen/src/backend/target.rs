@@ -257,6 +257,10 @@ pub struct Segments {
     /// The one that reaches the data group while `data` holds something
     /// else: the stack's, where the stack lives in the data group.
     pub through: Option<RegId>,
+    /// A near pointer into the stack is read through the data segment: the
+    /// stack's selector is the data group's for the whole run
+    /// (`Segments::stack_shares_data`), and the data register stays reserved.
+    pub stack_shares_data: bool,
     /// The selector stride a huge pointer takes per carried 64K, as a shift:
     /// the machine's (`Machine::huge_shift`), where it states one.
     pub huge_shift: Option<u32>,
@@ -292,6 +296,7 @@ impl Segments {
                 selectors: Vec::new(),
                 data: registers.data_segment,
                 through: None,
+                stack_shares_data: false,
                 huge_shift: None,
                 offset_bytes,
                 registers,
@@ -315,6 +320,7 @@ impl Segments {
                 .collect(),
             data: Some(register(&segments.data)),
             through: segments.stack_is_data.then(|| register(&segments.stack)),
+            stack_shares_data: segments.stack_shares_data && !segments.stack_is_data,
             huge_shift: machine.huge_shift(),
             offset_bytes,
             registers,
@@ -334,6 +340,21 @@ pub fn offset_bytes(arch: &dyn llrm_target::Target) -> i64 {
 #[cfg(test)]
 pub static BUILT_IN: std::sync::LazyLock<Segments> =
     std::sync::LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BUILT_IN, Regs(&llrm_x86_m16::REGISTER_INFO), 2));
+
+/// The segment registers of a machine whose start-up makes SS the data group's
+/// selector (`os.toml`'s `stack_shares_data`: Nib on DOS), for the tests of
+/// this crate.
+#[cfg(test)]
+pub static SHARED_STACK: std::sync::LazyLock<Segments> = std::sync::LazyLock::new(|| {
+    let machine = llrm_target::machine::Machine {
+        segments: llrm_x86_m16::machine::BUILT_IN
+            .segments
+            .clone()
+            .map(|segments| llrm_target::machine::Segments { stack_shares_data: true, ..segments }),
+        ..llrm_x86_m16::machine::BUILT_IN.clone()
+    };
+    Segments::of(&machine, Regs(&llrm_x86_m16::REGISTER_INFO), 2)
+});
 
 /// The segment registers of `machine::BASIC`, for the tests of this crate.
 #[cfg(test)]
