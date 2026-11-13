@@ -106,7 +106,7 @@ def gcc_program_flags(flags: list[str], source: str = "") -> list[str]:
     difference from the program's own flags (external_flags.check_gcc_flags): the cell then has no gcc column."""
     # A source that tests `__clang__` has one branch for clang and another for the rest; all three columns build the clang one
     # (variadic.c: gcc built the macro walk, 178 B at 68000 -Os, against 276 B with the stdarg one ours and clang build).
-    extra = ("-D__clang__",) if "__clang__" in source else ()
+    extra = (*external_flags.GCC_DIALECT, *(("-D__clang__",) if "__clang__" in source else ()))
     out = [*external_flags.gcc_program_flags(flags), *extra]
     external_flags.check_gcc_flags(flags, out, extra)
     return out

@@ -1829,7 +1829,7 @@ fn trial_clocks(
         &module.metadata,
         function,
     );
-    let weights: std::collections::HashMap<llrm_mir::module::BlockId, f64> =
+    let weights: llrm_mir::dense::IdMap<llrm_mir::module::BlockId, f64> =
         session.ask_within(&module.context, layout, &module.globals, &module.metadata, function, |scev, cx| {
             function
                 .layout()

@@ -57,7 +57,7 @@ fn can_pass<T: Target>(
     if (kill.may_load && other.may_store) || (kill.may_store && (other.may_load || other.may_store)) {
         return false;
     }
-    if (kill.sets_flags || kill.reads_flags) && (other.sets_flags || other.reads_flags) {
+    if (kill.sets_flags() || kill.reads_flags()) && (other.sets_flags() || other.reads_flags()) {
         return false;
     }
     let (kill_defs, other_uses, other_defs) = (

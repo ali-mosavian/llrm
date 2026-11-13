@@ -226,18 +226,24 @@ pub fn pressure_in(
     blocks: &[BlockId],
     counted: &dyn Fn(ValueId) -> bool,
 ) -> usize {
-    let found = live_where(function, counted);
+    // Followed from the reads of the counted values: the work is the blocks
+    // they are live in, not the dataflow of the whole function, which a caller
+    // asking of each loop in turn paid again for each.
+    let found = live_of(function, &needed_for(function, counted));
+    let none = IdSet::new();
+    let alive_out = |block: BlockId| -> IdSet<ValueId> {
+        found.live_out.get(&id(block)).unwrap_or(&none).iter().filter(|&one| counted(one)).collect()
+    };
     let mut peak = 0;
     for &block in blocks {
-        let mut alive = found.live_out[&id(block)].clone();
-        let size = |alive: &IdSet<ValueId>| alive.iter().filter(|&one| counted(one)).count();
-        peak = peak.max(size(&alive));
+        let mut alive = alive_out(block);
+        peak = peak.max(alive.len());
         for op in split(function, block).1.into_iter().rev() {
             if let Some(one) = op.result {
                 alive.remove(&one);
             }
-            alive.extend(reads(op));
-            peak = peak.max(size(&alive));
+            alive.extend(reads(op).filter(|&one| counted(one)));
+            peak = peak.max(alive.len());
         }
     }
     peak
@@ -536,14 +542,13 @@ pub fn live(function: &Function) -> Liveness {
     found
 }
 
-/// `live` of the values `wanted` says only: each is live where it is in the
-/// whole, the others are in no set. A caller that asks of a few values (the
-/// phis a pass takes for cells) is not charged for the live sets of every value
-/// in the function.
-pub fn live_where(
+/// The values `wanted` says and the phis that take them: a phi's arm is live
+/// where the phi is, so following a wanted arm needs the liveness of the phi
+/// that takes it, and of the phis that take that one.
+fn needed_for(
     function: &Function,
     wanted: &dyn Fn(ValueId) -> bool,
-) -> Liveness {
+) -> IdSet<ValueId> {
     // A phi's arm is live where the phi is: following a wanted arm needs the
     // liveness of the phi that takes it, and of the phis that take that
     // one.
@@ -568,6 +573,18 @@ pub fn live_where(
             }
         }
     }
+    needed
+}
+
+/// `live` of the values `wanted` says only: each is live where it is in the
+/// whole, the others are in no set. A caller that asks of a few values (the
+/// phis a pass takes for cells) is not charged for the live sets of every value
+/// in the function.
+pub fn live_where(
+    function: &Function,
+    wanted: &dyn Fn(ValueId) -> bool,
+) -> Liveness {
+    let needed = needed_for(function, wanted);
     let mut found = solved(function, &|value| needed.contains(&value));
     for set in found.live_in.values_mut().chain(found.live_out.values_mut()) {
         set.retain(|value| wanted(value));
@@ -1496,6 +1513,29 @@ top:
         };
         let (small, large) = (steps(100), steps(200));
         assert!(small > 0 && large <= 2 * small + 8, "{small} steps for 100 blocks, {large} for 200");
+    }
+
+    /// A loop asked of the float pressure of each in turn solved the dataflow
+    /// of the whole function each time: 160 loops of one function cost the
+    /// unroll 6.7 G of 11.9 G. The pressure is followed from the reads of the
+    /// floats, and is what the dataflow said.
+    #[test]
+    fn test_the_pressure_in_a_loop_is_followed_from_the_reads_not_solved_for_the_function() {
+        let mut text = String::from("define double @f(double %x, i32 %n) {\ne:\n  br label %h\n\n");
+        text += "h:\n  %i = phi i32 [ 0, %e ], [ %j, %h ]\n  %a = phi double [ %x, %e ], [ %c, %h ]\n  %b = fmul double %a, %x\n  %c = fadd double %b, %a\n  %j = add i32 %i, 1\n  %t = icmp ne i32 %j, %n\n  br i1 %t, label %h, label %p0\n\n";
+        for at in 0..64 {
+            text += &format!("p{at}:\n  %q{at} = fadd double %c, {at}.0\n  br label %p{}\n\n", at + 1);
+        }
+        text += "p64:\n  ret double %c\n}\n";
+        let module = parsed(&text);
+        let f = function(&module, "f");
+        let is_float = |one: ValueId| value(f, "x") == one || ["a", "b", "c"].iter().any(|name| value(f, name) == one);
+        let blocks = [block(f, "h")];
+        let before = solves();
+        let peak = pressure_in(f, &blocks, &is_float);
+        assert_eq!(solves(), before, "the whole function was solved for one loop");
+        assert_eq!(peak, pressure_weighted(f, &blocks, &|one| usize::from(is_float(one))));
+        assert!(peak >= 3, "premise: floats are live in the loop: {peak}");
     }
 
     /// The position table of a block was a slot for every instruction id up to
