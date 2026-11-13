@@ -426,7 +426,7 @@ fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
 
 /// clang marks every loop `llvm.loop.unroll.disable` at -O1 (its `UnrollLoops`
 /// is off), so the pin's -O1 never unrolls and x_life O1 ran 64k taken `jne`
-/// against gcc's 16k (+151k clk). The m32 rows take `-funroll-loops` at -O1,
+/// against gcc's 16k (+151k clk). The m32 and m64 rows take `-funroll-loops` at -O1,
 /// unless the command line states either spelling; other rows and levels are
 /// as before.
 #[test]
@@ -442,11 +442,15 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
         let (clang, llc) = flags("x86_32-linux", line);
         assert!(!clang.iter().any(|f| f == "-funroll-loops") && !llc.iter().any(|f| f == "-funroll-loops"), "{line}");
     }
-    let (clang, llc) = flags("x86_64-linux", "-O1 -c x.c");
-    assert!(
-        !clang.iter().any(|f| f == "-funroll-loops") && !llc.iter().any(|f| f == "-funroll-loops"),
-        "m64 as before"
-    );
+    // #9536: the m64 row takes it at -O1 as well, with the same exceptions.
+    for line in ["-O1 -c x.c", "-O2 -c x.c", "-O1 -fno-unroll-loops -c x.c"] {
+        let (clang, llc) = flags("x86_64-linux", line);
+        let unrolls = line.starts_with("-O1 -c");
+        assert!(
+            clang.iter().any(|f| f == "-funroll-loops") == unrolls && llc.iter().any(|f| f == "-funroll-loops") == unrolls,
+            "m64 {line}"
+        );
+    }
     let (clang, _) = flags("x86_16-dos", "-O1 -c x.c");
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
 }
