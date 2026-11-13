@@ -1713,12 +1713,11 @@ fn parts(
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
     let moved = !omit && framed && moves_stack(&procedure.body);
-    // A one-slot adjustment of a 64-bit frame is `push rax` / `pop rcx` where
-    // no return is a sibling call (rcx may carry its argument):
+    // A one-slot adjustment of a 64-bit frame is `push rax` / `pop rcx`:
     // X86FrameLowering's emitSPUpdate, with the register
-    // findDeadCallerSavedReg gives a `ret`.
-    let scratch =
-        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    // findDeadCallerSavedReg gives a `ret` or a sibling call (the `pop`'s
+    // register is one no exit reads: `dead_pop`).
+    let scratch = procedure.registers.slot_scratch.filter(|_| omit && reserve == slot);
     let one_slot = scratch.is_some();
     let (accumulator, dead_at_return) = scratch.map_or((STACK, None), |(push, pop)| (push, Some(pop)));
     let mut leave: Vec<Semantics> = Vec::new();
