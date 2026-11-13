@@ -460,6 +460,9 @@ pub struct Tuning {
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
     /// `Tti::lsr_phi_operand_uses`.
     pub lsr_phi_operand_uses: bool,
+    /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+    /// `Tti::lsr_phi_users_first`.
+    pub lsr_phi_users_first: bool,
     /// `Tti::splits_invariant_fmuladd`.
     pub splits_invariant_fmuladd: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
@@ -704,6 +707,7 @@ impl Tuning {
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
+        lsr_phi_users_first: false,
         splits_invariant_fmuladd: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,

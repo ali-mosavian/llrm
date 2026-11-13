@@ -434,6 +434,9 @@ impl llrm_target::Target for M64 {
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
+                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+                            // `Tti::lsr_phi_users_first`.
+                            lsr_phi_users_first: true,
                             lsr_size_order: true,
                             lsr_size_x86_64: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
