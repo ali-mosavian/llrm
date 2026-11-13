@@ -777,6 +777,30 @@ fn float_inst(
     if let Some(fill) = vector_fill(name, operands) {
         return Some(fill.map(|fill| Inst::VectorFill { rd, fill }));
     }
+    // `UMOVvi32`: one lane of a vector into a general register; the pin's
+    // `_idx0` forms read lane 0 and take no index.
+    if let Some((lanes, idx0)) = name
+        .strip_prefix("UMOVv")
+        .map(|rest| rest.strip_suffix("_idx0").map_or((rest, false), |lane| (lane, true)))
+        .and_then(|(lane, idx0)| {
+            let lanes = match lane {
+                "i8" => Arrangement::B16,
+                "i16" => Arrangement::H8,
+                "i32" => Arrangement::S4,
+                "i64" => Arrangement::D2,
+                _ => return None,
+            };
+            Some((lanes, idx0))
+        })
+    {
+        return Some(match (operands, idx0) {
+            ([Operand::Fpr(rn), Operand::Imm(index)], false) => {
+                Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: *index as u8 })
+            }
+            ([Operand::Fpr(rn)], true) => Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: 0 }),
+            _ => wrong(),
+        });
+    }
     if let Some(inst) = vector_inst(name, rd, operands) {
         return Some(inst);
     }
@@ -2045,7 +2069,25 @@ impl Emitter<'_> {
                         return Ok(());
                     }
                     // The low lane of a vector register is the scalar one.
+                    // An integer one is read by a general register operand:
+                    // the `COPY` the pin's `InstrEmitter` makes across the
+                    // classes is `fmov x, d`.
                     ("EXTRACT_SUBREG", [Operand::Fpr(rn), _]) => {
+                        if node.values[0].is_integer() {
+                            let (width, size) = match node.values[0].size_in_bits() {
+                                64 => (Width::X, FpSize::D),
+                                _ => (Width::W, FpSize::S),
+                            };
+                            let gpr = self.mf.gpr();
+                            self.ops.push(Op::I(Inst::FpInt {
+                                op: FpConvert::Bits { to_fp: false },
+                                width,
+                                size,
+                                gpr,
+                                fpr: *rn,
+                            }));
+                            self.values.insert((id, 0), gpr);
+                        }
                         self.fvalues.insert((id, 0), *rn);
                         return Ok(());
                     }

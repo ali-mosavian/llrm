@@ -320,6 +320,7 @@ fn branches() {
     ] {
         all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
         all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
+        all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
     }
     for (lanes, index) in
         [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)]

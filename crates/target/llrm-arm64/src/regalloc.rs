@@ -338,6 +338,9 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorInsGpr { rd, .. }) => {
                 wide.insert(Reg::Fpr(*rd));
             }
+            Op::I(Inst::VectorUmov { rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+            }
             Op::I(Inst::VectorInsLane { rd, rn, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
             }

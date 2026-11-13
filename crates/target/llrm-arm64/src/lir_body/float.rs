@@ -158,6 +158,16 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::VectorUmov { lanes, rd, rn, index } => {
+            let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
+            semantics(
+                Operation::Move,
+                format!("UMOVv{}", ins_lane(*lanes)),
+                vec![gpr_loc(*rd, width)],
+                vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+                None,
+            )
+        }
         Inst::VectorInsLane { lanes, rd, rn, index, src } => semantics(
             Operation::Move,
             format!("INSv{}lane", ins_lane(*lanes)),
@@ -400,6 +410,14 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 lanes,
                 rd: vreg_of(dest?),
                 rn: gpr_of(&s[2]),
+                index: value_of(&s[1]) as u8,
+            });
+        }
+        if name == format!("UMOVv{}", ins_lane(lanes)) {
+            return Some(Inst::VectorUmov {
+                lanes,
+                rd: gpr_of(dest?),
+                rn: vreg_of(&s[0]),
                 index: value_of(&s[1]) as u8,
             });
         }

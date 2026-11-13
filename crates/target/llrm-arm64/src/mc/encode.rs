@@ -456,6 +456,11 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
             0x4E00_1C00 | imm5 << 16 | reg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorUmov { lanes, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            let q = u32::from(*lanes == Arrangement::D2);
+            0x0E00_3C00 | q << 30 | imm5 << 16 | vreg(*rn)? << 5 | reg(*rd)?
+        }
         Inst::VectorInsLane { lanes, rd, rn, index, src } => {
             let shift = lanes.imm5().trailing_zeros();
             let imm5 = (u32::from(*index) << (shift + 1)) | lanes.imm5();

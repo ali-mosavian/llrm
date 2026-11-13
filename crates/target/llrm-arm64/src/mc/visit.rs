@@ -305,6 +305,10 @@ impl Inst {
                 f(Fpr(rd), Role::UseDef);
                 f(G(rn), Role::Use);
             }
+            Inst::VectorUmov { rd, rn, .. } => {
+                f(G(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
             Inst::VectorInsLane { rd, rn, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);

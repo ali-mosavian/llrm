@@ -246,6 +246,7 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::V2I64) => mvt::v2i64,
         EVT::Simple(MVT::V4F32) => mvt::v4f32,
         EVT::Simple(MVT::V2F64) => mvt::v2f64,
+        EVT::Simple(MVT::V2F32) => mvt::v2f32,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -267,6 +268,7 @@ fn our_vt(
             (mvt::v2i64, MVT::V2I64),
             (mvt::v4f32, MVT::V4F32),
             (mvt::v2f64, MVT::V2F64),
+            (mvt::v2f32, MVT::V2F32),
         ]
         .into_iter()
         .find(|(p, _)| *p == vt)

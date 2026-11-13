@@ -1005,6 +1005,14 @@ pub enum Inst {
         rn: Gpr,
         index: u8,
     },
+    /// `umov w, v.s[index]`: one lane of `rn` zero-extended into a general
+    /// register (`UMOVvi32`; an `x` register for the 64-bit lane).
+    VectorUmov {
+        lanes: Arrangement,
+        rd: Gpr,
+        rn: Vreg,
+        index: u8,
+    },
     /// `ins v.s[index], v.s[src]`: lane `src` of `rn` into lane `index` of
     /// `rd`, the others kept (`INSvi32lane`).
     VectorInsLane {

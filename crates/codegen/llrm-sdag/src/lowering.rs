@@ -206,7 +206,17 @@ impl TargetLoweringInfo {
     /// one only where `DagConfig::vectors` is on.
     pub fn aarch64() -> TargetLoweringInfo {
         TargetLoweringInfo::new(
-            &[MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4F32, MVT::V2F64],
+            &[
+                MVT::I32,
+                MVT::I64,
+                MVT::V16I8,
+                MVT::V8I16,
+                MVT::V4I32,
+                MVT::V2I64,
+                MVT::V4F32,
+                MVT::V2F64,
+                MVT::V2F32,
+            ],
             false,
         )
         .with_set_cc_result(MVT::I32)

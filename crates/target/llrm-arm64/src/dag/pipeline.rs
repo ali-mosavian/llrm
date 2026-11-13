@@ -456,6 +456,12 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp if dag.value_type(node).is_vector() => {
+                super::vector::lower_vector_int_to_fp(dag, node)
+            }
+            ISD::FpToSInt | ISD::FpToUInt if dag.value_type(node).is_vector() => {
+                super::vector::lower_vector_fp_to_int(dag, node)
+            }
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
             ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
