@@ -997,6 +997,23 @@ pub enum Inst {
         rn: Vreg,
         index: u8,
     },
+    /// `ins v.d[index], x`: a general register into one lane of `rd`, the
+    /// others kept (`INSvi64gpr`; a `w` register for the narrower lanes).
+    VectorInsGpr {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Gpr,
+        index: u8,
+    },
+    /// `ins v.s[index], v.s[src]`: lane `src` of `rn` into lane `index` of
+    /// `rd`, the others kept (`INSvi32lane`).
+    VectorInsLane {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        index: u8,
+        src: u8,
+    },
     /// `fneg v.4s, v.4s` and `fabs`; `lanes` is `S4` or `D2`.
     VectorFpUnary {
         op: VectorFpUnary,

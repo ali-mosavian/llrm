@@ -47,6 +47,10 @@ pub enum TypeAction {
     /// DEVIATE SD13 subset only names it): the builder never creates such a value, it lowers a
     /// vector IR type this way only where the target lists the vector as a register class.
     ScalarizeVector,
+    /// A vector of two or more lanes no register class holds, whose half does
+    /// or splits again (`TypeSplitVector`): the type legalizer makes two
+    /// values of the half type.
+    SplitVector,
 }
 
 /// The simple integer types, narrowest first (the pin's `i1`..`i128` without
@@ -253,6 +257,15 @@ impl TargetLoweringInfo {
                     _ if mvt.is_vector() => {
                         if self.vectors.contains(&mvt) {
                             (TypeAction::Legal, vt)
+                        } else if let Some(half) = mvt
+                            .element()
+                            .zip(mvt.lanes())
+                            .and_then(|(element, lanes)| MVT::vector(element, lanes / 2))
+                            .filter(|_| !self.vectors.is_empty())
+                        {
+                            // `getTypeConversion`: split in two, if a half is a
+                            // type.
+                            (TypeAction::SplitVector, EVT::Simple(half))
                         } else {
                             (TypeAction::ScalarizeVector, EVT::Simple(mvt.element().expect("a vector")))
                         }

@@ -190,7 +190,25 @@ pub fn lower_build_vector(
         // "Use DUP for non-constant splats."
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first]));
     }
-    None
+    // "If all else fails, just use a sequence of INSERT_VECTOR_ELT": lane 0 by
+    // `SCALAR_TO_VECTOR`, the others inserted. DEVIATE VEC6 (owner
+    // llrm-arm64-vec, exit 2026-11-27): the branches before it in the pin
+    // (`PreferDUPAndInsert`, a constant splat with other lanes inserted, two
+    // `DUP`s joined, `ReconstructShuffle`) are not translated.
+    let index_ty = EVT::I64;
+    let mut vec = dag.get_undef(vt);
+    let mut at = 0;
+    if lanes[0].is_some() {
+        vec = dag.get_node(ISD::ScalarToVector, vt, &[ops[0]]);
+        at = 1;
+    }
+    for lane in at..ops.len() {
+        if let Some(value) = lanes[lane] {
+            let index = dag.get_constant(lane as u128, index_ty);
+            vec = dag.get_node(ISD::InsertVectorElt, vt, &[vec, value, index]);
+        }
+    }
+    Some(vec)
 }
 
 /// `LowerVECTOR_SHUFFLE`, as far as a splat of a scalar.

@@ -311,6 +311,16 @@ fn branches() {
     ] {
         all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
     }
+    for (lanes, index, src) in [
+        (Arrangement::B16, 3, 9),
+        (Arrangement::H8, 5, 2),
+        (Arrangement::S4, 0, 3),
+        (Arrangement::S4, 3, 1),
+        (Arrangement::D2, 1, 0),
+    ] {
+        all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
+        all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
+    }
     for (lanes, index) in
         [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)]
     {

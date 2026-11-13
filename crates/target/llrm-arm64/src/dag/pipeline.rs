@@ -443,6 +443,12 @@ impl LegalizeHooks for Aarch64Lowering {
                 _ => return None,
             },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
+            // `LowerINSERT_VECTOR_ELT`: a constant lane in range is as it is
+            // (`INS`); any other index is declined.
+            ISD::InsertVectorElt => {
+                let lanes = u128::from(dag.value_type(node).lanes());
+                dag.constant(dag.operand(node, 2)).filter(|&lane| lane < lanes).map(|_| node)
+            }
             ISD::BuildVector => super::vector::lower_build_vector(dag, node),
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),

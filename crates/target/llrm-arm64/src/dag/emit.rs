@@ -631,6 +631,36 @@ fn vector_inst(
         "2i64" => Some(Arrangement::D2),
         _ => None,
     };
+    // `INSvi64gpr`, `INSvi32lane`: a general register or a lane of another
+    // vector into one lane of `rd`, which starts as the first operand.
+    if let Some((lanes, form)) = name
+        .strip_prefix("INSv")
+        .and_then(|rest| {
+            rest.strip_suffix("gpr")
+                .map(|lane| (lane, true))
+                .or_else(|| rest.strip_suffix("lane").map(|lane| (lane, false)))
+        })
+        .and_then(|(lane, gpr)| {
+            let lanes = match lane {
+                "i8" => Arrangement::B16,
+                "i16" => Arrangement::H8,
+                "i32" => Arrangement::S4,
+                "i64" => Arrangement::D2,
+                _ => return None,
+            };
+            Some((lanes, gpr))
+        })
+    {
+        return Some(match (operands, form) {
+            ([Operand::Fpr(_), Operand::Imm(index), Operand::Reg(rn)], true) => {
+                Ok(Inst::VectorInsGpr { lanes, rd, rn: *rn, index: *index as u8 })
+            }
+            ([Operand::Fpr(_), Operand::Imm(index), Operand::Fpr(rn), Operand::Imm(src)], false) => {
+                Ok(Inst::VectorInsLane { lanes, rd, rn: *rn, index: *index as u8, src: *src as u8 })
+            }
+            _ => wrong(),
+        });
+    }
     // `DUPv4i32lane`, `DUPv2i64lane`: a lane of a vector register in every
     // lane (the float splat's `dup v.4s, v.s[0]`).
     if let Some(lanes) = name.strip_prefix("DUPv").and_then(|rest| rest.strip_suffix("lane")).and_then(lanes_of) {
@@ -1935,7 +1965,11 @@ impl Emitter<'_> {
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     // `FMLA` adds into the register it reads: `rd` is a copy of
                     // the accumulator that the instruction then changes.
-                    if let (Inst::VectorFma { .. }, Some(Operand::Fpr(acc))) = (&inst, operands.first()) {
+                    if let (
+                        Inst::VectorFma { .. } | Inst::VectorInsGpr { .. } | Inst::VectorInsLane { .. },
+                        Some(Operand::Fpr(acc)),
+                    ) = (&inst, operands.first())
+                    {
                         self.ops.push(Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(*acc) });
                     }
                     self.ops.push(Op::I(inst));

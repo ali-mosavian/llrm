@@ -211,6 +211,14 @@ FMLSv2f64                fmuladd x/x,x,x       -                        fp_arith
 DUPv16i8lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv16i8lane
 DUPv8i16lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv8i16lane
 DUPv4i32lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv4i32lane
+INSvi8gpr                move     x/x,i,r       -                        fp_arith   - - - -/-                INSvi8gpr
+INSvi8lane               move     x/x,i,x,i     -                        fp_arith   - - - -/-                INSvi8lane
+INSvi16gpr               move     x/x,i,r       -                        fp_arith   - - - -/-                INSvi16gpr
+INSvi16lane              move     x/x,i,x,i     -                        fp_arith   - - - -/-                INSvi16lane
+INSvi32gpr               move     x/x,i,r       -                        fp_arith   - - - -/-                INSvi32gpr
+INSvi32lane              move     x/x,i,x,i     -                        fp_arith   - - - -/-                INSvi32lane
+INSvi64gpr               move     x/x,i,r       -                        fp_arith   - - - -/-                INSvi64gpr
+INSvi64lane              move     x/x,i,x,i     -                        fp_arith   - - - -/-                INSvi64lane
 DUPv2i64lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv2i64lane
 FADDv4f32                binary   x/x,x         -                        fp_arith   - - - -/-                FADDv4f32
 FADDv2f64                binary   x/x,x         -                        fp_arith   - - - -/-                FADDv2f64
