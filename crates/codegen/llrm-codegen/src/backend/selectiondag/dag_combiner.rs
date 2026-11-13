@@ -1122,7 +1122,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
                 .fold_extend_of_cast(node)
                 .or_else(|| self.visit_extend(node))
-                .or_else(|| self.sext_of_non_negative(node)),
+                .or_else(|| self.sext_of_non_negative(node))
+                .or_else(|| self.zext_nneg_of_existing_sext(node)),
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
@@ -2170,6 +2171,29 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// The closing arm of `visitZERO_EXTEND` ([L16730][pin]): `(zext nneg x)`
+    /// is the `(sext x)` that already exists, if the zext is not free: one
+    /// extension serves both, where two left a mask beside a `load16_s`.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16730
+    fn zext_nneg_of_existing_sext(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::ZeroExtend
+            || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+        {
+            return None;
+        }
+        let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
+        if self.hooks.is_zext_free(self.dag.value_type(n0), vt) {
+            return None;
+        }
+        let existing = self.dag.get_node_if_exists(ISD::SignExtend, &[vt], &[n0])?;
+        Some(SDValue { node: existing, res: 0 })
     }
 
     /// `visitSIGN_EXTEND` ([L16279][pin]): `(sext x)` is `(zext nneg x)` if the
