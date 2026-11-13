@@ -134,3 +134,17 @@ Slices (pin function in the PR body; each: fail-first, per-target md5 identity, 
 5. **Binary result used by other than store/binary** (select, compare, reduction users): jpeg_fixed :165, reductions (`VPReductionPHIRecipe`, horizontal add).
 6. **Runtime alias checks** (`vector.memcheck`, `RuntimePointerChecking::generateChecks`, LV-M1): stft :52/:74, the O3 gcc bar. Own slice.
 LV-OS gate stays (DEVIATE LV-OS, exit 2026-11-24 cause card). Bytes at O2 vs gcc: jpeg_single +980 B, jpeg_fixed +1,540 B (O2 rate cells: +0.3 net per byte, 294/462 instrs against gaps of 1.33M/0.95M); gcc does not unroll at O2, not a vector cause.
+
+## LV-W2: what blocks the counted loops after slices 1-4 (2026-11-13, head 65d632f9a8; owner llrm-arm64-vec)
+
+TL;DR: float lanes, `fmuladd`, same-width converts and scalarized strided accesses are in (#9538); no counted cell moved. The shared blocker is vector **type legalization** (`LegalizeVectorTypes.cpp`: `SplitVectorResult/Operand`, `WidenVector*`) and D-register types; `legalize_types.rs` has `TypeAction::ScalarizeVector` as a name only ("vector with no register class").
+
+| loop (real `llrm-cc -O2` IR) | refusal now | needs |
+|---|---|---|
+| jpeg_single pass 1 (%520) | "A cast that changes the lane width": `coef` is `long`, `sitofp <4 x i64>` to `<4 x float>` | split `v4i64` (BUILD_VECTOR, INSERT, SINT_TO_FP), `v2f32` D-register, `fcvtn`; scalarized strided load/store done |
+| jpeg_single pass 2 (%639), :701 | binary result / cast width | same, plus `fptosi`, `smin/smax` (llrm-target-arm64 owns LV-D4 vectorutils), byte stores (`trunc`) |
+| jpeg_fixed convert (%795) | "Found a non-intrinsic callsite": `llvm.smax/smin.i32` | LV-D4 `smax/smin` recipes, `zext/trunc` `i8`<->`i32` (v8i8/v4i16 D types), stride-3 store (interleave group, factor 3), shift by an invariant amount (LVP6) |
+| jpeg_fixed IDCT (%531) | "possible but not beneficial": `mul <2 x i64>` is unpriced (14 in the pin) | price the scalarized `mul`/`sdiv` of `v2i64` as the pin does |
+| stft_single (%54, %93) | memory conflicts; strided `tw[j*stride]` runtime stride | runtime alias checks (own slice), gather-by-scalarize with a symbolic stride |
+
+Order proposed: (1) vector type legalization in the DAG legalizer (translate `LegalizeVectorTypes.cpp` for the node set the loops use) with D-register types; (2) widening of `trunc/zext/sext` and width-changing converts; (3) `smax/smin` and the rest of the intrinsic list on llrm-target-arm64's `vectorutils`; (4) pin's `mul <2 x i64>` price; (5) runtime alias checks. Slices 1-4 stay drafts until (1)-(2) move jpeg_single.

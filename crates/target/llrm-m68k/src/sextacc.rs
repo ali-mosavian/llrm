@@ -266,8 +266,8 @@ pub fn sign_extended_words(
             let rest = &function.blocks[b].insts[at + 1..];
             let settled = rest
                 .iter()
-                .find(|one| one.sets_flags || one.reads_flags || one.call)
-                .is_some_and(|one| !one.reads_flags || one.call);
+                .find(|one| one.sets_flags() || one.reads_flags() || one.call)
+                .is_some_and(|one| !one.reads_flags() || one.call);
             if !settled {
                 continue;
             }

@@ -65,6 +65,8 @@ corpus! {
     reduction => true,
     // Not vectorizing: Found a non-intrinsic callsite
     with_call => false,
+    // We can vectorize this loop! (`llvm.fmuladd` is trivially vectorizable)
+    fp_fmuladd => true,
     // Can't vectorize due to memory conflicts
     dependence => false,
     // Not vectorizing: Cannot vectorize uncountable loop.
