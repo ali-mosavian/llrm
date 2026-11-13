@@ -42,8 +42,9 @@
 //! - LVP5 recipes also include integer `add`, `sub`, `mul`, `and`, `or`, `xor`
 //!   and shifts by a constant, on loaded and loop-invariant operands (the pin's
 //!   `VPWidenRecipe`). LVP6 a shift by anything else is left scalar. An
-//!   operation of the induction (a vector `step-vector`) is not widened. Exit:
-//!   LV-X3 (2026-11-20).
+//!   operation of the induction is widened on a `vec.ind` phi
+//!   (`VPWidenIntOrFpInductionRecipe`): the integer induction read as a value,
+//!   or its `trunc`; a floating-point induction is not.
 //! - LVP4 the new instructions carry no metadata (`!tbaa`, `!alias.scope`).
 //!
 //! # Runs
@@ -69,6 +70,7 @@ use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_mir::tti::{ArithOp, MemoryOp, Ty};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
+use crate::lcssa::from_arms;
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
 use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, ScalarFacts, choose_interleave, pin_may_vectorize, plan};
@@ -150,6 +152,21 @@ struct Operation {
 enum Step {
     Access(Access),
     Operation(Operation),
+    Induction(Induction),
+}
+
+/// A widened induction (`vec.ind`): the integer induction, or its `trunc`.
+#[derive(Clone, Copy, Debug)]
+struct Induction {
+    /// The instruction whose value the lanes are: the induction phi or the
+    /// `trunc` of it.
+    inst: InstId,
+    /// The scalar type of a lane.
+    element: TypeId,
+    /// The induction's start; the lanes begin at it (truncated to `element`).
+    start: Operand,
+    /// The type the induction is held in, if `inst` truncates it.
+    truncated_from: Option<TypeId>,
 }
 
 /// What the transform needs to rewrite a planned loop.
@@ -221,6 +238,12 @@ fn extract(
     }
     let primary_phi = Operand::Value(function.instruction(primary).result.expect("a phi"));
     let index_ty = function.instruction(primary).ty;
+    let primary_start = legality
+        .inductions
+        .iter()
+        .find(|(phi, _)| *phi == primary)
+        .map(|(_, descriptor)| descriptor.start_value)
+        .expect("the primary induction has a descriptor");
     let strides = SymbolicStrideMap::default();
     let preheader = the_loop.get_loop_preheader(function).ok_or(Skipped("The loop has no preheader"))?;
     let exit = the_loop.get_unique_exit_block(function).ok_or(Skipped("The loop has no unique exit block"))?;
@@ -295,6 +318,31 @@ fn extract(
                 // the pin's middle block fixes it (LVP5: not translated).
                 if used_outside(inst) {
                     return Err(Skipped("The induction variable is used after the loop"));
+                }
+                // `VPWidenIntOrFpInductionRecipe`: the induction read as a value
+                // (not as an address, its step or a `trunc` of its own recipe)
+                // is a vector of consecutive numbers.
+                let Operand::Value(value) = primary_phi else { unreachable!("a phi's result") };
+                let read_as_value = function.users(value).iter().any(|one| {
+                    one.user != step
+                        && match function.instruction(one.user).opcode {
+                            Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::Trunc) => false,
+                            _ => !function
+                                .instruction(one.user)
+                                .result
+                                .is_some_and(|result| address_arithmetic(function, header, result)),
+                        }
+                });
+                if read_as_value {
+                    let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                    recipes.push(Recipe::Induction { lane, truncated_from: None });
+                    widened.push(inst);
+                    steps.push(Step::Induction(Induction {
+                        inst,
+                        element: index_ty,
+                        start: primary_start,
+                        truncated_from: None,
+                    }));
                 }
             }
             Opcode::GetElementPtr { .. } => {
@@ -458,6 +506,28 @@ fn extract(
             // LV-W3b): the pin also widens `zext`/`sext`/`trunc` and the
             // changes of width, which need the D-register and split
             // legalization.
+            Opcode::Cast(CastOp::Trunc)
+                if data.operands[0] == primary_phi
+                    && !data.result.is_some_and(|result| address_arithmetic(function, header, result)) =>
+            {
+                let value = data.result.expect("a cast");
+                let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                let src = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                if used_outside(inst) {
+                    return Err(Skipped("A cast used after the loop"));
+                }
+                if !widened_users(value) {
+                    return Err(Skipped("A cast result used other than by a store or an operation"));
+                }
+                recipes.push(Recipe::Induction { lane, truncated_from: Some(src) });
+                widened.push(inst);
+                steps.push(Step::Induction(Induction {
+                    inst,
+                    element: data.ty,
+                    start: primary_start,
+                    truncated_from: Some(index_ty),
+                }));
+            }
             Opcode::Cast(op) => {
                 let kind = interleave::cast_kind(op).ok_or(Skipped("A cast the cost model does not know"))?;
                 if !matches!(
@@ -873,6 +943,96 @@ fn widen_access(
     }
 }
 
+/// `VPWidenIntOrFpInductionRecipe::execute`: a `vec.ind` phi in the header that
+/// starts at `start + <0, 1, .., VF-1>` and steps by VF per part
+/// (`step.add`, `vec.ind.next`); part `k` is the phi plus `k * VF`.
+fn widen_induction(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    widening: &Widening,
+    plan: Plan,
+    splat_block: BlockId,
+    induction: Induction,
+    wide: &mut Vec<(InstId, Vec<ValueId>)>,
+) {
+    let header = widening.shape.header;
+    let vector_ty = context.types.intern(Type::Vector { element: induction.element, count: plan.vf });
+    let first = function.iter_block(header).find(|&inst| function.instruction(inst).opcode != Opcode::Phi).expect("a body");
+    let phi = function.create_instruction(Opcode::Phi, vector_ty, Vec::new(), Flags::default(), Some("vec.ind"));
+    function.insert(phi, Position::Before(first)).expect("the header");
+    let phi_value = function.instruction(phi).result.expect("a phi");
+
+    // The first lanes: constants where the start is one, else the start
+    // (truncated) broadcast plus the lane numbers, in the vector preheader.
+    let iota = |context: &mut llrm_mir::context::Context, base: i128| {
+        let lanes = (0..plan.vf).map(|lane| context.int(induction.element, base + i128::from(lane))).collect();
+        Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(lanes) }))
+    };
+    let start = match induction.start {
+        // `Context::int` wraps to the lane type, so a wider start truncates.
+        Operand::Constant(c) => match context.get(c).kind {
+            ConstantKind::Int(value) => iota(context, value as i128),
+            _ => unreachable!("an integer induction starts at an integer"),
+        },
+        scalar => {
+            let before = Position::Before(function.terminator(splat_block).expect("a terminated preheader"));
+            let scalar = match induction.truncated_from {
+                None => scalar,
+                Some(_) => {
+                    let cut = function.create_instruction(
+                        Opcode::Cast(CastOp::Trunc),
+                        induction.element,
+                        vec![scalar],
+                        Flags::default(),
+                        None,
+                    );
+                    function.insert(cut, before).expect("the preheader");
+                    Operand::Value(function.instruction(cut).result.expect("a trunc"))
+                }
+            };
+            let splat = broadcast(context, function, splat_block, vector_ty, plan.vf, scalar);
+            let lanes = iota(context, 0);
+            let sum = function.create_instruction(
+                Opcode::Binary(BinaryOp::Add),
+                vector_ty,
+                vec![splat, lanes],
+                Flags::default(),
+                Some("induction"),
+            );
+            function.insert(sum, before).expect("the preheader");
+            Operand::Value(function.instruction(sum).result.expect("an add"))
+        }
+    };
+
+    let by_vf = int_constant(context, induction.element, u64::from(plan.vf));
+    let by_vf = broadcast(context, function, splat_block, vector_ty, plan.vf, by_vf);
+    let mut parts = vec![phi_value];
+    let mut last = phi_value;
+    for _ in 1..plan.ic {
+        let next = function.create_instruction(
+            Opcode::Binary(BinaryOp::Add),
+            vector_ty,
+            vec![Operand::Value(last), by_vf],
+            Flags::default(),
+            Some("step.add"),
+        );
+        function.insert(next, Position::Before(first)).expect("the header");
+        last = function.instruction(next).result.expect("an add");
+        parts.push(last);
+    }
+    let next = function.create_instruction(
+        Opcode::Binary(BinaryOp::Add),
+        vector_ty,
+        vec![Operand::Value(last), by_vf],
+        Flags::default(),
+        Some("vec.ind.next"),
+    );
+    function.insert(next, Position::Before(function.terminator(header).expect("a terminated loop"))).expect("the header");
+    let next = Operand::Value(function.instruction(next).result.expect("an add"));
+    function.set_operands(phi, from_arms(&[(start, splat_block), (next, header)]));
+    wide.push((induction.inst, parts));
+}
+
 /// `VPlan::execute` for the plan: IC parts of each access, the induction
 /// stepped by VF x IC.
 fn execute(
@@ -902,6 +1062,12 @@ fn execute(
             Step::Access(access) => {
                 widen_access(context, function, widening, plan, splat_block, void_ty, access, &mut wide, &mut splats);
                 erased.push(access.inst);
+            }
+            Step::Induction(induction) => {
+                widen_induction(context, function, widening, plan, splat_block, induction, &mut wide);
+                if induction.truncated_from.is_some() {
+                    erased.push(induction.inst);
+                }
             }
             Step::Operation(operation) => {
                 let before = Position::Before(operation.inst);

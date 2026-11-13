@@ -85,6 +85,11 @@ pub enum Recipe {
     /// A select of `lane` values by the compare of `predicate`, if the loop
     /// makes the condition.
     Select { lane: Ty, predicate: Option<Predicate> },
+    /// A widened induction (`VPWidenIntOrFpInductionRecipe`): a vector phi of
+    /// `lane`s that steps by VF each iteration, priced as the vector `add`.
+    /// `truncated_from`: the scalar loop's `trunc` of the integer induction
+    /// (the recipe replaces it).
+    Induction { lane: Ty, truncated_from: Option<Ty> },
     /// An instruction the pin prices as a vector and this port does not (a
     /// uniform, reversed or grouped access, a cast without a table row): its
     /// scalar price is known, a vector factor cannot be weighed.
@@ -168,7 +173,8 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
         | Recipe::FMulAdd { lane }
         | Recipe::Scalarized { lane, .. }
         | Recipe::Compare { lane, .. }
-        | Recipe::Select { lane, .. } => Some(lane),
+        | Recipe::Select { lane, .. }
+        | Recipe::Induction { lane, .. } => Some(lane),
         Recipe::Cast { dst, .. } => Some(dst),
         Recipe::Unpriced { .. } => None,
     }
@@ -339,6 +345,15 @@ fn iteration_cost(
                     tti.cmp_sel_cost(CmpSel::Select, lane, kind)
                 } else {
                     unknown(tti.vector_cmp_sel_cost(CmpSel::Select, vector(lane), predicate, kind))?
+                }
+            }
+            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free, the
+            // step an `add` of the vector.
+            Recipe::Induction { lane, truncated_from } => {
+                if vf == 1 {
+                    truncated_from.map_or(Cost::FREE, |src| tti.cast_cost(CastKind::Trunc, lane, src, kind))
+                } else {
+                    tti.vector_arithmetic_cost(ArithOp::Add, vector(lane), kind).ok_or(NotTaken)?
                 }
             }
             Recipe::Unpriced { scalar_cost } => {
