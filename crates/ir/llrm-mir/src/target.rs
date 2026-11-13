@@ -452,6 +452,10 @@ pub struct Tuning {
     /// (`Tti::lftr_expansion_budget`; the pin's `SCEVCheapExpansionBudget` is 4). gcc keeps `i < n` where
     /// the zero-test form needs `smax(n, 1)` (fib `k`: cmp, mov, cmovl = 8 B before the loop).
     pub lftr_size_budget: u32,
+    /// DEVIATE OS-INLINE-GROWTH: an -Os caller's SZ2 trial does not re-decide a site the by-size guard refused
+    /// where the callee stays and has two or more calls left: the guard's growth over all of them stands, as gcc's
+    /// `estimate_growth` at -Os. Its byte estimate was -22 B a copy where the objects grew +5.
+    pub inline_trial_defers_to_shared_growth: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
@@ -719,6 +723,7 @@ impl Tuning {
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
         lftr_size_budget: 4,
+        inline_trial_defers_to_shared_growth: false,
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
