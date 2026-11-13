@@ -437,3 +437,22 @@ fn the_three_shifts_are_one_build() {
     );
     assert_eq!(count.get(), 3);
 }
+
+/// Pricing the choice rebuilt the function with every optional-rewrite trial
+/// (shift_int64_masked_amount Os: `main` 12 builds, 36 with the three shifts
+/// priced, x2.65 compile time). A build for the price is trial-free: the
+/// choice costs two plain builds (a build is 3 runs here), not two trial sets
+/// (18 builds against 4 inline before).
+#[test]
+fn pricing_the_libcall_choice_builds_the_function_without_trials() {
+    let builds = |mode| {
+        let module = llrm_mir::parse::module(&all_three_shifts(8)).expect("parses");
+        let before = llrm_m68k::compile::runs().builds;
+        text_with(&module, "f", Cpu::M68000, Options { size_libcalls: mode, mid_end: false, ..Options::default() })
+            .expect("compiles");
+        llrm_m68k::compile::runs().builds - before
+    };
+    let inline = builds(Mode::Inline);
+    let auto = builds(Mode::Auto);
+    assert!(auto <= inline + 6, "auto {auto} builds, inline {inline}");
+}
