@@ -564,10 +564,10 @@ impl Effects {
             }
             _ => false,
         };
-        if inst.sets_flags || copy_sets_flags {
+        if inst.sets_flags() || copy_sets_flags {
             effects.defs.push(Place::Flags);
         }
-        if inst.reads_flags {
+        if inst.reads_flags() {
             effects.uses.push(Place::Flags);
         }
         effects
@@ -603,8 +603,8 @@ pub(crate) fn identical(
     assignment: &Assignment,
 ) -> bool {
     one.kind == other.kind
-        && one.sets_flags == other.sets_flags
-        && one.reads_flags == other.reads_flags
+        && one.sets_flags() == other.sets_flags()
+        && one.reads_flags() == other.reads_flags()
         && one.operands.len() == other.operands.len()
         && one.operands.iter().zip(&other.operands).all(|pair| match pair {
             (Operand::Def(a), Operand::Def(b)) | (Operand::Use(a), Operand::Use(b)) => {
@@ -688,12 +688,14 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                     break;
                 }
                 let theirs = Effects::of::<T>(inst, assignment);
+                // a copy that becomes a `move` sets them too
+                let sets_flags = theirs.defs.contains(&Place::Flags);
                 let apart = !inst.terminator
                     && !inst.call
                     && !inst.barrier
                     && !inst.side_effects
-                    && !inst.reads_flags
-                    && !(inst.sets_flags && head.reads_flags)
+                    && !inst.reads_flags()
+                    && !(sets_flags && head.reads_flags())
                     && theirs.defs.iter().all(|place| {
                         *place == Place::Flags || !touches::<T>(&own.uses, *place) && !touches::<T>(&own.defs, *place)
                     })
@@ -701,7 +703,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                 if !apart {
                     break;
                 }
-                crossed_flags |= inst.sets_flags;
+                crossed_flags |= sets_flags;
             }
             if let Some(at) = twin.filter(|&at| at > run) {
                 let inst = self.function.blocks[move_in].insts.remove(at);

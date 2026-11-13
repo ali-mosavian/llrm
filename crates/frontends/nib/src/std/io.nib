@@ -44,18 +44,22 @@ fn opened(handle: i16) -> Result[File, IoError]:
         return .err(error(handle))
     return .ok(File(handle=handle, buffer=[0] * BUFFER, start=0, end=0))
 
-pub fn File.open(path: &string, mode: u8 = READ) -> Result[File, IoError]:
+# DOS's handle (or error) for the file `path` names: opened for `mode`, or with
+# `create` a new empty one in place of any of its name. One copy for both, so a
+# program that opens and creates carries the name buffer and its zero fill once.
+@noipa
+fn handle_of(path: &string, mode: u8, create: bool) -> i16:
     let mut name: char[LONGEST_NAME] = ['\0'] * LONGEST_NAME
     named(path, &mut name)
     unsafe:
-        return opened(os.open(&name, mode))
+        return create ? os.create(&name) : os.open(&name, mode)
+
+pub fn File.open(path: &string, mode: u8 = READ) -> Result[File, IoError]:
+    return opened(handle_of(path, mode, false))
 
 # A new, empty file, replacing any of its name.
 pub fn File.create(path: &string) -> Result[File, IoError]:
-    let mut name: char[LONGEST_NAME] = ['\0'] * LONGEST_NAME
-    named(path, &mut name)
-    unsafe:
-        return opened(os.create(&name))
+    return opened(handle_of(path, WRITE, true))
 
 # `count` bytes from `data`, as they are.
 pub fn File.write_raw(self: &mut File, data: *far u8, count: u16) -> Result[u16, IoError]:

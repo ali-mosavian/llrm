@@ -1032,6 +1032,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPRA-DSO-LOCAL: see `Tuning::ipra_binds_local`.
+    fn ipra_binds_local(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
@@ -1118,6 +1123,12 @@ pub trait Tti {
     /// bytes a loop. False: RS1 alone.
     fn rotation_hot_at_size(&self) -> bool {
         false
+    }
+
+    /// Bytes a loop ROTATION-HOT rotates may add where the finished code executes less. 0: the object
+    /// may not grow (-Os strict on bytes).
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        4
     }
 
     /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a
@@ -1392,6 +1403,11 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::libc_memcpy`.
+    fn libc_memcpy(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
@@ -1507,11 +1523,6 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::push_imm_at_size`.
-    fn push_imm_at_size(&self) -> bool {
-        false
-    }
-
     /// `Tuning::sdiv_pow2_stays_at_size`.
     fn sdiv_pow2_stays_at_size(&self) -> bool {
         false
@@ -1551,6 +1562,11 @@ pub trait Tti {
 
     /// `Tuning::sink_select_arms`.
     fn sinks_select_arms(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::branch_constant_arm_selects`.
+    fn branches_constant_arm_selects(&self) -> bool {
         false
     }
 
@@ -1706,6 +1722,16 @@ pub trait Tti {
     /// (`Tuning::x87_zero_fill_at_size`).
     fn x87_zero_fill_at_size(&self) -> bool {
         false
+    }
+
+    /// DEVIATE FPTOINT-CHECKED: the width of the integer a float is converted
+    /// into in one instruction (the x87's `fistp` stores a dword or a qword,
+    /// and NaN and overflow come out as its most negative value) when the
+    /// result is `bits` wide; none: the range of the integer is checked on the
+    /// float.
+    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+        let _ = bits;
+        None
     }
 
     /// `Tuning::size_fill`: the encoded bytes of a constant fill at size.
@@ -2503,8 +2529,8 @@ pub trait Tti {
     /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
     /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit
     /// counter, product or pointer is reduced. None: the datalayout's.
-    /// Owner llrm-target-6502; exit: 16-bit widths and `-Os` with a byte-aware
-    /// LSR cost, 2026-11-20.
+    /// Held at `-Os` too. Owner llrm-target-6502; exit: a byte-aware LSR cost
+    /// (`lsr_size_model`) for the 6502, 2026-11-24.
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
         &[]
     }
@@ -2560,6 +2586,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE EXT-LOAD-COST: whether a load that widens costs clocks over
+    /// the plain load, so CGP's `optimizeExt` leaves an extension in the
+    /// block that reads it. The pin has no such cost: it moves it.
+    fn ext_load_costs_extra(&self) -> bool {
+        false
+    }
+
     /// The bits one general-purpose register holds: an `i32` takes one at 32,
     /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
     fn gpr_bits(&self) -> u32 {
@@ -2573,6 +2606,13 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
+    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
+    /// none: the pass does not run.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        None
     }
 
     /// Whether the loop as written keeps the bound of its exit test live next

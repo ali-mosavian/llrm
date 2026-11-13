@@ -83,8 +83,8 @@ pub fn step_by_small_constants(function: &mut MFunction) -> bool {
             // reader; a block that ends first leaves it to the printer's check
             let dead = block.insts[at + 1..]
                 .iter()
-                .find(|one| one.reads_flags || one.sets_flags)
-                .is_some_and(|one| one.sets_flags && !one.reads_flags);
+                .find(|one| one.reads_flags() || one.sets_flags())
+                .is_some_and(|one| one.sets_flags() && !one.reads_flags());
             if !dead {
                 continue;
             }

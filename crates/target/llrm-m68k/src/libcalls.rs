@@ -18,16 +18,18 @@
 //! body would recurse).
 //!
 //! DEVIATE M68K-SIZE-LIBCALL: see [`llrm_codegen::backend::libcall_choice`].
-//! The 68000 and 68010 call these always (BC1, `dagisel/lowering.rs`). Owner
-//! m68k. Review: 2026-12-20.
+//! The 68000 and 68010 call the counts always (BC1, `dagisel/lowering.rs`);
+//! their variable shifts are priced like the 68020's. Owner m68k.
+//! Review: 2026-12-20.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// DEVIATE M68K-SIZE-LIBCALL-CAP: a function is built `1 + kinds` times to
-/// price its sites, so the work stays linear in the size of the functions with
-/// a site: one with more kinds than this, or more instructions than the next
-/// constant, is not measured and stays inline (the pin's choice). Owner m68k.
+/// price its sites (the three shifts count as one kind, see `grouped`), so the
+/// work stays linear in the size of the functions with a site: one with more
+/// kinds than this, or more instructions than the next constant, is not
+/// measured and stays inline (the pin's choice). Owner m68k.
 /// Review: 2026-12-20.
 const MEASURED_KINDS: usize = 2;
 const MEASURED_INSTRUCTIONS: usize = 1000;
@@ -157,12 +159,12 @@ pub fn costs() -> &'static Costs<Kind> {
     &COSTS
 }
 
-/// The kinds with a site in `function`.
+/// The kinds with a site in `function`, each with its count of sites.
 fn present(
     module: &Module,
     function: &Function,
-) -> Vec<Kind> {
-    let mut found = Vec::new();
+) -> Vec<(Kind, usize)> {
+    let mut found: Vec<(Kind, usize)> = Vec::new();
     let types = &module.context.types;
     for (_, inst) in function.walk() {
         let instruction = function.instruction(inst);
@@ -200,22 +202,42 @@ fn present(
             }
             _ => continue,
         };
-        if !found.contains(&kind) {
-            found.push(kind);
+        match found.iter_mut().find(|(one, _)| *one == kind) {
+            Some((_, count)) => *count += 1,
+            None => found.push((kind, 1)),
         }
     }
     found
 }
 
-/// Whether `kind` is a choice at `cpu`. The counts and shifts are the 68020's
-/// (the 68000 and 68010 always call, M68K-BC1); the product of two `i64`s is
-/// the choice of every CPU without a `mulu.l` that gives 64 bits (68000,
-/// 68010, 68060): the 68020 to the 68040 take it before any call.
+/// The kinds priced by one build: the three shifts share one (a function
+/// with all of them is built twice, not four times), their gain split by
+/// sites; every other kind is its own.
+fn grouped(here: Vec<(Kind, usize)>) -> Vec<Vec<(Kind, usize)>> {
+    let (shifts, others): (Vec<_>, Vec<_>) =
+        here.into_iter().partition(|(kind, _)| matches!(kind, Kind::Shl64 | Kind::Shr64 | Kind::Sar64));
+    let mut groups: Vec<Vec<(Kind, usize)>> = others.into_iter().map(|one| vec![one]).collect();
+    if !shifts.is_empty() {
+        groups.push(shifts);
+    }
+    groups
+}
+
+/// Whether `kind` is a choice at `cpu`. The counts are the 68020's (the 68000
+/// and 68010 always call them, M68K-BC1); a variable shift is a choice of every
+/// CPU (the expansion is the same code, and the 68000 and 68010 inline it
+/// too); the product of two `i64`s is the choice of every CPU without a
+/// `mulu.l` that gives 64 bits (68000, 68010, 68060): the 68020 to the 68040
+/// take it before any call.
 pub fn decided_at(
     kind: Kind,
     cpu: Cpu,
 ) -> bool {
-    if kind == Kind::Mul64 { !cpu.has_wide_multiply() } else { cpu.at_least(Cpu::M68020) }
+    match kind {
+        Kind::Mul64 => !cpu.has_wide_multiply(),
+        Kind::Shl64 | Kind::Shr64 | Kind::Sar64 => true,
+        _ => cpu.at_least(Cpu::M68020),
+    }
 }
 
 /// The kinds to call in this module's size-built functions (`built_for_size`
@@ -234,14 +256,19 @@ pub fn chosen(
             let mut saved: HashMap<Kind, i64> = HashMap::new();
             for (_, global, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
                 let (Some(name), true) = (global.name.as_deref(), built_for_size(function)) else { continue };
-                let here: Vec<Kind> = present(module, function).into_iter().filter(|&kind| decided_at(kind, cpu)).collect();
+                let here =
+                    grouped(present(module, function).into_iter().filter(|&(kind, _)| decided_at(kind, cpu)).collect());
                 if here.is_empty() || here.len() > MEASURED_KINDS || function.walk().count() > MEASURED_INSTRUCTIONS {
                     continue;
                 }
                 let Ok(inline) = bytes_of(name, &[]) else { continue };
-                for kind in here {
-                    if let Ok(called) = bytes_of(name, &[kind]) {
-                        *saved.entry(kind).or_default() += inline as i64 - called as i64;
+                for group in here {
+                    let kinds: Vec<Kind> = group.iter().map(|&(kind, _)| kind).collect();
+                    let Ok(called) = bytes_of(name, &kinds) else { continue };
+                    let gain = inline as i64 - called as i64;
+                    let sites = group.iter().map(|&(_, count)| count as i64).sum::<i64>();
+                    for (kind, count) in group {
+                        *saved.entry(kind).or_default() += gain * count as i64 / sites;
                     }
                 }
             }

@@ -150,7 +150,7 @@ pub fn keeps_unrotated(
     let added = other.bytes - kept.bytes;
     let saved = (kept.work - other.work).round() as i64;
     // Strict at -Os on both axes: smaller, and not slower.
-    trial::keeps_at_size(added) && saved >= 0 && !(hot && trial::keeps_rotation_hot(-saved, -added, loops))
+    trial::keeps_at_size(added) && saved >= 0 && !(hot && trial::keeps_rotation_hot(-saved, -added, loops, trial::ROTATION_HOT_BYTES_PER_LOOP))
 }
 
 /// Whether the compile that also rotates the left loops is kept over `kept`.
@@ -160,7 +160,7 @@ pub fn keeps_rotated(
     loops: usize,
 ) -> bool {
     !(kept.work.is_nan() || other.work.is_nan())
-        && trial::keeps_rotation_hot((kept.work - other.work).round() as i64, other.bytes - kept.bytes, loops)
+        && trial::keeps_rotation_hot((kept.work - other.work).round() as i64, other.bytes - kept.bytes, loops, trial::ROTATION_HOT_BYTES_PER_LOOP)
 }
 
 /// Whether `platform`'s target asks for the trial at `size` builds.

@@ -130,6 +130,9 @@ impl Default for Z80Tti {
     }
 }
 
+/// A byte of code is worth 3 T at -O2 and -O3 (the rate the program table is judged at), in thousandths of a clock.
+pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
+
 impl Tti for Z80Tti {
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it): `va_list` is `char *`, so `va_start` is a
     /// store of the first variadic argument's address and the list lives in a register, as SDCC has it.
@@ -389,7 +392,19 @@ impl Tti for Z80Tti {
     /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
     /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        3000
+        SPEED_MILLICLOCKS_PER_BYTE
+    }
+
+    /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll is made at -O2/-O3 where the clocks it
+    /// saves repay its bytes at the same rate, in place of the pin's threshold alone (0).
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        SPEED_MILLICLOCKS_PER_BYTE
+    }
+
+    /// The same rate for every speed decision that trades bytes for clocks (peeling, the combiner, the inliner's
+    /// walk, loop idioms, the backend's byte-for-clock choices): one place, not an inliner-only 3000.
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        SPEED_MILLICLOCKS_PER_BYTE
     }
 
     /// A loop whose bound the call's constants fix unrolls and folds in the copy, which the call's latency does not

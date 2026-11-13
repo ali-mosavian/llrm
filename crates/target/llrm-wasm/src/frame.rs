@@ -12,13 +12,17 @@
 //! return writes the incoming value back. A frame index becomes an offset from
 //! the new stack pointer.
 //!
-//! DEVIATE W11: not translated are the frame pointer (`hasFP`: variable-sized
-//! objects, taken frame address), the base pointer for over-aligned objects,
-//! `WasmLocal` stack objects, stack maps and the libcall thread context.
-//! Reason: each needs IR the slice does not reach. A function that needs one is
-//! refused by name. Exit: with the alloca forms that use them, no later than
-//! 2026-11-30 (the shared `ExpandDYNAMIC_STACKALLOC` plus the frame-pointer
-//! path; the pin accepts them, `tests/run/c/alloca_frame.c` is the cell).
+//! A variable-sized object (`hasVarSizedObjects`: a non-static alloca) makes
+//! a frame pointer: a copy of the stack pointer after the prologue that
+//! addresses the frame and, where the stack pointer is written back, restores
+//! it. The `ADJCALLSTACKDOWN`/`UP` pair around an alloca is dropped, the end
+//! writing the new stack pointer back (`eliminateCallFramePseudoInstr`).
+//!
+//! DEVIATE W11: not translated are the frame pointer of a taken frame address
+//! and of stack maps, the base pointer for over-aligned objects,
+//! `WasmLocal` stack objects and the libcall thread context. Reason: each
+//! needs IR the slice does not reach. A function that needs one is refused by
+//! name. Exit: no later than 2026-11-30.
 //!
 //! # See also
 //! `WebAssemblyFrameLowering.cpp` (`emitPrologue` L254, `emitEpilogue` L330),
@@ -42,6 +46,14 @@ fn align_to(
     align: u64,
 ) -> u64 {
     value.div_ceil(align) * align
+}
+
+/// `COPY` of a pointer's class.
+fn copy_of(pointer: ValType) -> u16 {
+    match pointer {
+        ValType::I64 => post::COPY_I64,
+        _ => post::COPY_I32,
+    }
 }
 
 fn has(
@@ -94,11 +106,19 @@ pub fn frame_lowering(
     // `needsPrologForEH`: a function with a personality and a call keeps the
     // incoming stack pointer to restore after a catch.
     let for_eh = f.personality && has_calls;
-    if stack_size == 0 && !for_eh {
+    // `hasFPImpl`: a variable-sized object moves the stack pointer by an
+    // unknown amount, so the frame is addressed from a frame pointer.
+    let has_fp = f.has_var_sized;
+    // `needsSPForLocalFrame`: the call-frame pseudos of a dynamic alloca are
+    // `adjustsStack`; any other use of the register is explicit.
+    let adjusts_stack =
+        f.blocks.iter().flatten().any(|inst| matches!(inst.opcode, op::ADJCALLSTACKDOWN | op::ADJCALLSTACKUP));
+    let needs_local_frame = stack_size > 0 || adjusts_stack || has_fp || f.sp.is_some();
+    if !needs_local_frame && !for_eh {
         return Ok(false);
     }
-    // `needsSPWriteback`: only a frame of its own is written back.
-    let writeback = stack_size > 0 && !(stack_size <= RED_ZONE && !has_calls);
+    // `needsSPWriteback`: not where the red zone serves.
+    let writeback = needs_local_frame && !(stack_size <= RED_ZONE && !has_calls);
     let (konst, add, sub, global_get, global_set) = match pointer {
         ValType::I64 => (op::CONST_I64, op::ADD_I64, op::SUB_I64, op::GLOBAL_GET_I64, op::GLOBAL_SET_I64),
         _ => (op::CONST_I32, op::ADD_I32, op::SUB_I32, op::GLOBAL_GET_I32, op::GLOBAL_SET_I32),
@@ -107,8 +127,19 @@ pub fn frame_lowering(
     if f.globals.is_empty() {
         f.globals.push(("__stack_pointer".to_string(), pointer));
     }
-    let sp = f.new_vreg(pointer);
-    f.sp = Some(sp);
+    // The register `ReplacePhysRegs` makes of `SP32`: the one the selected
+    // code already copies to and from, when it does.
+    let sp = match f.sp {
+        Some(sp) => sp,
+        None => {
+            let sp = f.new_vreg(pointer);
+            f.sp = Some(sp);
+            sp
+        }
+    };
+    let fp = has_fp.then(|| f.new_vreg(pointer));
+    // `getFrameRegister`: the frame pointer where there is one.
+    let base = fp.unwrap_or(sp);
 
     // The prologue goes below the ARGUMENTs.
     let at = f.blocks[0].iter().take_while(|inst| is_argument(inst.opcode)).count();
@@ -123,7 +154,12 @@ pub fn frame_lowering(
             Inst::new(sub, &[Operand::Def(sp), Operand::Use(read), Operand::Use(amount)]),
         ]);
     }
-    if writeback {
+    // `FP` points to the bottom of the fixed-size locals, so frame offsets stay
+    // positive.
+    if let Some(fp) = fp {
+        prologue.push(Inst::new(copy_of(pointer), &[Operand::Def(fp), Operand::Use(sp)]));
+    }
+    if stack_size > 0 && writeback {
         prologue.push(Inst::new(global_set, &[Operand::Sym(stack_pointer), Operand::Use(sp)]));
     }
 
@@ -165,7 +201,7 @@ pub fn frame_lowering(
             let from_sp = stack_size as i64 + offsets[frame as usize];
             let Some(Operand::Imm(value)) = f.blocks[def_block][def_at].operands.get_mut(1) else { continue };
             *value += from_sp;
-            f.blocks[block][i].operands[3 - other.0] = Operand::Use(sp);
+            f.blocks[block][i].operands[3 - other.0] = Operand::Use(base);
         }
     }
     // An address operand folds the offset in; anything else adds it to the
@@ -183,17 +219,18 @@ pub fn frame_lowering(
             if (has(inst, flag::MAY_LOAD) || has(inst, flag::MAY_STORE)) && operand > 0 && names_address(inst.opcode) {
                 if let Operand::Imm(offset) = &mut inst.operands[operand - 1] {
                     *offset += from_sp;
-                    inst.operands[operand] = Operand::Use(sp);
+                    inst.operands[operand] = Operand::Use(base);
                     continue;
                 }
             }
             if from_sp == 0 {
-                inst.operands[operand] = Operand::Use(sp);
+                inst.operands[operand] = Operand::Use(base);
                 continue;
             }
             let (offset, address) = (f.new_vreg(pointer), f.new_vreg(pointer));
             f.blocks[block][i].operands[operand] = Operand::Use(address);
-            f.blocks[block].insert(i, Inst::new(add, &[Operand::Def(address), Operand::Use(sp), Operand::Use(offset)]));
+            f.blocks[block]
+                .insert(i, Inst::new(add, &[Operand::Def(address), Operand::Use(base), Operand::Use(offset)]));
             f.blocks[block].insert(i, Inst::new(konst, &[Operand::Def(offset), Operand::Imm(from_sp)]));
             i += 2;
         }
@@ -203,13 +240,39 @@ pub fn frame_lowering(
     if writeback {
         for block in 0..f.blocks.len() {
             let Some(at) = f.blocks[block].iter().position(|inst| has(inst, flag::RETURN)) else { continue };
+            // No frame of its own: the pointer itself goes back.
+            if stack_size == 0 {
+                let back = Inst::new(global_set, &[Operand::Sym(stack_pointer), Operand::Use(base)]);
+                f.blocks[block].insert(at, back);
+                continue;
+            }
             let (amount, restored): (VReg, VReg) = (f.new_vreg(pointer), f.new_vreg(pointer));
             let epilogue = [
                 Inst::new(konst, &[Operand::Def(amount), Operand::Imm(stack_size as i64)]),
-                Inst::new(add, &[Operand::Def(restored), Operand::Use(sp), Operand::Use(amount)]),
+                Inst::new(add, &[Operand::Def(restored), Operand::Use(base), Operand::Use(amount)]),
                 Inst::new(global_set, &[Operand::Sym(stack_pointer), Operand::Use(restored)]),
             ];
             f.blocks[block].splice(at..at, epilogue);
+        }
+    }
+    // `eliminateCallFramePseudoInstr`: the bracket of a dynamic alloca goes;
+    // the end of it writes the new stack pointer back.
+    for block in &mut f.blocks {
+        let mut i = 0;
+        while i < block.len() {
+            match block[i].opcode {
+                op::ADJCALLSTACKDOWN => {
+                    block.remove(i);
+                }
+                op::ADJCALLSTACKUP => {
+                    block.remove(i);
+                    if writeback {
+                        block.insert(i, Inst::new(global_set, &[Operand::Sym(stack_pointer), Operand::Use(sp)]));
+                        i += 1;
+                    }
+                }
+                _ => i += 1,
+            }
         }
     }
     f.blocks[0].splice(at..at, prologue);

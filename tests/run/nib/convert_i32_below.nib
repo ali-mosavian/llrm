@@ -1,0 +1,13 @@
+# flags: -O2 -march=i486 | -Os -march=i486
+# i32(f) of one below the minimum panics. The value is stored through an opaque call, so nothing folds the conversion.
+var v: f64 = 0.0
+
+@noipa
+fn put(x: f64) -> void:
+    v = x
+
+fn main() -> i16:
+    print("start")
+    put(-2147483649.0)
+    print(i32(v))
+    return 0

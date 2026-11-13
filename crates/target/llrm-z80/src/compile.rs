@@ -289,11 +289,11 @@ fn eliminate_dead(function: &mut MFunction) {
         let slot = |r: RegId| usize::from(r == FLAGS);
         let reads_of = |inst: &Inst, r: RegId| {
             inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(p)) if *p == r))
-                || (r == FLAGS && inst.reads_flags)
+                || (r == FLAGS && inst.reads_flags())
         };
         let writes_of = |inst: &Inst, r: RegId| {
             inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Phys(p)) if *p == r))
-                || (r == FLAGS && inst.sets_flags)
+                || (r == FLAGS && inst.sets_flags())
         };
         // a block nothing follows may leave `a` and the flags to its caller
         let exits: Vec<bool> = (0..function.blocks.len())
@@ -347,7 +347,7 @@ fn eliminate_dead(function: &mut MFunction) {
                         Operand::Def(_) => false,
                         _ => true,
                     })
-                    && !(inst.sets_flags && live[slot(FLAGS)])
+                    && !(inst.sets_flags() && live[slot(FLAGS)])
                     && !(inst.call
                         || inst.terminator
                         || inst.barrier
@@ -519,7 +519,7 @@ fn cheaper(
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
+    let priced = |(bytes, clocks): (u32, u64)| clocks + u64::from(bytes) * crate::tti::SPEED_MILLICLOCKS_PER_BYTE as u64 / 1000;
     if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
 }
 
@@ -632,6 +632,41 @@ mod tests {
             assert!(sunk_operand(&function, 0, 2, Reg::Virt(1)).is_none(), "flag operand named: {named}");
         }
     }
+
+    /// `or a; ...; add hl, de; ...; cp a, 0; jr nz` lost its `or`: the test was dropped across the `add hl`, whose Z
+    /// the CPU keeps, but the flag liveness that followed read the `add` as a full flag def and deleted the `or`
+    /// chain; the `jr nz` then read the `add`'s flags and `(long)(3.0 / 1.0)` was 4 (f64 divide of a mantissa
+    /// at least 1 with fraction bits). The test stays whenever a flag setter lies between.
+    #[test]
+    fn a_zero_test_is_kept_where_another_flag_setter_lies_between() {
+        let (a, flags) = (Reg::Phys(crate::reg::A), Reg::Phys(crate::reg::FLAGS));
+        let mut or = Inst::new(Kind::Op("OR8r"), vec![Operand::Def(a), Operand::Use(a), Operand::Use(Reg::Virt(2))]);
+        or.sets_flags = true;
+        let mut add = Inst::new(Kind::Op("ADD16"), vec![Operand::Def(Reg::Virt(5)), Operand::Use(Reg::Virt(6))]);
+        add.sets_flags = true;
+        let mut test = Inst::new(Kind::Op("CP8i"), vec![Operand::Def(flags), Operand::Use(a), Operand::Imm(0)]);
+        test.sets_flags = true;
+        let mut jump = Inst::new(Kind::Op("JPNZ"), vec![Operand::Block(1), Operand::Use(flags)]);
+        jump.reads_flags = true;
+        jump.terminator = true;
+        let insts = vec![
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(1))]),
+            or,
+            Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(3)), Operand::Use(a)]),
+            add,
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(3))]),
+            test,
+            jump,
+        ];
+        let mut function = MFunction::new("f");
+        function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+        eliminate_tests(&mut function);
+        eliminate_dead(&mut function);
+        let insts = &function.blocks[0].insts;
+        let reader = insts.iter().position(|inst| inst.reads_flags()).expect("the jump stays");
+        let setter = insts[..reader].iter().rposition(|inst| inst.sets_flags()).expect("something sets the flags it reads");
+        assert_ne!(insts[setter].kind, Kind::Op("ADD16"), "the jump reads the add's flags: {insts:?}");
+    }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -708,20 +743,15 @@ fn repeating_loop_fold_wins(
         return (true, None);
     }
     LOOPS_FOLDED.with(|one| one.set(false));
-    let Ok(joined) = allocate_first(function.clone(), name, level) else { return (true, None) };
-    if !LOOPS_FOLDED.with(|one| one.get()) {
-        return (true, Some(joined));
-    }
-    HOT_LOOP_FOLD.with(|one| one.set(false));
-    let apart = allocate_first(function.clone(), name, level);
-    HOT_LOOP_FOLD.with(|one| one.set(true));
-    let Ok(apart) = apart else { return (true, Some(joined)) };
-    // the allocation kept is the first of the plain function in the chosen mode
+    let Ok((joined, apart)) = allocate_first_apart(function.clone(), name, level, true) else { return (true, None) };
+    // one allocation, finished with and without the merge; the one kept is the
+    // first of the function in the chosen mode
+    let Some(apart) = apart.filter(|_| LOOPS_FOLDED.with(|one| one.get())) else { return (true, Some(joined)) };
     if matches!(
-        (priced_in_loops(&joined.0, level), priced_in_loops(&apart.0, level)),
+        (priced_in_loops(&joined.0, level), priced_in_loops(&apart, level)),
         (Some(now), Some(then)) if cheaper(level, then, now)
     ) {
-        (false, Some(apart))
+        (false, Some((apart, joined.1, joined.2)))
     } else {
         (true, Some(joined))
     }
@@ -739,10 +769,21 @@ fn allocate_first(
     name: &str,
     level: Level,
 ) -> Result<First, String> {
-    match allocate_with(None, true, function.clone(), name, level) {
-        Ok((best, held)) => Ok((best, held, true)),
+    allocate_first_apart(function, name, level, false).map(|(first, _)| first)
+}
+
+/// [`allocate_first`], and with `want_apart` the same allocation finished
+/// without the hot loops' tail merge (`allocate_once_with`).
+fn allocate_first_apart(
+    function: MFunction,
+    name: &str,
+    level: Level,
+    want_apart: bool,
+) -> Result<(First, Option<Allocated>), String> {
+    match allocate_with_apart(None, true, function.clone(), name, level, want_apart) {
+        Ok((best, held, apart)) => Ok(((best, held, true), apart)),
         Err(first) => allocate_with(Some(true), true, function, name, level)
-            .map(|(done, _)| (done, false, false))
+            .map(|(done, _)| ((done, false, false), None))
             .map_err(|_| first),
     }
 }
@@ -754,8 +795,19 @@ fn allocate_with(
     name: &str,
     level: Level,
 ) -> Result<(Allocated, bool), String> {
+    allocate_with_apart(unjoined, strict, function, name, level, false).map(|(best, held, _)| (best, held))
+}
+
+fn allocate_with_apart(
+    unjoined: Option<bool>,
+    strict: bool,
+    function: MFunction,
+    name: &str,
+    level: Level,
+    want_apart: bool,
+) -> Result<(Allocated, bool, Option<Allocated>), String> {
     crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
-    let done = allocate_once(function, name, strict, level);
+    let done = allocate_once_with(function, name, strict, level, want_apart);
     crate::regalloc::UNJOINED.with(|one| one.set(None));
     done
 }
@@ -833,11 +885,24 @@ pub fn take_allocations() -> usize {
 
 /// One allocation, and whether `strict` held a byte back from `a`.
 fn allocate_once(
-    mut function: MFunction,
+    function: MFunction,
     name: &str,
     strict: bool,
     level: Level,
 ) -> Result<(Allocated, bool), String> {
+    allocate_once_with(function, name, strict, level, false).map(|(best, held, _)| (best, held))
+}
+
+/// [`allocate_once`], and with `want_apart` also the function finished without
+/// the hot loops' tail merge where that merge changed it: one allocation
+/// serves both finishes, as the fold decision needs them (`repeating_loop_fold_wins`).
+fn allocate_once_with(
+    mut function: MFunction,
+    name: &str,
+    strict: bool,
+    level: Level,
+    want_apart: bool,
+) -> Result<(Allocated, bool, Option<Allocated>), String> {
     if std::env::var("LLRM_NO_Z80_NARROW").is_err() {
         crate::narrow::narrow_low_only_pairs(&mut function);
     }
@@ -867,12 +932,38 @@ fn allocate_once(
         dump(&function);
     }
     ALLOCATIONS.with(|one| one.set(one.get() + 1));
-    let mut frequencies: Option<llrm_support::hash::HashMap<u32, f64>> = None;
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     let reads = expand::reads(&function);
     if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
         dump(&function);
     }
+    let colored = want_apart.then(|| function.clone());
+    let best = settle(function, &assignment, slots.clone(), &reads, name, level);
+    let apart = match colored {
+        Some(colored) if LOOPS_FOLDED.with(|one| one.get()) => {
+            HOT_LOOP_FOLD.with(|one| one.set(false));
+            let apart = settle(colored, &assignment, slots, &reads, name, level);
+            HOT_LOOP_FOLD.with(|one| one.set(true));
+            Some(apart)
+        }
+        _ => None,
+    };
+    Ok((best, held, apart))
+}
+
+/// What follows a coloring: the copies it leaves, the tail merge, the slots
+/// as a frame or a stack, the conditional return.
+fn settle(
+    mut function: MFunction,
+    assignment: &Assignment,
+    slots: Vec<(i32, <Z80Registers as Target>::Class)>,
+    reads: &llrm_support::hash::HashMap<u32, usize>,
+    name: &str,
+    level: Level,
+) -> Allocated {
+    let assignment = assignment.clone();
+    let reads = reads.clone();
+    let mut frequencies: Option<llrm_support::hash::HashMap<u32, f64>> = None;
     remove_identity_copies(&mut function, &assignment);
     tidy_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
@@ -982,7 +1073,7 @@ fn allocate_once(
     if !expand::needs_frame(&best.0, &best.2) {
         return_conditionally(&mut best.0);
     }
-    Ok((best, held))
+    best
 }
 
 /// The headers of the loops that run more than once a time they are entered, by
@@ -1101,15 +1192,15 @@ pub fn use_the_shift_carry(function: &mut MFunction) {
                         test = Some(k);
                         break;
                     }
-                    if inst.sets_flags || inst.call || writes(inst, old) {
+                    if inst.sets_flags() || inst.call || writes(inst, old) {
                         return None;
                     }
                 }
                 let test = test?;
                 // every reader is a branch of this block
                 let readers: Vec<usize> =
-                    (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags).collect();
-                let flags_set_later = block.insts[test + 1..].iter().any(|inst| inst.sets_flags);
+                    (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags()).collect();
+                let flags_set_later = block.insts[test + 1..].iter().any(|inst| inst.sets_flags());
                 let ends_here = block.insts.last().is_some_and(|inst| inst.terminator);
                 let branches = readers.iter().all(|&k| matches!(block.insts[k].kind, Kind::Op("JPZ" | "JPNZ")));
                 (!readers.is_empty() && branches && !flags_set_later && ends_here).then_some((test, readers))
@@ -2540,8 +2631,8 @@ fn dump(function: &MFunction) {
                 "  {:?} {:?}{}{}",
                 inst.kind,
                 inst.operands,
-                if inst.sets_flags { " SF" } else { "" },
-                if inst.reads_flags { " RF" } else { "" }
+                if inst.sets_flags() { " SF" } else { "" },
+                if inst.reads_flags() { " RF" } else { "" }
             );
         }
     }
@@ -3092,7 +3183,7 @@ fn sunk_operand(
         !(inst.call
             || inst.terminator
             || inst.barrier
-            || inst.reads_flags
+            || inst.reads_flags()
             || inst.side_effects
             || inst.may_load
             || inst.may_store)
@@ -3189,15 +3280,15 @@ fn sunk_operand(
     // none
     let flags = Reg::Phys(crate::reg::FLAGS);
     // an instruction that sets the flags may not name them (`XOR16i`)
-    let sets = |inst: &Inst| inst.sets_flags || touches(inst, flags);
+    let sets = |inst: &Inst| inst.sets_flags() || touches(inst, flags);
     let makes_flags = slice.iter().any(|&at| sets(&insts[at]));
     if makes_flags {
         if insts.iter().rposition(sets).is_some_and(|last| slice.contains(&last)) {
             return None;
         }
         let tail = &function.blocks[block].insts[p + 1..];
-        let wanted = tail.iter().find(|inst| inst.reads_flags || sets(inst));
-        if wanted.is_some_and(|inst| inst.reads_flags) {
+        let wanted = tail.iter().find(|inst| inst.reads_flags() || sets(inst));
+        if wanted.is_some_and(|inst| inst.reads_flags()) {
             return None;
         }
     }
@@ -3478,8 +3569,7 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
 /// `optimizeCompareInstr`: the test of a byte against zero (`cp 0`) after the
 /// instruction that made the byte and set the flags by it is dropped when only
 /// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`.
-/// Every `ld` between leaves the flags alone, and so does `add hl, rr` (but
-/// for C, H and N).
+/// Every `ld` between leaves the flags alone.
 fn eliminate_tests(function: &mut MFunction) {
     for block in &mut function.blocks {
         let mut at = 1;
@@ -3517,17 +3607,14 @@ fn eliminate_tests(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // `add hl, rr` (Z80 CPU User Manual UM0080, ADD HL,ss): C is the
-            // carry out of bit 15, H out of bit 11, N is reset; S,
-            // Z and P/V are not affected, so the zero of the byte
-            // survives it. (`adc hl, rr` and `sbc hl, rr` set all
-            // of them.)
-            let flags_kept = block.insts[setter + 1..at - 1]
-                .iter()
-                .all(|inst| !inst.call && (!inst.sets_flags || inst.kind == Kind::Op("ADD16")));
-            let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags);
+            // `optimizeCompareInstr` stops at an instruction between that sets the
+            // flags. `add hl, rr` keeps Z, but every flag scan after this
+            // (`eliminate_dead`, the expander's `flags_dead`) reads it as a full
+            // def, so a zero kept across it was deleted with its setter.
+            let flags_kept = block.insts[setter + 1..at - 1].iter().all(|inst| !inst.call && !inst.sets_flags());
+            let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags());
             let only_zero = readers
-                .filter(|inst| inst.reads_flags)
+                .filter(|inst| inst.reads_flags())
                 .all(|inst| matches!(inst.kind, Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ")));
             if flags_kept && only_zero {
                 block.insts.drain(at - 1..=at);
