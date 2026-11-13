@@ -50,7 +50,13 @@ pub fn mulsi3_clocks(
     bits: u32,
 ) -> u32 {
     match fit(cpu) {
-        Some((narrow, wide)) => if bits > 16 { wide } else { narrow },
+        Some((narrow, wide)) => {
+            if bits > 16 {
+                wide
+            } else {
+                narrow
+            }
+        }
         None => 0,
     }
 }
@@ -76,7 +82,9 @@ mod tests {
     /// fails when the routine changes and the numbers are stale.
     #[test]
     fn the_measured_routine_is_the_shipped_one() {
-        let hash = body().bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));
+        let hash = body()
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));
         assert_eq!(hash, MULSI3_SOURCE_STAMP, "__mulsi3 changed: measure the table in routine.rs again");
     }
 
@@ -84,7 +92,9 @@ mod tests {
     #[test]
     fn the_fit_is_the_measured_table() {
         use crate::dagisel::hooks::Cpu;
-        for (cpu, narrow, wide) in [(Cpu::M68000, 138 - 32, 340 - 96), (Cpu::M68010, 106 - 32, 248 - 96), (Cpu::M68020, 61, 61)] {
+        for (cpu, narrow, wide) in
+            [(Cpu::M68000, 138 - 32, 340 - 96), (Cpu::M68010, 106 - 32, 248 - 96), (Cpu::M68020, 61, 61)]
+        {
             assert_eq!((mulsi3_clocks(cpu, 1), mulsi3_clocks(cpu, 17)), (narrow, wide), "{cpu:?}");
         }
     }

@@ -1,5 +1,6 @@
-//! `h(buf + 1, buf + 3)` pushed `move %a2, %d0; addq #1, %d0; move %d0, (4,%sp)` for each
-//! pointer argument (8 B); `pea (1,%a2)` is 4 B and changes no register.
+//! `h(buf + 1, buf + 3)` pushed `move %a2, %d0; addq #1, %d0; move %d0,
+//! (4,%sp)` for each pointer argument (8 B); `pea (1,%a2)` is 4 B and changes
+//! no register.
 
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;

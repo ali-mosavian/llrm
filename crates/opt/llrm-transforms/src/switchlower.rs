@@ -48,7 +48,8 @@
 //!
 //! DEVIATE LP-6 (no mid-end pin pass: SelectionDAGBuilder lowers a switch at
 //! isel (`visitSwitch`), here MIR is lowered before selection (CG1); exit: isel
-//! lowers switches and this is deleted; owner w10-instcombine; review 2026-11-20).
+//! lowers switches and this is deleted; owner w10-instcombine; review
+//! 2026-11-20).
 //!
 //! # Example
 //! Before:

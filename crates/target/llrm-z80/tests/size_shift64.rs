@@ -56,18 +56,21 @@ fn two_shifts_at_the_speed_levels_link_no_routine() {
     }
 }
 
-/// shift_int64_variable -Os called the 101 B routine for its shifts (388 T a bit): 872 B and 12.3M T against SDCC's
-/// 1438 B and 11.7M T. Where the module's clocks are the shifts', the loops (half the clocks a bit) win by the
-/// smaller relative regret, bytes first or not: 14 shifts are 14 loops and no routine.
+/// shift_int64_variable -Os called the 101 B routine for its shifts (388 T a
+/// bit): 872 B and 12.3M T against SDCC's 1438 B and 11.7M T. Where the
+/// module's clocks are the shifts', the loops (half the clocks a bit) win by
+/// the smaller relative regret, bytes first or not: 14 shifts are 14 loops and
+/// no routine.
 #[test]
 fn many_shifts_in_a_module_of_shifts_are_loops() {
     let out = compiled(&module("minsize", 14), Level::Os);
     assert!(out.matches("djnz").count() == 14 && !out.contains("__s_"), "{out}");
 }
 
-/// Every site is a loop of its own, unless the module's clocks are another loop's: the loops are 34 B a site
-/// against a 9 B call and 101 B once, and the size routine's 388 T a bit is lost beside 40000 trips of a loop.
-/// Six shifts beside it at -Os are the 101 B routine and six calls.
+/// Every site is a loop of its own, unless the module's clocks are another
+/// loop's: the loops are 34 B a site against a 9 B call and 101 B once, and the
+/// size routine's 388 T a bit is lost beside 40000 trips of a loop. Six shifts
+/// beside it at -Os are the 101 B routine and six calls.
 #[test]
 fn many_shifts_beside_a_hot_loop_share_the_routine() {
     let hot = "@a = global [200 x i8] zeroinitializer

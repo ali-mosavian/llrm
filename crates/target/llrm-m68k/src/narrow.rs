@@ -174,8 +174,9 @@ pub fn merge_logic_immediates(
                     next = Some((later, bits_b, b, sets_b));
                     break;
                 }
-                // A row that only sets the codes is passed: the second row sets them again
-                // (and `flags_read_after` guards a second that does not).
+                // A row that only sets the codes is passed: the second row sets
+                // them again (and `flags_read_after` guards a
+                // second that does not).
                 if mentions(inst, root) || inst.reads_flags() || inst.call || inst.terminator {
                     break;
                 }

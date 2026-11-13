@@ -7,8 +7,9 @@
 //! `A` and `B` do not alias if, for some domain, all of `A`'s scopes in it are
 //! among `B`'s `!noalias` ones, or the other way round. An access with either
 //! list missing says nothing. A call or fence carries the lists on itself.
-//! [`ScopedNoAliasAA`] is an [`AAResults`]; what it does not decide is the top of
-//! the lattice, for [`crate::aggregate::AggregateAA`] to meet with the others.
+//! [`ScopedNoAliasAA`] is an [`AAResults`]; what it does not decide is the top
+//! of the lattice, for [`crate::aggregate::AggregateAA`] to meet with the
+//! others.
 //!
 //! # Example
 //! A load in scope `!1` and a store with `!noalias !{!1}`: apart.

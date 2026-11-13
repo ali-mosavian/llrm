@@ -32,15 +32,18 @@ fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
 }
 
 /// crc -O2: the 8-trip bit loop inside the 9-trip byte loop saves 207 clocks
-/// for 112 B (1.8 clocks a byte): unrolled, 152 B and 262 instructions where the
-/// rolled loop is 88 B and 494 (clang 271, gcc 238). Unrolled it has 4 labels,
-/// rolled 6.
+/// for 112 B (1.8 clocks a byte): unrolled, 152 B and 262 instructions where
+/// the rolled loop is 88 B and 494 (clang 271, gcc 238). Unrolled it has 4
+/// labels, rolled 6.
 #[test]
 fn a_nest_loop_that_saves_more_than_its_bytes_cost_is_unrolled() {
     assert_eq!(labels(include_str!("data/bench_crc.ll")), 4);
 }
 
-fn instructions(source: &str, level: Level) -> usize {
+fn instructions(
+    source: &str,
+    level: Level,
+) -> usize {
     let asm = driver::assembly(source, Platform::Linux, level).expect("lowers");
     asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
 }
@@ -83,7 +86,8 @@ fn loops_an_earlier_slot_unrolled_around_are_decided_with_their_nest() {
 /// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced
 /// as if it ran 32 times: 17,408 clocks saved against 72,250 for the bytes,
 /// kept rolled: 737,170 instructions where unrolled they are 501,176. Rolled
-/// the module is 112 instructions, unrolled 190 (183 since #9232's symbol bases).
+/// the module is 112 instructions, unrolled 190 (183 since #9232's symbol
+/// bases).
 #[test]
 fn a_loop_in_a_known_thousand_trip_loop_is_priced_by_its_real_runs() {
     assert!(instructions(include_str!("data/bench_nbody_single.ll"), Level::O2) >= 150);

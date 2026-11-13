@@ -1,7 +1,7 @@
 //! m32 -O2 (SD-DIVMAG): `x / -3` and `x % -3` of one dividend multiply once.
-//! The quotient used the negative divisor's own magic and the remainder (`x % -c`
-//! is `x % c`) the positive one: two `imul`, 13 to 42 clocks each on the 486
-//! (div_constants_long -O2: 27,108 `imul` against gcc's 21,072, +4.1% clk).
+//! The quotient used the negative divisor's own magic and the remainder (`x %
+//! -c` is `x % c`) the positive one: two `imul`, 13 to 42 clocks each on the
+//! 486 (div_constants_long -O2: 27,108 `imul` against gcc's 21,072, +4.1% clk).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;

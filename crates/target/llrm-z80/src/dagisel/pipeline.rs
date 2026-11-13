@@ -74,14 +74,18 @@ thread_local! {
     /// selected the second time, with the shifts and adds of `x * (2^k +- 1)`
     /// kept (`driver::selections_with_alternatives`).
     pub static DECOMPOSE_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Every long multiply of an unsized function is the `__mulsi3` call, the near-power constants included
-    /// (the form `DECOMPOSE_MULS` is the inline counterpart of, for a sized one).
+    /// Every long multiply of an unsized function is the `__mulsi3` call, the
+    /// near-power constants included (the form `DECOMPOSE_MULS` is the inline
+    /// counterpart of, for a sized one).
     pub static CALL_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set while a function with a constant-count `memset` is selected the second time, each such fill an
-    /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
-    /// prices the two with the routine linked once (`compile::decomposed_functions`).
+    /// Set while a function with a constant-count `memset` is selected the
+    /// second time, each such fill an inline `ldir` fill
+    /// (`Z80Calling::emit_memset`) where the first selection calls `__memseta`;
+    /// the caller prices the two with the routine linked once
+    /// (`compile::decomposed_functions`).
     pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set while a function is selected at a level that allows no trade between bytes and clocks (-O1, -Os, -Oz).
+    /// Set while a function is selected at a level that allows no trade between
+    /// bytes and clocks (-O1, -Os, -Oz).
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function with a variable 64-bit shift is selected the second
     /// time, each such shift an in-place loop over eight bytes of the frame
@@ -93,15 +97,16 @@ thread_local! {
     /// routines (`target_lowering(true)`); priced against the size routines by
     /// the smaller relative regret (`compile::decomposed_functions`).
     pub static SPEED_ROUTINES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set while a function is selected with the words of its long adds and subtracts left to the generic
-    /// expansion (an add and a compare of the sum), not the carry ops
-    /// (`lower_carry_op`); the caller prices the two forms
-    /// (`compile::lines_of`).
+    /// Set while a function is selected with the words of its long adds and
+    /// subtracts left to the generic expansion (an add and a compare of the
+    /// sum), not the carry ops (`lower_carry_op`); the caller prices the two
+    /// forms (`compile::lines_of`).
     pub static GENERIC_CARRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// The carry ops `lower_carry_op` made since the count was last taken: a function with none has no
-    /// generic form to price.
+    /// The carry ops `lower_carry_op` made since the count was last taken: a
+    /// function with none has no generic form to price.
     pub static CARRY_OPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Set while the generic form of a selection is emitted and allocated (`Selection::generic`).
+    /// Set while the generic form of a selection is emitted and allocated
+    /// (`Selection::generic`).
     pub static GENERIC_FORM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -186,13 +191,16 @@ pub enum Refusal {
 struct Z80Combines {
     /// The size routine `__mulsi3` is this function's long multiply.
     long_multiply: bool,
-    /// Selected at a level that allows no trade between bytes and clocks (`STRICT_LEVEL`).
+    /// Selected at a level that allows no trade between bytes and clocks
+    /// (`STRICT_LEVEL`).
     strict: bool,
-    /// The module's word multiplies are all constants that chain (`prepare::mark_word_chains`): the routine goes.
+    /// The module's word multiplies are all constants that chain
+    /// (`prepare::mark_word_chains`): the routine goes.
     chain_credit: bool,
 }
 
-/// The bytes and T-states of a chain of shifts and adds on a word in `hl`, the source copied to `bc` when a step adds it.
+/// The bytes and T-states of a chain of shifts and adds on a word in `hl`, the
+/// source copied to `bc` when a step adds it.
 fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
     let (mut bytes, mut clocks) = (0, 0);
     let mut seeded = false;
@@ -215,14 +223,18 @@ fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
     (bytes, clocks)
 }
 
-/// A word multiplied by a constant as the shifts and adds of `chain_search` (Bernstein 1986), where the pin leaves
-/// every constant but `2^k +- 1` to the `__mulhi3` call: `ld de, #c; call` is 6 B and a loop of about 65 T a bit of
-/// the constant. Taken where the chain is no larger and no slower (a strict level), or by the rate 1 B = 3 T.
+/// A word multiplied by a constant as the shifts and adds of `chain_search`
+/// (Bernstein 1986), where the pin leaves every constant but `2^k +- 1` to the
+/// `__mulhi3` call: `ld de, #c; call` is 6 B and a loop of about 65 T a bit of
+/// the constant. Taken where the chain is no larger and no slower (a strict
+/// level), or by the rate 1 B = 3 T.
 ///
-/// DEVIATE Z80-MUL-CHAIN (owner z80, exit 2026-11-24): the pin has no such search; AArch64's `performMulCombine`
-/// and X86's `combineMul` are the table-driven analogues.
-/// The chain of shifts and adds for a word times `c`, with its bytes and T-states, and the `ld de, #c; call` it
-/// replaces; `None` where the call is no dearer. `forced` takes the chain whatever its bytes (the routine is paid for).
+/// DEVIATE Z80-MUL-CHAIN (owner z80, exit 2026-11-24): the pin has no such
+/// search; AArch64's `performMulCombine` and X86's `combineMul` are the
+/// table-driven analogues. The chain of shifts and adds for a word times `c`,
+/// with its bytes and T-states, and the `ld de, #c; call` it replaces; `None`
+/// where the call is no dearer. `forced` takes the chain whatever its bytes
+/// (the routine is paid for).
 pub(crate) fn word_chain(
     c: i64,
     strict: bool,
@@ -252,7 +264,8 @@ pub(crate) fn word_chain(
     wins.then_some((chain, price, call))
 }
 
-/// Whether the pin turns a word times `c` into shifts and one add (`2^k +- 1`, times a power of two): no call.
+/// Whether the pin turns a word times `c` into shifts and one add (`2^k +- 1`,
+/// times a power of two): no call.
 pub(crate) fn pin_decomposes(c: u64) -> bool {
     let odd = c >> c.trailing_zeros().min(63);
     c == 0 || odd == 1 || (odd - 1).is_power_of_two() || (odd + 1).is_power_of_two()
@@ -310,7 +323,10 @@ impl CombineHooks for Z80Combines {
         wide: EVT,
         narrow: EVT,
     ) -> bool {
-        matches!((wide, narrow), (EVT::I16 | EVT::I32, EVT::I8) | (EVT::I32, EVT::I16))
+        matches!(
+            (wide, narrow),
+            (EVT::I16 | EVT::I32, EVT::I8) | (EVT::I32, EVT::I16)
+        )
     }
 
     /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
@@ -366,7 +382,8 @@ impl CombineHooks for Z80Combines {
         c: u128,
     ) -> bool {
         self.decompose_mul_by_constant(vt, c)
-            && !(vt == EVT::I32 && llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero(dag, x, 0xFFFF_FF00))
+            && !(vt == EVT::I32
+                && llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero(dag, x, 0xFFFF_FF00))
     }
 
     /// The pin's default: a compare of a masked or zero-extended value against
@@ -413,13 +430,16 @@ impl CombineHooks for Z80Combines {
                 .flatten();
         }
         if dag.opcode(node) == ISD::And {
-            // A mask that fits the byte a word was extended from (zero or any: the high byte is masked off) is a byte `and`, extended after: no pair is made
-            // for the extension and read back. The pin leaves it to isel.
-            // DEVIATE Z80-BYTE-SHIFT (owner z80, exit 2026-12-15): with the byte shift, huffman_decode `getbit`.
+            // A mask that fits the byte a word was extended from (zero or any:
+            // the high byte is masked off) is a byte `and`, extended after: no
+            // pair is made for the extension and read back. The pin
+            // leaves it to isel. DEVIATE Z80-BYTE-SHIFT (owner z80,
+            // exit 2026-12-15): with the byte shift, huffman_decode `getbit`.
             let (value, mask) = (dag.operand(node, 0), dag.operand(node, 1));
-            let byte = (dag.value_type(node) == EVT::I16 && matches!(dag.opcode(value), ISD::ZeroExtend | ISD::AnyExtend))
-                .then(|| dag.operand(value, 0))
-                .filter(|byte| dag.value_type(*byte) == EVT::I8);
+            let byte = (dag.value_type(node) == EVT::I16
+                && matches!(dag.opcode(value), ISD::ZeroExtend | ISD::AnyExtend))
+            .then(|| dag.operand(value, 0))
+            .filter(|byte| dag.value_type(*byte) == EVT::I8);
             return match (byte, dag.constant(mask)) {
                 (Some(byte), Some(bits)) if bits <= 0xFF => {
                     let mask = dag.get_constant(bits, EVT::I8);
@@ -433,10 +453,13 @@ impl CombineHooks for Z80Combines {
             return None;
         }
         let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
-        // A word whose high byte is zero, shifted right by less than 8 (C's promotion of a char): the shift runs on the
-        // byte, one instruction a step against two, and the extension is what the demanded bits then fold away. The
-        // pin narrows only a known amount (`SimplifyDemandedBits`, `SRL`).
-        // DEVIATE Z80-BYTE-SHIFT (owner z80, exit 2026-12-15): huffman_decode `getbit`, `stream[i] >> (7 - n)`.
+        // A word whose high byte is zero, shifted right by less than 8 (C's
+        // promotion of a char): the shift runs on the
+        // byte, one instruction a step against two, and the extension is what
+        // the demanded bits then fold away. The pin narrows only a
+        // known amount (`SimplifyDemandedBits`, `SRL`).
+        // DEVIATE Z80-BYTE-SHIFT (owner z80, exit 2026-12-15): huffman_decode
+        // `getbit`, `stream[i] >> (7 - n)`.
         if dag.opcode(node) == ISD::Srl {
             let width = dag.value_type(amount).size_in_bits();
             if level == CombineLevel::BeforeLegalizeTypes
@@ -510,8 +533,9 @@ pub fn select_block(
     // the product of two zero-extended words is a call in a block that runs
     // once (`block_frequencies` at most 1): 15 B against 216 B of partial
     // products for a few hundred T-states more; in a loop the products stay
-    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only). Above -O1, where the module links
-    // `__mulsi3` for its long products, the call is `__umulhisi3` for two words too: the same call, half the steps.
+    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only). Above
+    // -O1, where the module links `__mulsi3` for its long products, the
+    // call is `__umulhisi3` for two words too: the same call, half the steps.
     if (cold || (long_multiply && !STRICT_LEVEL.with(std::cell::Cell::get))) && !sized {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
@@ -542,7 +566,8 @@ pub fn select_block(
         Cpu::Z80 => z80_z80::TABLE,
         Cpu::Z180 => z80_z180::TABLE,
     });
-    // the users of each constant before any is selected: a selected store no longer names it
+    // the users of each constant before any is selected: a selected store no
+    // longer names it
     let mut uses: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
     for (id, node) in dag.nodes().iter().enumerate() {
         if dag.is_deleted(id as u32) {

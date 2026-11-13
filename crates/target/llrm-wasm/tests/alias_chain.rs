@@ -32,7 +32,11 @@ fn a_store_does_not_wait_for_a_load_of_another_global() {
 #[test]
 fn a_run_of_halfword_copies_is_merged_to_the_end() {
     let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/store_merge_run.ll");
-    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc")).args(["-S", "-o", "-"]).arg(ir).output().expect("llrm-wasm-llc");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
     assert!(out.status.success());
     let asm = String::from_utf8_lossy(&out.stdout).into_owned();
     let kinds: Vec<&str> = asm

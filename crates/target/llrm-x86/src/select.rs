@@ -1516,7 +1516,8 @@ pub fn test_immediate(
     match dest {
         Loc::Reg(one) => {
             // `optimizeToFixedRegisterForm`: `test al, imm8` (`a8`) and
-            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7` form.
+            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7`
+            // form.
             let register = match (width, ACCUMULATOR.get(&width) == Some(&one.register)) {
                 (1, true) => Some("AL"),
                 (2, true) => Some("AX"),

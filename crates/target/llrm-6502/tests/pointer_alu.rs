@@ -267,9 +267,9 @@ fn an_or_or_xor_of_a_zero_accumulator_through_a_pointer_is_the_load() {
     assert_eq!(asm.text(), live, "a is not zero");
 }
 
-/// A word op whose second operand is a zero-extended loaded byte runs on the low
-/// bytes with the load as the operand and `#0` for the high byte: `a - *p` was
-/// `lda (p); sta t; sec; lda a; sbc t; ...` (17 B), `*p - *q` (scmp's final
+/// A word op whose second operand is a zero-extended loaded byte runs on the
+/// low bytes with the load as the operand and `#0` for the high byte: `a - *p`
+/// was `lda (p); sta t; sec; lda a; sbc t; ...` (17 B), `*p - *q` (scmp's final
 /// subtract) 19 B, 13 B now (2026-11-10).
 #[test]
 fn a_zero_extended_loaded_byte_is_the_operand_of_a_word_subtract() {
@@ -289,8 +289,8 @@ fn a_zero_extended_loaded_byte_is_the_operand_of_a_word_subtract() {
     }
 }
 
-/// The word is an address: `p + zext(*q)` read by a load stays the word add that
-/// `(p),y` takes, not a byte add and a carry.
+/// The word is an address: `p + zext(*q)` read by a load stays the word add
+/// that `(p),y` takes, not a byte add and a carry.
 #[test]
 fn a_zero_extended_loaded_byte_added_to_a_pointer_stays_an_index() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {

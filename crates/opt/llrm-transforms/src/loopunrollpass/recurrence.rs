@@ -16,12 +16,12 @@
 //! between the walks is the latency a trip adds. Only a single-block loop is
 //! priced: its operations all run each trip, so the sums are the trip's.
 //!
-//! A load of the address a store wrote, an address the same every trip, waits for it, as a
-//! phi waits for its latch value: a variable kept in memory (`volatile double
-//! value`, floats -O2) is a chain like any other. Known limits, not claims: a
-//! chain through different addresses (`a[i] = a[i - 1] * c`) shows no growth and
-//! keeps the pin's unroll, and so does a loop of several blocks. Latencies and
-//! throughputs are the `Tti`'s, as the pin's.
+//! A load of the address a store wrote, an address the same every trip, waits
+//! for it, as a phi waits for its latch value: a variable kept in memory
+//! (`volatile double value`, floats -O2) is a chain like any other. Known
+//! limits, not claims: a chain through different addresses (`a[i] = a[i - 1] *
+//! c`) shows no growth and keeps the pin's unroll, and so does a loop of
+//! several blocks. Latencies and throughputs are the `Tti`'s, as the pin's.
 //!
 //! <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectOptimize.cpp#L1305>
 
@@ -32,7 +32,8 @@ use super::*;
 
 /// Whether the runtime unroll of `lp` is vetoed: the target asks it
 /// (`Tuning::unroll_recurrence_veto`), states its issue width, and the loop is
-/// a single block whose chain is longer than its throughput cost over that width.
+/// a single block whose chain is longer than its throughput cost over that
+/// width.
 pub(super) fn recurrence_bound(
     run: &Run,
     lp: Loop,
@@ -52,18 +53,14 @@ pub(super) fn recurrence_bound(
         cost.valid.then_some(cost.value)
     };
     let chain = chain_growth(run.function, block, |inst| price(inst, CostKind::Latency));
-    let issue = run
-        .function
-        .iter_block(block)
-        .map(|inst| price(inst, CostKind::RecipThroughput))
-        .sum::<Option<i64>>();
+    let issue = run.function.iter_block(block).map(|inst| price(inst, CostKind::RecipThroughput)).sum::<Option<i64>>();
     if llrm_support::debug::enabled("unroll") {
         eprintln!("unroll: RU-REC: chain {chain:?}, issue {issue:?}, width {width}");
     }
     let (Some(chain), Some(issue)) = (chain, issue) else { return false };
     // Strictly: when the two are equal the issue side binds too, and the copies
-    // do relieve it (jpeg -O2: chain 3, issue 12 / 4, +2.9% instructions, clocks
-    // unmeasured).
+    // do relieve it (jpeg -O2: chain 3, issue 12 / 4, +2.9% instructions,
+    // clocks unmeasured).
     chain * width > issue
 }
 

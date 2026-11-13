@@ -1,5 +1,7 @@
-//! At m16 the alloca raise to a type's preferred alignment is unbounded, as the pin's is (its m16 datalayout names no `S`). Needs the pinned
-//! clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`, tools/ow-fetch.sh).
+//! At m16 the alloca raise to a type's preferred alignment is unbounded, as the
+//! pin's is (its m16 datalayout names no `S`). Needs the pinned
+//! clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`,
+//! tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,8 +16,10 @@ fn has(
     code.windows(pattern.len()).any(|window| window == pattern)
 }
 
-/// With `S16` in m16's datalayout, bench/parity/qbsp -Os zeroed a packed 16-byte local with `mov cx, 16; rep stosb` where the pin's (no `S`)
-/// raises the local to 4 and zeroes it with `mov cx, 8; rep stosw`: twice the iterations.
+/// With `S16` in m16's datalayout, bench/parity/qbsp -Os zeroed a packed
+/// 16-byte local with `mov cx, 16; rep stosb` where the pin's (no `S`)
+/// raises the local to 4 and zeroes it with `mov cx, 8; rep stosw`: twice the
+/// iterations.
 #[test]
 fn a_packed_local_is_raised_and_zeroed_by_words() {
     if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {

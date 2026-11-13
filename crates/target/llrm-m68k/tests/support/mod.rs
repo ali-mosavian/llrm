@@ -29,7 +29,8 @@ pub enum Oracle {
     Skipped(String),
 }
 
-/// `$GCC_M68K` against `$M68K_ISA_SKIP_ORACLE`: the root, the explicit skip, or the reason the test must fail.
+/// `$GCC_M68K` against `$M68K_ISA_SKIP_ORACLE`: the root, the explicit skip, or
+/// the reason the test must fail.
 pub fn oracle_with(
     root: Option<&str>,
     skip: Option<&str>,
@@ -46,11 +47,13 @@ pub fn oracle_with(
     if skip == Some("1") {
         return Ok(Oracle::Skipped("ORACLE SKIPPED: GCC_M68K is not set and M68K_ISA_SKIP_ORACLE=1".to_owned()));
     }
-    Err("GCC_M68K is not set: the unpacked m68k binutils tree (gcc-m68k); M68K_ISA_SKIP_ORACLE=1 skips this oracle".to_owned())
+    Err("GCC_M68K is not set: the unpacked m68k binutils tree (gcc-m68k); M68K_ISA_SKIP_ORACLE=1 skips this oracle"
+        .to_owned())
 }
 
-/// The binutils root for an oracle test. Unset, the test fails naming what to set; `M68K_ISA_SKIP_ORACLE=1`
-/// skips it with a visible `ORACLE SKIPPED` line and gives `None`.
+/// The binutils root for an oracle test. Unset, the test fails naming what to
+/// set; `M68K_ISA_SKIP_ORACLE=1` skips it with a visible `ORACLE SKIPPED` line
+/// and gives `None`.
 pub fn oracle_root() -> Option<String> {
     let root = std::env::var("GCC_M68K").ok();
     let skip = std::env::var("M68K_ISA_SKIP_ORACLE").ok();

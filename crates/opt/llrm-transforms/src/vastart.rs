@@ -13,10 +13,10 @@
 //! value, the step by its size and the store the selector's `expandVAArg`
 //! makes, written here so the list slot has no user SROA cannot see through.
 //!
-//! DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4): the pin lowers
-//! the intrinsics in selection only. Off unless
-//! `Tuning::promote_va_list`. Exit: the target states `va_list` as a value
-//! the pin's mem2reg understands, or the pin does.
+//! DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32,
+//! m68k with `va_arg_slot` = 4): the pin lowers the intrinsics in selection
+//! only. Off unless `Tuning::promote_va_list`. Exit: the target states
+//! `va_list` as a value the pin's mem2reg understands, or the pin does.
 //!
 //! # Example
 //! ```text
@@ -84,14 +84,20 @@ impl FunctionPass for VaStart {
             let list = unit.function.instruction(inst).operands[0];
             match which {
                 Intrinsic::VaStart => {
-                    let ty = unit.context.types.intern(Type::Function {
-                        returns: pointer,
-                        parameters: Vec::new(),
-                        variadic: false,
-                    });
+                    let ty = unit
+                        .context
+                        .types
+                        .intern(
+                            Type::Function {
+                                returns: pointer,
+                                parameters: Vec::new(),
+                                variadic: false,
+                            },
+                        );
                     let callee = unit.declared.declare("llrm.vararg.address.p0", ty);
-                    let callee =
-                        Operand::Constant(unit.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+                    let callee = Operand::Constant(
+                        unit.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }),
+                    );
                     let info = CallInfo {
                         function_type: ty,
                         calling_convention: 0,
@@ -100,26 +106,30 @@ impl FunctionPass for VaStart {
                         attrs: Vec::new(),
                         tail: Tail::default(),
                     };
-                    let first = unit.function.create_instruction(
-                        Opcode::Call(Box::new(info)),
-                        pointer,
-                        vec![callee],
-                        Flags::default(),
-                        None,
-                    );
+                    let first = unit
+                        .function
+                        .create_instruction(
+                            Opcode::Call(Box::new(info)),
+                            pointer,
+                            vec![callee],
+                            Flags::default(),
+                            None,
+                        );
                     unit.function.insert(first, Position::Before(inst)).expect("a placed call");
                     let value = Operand::Value(unit.function.instruction(first).result.expect("a pointer"));
                     store(unit, inst, value, list);
                 }
                 Intrinsic::VaCopy => {
                     let source = unit.function.instruction(inst).operands[1];
-                    let load = unit.function.create_instruction(
-                        Opcode::Load { align: None, volatile: false },
-                        pointer,
-                        vec![source],
-                        Flags::default(),
-                        None,
-                    );
+                    let load = unit
+                        .function
+                        .create_instruction(
+                            Opcode::Load { align: None, volatile: false },
+                            pointer,
+                            vec![source],
+                            Flags::default(),
+                            None,
+                        );
                     unit.function.insert(load, Position::Before(inst)).expect("a placed call");
                     let value = Operand::Value(unit.function.instruction(load).result.expect("a pointer"));
                     store(unit, inst, value, list);
@@ -139,12 +149,21 @@ fn store(
     address: Operand,
 ) {
     let void = unit.function.instruction(before).ty;
-    let one = unit.function.create_instruction(Opcode::Store { align: None, volatile: false }, void, vec![value, address], Flags::default(), None);
+    let one = unit
+        .function
+        .create_instruction(
+            Opcode::Store { align: None, volatile: false },
+            void,
+            vec![value, address],
+            Flags::default(),
+            None,
+        );
     unit.function.insert(one, Position::Before(before)).expect("a placed call");
 }
 
-/// `%v = va_arg ptr %ap, ty` as `%p = load ptr, %ap; %v = load ty, %p; %n = gep i8, %p, size; store %n, %ap`: the
-/// selector's `expandVAArg` with the alignment capped to the slot, so the list pointer is never rounded.
+/// `%v = va_arg ptr %ap, ty` as `%p = load ptr, %ap; %v = load ty, %p; %n = gep
+/// i8, %p, size; store %n, %ap`: the selector's `expandVAArg` with the
+/// alignment capped to the slot, so the list pointer is never rounded.
 fn read_lowered(
     unit: &mut Unit,
     inst: InstId,
@@ -156,7 +175,8 @@ fn read_lowered(
     };
     let types = &unit.context.types;
     let align = unit.layout.align(types, ty).min(u64::from(slot));
-    // `expandVAArg`: a power-of-two scalar steps by its store size, else the size rounded to the alignment
+    // `expandVAArg`: a power-of-two scalar steps by its store size, else the
+    // size rounded to the alignment
     let bytes = unit.layout.store_size(types, ty);
     let step = if bytes.is_power_of_two() { bytes } else { bytes.next_multiple_of(align.max(1)) };
     let pointer = unit.context.types.ptr(0);

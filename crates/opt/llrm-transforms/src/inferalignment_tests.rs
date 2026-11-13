@@ -85,7 +85,10 @@ fn an_instruction_that_is_not_a_mask_a_trunc_or_a_call_is_not_copied() {
 }
 
 /// `body` of @f under the datalayout `layout`, after InferAlignment.
-fn inferred_under(layout: &str, body: &str) -> String {
+fn inferred_under(
+    layout: &str,
+    body: &str,
+) -> String {
     let mut module = parsed(&format!("define i32 @f(i32 %n) {{\nb0:\n{body}}}\n"));
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
@@ -97,22 +100,27 @@ fn inferred_under(layout: &str, body: &str) -> String {
 
 const WIDE_LOAD: &str = "  %a = alloca [16 x i8]\n  %v = load i64, ptr %a\n  %t = trunc i64 %v to i32\n  ret i32 %t\n";
 
-/// matmul's `short a[8][8]` came out of the m16 pipeline `alloca ..., align 32` at -O2: the layout named no stack alignment (no `S`), so the
-/// raise to the preferred alignment of the type accessed had no bound, and a frame that keeps 2 bytes carried a 32-aligned local.
+/// matmul's `short a[8][8]` came out of the m16 pipeline `alloca ..., align 32`
+/// at -O2: the layout named no stack alignment (no `S`), so the raise to the
+/// preferred alignment of the type accessed had no bound, and a frame that
+/// keeps 2 bytes carried a 32-aligned local.
 #[test]
 fn an_alloca_is_not_raised_past_the_stack_alignment_the_layout_names() {
     let text = inferred_under("e-p:16:16-i32:16-i64:64:128-n8:16:32-S16", WIDE_LOAD);
     assert!(!text.contains("align 16"), "raised past a 2-byte stack: {text}");
 }
 
-/// The control: with a stack that keeps 16 bytes the same alloca is raised, so the test above is the bound and not a pass that never raises.
+/// The control: with a stack that keeps 16 bytes the same alloca is raised, so
+/// the test above is the bound and not a pass that never raises.
 #[test]
 fn an_alloca_is_raised_up_to_the_stack_alignment() {
     let text = inferred_under("e-p:16:16-i32:16-i64:64:128-n8:16:32-S128", WIDE_LOAD);
     assert!(text.contains("align 16"), "{text}");
 }
 
-/// With no `S` at all the pin raises without a bound (`exceedsNaturalStackAlignment` is false): the reason a target must name its own.
+/// With no `S` at all the pin raises without a bound
+/// (`exceedsNaturalStackAlignment` is false): the reason a target must name its
+/// own.
 #[test]
 fn a_layout_without_a_stack_alignment_raises_without_a_bound() {
     let text = inferred_under("e-p:16:16-i32:16-i64:64:128-n8:16:32", WIDE_LOAD);

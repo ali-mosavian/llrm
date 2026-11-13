@@ -30,9 +30,9 @@ fn a_store_to_a_returned_or_callee_saved_cell_stays() {
     }
 }
 
-/// stricmp's `select i16 -1, 1` left `lda #255; sta rc4; sta rc5` (6 B) before a
-/// `bcs` over the loads of the other arm: the scan stopped at the branch, though
-/// both paths reach an `rts` that does not read the cells.
+/// stricmp's `select i16 -1, 1` left `lda #255; sta rc4; sta rc5` (6 B) before
+/// a `bcs` over the loads of the other arm: the scan stopped at the branch,
+/// though both paths reach an `rts` that does not read the cells.
 #[test]
 fn a_store_before_a_branch_is_dropped_when_no_path_reads_the_cell() {
     let mut a = asm("  sta rc4\n  cmp rc3\n  bcs L\n  ldy #255\nL:\n  rts\n", &[]);
@@ -62,8 +62,9 @@ fn a_store_before_a_loop_is_dropped_only_when_the_loop_never_reads_it() {
     assert_eq!(a.text(), read);
 }
 
-/// `float_conversions_loop` (+#8590) kept `ldy #0; sty rc10` after a call: nothing read `rc10` before the
-/// epilogue's restore, and a call keeps the callee-saved cells, so the store is dead (4 B with its load).
+/// `float_conversions_loop` (+#8590) kept `ldy #0; sty rc10` after a call:
+/// nothing read `rc10` before the epilogue's restore, and a call keeps the
+/// callee-saved cells, so the store is dead (4 B with its load).
 #[test]
 fn a_store_to_a_callee_saved_cell_is_dropped_when_only_the_restore_follows() {
     let mut a = asm("  sty rc10\n  jsr f\n  jsr g\n  pla\n  sta rc10\n  rts\n", &[]);
@@ -71,15 +72,16 @@ fn a_store_to_a_callee_saved_cell_is_dropped_when_only_the_restore_follows() {
     assert_eq!(a.text(), "  jsr f\n  jsr g\n  pla\n  sta rc10\n  rts\n");
 }
 
-/// A read after the call, a return without the restore, and a caller-saved cell across a call (the callee may
-/// read it as an argument) all keep the store.
+/// A read after the call, a return without the restore, and a caller-saved cell
+/// across a call (the callee may read it as an argument) all keep the store.
 #[test]
 fn a_store_across_a_call_stays_when_a_read_or_the_return_follows() {
     for text in [
         "  sty rc10\n  jsr f\n  lda rc10\n  rts\n",
         "  sty rc10\n  jsr f\n  rts\n",
         "  sta rc2\n  jsr f\n  pla\n  rts\n",
-        // a call through a pointer: the `rts` jumps to the address pushed, and the callee reads rc2
+        // a call through a pointer: the `rts` jumps to the address pushed, and
+        // the callee reads rc2
         "  sta rc2\n  lda t\n  pha\n  lda t+1\n  pha\n  rts\n",
     ] {
         let mut a = asm(text, &[]);
@@ -88,8 +90,9 @@ fn a_store_across_a_call_stays_when_a_read_or_the_return_follows() {
     }
 }
 
-/// The 65C02 stores a zero with `stz`: `float_conversions_loop` kept a `stz rc10` after the call that only the
-/// restore followed (65C02-FLOATCONV-8590), where the 6502's `ldy #0; sty rc10` was dropped. Every store op is a store.
+/// The 65C02 stores a zero with `stz`: `float_conversions_loop` kept a `stz
+/// rc10` after the call that only the restore followed (65C02-FLOATCONV-8590),
+/// where the 6502's `ldy #0; sty rc10` was dropped. Every store op is a store.
 #[test]
 fn a_dead_stz_goes_like_a_dead_sta() {
     let mut a = asm("  stz rc10\n  jsr f\n  pla\n  sta rc10\n  rts\n", &[]);
@@ -115,8 +118,9 @@ fn a_shift_run_whose_low_byte_is_loaded_next_shifts_in_a() {
     assert_eq!(a.text(), "  lda rc2\n  lsr rc3\n  ror a\n  lsr rc3\n  ror a\n  ldx rc3\n  rts\n");
 }
 
-/// A call clobbers the scratch cells and reads none of them: `sta rc16; ...; jsr f` kept the store
-/// (rep_count -O1 inlined into main: two dead splat copies a trip, +1,703 instructions, 2026-11-12).
+/// A call clobbers the scratch cells and reads none of them: `sta rc16; ...;
+/// jsr f` kept the store (rep_count -O1 inlined into main: two dead splat
+/// copies a trip, +1,703 instructions, 2026-11-12).
 #[test]
 fn a_store_to_a_scratch_cell_before_a_call_is_dropped() {
     let mut a = asm("  sta rc16\n  lda rc3\n  jsr f\n  rts\n", &[]);
@@ -133,9 +137,10 @@ fn a_store_to_an_argument_cell_before_a_call_stays() {
     assert_eq!(a.text(), text);
 }
 
-/// `__mulsi3` works in `__sa`/`__sb` and names no `rcN`: a constant's high bytes stored to `rc2`/`rc3`
-/// before it were kept as arguments (mul_constants -Os: 249 lines, 478 B of dead stores, 2026-11-12).
-/// `__udivhi3` reads `rc4`: that store stays.
+/// `__mulsi3` works in `__sa`/`__sb` and names no `rcN`: a constant's high
+/// bytes stored to `rc2`/`rc3` before it were kept as arguments (mul_constants
+/// -Os: 249 lines, 478 B of dead stores, 2026-11-12). `__udivhi3` reads `rc4`:
+/// that store stays.
 #[test]
 fn a_store_before_a_routine_that_names_no_cell_is_dropped() {
     let mut a = asm("  sta rc3\n  sta __sb\n  jsr __mulsi3\n  rts\n", &[]);

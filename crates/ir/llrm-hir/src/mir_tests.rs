@@ -645,7 +645,8 @@ fn fixed_division_of_a_dividend_that_fits_is_a_32_bit_divide() {
         Instruction::new(id, Op::FixedDiv, vec![result], vec![dividend, Operand::value_ref(1), nine.clone()])
     };
     let instructions = vec![
-        // 2: bounded by its stated range, 3: stated range too wide, 4: no range.
+        // 2: bounded by its stated range, 3: stated range too wide, 4: no
+        // range.
         Instruction::new(1, Op::FixedMul, vec![2], vec![Operand::value_ref(1), Operand::value_ref(1), nine.clone()]),
         Instruction::new(2, Op::FixedMul, vec![3], vec![Operand::value_ref(1), Operand::value_ref(1), nine.clone()]),
         divide(3, 4, Operand::constant(2, 512)),
@@ -2288,9 +2289,13 @@ fn a_routine_answering_an_integer_is_defined_on_a_target_whose_word_is_wider() {
         let emitted = crate::mir::emit(&program, &Layout::parse(description).unwrap()).remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         let text = llrm_mir::print::module(&emitted.module);
-        assert!(text.contains("define available_externally") && text.contains("i16 @llrm.qb.B$FASC("), "word {word}\n{text}");
+        assert!(
+            text.contains("define available_externally") && text.contains("i16 @llrm.qb.B$FASC("),
+            "word {word}\n{text}"
+        );
         assert!(text.contains("ret i16"), "word {word}\n{text}");
-        // A value as wide as the word is cut to the stated width, where the word is wider.
+        // A value as wide as the word is cut to the stated width, where the
+        // word is wider.
         let wide = Meaning { result: Returns::Value(Expr::Length(0)), ..asc.clone() };
         let mut program = program;
         program.promises.routines = vec![wide];

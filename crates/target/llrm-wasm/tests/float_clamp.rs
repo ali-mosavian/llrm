@@ -16,9 +16,10 @@ define double @hi(double %x, double %y) {
 }
 ";
 
-/// `combineSelectToPseudoMinMax` saw a wasm float select (kept for the DAG since #7356) and made a
-/// `PseudoFMin`/`PseudoFMax` nobody lowers: jpeg_single and stft_single stopped with
-/// `CannotSelect("PseudoFMin")`. The node is Expand by default (TargetLoweringBase.cpp#L864).
+/// `combineSelectToPseudoMinMax` saw a wasm float select (kept for the DAG
+/// since #7356) and made a `PseudoFMin`/`PseudoFMax` nobody lowers: jpeg_single
+/// and stft_single stopped with `CannotSelect("PseudoFMin")`. The node is
+/// Expand by default (TargetLoweringBase.cpp#L864).
 #[test]
 fn a_float_clamp_compiles_where_there_is_no_minss() {
     for level in [Level::O0, Level::O2] {

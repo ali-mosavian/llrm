@@ -64,10 +64,8 @@ fn bfffo_encodes_as_edc0_with_the_result_in_the_extension_word() {
 /// follows the bit-field word.
 #[test]
 fn bfffo_from_a_displacement_encodes_with_the_displacement_after_the_field_word() {
-    let inst = Inst {
-        opcode: "BFFFO32dp",
-        operands: vec![Operand::Reg(reg::D1), Operand::Imm(4), Operand::Reg(reg::SP)],
-    };
+    let inst =
+        Inst { opcode: "BFFFO32dp", operands: vec![Operand::Reg(reg::D1), Operand::Imm(4), Operand::Reg(reg::SP)] };
     assert_eq!(encode(&inst).unwrap().bytes, [0xed, 0xef, 0x10, 0x00, 0x00, 0x04]);
 }
 

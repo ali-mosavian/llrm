@@ -14,9 +14,8 @@
 //! `MachineCSEImpl::{isCSECandidate, isProfitableToCSE, ProcessBlockCSE,
 //! PerformTrivialCopyPropagation}`, pin d1106deb71cc.
 
-use llrm_support::hash::HashMap;
-
 use llrm_mir::module::BlockId;
+use llrm_support::hash::HashMap;
 
 use crate::cfg::Cfg;
 use crate::dagisel::generated::instrinfo::{desc, flag};

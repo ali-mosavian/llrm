@@ -436,18 +436,17 @@ impl Profile {
     }
 
     /// DEVIATE X87-FCMP-AH: whether a compare read from the status word is
-    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
-    /// register-immediate operation, code is not tuned for size, and the clock
-    /// saved pays for the two bytes the test adds at the target's speed rate
-    /// (m16's 500 milli-clocks a byte makes it a tie, which keeps `sahf`). A
-    /// target that keeps `sahf` where bytes are held (m32) tests at neither -O1
-    /// nor size: two bytes there are a worse cell.
+    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above
+    /// a register-immediate operation, code is not tuned for size, and the
+    /// clock saved pays for the two bytes the test adds at the target's
+    /// speed rate (m16's 500 milli-clocks a byte makes it a tie, which
+    /// keeps `sahf`). A target that keeps `sahf` where bytes are held (m32)
+    /// tests at neither -O1 nor size: two bytes there are a worse cell.
     pub fn tests_status_word(&self) -> bool {
         const EXTRA_BYTES: i64 = 2;
         !self.size
             && !self.min_size
-            && !(self.bytes_strict()
-                && self.target().tti().is_some_and(|tti| tti.keeps_sahf_where_bytes_are_held()))
+            && !(self.bytes_strict() && self.target().tti().is_some_and(|tti| tti.keeps_sahf_where_bytes_are_held()))
             && matches!(
                 (self.cost("sahf"), self.cost("alu_ri")),
                 (Ok(sahf), Ok(alu)) if alu < sahf
@@ -590,7 +589,8 @@ impl Profile {
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
     ///
-    /// DEVIATE PO1 (owner w10, 2026-10-30; x86-m32 off, `Tuning::pops_arguments_at_size`): the pin pops only at `minsize`
+    /// DEVIATE PO1 (owner w10, 2026-10-30; x86-m32 off,
+    /// `Tuning::pops_arguments_at_size`): the pin pops only at `minsize`
     /// (`X86FrameLowering::eliminateCallFramePseudoInstr`,
     /// X86FrameLowering.cpp:4116, `F.hasMinSize() && adjustStackWithPops`; pin
     /// llc -mcpu=i486 keeps `add esp,8` at `optsize`). Here -Os pops too: one
@@ -881,8 +881,10 @@ mod tests {
         let targets: [&dyn Target; 3] = [&llrm_x86_m16::M16, &llrm_x86_m32::M32, &llrm_x86_m64::M64];
         for arch in targets {
             let file = llrm_target::registers::file(&arch.registers_text()).unwrap();
-            let old: Vec<RegId> =
-                llrm_target::registers::of_class(&file, "gpr").into_iter().map(|name| RegId::named(name).unwrap()).collect();
+            let old: Vec<RegId> = llrm_target::registers::of_class(&file, "gpr")
+                .into_iter()
+                .map(|name| RegId::named(name).unwrap())
+                .collect();
             assert!(!old.is_empty());
             assert_eq!(general_registers(arch), old, "{}", arch.name());
         }

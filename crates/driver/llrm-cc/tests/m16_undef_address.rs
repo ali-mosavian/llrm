@@ -1,8 +1,8 @@
 //! A store through an undefined far pointer panicked the allocator at m16
-//! ("a unique value", `LiveRangeCalc::extend`): `ProcessImplicitDefs` flagged the
-//! address undef, then the class peel copied the undefined value as a real read.
-//! queens (bq16) took the descriptor load of `!invariant.load` to `undef` and
-//! no longer compiled.
+//! ("a unique value", `LiveRangeCalc::extend`): `ProcessImplicitDefs` flagged
+//! the address undef, then the class peel copied the undefined value as a real
+//! read. queens (bq16) took the descriptor load of `!invariant.load` to `undef`
+//! and no longer compiled.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;

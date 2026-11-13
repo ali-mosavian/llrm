@@ -366,7 +366,8 @@ fn _mask_of(
 ) -> Option<Mask> {
     let during: BTreeSet<RegId> = one.clobbers.iter().map(|register| _whole(*register)).collect();
     let high: BTreeSet<RegId> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
-    let before: BTreeSet<RegId> = target::needs_data_group(one).then_some(segments.data).flatten().into_iter().collect();
+    let before: BTreeSet<RegId> =
+        target::needs_data_group(one).then_some(segments.data).flatten().into_iter().collect();
     (!during.is_empty() || !high.is_empty() || !before.is_empty()).then_some(Mask { slot, during, high, before })
 }
 

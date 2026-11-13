@@ -1042,9 +1042,10 @@ impl Emitter<'_, '_> {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register in a division sequence".to_owned()));
                 };
-                // A constant read by an earlier divide, multiply, shift count or
-                // string operation is made again for this one (SD440): the pin's
-                // `$edx = COPY %zero` per use is a `xor edx, edx` each, and one
+                // A constant read by an earlier divide, multiply, shift count
+                // or string operation is made again for this
+                // one (SD440): the pin's `$edx = COPY %zero`
+                // per use is a `xor edx, edx` each, and one
                 // value shared by all would live across every clobber of the
                 // register.
                 let value = self.held_operand(node.ops[2])?;
@@ -2459,8 +2460,9 @@ impl Emitter<'_, '_> {
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
                 if self.ctx.address_mode != AddrMode::Real16 || self.ctx.reserved_calls {
-                    // Every call has its pair, as the pin's: a zero-byte one holds its
-                    // slot-index entry through allocation and is removed after it.
+                    // Every call has its pair, as the pin's: a zero-byte one
+                    // holds its slot-index entry through
+                    // allocation and is removed after it.
                     let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
                     let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
                     let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
@@ -3250,7 +3252,9 @@ impl Emitter<'_, '_> {
                 // by the pointer width. A pointer-wide 64-bit table read into a
                 // register would be written as offsets: refuse it.
                 if !self.dag.relative_jump_tables() && self.dag.config().pointer == EVT::I64 {
-                    return Err(EmitError::Unsupported("a jump through a register at 64 bits without position independence".to_owned()));
+                    return Err(EmitError::Unsupported(
+                        "a jump through a register at 64 bits without position independence".to_owned(),
+                    ));
                 }
                 let what = Semantics {
                     indirect: true,
@@ -4215,9 +4219,9 @@ impl Emitter<'_, '_> {
     }
 
     /// DEVIATE SD440 (cites C1, C2 of the coalescer): a constant that a call, a
-    /// return or an instruction's implicit register (`div`'s `EDX`, a shift count in
-    /// `CL`) needs in a fixed register, once something read it, is made
-    /// again for that use. The pin
+    /// return or an instruction's implicit register (`div`'s `EDX`, a shift
+    /// count in `CL`) needs in a fixed register, once something read it, is
+    /// made again for that use. The pin
     /// copies it to the physical register (`$rdi = COPY %0`), which cannot join
     /// where the call clobbers the register, so `reMaterializeDef` turns the
     /// copy into the constant. The coalescer here has no physical copies (a
@@ -4344,8 +4348,10 @@ fn sign_extend(
     (((bits << shift) as i128) >> shift) as i64
 }
 
-/// A register-to-register `mov` of one general class (`MOV32rr`, `MOV64rr_REV`): emitted as a `Move` the coalescer
-/// joins away. `MOVPDI2DIrr` (`movd r32, xmm`) and its kin write a register of another class, a real write.
+/// A register-to-register `mov` of one general class (`MOV32rr`,
+/// `MOV64rr_REV`): emitted as a `Move` the coalescer joins away. `MOVPDI2DIrr`
+/// (`movd r32, xmm`) and its kin write a register of another class, a real
+/// write.
 fn is_gpr_copy(name: &str) -> bool {
     let name = name.strip_suffix("_REV").unwrap_or(name);
     matches!(name, "MOV8rr" | "MOV16rr" | "MOV32rr" | "MOV64rr")
@@ -4374,4 +4380,3 @@ pub(crate) fn shared_load_pays(
     // and the old shape (a memory operand at each reader) stays.
     shared + 1000 <= fold
 }
-

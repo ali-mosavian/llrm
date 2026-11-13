@@ -7,22 +7,22 @@
 //! lifetime intrinsics, phis and selects of pointers, pre-splitting).
 //!
 //! DEVIATE, each with its reason (line numbers are SROA.cpp's):
-//! - Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>` (`PreserveCFG`,
-//!   L174: the late slot), where a select whose load is not speculatable, a
-//!   store through a select and a store through a phi on a critical edge are
-//!   not rewritten and the alloca is left; `SroaModifyCfg` is the early slots'
-//!   `ModifyCFG`, which makes the blocks (`SplitBlockAndInsertIfThen(Else)`,
-//!   `SplitBlockPredecessors`). No `DomTreeUpdater` either way: the analyses are
-//!   dropped.
+//! - Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>`
+//!   (`PreserveCFG`, L174: the late slot), where a select whose load is not
+//!   speculatable, a store through a select and a store through a phi on a
+//!   critical edge are not rewritten and the alloca is left; `SroaModifyCfg` is
+//!   the early slots' `ModifyCFG`, which makes the blocks
+//!   (`SplitBlockAndInsertIfThen(Else)`, `SplitBlockPredecessors`). No
+//!   `DomTreeUpdater` either way: the analyses are dropped.
 //! - Vectors (`isVectorPromotionViable` L2374, `rewriteVectorized*`
 //!   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
 //!   registers, and `AggregateToVector` is off at -O2.
 //! - Calls and invokes escape a pointer whatever their attributes
 //!   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
-//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none with a
-//!   call-site nocapture, and `strlen(b)+b[0]` forwards the same as the pin at
-//!   -Os; exit when a cell shows a missed forward, review 2026-12-10.
+//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none
+//!   with a call-site nocapture, and `strlen(b)+b[0]` forwards the same as the
+//!   pin at -Os; exit when a cell shows a missed forward, review 2026-12-10.
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
@@ -2091,8 +2091,15 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if let Some(common) = common {
             let common_size = layout.alloc_size(&self.context().types, common);
             if common_size >= p.size() {
-                let widen =
-                    is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, common, self.odd_sizes);
+                let widen = is_integer_widening_viable(
+                    layout,
+                    self.unit.context,
+                    self.unit.function,
+                    slices,
+                    p,
+                    common,
+                    self.odd_sizes,
+                );
                 return (common, widen);
             }
         }
@@ -2104,12 +2111,28 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     partition_ty = self.unit.context.types.int((p.size() * 8) as u32);
                 }
             }
-            if is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, partition_ty, self.odd_sizes) {
+            if is_integer_widening_viable(
+                layout,
+                self.unit.context,
+                self.unit.function,
+                slices,
+                p,
+                partition_ty,
+                self.odd_sizes,
+            ) {
                 return (partition_ty, true);
             }
             if let Some(largest) = largest_int {
                 if layout.alloc_size(&self.context().types, largest) >= p.size()
-                    && is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, largest, self.odd_sizes)
+                    && is_integer_widening_viable(
+                        layout,
+                        self.unit.context,
+                        self.unit.function,
+                        slices,
+                        p,
+                        largest,
+                        self.odd_sizes,
+                    )
                 {
                     return (largest, true);
                 }
@@ -3372,8 +3395,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             // A predecessor with other successors gets a block of its own on
             // the edge (`SplitBlockPredecessors(BB, {Pred}, ".sroa.store")`).
-            let store_block =
-                if self.successor_edges(pred) != 1 { crate::edges::split_block_predecessors(self.unit.function, block, &[pred]) } else { pred };
+            let store_block = if self.successor_edges(pred) != 1 {
+                crate::edges::split_block_predecessors(self.unit.function, block, &[pred])
+            } else {
+                pred
+            };
             let terminator = self.function().terminator(store_block).expect("a terminated block");
             let mut operands = self.function().instruction(store).operands.clone();
             operands[1] = pair[0];
@@ -3385,10 +3411,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         self.unit.function.erase(phi).expect("its store is gone");
     }
 
-    /// `isSafeSelectToSpeculate`: the loads and stores through `select` and, per
-    /// hand, whether the pointer may be loaded before the condition is known.
-    /// With `preserve_cfg` only loads with both hands speculatable are safe.
-    /// SROA.cpp#L1854
+    /// `isSafeSelectToSpeculate`: the loads and stores through `select` and,
+    /// per hand, whether the pointer may be loaded before the condition is
+    /// known. With `preserve_cfg` only loads with both hands speculatable
+    /// are safe. SROA.cpp#L1854
     fn is_safe_select_to_speculate(
         &self,
         select: InstId,
@@ -3496,8 +3522,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let new_block = |this: &mut Self, after: BlockId| -> BlockId {
             let block = this.unit.function.create_block(None);
             this.unit.function.insert_block(block, Some(after)).expect("a new block");
-            let jump =
-                this.unit.function.create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
+            let jump = this
+                .unit
+                .function
+                .create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
             this.unit.function.insert(jump, Position::End(block)).expect("a placed block");
             block
         };
@@ -3513,13 +3541,16 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             // the tail.
             (first, second) = if op.true_speculatable { (tail, then_block) } else { (then_block, tail) };
         }
-        let jump = self.unit.function.create_instruction(
-            Opcode::Br,
-            void,
-            vec![select[0], Operand::Block(first), Operand::Block(second)],
-            Flags::default(),
-            None,
-        );
+        let jump = self
+            .unit
+            .function
+            .create_instruction(
+                Opcode::Br,
+                void,
+                vec![select[0], Operand::Block(first), Operand::Block(second)],
+                Flags::default(),
+                None,
+            );
         self.unit.function.insert(jump, Position::End(head)).expect("a placed block");
         let is_load = matches!(self.function().instruction(inst).opcode, Opcode::Load { .. });
         let mut incoming: Vec<Operand> = Vec::new();

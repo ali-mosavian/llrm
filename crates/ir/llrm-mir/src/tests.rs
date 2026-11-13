@@ -1551,9 +1551,10 @@ fn a_globals_intrinsic_follows_its_name_through_renames_and_copies() {
     assert_eq!(intrinsic(&module), None);
 }
 
-/// clang 24 prints `/* (nan) */` before the class mask of `llvm.is.fpclass`; the reader stopped at it
-/// (`unexpected character `/``), so `runtime/compiler-rt/tests/host_fp8.c` did not compile on arm64 at any level.
-/// A C comment is white space, and it counts its lines.
+/// clang 24 prints `/* (nan) */` before the class mask of `llvm.is.fpclass`;
+/// the reader stopped at it (`unexpected character `/``), so
+/// `runtime/compiler-rt/tests/host_fp8.c` did not compile on arm64 at any
+/// level. A C comment is white space, and it counts its lines.
 #[test]
 fn a_c_style_comment_in_the_text_is_white_space() {
     let text = "declare i1 @llvm.is.fpclass.f64(double, i32)\ndefine i1 @f(double %x) {\nentry:\n  %c = call i1 @llvm.is.fpclass.f64(double %x, /* (nan) */ i32 3)\n  ret i1 %c\n}\n";
@@ -1563,8 +1564,9 @@ fn a_c_style_comment_in_the_text_is_white_space() {
     assert_eq!(round(&spanning), round(&without));
 }
 
-/// A comment opener inside a string is text: a `c"..."` constant, a quoted name and a metadata string holding `/*`
-/// and `*/` read as the base lexer read them. (A guard: it passes on the base too, as it must.)
+/// A comment opener inside a string is text: a `c"..."` constant, a quoted name
+/// and a metadata string holding `/*` and `*/` read as the base lexer read
+/// them. (A guard: it passes on the base too, as it must.)
 #[test]
 fn a_comment_opener_inside_a_string_is_not_a_comment() {
     let text = "@s = constant [6 x i8] c\"a/*b*/\"\n@\"x/*y\" = global i32 0\n@t = constant [5 x i8] c\"*/ /*\"\ndefine void @f() !dbg !0 {\n  ret void\n}\n!0 = !{!\"p/*q*/r\"}\n";
@@ -1574,7 +1576,8 @@ fn a_comment_opener_inside_a_string_is_not_a_comment() {
     }
 }
 
-/// An unterminated comment is an error at the line it opens, not the end of the text read as nothing.
+/// An unterminated comment is an error at the line it opens, not the end of the
+/// text read as nothing.
 #[test]
 fn an_unterminated_c_comment_is_refused_at_its_line() {
     let why = refusal("define void @f() {\n  ret void /* open\n}\n");
@@ -1683,9 +1686,10 @@ fn a_name_made_on_another_thread_costs_one_table() {
 }
 
 /// The count of tables made was one for the whole process: a test that made
-/// a module's table beside `test_a_module_makes_one_symbol_table_for_all_its_lookups`
-/// failed it (5 of 40 runs red at the tip). A table made on another thread is
-/// not this thread's.
+/// a module's table beside
+/// `test_a_module_makes_one_symbol_table_for_all_its_lookups` failed it (5 of
+/// 40 runs red at the tip). A table made on another thread is not this thread'
+/// s.
 #[test]
 fn a_table_made_on_another_thread_is_not_counted() {
     let module = module_of_functions(3);

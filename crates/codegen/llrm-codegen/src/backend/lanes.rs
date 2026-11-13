@@ -131,9 +131,10 @@ impl Table {
 }
 
 impl Table {
-    /// The table of a file that states `@lanes bytes`: the 32 flag lanes, then a
-    /// lane for each byte of each root. A view covers the bytes `lane / 8 ..
-    /// (lane + bits) / 8` of its root (the 6502's `rc3` is byte 1 of `rs1`).
+    /// The table of a file that states `@lanes bytes`: the 32 flag lanes, then
+    /// a lane for each byte of each root. A view covers the bytes `lane / 8
+    /// .. (lane + bits) / 8` of its root (the 6502's `rc3` is byte 1 of
+    /// `rs1`).
     fn of_bytes(regs: Regs) -> Table {
         let entries = || regs.table.iter().flatten();
         let bytes_of = |entry: &llrm_lir::registers::Entry| ((entry.bits / 8).max(1)) as usize;
@@ -180,8 +181,9 @@ fn table_of(regs: Regs) -> &'static Table {
             .entries()
             .find(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0)
     {
-        // Not a default: a z80 file without the line read x86's table for every register (no effect decoded, every
-        // instruction a scheduling barrier).
+        // Not a default: a z80 file without the line read x86's table for every
+        // register (no effect decoded, every instruction a scheduling
+        // barrier).
         assert!(
             regs.0.lanes_x86 || regs.0.lanes_none,
             "a register file with integer views under 32 bits (`{small:?}`) must say `@lanes bytes`, `@lanes x86` \
@@ -241,7 +243,8 @@ pub fn is_x86(regs: Regs) -> bool {
 /// Makes the lanes of `regs`' file the ones this thread reads. A mask made
 /// under one file is not meaningful under another.
 pub fn enter(regs: Regs) -> Guard {
-    // not a default: a consumer of lanes on a target that has none must say so, by stating its lanes
+    // not a default: a consumer of lanes on a target that has none must say so,
+    // by stating its lanes
     assert!(
         !regs.0.lanes_none,
         "this register file says `@lanes none` (its target reads no lanes yet), but something reads its lanes: \
@@ -421,7 +424,8 @@ impl Lanes {
         Iter(self.0 & other.0, active())
     }
 
-    /// Every lane of `other` added: `extend` of its lanes, as one word operation.
+    /// Every lane of `other` added: `extend` of its lanes, as one word
+    /// operation.
     pub fn include(
         &mut self,
         other: Self,
@@ -612,7 +616,8 @@ mod tests {
         for regs in
             [Regs(&llrm_x86_m16::REGISTER_INFO), Regs(&llrm_x86_m32::REGISTER_INFO), Regs(&llrm_x86_m64::REGISTER_INFO)]
         {
-            for (id, entry) in regs.entries().filter(|(_, entry)| entry.classes & llrm_lir::registers::class::INT != 0) {
+            for (id, entry) in regs.entries().filter(|(_, entry)| entry.classes & llrm_lir::registers::class::INT != 0)
+            {
                 assert_eq!(regs.bytes(id), Some(id.size() as i64), "{id:?}");
             }
         }
@@ -713,8 +718,9 @@ mod tests {
         }
     }
 
-    /// A z80 file with 8-bit integer views and no `@lanes` line read x86's table for every register: the
-    /// scheduler found no effect for 94 of 94 instructions of `three` and ordered none of them. A file with
+    /// A z80 file with 8-bit integer views and no `@lanes` line read x86's
+    /// table for every register: the scheduler found no effect for 94 of 94
+    /// instructions of `three` and ordered none of them. A file with
     /// such views and no lane declaration is refused by name.
     #[test]
     #[should_panic(expected = "@lanes")]
@@ -745,8 +751,9 @@ mod tests {
         let _ = table_of(bare);
     }
 
-    /// m68k's file says `@lanes none`: its private pipeline reads no lanes. A consumer that later reaches
-    /// `enter` (the scheduler, machinecp's fixed units) got x86's table for ids that are not x86's, without a
+    /// m68k's file says `@lanes none`: its private pipeline reads no lanes. A
+    /// consumer that later reaches `enter` (the scheduler, machinecp's
+    /// fixed units) got x86's table for ids that are not x86's, without a
     /// word; it is refused by name, and `is_x86` is false for the file.
     #[test]
     #[should_panic(expected = "@lanes none")]

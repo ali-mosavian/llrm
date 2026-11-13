@@ -374,21 +374,15 @@ mod tests {
     /// body with no block that reloads a cell and returns asks for none.
     #[test]
     fn test_a_body_with_no_return_to_split_is_not_shrink_wrapped() {
-        let block = |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| {
-            LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
-        };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(0, vec![1, 2], vec![insn(0, Operation::Branch, "jne")]),
             block(1, vec![2], vec![insn(1, Operation::Jump, "jmp")]),
             block(2, vec![], vec![insn(2, Operation::Return, "ret")]),
         ];
-        let body = LirBody::new(
-            "plain",
-            0,
-            crate::model::lir::shared(blocks),
-            IndexMap::default(),
-            IndexMap::default(),
-        );
+        let body =
+            LirBody::new("plain", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         let procedure = masm::Procedure {
             name: "plain".into(),
             public: true,

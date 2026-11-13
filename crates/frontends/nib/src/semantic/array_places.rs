@@ -362,9 +362,10 @@ impl FunctionCompiler<'_> {
 
     /// A read-only object holding the elements of the literal `value`, when
     /// each is a compile-time scalar and there are more than
-    /// `CONSTANT_COPY_BYTES` of them (a float one is a literal too): copied into the local, a table costs a
-    /// loop instead of a store per element, and the optimizer reads it in
-    /// place when the local is never written (clang's constant global and
+    /// `CONSTANT_COPY_BYTES` of them (a float one is a literal too): copied
+    /// into the local, a table costs a loop instead of a store per element,
+    /// and the optimizer reads it in place when the local is never written
+    /// (clang's constant global and
     /// memcpy, `isOnlyCopiedFromConstantMemory`).
     fn constant_source(
         &mut self,
@@ -376,7 +377,12 @@ impl FunctionCompiler<'_> {
     ) -> Result<Option<StructView>, Diagnostic> {
         let ElementType::Scalar(type_name) = element else { return Ok(None) };
         let floating = matches!(type_name.plain(), TypeName::F32 | TypeName::F64);
-        let plain = matches!(type_name, TypeName::Fixed { .. } | TypeName::Char | TypeName::Bool) || is_integer(type_name) || floating;
+        let plain = matches!(
+            type_name,
+            TypeName::Fixed { .. } | TypeName::Char | TypeName::Bool
+        )
+            || is_integer(type_name)
+            || floating;
         let width = self.types.width(element.id()) as usize;
         if !plain || width * shape.len() as usize <= CONSTANT_COPY_BYTES {
             return Ok(None);
@@ -388,14 +394,15 @@ impl FunctionCompiler<'_> {
                 let Expr::Float(spelling, _) = &literal else { return Ok(None) };
                 let Ok(parsed) = spelling.parse::<f64>() else { return Ok(None) };
                 match type_name.plain() {
-                    TypeName::F32 if (parsed as f32).is_finite() => bytes.extend_from_slice(&(parsed as f32).to_le_bytes()),
+                    TypeName::F32 if (parsed as f32).is_finite() => {
+                        bytes.extend_from_slice(&(parsed as f32).to_le_bytes())
+                    }
                     TypeName::F64 if parsed.is_finite() => bytes.extend_from_slice(&parsed.to_le_bytes()),
                     _ => return Ok(None),
                 }
                 continue;
             }
-            let Some(hir::Operand::Constant(_, number)) = self.coerced(&literal, type_name)?.operand
-            else {
+            let Some(hir::Operand::Constant(_, number)) = self.coerced(&literal, type_name)?.operand else {
                 return Ok(None);
             };
             bytes.extend_from_slice(&number.to_le_bytes()[..width]);

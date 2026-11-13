@@ -83,7 +83,8 @@ fn with_flagged_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order, phi_operand_uses };
+    let env =
+        Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order, phi_operand_uses };
     let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
     GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
@@ -211,7 +212,13 @@ fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
         assumptions: &assumptions,
     };
     let mut se = ScalarEvolution::new();
-    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false };
+    let env = Env {
+        safe_to_speculate: &|_| true,
+        ephemeral: &|_| false,
+        native_widths: &[],
+        use_list_order: false,
+        phi_operand_uses: false,
+    };
     let before = llrm_mir::module::block_places_built();
     let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
     assert_eq!(headers.len(), 6);
@@ -286,7 +293,13 @@ fn users_on_a_16_bit_native_target(text: &str) -> Vec<String> {
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false, phi_operand_uses: false };
+    let env = Env {
+        safe_to_speculate: &|_: InstId| true,
+        ephemeral: &|_| false,
+        native_widths: &[16],
+        use_list_order: false,
+        phi_operand_uses: false,
+    };
     let users = IvUsers::of(&mut se, &cx, header, &env);
     users.uses.iter().map(|u| format!("{:?}", function.instruction(u.user).opcode)).collect()
 }
@@ -351,7 +364,10 @@ exit:
         // The loop is the second block; its first gep is `%a`.
         let a = function
             .iter_block(function.layout()[1])
-            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::GetElementPtr { .. }))
+            .find(|&inst| matches!(
+                function.instruction(inst).opcode,
+                Opcode::GetElementPtr { .. }
+            ))
             .expect("the gep of %a");
         let index = function.instruction(a).operands[1];
         function.set_operand(a, 1, index);
@@ -400,9 +416,15 @@ exit:
 ";
     let phi_operands = |asked: bool| {
         let mut found = Vec::new();
-        with_flagged_users(text, false, asked, |_| {}, |cx, _, users, _, _| {
-            found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
-        });
+        with_flagged_users(
+            text,
+            false,
+            asked,
+            |_| {},
+            |cx, _, users, _, _| {
+                found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
+            },
+        );
         found.sort();
         found
     };

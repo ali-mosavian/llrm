@@ -19,11 +19,12 @@ const PROGRAMS: &[(&str, &str)] = &[
     // (An)+`
     ("overflow_loop", include_str!("fixtures/overflow_loop_raw.ll")),
     ("mandel", include_str!("fixtures/mandel_raw.ll")),
-    // `move.l sp, -(An)`: the stack pointer is dropped from the sources, and the
-    // row's source 1 (the address) was none: the write-back def went untied
+    // `move.l sp, -(An)`: the stack pointer is dropped from the sources, and
+    // the row's source 1 (the address) was none: the write-back def went untied
     ("nbody_single", include_str!("fixtures/nbody_single_raw.ll")),
-    // an i64 result whose low word is computed before a select's split: its copy
-    // into the return register stayed in the head, the `RET` that reads it in the join
+    // an i64 result whose low word is computed before a select's split: its
+    // copy into the return register stayed in the head, the `RET` that reads it
+    // in the join
     ("i64_select_returns", include_str!("fixtures/i64_select_returns.ll")),
     // `CCR_SAVE` reads the flags the `cmp` before it set without naming them
     ("word_compare_branches", include_str!("fixtures/word_compare_branches_raw.ll")),
@@ -51,5 +52,9 @@ fn programs_that_compile_with_the_private_passes_compile_with_the_shared_prelude
         }
     }
     assert!(refused.is_empty(), "{refused:#?}");
-    assert_eq!(llrm_codegen::backend::twoaddr::skipped_ties(), 0, "a declared tie named an operand its instruction lacks");
+    assert_eq!(
+        llrm_codegen::backend::twoaddr::skipped_ties(),
+        0,
+        "a declared tie named an operand its instruction lacks"
+    );
 }

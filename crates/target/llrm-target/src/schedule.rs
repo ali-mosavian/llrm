@@ -1,6 +1,7 @@
-//! A CPU's processor resources and what each instruction form puts on them, from the `[schedule]` tables
-//! of its `machine/tune/` file: the pin's `ProcResource` units and a form's `WriteRes` micro-ops and
-//! `ReleaseAtCycles` (X86SchedSandyBridge.td).
+//! A CPU's processor resources and what each instruction form puts on them,
+//! from the `[schedule]` tables of its `machine/tune/` file: the pin's
+//! `ProcResource` units and a form's `WriteRes` micro-ops and `ReleaseAtCycles`
+//! (X86SchedSandyBridge.td).
 //!
 //! ```toml
 //! [schedule.resources]   # name = units
@@ -16,7 +17,8 @@ use llrm_mir::target::{OperationCosts, Resource, Throughput};
 pub struct Schedule {
     /// Resource name and units, in file order.
     pub resources: Vec<(String, i64)>,
-    /// Form, its micro-ops, and the cycles it puts on each resource it uses (by index into `resources`).
+    /// Form, its micro-ops, and the cycles it puts on each resource it uses (by
+    /// index into `resources`).
     pub forms: Vec<(String, i64, Vec<(usize, i64)>)>,
 }
 
@@ -41,7 +43,11 @@ impl Schedule {
                     if key == "uops" {
                         uops = number;
                     } else {
-                        let at = out.resources.iter().position(|(name, _)| name == key).ok_or(format!("schedule.forms.{form}: no resource `{key}`"))?;
+                        let at = out
+                            .resources
+                            .iter()
+                            .position(|(name, _)| name == key)
+                            .ok_or(format!("schedule.forms.{form}: no resource `{key}`"))?;
                         uses.push((at, number));
                     }
                 }
@@ -51,10 +57,12 @@ impl Schedule {
         Ok(out)
     }
 
-    /// The processor resources of `issue_width` micro-ops a cycle and the file's, as operations: `operations`
-    /// turns a price of each instruction form into a price of each operation (the target's mapping), once for
-    /// the micro-ops and once for each resource, a form the file does not list occupying none and being one
-    /// micro-op. Latencies are `latency`'s, in thousandths of a clock.
+    /// The processor resources of `issue_width` micro-ops a cycle and the
+    /// file's, as operations: `operations` turns a price of each
+    /// instruction form into a price of each operation (the target's mapping),
+    /// once for the micro-ops and once for each resource, a form the file
+    /// does not list occupying none and being one micro-op. Latencies are
+    /// `latency`'s, in thousandths of a clock.
     pub fn throughput(
         &self,
         issue_width: i64,
@@ -62,10 +70,17 @@ impl Schedule {
         operations: &dyn Fn(&dyn Fn(&str) -> i64) -> OperationCosts,
     ) -> Throughput {
         let form = |name: &str| self.forms.iter().find(|(one, ..)| one == name);
-        let issue = Resource { units: issue_width, costs: operations(&|name| 1000 * form(name).map_or(1, |(_, uops, _)| *uops)) };
+        let issue = Resource {
+            units: issue_width,
+            costs: operations(&|name| 1000 * form(name).map_or(1, |(_, uops, _)| *uops)),
+        };
         let mut resources = vec![issue];
         for (at, (_, units)) in self.resources.iter().enumerate() {
-            let cycles = |name: &str| form(name).map_or(0, |(_, _, uses)| uses.iter().filter(|(used, _)| *used == at).map(|(_, cycles)| 1000 * cycles).sum());
+            let cycles = |name: &str| {
+                form(name).map_or(0, |(_, _, uses)| {
+                    uses.iter().filter(|(used, _)| *used == at).map(|(_, cycles)| 1000 * cycles).sum()
+                })
+            };
             resources.push(Resource { units: *units, costs: operations(&cycles) });
         }
         Throughput { latency, resources }
@@ -81,7 +96,10 @@ mod tests {
         let text = "[schedule.resources]\np015 = 3\np4 = 1\n[schedule.forms]\nalu_rr = { uops = 1, p015 = 1 }\nmov_mr = { uops = 2, p4 = 1 }\n";
         let schedule = Schedule::parse(text).expect("parses");
         assert_eq!(schedule.resources, vec![("p015".to_owned(), 3), ("p4".to_owned(), 1)]);
-        assert_eq!(schedule.forms, vec![("alu_rr".to_owned(), 1, vec![(0, 1)]), ("mov_mr".to_owned(), 2, vec![(1, 1)])]);
+        assert_eq!(
+            schedule.forms,
+            vec![("alu_rr".to_owned(), 1, vec![(0, 1)]), ("mov_mr".to_owned(), 2, vec![(1, 1)])]
+        );
         assert!(Schedule::parse("[schedule.forms]\nx = { uops = 1, p9 = 1 }\n").is_err());
     }
 }

@@ -217,9 +217,9 @@ pub mod registers {
 /// is made of: `[base+index+disp]` with a base from BX or BP and an index from
 /// SI or DI. The architecture's, the same in every 16-bit target.
 pub mod asm;
+pub mod helpers;
 pub mod inline_asm;
 pub mod pinregs;
-pub mod helpers;
 
 pub mod addressing16 {
     use llrm_lir::registers::RegId;

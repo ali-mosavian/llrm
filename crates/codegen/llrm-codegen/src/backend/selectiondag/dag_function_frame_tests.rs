@@ -1768,9 +1768,7 @@ fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_o3() {
     let target = cpu.target();
     let tti = target.tti();
     let depth = |o3: bool| {
-        llrm_transforms::walk::Recursion::of(None, false, true, o3, tti.as_deref())
-            .expect("m32 copies recursion")
-            .depth
+        llrm_transforms::walk::Recursion::of(None, false, true, o3, tti.as_deref()).expect("m32 copies recursion").depth
     };
     assert_eq!((depth(false), depth(true)), (2, 2));
 }

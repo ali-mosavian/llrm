@@ -1,5 +1,6 @@
-//! What a driver flag asks of the mid-end past the level, as `llrm-cc` passes it on to a backend's `llc`: one parser for every
-//! backend, so none refuses a flag another takes.
+//! What a driver flag asks of the mid-end past the level, as `llrm-cc` passes
+//! it on to a backend's `llc`: one parser for every backend, so none refuses a
+//! flag another takes.
 
 use llrm_mir::program::Program;
 use llrm_transforms::pipeline::Options as MidEnd;
@@ -30,7 +31,10 @@ impl Policy {
     ) -> bool {
         if let Some(name) = flag.strip_prefix("-fno-inline=") {
             self.no_inline.push(name.to_owned());
-        } else if matches!(flag, "-fexcess-precision=standard" | "-fexcess-precision=fast" | "-ffloat-store" | "-fno-float-store") {
+        } else if matches!(
+            flag,
+            "-fexcess-precision=standard" | "-fexcess-precision=fast" | "-ffloat-store" | "-fno-float-store"
+        ) {
         } else if super::flags::apply_pass_flag(&mut MidEnd::default(), flag) {
             self.passes.push(flag.to_owned());
         } else {
@@ -76,13 +80,14 @@ impl Policy {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::Policy;
 
-    /// What `llrm-cc` hands to an `llc` that clang does not take, and what stays the caller's. A backend's `llc` that calls `Policy::take`
-    /// accepts the first column: arm64 and wasm refused `-fexcess-precision=` and `-fno-inline=` as unrecognized arguments.
+    /// What `llrm-cc` hands to an `llc` that clang does not take, and what
+    /// stays the caller's. A backend's `llc` that calls `Policy::take`
+    /// accepts the first column: arm64 and wasm refused `-fexcess-precision=`
+    /// and `-fno-inline=` as unrecognized arguments.
     #[test]
     fn the_flags_the_driver_passes_on_are_taken_and_others_are_left_to_the_caller() {
         let passed_on = [

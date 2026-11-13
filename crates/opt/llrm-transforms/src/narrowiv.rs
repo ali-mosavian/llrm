@@ -118,8 +118,11 @@ fn plan_loop(
     let (Some(preheader), Some(latch)) = (l.get_loop_preheader(cx.function), l.get_loop_latch(cx.function)) else {
         return;
     };
-    let phis: Vec<InstId> =
-        cx.function.iter_block(header).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
+    let phis: Vec<InstId> = cx
+        .function
+        .iter_block(header)
+        .take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi)
+        .collect();
     for phi in phis {
         let inst = cx.function.instruction(phi);
         let Some(bits) = cx.context.types.int_bits(inst.ty) else { continue };

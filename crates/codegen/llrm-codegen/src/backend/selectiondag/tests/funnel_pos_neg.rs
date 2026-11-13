@@ -1,8 +1,9 @@
 //! `MatchFunnelPosNeg`: the expansion of an `i64` shift by a small amount is
-//! `(or (shl hi, y), (srl (srl lo, 1), (xor y, 31)))`, which the pin folds to one
-//! `fshl` (x86 `shld`). Not matched here (DEVIATE SD321), x86_32 -Os
+//! `(or (shl hi, y), (srl (srl lo, 1), (xor y, 31)))`, which the pin folds to
+//! one `fshl` (x86 `shld`). Not matched here (DEVIATE SD321), x86_32 -Os
 //! `call_cleanup_keeps_pair` went 1016 -> 1040 B and x86_16 -O2
-//! `shift_int64_masked_amount` 463 -> 518 B once the shift expanded without the funnel.
+//! `shift_int64_masked_amount` 463 -> 518 B once the shift expanded without the
+//! funnel.
 
 use super::super::dag_combiner::{CombineLevel, DagCombiner};
 use super::super::x86_lowering::X86Lowering;
@@ -15,7 +16,8 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue, SDValue) -> 
     let root = build(&mut dag, x, z, y);
     dag.set_root(root);
     let mut hooks = X86Lowering {
-        imul_if_smaller: false, hot_chains: false,
+        imul_if_smaller: false,
+        hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,
@@ -62,10 +64,11 @@ fn a_shift_pair_through_one_and_xor_is_a_right_funnel_shift() {
     assert_eq!(dag.opcode(root), ISD::FShr);
 }
 
-/// A constant `z` folds `(srl z, 1)` away before the pair is matched; x86_16 -Os
-/// `call_cleanup_keeps_pair` then kept `shl/not/shr/or` for the folded shape
-/// where `shld` was, 307 -> 327 B. The folded constant is `z >> 1` for a `z` that
-/// is left to the fold's other half, so the pair is still `(fshl x, z, y)`.
+/// A constant `z` folds `(srl z, 1)` away before the pair is matched; x86_16
+/// -Os `call_cleanup_keeps_pair` then kept `shl/not/shr/or` for the folded
+/// shape where `shld` was, 307 -> 327 B. The folded constant is `z >> 1` for a
+/// `z` that is left to the fold's other half, so the pair is still `(fshl x, z,
+/// y)`.
 #[test]
 fn a_left_pair_whose_srl_of_a_constant_folded_is_a_left_funnel_shift() {
     let (dag, root) = combined(|dag, x, _, y| {
@@ -95,9 +98,10 @@ fn a_right_pair_whose_shl_of_a_constant_folded_is_a_right_funnel_shift() {
     assert_eq!(dag.constant(dag.operand(root, 0)), Some(0x3a5c_0f10 >> 1));
 }
 
-/// The folded constant leaves one bit free; x86_16 -Os `call_cleanup_keeps_pair` took the
-/// even one while the shl side held the odd constant, so the pair needed a second `mov` of
-/// 32 bits: 316 B against 307 B before the fold. The free bit follows a constant already in the DAG.
+/// The folded constant leaves one bit free; x86_16 -Os
+/// `call_cleanup_keeps_pair` took the even one while the shl side held the odd
+/// constant, so the pair needed a second `mov` of 32 bits: 316 B against 307 B
+/// before the fold. The free bit follows a constant already in the DAG.
 #[test]
 fn a_folded_constant_takes_the_free_bit_of_a_constant_already_in_the_dag() {
     let (dag, root) = combined(|dag, x, _, y| {

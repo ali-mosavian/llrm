@@ -456,11 +456,14 @@ fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
     assert!(spelled(&[("watcall32", "*")]).contains(&"f".to_owned()));
 }
 
-/// #6736 gave the `promote.` rerun the minimal cleanup list: `sort` kept its length parameter, the bounds checks
-/// and a far array pointer (`ret 4`), which the full list folds into a two-index call on the stack array. Nib
-/// quicksort -O2 went from 258,793 to 324,077 clocks (+25%) and from 334 to 411 B (those figures are #6736's, fixed by #6916).
-/// #7082 brought the same `ret 4` back by another cause (the walk's promotion left the second IPSCCP unrun, #7476): measured
-/// on its own, Nib quicksort m16 -O2 355 -> 331 B and 5.2% fewer executed instructions (base de3796acc7).
+/// #6736 gave the `promote.` rerun the minimal cleanup list: `sort` kept its
+/// length parameter, the bounds checks and a far array pointer (`ret 4`), which
+/// the full list folds into a two-index call on the stack array. Nib
+/// quicksort -O2 went from 258,793 to 324,077 clocks (+25%) and from 334 to 411
+/// B (those figures are #6736's, fixed by #6916). #7082 brought the same `ret
+/// 4` back by another cause (the walk's promotion left the second IPSCCP
+/// unrun, #7476): measured on its own, Nib quicksort m16 -O2 355 -> 331 B and
+/// 5.2% fewer executed instructions (base de3796acc7).
 #[test]
 fn test_sort_takes_only_its_two_indices_after_the_ipo_reruns() {
     let function = _nib("quicksort", "main", "_sort");
@@ -468,8 +471,9 @@ fn test_sort_takes_only_its_two_indices_after_the_ipo_reruns() {
     assert!(function.contains("\n    ret\n"), "{function}");
 }
 
-/// An immutable literal table was built on the stack by one `mov` per element on every call (jpeg_fixed's `cosine`: 64
-/// dword stores, 398 B of frame, +570 B of code against C's static table). It is read from a read-only object.
+/// An immutable literal table was built on the stack by one `mov` per element
+/// on every call (jpeg_fixed's `cosine`: 64 dword stores, 398 B of frame, +570
+/// B of code against C's static table). It is read from a read-only object.
 #[test]
 fn test_an_immutable_literal_table_is_read_from_its_object_not_stored_per_call() {
     let function = _nib("table", "pick", "_pick");
@@ -477,8 +481,10 @@ fn test_an_immutable_literal_table_is_read_from_its_object_not_stored_per_call()
     assert!(function.matches("mov dword ptr [bp-").count() < 4, "{function}");
 }
 
-/// A local f32 literal table was built by one `mov dword ptr [bp-N], imm` per element (jpeg_single's `cosine`: 64 stores, 102
-/// instructions, ~550 B at -Os m16): `constant_source` took only integer-like elements. It is read from a read-only object too.
+/// A local f32 literal table was built by one `mov dword ptr [bp-N], imm` per
+/// element (jpeg_single's `cosine`: 64 stores, 102 instructions, ~550 B at -Os
+/// m16): `constant_source` took only integer-like elements. It is read from a
+/// read-only object too.
 #[test]
 fn test_an_immutable_f32_literal_table_is_read_from_its_object_not_stored_per_call() {
     let function = _nib("ftable", "pick", "_pick");

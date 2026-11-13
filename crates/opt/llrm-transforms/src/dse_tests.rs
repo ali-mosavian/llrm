@@ -790,10 +790,11 @@ fn dropped_unrun(text: &str) -> String {
     after[after.find("@f(").unwrap()..].to_owned()
 }
 
-/// MemorySSA gave a `noalias.scope.decl` a MemoryDef (the pin's `createNewAccess`
-/// gives it none), so the load of other bytes before it read as a clobber and the
-/// byte store a later `i64` store covers survived: bitfield_long_long wasm32 +12 B
-/// (`i32.const 12; i32.store8` beside the covering `i64.store`).
+/// MemorySSA gave a `noalias.scope.decl` a MemoryDef (the pin's
+/// `createNewAccess` gives it none), so the load of other bytes before it read
+/// as a clobber and the byte store a later `i64` store covers survived:
+/// bitfield_long_long wasm32 +12 B (`i32.const 12; i32.store8` beside the
+/// covering `i64.store`).
 #[test]
 fn a_noalias_scope_declaration_does_not_keep_a_covered_store() {
     let text = dropped_unrun(

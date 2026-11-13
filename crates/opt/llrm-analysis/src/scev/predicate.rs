@@ -5,12 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use super::ConstantRange;
 use llrm_mir::dense::IdSet;
 use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, Operand, ValueDef};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Type, Use, flags};
 use super::{Cx, ScalarEvolution};

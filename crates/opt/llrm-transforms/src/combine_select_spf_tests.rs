@@ -59,10 +59,13 @@ fn a_select_of_a_value_and_its_negation_is_abs() {
     assert!(out.contains("@llvm.abs.i16(i16 %x, i1 true)"), "{out}");
 }
 
-/// `x < 0 ? 0 : (x > 255 ? 255 : x)` is `smax` and `smin` in ONE combine, as the pin's `InstCombine` leaves it: the inner select becomes
-/// `smin`, and the outer one (a user of it) must see that call as the intrinsic. It did not while the declaration was pending in the pass,
-/// so `clamp` stayed `select (icmp slt x, 0), 0, smin(x, 255)` and, inlined into wasm jpeg_fixed -O2, its compare folded into the sdiv's
-/// operand: +4 executed instructions per pixel channel, +0.76% of the run against the pin.
+/// `x < 0 ? 0 : (x > 255 ? 255 : x)` is `smax` and `smin` in ONE combine, as
+/// the pin's `InstCombine` leaves it: the inner select becomes `smin`, and the
+/// outer one (a user of it) must see that call as the intrinsic. It did not
+/// while the declaration was pending in the pass, so `clamp` stayed `select
+/// (icmp slt x, 0), 0, smin(x, 255)` and, inlined into wasm jpeg_fixed -O2, its
+/// compare folded into the sdiv's operand: +4 executed instructions per pixel
+/// channel, +0.76% of the run against the pin.
 #[test]
 fn a_clamp_of_two_selects_is_min_and_max_in_one_combine() {
     let out = combined(

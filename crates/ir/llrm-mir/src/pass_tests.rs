@@ -697,9 +697,10 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     );
 }
 
-/// `LLRM_CHECK_MODULES` ran every compile into a panic, "declarations: brought up to date, it is not
-/// what working it out afresh gives", then the same for callee-effects: the afresh run took the patch
-/// path on the result the first run left behind, from before `stamp` gave `f` its attributes.
+/// `LLRM_CHECK_MODULES` ran every compile into a panic, "declarations: brought
+/// up to date, it is not what working it out afresh gives", then the same for
+/// callee-effects: the afresh run took the patch path on the result the first
+/// run left behind, from before `stamp` gave `f` its attributes.
 #[test]
 fn analyses_worked_out_afresh_ignore_the_result_the_first_run_left() {
     use crate::passes::{CalleeEffects, Declarations};
@@ -711,8 +712,14 @@ fn analyses_worked_out_afresh_ignore_the_result_the_first_run_left() {
     let (_, function) = module.function_mut("f").unwrap();
     function.attrs.push(Attribute::Flag("readnone".into()));
     analyses.invalidate(&PreservedAnalyses::none());
-    assert!(analyses.run_agrees_afresh::<Declarations>(&module), "declarations kept the listing from before the attribute");
-    assert!(analyses.run_agrees_afresh::<CalleeEffects>(&module), "callee effects kept the map from before the attribute");
+    assert!(
+        analyses.run_agrees_afresh::<Declarations>(&module),
+        "declarations kept the listing from before the attribute"
+    );
+    assert!(
+        analyses.run_agrees_afresh::<CalleeEffects>(&module),
+        "callee effects kept the map from before the attribute"
+    );
 }
 
 /// A pass that named nothing loses the result though the body did not move:

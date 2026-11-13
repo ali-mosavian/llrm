@@ -1,4 +1,5 @@
-//! A select is a branch on the 6502; the arm only it reads is made on its own path.
+//! A select is a branch on the 6502; the arm only it reads is made on its own
+//! path.
 
 mod common;
 
@@ -54,8 +55,8 @@ fn a_case_fold_makes_its_subtraction_on_the_taken_path() {
     assert!(bytes <= 90, "{bytes} B\n{body}");
 }
 
-/// k_itoa's digit loop: `u % r`, a `d > 9` fix-up whose arm is sunk, and `u / r`.
-/// The pair is one runtime call in a block; the sunk arm split it into two
+/// k_itoa's digit loop: `u % r`, a `d > 9` fix-up whose arm is sunk, and `u /
+/// r`. The pair is one runtime call in a block; the sunk arm split it into two
 /// (k_itoa -O2: 2747 -> 4720 clocks, 374 -> 415 B).
 const DIGITS: &str = "define i16 @k_digits(i16 %u0, ptr %buf, i16 %r) {
   br label %loop

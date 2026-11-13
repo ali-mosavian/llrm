@@ -41,8 +41,8 @@ macro_rules! kernel_tests {
     ($($name:ident),*) => { $( #[test] fn $name() { check(stringify!($name)); } )* };
 }
 
-/// The other inputs the matrix averages (`extra_runs`) exit with their hand-worked
-/// results too: a wrong expected value there would void a cell.
+/// The other inputs the matrix averages (`extra_runs`) exit with their
+/// hand-worked results too: a wrong expected value there would void a cell.
 #[test]
 fn the_extra_inputs_give_their_results() {
     if support::qemu().is_none() {
@@ -54,7 +54,8 @@ fn the_extra_inputs_give_their_results() {
         for (at, (args, expected)) in extra_runs(name).into_iter().enumerate() {
             let exe = std::env::temp_dir().join(format!("llrm-m68k-extra-{}-{name}-{at}", std::process::id()));
             write_executable(&exe, &executable(&program(&args, code.clone())).unwrap()).unwrap();
-            let status = Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+            let status =
+                Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
             std::fs::remove_file(&exe).ok();
             assert_eq!(status.code(), Some(expected), "{name} input {at}");
         }

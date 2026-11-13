@@ -155,7 +155,8 @@ fn writes_a_segment(
     regs: Regs,
     one: &Insn,
 ) -> bool {
-    one.call.as_ref().is_some_and(|call| !call.block) || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_segment(regs, *register))
+    one.call.as_ref().is_some_and(|call| !call.block)
+        || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_segment(regs, *register))
 }
 
 fn is_segment_loc(

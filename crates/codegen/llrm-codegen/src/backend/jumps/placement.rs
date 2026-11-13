@@ -265,13 +265,17 @@ impl Placer {
             blocks: blocks.to_vec(),
             dead: vec![false; n],
             // DEVIATE (timings.times): a target may state a smaller bound.
-            dup_size: tail_dup.unwrap_or(usize::MAX).min(if size {
-                1
-            } else if aggressive {
-                TAIL_DUPLICATION_AGGRESSIVE
-            } else {
-                TAIL_DUPLICATION
-            }),
+            dup_size: tail_dup
+                .unwrap_or(usize::MAX)
+                .min(
+                    if size {
+                        1
+                    } else if aggressive {
+                        TAIL_DUPLICATION_AGGRESSIVE
+                    } else {
+                        TAIL_DUPLICATION
+                    },
+                ),
             hot: hot.filter(|_| !size),
             latch: vec![false; n],
             rerouted: Vec::new(),

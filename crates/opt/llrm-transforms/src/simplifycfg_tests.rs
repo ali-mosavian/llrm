@@ -1592,8 +1592,9 @@ b0:
 }
 
 /// Compile time: every call in every block was asked `noreturn` through a set
-/// of all its attribute facts, made and dropped (1.7 M Ir of `unreachable_removed`'s
-/// 18 M on memexp -O2, 22.7 K sets). The pin tests the one attribute.
+/// of all its attribute facts, made and dropped (1.7 M Ir of
+/// `unreachable_removed`'s 18 M on memexp -O2, 22.7 K sets). The pin tests the
+/// one attribute.
 #[test]
 fn test_the_noreturn_question_makes_no_fact_set() {
     let mut module = parsed(

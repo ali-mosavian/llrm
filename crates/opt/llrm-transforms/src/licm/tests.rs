@@ -2307,11 +2307,12 @@ b2:
     assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
 }
 
-/// mul_constants m64 -O2: `sum = sum * 31 + x * K` unrolled four times is a chain of
-/// products of sums. The pin reassociates the instruction it has just made, in the
-/// same walk, until one multiply of `sum` is left (31, 961, 29791, 923521); llrm
-/// left alone whatever an earlier reassociation of the loop had replaced, so
-/// two `mul 31` of the chain stayed in the body (+931 B over the pin's whole file).
+/// mul_constants m64 -O2: `sum = sum * 31 + x * K` unrolled four times is a
+/// chain of products of sums. The pin reassociates the instruction it has just
+/// made, in the same walk, until one multiply of `sum` is left (31, 961, 29791,
+/// 923521); llrm left alone whatever an earlier reassociation of the loop had
+/// replaced, so two `mul 31` of the chain stayed in the body (+931 B over the
+/// pin's whole file).
 #[test]
 fn test_a_chain_of_products_of_sums_is_reassociated_until_no_multiply_by_the_factor_is_left() {
     let text = "define i64 @f() {
@@ -2352,7 +2353,8 @@ b2:
 ";
     let after = licm_printed(text);
     let body = block_of(&after, "b1");
-    let left: Vec<_> = body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
+    let left: Vec<_> =
+        body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
     assert!(left.is_empty(), "{left:?}\n{after}");
 }
 

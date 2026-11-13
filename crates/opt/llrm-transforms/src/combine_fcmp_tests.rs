@@ -20,13 +20,12 @@ fn one(
     pred_and_rhs: &str,
     expect: &str,
 ) {
-    let after = combined(&format!(
-        "define i1 @f(float %x) {{\nb0:\n  %c = fcmp {pred_and_rhs}\n  ret i1 %c\n}}\n"
-    ));
+    let after = combined(&format!("define i1 @f(float %x) {{\nb0:\n  %c = fcmp {pred_and_rhs}\n  ret i1 %c\n}}\n"));
     assert!(after.contains(expect), "{pred_and_rhs}: {after}");
 }
 
-/// `x < +inf` stayed `olt`; the pin makes it `one` (false only for NaN and +inf).
+/// `x < +inf` stayed `olt`; the pin makes it `one` (false only for NaN and
+/// +inf).
 #[test]
 fn test_olt_plus_inf_is_one() {
     one("olt float %x, 0x7FF0000000000000", "fcmp one float %x, 0x7FF0000000000000");

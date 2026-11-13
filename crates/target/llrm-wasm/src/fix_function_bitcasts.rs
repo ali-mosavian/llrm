@@ -15,11 +15,10 @@
 //! parameter attributes beyond its own parameters are dropped. Exit: none,
 //! only the order of the wrappers in the module differs.
 
-use llrm_support::hash::HashMap;
-
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, Linkage, Module, Operand};
 use llrm_mir::{CastOp, Constant, ConstantId, ConstantKind, GlobalId, InstId, Opcode, Type, TypeId};
+use llrm_support::hash::HashMap;
 
 /// LLVM's `CallingConv::Swift` and `SwiftTail`: their bitcasts may differ.
 const SWIFT: u32 = 16;

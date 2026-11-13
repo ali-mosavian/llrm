@@ -359,8 +359,9 @@ fn a_68030_trap_is_the_exception_table_row() {
     assert_eq!(clocks(Cpu::M68030, "trap #0"), 18);
 }
 
-/// Table 11.6.8 `MULU.L`/`MULS.L EA,Dn` 44 plus Table 11.6.2 `#<data>.W,#<data>.L`
-/// 6, as the 68020's 43 + 6. `mulu.l #imm` was UNMEASURED (17 cells).
+/// Table 11.6.8 `MULU.L`/`MULS.L EA,Dn` 44 plus Table 11.6.2
+/// `#<data>.W,#<data>.L` 6, as the 68020's 43 + 6. `mulu.l #imm` was UNMEASURED
+/// (17 cells).
 #[test]
 fn a_68030_long_multiply_by_an_immediate_adds_the_immediate_fetch() {
     assert_eq!(clocks(Cpu::M68030, "mulu.l #1000, %d0"), 44 + 6);
@@ -389,7 +390,8 @@ fn a_68060_compare_immediate_to_a_pc_relative_operand_is_priced_as_the_address_f
 /// `%a2@(10,%d0:w)` is 16, a negative is sign-extended to 64 bits) and a
 /// suppressed base as `@(ffffffff800020a0,%d0:l)`. All-digit hex was read as
 /// decimal (256 priced as a brief index, 16 as 10) and the rest was unpriced:
-/// 84 exes at 68000 and 103 at 68020 carried `operand ... is not in the tables`.
+/// 84 exes at 68000 and 103 at 68020 carried `operand ... is not in the
+/// tables`.
 #[test]
 fn an_objdump_index_displacement_is_hex() {
     assert_eq!(gnu("moveb %a1@(7e,%d1:w),%d0"), "move.b (126,%a1,%d1), %d0");

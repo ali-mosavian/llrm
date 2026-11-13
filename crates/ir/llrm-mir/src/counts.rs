@@ -87,7 +87,8 @@ pub enum Event {
     SinkAssumeLookups,
     /// An instruction `hoist_min_max` built a pattern query for.
     HoistMinMaxQueries,
-    /// A lookup of where a simulated move put an instruction (`LoopCtx::contains`).
+    /// A lookup of where a simulated move put an instruction
+    /// (`LoopCtx::contains`).
     LoopCtxMovedLookups,
     /// A list of a block's predecessors LVI built (`predecessors`).
     LviPredecessorLists,
@@ -104,7 +105,8 @@ pub enum Event {
     CombineDrains,
     /// An instruction `combine` visited.
     CombineVisits,
-    /// An instruction the combine worklist was first filled with (`prepareWorklist`).
+    /// An instruction the combine worklist was first filled with
+    /// (`prepareWorklist`).
     CombineInitial,
     /// An instruction put on the combine worklist that was not already on it.
     CombineInserts,
@@ -113,7 +115,8 @@ pub enum Event {
     /// A constant visited for the globals it holds the address of
     /// (`globalsaa::embedded_once`).
     ConstantsEmbedded,
-    /// A cost model built from a `Profile` (`Profile::target`): it clones the price tables.
+    /// A cost model built from a `Profile` (`Profile::target`): it clones the
+    /// price tables.
     MachineModels,
     /// A list of attributes scanned for the fact one flag states
     /// (`Fact::stated_by`).
@@ -174,7 +177,6 @@ const NAMES: [&str; 46] = [
     "machine_models",
     "attribute_scans",
     "flag_names_resolved",
-
     "fact_sets",
     "loop_analyses",
 ];

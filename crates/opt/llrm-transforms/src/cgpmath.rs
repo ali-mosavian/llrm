@@ -26,9 +26,10 @@
 //!                                            %c = extractvalue {i16, i1} %o, 1
 //! ```
 //!
-//! MIRROR: `combineToUAddWithOverflow`, `matchUAddWithOverflowConstantEdgeCases`,
-//! `combineToUSubWithOverflow`, `replaceMathCmpWithIntrinsic`, `matchIncrement`,
-//! `getIVIncrement`, `isIVIncrement` and `m_UAddWithOverflow`.
+//! MIRROR: `combineToUAddWithOverflow`,
+//! `matchUAddWithOverflowConstantEdgeCases`, `combineToUSubWithOverflow`,
+//! `replaceMathCmpWithIntrinsic`, `matchIncrement`, `getIVIncrement`,
+//! `isIVIncrement` and `m_UAddWithOverflow`.
 //!
 //! # Example
 //! `test_a_compare_with_the_add_of_its_negated_constant_is_a_usub_with_overflow`
@@ -128,7 +129,8 @@ fn add_of(
 ) -> Option<(InstId, Operand, Operand)> {
     let inst = instruction_of(function, operand)?;
     let instruction = function.instruction(inst);
-    (instruction.opcode == Opcode::Binary(BinaryOp::Add)).then(|| (inst, instruction.operands[0], instruction.operands[1]))
+    (instruction.opcode == Opcode::Binary(BinaryOp::Add))
+        .then(|| (inst, instruction.operands[0], instruction.operands[1]))
 }
 
 /// `m_OneUse(m_Not(m_Value(x)))`: the `xor` `operand` is, and `x`.
@@ -187,7 +189,8 @@ fn uadd_pattern(
     {
         return Some(Found { math: not, arg0: a, arg1: lhs });
     }
-    // The increment by one: (a + 1) == 0, (1 + a) == 0, 0 == (a + 1), 0 == (1 + a).
+    // The increment by one: (a + 1) == 0, (1 + a) == 0, 0 == (a + 1), 0 == (1 +
+    // a).
     if pred == IntPredicate::Eq {
         let increment = |sum: Operand, zero: Operand| -> Option<Found> {
             let (inst, a, b) = add_of(function, sum)?;
@@ -308,7 +311,10 @@ fn match_increment(
             let call = instruction_of(function, instruction.operands[0])?;
             let q = query(env.context, env.globals, env.layout, function, call);
             let id = pattern::call_intrinsic(&q, call)?;
-            if !matches!(id, IntrinsicId::UaddWithOverflow | IntrinsicId::UsubWithOverflow) {
+            if !matches!(
+                id,
+                IntrinsicId::UaddWithOverflow | IntrinsicId::UsubWithOverflow
+            ) {
                 return None;
             }
             let [x, step, _callee] = function.instruction(call).operands[..] else { return None };
@@ -376,7 +382,8 @@ fn replaceable_iv_increment(
     }
     let latch = the_loop.latches.iter().next().expect("one latch");
     let Some(result) = function.instruction(bo).result else { return false };
-    function.users(result).has_one_use() && function.layout().iter().any(|&block| cfg::id(block) == *latch && dt.dominates(cmp_block, block))
+    function.users(result).has_one_use()
+        && function.layout().iter().any(|&block| cfg::id(block) == *latch && dt.dominates(cmp_block, block))
 }
 
 /// `replaceMathCmpWithIntrinsic(bo, arg0, arg1, cmp, id)`: the call before the
@@ -405,7 +412,9 @@ fn replace_math_cmp_with_intrinsic(
     // The canonical `add X, C` is matched back to `usubo X, -C`.
     if math_opcode == Opcode::Binary(BinaryOp::Add) && op == OverflowOp::USub {
         let Some(step) = int_constant(context, arg1) else { return false };
-        arg1 = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Int(step.wrapping_neg() & mask(bits)) }));
+        arg1 = Operand::Constant(
+            context.constant(Constant { ty, kind: ConstantKind::Int(step.wrapping_neg() & mask(bits)) }),
+        );
     }
     // Insert at the first instruction of the pair. An `xor` may come before
     // an input of the intrinsic is defined.
@@ -415,7 +424,8 @@ fn replace_math_cmp_with_intrinsic(
     };
     let i1 = context.types.int(1);
     let pair = context.types.intern(Type::Struct { fields: vec![ty, i1], packed: false });
-    let function_type = context.types.intern(Type::Function { returns: pair, parameters: vec![ty, ty], variadic: false });
+    let function_type =
+        context.types.intern(Type::Function { returns: pair, parameters: vec![ty, ty], variadic: false });
     let name = format!("llvm.{}.with.overflow.i{bits}", if op == OverflowOp::UAdd { "uadd" } else { "usub" });
     let callee = declared.declare(&name, function_type);
     let pointer = context.types.ptr(0);
@@ -428,11 +438,23 @@ fn replace_math_cmp_with_intrinsic(
         attrs: Vec::new(),
         tail: Default::default(),
     };
-    let call = function.create_instruction(Opcode::Call(Box::new(info)), pair, vec![arg0, arg1, callee], Flags::default(), None);
+    let call = function.create_instruction(
+        Opcode::Call(Box::new(info)),
+        pair,
+        vec![arg0, arg1, callee],
+        Flags::default(),
+        None,
+    );
     function.insert(call, Position::Before(insert_at)).expect("an unplaced call");
     let both = Operand::Value(function.instruction(call).result.expect("a pair"));
     let extract = |function: &mut Function, index: u32, ty: TypeId, name: &str| {
-        let one = function.create_instruction(Opcode::ExtractValue(vec![index]), ty, vec![both], Flags::default(), Some(name));
+        let one = function.create_instruction(
+            Opcode::ExtractValue(vec![index]),
+            ty,
+            vec![both],
+            Flags::default(),
+            Some(name),
+        );
         function.insert(one, Position::Before(insert_at)).expect("an unplaced extract");
         Operand::Value(function.instruction(one).result.expect("a value"))
     };

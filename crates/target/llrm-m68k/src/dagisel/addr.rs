@@ -504,9 +504,10 @@ pub fn select_arii<D: AddrDag>(
     // (`move.w #650, %a1; move.l #x, (0,%a0,%a1)`: 12 B where `(650,%a0)` is 8,
     // and a register). Reason: best of gcc and clang is the goal. The pin's
     // `llc` makes the same pair. Owner m68k. Exit 2026-12-12: upstream the
-    // order (`ARID` first) or keep. Only where a displacement form (`ARID`, `PCD`) takes
-    // the address: `(500, %a0)` needs one base register, and `buf + k + 500` has two, so
-    // refusing the constant index left `store (add (add (WrapperPC buf) k) 500)` with no
+    // order (`ARID` first) or keep. Only where a displacement form (`ARID`,
+    // `PCD`) takes the address: `(500, %a0)` needs one base register, and
+    // `buf + k + 500` has two, so refusing the constant index left `store
+    // (add (add (WrapperPC buf) k) 500)` with no
     // pattern (`CannotSelect(Store)`, `x_strlen` at every level).
     if dag.opcode(index.node) == isd::Constant
         && dag.constant(index).is_some_and(|value| i16::try_from(value).is_ok())

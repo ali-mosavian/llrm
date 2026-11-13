@@ -137,8 +137,9 @@
 //! Library of [`crate::interprocedural`], which runs it once every body has
 //! reached its fixed point, then sends each changed body back through the
 //! pipeline (`inline<N>`, `ipa-inline<N>.`; `LLRM_DEBUG=inline` logs each
-//! site: caller, callee, cost, threshold, verdict). Off at -O0; the threshold is the pin's
-//! 225 at -O1 and -O2, 250 at -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
+//! site: caller, callee, cost, threshold, verdict). Off at -O0; the threshold
+//! is the pin's 225 at -O1 and -O2, 250 at -O3 and -Omax. Per-level budgets are
+//! in `docs/reference/levels.md`.
 //!
 //! # Needs
 //! [`crate::profit`] (operation prices, block frequencies),
@@ -212,7 +213,16 @@ pub struct Threshold {
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, single: false, min_size: false, last: true, cp_clone: None, cp_hint_clones: true, cp_peel_limited: false, recursive: None }
+        Self {
+            limit,
+            single: false,
+            min_size: false,
+            last: true,
+            cp_clone: None,
+            cp_hint_clones: true,
+            cp_peel_limited: false,
+            recursive: None,
+        }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -330,9 +340,9 @@ const MAX_INLINE_INSNS_RECURSIVE_GCC: i64 = 450;
 /// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
 /// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
 /// in `gcc_insns`: the size the function may reach by copies of itself. A
-/// target states its own through `Tti::recursive_inlining_growth`; m32 takes 450
-/// at -O2 (fib 240256 -> 99687 clk, 469 -> 985 B, 2026-11-05) and keeps 150 at
-/// -O3 (rectwo +185k, bintree +2k, recchop +0.8k clk worse with 450). The
+/// target states its own through `Tti::recursive_inlining_growth`; m32 takes
+/// 450 at -O2 (fib 240256 -> 99687 clk, 469 -> 985 B, 2026-11-05) and keeps 150
+/// at -O3 (rectwo +185k, bintree +2k, recchop +0.8k clk worse with 450). The
 /// 10-20 numbers of fib 132006/360 are gone with the rest of the pipeline.
 /// Owner: x86-m32. Exit: 2026-11-20, the copies chosen by gcc's badness heap.
 pub const MAX_INLINE_INSNS_RECURSIVE: i64 = 150;
@@ -1052,13 +1062,14 @@ fn outlives_the_copy(
 
 /// `CloneAndPruneFunctionInto`
 /// ([CloneFunction.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L77)):
-/// every instruction of the copy is simplified as the arguments make constants of
-/// it, so a call the copy brings carries the constants the pin's cost model sees
-/// (`hold(1)` copies `churn(c1, c2, c3, c4)`, not `churn(add 1 K, ...)`), and an alloca of the
-/// entry whose count was the argument's (`int a[n]`) has a constant one and is
-/// static: it goes to the caller's entry, and the copy has no dynamic alloca to bracket.
-/// DEVIATE: the pin also prunes the blocks a folded branch condition leaves dead and folds phis
-/// while it clones; here the Simplify list that follows does.
+/// every instruction of the copy is simplified as the arguments make constants
+/// of it, so a call the copy brings carries the constants the pin's cost model
+/// sees (`hold(1)` copies `churn(c1, c2, c3, c4)`, not `churn(add 1 K, ...)`),
+/// and an alloca of the entry whose count was the argument's (`int a[n]`) has a
+/// constant one and is static: it goes to the caller's entry, and the copy has
+/// no dynamic alloca to bracket. DEVIATE: the pin also prunes the blocks a
+/// folded branch condition leaves dead and folds phis while it clones; here the
+/// Simplify list that follows does.
 fn fold_entry_allocas(
     context: &Context,
     function: &mut Function,
@@ -1078,9 +1089,8 @@ fn fold_entry_allocas(
         .collect();
     // Asked before the fold: it is what makes the count constant, and an alloca
     // that was dynamic is the one to move to the caller's entry.
-    let was_dynamic = copies
-        .iter()
-        .any(|&(copy, alloca, in_entry)| in_entry && alloca && !is_static_alloca(context, function, copy));
+    let was_dynamic =
+        copies.iter().any(|&(copy, alloca, in_entry)| in_entry && alloca && !is_static_alloca(context, function, copy));
     for &(copy, alloca, _) in &copies {
         if alloca || function.instruction(copy).opcode == Opcode::Phi {
             continue;

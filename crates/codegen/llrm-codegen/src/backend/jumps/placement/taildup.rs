@@ -101,7 +101,8 @@ impl Placer {
         block: usize,
         count: usize,
     ) -> bool {
-        let jumpers: Vec<usize> = self.pred[block].iter().copied().filter(|&from| self.can_tail_duplicate(block, from)).collect();
+        let jumpers: Vec<usize> =
+            self.pred[block].iter().copied().filter(|&from| self.can_tail_duplicate(block, from)).collect();
         let jumped: f64 = jumpers.iter().map(|&from| self.freq[from]).sum();
         hot.pays(count, jumped, jumpers.len(), jumpers.len() == self.pred[block].len(), self.latch[block])
     }

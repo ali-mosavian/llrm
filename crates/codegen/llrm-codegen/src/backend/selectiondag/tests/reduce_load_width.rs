@@ -32,7 +32,8 @@ fn combined_with(
     let mut hooks = X86Lowering {
         multiply_early_out: None,
         share_products: false,
-        imul_if_smaller: false, hot_chains: false,
+        imul_if_smaller: false,
+        hot_chains: false,
         cmov: true,
         sse2: false,
         min_size: false,

@@ -190,7 +190,19 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, false, false, true, Default::default(), Default::default(), &[], &mut Temporaries::new(0))
+    select_block_with(
+        dag,
+        cpu,
+        false,
+        false,
+        false,
+        false,
+        true,
+        Default::default(),
+        Default::default(),
+        &[],
+        &mut Temporaries::new(0),
+    )
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
@@ -211,9 +223,18 @@ pub fn select_block_with(
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering_with(cpu, carry_chain);
     crate::libcalls::apply(&mut tli, libcalls);
-    // `DAG.shouldOptForSize()`: the routines tuned for size (`set_size_libcall_name`)
+    // `DAG.shouldOptForSize()`: the routines tuned for size
+    // (`set_size_libcall_name`)
     tli.set_opt_for_size(price == crate::timing::Price::Size);
-    let mut lowering = M68kLowering { indexed, short, absolute_data, half_mul: short && super::lowering::prefers_word_multiply(cpu), cpu, price, mul };
+    let mut lowering = M68kLowering {
+        indexed,
+        short,
+        absolute_data,
+        half_mul: short && super::lowering::prefers_word_multiply(cpu),
+        cpu,
+        price,
+        mul,
+    };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
         Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,

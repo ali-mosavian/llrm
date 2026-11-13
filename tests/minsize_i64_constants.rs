@@ -1,4 +1,5 @@
-//! m64 -Oz: a small i64 constant (the pin's `MOV64ImmSExti8`) is loaded and sign-extended to 64 bits.
+//! m64 -Oz: a small i64 constant (the pin's `MOV64ImmSExti8`) is loaded and
+//! sign-extended to 64 bits.
 
 mod common;
 

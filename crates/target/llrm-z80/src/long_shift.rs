@@ -108,7 +108,11 @@ fn fuse_block(
         }
         // the high word leaves hl by the next copy
         let Some(copy_out) = insts.get(adc + 1).filter(|i| {
-            i.kind == Kind::Copy && matches!(&i.operands[..], [Operand::Def(Reg::Virt(_)), Operand::Use(r)] if *r == hl)
+            i.kind == Kind::Copy
+                && matches!(
+                    &i.operands[..],
+                    [Operand::Def(Reg::Virt(_)), Operand::Use(r)] if *r == hl
+                )
         }) else {
             continue;
         };

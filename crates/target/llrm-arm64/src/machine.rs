@@ -94,8 +94,9 @@ fn flag_on(value: Option<&std::ffi::OsStr>) -> bool {
 
 #[cfg(test)]
 mod flag_tests {
-    use super::flag_on;
     use std::ffi::OsStr;
+
+    use super::flag_on;
 
     #[test]
     fn only_a_zero_flag_value_turns_the_vectors_off() {
@@ -120,7 +121,8 @@ impl Machine for Arm64Machine {
         None
     }
 
-    /// Frames keep 16 and nothing realigns them: nothing clamps, more is refused.
+    /// Frames keep 16 and nothing realigns them: nothing clamps, more is
+    /// refused.
     fn kept_stack_align(&self) -> Option<u64> {
         Some(16)
     }
@@ -135,7 +137,8 @@ impl Machine for Arm64Machine {
 
     /// Darwin's runtime has `memset_pattern16`; Linux states nothing.
     fn library(&self) -> Option<Rc<dyn llrm_mir::libfunc::Library>> {
-        (self.platform == Platform::Darwin).then(|| Rc::new(llrm_mir::libfunc::Darwin { int_bits: 32, size_t_bits: 64 }) as _)
+        (self.platform == Platform::Darwin)
+            .then(|| Rc::new(llrm_mir::libfunc::Darwin { int_bits: 32, size_t_bits: 64 }) as _)
     }
 
     fn lowering(&self) -> Option<Rc<dyn Lowering>> {
@@ -225,14 +228,20 @@ impl Machine for Arm64Machine {
         &self,
         aggressive: bool,
     ) -> Option<GlobalMerge> {
-        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, optsize_counts: true, mach_o: self.platform == Platform::Darwin })
+        Some(GlobalMerge {
+            max_offset: 4095,
+            size_only: !aggressive,
+            optsize_counts: true,
+            mach_o: self.platform == Platform::Darwin,
+        })
     }
 }
 
 #[cfg(test)]
 mod library_tests {
-    use super::*;
     use llrm_mir::libfunc::{LibFunc, TargetLibraryInfo};
+
+    use super::*;
 
     fn has_pattern(platform: Platform) -> bool {
         match (Arm64Machine { platform }).library() {

@@ -61,7 +61,8 @@ fn promoted(
     let before: Vec<u32> = pairs().map(|pair| eval(&dag, root, pair)).collect();
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false, hot_chains: false,
+        imul_if_smaller: false,
+        hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,
@@ -123,7 +124,8 @@ fn only_words_and_byte_multiplies_are_promoted_and_not_at_m16() {
     dag.set_root(add);
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false, hot_chains: false,
+        imul_if_smaller: false,
+        hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,

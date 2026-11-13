@@ -246,8 +246,8 @@ fn run_suffix(
     if known_loads {
         drop_known_loads(asm);
     }
-    // after the known loads: a register that holds the literal stores it without a bracket; the loads the
-    // moved pair repeats are known in turn
+    // after the known loads: a register that holds the literal stores it
+    // without a bracket; the loads the moved pair repeats are known in turn
     sink_save_bracket(asm);
     if known_loads {
         drop_known_loads(asm);
@@ -1440,7 +1440,8 @@ fn load_straight_once(asm: &mut Asm) -> bool {
         };
         let (transfer, register) = if *load == Op::Ldx { (Op::Txa, Registers::X) } else { (Op::Tya, Registers::Y) };
         let mut to = None;
-        // N and Z are still the load's: a branch on them would test the deleted load
+        // N and Z are still the load's: a branch on them would test the deleted
+        // load
         let mut load_flags = true;
         for (next, line) in lines.iter().enumerate().skip(at + 1) {
             let Line::Inst(Inst { op, operand, .. }) = line else { break };
@@ -1471,8 +1472,9 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                         Operand::Direct(target) => {
                             let reads_load = load_flags && !matches!(op, Op::Bcc | Op::Bcs);
                             !reads_load
-                                && label_at(target)
-                                    .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), exits))
+                                && label_at(target).is_some_and(|label| {
+                                    dead_from(lines, label, register, &mut HashSet::default(), exits)
+                                })
                         }
                         _ => false,
                     },
@@ -1667,14 +1669,15 @@ pub fn merge_saves_of_a(asm: &mut Asm) {
 ///
 /// DEVIATE (6502-A-BRACKET): same exit as `merge_saves_of_a`.
 pub fn sink_save_bracket(asm: &mut Asm) {
-    // an instruction that sets `a` from elsewhere than `a`, and so ends its live range
+    // an instruction that sets `a` from elsewhere than `a`, and so ends its
+    // live range
     let overwrites = |inst: &Inst| match inst.op {
         Op::Lda => !matches!(inst.operand, Operand::Acc),
         Op::Txa | Op::Tya | Op::Pla => true,
         _ => false,
     };
-    // straight-line code that is no memory access but a plain cell's, none of `m`, and
-    // sets or keeps what a branch would read (there is no branch)
+    // straight-line code that is no memory access but a plain cell's, none of
+    // `m`, and sets or keeps what a branch would read (there is no branch)
     let passable = |inst: &Inst, cell: &str| -> bool {
         use Op::*;
         let plain = match &inst.operand {
@@ -1762,7 +1765,8 @@ pub fn sink_save_bracket(asm: &mut Asm) {
             at += 1;
             continue;
         };
-        // `lda #n` changes the zero and sign flags, which the instruction at `look` sets again; it leaves the carry
+        // `lda #n` changes the zero and sign flags, which the instruction at
+        // `look` sets again; it leaves the carry
         let moved = [Line::Inst(load), Line::Inst(store)];
         asm.lines.drain(at..at + 4);
         let into = if after { look - 4 } else { look };
@@ -1991,7 +1995,9 @@ pub(crate) fn dead_from(
             // steps and compares
             (Op::Cpx | Op::Inx | Op::Dex, Registers::Y | Registers::A)
             | (Op::Cpy | Op::Iny | Op::Dey, Registers::X | Registers::A) => (false, false),
-            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Bit | Op::Pha, Registers::A) => (true, false),
+            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Bit | Op::Pha, Registers::A) => {
+                (true, false)
+            }
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
                 (matches!(inst.operand, Operand::Acc | Operand::None), false)
             }

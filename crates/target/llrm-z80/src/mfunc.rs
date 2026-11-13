@@ -240,7 +240,9 @@ impl Emitter<'_> {
             }
             (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
             // named for the printer, which numbers it with the function
-            (ISD::TargetJumpTable | ISD::JumpTable, NodeData::JumpTable(index)) => Operand::Symbol(format!("$JT{index}"), 0),
+            (ISD::TargetJumpTable | ISD::JumpTable, NodeData::JumpTable(index)) => {
+                Operand::Symbol(format!("$JT{index}"), 0)
+            }
             _ => match self.values.get(&(value.node, value.res)) {
                 Some(reg) => Operand::Use(*reg),
                 None => return Err(format!("operand {:?} before its definition", node.opcode)),
@@ -397,8 +399,8 @@ impl Emitter<'_> {
                     .filter(|(_, one)| one.tied_to >= 0)
                     .map(|(at, one)| (one.tied_to as usize, at))
                     .collect();
-                // a jump through a table: the table's index and its blocks, which make them this block's
-                // successors
+                // a jump through a table: the table's index and its blocks,
+                // which make them this block's successors
                 if name == "JPHL" {
                     let index = into
                         .iter()
@@ -742,7 +744,9 @@ fn phis(
             };
             let at = emitter.function.blocks.iter().position(|block| block.id == to).ok_or("a phi in no block")?;
             for &(input, result) in &edge.copies {
-                let class = width_class(selection.widths.get(result as usize).copied().filter(|width| *width != 0).unwrap_or(16));
+                let class = width_class(
+                    selection.widths.get(result as usize).copied().filter(|width| *width != 0).unwrap_or(16),
+                );
                 let result = emitter.numbered(result, class);
                 let incoming = emitter.numbered(input, class);
                 let phis = &mut emitter.function.blocks[at].phis;

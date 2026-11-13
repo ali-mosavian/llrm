@@ -12,10 +12,7 @@ const SOURCE: &str = "typedef unsigned long long u64; typedef unsigned u32;\next
 
 #[test]
 fn a_product_with_a_zero_extended_value_from_another_block_is_one_mul() {
-    assert!(
-        llrm_cc::ow_present(),
-        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
-    );
+    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
     assert!(
         std::env::var_os("LLRM_CLANG_M16").is_some(),
         "LLRM_CLANG_M16 is not set: this test needs it and does not skip"

@@ -22,7 +22,6 @@
 //! object is smaller. What rotating costs or frees is in the passes after it
 //! (x_prefix -12 B unrotated, x_transpose +34 B), so the finished code decides.
 
-
 use std::collections::BTreeSet;
 
 use llrm_mir::module::Module;
@@ -40,16 +39,19 @@ fn o1_unroll_limit(options: &Options) -> Option<u32> {
     options.cpu().ok().and_then(|cpu| cpu.target().tti())?.unroll_trial_threshold()
 }
 
-/// A reversible decision of the -Os mid-end. The module is compiled again with one reversed and the finished code
-/// decides whether it stays.
+/// A reversible decision of the -Os mid-end. The module is compiled again with
+/// one reversed and the finished code decides whether it stays.
 #[derive(Clone, Copy, PartialEq)]
 enum Dimension {
-    /// DEVIATE ROTATION-TRIAL: leave unrotated the counted loops RS1 rotated. The flag: a rotation that executes
-    /// less for a few bytes a loop stays (DEVIATE ROTATION-HOT, `Tti::rotation_hot_at_size`).
+    /// DEVIATE ROTATION-TRIAL: leave unrotated the counted loops RS1 rotated.
+    /// The flag: a rotation that executes less for a few bytes a loop stays
+    /// (DEVIATE ROTATION-HOT, `Tti::rotation_hot_at_size`).
     Unrotate { hot: bool, bytes: i64 },
-    /// DEVIATE ROTATION-HOT: rotate the loops of an unfolded guard and uncounted trips RS1 left.
+    /// DEVIATE ROTATION-HOT: rotate the loops of an unfolded guard and
+    /// uncounted trips RS1 left.
     RotateMore { bytes: i64 },
-    /// DEVIATE UNROLL-OS-TRIAL: unroll the loops under this size that the -Os threshold refused.
+    /// DEVIATE UNROLL-OS-TRIAL: unroll the loops under this size that the -Os
+    /// threshold refused.
     Unroll { limit: u32, bytes_strict: bool },
 }
 
@@ -118,15 +120,17 @@ impl Dimension {
         }
     }
 
-    /// Whether the reversed compile is kept over the base, `bytes` and `work` being the finished modules'.
+    /// Whether the reversed compile is kept over the base, `bytes` and `work`
+    /// being the finished modules'.
     fn keeps(
         self,
         noted: &Noted,
         (kept_sizes, kept_work): (Sizes, Option<f64>),
         (other_sizes, other_work): (Sizes, Option<f64>),
     ) -> bool {
-        // A bytes-strict unroll trial compares the code alone: the constants a loop's removal frees are data, which
-        // a code-size column does not count.
+        // A bytes-strict unroll trial compares the code alone: the constants a
+        // loop's removal frees are data, which a code-size column does
+        // not count.
         let strict = matches!(self, Dimension::Unroll { bytes_strict: true, .. });
         let (kept_bytes, other_bytes) =
             if strict { (kept_sizes.code, other_sizes.code) } else { (kept_sizes.total(), other_sizes.total()) };
@@ -135,19 +139,25 @@ impl Dimension {
         let saved = (work(kept_work) - work(other_work)).round() as i64;
         let measured = kept_work.is_some() && other_work.is_some();
         let (what, pays) = match self {
-            // The unrotated object is smaller; the rotated one stays if it executes less for a few bytes a loop.
+            // The unrotated object is smaller; the rotated one stays if it
+            // executes less for a few bytes a loop.
             Dimension::Unrotate { hot, bytes } => (
                 "unrotated",
                 trial::keeps_at_size(added)
                     && !(hot && trial::keeps_rotation_hot(-saved, -added, noted.rotated_loops, bytes)),
             ),
-            Dimension::RotateMore { bytes } => ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1, bytes)),
+            Dimension::RotateMore { bytes } => {
+                ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1, bytes))
+            }
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
         };
         if llrm_support::debug::enabled("trial") {
-            eprintln!("trial {what}: {added:+} bytes, {saved:+} work saved: {}", if pays { "kept" } else { "put back" });
+            eprintln!(
+                "trial {what}: {added:+} bytes, {saved:+} work saved: {}",
+                if pays { "kept" } else { "put back" }
+            );
         }
         pays
     }
@@ -164,8 +174,9 @@ fn compiled_with<T>(
     }
 }
 
-/// What a finished module is expected to execute: instructions and memory operands as `executed::work`, the
-/// branches and jumps at their clocks on the CPU (a rotation trades a taken `jmp` for a copied guard, which the
+/// What a finished module is expected to execute: instructions and memory
+/// operands as `executed::work`, the branches and jumps at their clocks on the
+/// CPU (a rotation trades a taken `jmp` for a copied guard, which the
 /// work alone does not see). `None` where the model has no answer.
 fn rotation_work(
     built: &masm::Module,
@@ -183,7 +194,8 @@ fn rotation_work(
         .sum::<Option<f64>>()
 }
 
-/// The unpadded bytes of a finished module: its functions' code and its data sections' images.
+/// The unpadded bytes of a finished module: its functions' code and its data
+/// sections' images.
 #[derive(Clone, Copy)]
 pub struct Sizes {
     pub code: i64,
@@ -196,8 +208,9 @@ impl Sizes {
     }
 }
 
-/// A compiled variant of the module: its code, the program the backend took (the leaf-fold pair assembles it again)
-/// and whether the backend folded a leaf.
+/// A compiled variant of the module: its code, the program the backend took
+/// (the leaf-fold pair assembles it again) and whether the backend folded a
+/// leaf.
 struct Variant {
     built: masm::Module,
     program: Program,
@@ -215,8 +228,9 @@ fn built(
     Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded() })
 }
 
-/// DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the branching block, the module is
-/// assembled again without the fold and the smaller one kept. Decided once, on the variant the other trials chose,
+/// DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the
+/// branching block, the module is assembled again without the fold and the
+/// smaller one kept. Decided once, on the variant the other trials chose,
 /// not in each of them: the pair doubled every variant's assembly.
 fn with_leaf_trial(
     variant: Variant,
@@ -228,7 +242,10 @@ fn with_leaf_trial(
         return Ok(variant.built);
     }
     let second = crate::backend::leaffold::without(|| assembled(&variant.program, name, options))?;
-    let smaller = matches!((unpadded(&variant.built), unpadded(&second)), (Some(a), Some(b)) if b.total() < a.total());
+    let smaller = matches!(
+        (unpadded(&variant.built), unpadded(&second)),
+        (Some(a), Some(b)) if b.total() < a.total()
+    );
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial leaffold: {}", if smaller { "put back" } else { "kept" });
     }
@@ -237,16 +254,19 @@ fn with_leaf_trial(
     Ok(chosen)
 }
 
-/// Whether the module is assembled with and without LEAF-FOLD-OS: a size build on a target that folds.
+/// Whether the module is assembled with and without LEAF-FOLD-OS: a size build
+/// on a target that folds.
 fn leaf_fold_trial(options: &Options) -> bool {
     options.cpu().is_ok_and(|cpu| cpu.size) && options.arch.leaf_fold_at_size()
 }
 
-/// `module` compiled as `compiled_module` does and, where the target has trials, again with one decision reversed
-/// at a time, each kept if the finished code prices better: at -O1 UNROLL-O1-TRIAL (`Tti::unroll_trial_threshold`),
-/// at -Os the dimensions of [`Dimension`]. `bytes` is the size of a compiled module as the caller will write it,
-/// `unpadded` the same without the padding between functions (a layout shift of one function is not a code-size
-/// win); `None` leaves the first compile.
+/// `module` compiled as `compiled_module` does and, where the target has
+/// trials, again with one decision reversed at a time, each kept if the
+/// finished code prices better: at -O1 UNROLL-O1-TRIAL
+/// (`Tti::unroll_trial_threshold`), at -Os the dimensions of [`Dimension`].
+/// `bytes` is the size of a compiled module as the caller will write it,
+/// `unpadded` the same without the padding between functions (a layout shift of
+/// one function is not a code-size win); `None` leaves the first compile.
 pub fn compiled_module_trying(
     module: llrm_mir::module::Module,
     name: &str,
@@ -268,8 +288,8 @@ pub fn compiled_module_trying(
     compiled_module_at_size(module, name, options, &dimensions, unpadded)
 }
 
-/// UNROLL-O1-TRIAL: the loops under the trial size unrolled by the pin's threshold, kept if the object is no
-/// larger and the code does no more work.
+/// UNROLL-O1-TRIAL: the loops under the trial size unrolled by the pin's
+/// threshold, kept if the object is no larger and the code does no more work.
 fn compiled_module_at_o1(
     module: llrm_mir::module::Module,
     name: &str,
@@ -278,9 +298,11 @@ fn compiled_module_at_o1(
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
     unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
-    // A bytes-strict target (`unroll_trial_bytes_strict`) compares the code alone, as at -Os: the constants a
-    // loop's removal frees are data, which a code-size column does not count (call_cleanup_keeps_pair +13 B).
-    let strict = options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.unroll_trial_bytes_strict());
+    // A bytes-strict target (`unroll_trial_bytes_strict`) compares the code
+    // alone, as at -Os: the constants a loop's removal frees are data,
+    // which a code-size column does not count (call_cleanup_keeps_pair +13 B).
+    let strict =
+        options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.unroll_trial_bytes_strict());
     let _ = trial::take();
     let kept = optimized_program(module.clone(), options)?;
     if trial::take().0.is_empty() {
@@ -305,11 +327,13 @@ fn compiled_module_at_o1(
     Ok(if pays { other } else { kept })
 }
 
-/// The -Os trials. The base compile notes what each dimension could reverse. Each noted dimension is compiled
-/// against the base alone, priced on the functions that differ (the whole module where they are half of it) and
-/// kept or put back; the dimensions that stay are added one at a time and priced against the code so far. The mid-end
-/// runs `1 + k` times for `k` noted dimensions, plus one for each that stays after the first, where nesting them ran
-/// it `2^k` times.
+/// The -Os trials. The base compile notes what each dimension could reverse.
+/// Each noted dimension is compiled against the base alone, priced on the
+/// functions that differ (the whole module where they are half of it) and
+/// kept or put back; the dimensions that stay are added one at a time and
+/// priced against the code so far. The mid-end runs `1 + k` times for `k` noted
+/// dimensions, plus one for each that stays after the first, where nesting them
+/// ran it `2^k` times.
 fn compiled_module_at_size(
     module: llrm_mir::module::Module,
     name: &str,
@@ -327,7 +351,8 @@ fn compiled_module_at_size(
     }
     let mut again = options.clone();
     again.dump = None;
-    // A dimension that stays, with its variant assembled whole or the program not yet assembled.
+    // A dimension that stays, with its variant assembled whole or the program
+    // not yet assembled.
     let mut kept: Vec<(Dimension, Result<Variant, Program>)> = Vec::new();
     for dimension in active {
         let program = dimension.compile(|| optimized_program(module.clone(), &again))?;
@@ -339,8 +364,9 @@ fn compiled_module_at_size(
         if cut.is_empty() {
             continue;
         }
-        // Pricing the cut twice costs `2 * cut` instructions of backend work, the variant whole `all`: the cut is
-        // the cheaper only while it is under half.
+        // Pricing the cut twice costs `2 * cut` instructions of backend work,
+        // the variant whole `all`: the cut is the cheaper only while it
+        // is under half.
         let size = |module: &Module, only: Option<&BTreeSet<String>>| -> usize {
             module
                 .globals
@@ -355,7 +381,10 @@ fn compiled_module_at_size(
         let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options)));
         if 2 * size(&base.program.modules[0], Some(&cut)) >= size(&base.program.modules[0], None) {
             let variant = built(program, name, &again)?;
-            let pays = matches!((price(&base.built), price(&variant.built)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
+            let pays = matches!(
+                (price(&base.built), price(&variant.built)),
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+            );
             if pays {
                 kept.push((dimension, Ok(variant)));
             }
@@ -363,14 +392,19 @@ fn compiled_module_at_size(
         }
         let each = |program: &Program| assembled_module(&only(&program.modules[0], &cut), program, name, &again).ok();
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
-        let pays = matches!((price(&first), price(&second)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
+        let pays = matches!(
+            (price(&first), price(&second)),
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+        );
         if pays {
             kept.push((dimension, Err(program)));
         }
     }
-    // The first dimension that stayed is the variant already priced against the base. Each further one is added to
-    // it and priced against the code so far: a dimension's gain does not carry over when another changed the loops
-    // (x_popcount: the unrotated loops and the hot rotations each paid alone and cost clocks together).
+    // The first dimension that stayed is the variant already priced against the
+    // base. Each further one is added to it and priced against the code so
+    // far: a dimension's gain does not carry over when another changed the
+    // loops (x_popcount: the unrotated loops and the hot rotations each
+    // paid alone and cost clocks together).
     let mut kept = kept.into_iter();
     let Some((first, variant)) = kept.next() else { return with_leaf_trial(base, name, options, unpadded) };
     let mut accepted = vec![first];
@@ -384,8 +418,10 @@ fn compiled_module_at_size(
         let _ = Noted::take();
         let together = built(program, name, &again)?;
         let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options)));
-        let pays =
-            matches!((price(&chosen.built), price(&together.built)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
+        let pays = matches!(
+            (price(&chosen.built), price(&together.built)),
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+        );
         if pays {
             chosen = together;
         } else {

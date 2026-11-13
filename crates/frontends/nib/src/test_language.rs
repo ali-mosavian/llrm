@@ -2146,7 +2146,8 @@ fn a_module_variable_may_be_a_struct_its_literal_laid_out_in_the_executable() {
 fn a_module_variable_may_start_as_a_float_literal() {
     // `var x: f32[2] = [0.5, 0.0]` was refused: "a module variable starts as an
     // integer, char or bool", so a float table could only be a local and every
-    // loop over it reloaded its frame address (stft_single, +124 B, +14% instr).
+    // loop over it reloaded its frame address (stft_single, +124 B, +14%
+    // instr).
     let source = "\
 var gain: f32 = 1.5
 var table: f32[3] = [0.5, -2.0, 0.0]

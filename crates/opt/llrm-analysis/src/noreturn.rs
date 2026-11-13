@@ -314,7 +314,8 @@ fn returning_blocks(function: &Function) -> std::rc::Rc<IdSet<i64>> {
     }
     RETURNING_BUILDS.with(|count| count.set(count.get() + 1));
     let mut returning = IdSet::new();
-    let mut pending: Vec<i64> = cfg::graph(function).iter().map(|block| block.at).filter(|&at| _returns(function, at)).collect();
+    let mut pending: Vec<i64> =
+        cfg::graph(function).iter().map(|block| block.at).filter(|&at| _returns(function, at)).collect();
     while let Some(at) = pending.pop() {
         if returning.insert(at) {
             pending.extend(function.predecessors(cfg::block(at)).into_iter().map(cfg::id));

@@ -1,9 +1,10 @@
-//! `__divdf3` at 68000 -O2 returned 0 for 1.0 / 1.0 (the floats bench printed 0,
-//! not 162635): branch folding hoisted the argument load both ways began with
-//! (`move.l (64,%sp), %d7`) above the `beq`, between the `and.l #2047` whose
-//! codes it reads and the branch, and the `move` overwrote them. A made-again
-//! load is a `move` that sets the codes in hardware though its `sets_flags` is
-//! clear. `divdf3_mid.ll` is the mid-end's output for lib/fp/f64/div.c.
+//! `__divdf3` at 68000 -O2 returned 0 for 1.0 / 1.0 (the floats bench printed
+//! 0, not 162635): branch folding hoisted the argument load both ways began
+//! with (`move.l (64,%sp), %d7`) above the `beq`, between the `and.l #2047`
+//! whose codes it reads and the branch, and the `move` overwrote them. A
+//! made-again load is a `move` that sets the codes in hardware though its
+//! `sets_flags` is clear. `divdf3_mid.ll` is the mid-end's output for
+//! lib/fp/f64/div.c.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

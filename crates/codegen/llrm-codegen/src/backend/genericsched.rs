@@ -21,7 +21,9 @@
 //! apply.
 //!
 //! # Reasons (pin d1106deb71cc)
-//! The enum is [`CandReason`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineScheduler.h#L1099); each reason is set at:
+//! The enum is
+//! [`CandReason`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineScheduler.h#L1099);
+//! each reason is set at:
 //!
 //! | reason | set at |
 //! |---|---|

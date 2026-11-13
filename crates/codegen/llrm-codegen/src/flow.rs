@@ -230,8 +230,8 @@ pub fn machine_with<'a>(
         // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low`
         // (DEVIATE MA1).
         Box::new(crate::backend::maskbyand::MaskByAnd {
-            // A profile that states neither clock (the target prices through its cost
-            // model) gets no pass, not a free one.
+            // A profile that states neither clock (the target prices through
+            // its cost model) gets no pass, not a free one.
             clocks_saved: target.cost("movzx").ok().zip(target.cost("alu_ri").ok()).map(|(movzx, and)| movzx - and),
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
             copy_clocks: target.cost("mov_rr").ok(),
@@ -281,10 +281,16 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
-        Box::new(phielim::PhiElimination { unoptimized: !target.optimized, share_congruent: target.share_congruent_phis }),
+        Box::new(phielim::PhiElimination {
+            unoptimized: !target.optimized,
+            share_congruent: target.share_congruent_phis,
+        }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
-        Box::new(crate::backend::fixupsetcc::FixupSetCc { strict: !target.speed_rate, status_word: classes.status_word() }),
+        Box::new(crate::backend::fixupsetcc::FixupSetCc {
+            strict: !target.speed_rate,
+            status_word: classes.status_word(),
+        }),
         // A float load a loop only reads is made again where it is read (so
         // the next step can fold it).
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),

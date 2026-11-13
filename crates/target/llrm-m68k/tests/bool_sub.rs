@@ -10,7 +10,8 @@ const COUNTGT: &str = include_str!("fixtures/countgt_raw.ll");
 
 #[test]
 fn a_counted_compare_is_subtracted_sign_extended_not_added_masked() {
-    // the 68000's word is subtracted into an address register (`suba.w`, see sext_acc.rs)
+    // the 68000's word is subtracted into an address register (`suba.w`, see
+    // sext_acc.rs)
     for (cpu, extend, subtract) in [("68020", "extb.l", "sub.l"), ("68000", "ext.w", "suba.w")] {
         for level in [Level::O2, Level::Os] {
             let out = assembly(COUNTGT, cpu_of(cpu).unwrap(), level).expect("compiles");

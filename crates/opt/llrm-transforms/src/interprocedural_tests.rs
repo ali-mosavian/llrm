@@ -976,7 +976,12 @@ fn test_a_loop_bound_past_the_peel_limit_is_no_reason_to_clone() {
     let cloned = |trips: &str| {
         let text = TWO_CONTEXTS.replace("i16 4,", &format!("i16 {trips},")).replace("i16 5,", &format!("i16 {trips},"));
         let mut module = parsed(&text);
-        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), cp_peel_limited: true, ..Threshold::none() });
+        stepped(
+            &mut module,
+            &["f", "g"],
+            20,
+            Threshold { cp_clone: Some(true), cp_peel_limited: true, ..Threshold::none() },
+        );
         module.named("g.constprop.1").is_some()
     };
     assert_eq!((cloned("4"), cloned("400")), (true, false));
@@ -1463,8 +1468,9 @@ b0:
 /// The clone for a context is remembered across the walk, which empties the
 /// bodies it inlined (`is_deleted`: one `unreachable`). A call that met the
 /// same constants afterwards was sent to that empty body: m32 x_hanoi2 -O3 with
-/// the clone bound at 4, 5 or 6 lost the tail of a function (no second recursive
-/// call, no `ret`) and ran off its end, a `UC_ERR_EXCEPTION` in the emulator.
+/// the clone bound at 4, 5 or 6 lost the tail of a function (no second
+/// recursive call, no `ret`) and ran off its end, a `UC_ERR_EXCEPTION` in the
+/// emulator.
 #[test]
 fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
     let mut module = parsed(TWO_CALLERS);
@@ -1473,36 +1479,60 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         let (f, h) = (program.modules[0].named("f").unwrap(), program.modules[0].named("h").unwrap());
         let private = private(program, 0);
         let mut state = crate::ipacp::Cloning::default();
-        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false }, &mut state);
+        let first = crate::ipacp::cloned(
+            &mut program.modules[0],
+            &program.layout,
+            &[f],
+            &private,
+            &costs,
+            true,
+            crate::ipacp::Tuning { hint_clones: true, peel_limited: false },
+            &mut state,
+        );
         assert_eq!(first.added.len(), 1, "the first round clones fill for row 2");
         let mut analyses = managers(program, &mut ProgramAnalyses::default());
-        // What `bare` leaves, without its check that no call stands: the callers
-        // of the clone were inlined away in the walk this stands for.
+        // What `bare` leaves, without its check that no call stands: the
+        // callers of the clone were inlined away in the walk this
+        // stands for.
         let module = &mut program.modules[0];
         let mut stub = module.global(first.added[0]).function().map(llrm_mir::module::Function::declaration).unwrap();
         let void = module.context.types.void();
         let entry = stub.create_block(None);
         stub.insert_block(entry, None).unwrap();
-        let end = stub.create_instruction(Opcode::Unreachable, void, Vec::new(), llrm_mir::opcode::Flags::default(), None);
+        let end =
+            stub.create_instruction(Opcode::Unreachable, void, Vec::new(), llrm_mir::opcode::Flags::default(), None);
         stub.insert(end, llrm_mir::edit::Position::End(entry)).unwrap();
         module.globals[first.added[0].0 as usize].kind = GlobalKind::Function(Box::new(stub));
         analyses[0].changed(first.added[0]);
-        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false }, &mut state);
+        crate::ipacp::cloned(
+            &mut program.modules[0],
+            &program.layout,
+            &[f, h],
+            &private,
+            &costs,
+            true,
+            crate::ipacp::Tuning { hint_clones: true, peel_limited: false },
+            &mut state,
+        );
         let module = &program.modules[0];
         let caller = module.global(h).function().unwrap();
         let target = caller
             .walk()
             .find_map(|(_, inst)| llrm_mir::memory::callee(&module.context, caller, inst))
             .expect("h still calls something");
-        assert!(!module.global(target).function().unwrap().is_deleted(), "h calls an emptied clone:\n{}", printed(module));
+        assert!(
+            !module.global(target).function().unwrap().is_deleted(),
+            "h calls an emptied clone:\n{}",
+            printed(module)
+        );
     })
     .unwrap();
 }
 
 /// Each level of `down` saves a few clocks, too little to pay for a copy; the
-/// four levels, each called four times, do, and GCC's `propagate_effects` credits the copy for
-/// `row = 0` with the ones after it. Priced alone, the copy was refused: queens
-/// got four clones of eight, hanoi2 none.
+/// four levels, each called four times, do, and GCC's `propagate_effects`
+/// credits the copy for `row = 0` with the ones after it. Priced alone, the
+/// copy was refused: queens got four clones of eight, hanoi2 none.
 const DOWN: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
 
 define void @down(i16 %row, i16 %x) {

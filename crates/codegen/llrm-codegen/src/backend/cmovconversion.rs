@@ -476,12 +476,14 @@ fn profitable_groups(
                 // A result that is an address: a search tree's branch, which
                 // nothing predicts.
                 let result = one.defines.first().copied();
-                let loaded_from = result.and_then(|value| readers.only(value)).is_some_and(|reader| {
-                    reader.what.as_ref().is_some_and(|what| {
-                        what.op == Operation::Move
-                            && what.dests.iter().any(|place| matches!(place, Loc::Held(held) if held.width >= 4))
-                    }) && may_load(reader)
-                });
+                let loaded_from = result
+                    .and_then(|value| readers.only(value))
+                    .is_some_and(
+                        |reader| reader.what.as_ref().is_some_and(|what| {
+                            what.op == Operation::Move
+                                && what.dests.iter().any(|place| matches!(place, Loc::Held(held) if held.width >= 4))
+                        }) && may_load(reader),
+                    );
                 if loaded_from {
                     return false;
                 }

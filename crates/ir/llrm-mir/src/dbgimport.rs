@@ -98,11 +98,14 @@ impl Import {
                 let Some(r#type) = self.r#type(module, node(module, old, "type")) else { continue };
                 // `arg: N` counts from 1: the position among the parameters.
                 let argument = int(module, old, "arg").filter(|&one| one > 0).map(|one| one - 1);
-                // The subprogram the variable is declared in: another one's means
-                // it came in with an inlined call, and is not this function's.
+                // The subprogram the variable is declared in: another one's
+                // means it came in with an inlined call, and is
+                // not this function's.
                 let declared_in = {
                     let mut scope = node(module, old, "scope");
-                    while let Some(one) = scope.filter(|&one| matches!(kind(module, one), "DILexicalBlock" | "DILexicalBlockFile")) {
+                    while let Some(one) =
+                        scope.filter(|&one| matches!(kind(module, one), "DILexicalBlock" | "DILexicalBlockFile"))
+                    {
                         scope = node(module, one, "scope");
                     }
                     scope.filter(|&one| kind(module, one) == "DISubprogram" && one != subprogram)

@@ -36,10 +36,10 @@
 //!   formed only where the compile states them in `Options::library`, as
 //!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
 //!   `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
-//!   are untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations. The `memcpy`
-//!   family is `memops.rs`.
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`,
+//!   math) are untranslated, and so are `iprintf`/`__small_printf`,
+//!   `optimizeErrorReporting` and the argument annotations. The `memcpy` family
+//!   is `memops.rs`.
 //! - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
 //!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
 //!   the character compare the pin makes of a `strchr` or `strstr` tested

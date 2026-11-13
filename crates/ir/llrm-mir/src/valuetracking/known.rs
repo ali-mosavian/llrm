@@ -550,9 +550,9 @@ fn compute_known_bits_from_shift_operator(
 }
 
 /// The `Y` of `m_c_BinOp(m_Value(X), m_c_Add(m_Deferred(X), m_Value(Y)))`,
-/// `..m_Sub(m_Deferred(X), m_Value(Y))` or `..m_Sub(m_Value(Y), m_Deferred(X))`,
-/// tried in that order. Each operand is looked up once, with no matcher
-/// closures: the miss path ran 126 Ir per call.
+/// `..m_Sub(m_Deferred(X), m_Value(Y))` or `..m_Sub(m_Value(Y),
+/// m_Deferred(X))`, tried in that order. Each operand is looked up once, with
+/// no matcher closures: the miss path ran 126 Ir per call.
 fn low_bit_partner(
     q: &Query,
     instruction: &Instruction,
@@ -580,7 +580,9 @@ fn low_bit_partner(
         }
         None
     };
-    find(BinaryOp::Add, true, true).or_else(|| find(BinaryOp::Sub, false, true)).or_else(|| find(BinaryOp::Sub, false, false))
+    find(BinaryOp::Add, true, true)
+        .or_else(|| find(BinaryOp::Sub, false, true))
+        .or_else(|| find(BinaryOp::Sub, false, false))
 }
 
 /// `getKnownBitsFromAndXorOr(I, DemandedElts, KnownLHS, KnownRHS, Q, Depth)`.

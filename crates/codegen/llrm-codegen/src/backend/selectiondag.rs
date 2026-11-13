@@ -251,8 +251,6 @@ mod dagisel_tests;
 #[cfg(test)]
 mod exact_shift_tests;
 #[cfg(test)]
-mod infer_ptr_align_tests;
-#[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
 mod fallthrough_tests;
@@ -266,6 +264,8 @@ mod fpround_tests;
 mod freeze_tests;
 #[cfg(test)]
 mod gaps_tests;
+#[cfg(test)]
+mod infer_ptr_align_tests;
 #[cfg(test)]
 mod invoke_tests;
 #[cfg(test)]

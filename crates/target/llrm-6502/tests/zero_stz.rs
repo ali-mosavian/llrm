@@ -40,7 +40,8 @@ fn a_zero_stored_before_a_branch_always_is_stz() {
 }
 
 /// `a` is read after the store (the function returns it, or a branch reads the
-/// flags `lda #0` set): the load stays. So it does on the 6502, which has no `stz`.
+/// flags `lda #0` set): the load stays. So it does on the 6502, which has no
+/// `stz`.
 #[test]
 fn a_zero_that_is_read_again_or_has_no_stz_stays() {
     for text in ["  lda #0\n  sta rc6\n  rts\n", "  lda #0\n  sta rc6\n  beq L\nL:\n  rts\n"] {

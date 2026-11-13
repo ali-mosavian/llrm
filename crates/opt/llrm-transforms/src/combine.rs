@@ -378,7 +378,8 @@ pub struct Combiner<'a> {
     /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
     /// dominating conditions while set (`foldICmpUsingKnownBits`).
     pub without_dom_conditions: bool,
-    /// The intrinsics this run declared that `env.globals` lacks, which a pattern must still read as intrinsics (`ValueTracking`'s
+    /// The intrinsics this run declared that `env.globals` lacks, which a
+    /// pattern must still read as intrinsics (`ValueTracking`'s
     /// `Query::pending_intrinsics`).
     pub pending_intrinsics: Vec<(u32, llrm_mir::valuetracking::pattern::IntrinsicId)>,
 }
@@ -587,7 +588,10 @@ pub fn visit(
     // no vectors), so an operation on vectors, which the loop vectorizer makes,
     // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
     if matches!(c.function.instruction(inst).opcode, Opcode::Binary(_))
-        && matches!(c.context.types.get(c.function.instruction(inst).ty), llrm_mir::types::Type::Vector { .. })
+        && matches!(
+            c.context.types.get(c.function.instruction(inst).ty),
+            llrm_mir::types::Type::Vector { .. }
+        )
     {
         return Visit::None;
     }

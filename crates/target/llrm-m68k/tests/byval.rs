@@ -19,7 +19,9 @@ fn run(text: &str) {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let mut all = start("f", &[]);
         for name in ["f", "g"] {
-            all.extend(items_with(&module, name, cpu, Options::default()).unwrap_or_else(|why| panic!("{cpu:?}: {why}")));
+            all.extend(
+                items_with(&module, name, cpu, Options::default()).unwrap_or_else(|why| panic!("{cpu:?}: {why}")),
+            );
         }
         let path = support::unique_path("byval");
         write_executable(&path, &executable(&all).unwrap()).unwrap();

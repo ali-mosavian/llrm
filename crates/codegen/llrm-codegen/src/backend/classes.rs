@@ -142,8 +142,8 @@ impl RegisterClasses {
         let named = |name: &str| {
             arch.registers().by_name(name).unwrap_or_else(|| panic!("the target names no register `{name}`"))
         };
-        // The word view of each root, the first the file names: a scan of the file for every root of
-        // every class was most of this function.
+        // The word view of each root, the first the file names: a scan of the
+        // file for every root of every class was most of this function.
         let mut word_views: HashMap<&str, &str> = HashMap::default();
         for one in file.iter().filter(|one| one.bits == 16) {
             word_views.entry(one.root.as_str()).or_insert(one.name.as_str());
@@ -309,7 +309,9 @@ mod tests {
     /// table of x86 names: `ax` is EAX, `es` stays ES.
     #[test]
     fn test_a_root_names_its_full_register() {
-        for (root, full) in [("ax", RegId::EAX), ("sp", RegId::ESP), ("bp", RegId::EBP), ("es", RegId::ES), ("gs", RegId::GS)] {
+        for (root, full) in
+            [("ax", RegId::EAX), ("sp", RegId::ESP), ("bp", RegId::EBP), ("es", RegId::ES), ("gs", RegId::GS)]
+        {
             assert_eq!(root_register(llrm_target::Target::registers(&llrm_x86_m16::M16), root), full, "{root}");
         }
     }
@@ -325,8 +327,8 @@ mod tests {
     }
 
     /// The class table read the forms a second time after the DAG tables had
-    /// read them (0.6 M Ir at start-up): the classes of one target, asked twice,
-    /// read its forms at most once.
+    /// read them (0.6 M Ir at start-up): the classes of one target, asked
+    /// twice, read its forms at most once.
     #[test]
     fn test_the_class_table_reads_the_forms_once() {
         let before = llrm_target::instr::parsed();

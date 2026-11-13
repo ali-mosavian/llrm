@@ -1,12 +1,13 @@
-//! `M68kMachine::registers` (14) and `call_registers` (10) were constants beside the allocator's file and
-//! `calling.toml`: a change to either left the mid-end pricing spills and unrolls against a register file
-//! the allocator no longer had. They are the allocator's candidates, and the ones the ABI keeps.
+//! `M68kMachine::registers` (14) and `call_registers` (10) were constants
+//! beside the allocator's file and `calling.toml`: a change to either left the
+//! mid-end pricing spills and unrolls against a register file the allocator no
+//! longer had. They are the allocator's candidates, and the ones the ABI keeps.
 
+use llrm_m68k::abi;
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::machine::M68kMachine;
 use llrm_m68k::mfunc::Class;
 use llrm_m68k::regalloc::M68kRegisters;
-use llrm_m68k::abi;
 use llrm_mir::target::Machine;
 use llrm_spike_mf::regalloc::Target;
 

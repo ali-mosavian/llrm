@@ -600,7 +600,9 @@ pub fn graph(
             register_succ[earlier] = true;
         }
         if aliasing {
-            let apart = |earlier: usize| !insns[earlier].may_alias(one) && one.memory.is_some() && insns[earlier].memory.is_some();
+            let apart = |earlier: usize| {
+                !insns[earlier].may_alias(one) && one.memory.is_some() && insns[earlier].memory.is_some()
+            };
             if reads_memory || writes_memory {
                 edges.extend(stores_before.iter().filter(|&&earlier| !apart(earlier)).map(|&earlier| (earlier, 0)));
             }
@@ -932,8 +934,8 @@ fn constrain_local_copy(
 }
 
 /// `-fast-cluster-threshold`: a region whose accesses times instructions pass
-/// this per thousand is clustered by chain predecessor in the pin. DEVIATE SB5b:
-/// such a region is not clustered at all.
+/// this per thousand is clustered by chain predecessor in the pin. DEVIATE
+/// SB5b: such a region is not clustered at all.
 const FAST_CLUSTER_THRESHOLD: usize = 1000;
 
 /// `MemOpInfo::operator<`: by base operand (registers before frame indices; a
@@ -1008,8 +1010,7 @@ pub fn cluster_mem_ops(
                 }
             } else {
                 // What the second store waits for comes before the first.
-                let before: Vec<usize> =
-                    graph.preds[second].iter().chain(&graph.weak_preds[second]).copied().collect();
+                let before: Vec<usize> = graph.preds[second].iter().chain(&graph.weak_preds[second]).copied().collect();
                 for pred in before.into_iter().filter(|&pred| pred != first) {
                     graph.add_artificial(pred, first);
                 }
@@ -1021,10 +1022,14 @@ pub fn cluster_mem_ops(
         let mut ids: HashMap<usize, u32> = HashMap::default();
         for node in members {
             let top = find(&mut leader, node);
-            let id = *ids.entry(top).or_insert_with(|| {
-                next_cluster += 1;
-                next_cluster - 1
-            });
+            let id = *ids
+                .entry(top)
+                .or_insert_with(
+                    || {
+                        next_cluster += 1;
+                        next_cluster - 1
+                    },
+                );
             graph.parent_cluster[node] = Some(id);
         }
     }
@@ -1656,7 +1661,8 @@ mod tests {
         use crate::model::memref::MemRef;
         let memory = Lanes::flags(Lanes::MEMORY);
         let name = if store { "str" } else { "ldr" };
-        let mut one = Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, name, vec![], vec![])), vec![], vec![]);
+        let mut one =
+            Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, name, vec![], vec![])), vec![], vec![]);
         one.declared = Some((memory, if store { memory } else { Lanes::new() }));
         one.memory = object.map(|(slot, offset, bytes)| MemRef {
             object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
@@ -1668,8 +1674,8 @@ mod tests {
     }
 
     /// The memory lane ordered every store before every later access, so a load
-    /// from one frame slot stayed behind a store to another: the scheduler could
-    /// not move it above the store (`addChainDependencies` asks
+    /// from one frame slot stayed behind a store to another: the scheduler
+    /// could not move it above the store (`addChainDependencies` asks
     /// `MachineInstr::mayAlias`). A load of the stored bytes stays behind; an
     /// access that says nothing is ordered with everything before it.
     #[test]
@@ -2353,8 +2359,11 @@ mod tests {
             crate::support::hash::IndexMap::default(),
         );
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-        let defined: Vec<u32> =
-            scheduled(&body, 2, &GenericModel, |_, _| one_set(3)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        let defined: Vec<u32> = scheduled(&body, 2, &GenericModel, |_, _| one_set(3)).blocks[0]
+            .insns
+            .iter()
+            .flat_map(|one| one.defines.clone())
+            .collect();
         assert_eq!(defined, [7, 1, 2, 3, 4, 5, 6], "the region peaks at 3 of 3: no critical set, source order");
     }
 

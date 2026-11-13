@@ -257,28 +257,35 @@ pub fn wrapped(
 ) -> Option<Wrap> {
     let shape = shape_of(body);
     let args = (kept.clone(), frame, stack_addressed, size);
-    let found = body.facts.0.stash::<Asked, _>(|asked| {
-        asked
-            .0
-            .iter()
-            .find(|answer| {
-                answer.args == args
-                    && answer.shape == shape
-                    && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
-            })
-            .map(|answer| answer.wrap.clone())
-    });
+    let found = body
+        .facts
+        .0
+        .stash::<Asked, _>(
+            |asked| asked
+                .0
+                .iter()
+                .find(|answer| {
+                    answer.args == args
+                        && answer.shape == shape
+                        && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
+                })
+                .map(|answer| answer.wrap.clone()),
+        );
     if let Some(wrap) = found {
         return wrap;
     }
     let wrap = wrapped_afresh(body, kept, frame, stack_addressed, size);
     let answer = Answer { stamp: crate::analysis::facts::Stamp::of(body), shape, args, wrap: wrap.clone() };
-    body.facts.0.stash::<Asked, _>(|asked| {
-        if asked.0.len() == ASKS_KEPT {
-            asked.0.remove(0);
-        }
-        asked.0.push(answer);
-    });
+    body.facts
+        .0
+        .stash::<Asked, _>(
+            |asked| {
+                if asked.0.len() == ASKS_KEPT {
+                    asked.0.remove(0);
+                }
+                asked.0.push(answer);
+            },
+        );
     wrap
 }
 
@@ -304,33 +311,36 @@ fn placed_once(
 ) -> Option<saverestore::Placement> {
     let shape = shape_of(body);
     let args = (kept.clone(), frame);
-    let found = body.facts.0.stash::<Placed, _>(|placed| {
-        placed
-            .0
-            .iter()
-            .find(|answer| {
-                answer.args == args
-                    && answer.shape == shape
-                    && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
-            })
-            .map(|answer| answer.placement.clone())
-    });
+    let found = body
+        .facts
+        .0
+        .stash::<Placed, _>(
+            |placed| placed
+                .0
+                .iter()
+                .find(|answer| {
+                    answer.args == args
+                        && answer.shape == shape
+                        && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
+                })
+                .map(|answer| answer.placement.clone()),
+        );
     if let Some(placement) = found {
         return placement;
     }
     let placement = solve();
-    let answer = PlacedAnswer {
-        stamp: crate::analysis::facts::Stamp::of(body),
-        shape,
-        args,
-        placement: placement.clone(),
-    };
-    body.facts.0.stash::<Placed, _>(|placed| {
-        if placed.0.len() == ASKS_KEPT {
-            placed.0.remove(0);
-        }
-        placed.0.push(answer);
-    });
+    let answer =
+        PlacedAnswer { stamp: crate::analysis::facts::Stamp::of(body), shape, args, placement: placement.clone() };
+    body.facts
+        .0
+        .stash::<Placed, _>(
+            |placed| {
+                if placed.0.len() == ASKS_KEPT {
+                    placed.0.remove(0);
+                }
+                placed.0.push(answer);
+            },
+        );
     placement
 }
 
@@ -435,9 +445,11 @@ fn wrapped_afresh(
                 _ => false,
             };
             if body.blocks.iter().filter(|block| from_save.contains(&block.at)).any(|block| {
-                block.insns.iter().filter_map(|one| one.what.as_ref()).any(|what| {
-                    what.dests.iter().chain(&what.sources).any(&through_stack)
-                })
+                block
+                    .insns
+                    .iter()
+                    .filter_map(|one| one.what.as_ref())
+                    .any(|what| what.dests.iter().chain(&what.sources).any(&through_stack))
             }) {
                 continue;
             }
@@ -1041,9 +1053,19 @@ mod tests {
         let a = make(vec![3]);
         let first = wrapped(&a, &kept, None, false, false);
         // The same instructions, shared, behind another successor list.
-        let b = a.with_blocks(
-            a.blocks.iter().map(|one| if one.at == 2 { LirBlock { succ: vec![].into(), ..(**one).clone() }.into() } else { one.clone() }).collect(),
-        );
+        let b =
+            a.with_blocks(
+                a.blocks
+                    .iter()
+                    .map(|one| {
+                        if one.at == 2 {
+                            LirBlock { succ: vec![].into(), ..(**one).clone() }.into()
+                        } else {
+                            one.clone()
+                        }
+                    })
+                    .collect(),
+            );
         let second = wrapped(&b, &kept, None, false, false);
         assert_eq!(b.facts.0.counted("shrinkwrap"), 2, "the second body was asked afresh");
         assert!(first.is_some());

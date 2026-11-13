@@ -243,15 +243,19 @@ impl GvnPass<'_> {
             };
             // `predecessors` of LLVM runs once per edge: a switch with two
             // cases to the join is two inputs.
-            let edges = self.function.terminator(pred).map_or(1, |last| {
-                self.function
-                    .instruction(last)
-                    .operands
-                    .iter()
-                    .filter(|&&op| op == Operand::Block(current_block))
-                    .count()
-                    .max(1)
-            });
+            let edges = self
+                .function
+                .terminator(pred)
+                .map_or(
+                    1,
+                    |last| self.function
+                        .instruction(last)
+                        .operands
+                        .iter()
+                        .filter(|&&op| op == Operand::Block(current_block))
+                        .count()
+                        .max(1),
+                );
             for _ in 0..edges {
                 arms.push(incoming);
                 arms.push(Operand::Block(pred));

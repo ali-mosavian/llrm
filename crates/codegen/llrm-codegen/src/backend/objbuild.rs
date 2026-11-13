@@ -682,10 +682,10 @@ pub fn written_in(
     })
 }
 
-/// The bytes of `module` as an object holds them without alignment padding: each function's
-/// body (its symbol's size, not the padding before it) and each data section's image. The
-/// size a code-size trial compares: the padding between functions is the layout's, not the
-/// code's.
+/// The bytes of `module` as an object holds them without alignment padding:
+/// each function's body (its symbol's size, not the padding before it) and each
+/// data section's image. The size a code-size trial compares: the padding
+/// between functions is the layout's, not the code's.
 pub fn unpadded_bytes(
     module: &masm::Module,
     source: &str,
@@ -697,9 +697,10 @@ pub fn unpadded_bytes(
     Ok(code + data)
 }
 
-/// [`unpadded_bytes`] as the functions' code and the data sections' images. `flat`: the code as the
-/// instructions fill it, without the alignment a block pads to inside a function either (a code-size
-/// column decodes the instructions and leaves the padding out).
+/// [`unpadded_bytes`] as the functions' code and the data sections' images.
+/// `flat`: the code as the instructions fill it, without the alignment a block
+/// pads to inside a function either (a code-size column decodes the
+/// instructions and leaves the padding out).
 pub fn unpadded_split(
     module: &masm::Module,
     source: &str,
@@ -984,8 +985,9 @@ pub fn _data(
             masm::Datum::Align(masm::Align { to }) => {
                 segment.align = segment.align.max(*to as usize);
                 let pad = (-(segment.image.len() as i64)).rem_euclid(*to) as usize;
-                // Uninitialised data is zeroed at start-up: its padding is not stored (a stored byte
-                // makes the linker store the segment up to it).
+                // Uninitialised data is zeroed at start-up: its padding is not
+                // stored (a stored byte makes the linker store
+                // the segment up to it).
                 if segment.role == Role::Bss {
                     segment.skip(pad);
                 } else {
@@ -1121,8 +1123,9 @@ pub fn _code_by(
                 let displacement = if model.flat() {
                     i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 } else {
-                    // Real mode adds the 16-bit displacement to IP modulo 64K, so
-                    // any offset of the segment is reachable (+33288 is -32248);
+                    // Real mode adds the 16-bit displacement to IP modulo 64K,
+                    // so any offset of the segment is
+                    // reachable (+33288 is -32248);
                     // only a callee beyond the segment is not.
                     if distance.unsigned_abs() >= 0x1_0000 {
                         return Err(far().into());
@@ -1979,8 +1982,10 @@ mod tests {
         masm::Datum::Fill(masm::Fill { size, byte })
     }
 
-    /// Alignment padding in an uninitialised segment was stored: jpeg_fixed's `_BSS` (15850 bytes) carried two
-    /// one-byte zero data records and jwlink stored the whole segment up to them, 16380 data bytes against bcc's 474.
+    /// Alignment padding in an uninitialised segment was stored: jpeg_fixed's
+    /// `_BSS` (15850 bytes) carried two one-byte zero data records and
+    /// jwlink stored the whole segment up to them, 16380 data bytes against
+    /// bcc's 474.
     #[test]
     fn alignment_padding_in_a_bss_segment_is_not_stored() {
         let mut segment = Segment::new("_BSS", Role::Bss, true);
@@ -1991,12 +1996,14 @@ mod tests {
         assert!(segment.spans.is_empty(), "{:?}", segment.spans);
     }
 
-    /// A data segment keeps its padding: bytes between stored data are part of the image.
+    /// A data segment keeps its padding: bytes between stored data are part of
+    /// the image.
     #[test]
     fn alignment_padding_in_a_data_segment_is_stored() {
         let mut segment = Segment::new("_DATA", Role::Data, true);
         let mut symbols = IndexMap::default();
-        let items = [masm::Datum::Bytes(vec![1, 2, 3]), masm::Datum::Align(masm::Align { to: 4 }), masm::Datum::Bytes(vec![9])];
+        let items =
+            [masm::Datum::Bytes(vec![1, 2, 3]), masm::Datum::Align(masm::Align { to: 4 }), masm::Datum::Bytes(vec![9])];
         _data(&mut segment, 0, &items, &mut symbols, CodeModel::Segmented16);
         assert_eq!(segment.spans, vec![[0, 5]]);
     }
@@ -2253,7 +2260,8 @@ mod tests {
         );
     }
 
-    /// One group of three procedures: `_a` calls `_b` across a `_pad` of `pad` bytes.
+    /// One group of three procedures: `_a` calls `_b` across a `_pad` of `pad`
+    /// bytes.
     fn call_across(pad: usize) -> Result<(Segment, IndexMap<String, (usize, usize)>), Error> {
         let procedures: Vec<masm::Procedure> =
             ["_a", "_pad", "_b"].iter().map(|name| procedure(name, true, body(name, vec![]), 0, vec![])).collect();
@@ -2280,7 +2288,8 @@ mod tests {
             requests: BTreeSet::new(),
             stack: 0,
         };
-        let returned = || masm::Item::Semantics(std::borrow::Cow::Owned(semantics(Operation::Return, "ret", vec![], vec![])));
+        let returned =
+            || masm::Item::Semantics(std::borrow::Cow::Owned(semantics(Operation::Return, "ret", vec![], vec![])));
         let mut segment = Segment::new("M_TEXT", Role::Text, true);
         let (mut symbols, mut sizes) = (IndexMap::default(), IndexMap::default());
         _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, false, |procedure, _| {
@@ -2293,10 +2302,11 @@ mod tests {
         Ok((segment, symbols))
     }
 
-    /// A far call to a procedure of the same group is `push cs; call near`; deedlines'
-    /// DEEDSAKS.BAS at -O1 had `_SUCKING` 33288 bytes past its caller and failed to
-    /// build ("a near call to SUCKING 33288 bytes away"): a rel16 wraps modulo 64K in
-    /// real mode, so the call is encodable, and its displacement must land on the callee.
+    /// A far call to a procedure of the same group is `push cs; call near`;
+    /// deedlines' DEEDSAKS.BAS at -O1 had `_SUCKING` 33288 bytes past its
+    /// caller and failed to build ("a near call to SUCKING 33288 bytes
+    /// away"): a rel16 wraps modulo 64K in real mode, so the call is
+    /// encodable, and its displacement must land on the callee.
     #[test]
     fn a_near_call_more_than_32k_ahead_wraps_to_its_callee() {
         let (segment, symbols) = call_across(33_000).expect("a call 33 KB ahead is encodable");
@@ -2308,9 +2318,9 @@ mod tests {
         assert_eq!(target, symbols["_b"].1, "the displacement {rel} must reach _b");
     }
 
-    /// The limit is the segment: 65_534 bytes ahead wraps to -2 and lands on the
-    /// callee, 65_536 is back at the call and cannot. (The distance is the pad
-    /// plus the caller's `ret`.)
+    /// The limit is the segment: 65_534 bytes ahead wraps to -2 and lands on
+    /// the callee, 65_536 is back at the call and cannot. (The distance is
+    /// the pad plus the caller's `ret`.)
     #[test]
     fn a_near_call_reaches_65534_bytes_and_refuses_65536() {
         let (segment, symbols) = call_across(65_533).expect("65534 bytes ahead is encodable");

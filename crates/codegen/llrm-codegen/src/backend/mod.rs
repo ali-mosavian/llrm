@@ -124,13 +124,13 @@
 //! The phase map: [`crate::backend`].
 
 pub mod absolute;
-pub mod checkedconv;
 pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
 pub mod allocresult;
 pub mod assignment_tracking;
+pub mod checkedconv;
 pub mod livedebugvalues;
 pub mod livedebugvariables;
 
@@ -165,7 +165,6 @@ pub mod farcall;
 pub mod farload;
 pub mod floatalloc;
 pub mod floatassign;
-pub mod libcall_choice;
 pub mod floatfold;
 pub mod floatregions;
 pub mod floatsink;
@@ -184,6 +183,7 @@ pub mod genericdriver;
 pub mod genericsched;
 pub mod globals;
 pub mod isel;
+pub mod libcall_choice;
 pub mod liverows;
 pub mod masks;
 pub mod valuefacts;
@@ -200,17 +200,17 @@ pub mod selectors {
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
 pub mod booleans;
+pub mod breakfalsedeps;
 pub mod callframe;
 pub mod cmpsub;
 pub mod deadmi;
 pub mod earlytaildup;
 pub mod edges;
-pub mod breakfalsedeps;
 pub mod fixupbw;
 pub mod fixupleas;
 pub mod fixupsetcc;
 pub mod flagscopy;
-pub mod statustest;
+pub mod hooks;
 pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
@@ -249,7 +249,6 @@ mod memcpycall_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
-pub mod hooks;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
@@ -273,6 +272,7 @@ pub mod regthrash;
 pub mod relayout;
 pub mod returnsplit;
 pub mod rmw;
+pub mod statustest;
 pub mod vectorsaves;
 pub use llrm_analysis::saverestore;
 pub mod schedboundary;
@@ -356,12 +356,12 @@ pub mod select {
 }
 pub mod bodyfacts;
 pub mod deadspills;
+pub mod floatslotcopy;
 pub mod regallocfast;
 pub mod regclass;
 pub mod registerinfo;
 pub mod repbsf;
 pub mod rewriter;
-pub mod floatslotcopy;
 pub mod sharedstores;
 pub mod spillplacement;
 pub mod storecombine;

@@ -4,14 +4,15 @@
 //! body costs in code (x_ld_max: the 8-trip inner loop, copied 8 times,
 //! 232 -> 755 bytes at m32 -O2 for a few clocks).
 //!
-//! The full-unroll gate against the pin's `shouldFullUnroll` (LoopUnrollPass.cpp:904),
-//! audited 2026-11-08 (w2): (1) the gate itself, above, run on both success paths of
-//! `should_full_unroll`, with bypasses (an inlinable internal function, a copy of this
-//! run, the nest, loops of few trips); (2) the cost analysis is passed `u32::MAX` and the
-//! trips, where the pin passes `Threshold * MaxPercentThresholdBoost / 100` and
-//! `MaxIterationsCountToAnalyze`; (3) UNROLL-O1 (owner x86), (4) UNROLL-TRIAL (owner 6502,
-//! exit 2026-12-05), (5) U1, the optsize few-trip bar (arm64 states none), (6) U3, the
-//! float-stack bar (owner m32, exit 2026-11-20).
+//! The full-unroll gate against the pin's `shouldFullUnroll`
+//! (LoopUnrollPass.cpp:904), audited 2026-11-08 (w2): (1) the gate itself,
+//! above, run on both success paths of `should_full_unroll`, with bypasses (an
+//! inlinable internal function, a copy of this run, the nest, loops of few
+//! trips); (2) the cost analysis is passed `u32::MAX` and the trips, where the
+//! pin passes `Threshold * MaxPercentThresholdBoost / 100` and
+//! `MaxIterationsCountToAnalyze`; (3) UNROLL-O1 (owner x86), (4) UNROLL-TRIAL
+//! (owner 6502, exit 2026-12-05), (5) U1, the optsize few-trip bar (arm64
+//! states none), (6) U3, the float-stack bar (owner m32, exit 2026-11-20).
 
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{Linkage, ValueDef, ValueId};
@@ -21,8 +22,8 @@ use super::*;
 use crate::loopidioms::{trip_clocks, trip_cost};
 
 /// How many times a loop of unknown trip count is assumed to run, as the
-/// pin's branch probabilities do (`LBH_TAKEN_WEIGHT` 124 : `LBH_NONTAKEN_WEIGHT`
-/// 4, a back edge taken 31 times in 32).
+/// pin's branch probabilities do (`LBH_TAKEN_WEIGHT` 124 :
+/// `LBH_NONTAKEN_WEIGHT` 4, a back edge taken 31 times in 32).
 const ASSUMED_TRIPS: i64 = 32;
 
 /// Whether `saved` clocks repay `added` bytes at `rate` thousandths of a clock
@@ -60,7 +61,12 @@ pub(super) fn full_unroll_pays(
     let inlinable = !run.options.target_unrolling
         && run.options.inliner_follows
         && llrm_mir::facts::Facts::of(&run.function.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
-        && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
+        && run
+            .this
+            .is_some_and(|this| matches!(
+                run.globals[this.0 as usize].linkage,
+                Linkage::Internal | Linkage::Private
+            ));
     if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
         why(run, lp, &format!("unpriced unroll: inlinable {inlinable}, rate {rate}"));
         return true;
@@ -91,8 +97,8 @@ pub(super) fn full_unroll_pays(
     // -O3 is speed: the pin's decision holds there. A byte rate priced at -O3
     // (250 down to 3 clocks a byte) trades matmul 672 -> 5,009 instructions (or
     // 857 at 6) for 700 -> 292 B, and no rate keeps shellsort and jpeg at the
-    // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves the
-    // rows slower than gcc and clang at the pin's value.
+    // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves
+    // the rows slower than gcc and clang at the pin's value.
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
     // DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 the
     // pin decides a loop inside a loop of known trips by its size alone, as it
@@ -136,18 +142,7 @@ pub(super) fn full_unroll_pays(
         why(run, lp, "unpriced unroll: inner loops of few trips");
         return true;
     }
-    let analysis = analyze_loop_unroll_cost(
-        run,
-        se,
-        analyzed,
-        lp,
-        trips,
-        eph,
-        u32::MAX,
-        trips,
-        None,
-        true,
-    );
+    let analysis = analyze_loop_unroll_cost(run, se, analyzed, lp, trips, eph, u32::MAX, trips, None, true);
     priced_verdict(&*run, se, analyzed, lp, up, trips, uce, analysis, None, prices_nest, prices_nest, rate)
 }
 
@@ -274,14 +269,29 @@ fn root_pays(
     }
     let rate = run.tti.unroll_milliclocks_per_byte();
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter();
-    Some(priced_verdict(run, se, analyzed, root, up, trips, &uce, None, Some(&projection), prices_nest, memory_aware, rate))
+    Some(priced_verdict(
+        run,
+        se,
+        analyzed,
+        root,
+        up,
+        trips,
+        &uce,
+        None,
+        Some(&projection),
+        prices_nest,
+        memory_aware,
+        rate,
+    ))
 }
 
-/// Whether `lp` is a step of a nest of known trips whose whole unroll is under `limit` units: the
-/// root's body at the copies the inner unrolls make (`project_nest`), once more for each of its
-/// trips, as the pin's threshold counts the outermost loop after the inner ones are gone. The
-/// loops DEVIATE UNROLL-O1-TRIAL compiles again for: a loop that is no nest step goes alone, and a
-/// nest the pin's own threshold refuses is not unrolled by the trial either.
+/// Whether `lp` is a step of a nest of known trips whose whole unroll is under
+/// `limit` units: the root's body at the copies the inner unrolls make
+/// (`project_nest`), once more for each of its trips, as the pin's threshold
+/// counts the outermost loop after the inner ones are gone. The loops DEVIATE
+/// UNROLL-O1-TRIAL compiles again for: a loop that is no nest step goes alone,
+/// and a nest the pin's own threshold refuses is not unrolled by the trial
+/// either.
 pub(super) fn nest_unroll_fits(
     run: &Run,
     se: &mut ScalarEvolution,
@@ -341,7 +351,6 @@ fn priced_verdict(
     memory_aware: bool,
     rate: i64,
 ) -> bool {
-
     let clocks = crate::profit::costs(run.outer);
     let bytes = run.outer.target().byte_costs();
     let blocks = lp.get_blocks();
@@ -385,7 +394,8 @@ fn priced_verdict(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, se, analyzed, lp, &known, up, memory_aware, projection);
+    let (mut promoted, mut promoted_runs, ints, floats, forwarded) =
+        promoted_accesses(run, se, analyzed, lp, &known, up, memory_aware, projection);
     let rmw = forwarded.len();
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
@@ -416,7 +426,8 @@ fn priced_verdict(
     }
     let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
     let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
-    let credited_operands = if analysis.is_none() && run.tti.unroll_credits_immediate_operands() { nested_uses } else { 0 };
+    let credited_operands =
+        if analysis.is_none() && run.tti.unroll_credits_immediate_operands() { nested_uses } else { 0 };
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
         None => {
@@ -444,21 +455,31 @@ fn priced_verdict(
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
     // to save 44 clocks a run ran 92 more: 14 more stores, 17 more exchanges).
     let spill_clocks = spilled * (clocks.float_store + clocks.float_load);
-    // DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): see `throughput`. A target with a throughput
-    // model prices a trip at the larger of its resource and chain bounds, and the unroll saves the
-    // resources it removes only where the trip is bound by them.
-    // A trip that calls a function the inliner takes next is outside the model: the copies make its arguments
-    // constants and the callee folds on them, work the trip's own instructions do not show (dot -O3 m64: the
-    // 40-trip loop around `dot(a, b)` saved "0 clk", and rolled left the callee's 48 products unfolded, +306 B
-    // and 87 -> 170 clocks a call). Such a trip is priced serially.
-    // Only a target with the model asks: the other targets' pricing is untouched.
+    // DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): see `throughput`. A
+    // target with a throughput model prices a trip at the larger of its
+    // resource and chain bounds, and the unroll saves the resources it
+    // removes only where the trip is bound by them. A trip that calls a
+    // function the inliner takes next is outside the model: the copies make its
+    // arguments constants and the callee folds on them, work the trip's own
+    // instructions do not show (dot -O3 m64: the 40-trip loop around
+    // `dot(a, b)` saved "0 clk", and rolled left the callee's 48 products
+    // unfolded, +306 B and 87 -> 170 clocks a call). Such a trip is priced
+    // serially. Only a target with the model asks: the other targets'
+    // pricing is untouched.
     let sees_trip = |_: &_| {
-        !blocks.iter().any(|&block| {
-            run.function.iter_block(block).any(|inst| {
-                matches!(run.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
-                    && call_inlined_next(run, inst)
-            })
-        })
+        !blocks
+            .iter()
+            .any(
+                |&block| run.function
+                    .iter_block(block)
+                    .any(
+                        |inst| matches!(
+                            run.function.instruction(inst).opcode,
+                            Opcode::Call(_) | Opcode::Invoke(_)
+                        )
+                            && call_inlined_next(run, inst),
+                    ),
+            )
     };
     let (saved, bound) = match run.outer.target().throughput().filter(sees_trip) {
         None => ((saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs, (0, 0)),
@@ -570,12 +591,14 @@ pub(super) struct Priced {
     pub spilled: i64,
     pub float_file: i64,
     pub rate: i64,
-    /// The terms of `saved`: units the analysis folds, the body's clocks a unit, the clocks the control and the promoted loads add, the runs.
+    /// The terms of `saved`: units the analysis folds, the body's clocks a
+    /// unit, the clocks the control and the promoted loads add, the runs.
     pub saved_units: i64,
     pub unit_clocks: i64,
     pub constant_clocks: i64,
     pub runs: i64,
-    /// The trip's resource and chain bounds in milli-clocks (0 where the target states no throughput model).
+    /// The trip's resource and chain bounds in milli-clocks (0 where the target
+    /// states no throughput model).
     pub resource: i64,
     pub chain: i64,
 }
@@ -649,25 +672,29 @@ fn constant_operand_uses(
                 // An element of a constant table at the counters is a constant
                 // in a copy.
                 let element = matches!(one.opcode, Opcode::Load { volatile: false, .. })
-                    && matches!(local_array_at(run, one.operands[0], &known), Some(Base::Table));
+                    && matches!(
+                        local_array_at(run, one.operands[0], &known),
+                        Some(Base::Table)
+                    );
                 let pure = element
                     || matches!(
-                    one.opcode,
-                    Opcode::FNeg
-                        | Opcode::Binary(_)
-                        | Opcode::Cast(_)
-                        | Opcode::ICmp(_)
-                        | Opcode::FCmp(_)
-                        | Opcode::Select
-                        | Opcode::GetElementPtr { .. }
-                ) || matches!(one.opcode, Opcode::Call(_))
-                    && crate::licm::hoist::is_safe_to_speculatively_execute_in(
-                        run.context,
-                        run.layout,
-                        function,
-                        run.outer,
-                        inst,
-                    );
+                        one.opcode,
+                        Opcode::FNeg
+                            | Opcode::Binary(_)
+                            | Opcode::Cast(_)
+                            | Opcode::ICmp(_)
+                            | Opcode::FCmp(_)
+                            | Opcode::Select
+                            | Opcode::GetElementPtr { .. }
+                    )
+                    || matches!(one.opcode, Opcode::Call(_))
+                        && crate::licm::hoist::is_safe_to_speculatively_execute_in(
+                            run.context,
+                            run.layout,
+                            function,
+                            run.outer,
+                            inst,
+                        );
                 let Some(result) = one.result else { continue };
                 if pure
                     && !known.contains(&result)
@@ -801,8 +828,8 @@ fn alloca_of(
     }
 }
 
-/// The loads and stores in the blocks of `lp` (and, as many as they run, those of
-/// the loops inside it) of a local array that does not
+/// The loads and stores in the blocks of `lp` (and, as many as they run, those
+/// of the loops inside it) of a local array that does not
 /// escape, at an address computed from the counters of `lp` (`known`) alone: in
 /// a full unroll each is at a constant offset and the array is promoted.
 fn promoted_accesses(
@@ -819,8 +846,9 @@ fn promoted_accesses(
     let mut resident: std::collections::BTreeMap<u32, bool> = Default::default();
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
-    // Float arrays the loop both reads and writes: after a full unroll their elements
-    // are forwarded from one trip of the loops around to the next, one live value each.
+    // Float arrays the loop both reads and writes: after a full unroll their
+    // elements are forwarded from one trip of the loops around to the next,
+    // one live value each.
     let (mut loaded, mut written, mut rmw): (IdSet<ValueId>, IdSet<ValueId>, IdSet<ValueId>) =
         (IdSet::new(), IdSet::new(), IdSet::new());
     for &block in lp.get_blocks() {
@@ -852,13 +880,16 @@ fn promoted_accesses(
                 .captures_nothing(),
                 None => false,
             };
-            // A store the array survives is still run: the array is promoted only
-            // where every other access is a constant offset too.
+            // A store the array survives is still run: the array is promoted
+            // only where every other access is a constant offset
+            // too.
             let free = free
                 && !(memory_aware
                     && matches!(one.opcode, Opcode::Store { .. })
-                    && matches!(local_array_at(run, pointer, known), Some(Base::Local(root))
-                        if *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, lp, root, up))));
+                    && matches!(
+                        local_array_at(run, pointer, known),
+                        Some(Base::Local(root)) if *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, lp, root, up))
+                    ));
             if free {
                 let weight = projection.map_or(1, |projection| projection.of(block));
                 found += weight;
@@ -873,7 +904,11 @@ fn promoted_accesses(
                         .is_some_and(|ty| ty.is_float());
                     if float {
                         floats.insert(root);
-                        if matches!(one.opcode, Opcode::Store { .. }) { written.insert(root) } else { loaded.insert(root) };
+                        if matches!(one.opcode, Opcode::Store { .. }) {
+                            written.insert(root)
+                        } else {
+                            loaded.insert(root)
+                        };
                         if loaded.contains(&root) && written.contains(&root) {
                             rmw.insert(root);
                         }
@@ -887,10 +922,12 @@ fn promoted_accesses(
     (found, runs, ints.len(), floats.len(), rmw)
 }
 
-/// A store of an integer that is a constant in each copy (a constant, or a value of the counters alone) and
-/// fits the target's store immediate (`Tti::unroll_store_immediate_bits`; none: never): the reader takes it as
-/// an immediate, so the element holds no register. UP1-REG counts the elements that do: a float is loaded from
-/// the constant pool, an element the loop also loads is a live value, a constant outside the immediate's range
+/// A store of an integer that is a constant in each copy (a constant, or a
+/// value of the counters alone) and fits the target's store immediate
+/// (`Tti::unroll_store_immediate_bits`; none: never): the reader takes it as an
+/// immediate, so the element holds no register. UP1-REG counts the elements
+/// that do: a float is loaded from the constant pool, an element the loop also
+/// loads is a live value, a constant outside the immediate's range
 /// is loaded into a register first.
 fn immediate_store(
     run: &Run,
@@ -954,7 +991,8 @@ fn stays_in_memory(
     };
     let mut finishes: std::collections::BTreeMap<u32, bool> = Default::default();
     // Only a read that can run after the loop keeps the stores (nbody -O2: the
-    // last update loop, after the step loop, is followed by reads of constants).
+    // last update loop, after the step loop, is followed by reads of
+    // constants).
     let mut after: IdSet<BlockId> = IdSet::new();
     let mut work: Vec<BlockId> = lp.get_exit_blocks(function);
     while let Some(block) = work.pop() {
@@ -1007,13 +1045,16 @@ fn stays_in_memory(
                         });
                         if let Some(counter) = counter {
                             let id = counter.get_header().0;
-                            // A loop an unroll of this run made is part of a nest decided
-                            // already; else the nest it belongs to is priced as a whole.
-                            let fits = *finishes.entry(id).or_insert_with(|| {
-                                !run.first.contains(&counter.get_header())
-                                    || run.decided.contains(&counter.get_header())
-                                    || root_pays(run, se, analyzed, counter, up, false).unwrap_or(false)
-                            });
+                            // A loop an unroll of this run made is part of a
+                            // nest decided already;
+                            // else the nest it belongs to is priced as a whole.
+                            let fits = *finishes
+                                .entry(id)
+                                .or_insert_with(
+                                    || !run.first.contains(&counter.get_header())
+                                        || run.decided.contains(&counter.get_header())
+                                        || root_pays(run, se, analyzed, counter, up, false).unwrap_or(false),
+                                );
                             if !fits {
                                 return true;
                             }
@@ -1063,7 +1104,11 @@ pub(super) fn forwarded_floats(
             }
             let Some((root, varying)) = array_root(run, pointer, &known) else { continue };
             let entry = roots.entry(root).or_default();
-            if stored { entry.1 = true } else { entry.0 = true }
+            if stored {
+                entry.1 = true
+            } else {
+                entry.0 = true
+            }
             entry.2 |= varying;
         }
     }
@@ -1117,10 +1162,11 @@ fn array_root(
 
 /// The bytes the copies of a full unroll save by storing one constant at
 /// consecutive addresses: the stores of `trips` trips are adjacent, and the
-/// backend merges them into wider stores and `stp` pairs (`MergeConsecutiveStores`;
-/// lru -O3: the model said +28 B, the code shrank 12). A stream of `trips`
-/// stores of `w` bytes becomes `ceil(trips * w / 16)` instructions of four
-/// bytes; a constant that is neither zero nor all ones costs one more to build.
+/// backend merges them into wider stores and `stp` pairs
+/// (`MergeConsecutiveStores`; lru -O3: the model said +28 B, the code shrank
+/// 12). A stream of `trips` stores of `w` bytes becomes `ceil(trips * w / 16)`
+/// instructions of four bytes; a constant that is neither zero nor all ones
+/// costs one more to build.
 fn merged_store_credit(
     run: &Run,
     se: &mut ScalarEvolution,
@@ -1171,7 +1217,10 @@ fn merged_store_credit(
             }
             let merged = (i64::from(trips) * i64::from(bits / 8) + 15) / 16;
             let mask = (1u128 << bits) - 1;
-            let plain = matches!(run.context.get(value).kind, ConstantKind::Int(number) if number & mask == 0 || number & mask == mask);
+            let plain = matches!(
+                run.context.get(value).kind,
+                ConstantKind::Int(number) if number & mask == 0 || number & mask == mask
+            );
             credit += (i64::from(trips) - merged) * 4 - if plain { 0 } else { 4 };
         }
     }
@@ -1198,7 +1247,9 @@ fn local_array_at(
             Operand::Constant(id) => {
                 let ConstantKind::Global(global) = run.context.get(id).kind else { return None };
                 return match &run.globals[global.0 as usize].kind {
-                    GlobalKind::Variable(variable) if variable.constant && variable.initializer.is_some() && indexed => {
+                    GlobalKind::Variable(variable)
+                        if variable.constant && variable.initializer.is_some() && indexed =>
+                    {
                         Some(Base::Table)
                     }
                     _ => None,
@@ -1211,11 +1262,16 @@ fn local_array_at(
                     Opcode::Alloca { .. } => return Some(Base::Local(value)),
                     Opcode::GetElementPtr { .. } => {
                         let varying = one.operands[1..].iter().any(|index| matches!(index, Operand::Value(_)));
-                        let counted = one.operands[1..].iter().all(|index| match index {
-                            Operand::Value(index) => known.contains(index),
-                            Operand::Constant(_) => true,
-                            Operand::Block(_) => false,
-                        });
+                        let counted = one
+                            .operands[1..]
+                            .iter()
+                            .all(
+                                |index| match index {
+                                    Operand::Value(index) => known.contains(index),
+                                    Operand::Constant(_) => true,
+                                    Operand::Block(_) => false,
+                                },
+                            );
                         if !counted {
                             return None;
                         }
@@ -1294,7 +1350,9 @@ fn reads_outer_counter(
         let (Some(preheader), Some(latch)) = (one.get_loop_preheader(function), one.get_loop_latch(function)) else {
             return false;
         };
-        for inst in function.iter_block(one.get_header()).take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi) {
+        for inst in
+            function.iter_block(one.get_header()).take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        {
             let pairs: Vec<&[Operand]> = function.instruction(inst).operands.chunks(2).collect();
             let start = pairs.iter().find(|pair| pair[1] == Operand::Block(preheader)).map(|pair| pair[0]);
             let step = pairs.iter().find(|pair| pair[1] == Operand::Block(latch)).map(|pair| pair[0]);
@@ -1311,11 +1369,15 @@ fn reads_outer_counter(
         while grew {
             grew = false;
             let all_known = |operands: &[Operand], known: &IdSet<ValueId>| {
-                operands.iter().all(|&operand| match operand {
-                    Operand::Constant(_) => true,
-                    Operand::Value(value) => known.contains(&value),
-                    Operand::Block(_) => true,
-                })
+                operands
+                    .iter()
+                    .all(
+                        |&operand| match operand {
+                            Operand::Constant(_) => true,
+                            Operand::Value(value) => known.contains(&value),
+                            Operand::Block(_) => true,
+                        },
+                    )
             };
             for &(inst, start, _) in &seeds {
                 let Some(result) = function.instruction(inst).result else { continue };
@@ -1335,7 +1397,10 @@ fn reads_outer_counter(
                         continue;
                     }
                     let element = matches!(one.opcode, Opcode::Load { volatile: false, .. })
-                        && matches!(local_array_at(run, one.operands[0], &known), Some(Base::Table));
+                        && matches!(
+                            local_array_at(run, one.operands[0], &known),
+                            Some(Base::Table)
+                        );
                     let divides = matches!(
                         one.opcode,
                         Opcode::Binary(
@@ -1355,7 +1420,11 @@ fn reads_outer_counter(
                         || divides
                         || matches!(
                             one.opcode,
-                            Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi
+                            Opcode::Binary(_)
+                                | Opcode::Cast(_)
+                                | Opcode::ICmp(_)
+                                | Opcode::GetElementPtr { .. }
+                                | Opcode::Phi
                         );
                     let has_value = one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)));
                     if pure && has_value && all_known(&one.operands, &known) {
@@ -1393,22 +1462,30 @@ fn reads_outer_counter(
                     one.opcode,
                     Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Phi | Opcode::GetElementPtr { .. }
                 );
-                // DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): a load reads
-                // its address, which is addressing, not data (tile -O2: `tile[(y + dy) & 63]
-                // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155 instructions
-                // where the rolled loop is 68 B and 4,181).
+                // DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): a
+                // load reads its address, which is addressing,
+                // not data (tile -O2: `tile[(y + dy) & 63]
+                // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155
+                // instructions where the rolled loop is 68 B
+                // and 4,181).
                 let mut sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
-                // A constant passed to a call nothing will inline folds in no copy: the
-                // call still runs and takes its arguments in registers (huffman_decode
-                // -O2 m64: `report(decode(t))` in a 12 x 4 nest, 850 B against gcc's 212).
-                sink &= !matches!(one.opcode, Opcode::Call(_) | Opcode::Invoke(_)) || call_may_fold_arguments(run, inst);
-                // DEVIATE ARM64-UNROLL-PRICE: nor a store into a local array that
-                // stays in memory, which the copies still run (matmul -O2: `a` and
-                // `b` filled by `(i + j) % 3`, read by the rolled `k` loop).
+                // A constant passed to a call nothing will inline folds in no
+                // copy: the call still runs and takes its
+                // arguments in registers (huffman_decode
+                // -O2 m64: `report(decode(t))` in a 12 x 4 nest, 850 B against
+                // gcc's 212).
+                sink &=
+                    !matches!(one.opcode, Opcode::Call(_) | Opcode::Invoke(_)) || call_may_fold_arguments(run, inst);
+                // DEVIATE ARM64-UNROLL-PRICE: nor a store into a local array
+                // that stays in memory, which the copies still
+                // run (matmul -O2: `a` and `b` filled by `(i +
+                // j) % 3`, read by the rolled `k` loop).
                 if sink
                     && matches!(one.opcode, Opcode::Store { .. })
                     && let Some(Base::Local(root)) = local_array_at(run, one.operands[1], &known)
-                    && *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, outermost, root, up))
+                    && *resident
+                        .entry(root.0)
+                        .or_insert_with(|| stays_in_memory(run, se, analyzed, outermost, root, up))
                 {
                     sink = false;
                 }
@@ -1428,12 +1505,17 @@ fn reads_outer_counter(
         }
     }
     // Data the copies of `lp` itself make constant.
-    real.iter().any(|value| data.contains(value)) || inside.iter().any(|&block| {
-        function.iter_block(block).any(|inst| {
-            let one = function.instruction(inst);
-            one.opcode != Opcode::Phi && one.result.is_some_and(|result| data.contains(&result))
+    real.iter().any(|value| data.contains(value))
+        || inside.iter().any(|&block| {
+            function
+                .iter_block(block)
+                .any(
+                    |inst| {
+                        let one = function.instruction(inst);
+                        one.opcode != Opcode::Phi && one.result.is_some_and(|result| data.contains(&result))
+                    },
+                )
         })
-    })
 }
 
 /// Whether the arguments of the call `inst` can fold once they are constants:
@@ -1445,7 +1527,8 @@ fn call_may_fold_arguments(
     inst: InstId,
 ) -> bool {
     let Some(id) = llrm_mir::memory::callee(run.context, run.function, inst) else { return false };
-    // A callee declared after the pass's snapshot of the module is past `run.globals`.
+    // A callee declared after the pass's snapshot of the module is past
+    // `run.globals`.
     let Some(global) = run.globals.get(id.0 as usize) else { return false };
     if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.")) {
         return true;
@@ -1453,7 +1536,8 @@ fn call_may_fold_arguments(
     call_inlined_next(run, inst)
 }
 
-/// Whether the call `inst` is to a function with a body that the inliner, still to run, may take.
+/// Whether the call `inst` is to a function with a body that the inliner, still
+/// to run, may take.
 fn call_inlined_next(
     run: &Run,
     inst: InstId,
@@ -1461,7 +1545,8 @@ fn call_inlined_next(
     let Some(id) = llrm_mir::memory::callee(run.context, run.function, inst) else { return false };
     let Some(global) = run.globals.get(id.0 as usize) else { return false };
     let llrm_mir::module::GlobalKind::Function(callee) = &global.kind else { return false };
-    // The late pass runs after the inliner took what it would take of this function's calls.
+    // The late pass runs after the inliner took what it would take of this
+    // function's calls.
     run.options.inliner_follows
         && !run.options.target_unrolling
         && run.callees.get(&id).is_some_and(|summary| summary.defined)

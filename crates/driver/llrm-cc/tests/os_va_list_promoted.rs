@@ -1,6 +1,6 @@
-//! m32 -Os (VASTART-PROMOTE): a one-pointer `va_list` is kept in a register. With
-//! `<stdarg.h>` the list was a stack slot `llvm.va_start` wrote through, so
-//! `va_arg` loaded and stored it on every trip: `sum` below was `sub esp,8;
+//! m32 -Os (VASTART-PROMOTE): a one-pointer `va_list` is kept in a register.
+//! With `<stdarg.h>` the list was a stack slot `llvm.va_start` wrote through,
+//! so `va_arg` loaded and stored it on every trip: `sum` below was `sub esp,8;
 //! lea; mov [esp],eax; ... mov edx,[esp]; mov [esp],edx` (46 B, gcc 32 B).
 //! Needs the Open Watcom tree (tools/ow-fetch.sh) and the m16 clang
 //! (`LLRM_CLANG_M16`).
@@ -29,10 +29,7 @@ fn compile(
     source: &str,
     flag: &str,
 ) -> (String, u64) {
-    assert!(
-        llrm_cc::ow_present(),
-        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
-    );
+    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
     assert!(
         std::env::var_os("LLRM_CLANG_M16").is_some(),
         "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
@@ -58,10 +55,7 @@ fn compile(
     };
     run("-S", "d.s");
     run("-c", "d.o");
-    (
-        std::fs::read_to_string(dir.join("d.s")).unwrap(),
-        std::fs::metadata(dir.join("d.o")).unwrap().len(),
-    )
+    (std::fs::read_to_string(dir.join("d.s")).unwrap(), std::fs::metadata(dir.join("d.o")).unwrap().len())
 }
 
 #[test]

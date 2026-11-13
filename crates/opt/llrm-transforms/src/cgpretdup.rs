@@ -26,8 +26,9 @@
 //! one (`x_mergesort` `msort`, -Os m32 +9 B).
 //!
 //! DEVIATE RD1: `mayBeEmittedAsTailCall` is `CI->isTailCall()` (x86's), read
-//! from the call's marker, where the target's `may_be_emitted_as_tail_call` allows; no bitcast of a pointer is looked through (MIR's
-//! pointers are opaque), and there are no fake uses or pseudo probes.
+//! from the call's marker, where the target's `may_be_emitted_as_tail_call`
+//! allows; no bitcast of a pointer is looked through (MIR's pointers are
+//! opaque), and there are no fake uses or pseudo probes.
 //!
 //! # Example
 //! Before:

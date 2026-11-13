@@ -27,9 +27,10 @@ fn body(text: &str) -> Vec<&str> {
     text.lines().filter(|l| l.starts_with('\t') && !l.starts_with("\t.")).map(str::trim).collect()
 }
 
-/// `x << 1` was `add hl,hl; ld c,l; ld b,h; ld l,e; ld h,d; adc hl,de; ex de,hl; ld l,c; ld h,b; ret`
-/// (10 B): the high word waited in `de` while the low word went through `bc`. It is
-/// `add hl,hl; rl e; rl d; ret` (6 B), SDCC's `sla e; rl d; adc hl,hl; ret` also being 6 B.
+/// `x << 1` was `add hl,hl; ld c,l; ld b,h; ld l,e; ld h,d; adc hl,de; ex
+/// de,hl; ld l,c; ld h,b; ret` (10 B): the high word waited in `de` while the
+/// low word went through `bc`. It is `add hl,hl; rl e; rl d; ret` (6 B), SDCC's
+/// `sla e; rl d; adc hl,hl; ret` also being 6 B.
 #[test]
 fn a_long_doubled_in_straight_code_needs_no_third_pair() {
     for (level, op) in [("-O1", "shl i32 %x, 1"), ("-O2", "shl i32 %x, 1"), ("-Os", "add i32 %x, %x")] {
@@ -40,8 +41,9 @@ fn a_long_doubled_in_straight_code_needs_no_third_pair() {
     }
 }
 
-/// A long doubled on each side of a call, the argument and result pairs of the convention: 20 instructions
-/// (two 9-instruction trades through `bc`), it is 7.
+/// A long doubled on each side of a call, the argument and result pairs of the
+/// convention: 20 instructions (two 9-instruction trades through `bc`), it is
+/// 7.
 #[test]
 fn a_long_doubled_around_a_call_needs_no_trade() {
     let text = assembly(

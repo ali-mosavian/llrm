@@ -111,8 +111,8 @@ const fn bits(
     Piece::Const { lo, width, value }
 }
 
-/// `0100 1100 01 mode reg` and the extension word `0 Dq 1 S 0 0 0 0000000 0 Dr`:
-/// `divs.l` / `divu.l` with `Dr` the remainder register.
+/// `0100 1100 01 mode reg` and the extension word `0 Dq 1 S 0 0 0 0000000 0
+/// Dr`: `divs.l` / `divu.l` with `Dr` the remainder register.
 const fn pieces(signed: u64) -> [Piece; 9] {
     [
         field(0, 3, DIVISOR as u8),

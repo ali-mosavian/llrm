@@ -22,11 +22,9 @@ fn run(text: &str) -> String {
 /// `printf` call (and a formed `puts` returned `i32`).
 #[test]
 fn test_printf_of_a_plain_string_is_puts_when_int_is_sixteen_bits() {
-    let after = run(
-        "@s = private constant [4 x i8] c\"hi\\0A\\00\"\n\
+    let after = run("@s = private constant [4 x i8] c\"hi\\0A\\00\"\n\
          declare i16 @printf(ptr, ...)\n\
-         define void @f() {\nb0:\n  %r = call i16 (ptr, ...) @printf(ptr @s)\n  ret void\n}\n",
-    );
+         define void @f() {\nb0:\n  %r = call i16 (ptr, ...) @printf(ptr @s)\n  ret void\n}\n");
     assert!(after.contains("@puts"), "{after}");
     assert!(!after.contains("call i16 (ptr, ...) @printf"), "{after}");
 }
@@ -116,8 +114,7 @@ fn test_the_library_table_is_built_once_per_module() {
 /// saw an intrinsic to expand inline and `mempcpy`/`memccpy` never did.
 #[test]
 fn test_the_memory_functions_become_their_intrinsics() {
-    let after = run(
-        "declare ptr @memcpy(ptr, ptr, i16)\n\
+    let after = run("declare ptr @memcpy(ptr, ptr, i16)\n\
          declare ptr @memmove(ptr, ptr, i16)\n\
          declare ptr @memset(ptr, i16, i16)\n\
          declare ptr @mempcpy(ptr, ptr, i16)\n\
@@ -126,8 +123,7 @@ fn test_the_memory_functions_become_their_intrinsics() {
          \x20 %b = call ptr @memmove(ptr %a, ptr %s, i16 %n)\n\
          \x20 %m = call ptr @memset(ptr %b, i16 %c, i16 %n)\n\
          \x20 %p = call ptr @mempcpy(ptr %m, ptr %s, i16 %n)\n\
-         \x20 ret ptr %p\n}\n",
-    );
+         \x20 ret ptr %p\n}\n");
     for gone in ["call ptr @memcpy", "call ptr @memmove", "call ptr @memset", "call ptr @mempcpy"] {
         assert!(!after.contains(gone), "{gone} stayed:\n{after}");
     }
@@ -142,18 +138,19 @@ fn test_the_memory_functions_become_their_intrinsics() {
 /// it (`optimizeMemCCpy`); a byte not in the first `n` gives null.
 #[test]
 fn test_memccpy_of_a_constant_string_is_a_memcpy_through_the_stop_byte() {
-    let after = run(
-        "@s = private constant [6 x i8] c\"hello\\00\"\n\
+    let after = run("@s = private constant [6 x i8] c\"hello\\00\"\n\
          declare ptr @memccpy(ptr, ptr, i16, i16)\n\
          define ptr @f(ptr %d) {\nb0:\n\
          \x20 %r = call ptr @memccpy(ptr %d, ptr @s, i16 108, i16 5)\n\
-         \x20 ret ptr %r\n}\n",
-    );
+         \x20 ret ptr %r\n}\n");
     assert!(!after.contains("call ptr @memccpy"), "{after}");
     assert!(after.contains("llvm.memcpy.p0.p0.i16(ptr align 1 %d, ptr align 1 @s, i16 3"), "{after}");
 }
 
-fn printf_of(global: &str, argument: &str) -> String {
+fn printf_of(
+    global: &str,
+    argument: &str,
+) -> String {
     run(&format!(
         "{global}\ndeclare i16 @printf(ptr, ...)\n\
          define void @f() {{\nb0:\n  %i = getelementptr i8, ptr @s, i16 1\n  \
@@ -174,10 +171,8 @@ fn test_printf_of_a_constant_gep_into_a_string_is_puts() {
 /// The same through a constant-expression GEP operand.
 #[test]
 fn test_printf_of_a_constant_expression_gep_is_puts() {
-    let after = printf_of(
-        "@s = private constant [6 x i8] c\"xhi\\0A\\00\\00\"",
-        "ptr getelementptr (i8, ptr @s, i16 1)",
-    );
+    let after =
+        printf_of("@s = private constant [6 x i8] c\"xhi\\0A\\00\\00\"", "ptr getelementptr (i8, ptr @s, i16 1)");
     assert!(after.contains("@puts"), "{after}");
     assert!(!after.contains("call i16 (ptr, ...) @printf"), "{after}");
 }

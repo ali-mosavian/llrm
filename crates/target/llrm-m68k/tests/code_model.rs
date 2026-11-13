@@ -51,8 +51,9 @@ fn small_is_pc_relative_at_every_cpu() {
 /// displacement refused a global past 32 KiB (memcpy_runtime and
 /// memfuncs_runtime, -O0 sweep: ".text: a value of 70016 does not fit its
 /// 2-byte field").
-/// Medium reaches any offset at every cpu with `abs.l` (DEVIATE in `CodeModel`): the pin's PC-relative medium at the
-/// 68020 has only a 16-bit displacement and fails to link past 32 KiB.
+/// Medium reaches any offset at every cpu with `abs.l` (DEVIATE in
+/// `CodeModel`): the pin's PC-relative medium at the 68020 has only a 16-bit
+/// displacement and fails to link past 32 KiB.
 #[test]
 fn medium_is_absolute_at_every_cpu_because_the_pin_pc16_cannot_reach() {
     for cpu in ["68000", "68020"] {

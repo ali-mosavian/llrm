@@ -48,7 +48,8 @@ pub(crate) fn text_at(
         }
         let id = llrm_mir::GlobalId(at as u32);
         let datums = globals::datums(module, id, &names)?;
-        // a variable of zeros is bss: space the program's start clears, not bytes of the image
+        // a variable of zeros is bss: space the program's start clears, not
+        // bytes of the image
         let bss = !variable.constant
             && datums.iter().all(|datum| match datum {
                 Datum::Label(_) | Datum::Object(_) => true,
@@ -95,7 +96,8 @@ fn offset(by: i64) -> String {
     if by == 0 { String::new() } else { format!("{by:+}") }
 }
 
-/// The bytes `text` puts in the linked image: `.db`, `.dw` and `.ds` outside `_BSS` (the program's start clears that).
+/// The bytes `text` puts in the linked image: `.db`, `.dw` and `.ds` outside
+/// `_BSS` (the program's start clears that).
 pub(crate) fn image_bytes(text: &str) -> u32 {
     let mut bss = false;
     let mut bytes = 0;

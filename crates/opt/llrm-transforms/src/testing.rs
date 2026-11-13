@@ -418,21 +418,21 @@ impl llrm_mir::target::Machine for Tuned {
             || self.unswitch_threshold.is_some()
             || self.skip_partial_at_size)
             .then(|| {
-            std::rc::Rc::new(Flagged {
-                exit_ne: self.exit_ne,
-                narrows_counters: self.narrows_counters,
-                narrows_counters_for_size_only: self.narrows_counters_for_size_only,
-                unswitch_threshold: self.unswitch_threshold,
-                sinks_invariants: self.sinks_invariants,
-                no_cmov: false,
-                no_global_base: self.no_global_base,
-                cheap_ctlz: self.cheap_ctlz,
-                fast_sqrt: self.fast_sqrt,
-                second_ipsccp: self.second_ipsccp,
-                ord_dear: self.ord_dear,
-                skip_partial_at_size: self.skip_partial_at_size,
-            }) as _
-        })
+                std::rc::Rc::new(Flagged {
+                    exit_ne: self.exit_ne,
+                    narrows_counters: self.narrows_counters,
+                    narrows_counters_for_size_only: self.narrows_counters_for_size_only,
+                    unswitch_threshold: self.unswitch_threshold,
+                    sinks_invariants: self.sinks_invariants,
+                    no_cmov: false,
+                    no_global_base: self.no_global_base,
+                    cheap_ctlz: self.cheap_ctlz,
+                    fast_sqrt: self.fast_sqrt,
+                    second_ipsccp: self.second_ipsccp,
+                    ord_dear: self.ord_dear,
+                    skip_partial_at_size: self.skip_partial_at_size,
+                }) as _
+            })
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {

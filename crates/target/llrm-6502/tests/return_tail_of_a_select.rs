@@ -10,7 +10,8 @@ use llrm_6502::driver::{Level, Request, assembly};
 use llrm_6502::timing::estimate;
 
 /// `(x & m) != 0` returned: the join `ldy #0 .. ldy #1; tya; rts` made
-/// `bit_test` 1 B and 6 clk longer than `lda #1; rts` / `txa; rts` (2026-11-11).
+/// `bit_test` 1 B and 6 clk longer than `lda #1; rts` / `txa; rts`
+/// (2026-11-11).
 #[test]
 fn a_returned_bool_select_returns_in_each_arm_not_through_y() {
     for level in [Level::O1, Level::Os] {

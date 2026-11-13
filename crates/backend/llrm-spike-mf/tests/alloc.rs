@@ -489,14 +489,18 @@ fn the_copies_at_the_top_of_a_loop_run_last_phi_first() {
     let mut function = MFunction::<()>::new("f");
     function.classes = vec![(); 8];
     function.blocks.push(Block { id: 0, insts: vec![], phis: vec![] });
-    function.blocks.push(Block {
-        id: 1,
-        insts: vec![],
-        phis: vec![
-            Phi { result: v(1), incoming: vec![(0, v(0)), (1, v(2))] },
-            Phi { result: v(2), incoming: vec![(0, v(0)), (1, v(1))] },
-        ],
-    });
+    function
+        .blocks
+        .push(
+            Block {
+                id: 1,
+                insts: vec![],
+                phis: vec![
+                    Phi { result: v(1), incoming: vec![(0, v(0)), (1, v(2))] },
+                    Phi { result: v(2), incoming: vec![(0, v(0)), (1, v(1))] },
+                ],
+            },
+        );
     eliminate_phis(&mut function);
     let heads: Vec<_> = function.blocks[1]
         .insts

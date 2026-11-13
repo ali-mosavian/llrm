@@ -14,7 +14,8 @@ fn asm(functions: &str) -> String {
 }
 
 const BY_THREE: &str = "define i32 @by_three(i32 %x) minsize nounwind {\n  %r = mul i32 %x, 3\n  ret i32 %r\n}\n";
-const BY_ARGUMENT: &str = "define i32 @by_argument(i32 %x, i32 %y) minsize nounwind {\n  %r = mul i32 %x, %y\n  ret i32 %r\n}\n";
+const BY_ARGUMENT: &str =
+    "define i32 @by_argument(i32 %x, i32 %y) minsize nounwind {\n  %r = mul i32 %x, %y\n  ret i32 %r\n}\n";
 
 /// `state * 3` at -Os called the 85-byte routine and its 25-byte tail for
 /// 3.34 M clocks where the 82-byte shifts and add take a tenth of that
@@ -47,7 +48,8 @@ fn a_routine_is_priced_from_the_runtime() {
 /// (53 B at -O2); the sum `x * 5` shifted by three is five (43 B).
 #[test]
 fn a_constant_with_factors_of_two_shifts_the_sum_once() {
-    let ir = "define i16 @k_mul40(i8 %x) nounwind {\n  %w = zext i8 %x to i16\n  %r = mul i16 %w, 40\n  ret i16 %r\n}\n";
+    let ir =
+        "define i16 @k_mul40(i8 %x) nounwind {\n  %w = zext i8 %x to i16\n  %r = mul i16 %w, 40\n  ret i16 %r\n}\n";
     let ir = format!("target datalayout = \"{}\"\n{ir}", datalayout());
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     let from = text.find("k_mul40:").unwrap_or_else(|| panic!("{text}"));
@@ -75,7 +77,8 @@ fn a_shift_the_function_has_is_not_made_again_by_a_factored_multiply() {
 /// when only a carry op stands between it and the load.
 #[test]
 fn a_shift_chain_before_an_add_runs_in_a() {
-    let ir = "define i16 @k_mul20(i8 %x) nounwind {\n  %w = zext i8 %x to i16\n  %r = mul i16 %w, 20\n  ret i16 %r\n}\n";
+    let ir =
+        "define i16 @k_mul20(i8 %x) nounwind {\n  %w = zext i8 %x to i16\n  %r = mul i16 %w, 20\n  ret i16 %r\n}\n";
     let ir = format!("target datalayout = \"{}\"\n{ir}", datalayout());
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     let from = text.find("k_mul20:").unwrap_or_else(|| panic!("{text}"));

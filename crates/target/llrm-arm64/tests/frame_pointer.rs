@@ -7,7 +7,10 @@ fn asm(attr: &str) -> String {
     on(Platform::Linux, attr)
 }
 
-fn on(platform: Platform, attr: &str) -> String {
+fn on(
+    platform: Platform,
+    attr: &str,
+) -> String {
     let ir = format!(
         "target datalayout = \"{}\"\n\
 define i32 @leaf(i32 %a) uwtable {attr} {{\n  %x = alloca [4 x i32], align 16\n  store volatile i32 %a, ptr %x\n\

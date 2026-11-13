@@ -35,8 +35,12 @@ pub fn made_and_expected(name: &str) -> (String, String) {
     made_and_expected_at("-O2", name)
 }
 
-/// `made_and_expected` at the level `level`; the expected file is the pin llc's at the same level.
-pub fn made_and_expected_at(level: &str, name: &str) -> (String, String) {
+/// `made_and_expected` at the level `level`; the expected file is the pin llc's
+/// at the same level.
+pub fn made_and_expected_at(
+    level: &str,
+    name: &str,
+) -> (String, String) {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir");
     let made = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
         .args([level, "-S", "-o", "-"])

@@ -621,9 +621,9 @@ define i16 @f() {{
 
 const V4: &str = "<4 x i32> <i32 10, i32 20, i32 30, i32 40>";
 
-/// MIR had no `extractelement`/`insertelement`/`shufflevector`, so no loop could
-/// say a vector value (VECTORS-1). Each reads and writes the lane the pin's
-/// semantics name; an index past the end is poison.
+/// MIR had no `extractelement`/`insertelement`/`shufflevector`, so no loop
+/// could say a vector value (VECTORS-1). Each reads and writes the lane the
+/// pin's semantics name; an index past the end is poison.
 #[test]
 fn lane_operations_read_and_write_the_named_lane() {
     let extract = |index: u32| {
@@ -654,11 +654,17 @@ fn a_shuffle_picks_lanes_across_both_inputs_and_poisons_negative_lanes() {
 #[test]
 fn the_verifier_rejects_a_shuffle_lane_past_both_inputs_and_mismatched_inputs() {
     let verify = |text: &str| crate::verify::verify(&parse::module(text).expect("parses"));
-    let bad_lane = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 8, i32 0, i32 0, i32 0>\n  ret <4 x i32> %s\n}}\n");
+    let bad_lane = format!(
+        "define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 8, i32 0, i32 0, i32 0>\n  ret <4 x i32> %s\n}}\n"
+    );
     assert!(!verify(&bad_lane).is_empty());
-    let mixed = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, <2 x i32> <i32 1, i32 2>, <4 x i32> zeroinitializer\n  ret <4 x i32> %s\n}}\n");
+    let mixed = format!(
+        "define <4 x i32> @f() {{\n  %s = shufflevector {V4}, <2 x i32> <i32 1, i32 2>, <4 x i32> zeroinitializer\n  ret <4 x i32> %s\n}}\n"
+    );
     assert!(parse::module(&mixed).is_err(), "the parser already refuses inputs of two types");
-    let fine = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 7, i32 0, i32 poison, i32 0>\n  ret <4 x i32> %s\n}}\n");
+    let fine = format!(
+        "define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 7, i32 0, i32 poison, i32 0>\n  ret <4 x i32> %s\n}}\n"
+    );
     assert_eq!(verify(&fine), Vec::<String>::new());
 }
 

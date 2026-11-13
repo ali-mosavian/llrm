@@ -108,7 +108,15 @@ fn formal_arguments_are_loaded_from_their_slots() {
         &mut dag,
         entry,
         &[
-            In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None },
+            In {
+                vt: EVT::I32,
+                pointer: false,
+                arg_vt: EVT::I32,
+                split: false,
+                sret: false,
+                ext: Ext::Any,
+                byval: None,
+            },
             In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false, ext: Ext::Any, byval: None },
         ],
         &mut fixed,

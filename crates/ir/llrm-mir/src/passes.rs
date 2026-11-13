@@ -1783,8 +1783,9 @@ thread_local! {
     static CHECKING_MODULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Runs `body` with `LLRM_CHECK_MODULES` on for this thread, for a test of a pass that must tell the analyses what it changed
-/// (the variable is read once per process, so a test cannot set it).
+/// Runs `body` with `LLRM_CHECK_MODULES` on for this thread, for a test of a
+/// pass that must tell the analyses what it changed (the variable is read once
+/// per process, so a test cannot set it).
 pub fn with_module_check<R>(body: impl FnOnce() -> R) -> R {
     let before = CHECKING_MODULES.with(|on| on.replace(true));
     let done = body();
@@ -1797,8 +1798,9 @@ fn check_modules() -> bool {
     CHECKING_MODULES.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
-/// The other bodies as they stand now, for `LLRM_CHECK_CAPTURES` to read a callee in. Every place that runs a pass on a function
-/// takes it first: one taken earlier holds bodies the later edits have changed.
+/// The other bodies as they stand now, for `LLRM_CHECK_CAPTURES` to read a
+/// callee in. Every place that runs a pass on a function takes it first: one
+/// taken earlier holds bodies the later edits have changed.
 pub fn snapshot_for_audit(module: &Module) {
     if check_captures() {
         MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
@@ -2784,7 +2786,8 @@ impl ModuleAnalyses {
     /// The result of `M` a pass dropped, handed over to the run that brings it
     /// up to date: not kept, so that it is the only holder where nothing else
     /// holds it. A run that does not take it leaves it to be compared. None
-    /// for a run afresh (`LLRM_CHECK_MODULES`), which keeps nothing of the last.
+    /// for a run afresh (`LLRM_CHECK_MODULES`), which keeps nothing of the
+    /// last.
     pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
         if self.scratch {
             return None;
@@ -2904,7 +2907,8 @@ impl ModuleAnalyses {
         result
     }
 
-    /// Whether `result` is what `kind` gives worked out afresh; else what differs, where the analysis can say.
+    /// Whether `result` is what `kind` gives worked out afresh; else what
+    /// differs, where the analysis can say.
     fn agrees_afresh(
         &mut self,
         kind: Kind,
@@ -2917,7 +2921,9 @@ impl ModuleAnalyses {
         if (kind.agree)(result, &*again) {
             return Ok(());
         }
-        let (Some(kept), Some(afresh)) = (result.downcast_ref::<Vec<GlobalValue>>(), again.downcast_ref::<Vec<GlobalValue>>()) else {
+        let (Some(kept), Some(afresh)) =
+            (result.downcast_ref::<Vec<GlobalValue>>(), again.downcast_ref::<Vec<GlobalValue>>())
+        else {
             return Err(String::new());
         };
         let Some(at) = kept.iter().zip(afresh).position(|(a, b)| a != b) else { return Err(String::new()) };
@@ -2925,7 +2931,8 @@ impl ModuleAnalyses {
         Err(format!("; @{name} (id {at}) kept {:.300?} afresh {:.300?}", kept[at], afresh[at]))
     }
 
-    /// `agrees_afresh` for a test: `M` run twice as `LLRM_CHECK_MODULES` runs it.
+    /// `agrees_afresh` for a test: `M` run twice as `LLRM_CHECK_MODULES` runs
+    /// it.
     #[cfg(test)]
     pub(crate) fn run_agrees_afresh<M: ModuleAnalysis>(
         &mut self,

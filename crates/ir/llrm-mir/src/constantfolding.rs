@@ -2066,8 +2066,11 @@ pub fn constant_fold_integer_cast(
 enum Folded {
     Id(IntrinsicId),
     IsConstant,
-    /// `llvm.experimental.fp{to}{s,u}i.checked` (`Intrinsic::FpToIntChecked`): MIR's own.
-    FpToIntChecked { signed: bool },
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (`Intrinsic::FpToIntChecked`):
+    /// MIR's own.
+    FpToIntChecked {
+        signed: bool,
+    },
 }
 
 fn folded_intrinsic(name: &str) -> Option<Folded> {
@@ -2394,9 +2397,9 @@ fn exact_rint(
     (-limit <= value && value < limit).then(|| int(context, width, (value as i128 as u128) & mask(width)))
 }
 
-/// `llvm.experimental.fp{to}{s,u}i.checked` of a float constant: the integer toward zero and
-/// `true`, or an unspecified value (poison) and `false` where the float is a
-/// NaN, an infinity or past the integer's range.
+/// `llvm.experimental.fp{to}{s,u}i.checked` of a float constant: the integer
+/// toward zero and `true`, or an unspecified value (poison) and `false` where
+/// the float is a NaN, an infinity or past the integer's range.
 fn fold_fp_to_int_checked(
     context: &Context,
     ty: TypeId,
@@ -2415,8 +2418,11 @@ fn fold_fp_to_int_checked(
         return None;
     }
     let value = value.trunc();
-    let (low, high) =
-        if signed { (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1)) } else { (0.0, 2f64.powi(width as i32)) };
+    let (low, high) = if signed {
+        (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
+    } else {
+        (0.0, 2f64.powi(width as i32))
+    };
     let members = if value.is_finite() && low <= value && value < high {
         vec![int(context, width, (value as i128 as u128) & mask(width)), int(context, 1, 1)]
     } else {

@@ -62,8 +62,8 @@ fn the_frame_is_restored_before_the_branch() {
 }
 
 /// A `byval` argument is one of the gate's refusals
-/// (`isEligibleForTailCallOptimization`): it stays `bl`. A convention the pin has
-/// no table for is a compile error (`dag_refusal_is_an_error.rs`). The
+/// (`isEligibleForTailCallOptimization`): it stays `bl`. A convention the pin
+/// has no table for is a compile error (`dag_refusal_is_an_error.rs`). The
 /// caller's own hidden result pointer, passed on in `x8`, is not one: the pin's
 /// `llc` makes `b _fill` of `sret_callee` (`x8` is no stack argument).
 #[test]

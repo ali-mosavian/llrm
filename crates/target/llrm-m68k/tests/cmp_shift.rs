@@ -26,7 +26,8 @@ fn asm(
     reuse: bool,
 ) -> String {
     let module = llrm_mir::parse::module(ir).expect("parses");
-    text_with(&module, "k", cpu, Options { reuse_shift_flags: reuse, size: true, ..Options::default() }).expect("compiles")
+    text_with(&module, "k", cpu, Options { reuse_shift_flags: reuse, size: true, ..Options::default() })
+        .expect("compiles")
 }
 
 #[test]

@@ -572,7 +572,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
-        cold_frequency: None,
+            cold_frequency: None,
             entry_weight: None,
             planned: None,
             tti: None,
@@ -619,7 +619,7 @@ fn an_interposable_callee_is_not_inlined() {
             callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
-        cold_frequency: None,
+            cold_frequency: None,
             entry_weight: None,
             planned: None,
             tti: None,
@@ -773,7 +773,8 @@ fn test_a_site_after_a_checked_loop_nest_is_not_cold_for_the_checks_sake() {
              a{a}.fail:\n  call void @trap()\n  unreachable\n\na{a}.out:\n  br label %{onward}\n\n"
         );
     }
-    text += "call:\n  %v = call i16 @leaf(i16 %x)\n  ret i16 %v\n}\n\n!0 = !{!\"branch_weights\", i32 1048575, i32 1}\n";
+    text +=
+        "call:\n  %v = call i16 @leaf(i16 %x)\n  ret i16 %v\n}\n\n!0 = !{!\"branch_weights\", i32 1048575, i32 1}\n";
     let module = parsed(&text);
     let main = module.globals.iter().position(|one| one.name.as_deref() == Some("main")).unwrap();
     let mut decided = Vec::new();
@@ -846,8 +847,8 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
             llrm_mir::opcode::Opcode::Call(_)
         ))
         .collect();
-    let one =
-        crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies, None).expect("leaf has a body");
+    let one = crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies, None)
+        .expect("leaf has a body");
     let mut listed = Vec::new();
     crate::inlinecost::sites(
         &module,
@@ -1008,7 +1009,7 @@ b0:
             callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
-        cold_frequency: None,
+            cold_frequency: None,
             entry_weight: None,
             planned: None,
             tti: None,
@@ -1049,7 +1050,8 @@ b0:
     assert_eq!(cost, -15025, "the pin prices this callee at -15025");
 }
 
-/// A target that states only its `inline_policy`, and whether its rate binds at -O1.
+/// A target that states only its `inline_policy`, and whether its rate binds at
+/// -O1.
 struct PolicyOnly(llrm_mir::tti::InlinePolicy, Option<bool>, bool);
 
 impl llrm_mir::tti::Tti for PolicyOnly {
@@ -1147,8 +1149,12 @@ impl llrm_mir::tti::Tti for PolicyOnly {
         rhs: llrm_mir::tti::OperandInfo,
     ) -> llrm_mir::tti::Cost {
         use llrm_mir::tti::ArithOp;
-        // a shift by a variable amount is a library call (z80 `__ashlhi3`), by a constant a few instructions
-        if cost == llrm_mir::tti::CostKind::CodeSize && matches!(op, ArithOp::Shl | ArithOp::LShr | ArithOp::AShr) && !rhs.constant {
+        // a shift by a variable amount is a library call (z80 `__ashlhi3`), by
+        // a constant a few instructions
+        if cost == llrm_mir::tti::CostKind::CodeSize
+            && matches!(op, ArithOp::Shl | ArithOp::LShr | ArithOp::AShr)
+            && !rhs.constant
+        {
             return llrm_mir::tti::Cost::of(12);
         }
         llrm_mir::tti::Basic.arithmetic_cost(op, ty, cost, lhs, rhs)
@@ -1156,15 +1162,16 @@ impl llrm_mir::tti::Tti for PolicyOnly {
 }
 
 /// The inliner reads the target's policy and no other inline hook: a target
-/// that returns a rate from `inline_policy` alone has a speed caller's inline of
-/// a compare loop with two sites refused, and `InlinePolicy::PIN` leaves it to
-/// the pin.
+/// that returns a rate from `inline_policy` alone has a speed caller's inline
+/// of a compare loop with two sites refused, and `InlinePolicy::PIN` leaves it
+/// to the pin.
 #[test]
 fn the_inliner_reads_the_inline_policy_of_the_target() {
     use llrm_mir::tti::{InlinePolicy, Tti};
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
     let pin = PolicyOnly(InlinePolicy::PIN, Some(true), false);
-    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, Some(true), false);
+    let priced =
+        PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, Some(true), false);
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&pin));
     assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced));
@@ -1190,14 +1197,16 @@ fn a_rate_that_binds_from_o2_leaves_o1_to_the_pin() {
     assert!(!verdict(&always, true), "a rate that binds at -O1 still does");
 }
 
-/// m32 -O1 moved (x_jpeg_fixed 5647 -> 6028 B) when a target that stated only a rate inherited the default
-/// "the rate binds at -O1": -O1 is strict, so a rate is opt-in there.
+/// m32 -O1 moved (x_jpeg_fixed 5647 -> 6028 B) when a target that stated only a
+/// rate inherited the default "the rate binds at -O1": -O1 is strict, so a rate
+/// is opt-in there.
 #[test]
 fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
     use llrm_mir::tti::InlinePolicy;
     let rate_only = PolicyOnly(InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN }, None, false);
     let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
-    let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&rate_only), params, (2, false));
+    let (cost, threshold) =
+        priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&rate_only), params, (2, false));
     assert!(cost < threshold, "the rate refused a copy at -O1");
 }
 
@@ -1249,8 +1258,9 @@ b0:
 }
 ";
 
-/// z80 loop_fusion -O3: `same(10)` was no longer copied into `main` at 3 T a byte, and the loops it holds no longer
-/// met their constant trip count (39,020 T became 299,430 T). A copy that gives a loop a constant bound is exempt
+/// z80 loop_fusion -O3: `same(10)` was no longer copied into `main` at 3 T a
+/// byte, and the loops it holds no longer met their constant trip count (39,020
+/// T became 299,430 T). A copy that gives a loop a constant bound is exempt
 /// from the rate, where the target says so; an unknown bound is not.
 #[test]
 fn a_constant_loop_bound_exempts_a_copy_from_the_rate_where_the_target_hints_it() {
@@ -1273,7 +1283,8 @@ fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
     use llrm_mir::tti::{InlinePolicy, SizeRule, Tti};
     assert_eq!(llrm_mir::tti::Basic.inline_policy(), InlinePolicy::PIN);
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
-    // At -Os an inline must not grow the code (#8228): the size rule is the hooks'.
+    // At -Os an inline must not grow the code (#8228): the size rule is the
+    // hooks'.
     let by_size = SizeRule {
         min_sites: arm.opt_size_inline_guard_min_sites(),
         yields_to_negative_cost: arm.opt_size_inline_guard_yields_to_negative_cost(),
@@ -1325,9 +1336,11 @@ b0:
 }
 ";
 
-/// z80 `rotate_small` -O1 576 -> 922 B once `fshl` had a price: the size rule priced `rotl16(x, 5)` with the callee's
-/// variable amount (two library calls, 27 B against a 10 B call) and kept it out of line with `rotl16(x, n)`. The copy
-/// at a constant amount is three instructions; the rule counts it so (`isGEPFree` prices with the site's constants).
+/// z80 `rotate_small` -O1 576 -> 922 B once `fshl` had a price: the size rule
+/// priced `rotl16(x, 5)` with the callee's variable amount (two library calls,
+/// 27 B against a 10 B call) and kept it out of line with `rotl16(x, n)`. The
+/// copy at a constant amount is three instructions; the rule counts it so
+/// (`isGEPFree` prices with the site's constants).
 #[test]
 fn the_size_rule_prices_a_callee_with_the_constants_of_the_site() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
@@ -1341,10 +1354,12 @@ fn the_size_rule_prices_a_callee_with_the_constants_of_the_site() {
     assert!(!inlined(1), "a variable amount keeps the call");
 }
 
-/// A float taken to an integer through `llvm.experimental.fptosi.checked` was charged as a call (the `llrm.`-named
-/// first version: 25 and its arguments), so `clamp` in bench/jpeg_single.nib stayed a call in the hot loop: m16 -O2
-/// +7.5% clocks. The intrinsic is lowered where it is called, as `llvm.lrint` is: it costs what the plain `fptosi`
-/// it replaces cost, within an instruction or two, not a `CALL_PENALTY` more.
+/// A float taken to an integer through `llvm.experimental.fptosi.checked` was
+/// charged as a call (the `llrm.`-named first version: 25 and its arguments),
+/// so `clamp` in bench/jpeg_single.nib stayed a call in the hot loop: m16 -O2
+/// +7.5% clocks. The intrinsic is lowered where it is called, as `llvm.lrint`
+/// is: it costs what the plain `fptosi` it replaces cost, within an instruction
+/// or two, not a `CALL_PENALTY` more.
 #[test]
 fn test_a_checked_float_to_integer_is_not_charged_as_a_call() {
     let price = |body: &str, declaration: &str| {
@@ -1385,7 +1400,8 @@ fn test_the_speed_guard_prices_a_call_without_the_arguments_nothing_reads() {
         let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&arm), params.clone(), (2, true));
         cost >= threshold
     };
-    // A body of `ops` instructions: the parameter that is unread flips no verdict at any size.
+    // A body of `ops` instructions: the parameter that is unread flips no
+    // verdict at any size.
     for ops in 2..16 {
         let mut body = String::from("  %v0 = load i32, ptr @g\n");
         for at in 1..ops {
@@ -1404,7 +1420,8 @@ define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee
     }
 }
 
-/// `PolicyOnly` with a byte-priced call sequence (8 B and 4 B an argument), as m68k and 6502 state theirs.
+/// `PolicyOnly` with a byte-priced call sequence (8 B and 4 B an argument), as
+/// m68k and 6502 state theirs.
 struct Sequenced(PolicyOnly);
 
 impl llrm_mir::tti::Tti for Sequenced {
@@ -1417,38 +1434,80 @@ impl llrm_mir::tti::Tti for Sequenced {
         shape: &llrm_mir::tti::CallShape,
         kind: llrm_mir::tti::CostKind,
     ) -> Option<llrm_mir::tti::Cost> {
-        (kind == llrm_mir::tti::CostKind::CodeSize).then(|| llrm_mir::tti::Cost::of(8 + 4 * shape.arguments.len() as i64))
+        (kind == llrm_mir::tti::CostKind::CodeSize)
+            .then(|| llrm_mir::tti::Cost::of(8 + 4 * shape.arguments.len() as i64))
     }
 
-    fn cmp_sel_cost(&self, kind: llrm_mir::tti::CmpSel, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+    fn cmp_sel_cost(
+        &self,
+        kind: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
         self.0.cmp_sel_cost(kind, ty, cost)
     }
 
-    fn memory_op_cost(&self, op: llrm_mir::tti::MemoryOp, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind, volatile: bool) -> llrm_mir::tti::Cost {
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        volatile: bool,
+    ) -> llrm_mir::tti::Cost {
         self.0.memory_op_cost(op, ty, cost, volatile)
     }
 
-    fn cf_instr_cost(&self, phi: bool, kind: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
         self.0.cf_instr_cost(phi, kind)
     }
 
-    fn int_imm_cost(&self, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+    fn int_imm_cost(
+        &self,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
         self.0.int_imm_cost(value, bits)
     }
 
-    fn int_imm_cost_inst(&self, user: llrm_mir::tti::ImmUser, index: u32, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+    fn int_imm_cost_inst(
+        &self,
+        user: llrm_mir::tti::ImmUser,
+        index: u32,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
         self.0.int_imm_cost_inst(user, index, value, bits)
     }
 
-    fn is_truncate_free(&self, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty) -> bool {
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
         self.0.is_truncate_free(from, to)
     }
 
-    fn is_legal_addressing_mode(&self, global: bool, offset: i64, base: bool, scale: i64) -> bool {
+    fn is_legal_addressing_mode(
+        &self,
+        global: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
         self.0.is_legal_addressing_mode(global, offset, base, scale)
     }
 
-    fn cast_cost(&self, kind: llrm_mir::tti::CastKind, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+    fn cast_cost(
+        &self,
+        kind: llrm_mir::tti::CastKind,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
         self.0.cast_cost(kind, from, to, cost)
     }
 
@@ -1464,17 +1523,21 @@ impl llrm_mir::tti::Tti for Sequenced {
     }
 }
 
-/// m68k x_idioms 68000 -Os: `sumlong(L, 40)` twice kept its out-of-line copy until `deadargelim` ran after the walk,
-/// then its unread `n` was priced as an argument push (call 18 B against 8), the -Os guard saw the inline as no growth
-/// and the program grew +10 B. A target with a call sequence must price the call without the unread argument.
+/// m68k x_idioms 68000 -Os: `sumlong(L, 40)` twice kept its out-of-line copy
+/// until `deadargelim` ran after the walk, then its unread `n` was priced as an
+/// argument push (call 18 B against 8), the -Os guard saw the inline as no
+/// growth and the program grew +10 B. A target with a call sequence must price
+/// the call without the unread argument.
 #[test]
 fn test_the_size_guard_prices_a_call_sequence_without_the_arguments_nothing_reads() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
     let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false }), by_rate: 0 };
     let tti = Sequenced(PolicyOnly(policy, None, false));
-    let params = InlineParams { compute_full_inline_cost: true, opt_size_threshold: 100_000, ..InlineParams::from_level(2) };
+    let params =
+        InlineParams { compute_full_inline_cost: true, opt_size_threshold: 100_000, ..InlineParams::from_level(2) };
     let held = |text: &str| {
-        let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&tti), params.clone(), (2, true));
+        let (cost, threshold) =
+            priced_params(text, 0, false, CallerSize::OptSize, Some(&tti), params.clone(), (2, true));
         cost >= threshold
     };
     for ops in 2..48 {

@@ -565,7 +565,10 @@ fn in_float_file(ty: EVT) -> bool {
 
 /// A value of 128 bits in a float register (`q`): `F128` and the vectors.
 fn is_quad(ty: EVT) -> bool {
-    matches!(ty, EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64))
+    matches!(
+        ty,
+        EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64)
+    )
 }
 
 /// `DUPv8i16gpr`, `MOVIv2d_ns`, `MOVIv8i16`, `MVNIv4s_msl`: a vector made from
@@ -635,7 +638,9 @@ fn vector_inst(
     // lane (the float splat's `dup v.4s, v.s[0]`).
     if let Some(lanes) = name.strip_prefix("DUPv").and_then(|rest| rest.strip_suffix("lane")).and_then(lanes_of) {
         return Some(match operands {
-            [Operand::Fpr(rn), Operand::Imm(index)] => Ok(Inst::VectorDupLane { lanes, rd, rn: *rn, index: *index as u8 }),
+            [Operand::Fpr(rn), Operand::Imm(index)] => {
+                Ok(Inst::VectorDupLane { lanes, rd, rn: *rn, index: *index as u8 })
+            }
             _ => wrong(),
         });
     }

@@ -12,7 +12,11 @@ fn mul_by(c: i32) -> String {
     )
 }
 
-fn compile(cpu: &str, level: Level, c: i32) -> String {
+fn compile(
+    cpu: &str,
+    level: Level,
+    c: i32,
+) -> String {
     assembly(&mul_by(c), cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 
@@ -24,7 +28,11 @@ define i32 @f(ptr %a, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  %i = phi i3
     )
 }
 
-fn compile_loop(cpu: &str, level: Level, c: i32) -> String {
+fn compile_loop(
+    cpu: &str,
+    level: Level,
+    c: i32,
+) -> String {
     assembly(&loop_mul_by(c), cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 

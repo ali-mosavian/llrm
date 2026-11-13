@@ -30,9 +30,11 @@ fn a_lane_nothing_reads_is_not_moved() {
     assert!(!body.contains("pha") && !body.contains("ldx"), "{body}");
 }
 
-/// `sum + zext(select(b, 2, 0) | zext(bool))` (`logical_value`) widened the byte-sized
-/// `or` to a word first, then added the high word with `adc rc7`: 103 B at -O2 against
-/// 85. The high bits of the `or` are known zero, so the `or` runs on bytes and the
+/// `sum + zext(select(b, 2, 0) | zext(bool))` (`logical_value`) widened the
+/// byte-sized `or` to a word first, then added the high word with `adc rc7`:
+/// 103 B at -O2 against
+/// 85. The high bits of the `or` are known zero, so the `or` runs on bytes and
+///     the
 /// three upper bytes add `#0`.
 #[test]
 fn a_value_known_to_fit_a_byte_adds_zero_to_the_upper_bytes() {
@@ -44,9 +46,9 @@ fn a_value_known_to_fit_a_byte_adds_zero_to_the_upper_bytes() {
     assert_eq!(body.matches("adc #0").count(), 3, "{body}");
 }
 
-/// `zext(and(x, 255))` compiled forever: sizing an `and` by its known-zero bits turned
-/// it into `zext(and8(trunc x, 255))`, which folds back into the `and` and was narrowed
-/// again (`compound_assignment_types` at -O1 never finished).
+/// `zext(and(x, 255))` compiled forever: sizing an `and` by its known-zero bits
+/// turned it into `zext(and8(trunc x, 255))`, which folds back into the `and`
+/// and was narrowed again (`compound_assignment_types` at -O1 never finished).
 #[test]
 fn a_masked_word_widened_to_a_long_compiles() {
     let ir = "define i32 @f(i16 %t, i32 %a) nounwind {\n  %m = and i16 %t, 255\n  %z = zext nneg i16 %m to i32\n  %r = add nsw i32 %a, %z\n  ret i32 %r\n}\n";

@@ -64,7 +64,8 @@ fn a_function_with_a_multiply_alternative_resolves_its_carry_ops_per_form() {
         price_emitted(&lines, true)
     };
     let (churn, hold) = (size("churn"), size("hold"));
-    // `hold` is 453 B since a doubled long is one `SHL32`: its inline form (`x * 3` as `add hl,hl; rl c; rl b`) is
-    // cheap enough for the O1 regret rule (Z80-SHL32-WORSE, call_keeps O1 +28 B / -789 T)
+    // `hold` is 453 B since a doubled long is one `SHL32`: its inline form (`x
+    // * 3` as `add hl,hl; rl c; rl b`) is cheap enough for the O1 regret
+    // rule (Z80-SHL32-WORSE, call_keeps O1 +28 B / -789 T)
     assert!(churn.0 <= 888 && hold.0 <= 453, "churn {churn:?} hold {hold:?}, the all-calls forms are 888 B and 434 B");
 }

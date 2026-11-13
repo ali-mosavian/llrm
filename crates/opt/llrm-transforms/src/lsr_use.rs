@@ -718,7 +718,8 @@ impl Cost {
             if lu.kind == Kind::Address {
                 for fixup in &lu.fixups {
                     let offset = fixup.offset.add_unsigned(f.base_offset).0;
-                    self.size_bytes += m.displacement(offset, f.has_global(), matches!(f.symbol, Some(Symbol::Frame(_))));
+                    self.size_bytes +=
+                        m.displacement(offset, f.has_global(), matches!(f.symbol, Some(Symbol::Frame(_))));
                 }
             }
             // An add or lea for each register not folded, and its immediate.
@@ -948,7 +949,8 @@ impl Cost {
             {
                 // The step added each trip.
                 let step = r.se.operands(reg)[1].scev;
-                let step_bytes = r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
+                let step_bytes =
+                    r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
                 self.bytes += m.local_get + step_bytes + m.op + m.local_set;
             }
 
@@ -1002,11 +1004,12 @@ impl Cost {
             // constant start the model prices by value is counted already.
             let priced_start = m.constant_start.is_some()
                 && r.se.match_affine_add_rec(reg).is_some_and(|(start, _, _)| r.se.as_constant(start).is_some());
-            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew without
-            // it checked): not for an integer recurrence the loop as
-            // written derives from its counter by one instruction each trip
-            // (`i << 4`, `i - 192`): it is no register stepped from a start,
-            // so there is nothing to set up. The pin counts it a recurrence
+            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew
+            // without it checked): not for an integer recurrence
+            // the loop as written derives from its counter by one
+            // instruction each trip (`i << 4`, `i - 192`): it is no
+            // register stepped from a start, so there is nothing to
+            // set up. The pin counts it a recurrence
             // like any other; a byte model prices the two apart.
             let derived = m.derived_setup_free
                 && r.as_written
@@ -1141,7 +1144,13 @@ fn leb_len(v: i64) -> u32 {
 
 /// What the code in the preheader that makes `reg` is in bytes, as
 /// `setup_cost` walks it.
-fn setup_bytes(se: &ScalarEvolution, cx: &Cx, m: &LsrBytes, reg: Scev, depth: u32) -> u32 {
+fn setup_bytes(
+    se: &ScalarEvolution,
+    cx: &Cx,
+    m: &LsrBytes,
+    reg: Scev,
+    depth: u32,
+) -> u32 {
     match se.scev_type(reg) {
         Type::Unknown => m.local_get,
         Type::Constant => m.constant + leb_len(se.as_constant(reg).expect("a constant").sext_value() as i64),
@@ -1152,8 +1161,7 @@ fn setup_bytes(se: &ScalarEvolution, cx: &Cx, m: &LsrBytes, reg: Scev, depth: u3
         }
         Type::Add | Type::Mul => {
             let ops = se.operands(reg);
-            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>()
-                + (ops.len() as u32 - 1) * m.op
+            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>() + (ops.len() as u32 - 1) * m.op
         }
         _ => 0,
     }

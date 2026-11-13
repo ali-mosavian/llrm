@@ -708,11 +708,15 @@ impl GvnPass<'_> {
             || changed
     }
 
-    /// DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01): `optsize`/`minsize` on a target
-    /// that says so (`Tti::load_pre_off_at_size`).
+    /// DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01):
+    /// `optsize`/`minsize` on a target that says so
+    /// (`Tti::load_pre_off_at_size`).
     fn load_pre_off_for_size(&self) -> bool {
         self.function.attrs.iter().any(|attr| {
-            matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize")
+            matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            )
         }) && crate::looprotate::target_tti(self.outer.target()).load_pre_off_at_size()
     }
 }

@@ -1,5 +1,6 @@
-//! An `alloca` asking more than the frames keep (one byte) is clamped, one asking more than the Z80 accepts is
-//! refused (`Machine::kept_stack_align`, `max_alloca_align`).
+//! An `alloca` asking more than the frames keep (one byte) is clamped, one
+//! asking more than the Z80 accepts is refused (`Machine::kept_stack_align`,
+//! `max_alloca_align`).
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
@@ -15,8 +16,9 @@ fn compiled(align: u32) -> Result<String, String> {
     text(&ir, "f", 0, &Request::new(Level::O2))
 }
 
-/// `alloca double, align 8` was believed: `ptr & 7` folded to the constant 0 while SP moves a byte at a time
-/// (over_aligned_local_after_even_pushes passed on that fold, not on an aligned frame).
+/// `alloca double, align 8` was believed: `ptr & 7` folded to the constant 0
+/// while SP moves a byte at a time (over_aligned_local_after_even_pushes passed
+/// on that fold, not on an aligned frame).
 #[test]
 fn an_object_up_to_the_accepted_alignment_is_not_assumed_aligned() {
     let asm = compiled(8).expect("compiles");

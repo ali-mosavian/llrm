@@ -96,9 +96,10 @@ fn test_a_counter_is_not_widened_past_the_pointer_width_on_the_16_bit_target() {
     assert!(!after.contains("phi i32"), "{after}");
 }
 
-/// A 32-bit pointer with a legal `i64` (wasm32's `n32:64`) widens an `i32` counter that a `zext`
-/// takes to `i64`: the pin does, and D18's pointer-width bound held it back. shift_int64_variable
-/// -O1 and -Os kept an `i32` counter and a second `i64` one for the shift amount: +12 B.
+/// A 32-bit pointer with a legal `i64` (wasm32's `n32:64`) widens an `i32`
+/// counter that a `zext` takes to `i64`: the pin does, and D18's pointer-width
+/// bound held it back. shift_int64_variable -O1 and -Os kept an `i32` counter
+/// and a second `i64` one for the shift amount: +12 B.
 #[test]
 fn test_a_counter_zero_extended_to_i64_is_widened_with_a_32_bit_pointer() {
     let text = "target datalayout = \"e-p:32:32-i64:64-n32:64\"

@@ -1,12 +1,14 @@
-//! `va_start`, `va_arg` and a variadic call: the unnamed arguments go on the soft stack after the named ones, and
-//! `va_start` is the address of the first. Before, any variadic function was `CannotSelect("VAStart")` (2026-11-11).
+//! `va_start`, `va_arg` and a variadic call: the unnamed arguments go on the
+//! soft stack after the named ones, and `va_start` is the address of the first.
+//! Before, any variadic function was `CannotSelect("VAStart")` (2026-11-11).
 
 mod common;
 
 use common::pipeline::datalayout;
 use llrm_6502::driver::{Level, Request, assembly};
 
-/// `ir` compiled, run on sim65 from `main` (raw ca65 that calls `probe`), and the exit code.
+/// `ir` compiled, run on sim65 from `main` (raw ca65 that calls `probe`), and
+/// the exit code.
 fn exit_code(
     name: &str,
     ir: &str,
@@ -79,7 +81,8 @@ define i16 @probe() {{
     }
 }
 
-/// `va_copy` copies the list pointer: reading the copy does not move the original.
+/// `va_copy` copies the list pointer: reading the copy does not move the
+/// original.
 #[test]
 fn a_copied_list_reads_the_same_arguments_again() {
     let ir = format!(

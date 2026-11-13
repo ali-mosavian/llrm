@@ -124,7 +124,8 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
     let args = lower_formal_arguments(
         &mut dag,
         entry,
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None }; 4],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None };
+            4],
         &mut fixed,
         &mut |_| 4096,
     )
@@ -169,7 +170,16 @@ fn a_returned_byte_is_copied_to_a() {
     let ret = lower_return(
         &mut dag,
         entry,
-        &[Out { value: v, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false, sret: false, byval: None }],
+        &[Out {
+            value: v,
+            ext: Ext::Any,
+            pointer: false,
+            arg_vt: EVT::I8,
+            split: false,
+            variadic: false,
+            sret: false,
+            byval: None,
+        }],
     )
     .unwrap();
 
@@ -180,8 +190,8 @@ fn a_returned_byte_is_copied_to_a() {
 }
 
 /// A call's `RegisterMask` names the flags register `P`: the scheduler read an
-/// empty mask, so flags live across a call were never recomputed after it (arm64
-/// fib10 gave 49 for 55 the same way).
+/// empty mask, so flags live across a call were never recomputed after it
+/// (arm64 fib10 gave 49 for 55 the same way).
 #[test]
 fn a_call_register_mask_names_the_flags() {
     use llrm_6502::dagisel::generated::ids::reg::P;

@@ -133,8 +133,8 @@ pub struct Target {
     /// gcc's 16k).
     #[serde(default)]
     pub unroll_at_o1: bool,
-    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04; the m32
-    /// rows extend it, owner x87, exit 2026-11-27):
+    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04; the
+    /// m32 rows extend it, owner x87, exit 2026-11-27):
     /// `-fthread-jumps` is the default at `-O1`. The pin's -O1 pipeline has no
     /// `JumpThreadingPass` (PassBuilderPipelines.cpp#L495), so clang's IR keeps
     /// a latch branch on a compare tested one block up.

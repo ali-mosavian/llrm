@@ -1137,9 +1137,11 @@ fn an_and_with_a_sum_of_a_not_stays_where_the_target_has_no_and_not() {
     assert_eq!(dag.opcode(dag.operand(dag.get_root(), 1)), ISD::Add);
 }
 
-/// `select_cc` on a compare of two constants made `get_setcc` fold the compare to a constant, and `visit_setcc` read
-/// the operands of that constant: `tests/fixtures/c/bitfield` panicked (`index out of bounds`, `dag.rs:1202`) at O1 on
-/// arm64. The pin's `SimplifySelectCC` takes the arm the constant compare names.
+/// `select_cc` on a compare of two constants made `get_setcc` fold the compare
+/// to a constant, and `visit_setcc` read the operands of that constant:
+/// `tests/fixtures/c/bitfield` panicked (`index out of bounds`, `dag.rs:1202`)
+/// at O1 on arm64. The pin's `SimplifySelectCC` takes the arm the constant
+/// compare names.
 #[test]
 fn a_select_cc_on_a_constant_compare_is_the_arm_it_names() {
     let mut dag = dag();

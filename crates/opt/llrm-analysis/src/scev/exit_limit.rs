@@ -17,12 +17,12 @@
 //! `(-1 + %n)` backedges.
 
 use llrm_mir::apint::Word;
-use super::ConstantRange;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
 
+use super::ConstantRange;
 use super::expr::{Kind, Scev, Use, flags};
 use super::trip::ExitLimit;
 use super::{Cx, ScalarEvolution};
@@ -297,7 +297,12 @@ impl ScalarEvolution {
             IntrinsicId::UmulWithOverflow => (llrm_mir::opcode::BinaryOp::Mul, 1),
             _ => return None,
         };
-        let nwr = ConstantRange::make_exact_no_wrap_region(op, c_width, llrm_mir::apint::U256::from_u128(c_bits), no_wrap_kind);
+        let nwr = ConstantRange::make_exact_no_wrap_region(
+            op,
+            c_width,
+            llrm_mir::apint::U256::from_u128(c_bits),
+            no_wrap_kind,
+        );
         let (mut pred, new_rhs_c, offset) = nwr.get_equivalent_icmp_offset();
         if !exit_if_true {
             pred = pred.inverse();

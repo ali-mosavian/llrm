@@ -881,7 +881,8 @@ impl Plan {
                     let array = context.types.intern(Type::Array { element: *cell, count: cells.len() as u64 });
                     let initial =
                         context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(cells.clone()) });
-                    // As the pin: the alignment of one cell, as only one cell is loaded.
+                    // As the pin: the alignment of one cell, as only one cell
+                    // is loaded.
                     let align = Some(spec.layout.pref_align(&context.types, *cell));
                     let table = declared.table("switch.table", array, initial, UnnamedAddr::Global, align);
                     let address = context.types.ptr(0);

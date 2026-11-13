@@ -209,8 +209,9 @@ impl Tti for Wasm {
     /// larger, +45 189 B; 2 smaller, -36 B; above the pin 5 -> 8 (div8_os,
     /// pattern_fill, shrink_wrapped_frame, shrink_wrapped_saves at -O1;
     /// memcpy_libcall -Os). Closes byvalue_struct_address (49 -> 31 B).
-    /// Next step, not "off": a trial-priced inline (`walk.rs` sized()) that counts
-    /// the dead store after main folds. Acceptance: those 8 cells at or below the pin.
+    /// Next step, not "off": a trial-priced inline (`walk.rs` sized()) that
+    /// counts the dead store after main folds. Acceptance: those 8 cells at
+    /// or below the pin.
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
     }
@@ -222,27 +223,31 @@ impl Tti for Wasm {
         true
     }
 
-    /// A callee the -O1 size bound refused is tried inline as at -Os, the copy staying where the
-    /// caller comes out smaller: the pin's `inline_cost` shrinks a caller whose inlined copy
-    /// folds, which the bound's static size cannot see (`call_keeps`, `switch_header_marker_loop`).
+    /// A callee the -O1 size bound refused is tried inline as at -Os, the copy
+    /// staying where the caller comes out smaller: the pin's `inline_cost`
+    /// shrinks a caller whose inlined copy folds, which the bound's static
+    /// size cannot see (`call_keeps`, `switch_header_marker_loop`).
     fn inline_trials_at_o1(&self) -> bool {
         true
     }
 
-    /// The -O1 trial also inlines the sites its splice brings (#7700, m32 -Os): the pin inlines
-    /// callee-first at threshold 337 where the size bound clamps it, so `churn` into `hold` and
-    /// `hold` into `main` meet the constants together (`call_keeps` -O1: 263 B against the pin's 50).
+    /// The -O1 trial also inlines the sites its splice brings (#7700, m32 -Os):
+    /// the pin inlines callee-first at threshold 337 where the size bound
+    /// clamps it, so `churn` into `hold` and `hold` into `main` meet the
+    /// constants together (`call_keeps` -O1: 263 B against the pin's 50).
     fn opt_size_inline_chain_trial(&self) -> bool {
         true
     }
 
-    /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines every site on its cost
-    /// and sinks the common call after (switch_header_marker_loop -Os: three `report(const)`).
+    /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines
+    /// every site on its cost and sinks the common call after
+    /// (switch_header_marker_loop -Os: three `report(const)`).
     fn inline_trial_groups_sites(&self) -> bool {
         true
     }
 
-    /// The DAG legalizes odd-width loads and stores (`i24` is a 16-bit and an 8-bit access).
+    /// The DAG legalizes odd-width loads and stores (`i24` is a 16-bit and an
+    /// 8-bit access).
     fn selects_odd_sized_integers(&self) -> bool {
         true
     }

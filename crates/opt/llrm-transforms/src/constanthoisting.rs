@@ -24,15 +24,18 @@
 //!                                  b1: store i64 %const, ptr %q
 //! ```
 //!
-//! DEVIATE 1 (exit 2026-12-31, [`consthoist-gep`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L84)):
+//! DEVIATE 1 (exit 2026-12-31,
+//! [`consthoist-gep`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L84)):
 //! constant `gep` expressions are not hoisted. The pin's option is off by
 //! default and a MIR operand is never a constant expression.
 //!
-//! DEVIATE 2 (exit 2026-12-31, [`consthoist-with-block-frequency`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L78)):
+//! DEVIATE 2 (exit 2026-12-31,
+//! [`consthoist-with-block-frequency`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L78)):
 //! block frequencies are always used; the option is on by default, so the
 //! dominator-only insertion point search is not translated.
 //!
-//! DEVIATE 3 (exit 2026-12-31, [`optsize`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L937)):
+//! DEVIATE 3 (exit 2026-12-31,
+//! [`optsize`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L937)):
 //! `shouldOptimizeForSize` reads the function's `optsize` or `minsize`; there
 //! is no profile summary.
 //!
@@ -46,9 +49,9 @@
 
 use llrm_analysis::blockfreq::BlockFrequencies;
 use llrm_mir::context::{ConstantId, ConstantKind, Context, mask, signed};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
-use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::hash::HashMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, Opcode};
@@ -218,7 +221,10 @@ fn first_insertion_pt(
 ) -> Option<InstId> {
     function
         .iter_block(block)
-        .find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Phi | Opcode::LandingPad { .. }))
+        .find(|&inst| !matches!(
+            function.instruction(inst).opcode,
+            Opcode::Phi | Opcode::LandingPad { .. }
+        ))
 }
 
 impl Hoister<'_> {
@@ -441,17 +447,21 @@ impl Hoister<'_> {
         let pin_cost = self.pin_cost_of(function, inst, index, width, signed(bits, width), cost);
         // Ignore cheap integer constants, as the pin prices them.
         if pin_cost.value > Cost::BASIC.value {
-            let at = *map.entry((width, bits)).or_insert_with(|| {
-                self.candidates.push(Candidate {
-                    ty,
-                    width,
-                    bits,
-                    uses: Vec::new(),
-                    cumulative_cost: 0,
-                    cheap_for_target: true,
-                });
-                self.candidates.len() - 1
-            });
+            let at = *map
+                .entry((width, bits))
+                .or_insert_with(
+                    || {
+                        self.candidates.push(Candidate {
+                            ty,
+                            width,
+                            bits,
+                            uses: Vec::new(),
+                            cumulative_cost: 0,
+                            cheap_for_target: true,
+                        });
+                        self.candidates.len() - 1
+                    },
+                );
             let candidate = &mut self.candidates[at];
             candidate.cumulative_cost = candidate.cumulative_cost.wrapping_add(pin_cost.value as u32);
             candidate.cheap_for_target &= cost.value <= Cost::BASIC.value;
@@ -520,12 +530,17 @@ impl Hoister<'_> {
         let by_constant = matches!(
             instruction.opcode,
             Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem)
-        ) && matches!(instruction.operands[1], Operand::Constant(id) if matches!(self.context.get(id).kind, ConstantKind::Int(_)));
-        self.tti().prefer_to_keep_constants_attached(by_constant, self.min_size) || self.select_mask_kept(function, inst)
+        ) && matches!(
+            instruction.operands[1],
+            Operand::Constant(id) if matches!(self.context.get(id).kind, ConstantKind::Int(_))
+        );
+        self.tti().prefer_to_keep_constants_attached(by_constant, self.min_size)
+            || self.select_mask_kept(function, inst)
     }
 
-    /// DEVIATE ZIMM (M64-ZIMM-CRC, owner m64, exit 2026-11-20): `select c, 0, K`
-    /// or `select c, K, 0` with `K` an immediate the target's mask `and` takes.
+    /// DEVIATE ZIMM (M64-ZIMM-CRC, owner m64, exit 2026-11-20): `select c, 0,
+    /// K` or `select c, K, 0` with `K` an immediate the target's mask `and`
+    /// takes.
     fn select_mask_kept(
         &self,
         function: &Function,
@@ -627,8 +642,9 @@ impl Hoister<'_> {
             return;
         }
         // DEVIATE ZIMM (M64-ZIMM-DCL, owner m64, exit 2026-11-20): a lone
-        // constant the target materializes in one instruction stays where it is;
-        // beside a neighbour it is hoisted as the pin does, a base and an offset.
+        // constant the target materializes in one instruction stays where it
+        // is; beside a neighbour it is hoisted as the pin does, a base
+        // and an offset.
         if range.len() == 1 && self.candidates[range.start].cheap_for_target {
             return;
         }

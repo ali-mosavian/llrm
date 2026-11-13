@@ -236,18 +236,23 @@ pub fn zero_above_dword(
         }
         // A dword write, or the `movzx` of a dword to the whole register (the
         // same instruction, written wide).
-        let dword_write = prev.what.as_ref().is_some_and(|what| {
-            let from_dword = what.name.as_deref() == Some("movzx")
-                && what.sources.first().is_some_and(|source| match source {
-                    Loc::Reg(Reg { width, .. }) => *width == 4,
-                    Loc::Mem(Mem { width, .. }) => *width == 4,
-                    _ => false,
-                });
-            what.dests.iter().any(|dest| match dest {
-                Loc::Reg(Reg { register, width }) if ir::root(*register) == root => *width == 4 || from_dword,
-                _ => false,
-            })
-        });
+        let dword_write = prev
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| {
+                    let from_dword = what.name.as_deref() == Some("movzx")
+                        && what.sources.first().is_some_and(|source| match source {
+                            Loc::Reg(Reg { width, .. }) => *width == 4,
+                            Loc::Mem(Mem { width, .. }) => *width == 4,
+                            _ => false,
+                        });
+                    what.dests.iter().any(|dest| match dest {
+                        Loc::Reg(Reg { register, width }) if ir::root(*register) == root => *width == 4 || from_dword,
+                        _ => false,
+                    })
+                },
+            );
         return dword_write;
     }
     false
@@ -312,17 +317,28 @@ pub fn no_longer_when_strict(
         }
         select::priced_in(bits, &what, 0, None, false, false, None).map(|code| code.code.len())
     };
-    matches!((sized(before), sized(after)), (Some(before), Some(after)) if after <= before)
+    matches!(
+        (sized(before), sized(after)),
+        (Some(before), Some(after)) if after <= before
+    )
 }
 
 /// A frame cell reached by a wide index has no encoding until the frame
 /// layout names the frame register; `after` is not one that cannot encode.
 fn awaits_frame_layout(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.dests.iter().chain(&what.sources).any(
-            |place| matches!(place, Loc::Mem(cell) if llrm_x86::select::awaits_frame_layout(cell)),
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.dests
+                .iter()
+                .chain(&what.sources)
+                .any(
+                    |place| matches!(
+                        place,
+                        Loc::Mem(cell) if llrm_x86::select::awaits_frame_layout(cell)
+                    ),
+                ),
         )
-    })
 }
 
 /// Both encode, in as many bytes.

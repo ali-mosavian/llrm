@@ -12,7 +12,8 @@
 //! compares. `isKnownNeverLogicalZero` is "a non-zero constant" (`fp_combine`).
 //! Owner w10.
 //!
-//! [L13713]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13713
+//! [L13713]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13713
 
 use super::dag::{NodeData, SDNodeFlags, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};

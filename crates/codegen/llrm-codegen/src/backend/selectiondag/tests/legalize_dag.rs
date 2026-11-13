@@ -312,10 +312,11 @@ fn a_float_routine_is_a_libcall_with_all_its_operands() {
     assert_eq!(calls.0, vec![("lrint", 1, EVT::I32), ("sin", 1, f64), ("fmod", 2, f64)]);
 }
 
-/// `clz`, `ctz` and `popcount` marked `LibCall` were refused ("convert node to libcall"): only the arithmetic and
-/// float routines were translated, so m68k expanded `clzll` inline (544 B for `clzll_ctzll_64` at -Os). The call takes
-/// the value as is, returns `int` and is sign-extended or truncated to the node's type; the default action still
-/// expands, with no call.
+/// `clz`, `ctz` and `popcount` marked `LibCall` were refused ("convert node to
+/// libcall"): only the arithmetic and float routines were translated, so m68k
+/// expanded `clzll` inline (544 B for `clzll_ctzll_64` at -Os). The call takes
+/// the value as is, returns `int` and is sign-extended or truncated to the
+/// node's type; the default action still expands, with no call.
 #[test]
 fn a_count_marked_libcall_is_a_call_to_its_routine_and_the_default_is_no_call() {
     #[derive(Default)]

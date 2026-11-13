@@ -121,7 +121,8 @@ pub(crate) fn fold_icmp_with_min_max(
     }
 }
 
-/// The pin's `FoldIntoCmpYZ`: the known answer for `Y pred Z`, else the compare.
+/// The pin's `FoldIntoCmpYZ`: the known answer for `Y pred Z`, else the
+/// compare.
 fn fold_into_cmp_yz(
     c: &mut Combiner,
     inst: InstId,

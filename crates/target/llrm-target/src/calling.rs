@@ -928,7 +928,9 @@ impl Convention {
                     Kind::Float(_) => None,
                 }
             };
-            if let (Kind::Float(_), Some(register), true) = (kind, self.float_argument_registers.get(float_free), index < fixed) {
+            if let (Kind::Float(_), Some(register), true) =
+                (kind, self.float_argument_registers.get(float_free), index < fixed)
+            {
                 float_free += 1;
                 used.push(register.clone());
                 places.push(Place::Registers(vec![register.clone()]));
@@ -1157,9 +1159,10 @@ mod tests {
         );
     }
 
-    /// The unnamed arguments of a variadic call went to the registers the named ones left free, where a callee that
-    /// walks the stack for them found nothing. They go on the stack after the named ones: `(int, int)` with one
-    /// named is EAX and then stack offset 0, though EDX was free.
+    /// The unnamed arguments of a variadic call went to the registers the named
+    /// ones left free, where a callee that walks the stack for them found
+    /// nothing. They go on the stack after the named ones: `(int, int)` with
+    /// one named is EAX and then stack offset 0, though EDX was free.
     #[test]
     fn the_unnamed_arguments_go_on_the_stack_after_the_named_ones() {
         let calling = Calling::parse(WATCALL).unwrap();
@@ -1167,7 +1170,10 @@ mod tests {
         let placed = w.place_variadic(&[Kind::Word, Kind::Word, Kind::Wide], &[], 1);
         assert_eq!(placed.places, [registers(&["eax"]), Place::Stack(0), Place::Stack(4)]);
         assert_eq!(placed.stack_bytes, 12);
-        assert_eq!(w.place_variadic(&[Kind::Word, Kind::Word], &[], 2).places, w.place(&[Kind::Word, Kind::Word]).places);
+        assert_eq!(
+            w.place_variadic(&[Kind::Word, Kind::Word], &[], 2).places,
+            w.place(&[Kind::Word, Kind::Word]).places
+        );
     }
 
     const WIN64: &str = "default = \"w\"\n[abi.w]\nconvention = \"w\"\n[w]\nslot_bytes = 8\norder = \"right-to-left\"\ncleanup = \"caller\"\nargument_registers = [\"rcx\", \"rdx\", \"r8\", \"r9\"]\nfloat_argument_registers = [\"xmm0\", \"xmm1\", \"xmm2\", \"xmm3\"]\npositional = true\nshadow_bytes = 32\nreturn_address_bytes = 8\nfirst_argument_offset = 48\nframe = \"rbp\"\nstack = \"rsp\"\npreserved = [[\"ebx\", \"rbx\"]]\nclobbered = [\"rax\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 1\nvariadic_float = \"double\"\n[w.result]\n8 = [\"rax\"]\n";
@@ -1380,8 +1386,8 @@ mod interrupt_frame_tests {
     }
 
     /// Borland's `interrupt` register parameters were the frame's words in
-    /// address order; the description names each one's slot, and every name is a
-    /// slot of the frame.
+    /// address order; the description names each one's slot, and every name is
+    /// a slot of the frame.
     #[test]
     fn test_interrupt_parameters_name_slots_of_the_frame() {
         let text =

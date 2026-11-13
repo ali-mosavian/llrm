@@ -111,7 +111,8 @@ fn mode_label(mode: Mode) -> Option<&'static str> {
         Mode::AbsW => "(xxx).W",
         Mode::AbsL => "(xxx).L",
         Mode::Index | Mode::PcIndex => "(d8,An,Xn) or (d8,PC,Xn)",
-        // the full format by its base displacement, as the 68020's reading (Table 11.6.3)
+        // the full format by its base displacement, as the 68020's reading
+        // (Table 11.6.3)
         Mode::IndexW => "(d16,An,Xn) or (d16,PC,Xn)",
         Mode::IndexL => "(d32,B)",
         Mode::IndexB => "(B)",
@@ -402,7 +403,8 @@ pub(super) fn clocks(
         ("cas", [_, _, memory]) => {
             Some(plain(get(16, "CAS (Successful Compare)", "##"))? + ciea(mode(memory)?, Size::W)?)
         }
-        // Table 11.6.17 (p. 11-50): the exception entry, I-cache case, not the handler
+        // Table 11.6.17 (p. 11-50): the exception entry, I-cache case, not the
+        // handler
         ("trap", [Operand::Mode(Mode::Imm, _)]) => plain(get(17, "TRAP #n", "")),
         ("trapv", []) => plain(get(17, "TRAPV (No Trap)", "")),
         ("trapcc" | "trapt" | "trapf" | "trapeq" | "trapne", _) => plain(get(17, "TRAPcc (No Trap)", "")),

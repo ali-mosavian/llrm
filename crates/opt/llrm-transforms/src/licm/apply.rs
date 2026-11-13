@@ -96,16 +96,24 @@ impl Graph<'_> {
         self.accesses.add_instruction(&unit, inst);
         let effect = llrm_analysis::mssa::shadow::effect_of_in(self.accesses, &unit);
         let access = match at {
-            Created::Beginning => {
-                self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::Beginning, &effect)?
-            }
+            Created::Beginning => self.updater.create_memory_access_in_bb(
+                self.mssa,
+                function,
+                inst,
+                None,
+                block,
+                Place::Beginning,
+                &effect,
+            )?,
             Created::End => {
                 self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::End, &effect)?
             }
             Created::After(previous) => {
                 self.updater.create_memory_access_after(self.mssa, function, inst, None, previous, &effect)?
             }
-            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, function, inst, None, next, &effect)?,
+            Created::Before(next) => {
+                self.updater.create_memory_access_before(self.mssa, function, inst, None, next, &effect)?
+            }
         };
         if self.mssa.access(access).kind == Kind::Def {
             self.updater.insert_def(self.mssa, function, access, rename_uses);

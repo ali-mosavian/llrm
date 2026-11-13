@@ -372,7 +372,8 @@ fn main() -> ExitCode {
                     only_when_forced: false,
                     prepare_for_lto: false,
                     target_unrolling: false,
-                    // The early full-unroll slot of the default pipeline, where inlining is on.
+                    // The early full-unroll slot of the default pipeline, where
+                    // inlining is on.
                     inliner_follows: true,
                 };
                 let names: Vec<String> = module

@@ -1,6 +1,7 @@
-//! How often a function runs: the frequency of a block over its function's entry (`BlockFrequencyInfo` over
-//! `BranchProbabilityInfo`, as the inliner's `GetBFI` has it) and, from the direct calls to a function, how many
-//! times it runs per run of the program.
+//! How often a function runs: the frequency of a block over its function's
+//! entry (`BlockFrequencyInfo` over `BranchProbabilityInfo`, as the inliner's
+//! `GetBFI` has it) and, from the direct calls to a function, how many times it
+//! runs per run of the program.
 
 use std::collections::BTreeSet;
 
@@ -97,4 +98,3 @@ pub fn entry_weight(
     }
     weight(module, layout, function, addressed, ENTRY_DEPTH, &mut Vec::new(), &mut frequencies).min(ENTRY_CAP)
 }
-

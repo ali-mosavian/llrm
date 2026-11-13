@@ -17,9 +17,15 @@ fn only_the_copy_destination_shape_drops_copies_into_a_copy_register() {
     let mut module = llrm_mir::parse::module(include_str!("fixtures/sieve_pin_o2.ll")).expect("parses");
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let blocks = llrm_m68k::dagisel::function::select_function(&module, "bench_sieve", Cpu::M68000).expect("selects");
-    let shaped = emit_with("bench_sieve", &blocks, Shape { copy_destinations: true, ..Shape::default() }).expect("emits");
+    let shaped =
+        emit_with("bench_sieve", &blocks, Shape { copy_destinations: true, ..Shape::default() }).expect("emits");
     let default = emit("bench_sieve", &blocks).expect("emits");
-    assert!(copies(&shaped) < copies(&default), "the shape drops no copy ({} against {}): the test sees nothing", copies(&shaped), copies(&default));
+    assert!(
+        copies(&shaped) < copies(&default),
+        "the shape drops no copy ({} against {}): the test sees nothing",
+        copies(&shaped),
+        copies(&default)
+    );
     let off = emit_with("bench_sieve", &blocks, Shape::default()).expect("emits");
     assert_eq!(format!("{off:?}"), format!("{default:?}"), "the default emit is not the unshaped one");
     // the default keeps the copies the tuned passes read

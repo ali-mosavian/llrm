@@ -26,8 +26,8 @@
 //! [L672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L672)),
 //! so the inliner then takes the direct calls.
 //!
-//! DEVIATE JT-1 (no number, owner w10-instcombine): no profile data (`!prof` value
-//! profile) and no `!prof` on the switch: llrm has none.
+//! DEVIATE JT-1 (no number, owner w10-instcombine): no profile data (`!prof`
+//! value profile) and no `!prof` on the switch: llrm has none.
 //!
 //! # Example
 //! The unit test `a_call_through_a_table_is_a_switch_of_direct_calls`.

@@ -715,9 +715,10 @@ impl Facts {
         self.0.contains(&fact)
     }
 
-    /// Whether `attributes` state `fact`: `Facts::of(attributes).contains(fact)`
-    /// without the set made (the pin's `hasFnAttr`). Not for `Fact::Inline`,
-    /// where `of` keeps only the strongest.
+    /// Whether `attributes` state `fact`:
+    /// `Facts::of(attributes).contains(fact)` without the set made (the
+    /// pin's `hasFnAttr`). Not for `Fact::Inline`, where `of` keeps only
+    /// the strongest.
     pub fn states(
         attributes: &[Attribute],
         fact: Fact,
@@ -868,9 +869,8 @@ mod tests {
     /// said never to inline was copied.
     #[test]
     fn never_outranks_always_in_either_order() {
-        let flags = |names: &[&str]| -> Vec<Attribute> {
-            names.iter().map(|name| Attribute::Flag((*name).into())).collect()
-        };
+        let flags =
+            |names: &[&str]| -> Vec<Attribute> { names.iter().map(|name| Attribute::Flag((*name).into())).collect() };
         for names in [["noinline", "alwaysinline"], ["alwaysinline", "noinline"]] {
             assert_eq!(Facts::of(&flags(&names)).inline(), Some(Inlining::Never), "{names:?}");
         }

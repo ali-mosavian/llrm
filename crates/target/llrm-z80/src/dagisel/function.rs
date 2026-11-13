@@ -76,15 +76,16 @@ pub fn builder_target() -> BuilderTarget {
             known_bits_of_build_pair: true,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
-        // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
+        // the target's limits (`driver::MEMCPY_STORES`), the same table the
+        // mid-end reads
         tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
         ..BuilderTarget::for_pointer_bits(16)
     }
 }
 
 thread_local! {
-    /// The pin's block frequencies as they are (`Request::flat_loop_trips`), for
-    /// the selections made on this thread.
+    /// The pin's block frequencies as they are (`Request::flat_loop_trips`),
+    /// for the selections made on this thread.
     pub static FLAT_LOOP_TRIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -128,7 +129,8 @@ pub struct Selection {
     pub returns_twice: bool,
     /// `internal` or `private` linkage: the label is not exported.
     pub local: bool,
-    /// The function carries `optsize` or `minsize`: tuned for size at any level.
+    /// The function carries `optsize` or `minsize`: tuned for size at any
+    /// level.
     pub sized: bool,
     /// Selected the second time for the module price with the speed routines or
     /// the shift loops (`pipeline::SPEED_ROUTINES`, `INLINE_SHIFTS`): a
@@ -144,8 +146,9 @@ pub struct Selection {
     /// into the next one, so emission states the end.
     pub unreachable: llrm_mir::dense::IdSet<BlockId>,
     /// The pin's block frequency of each IR block over the entry's
-    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number: what
-    /// the prices that choose between variants of the function weigh by.
+    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number:
+    /// what the prices that choose between variants of the function weigh
+    /// by.
     pub frequencies: Vec<(u32, f64)>,
     /// The jump tables: the block of each entry, by table.
     pub tables: Vec<Vec<u32>>,
@@ -188,7 +191,8 @@ pub fn select_function_with(
     let chain_credit = llrm_mir::memory::has(&function.attrs, crate::prepare::WORD_CHAINS);
     let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
         && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
-    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
+    let frequencies =
+        crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -373,8 +377,8 @@ fn select_built(
     // the scratch slots the legalizers ask for (a long long result's memory)
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
-    let units =
-        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply, cold, chain_credit)).map_err(|why| format!("{why:?}"))?;
+    let units = select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply, cold, chain_credit))
+        .map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }

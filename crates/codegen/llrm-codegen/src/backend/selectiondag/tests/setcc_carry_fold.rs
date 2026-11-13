@@ -12,9 +12,10 @@ fn combined(carry: impl FnOnce(&mut SelectionDAG) -> SDValue) -> (SelectionDAG, 
     (dag, root)
 }
 
-/// A compare of a long with a constant whose low words are zero has `usubo x, 0` as its low borrow, which folds to no
-/// borrow: the node stayed a `SetCCCarry` of a constant zero, which the 6502 and z80 backends refused ("convert node to
-/// libcall"). The pin's `visitSETCCCARRY` makes it a `setcc`.
+/// A compare of a long with a constant whose low words are zero has `usubo x,
+/// 0` as its low borrow, which folds to no borrow: the node stayed a
+/// `SetCCCarry` of a constant zero, which the 6502 and z80 backends refused
+/// ("convert node to libcall"). The pin's `visitSETCCCARRY` makes it a `setcc`.
 #[test]
 fn a_setcc_carry_with_no_borrow_in_is_a_setcc() {
     let (dag, root) = combined(|dag| dag.get_constant(0, EVT::I1));

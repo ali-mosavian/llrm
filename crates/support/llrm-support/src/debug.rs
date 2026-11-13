@@ -307,8 +307,9 @@ impl Drop for Span {
                     clock.work_top += done;
                 }
             }
-            // The bookkeeping above ran after the counter was read, and the open
-            // before it: inside the step around this one, but not its work.
+            // The bookkeeping above ran after the counter was read, and the
+            // open before it: inside the step around this one, but
+            // not its work.
             let overhead = opening + work_now().saturating_sub(closed);
             clock.span_work += overhead;
             if let Some(parent) = clock.open.last_mut() {
@@ -632,7 +633,8 @@ mod tests {
     /// Opening and closing a span ran inside the step around it, so a step of
     /// 9 070 spans (sfm16_dbg) read 42 M instructions of its own that were the
     /// report's: `mir walk` 42.4 M of 767 M, taken for plumbing. A step holding
-    /// 2 000 empty spans has about 110 instructions each of its own (was 4 600).
+    /// 2 000 empty spans has about 110 instructions each of its own (was 4
+    /// 600).
     #[test]
     fn test_empty_spans_add_nothing_to_the_step_around_them() {
         if work_fd() < 0 {

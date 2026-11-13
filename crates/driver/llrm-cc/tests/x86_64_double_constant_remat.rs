@@ -1,7 +1,9 @@
-//! x86-64: a double constant read from the pool and used on both sides of a call is read again, not spilled, and the
-//! load folds into the multiply after the call. The remat predicate knew `movsd` but the scalar double load is
-//! `movsd_x`, so the constant was stored to the stack and reloaded (`mulsd xmm0, [rsp]`, soft_double_add_sub -O1
-//! `main` 113 B against the pin's 107); remade alone it was a load beside the multiply (115 B), where the pin
+//! x86-64: a double constant read from the pool and used on both sides of a
+//! call is read again, not spilled, and the load folds into the multiply after
+//! the call. The remat predicate knew `movsd` but the scalar double load is
+//! `movsd_x`, so the constant was stored to the stack and reloaded (`mulsd
+//! xmm0, [rsp]`, soft_double_add_sub -O1 `main` 113 B against the pin's 107);
+//! remade alone it was a load beside the multiply (115 B), where the pin
 //! (`canFoldAsLoad`) folds it: `mulsd xmm0, [pool]`. Needs `LLRM_LLC`.
 
 use std::path::Path;

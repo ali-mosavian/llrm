@@ -147,23 +147,20 @@ impl<'m> ValueFacts<'m> {
             .operand_type(self.context, operand)
             .and_then(|ty| self.context.types.int_bits(ty))
             .filter(|&width| width <= 64)?;
-        let (unsigned_range, signed_range) = self
-            .session
-            .borrow_mut()
-            .ask_within(
-                self.context,
-                &self.layout,
-                self.globals,
-                self.metadata,
-                self.function,
-                |scev, cx| {
-                    if !scev.is_value_scevable(cx, operand) {
-                        return None;
-                    }
-                    let s = scev.get_scev(cx, operand);
-                    Some((scev.get_unsigned_range(cx, s).to_word::<u128>(), scev.get_signed_range(cx, s).to_word::<u128>()))
-                },
-            )?;
+        let (unsigned_range, signed_range) = self.session.borrow_mut().ask_within(
+            self.context,
+            &self.layout,
+            self.globals,
+            self.metadata,
+            self.function,
+            |scev, cx| {
+                if !scev.is_value_scevable(cx, operand) {
+                    return None;
+                }
+                let s = scev.get_scev(cx, operand);
+                Some((scev.get_unsigned_range(cx, s).to_word::<u128>(), scev.get_signed_range(cx, s).to_word::<u128>()))
+            },
+        )?;
         // What the conditions that dominate `at` and the assumptions say.
         let query = Query {
             dt: Some(&self.tree),

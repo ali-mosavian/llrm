@@ -331,7 +331,9 @@ fn processed_keeping(
                     .iter()
                     .filter(|one| {
                         implicit_def_of(one).is_none_or(|value| {
-                            phi_read.contains(&value) || !defined.contains(&value) || (keep_written && written.contains(&value))
+                            phi_read.contains(&value)
+                                || !defined.contains(&value)
+                                || (keep_written && written.contains(&value))
                         })
                     })
                     .cloned()

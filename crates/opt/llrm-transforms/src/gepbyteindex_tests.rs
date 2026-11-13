@@ -2,11 +2,9 @@
 
 use std::rc::Rc;
 
-use crate::gepbyteindex::GepByteIndex;
-use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Ty,
-};
+use llrm_mir::tti::{ArithOp, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Ty};
 
+use crate::gepbyteindex::GepByteIndex;
 use crate::testing::{parsed, printed, results};
 
 const HEAD: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-n8-S8\"\n\n";
@@ -15,39 +13,87 @@ const HEAD: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-n8-S8\"\n\n";
 struct Byte(llrm_mir::tti::Basic);
 
 impl llrm_mir::tti::Tti for Byte {
-    fn cmp_sel_cost(&self, op: CmpSel, ty: Ty, kind: CostKind) -> Cost {
+    fn cmp_sel_cost(
+        &self,
+        op: CmpSel,
+        ty: Ty,
+        kind: CostKind,
+    ) -> Cost {
         self.0.cmp_sel_cost(op, ty, kind)
     }
 
-    fn memory_op_cost(&self, op: MemoryOp, ty: Ty, kind: CostKind, stored_constant: bool) -> Cost {
+    fn memory_op_cost(
+        &self,
+        op: MemoryOp,
+        ty: Ty,
+        kind: CostKind,
+        stored_constant: bool,
+    ) -> Cost {
         self.0.memory_op_cost(op, ty, kind, stored_constant)
     }
 
-    fn cf_instr_cost(&self, phi: bool, kind: CostKind) -> Cost {
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> Cost {
         self.0.cf_instr_cost(phi, kind)
     }
 
-    fn int_imm_cost(&self, imm: i128, bits: u32) -> Cost {
+    fn int_imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
         self.0.int_imm_cost(imm, bits)
     }
 
-    fn int_imm_cost_inst(&self, op: ImmUser, index: u32, imm: i128, bits: u32) -> Cost {
+    fn int_imm_cost_inst(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
         self.0.int_imm_cost_inst(op, index, imm, bits)
     }
 
-    fn is_truncate_free(&self, from: Ty, to: Ty) -> bool {
+    fn is_truncate_free(
+        &self,
+        from: Ty,
+        to: Ty,
+    ) -> bool {
         self.0.is_truncate_free(from, to)
     }
 
-    fn is_legal_addressing_mode(&self, base_gv: bool, base_offset: i64, has_base_reg: bool, scale: i64) -> bool {
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
         self.0.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
     }
 
-    fn cast_cost(&self, op: CastKind, dst: Ty, src: Ty, kind: CostKind) -> Cost {
+    fn cast_cost(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+        kind: CostKind,
+    ) -> Cost {
         self.0.cast_cost(op, dst, src, kind)
     }
 
-    fn arithmetic_cost(&self, op: ArithOp, ty: Ty, kind: CostKind, first: OperandInfo, second: OperandInfo) -> Cost {
+    fn arithmetic_cost(
+        &self,
+        op: ArithOp,
+        ty: Ty,
+        kind: CostKind,
+        first: OperandInfo,
+        second: OperandInfo,
+    ) -> Cost {
         self.0.arithmetic_cost(op, ty, kind, first, second)
     }
 
@@ -94,7 +140,8 @@ impl llrm_mir::target::Machine for Machine {
     }
 }
 
-/// `text` before and after the pass; `byte_reach`: the target sets `address_index_max`.
+/// `text` before and after the pass; `byte_reach`: the target sets
+/// `address_index_max`.
 fn run(
     text: &str,
     byte_reach: bool,
@@ -142,8 +189,8 @@ define i8 @f(i8 %x) {
     assert_eq!(results(&parsed(&format!("{HEAD}{ir}")), &[&[0], &[1]]), results(&parsed(&after), &[&[0], &[1]]));
 }
 
-/// What the rewrite must not touch: a target with no byte reach, a global larger
-/// than it, a `gep` that is not `inbounds`, and a scale of 1.
+/// What the rewrite must not touch: a target with no byte reach, a global
+/// larger than it, a `gep` that is not `inbounds`, and a scale of 1.
 #[test]
 fn other_geps_are_left_alone() {
     let ir = |global: &str, gep: &str| {

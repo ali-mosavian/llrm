@@ -392,7 +392,8 @@ impl Combiner<'_> {
         let Opcode::Store { volatile: false, .. } = self.function.instruction(store).opcode else { return false };
         let [value, ptr] = self.function.instruction(store).operands[..] else { return false };
         let store_bb = self.function.parent(store).expect("a placed store");
-        let Some(&Operand::Block(dest_bb)) = self.function.instruction(self.function.terminator(store_bb).expect("terminated")).operands.first()
+        let Some(&Operand::Block(dest_bb)) =
+            self.function.instruction(self.function.terminator(store_bb).expect("terminated")).operands.first()
         else {
             return false;
         };
@@ -480,7 +481,8 @@ impl Combiner<'_> {
             .metadata
             .iter()
             .filter(|(kind, node)| {
-                kind == "tbaa" && self.function.instruction(other_store).metadata.iter().any(|(k, n)| k == kind && n == node)
+                kind == "tbaa"
+                    && self.function.instruction(other_store).metadata.iter().any(|(k, n)| k == kind && n == node)
             })
             .cloned()
             .collect();

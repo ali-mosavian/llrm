@@ -531,10 +531,11 @@ pub struct Semantics {
     pub pops: Option<i64>,
     /// The `(source, dest)` pairs the instruction ties, numbered as `sources`
     /// and `dests` are, where the producer knows them from the machine
-    /// instruction itself (its own tied operands, `MachineInstr::isRegTiedToDefOperand`).
-    /// A target's per-name rows (`@ties rows`) number operands as the
-    /// description does, which is not these lists once an operand is dropped
-    /// (a reserved register). None: the rows say.
+    /// instruction itself (its own tied operands,
+    /// `MachineInstr::isRegTiedToDefOperand`). A target's per-name rows
+    /// (`@ties rows`) number operands as the description does, which is not
+    /// these lists once an operand is dropped (a reserved register). None:
+    /// the rows say.
     pub tied: Option<Vec<(usize, usize)>>,
 }
 
@@ -547,7 +548,8 @@ impl Semantics {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        let Semantics { op, name: _, dests: _, sources: _, target, indirect, table, table_id, repeat, pops, tied } = self;
+        let Semantics { op, name: _, dests: _, sources: _, target, indirect, table, table_id, repeat, pops, tied } =
+            self;
         Semantics {
             op: *op,
             name,

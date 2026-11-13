@@ -1718,7 +1718,8 @@ fn _stored(
     // target's `rep stos` takes, and isel cannot lower it.
     let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
     // Only where the target's library has the function
-    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`, LoopIdiomRecognize.cpp#L372).
+    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`,
+    // LoopIdiomRecognize.cpp#L372).
     (matches!(width, 16 | 32) && counted && _has_memset_pattern(unit)).then_some((pointer, Byte::Pattern(value), bytes))
 }
 

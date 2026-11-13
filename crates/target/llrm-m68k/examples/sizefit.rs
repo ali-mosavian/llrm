@@ -1,7 +1,9 @@
-//! `sizefit CPU FILE.ll`: the bytes `function_bytes` (the inliner's and unroller's byte estimate, by the
-//! machine's `size_costs`) gives each defined function of FILE.ll, one `name<TAB>bytes` line each. Run it on the
-//! last IR stage `LLRM_MIR_STAGES` dumps (the module selection sees) and compare with the object's symbol
-//! sizes (`nm -S`): that is how the byte table is calibrated against what the compiler emits.
+//! `sizefit CPU FILE.ll`: the bytes `function_bytes` (the inliner's and
+//! unroller's byte estimate, by the machine's `size_costs`) gives each defined
+//! function of FILE.ll, one `name<TAB>bytes` line each. Run it on the
+//! last IR stage `LLRM_MIR_STAGES` dumps (the module selection sees) and
+//! compare with the object's symbol sizes (`nm -S`): that is how the byte table
+//! is calibrated against what the compiler emits.
 
 use llrm_m68k::driver::cpu_of;
 use llrm_m68k::machine::M68kMachine;

@@ -1,8 +1,8 @@
 //! `visitBITCAST`'s load fold: `(conv (load x))` is `(load (conv*)x)`, so a
 //! float argument read as its bits is one integer load, not `fld; fstp; mov`.
-//! And `foldBitcastedFPLogic` (a port): a sign-bit `xor`/`and`/`or` of a float's bits,
-//! cast back, is `fneg`/`fabs`/`fneg (fabs)` (`__negdf2` on wasm: `f64.neg`,
-//! 7 B, not reinterpret, const, xor, reinterpret, 20 B).
+//! And `foldBitcastedFPLogic` (a port): a sign-bit `xor`/`and`/`or` of a
+//! float's bits, cast back, is `fneg`/`fabs`/`fneg (fabs)` (`__negdf2` on wasm:
+//! `f64.neg`, 7 B, not reinterpret, const, xor, reinterpret, 20 B).
 //!
 //! DEVIATE SD548: `foldBitcastedFPLogic` takes the operand only when it is a
 //! cast from the result type; the target's `isFNegFree`/`isFAbsFree` second

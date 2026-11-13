@@ -251,9 +251,10 @@ pub fn widen_when_it_pays(
     Ok(())
 }
 
-/// Whether a module, of `clocks` and `bytes` by the static estimate, takes a speed routine at size that
-/// saves `saved` clocks for `growth` bytes: when the share of its clocks it saves is at least
-/// `[share] percent_per_percent` times the share of its bytes it adds.
+/// Whether a module, of `clocks` and `bytes` by the static estimate, takes a
+/// speed routine at size that saves `saved` clocks for `growth` bytes: when the
+/// share of its clocks it saves is at least `[share] percent_per_percent` times
+/// the share of its bytes it adds.
 pub fn pays_by_share(
     (saved, growth): (u64, i64),
     clocks: u64,
@@ -263,7 +264,8 @@ pub fn pays_by_share(
     growth <= 0 || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
 }
 
-/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones those call.
+/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones
+/// those call.
 pub fn image_of_texts(
     names: &[String],
     texts: &[String],

@@ -352,11 +352,8 @@ fn binary(
 ) -> u32 {
     let ir = format!("define {ty} @func({ty} %a, {ty} %b) {{\n  %r = {op} {ty} %a, %b\n  ret {ty} %r\n}}");
     let word = ty == "i16";
-    let setup = if word {
-        set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8)
-    } else {
-        bytes(&[a, b])
-    };
+    let setup =
+        if word { set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8) } else { bytes(&[a, b]) };
     let key = format!("{ty}-{op}-{a}-{b}");
     let low = run(&format!("{key}-lo"), &ir, "func", &setup, "") as u32;
     if word { (run(&format!("{key}-hi"), &ir, "func", &setup, "  txa\n") as u32) << 8 | low } else { low }

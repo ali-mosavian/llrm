@@ -126,8 +126,10 @@ fn fold_and_to_xor(
 /// nothing). `visitAnd` ([:2938]) and `visitOr` ([:4691]); one helper, the
 /// two folds are the same text with the operation changed.
 ///
-/// [:2938]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L2938
-/// [:4691]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L4691
+/// [:2938]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L2938
+/// [:4691]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L4691
 pub fn fold_idempotent_recurrence(
     c: &mut Combiner,
     inst: InstId,

@@ -995,10 +995,11 @@ mod tests {
         assert_eq!(done.reserve, -lowest + 12, "the locals lie above the outgoing area");
     }
 
-    /// The second layout was built, and dropped, in every one of a -O0 compile's
-    /// functions that had far cells and a spill area: 10.5 M of 207 M
-    /// instructions. Its far cells are counted from the moved displacements
-    /// alone, and the count is the one of the body `laid_again` builds.
+    /// The second layout was built, and dropped, in every one of a -O0
+    /// compile's functions that had far cells and a spill area: 10.5 M of
+    /// 207 M instructions. Its far cells are counted from the moved
+    /// displacements alone, and the count is the one of the body
+    /// `laid_again` builds.
     #[test]
     fn test_the_far_cells_of_the_second_layout_are_counted_without_building_it() {
         use super::{far_again, laid_again};
@@ -1054,7 +1055,8 @@ mod tests {
         }
         let (done, _) = ordered(&first, &frame, false).unwrap();
         assert_ne!(far_frame(&done, false), far_frame(&first, false), "the premise: the order moves cells");
-        // an SP frame counts the reserve, whatever it is: cells near the top of it are far
+        // an SP frame counts the reserve, whatever it is: cells near the top of
+        // it are far
         let mut frame = Frame::new(-9);
         frame.align = 4;
         frame.extents = vec![(-4, 4), (-8, 4), (-9, 1)];

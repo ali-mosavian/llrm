@@ -1,7 +1,8 @@
 //! The register counts of `WasmMachine` are the pin's `WebAssemblyTTIImpl`
 //! answers for the scalar class, not a number chosen for wasm's locals:
-//! `getNumberOfRegisters` = `BasicTTIImpl`'s 8 (WebAssemblyTargetTransformInfo.cpp#L31-L40,
-//! BasicTTIImpl.h#L616 at d1106deb71cc).
+//! `getNumberOfRegisters` = `BasicTTIImpl`'s 8
+//! (WebAssemblyTargetTransformInfo.cpp#L31-L40, BasicTTIImpl.h#L616 at
+//! d1106deb71cc).
 
 use llrm_mir::target::Machine;
 use llrm_wasm::machine::WasmMachine;

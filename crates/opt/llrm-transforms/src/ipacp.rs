@@ -33,11 +33,12 @@
 //! The copy is an internal function `<origin>.constprop.N` with each known
 //! parameter replaced by its constant. A later call with the same constants
 //! (`Cloning::contexts`) goes to the copy already made. A function gets at
-//! most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH below), which also bounds the
-//! recursion: a clone that calls itself with a new constant (`place(q, row + 1,
-//! n)` in the clone for `row`) is a candidate for the next clone, so GCC's -O3
-//! unrolls `queens` into eight, one a row (four here). The copy is an ordinary function:
-//! the inliner takes a clone with one caller into it.
+//! most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH
+//! below), which also bounds the recursion: a clone that calls itself with a
+//! new constant (`place(q, row + 1, n)` in the clone for `row`) is a candidate
+//! for the next clone, so GCC's -O3 unrolls `queens` into eight, one a row
+//! (four here). The copy is an ordinary function: the inliner takes a clone
+//! with one caller into it.
 //!
 //! GCC propagates lattices over the whole call graph and prices a value with
 //! each function's time and size summaries under the context
@@ -151,7 +152,8 @@ pub struct Tuning {
     pub peel_limited: bool,
 }
 
-/// `max-completely-peel-times` (params.opt): the most trips the unroller takes whole.
+/// `max-completely-peel-times` (params.opt): the most trips the unroller takes
+/// whole.
 const MAX_PEEL_TIMES: i128 = 16;
 /// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known
 /// actuals make a loop's bound known.
@@ -271,8 +273,9 @@ pub fn cloned(
             continue;
         }
         let origin = state.origin.get(&name).copied().unwrap_or(name);
-        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a call sent
-        // there never returns, and the context gets a new clone.
+        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a
+        // call sent there never returns, and the context gets a new
+        // clone.
         let existing = state
             .contexts
             .get(&(origin, known.clone()))
@@ -328,10 +331,21 @@ pub fn cloned(
         let mut verdict = false;
         let (mut saved, mut loops, mut benefit) = (0, false, 0);
         for context in &contexts {
-            let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited);
+            let (context_saved, context_loops, _) =
+                time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited);
             let level = state.made.get(&origin).copied().unwrap_or(0);
-            let (chain, chain_size) =
-                chain_benefit(module, layout, name, body, context, &callees, costs, tuning.peel_limited, level, &mut BTreeMap::new());
+            let (chain, chain_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                context,
+                &callees,
+                costs,
+                tuning.peel_limited,
+                level,
+                &mut BTreeMap::new(),
+            );
             let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
             // GCC's `incorporate_penalties`: a function in a cycle with others,
             // not one that calls itself.
@@ -691,7 +705,8 @@ fn time_saved(
                                 _ => return None,
                             }
                         };
-                        // The counter's start: the one arm from outside the loop.
+                        // The counter's start: the one arm from outside the
+                        // loop.
                         let mut start = Some(0i128);
                         for (value, from) in crate::lcssa::arms(body, phi) {
                             if one.body.contains(&cfg::id(from)) {
@@ -787,11 +802,16 @@ fn constant_addresses(
                     Operand::Value(v) => values.contains(&v),
                     Operand::Block(_) => false,
                 };
-                let indices = instruction.operands[1..].iter().all(|index| match index {
-                    Operand::Constant(_) => true,
-                    Operand::Value(v) => known.contains_key(v),
-                    Operand::Block(_) => false,
-                });
+                let indices = instruction
+                    .operands[1..]
+                    .iter()
+                    .all(
+                        |index| match index {
+                            Operand::Constant(_) => true,
+                            Operand::Value(v) => known.contains_key(v),
+                            Operand::Block(_) => false,
+                        },
+                    );
                 if base && indices {
                     found.insert(inst);
                     values.insert(result);

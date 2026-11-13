@@ -8,13 +8,13 @@
 //! is 6 to 10 B: 45 small programs grew 2 to 28 B at -Os. The answer here is
 //! the level's [`Price`] of the chain against the multiply, on the CPU's
 //! tables, so a size build keeps `muls.l` where the chain is longer and a speed
-//! build takes the chain where it is faster; -O1 keeps the pin's chain unless the
-//! multiply is no worse in both (the function-level trial below). The 68000 and 68010 have no 32-bit
-//! multiply: it is a call (16 B at the site, and the routine), so the chain
-//! always wins there, as the pin has it. Wider than 32 bits stays the multiply
-//! (the pin's `atLeast68020` answer decomposed `i64` into pairs; unpriced).
-//! Owner m68k. Exit 2026-12-20: the price from the selected instructions (G2,
-//! `synth_mult` for any constant).
+//! build takes the chain where it is faster; -O1 keeps the pin's chain unless
+//! the multiply is no worse in both (the function-level trial below). The 68000
+//! and 68010 have no 32-bit multiply: it is a call (16 B at the site, and the
+//! routine), so the chain always wins there, as the pin has it. Wider than 32
+//! bits stays the multiply (the pin's `atLeast68020` answer decomposed `i64`
+//! into pairs; unpriced). Owner m68k. Exit 2026-12-20: the price from the
+//! selected instructions (G2, `synth_mult` for any constant).
 //!
 //!
 //! DEVIATE M68K-MUL-LATE: the per-site answer cannot see what the chain does to
@@ -71,7 +71,13 @@ pub struct Chain {
 
 impl Chain {
     pub fn of(mode: Mode) -> Chain {
-        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, shapes_only: mode == Mode::TrialPinShapes, used: Rc::default(), synthesized: Rc::default() }
+        Chain {
+            off: mode == Mode::Kept,
+            pin: mode == Mode::Pin,
+            shapes_only: mode == Mode::TrialPinShapes,
+            used: Rc::default(),
+            synthesized: Rc::default(),
+        }
     }
 
     /// Whether this build decomposed at least one multiply.
@@ -94,7 +100,10 @@ impl Chain {
         !self.pin && !self.off && !self.shapes_only
     }
 
-    pub(super) fn allows(&self, yes: bool) -> bool {
+    pub(super) fn allows(
+        &self,
+        yes: bool,
+    ) -> bool {
         let yes = yes && !self.off;
         if yes {
             self.used.set(true);
@@ -180,9 +189,10 @@ pub fn decomposes(
     }
     let c = (c & u128::from(u32::MAX)) as u32;
     let Some(chain) = chain(cpu, c) else { return false };
-    // -O1 stands on the pin's answer: the chain is the incumbent and the multiply replaces it
-    // only where it is no worse in bytes and in clocks, which `crate::trial` decides for the
-    // function (a lone `x * 9` is 6 B against 4 but 12 clocks against 43: each wins one axis,
+    // -O1 stands on the pin's answer: the chain is the incumbent and the
+    // multiply replaces it only where it is no worse in bytes and in
+    // clocks, which `crate::trial` decides for the function (a lone `x * 9`
+    // is 6 B against 4 but 12 clocks against 43: each wins one axis,
     // the chain stands, as the pin's clang has it).
     if !cpu.at_least(Cpu::M68020) || price == Price::Strict {
         return true;

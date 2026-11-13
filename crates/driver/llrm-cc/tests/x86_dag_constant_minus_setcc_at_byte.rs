@@ -14,11 +14,7 @@ fn test_m64_dag_a_byte_select_of_two_constants_is_an_inverted_setcc_and_add() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("sel-byte-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("c.c"),
-        "signed char f(int x, int y) { return x < y ? 5 : 6; }\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("c.c"), "signed char f(int x, int y) { return x < y ? 5 : 6; }\n").unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .args(["-m64", "-Os", "--isel=dag", "-w", "-S", "-o"])

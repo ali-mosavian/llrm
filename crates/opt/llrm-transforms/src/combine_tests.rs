@@ -382,9 +382,8 @@ fn drains_visits_and_inserts_count_the_worklist() {
     assert_eq!(inserts, initial);
 
     let before = counts();
-    let mut module = parsed(
-        "define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n",
-    );
+    let mut module =
+        parsed("define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n");
     assert!(combined(&mut module));
     let [_, visits, initial, inserts] = delta(before);
     assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");

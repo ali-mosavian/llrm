@@ -52,9 +52,10 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 pub struct M16;
 
 /// The registers the description states.
-static REGISTERS: std::sync::LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> = std::sync::LazyLock::new(|| {
-    llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses")
-});
+static REGISTERS: std::sync::LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> =
+    std::sync::LazyLock::new(|| {
+        llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses")
+    });
 
 /// The pin's register pressure sets for the registers described above:
 /// `pressure.sets` (the pin's x86 tables are the same for 16 and 32 bits).
@@ -673,16 +674,34 @@ mod tuning_tests {
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
         assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
-        assert!(!table.carry_slot_indexes, "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced");
-        assert_eq!(table.address_reference_milliweight, 3000, "DEVIATE RA-CLK: an address component weighs three references");
+        assert!(
+            !table.carry_slot_indexes,
+            "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced"
+        );
+        assert_eq!(
+            table.address_reference_milliweight, 3000,
+            "DEVIATE RA-CLK: an address component weighs three references"
+        );
         assert_eq!(table.unswitch_threshold, Some(0));
-        assert_eq!(table.min_jump_table_density, Some(40), "DEVIATE M16-JT-DENSITY: a table pays from 40% at every level");
-        // The later overrides, each with its source: a new one must be named here.
-        assert_eq!((table.narrow_divide_live_limit, table.narrow_divide_live_max_bits), (3, 32), "#9067: -O1 divide yields to register pressure");
+        assert_eq!(
+            table.min_jump_table_density,
+            Some(40),
+            "DEVIATE M16-JT-DENSITY: a table pays from 40% at every level"
+        );
+        // The later overrides, each with its source: a new one must be named
+        // here.
+        assert_eq!(
+            (table.narrow_divide_live_limit, table.narrow_divide_live_max_bits),
+            (3, 32),
+            "#9067: -O1 divide yields to register pressure"
+        );
         assert!(!table.narrow_divide_live_at_size, "#9067: -Os keeps every divide");
         assert!(!table.inline_dying_credit_at_os, "#9253, D13: the units undercount a 16-bit copy");
         assert!(table.cold_site_ignores_sinks, "#9102, DEVIATE BFS-1");
-        assert!(table.frame_slot_is_free_base && table.lsr_address_fewest_registers, "#9312, DEVIATE LU31: [bp+si+disp] and the narrow filter");
+        assert!(
+            table.frame_slot_is_free_base && table.lsr_address_fewest_registers,
+            "#9312, DEVIATE LU31: [bp+si+disp] and the narrow filter"
+        );
         assert!(table.lsr_size_order, "#9352, DEVIATE LSR-SIZE: -Os LSR orders by x86 bytes");
         assert!(!table.libc_memcpy, "m16 has no libc: a run-time copy stays a loop where `rep movs` is more bytes");
         assert!(table.pops_arguments_at_size, "DEVIATE PO1: -Os pops a call's arguments; only x86-m32 is the pin's");
@@ -741,17 +760,28 @@ mod stack_natural_alignment_tests {
         super::DATALAYOUT_TOML.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix(" = \"")?.strip_suffix('"'))
     }
 
-    /// S16 made bench/parity/qbsp -Os zero a packed 16-byte local with `rep stosb` x16 where the pin's m16 (no S in its string) raises the
-    /// local and zeroes it with `rep stosw` x8. The datalayout follows the pin: no S, and the reason is data.
+    /// S16 made bench/parity/qbsp -Os zero a packed 16-byte local with `rep
+    /// stosb` x16 where the pin's m16 (no S in its string) raises the local
+    /// and zeroes it with `rep stosw` x8. The datalayout follows the pin: no S,
+    /// and the reason is data.
     #[test]
     fn the_datalayout_follows_the_pin_in_naming_no_stack_alignment() {
-        llrm_target::testing::assert_unstated_stack("x86-m16", stated("datalayout").unwrap(), stated("stack_alignment_unstated"));
+        llrm_target::testing::assert_unstated_stack(
+            "x86-m16",
+            stated("datalayout").unwrap(),
+            stated("stack_alignment_unstated"),
+        );
     }
 
-    /// A target that is exempt for having no S in its pin string and declares one anyway is caught by name.
+    /// A target that is exempt for having no S in its pin string and declares
+    /// one anyway is caught by name.
     #[test]
     #[should_panic(expected = "declares an S though its pin string has none")]
     fn an_exempt_target_that_declares_a_stack_alignment_fails() {
-        llrm_target::testing::assert_unstated_stack("x86-m16", "e-p:16:16-S16", Some("the pin's m16 datalayout has no S"));
+        llrm_target::testing::assert_unstated_stack(
+            "x86-m16",
+            "e-p:16:16-S16",
+            Some("the pin's m16 datalayout has no S"),
+        );
     }
 }

@@ -158,7 +158,8 @@ fn list_size(text: &str) -> Option<u32> {
     Some(count)
 }
 
-/// An error that is a parser fault, not a missing table row: the cycles tool stops on it.
+/// An error that is a parser fault, not a missing table row: the cycles tool
+/// stops on it.
 pub const UNPARSEABLE: &str = "unparseable displacement";
 
 fn operand(text: &str) -> Result<Operand, String> {
@@ -207,15 +208,18 @@ fn operand(text: &str) -> Result<Operand, String> {
             [_, "%pc"] => Ok(Operand::Mode(Mode::PcDisp, 0)),
             // a displacement that does not fit the brief format's 8 bits is
             // the full format's base displacement (68020 and up)
-            // an empty base is the full format's suppressed one: `@(ffffffff800020a0,%d0:l)`
-            [disp, base, _] if is_address(base) || *base == "%pc" || base.is_empty() => match (displacement(disp), *base == "%pc") {
-                (Some(d), _) if (-128..=127).contains(&d) && !base.is_empty() => {
-                    Ok(Operand::Mode(if *base == "%pc" { Mode::PcIndex } else { Mode::Index }, 0))
+            // an empty base is the full format's suppressed
+            // one: `@(ffffffff800020a0,%d0:l)`
+            [disp, base, _] if is_address(base) || *base == "%pc" || base.is_empty() => {
+                match (displacement(disp), *base == "%pc") {
+                    (Some(d), _) if (-128..=127).contains(&d) && !base.is_empty() => {
+                        Ok(Operand::Mode(if *base == "%pc" { Mode::PcIndex } else { Mode::Index }, 0))
+                    }
+                    (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
+                    (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
+                    (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
                 }
-                (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
-                (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
-                (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
-            },
+            }
             [base, index] if (is_address(base) || *base == "%pc") && is_index(index) => {
                 Ok(Operand::Mode(Mode::IndexB, 0))
             }
@@ -547,8 +551,10 @@ fn gnu_operand(text: &str) -> String {
             match parts.next() {
                 None => format!("({displacement},{base})"),
                 Some(index) => {
-                    // binutils prints an index displacement as bare hex, sign-extended to 64 bits
-                    let decimal = u64::from_str_radix(&displacement, 16).map_or(displacement, |bits| (bits as i64).to_string());
+                    // binutils prints an index displacement as bare hex,
+                    // sign-extended to 64 bits
+                    let decimal =
+                        u64::from_str_radix(&displacement, 16).map_or(displacement, |bits| (bits as i64).to_string());
                     format!("({decimal},{base},{})", index.split(':').next().unwrap_or(index))
                 }
             }

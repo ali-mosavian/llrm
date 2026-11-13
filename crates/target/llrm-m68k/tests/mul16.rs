@@ -43,7 +43,10 @@ fn two_unsigned_halves_are_multiplied_with_mulu_w_where_the_long_multiply_is_a_c
     for cpu in NO_LONG_MULTIPLY {
         for level in [Level::O2, Level::Os] {
             let out = asm(&product("zext", "zext"), cpu, level);
-            assert!(out.contains("mulu\t") && !out.contains("__mulsi3") && !out.contains("mulu.l"), "{cpu} {level:?}:\n{out}");
+            assert!(
+                out.contains("mulu\t") && !out.contains("__mulsi3") && !out.contains("mulu.l"),
+                "{cpu} {level:?}:\n{out}"
+            );
         }
     }
 }
@@ -105,7 +108,8 @@ fn the_word_multiply_is_priced_no_slower_than_the_long_one_on_every_cpu() {
 
 #[test]
 fn a_constant_operand_is_left_to_the_pins_folds() {
-    // `(x + 3) * 5` is `x * 5 + 15` in the pin; the half multiply must not take the product first
+    // `(x + 3) * 5` is `x * 5 + 15` in the pin; the half multiply must not take
+    // the product first
     let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
               define i32 @f(i16 %a) {\n  %x = zext i16 %a to i32\n  %s = add i32 %x, 3\n  %m = mul i32 %s, 5\n  ret i32 %m\n}";
     let out = asm(ir, "68000", Level::O2);

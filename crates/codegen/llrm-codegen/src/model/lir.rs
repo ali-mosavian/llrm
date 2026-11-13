@@ -895,9 +895,10 @@ impl Insn {
         self.volatile
     }
 
-    /// `MachineInstr::mayAlias` of two memory accesses (MachineInstr.cpp#L1558):
-    /// a call may; two loads do not; an access whose object a target did not say
-    /// may reach the other's. Ask it of accesses only.
+    /// `MachineInstr::mayAlias` of two memory accesses
+    /// (MachineInstr.cpp#L1558): a call may; two loads do not; an access
+    /// whose object a target did not say may reach the other's. Ask it of
+    /// accesses only.
     #[must_use]
     pub fn may_alias(
         &self,
@@ -2411,8 +2412,8 @@ mod tests {
         assert!(access(false, 1).may_alias(&call), "a call");
     }
 
-    /// A copy made to say something else (`with_what`) was built field by field:
-    /// the memory operand must come with it.
+    /// A copy made to say something else (`with_what`) was built field by
+    /// field: the memory operand must come with it.
     #[test]
     fn test_a_copy_with_other_semantics_keeps_its_memory_operand() {
         let one = access(true, 3);

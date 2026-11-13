@@ -1,6 +1,8 @@
-//! What z80 code costs by operation in T-states: `opcosts.txt`'s sums over the instruction forms, priced by the
-//! Zilog manual's table (`timing/z80.csv`) where the bytes side is priced by the forms' lengths. An operation that is
-//! a library call adds the routine's typical clocks (`runtime_size`); a fill and a copy are `ldir`, 21 T a byte.
+//! What z80 code costs by operation in T-states: `opcosts.txt`'s sums over the
+//! instruction forms, priced by the Zilog manual's table (`timing/z80.csv`)
+//! where the bytes side is priced by the forms' lengths. An operation that is a
+//! library call adds the routine's typical clocks (`runtime_size`); a fill and
+//! a copy are `ldir`, 21 T a byte.
 
 use llrm_mir::target::OperationCosts;
 
@@ -8,7 +10,8 @@ use crate::driver::DESCRIPTION;
 use crate::runtime_size::routine_clocks;
 use crate::timing::cost;
 
-/// The alias of `opcosts.txt` and the csv row it names (the bytes side is checked against the same rows).
+/// The alias of `opcosts.txt` and the csv row it names (the bytes side is
+/// checked against the same rows).
 pub const FORMS: [(&str, &str); 19] = [
     ("add_hl", "add hl;bc"),
     ("mov_rr", "ld b;c"),
@@ -37,7 +40,8 @@ fn form_clocks(alias: &str) -> i64 {
     i64::from(cost(row).unwrap_or_else(|| panic!("no row `{row}`")).taken)
 }
 
-/// A call to `routine` with `moves` byte moves around it: the call, the routine's typical body.
+/// A call to `routine` with `moves` byte moves around it: the call, the
+/// routine's typical body.
 fn library(
     routine: &str,
     moves: i64,
@@ -54,8 +58,9 @@ pub fn sheet() -> OperationCosts {
 fn compute() -> OperationCosts {
     let sheet = DESCRIPTION.operations(&form_clocks, 0);
     let ldir_byte = i64::from(cost("ldir").expect("ldir").taken);
-    // `ld (hl),v; ld e,l; ld d,h; inc de; ld bc,n; ldir` for a fill: the setup, then 21 T for each byte after the
-    // first; the generic count is in cells of four bytes.
+    // `ld (hl),v; ld e,l; ld d,h; inc de; ld bc,n; ldir` for a fill: the setup,
+    // then 21 T for each byte after the first; the generic count is in
+    // cells of four bytes.
     let fill_setup = 7 + 4 + 4 + 6 + 10 + i64::from(cost("ldir").expect("ldir").not_taken.expect("last pass"));
     OperationCosts {
         multiply: library("__mulhi3", 2),

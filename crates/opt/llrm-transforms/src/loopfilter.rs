@@ -46,7 +46,8 @@ pub fn scoped() -> bool {
     ONLY.with(|only| only.borrow().is_some())
 }
 
-/// Whether the loop headed by `header` is in the scope; every loop is, without one.
+/// Whether the loop headed by `header` is in the scope; every loop is, without
+/// one.
 pub fn allows(header: BlockId) -> bool {
     ONLY.with(|only| only.borrow().as_ref().is_none_or(|only| only.contains(&header)))
 }

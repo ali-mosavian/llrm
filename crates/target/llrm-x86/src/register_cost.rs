@@ -103,8 +103,9 @@ pub fn register_extra_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use llrm_lir::{Held, Imm, Operation};
+
+    use super::*;
 
     /// `encoding_class` lets greedy price one register per class; two registers
     /// of a class that took different bytes in some instruction would make it

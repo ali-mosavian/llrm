@@ -44,13 +44,14 @@ pub fn hot(module: &Module) -> bool {
     runs(module) >= hot_runs()
 }
 
-/// What a call saves at size, in clocks, when the compact `__divsi3` family (32 bits a call whatever the
-/// quotient) becomes the speed family with the small wide path, averaged over six shapes: `__modsi3`
-/// 4333/984, 4159/964, 4072/1531, 4072/1436, 3898/934, 4793/3249 (sim65).
+/// What a call saves at size, in clocks, when the compact `__divsi3` family (32
+/// bits a call whatever the quotient) becomes the speed family with the small
+/// wide path, averaged over six shapes: `__modsi3` 4333/984, 4159/964,
+/// 4072/1531, 4072/1436, 3898/934, 4793/3249 (sim65).
 pub const SAVED_AT_SIZE: f64 = 2700.0;
 
-/// The static runs of the 32-bit divisions of `module` that are not by a known byte: 10 per level of loop
-/// depth, times the runs of the function.
+/// The static runs of the 32-bit divisions of `module` that are not by a known
+/// byte: 10 per level of loop depth, times the runs of the function.
 pub fn runs(module: &Module) -> f64 {
     let calls = call_weights(module);
     let mut runs = 0.0;

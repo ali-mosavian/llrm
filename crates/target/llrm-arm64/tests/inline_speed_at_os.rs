@@ -1,6 +1,8 @@
-//! DEVIATE INL-SPEED-OS: at -Os an inline trial the byte count refuses is kept where its sites run in a hot
-//! loop and the copies save clocks. jpeg_single -Os: `clamp` (8 instructions) called 3 times per pixel of
-//! `convert`, 1.18 M calls, 16,886,488 instructions against clang's 16,273,546; inlined, 16,297,779 for +24 B.
+//! DEVIATE INL-SPEED-OS: at -Os an inline trial the byte count refuses is kept
+//! where its sites run in a hot loop and the copies save clocks. jpeg_single
+//! -Os: `clamp` (8 instructions) called 3 times per pixel of `convert`, 1.18 M
+//! calls, 16,886,488 instructions against clang's 16,273,546; inlined,
+//! 16,297,779 for +24 B.
 
 use std::process::Command;
 

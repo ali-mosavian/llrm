@@ -342,13 +342,19 @@ fn test_an_accumulator_immediate_takes_the_short_opcode() {
     }
 }
 
-/// `add al, 5` was `80 c0 05` (3 B) where the pin's `optimizeToFixedRegisterForm`
-/// makes `04 05`: select_of_constants -O1 was one byte over per function.
+/// `add al, 5` was `80 c0 05` (3 B) where the pin's
+/// `optimizeToFixedRegisterForm` makes `04 05`: select_of_constants -O1 was one
+/// byte over per function.
 #[test]
 fn test_a_byte_accumulator_immediate_takes_the_short_opcode() {
-    for (name, value, want) in
-        [("add", 5, "0405"), ("or", 4, "0c04"), ("and", 0xf, "240f"), ("xor", 0x55, "3455"), ("sub", 3, "2c03"), ("cmp", 7, "3c07")]
-    {
+    for (name, value, want) in [
+        ("add", 5, "0405"),
+        ("or", 4, "0c04"),
+        ("and", 0xf, "240f"),
+        ("xor", 0x55, "3455"),
+        ("sub", 3, "2c03"),
+        ("cmp", 7, "3c07"),
+    ] {
         assert_eq!(hex(&made(arith_imm(name, RegId::AL, value, At::bits16(0), false)).code), want);
     }
     assert_eq!(hex(&made(arith_imm("add", RegId::BL, 5, At::bits16(0), false)).code), "80c305");

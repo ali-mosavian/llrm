@@ -59,7 +59,8 @@ fn run_example(
     let profile_dir = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
     let exe = profile_dir.join("examples").join(name);
     if !exe.exists() {
-        // `cargo test --test scratch` builds no examples; only a full `cargo test` does.
+        // `cargo test --test scratch` builds no examples; only a full `cargo
+        // test` does.
         let profile = profile_dir.file_name().unwrap().to_string_lossy().into_owned();
         let mut build = std::process::Command::new(env!("CARGO"));
         build.args(["build", "-p", "llrm-m68k", "--example", name]);

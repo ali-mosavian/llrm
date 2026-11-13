@@ -129,9 +129,10 @@ fn a_step_by_one_in_the_low_word_with_a_constant_above_compiles() {
     assert!(!text.is_empty(), "{text}");
 }
 
-/// Eight long arguments on the stack, five adds of products: five of the seven carries were rebuilt by a compare (`pack` of
-/// os_locals_between_pushes at -O2: 9 instructions and a branch each, 362 B against SDCC's 270 B) where the same chain with seven
-/// arguments, or each add alone, took `adc hl, rr`.
+/// Eight long arguments on the stack, five adds of products: five of the seven
+/// carries were rebuilt by a compare (`pack` of os_locals_between_pushes at
+/// -O2: 9 instructions and a branch each, 362 B against SDCC's 270 B) where the
+/// same chain with seven arguments, or each add alone, took `adc hl, rr`.
 #[test]
 fn the_carries_of_a_chain_of_long_adds_over_stack_arguments_stay_in_the_flag() {
     let text = assembly(

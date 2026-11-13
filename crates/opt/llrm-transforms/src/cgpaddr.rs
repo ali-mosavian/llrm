@@ -304,7 +304,8 @@ impl CgpAddr {
         let extended = match lowering_for(analyses, CgpStep::ExtPromotion) {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
-                let costs_extra = !bytes_strict && analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
+                let costs_extra =
+                    !bytes_strict && analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
                 let promoted = exts_optimized(unit, &*lowering, &mut state, costs_extra);
                 ext_uses(unit, &*lowering, &mut state) | promoted
             }

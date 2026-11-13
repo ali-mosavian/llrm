@@ -1,5 +1,6 @@
-//! x86-64 -O1 tries the inlines its size bound refused (DEVIATE INL-O1-TRIAL-M64): uint64_to_float.c kept six
-//! calls of `classify` and its conversions, 280 B where clang's folded program is 65 B. Needs `LLRM_LLC`.
+//! x86-64 -O1 tries the inlines its size bound refused (DEVIATE
+//! INL-O1-TRIAL-M64): uint64_to_float.c kept six calls of `classify` and its
+//! conversions, 280 B where clang's folded program is 65 B. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

@@ -275,12 +275,22 @@ impl FixupBw {
     }
 }
 
-/// `one` reads a frame cell. Before the frame layout it has no encoding to size, and the pin widens a spill
-/// reload (`MOV8rm` of a slot) as it does any load: above real mode the dword form is not refused for it.
+/// `one` reads a frame cell. Before the frame layout it has no encoding to
+/// size, and the pin widens a spill reload (`MOV8rm` of a slot) as it does any
+/// load: above real mode the dword form is not refused for it.
 fn reads_frame_cell(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.sources.iter().any(|place| matches!(place, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)))
-    })
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.sources
+                .iter()
+                .any(
+                    |place| matches!(
+                        place,
+                        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
+                    ),
+                ),
+        )
 }
 
 /// `one` with the opcode `name`, the destination `wide` and, if given, the
@@ -437,9 +447,11 @@ mod tests {
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "movzx");
     }
-    /// `mov cl, [frame-54]` at 64 bits: a spill slot has no encoding until the frame layout either, so the probe
-    /// refused `movzx ecx, ...` and the partial write waited on the last write of RCX, a whole clamp chain of
-    /// the loop before (jpeg_fixed -O2/-O3 m64: +8% clocks against clang at 3% fewer instructions).
+    /// `mov cl, [frame-54]` at 64 bits: a spill slot has no encoding until the
+    /// frame layout either, so the probe refused `movzx ecx, ...` and the
+    /// partial write waited on the last write of RCX, a whole clamp chain of
+    /// the loop before (jpeg_fixed -O2/-O3 m64: +8% clocks against clang at 3%
+    /// fewer instructions).
     #[test]
     fn a_byte_reload_of_a_frame_slot_is_widened_at_64_bits() {
         use crate::model::ir::{Addr, Mem, Space};
@@ -461,8 +473,9 @@ mod tests {
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "movzx");
     }
-    /// Real mode sizes exactly (`0F B6` is a byte longer there, and the 66h prefix more): the same reload at 16
-    /// bits keeps the byte load, as before the frame-cell exception.
+    /// Real mode sizes exactly (`0F B6` is a byte longer there, and the 66h
+    /// prefix more): the same reload at 16 bits keeps the byte load, as
+    /// before the frame-cell exception.
     #[test]
     fn a_byte_reload_of_a_frame_slot_stays_at_16_bits() {
         use crate::model::ir::{Addr, Mem, Space};
@@ -491,13 +504,7 @@ mod tests {
     fn a_byte_load_stays_where_bytes_are_strict_and_widens_at_speed() {
         let kept = |strict_bytes: bool| {
             let cell = Loc::Mem(crate::model::ir::Mem { through: RegId::ESI, ..crate::model::ir::Mem::new(None, 1) });
-            let load = Arc::new(Insn::new(
-                0,
-                Some((0, 0)),
-                Some(copy(reg(RegId::CL, 1), cell)),
-                vec![],
-                vec![],
-            ));
+            let load = Arc::new(Insn::new(0, Some((0, 0)), Some(copy(reg(RegId::CL, 1), cell)), vec![], vec![]));
             let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
             let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
             ret.reads_complete = true;

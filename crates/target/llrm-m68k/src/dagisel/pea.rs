@@ -4,8 +4,8 @@
 //! absolute short operand takes 4 (16 clk) and pushes the sign-extended
 //! address. [`crate::callpush`] chooses it for an argument push.
 //!
-//! `pea (d,An)` pushes an address register plus a displacement: 4 B, against the
-//! pin's `move An,Dn; addq #k,Dn; move Dn,(d,sp)`.
+//! `pea (d,An)` pushes an address register plus a displacement: 4 B, against
+//! the pin's `move An,Dn; addq #k,Dn; move Dn,(d,sp)`.
 //!
 //! DEVIATE: the pin's M68k has no `PEA`. Reason: best of gcc and clang is the
 //! goal; gcc pushes small constants with it. Exit: none.

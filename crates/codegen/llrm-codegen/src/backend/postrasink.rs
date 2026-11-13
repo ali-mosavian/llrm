@@ -417,9 +417,10 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 continue;
             }
             let both = written.or(&read);
-            // A later instruction that names no register (a copy of a value to its
-            // coalesced twin) still reads the value the copy defines: left behind,
-            // it would read a value defined in another block.
+            // A later instruction that names no register (a copy of a value to
+            // its coalesced twin) still reads the value the copy
+            // defines: left behind, it would read a value defined
+            // in another block.
             if insns[&at][index + 1..].iter().any(|other| {
                 touches(regs, body.bits, other, &both, false)
                     || touches(regs, body.bits, other, &written, true)
@@ -695,9 +696,9 @@ mod tests {
         assert_eq!((copies_in(&after, 1), copies_in(&after, 9)), (0, 1));
     }
 
-    /// qcport render/sc.c -O2 x86_16-dos: `mov si, cx` sank past a register-less copy
-    /// of its value, which then read it from the other block: "value is read but
-    /// never defined".
+    /// qcport render/sc.c -O2 x86_16-dos: `mov si, cx` sank past a
+    /// register-less copy of its value, which then read it from the other
+    /// block: "value is read but never defined".
     #[test]
     fn test_a_copy_stays_ahead_of_a_later_reader_of_its_value() {
         let mut body = shape(false, false);

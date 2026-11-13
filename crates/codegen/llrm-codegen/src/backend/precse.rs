@@ -320,7 +320,8 @@ impl Walk<'_> {
                         .count(),
                 );
             let only_one = reads == 1 && self.readers.get(&used).is_some_and(|readers| readers.len() == 1);
-            // `MRI->constrainRegClass(SrcReg, ...)`: not where the source cannot be of the class the reader needs
+            // `MRI->constrainRegClass(SrcReg, ...)`: not where the source
+            // cannot be of the class the reader needs
             if !self.allows(used, source) {
                 continue;
             }
@@ -359,16 +360,23 @@ impl Walk<'_> {
             return false;
         }
         let Some(what) = one.what.as_ref() else { return false };
-        let shared_id =
-            self.body.blocks[shared_block].insns.iter().find(|made| made.defines.first() == Some(&shared)).map(|made| made.id());
+        let shared_id = self.body.blocks[shared_block]
+            .insns
+            .iter()
+            .find(|made| made.defines.first() == Some(&shared))
+            .map(|made| made.id());
         let position = |at: usize, id: u64| self.body.blocks[at].insns.iter().position(|made| made.id() == id);
         let defined_in = |key: u32| {
-            self.body.blocks.iter().position(|candidate| {
-                candidate.phis.iter().any(|phi| phi.result == key)
-                    || candidate.insns.iter().any(|made| made.defines.contains(&key))
-            })
+            self.body
+                .blocks
+                .iter()
+                .position(
+                    |candidate| candidate.phis.iter().any(|phi| phi.result == key)
+                        || candidate.insns.iter().any(|made| made.defines.contains(&key)),
+                )
         };
-        // Whether `reader` reads `key` after the instruction `origin` of block `from`.
+        // Whether `reader` reads `key` after the instruction `origin` of block
+        // `from`.
         let after = |reader: &Reader, key: u32, from: usize, origin: u64| match reader {
             Reader::Insn(id) => match self.block_of.get(id) {
                 Some(&at) if at == from => {
@@ -379,12 +387,14 @@ impl Walk<'_> {
                 None => true,
             },
             Reader::Phi(join) => self.body.blocks[*join].phis.iter().any(|phi| {
-                phi.incoming.iter().any(|&(edge_from, value)| {
-                    self.name(value) == key
-                        && self.by_at.get(&edge_from).is_none_or(|&edge| {
-                            edge == from || reaches_avoiding(self.body, &self.by_at, from, edge, defined_in(key))
-                        })
-                })
+                phi.incoming
+                    .iter()
+                    .any(
+                        |&(edge_from, value)| self.name(value) == key
+                            && self.by_at.get(&edge_from).is_none_or(|&edge| {
+                                edge == from || reaches_avoiding(self.body, &self.by_at, from, edge, defined_in(key))
+                            }),
+                    )
             }),
         };
         // (live past the shared point, live past `one`) of one operand.
@@ -398,7 +408,8 @@ impl Walk<'_> {
                 .flatten()
                 .filter(|reader| **reader != Reader::Insn(one.id()) && Some(**reader) != shared_id.map(Reader::Insn))
                 .collect();
-            let past_shared = shared_id.is_some_and(|origin| others.iter().any(|reader| after(reader, key, shared_block, origin)));
+            let past_shared =
+                shared_id.is_some_and(|origin| others.iter().any(|reader| after(reader, key, shared_block, origin)));
             Some((past_shared, others.iter().any(|reader| after(reader, key, block, one.id()))))
         };
         let operands: Vec<(bool, bool)> = what.sources.iter().filter_map(lives).collect();
@@ -468,8 +479,8 @@ impl Walk<'_> {
     }
 
     /// The pin reads a value a call or a return needs in a particular register
-    /// through a `COPY` into it (a call's argument, the returned value). Another
-    /// fixed-register reader is not one.
+    /// through a `COPY` into it (a call's argument, the returned value).
+    /// Another fixed-register reader is not one.
     fn pinned_read(
         &self,
         id: u64,
@@ -1028,7 +1039,8 @@ pub fn shared_constrained(
                 mine.push(key);
                 continue;
             }
-            // not where the shared result cannot be of the class the removed one's readers need
+            // not where the shared result cannot be of the class the removed
+            // one's readers need
             if !walk.allows(old, shared_value) {
                 walk.table.insert(key.clone(), (old, number));
                 mine.push(key);
@@ -1686,10 +1698,26 @@ mod tests {
     fn test_a_movabs_a_call_separates_from_its_use_is_shared() {
         let imm = || Loc::Imm(llrm_lir::Imm { value: 0xaaaa_aaaa_aaaa_aaabu64 as i64, width: 8, address: None });
         let make = |at: i64, result: u32| {
-            insn(at, Operation::Move, "mov", vec![Loc::Held(Held { value: result, width: 8, offset: 0 })], vec![imm()], vec![result], vec![])
+            insn(
+                at,
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(Held { value: result, width: 8, offset: 0 })],
+                vec![imm()],
+                vec![result],
+                vec![],
+            )
         };
         let read = |at: i64, value: u32, result: u32| {
-            insn(at, Operation::Binary, "add", vec![held(result)], vec![held(value), held(1)], vec![result], vec![value, 1])
+            insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![held(result)],
+                vec![held(value), held(1)],
+                vec![result],
+                vec![value, 1],
+            )
         };
         let call = insn(2, Operation::Call, "call", vec![], vec![], vec![], vec![]);
         let blocks = vec![
@@ -1907,13 +1935,26 @@ mod tests {
         };
         let mut join_insns = vec![];
         if after {
-            join_insns.push(insn(7, Operation::Binary, "add", vec![held(6)], vec![held(1), held(5)], vec![6], vec![1, 5]));
+            join_insns.push(insn(
+                7,
+                Operation::Binary,
+                "add",
+                vec![held(6)],
+                vec![held(1), held(5)],
+                vec![6],
+                vec![1, 5],
+            ));
         }
         join_insns.push(insn(8, Operation::Return, "ret", vec![], vec![], vec![], vec![]));
         let mut join = LirBlock::new(3, join_insns);
         join.phis = vec![crate::model::lir::Phi { result: 5, incoming: vec![(1, 4), (2, 1)] }].into();
-        let mut body =
-            LirBody::new("diamond", 0, vec![head.into(), then.into(), other.into(), join.into()], IndexMap::default(), IndexMap::default());
+        let mut body = LirBody::new(
+            "diamond",
+            0,
+            vec![head.into(), then.into(), other.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         body

@@ -378,7 +378,8 @@ pub fn cast(
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Float80(*bits) }))
         }
         (CastOp::BitCast, Type::Float(FloatKind::F128)) => {
-            let (ConstantKind::Int(bits), Type::Int(128)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            let (ConstantKind::Int(bits), Type::Int(128)) =
+                (&context.get(c).kind, context.types.get(context.get(c).ty))
             else {
                 return None;
             };

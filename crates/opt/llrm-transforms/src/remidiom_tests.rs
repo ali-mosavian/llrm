@@ -189,9 +189,10 @@ fn test_a_negated_counter_is_the_negated_remainder() {
     assert!(!text.contains("%y"), "the dead -x counter is gone: {text}");
 }
 
-/// What LSR left of `i % 97 + 2` in recpow's loop at m64 -Os: the counter `%n` (= `%x` + 40) is added
-/// after `3 - q * 97`, so the subtrahend's left operand is the constant 3. The divide, multiply and
-/// subtract stayed (`div`, `imul`, `neg`, `lea` where gcc has `idiv` and `add edx, 2`): recpow -Os
+/// What LSR left of `i % 97 + 2` in recpow's loop at m64 -Os: the counter `%n`
+/// (= `%x` + 40) is added after `3 - q * 97`, so the subtrahend's left operand
+/// is the constant 3. The divide, multiply and subtract stayed (`div`, `imul`,
+/// `neg`, `lea` where gcc has `idiv` and `add edx, 2`): recpow -Os
 /// 209 B against gcc's 175.
 const SHIFTED: &str = "define void @f(ptr %p) {
 entry:

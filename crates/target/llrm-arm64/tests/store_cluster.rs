@@ -39,7 +39,10 @@ fn loads_with_work_between_them_pair() {
 #[test]
 fn slot_loads_with_work_between_them_pair() {
     let text = body("a_chain_of_slot_loads");
-    let data_pairs = text.lines().filter(|line| line.contains("ldp") && (line.contains("[sp]") || line.contains("[sp, #16]"))).count();
+    let data_pairs = text
+        .lines()
+        .filter(|line| line.contains("ldp") && (line.contains("[sp]") || line.contains("[sp, #16]")))
+        .count();
     assert_eq!(data_pairs, 2, "{text}");
 }
 

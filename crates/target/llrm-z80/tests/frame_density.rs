@@ -1,6 +1,7 @@
 //! Frame objects past IX's reach are laid by density, as the pin's
 //! `orderFrameObjects` does. By size alone a cold 100-byte array lay nearest
-//! IX and eight stores to the hot 120-byte one went through `ld iy, #n; add iy, sp`.
+//! IX and eight stores to the hot 120-byte one went through `ld iy, #n; add iy,
+//! sp`.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};

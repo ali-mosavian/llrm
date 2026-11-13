@@ -1,8 +1,8 @@
-//! `llrm-z80-llc [-S] [-g] [-O<n>] [-f[no-]PASS...] [-o OUT] FILE.ll`: LLVM IR from clang's
-//! front end alone through the mid-end and the Z80 backend to sdasz80 text.
-//! `-S` is the only output; `-g` adds SDCC's `C$` line symbols (no `.adb`). A
-//! function the backend refuses is named on stderr and the exit status is 1;
-//! the others are still written.
+//! `llrm-z80-llc [-S] [-g] [-O<n>] [-f[no-]PASS...] [-o OUT] FILE.ll`: LLVM IR
+//! from clang's front end alone through the mid-end and the Z80 backend to
+//! sdasz80 text. `-S` is the only output; `-g` adds SDCC's `C$` line symbols
+//! (no `.adb`). A function the backend refuses is named on stderr and the exit
+//! status is 1; the others are still written.
 
 use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};

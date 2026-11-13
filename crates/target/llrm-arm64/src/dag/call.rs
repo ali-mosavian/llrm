@@ -21,9 +21,9 @@
 //! 16 bytes of stack aligned to 16.
 //!
 //! DEVIATE SD526: not translated are `f16` and vectors, HFAs, a `byval`
-//! argument too large to copy in line, a tail call that needs stack arguments or an
-//! argument area of a different size, and a callee reached through the GOT;
-//! `accepts` refuses what it can see. Exit: B3.
+//! argument too large to copy in line, a tail call that needs stack arguments
+//! or an argument area of a different size, and a callee reached through the
+//! GOT; `accepts` refuses what it can see. Exit: B3.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp` at the pin: `LowerCall`, `LowerCallResult`,
@@ -112,8 +112,9 @@ fn place(
             if sret {
                 return Location::Register(reg::X8);
             }
-            // `CCIfByVal<CCPassByVal<8, 8>>`, `CCState::HandleByVal`: the bytes are in the stack area, at least 8 of
-            // them, aligned to at least 8.
+            // `CCIfByVal<CCPassByVal<8, 8>>`, `CCState::HandleByVal`: the bytes
+            // are in the stack area, at least 8 of them, aligned to
+            // at least 8.
             if let Some(byval) = byval {
                 let align = u64::from(byval.align).max(8);
                 let bytes = u64::from(byval.size).max(8).next_multiple_of(8);
@@ -368,7 +369,8 @@ impl TargetCalling for Aarch64Calling {
     }
 
     /// An `sret` pointer is an ordinary pointer to the builder; `x8` carries
-    /// it. A `byval` one is the address of the bytes the hook copies into the argument area.
+    /// it. A `byval` one is the address of the bytes the hook copies into the
+    /// argument area.
     fn passes_in_place(
         &self,
         attribute: &str,
@@ -380,8 +382,8 @@ impl TargetCalling for Aarch64Calling {
         true
     }
 
-    /// `isEligibleForTailCallOptimization`: a caller's `byval` parameter is a pointer into the area a tail call would
-    /// reuse.
+    /// `isEligibleForTailCallOptimization`: a caller's `byval` parameter is a
+    /// pointer into the area a tail call would reuse.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L10175>
     fn byval_parameter_blocks_tail_call(&self) -> bool {
         true
@@ -412,11 +414,13 @@ impl TargetCalling for Aarch64Calling {
         if !outs.iter().chain(&ins).all(|&(vt, arg_vt, split, ..)| integer(vt) && known(arg_vt, split)) {
             return Err("an arm64 argument or result that is no integer or float");
         }
-        // `getMemcpy` of a `byval` argument expands in line only up to a bound; a larger one is a libcall in the call
-        // sequence, which the hook does not make (DEVIATE SD526).
+        // `getMemcpy` of a `byval` argument expands in line only up to a bound;
+        // a larger one is a libcall in the call sequence, which the
+        // hook does not make (DEVIATE SD526).
         if outs.iter().any(|&(.., byval)| {
             byval.is_some_and(|byval| {
-                byval.size == 0 || crate::dag::memops::pieces(u64::from(byval.size)).len() > crate::dag::memops::COPY_OPS
+                byval.size == 0
+                    || crate::dag::memops::pieces(u64::from(byval.size)).len() > crate::dag::memops::COPY_OPS
             })
         }) {
             return Err("an arm64 byval argument too large to copy in line");
@@ -517,7 +521,8 @@ impl TargetCalling for Aarch64Calling {
                         .get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, reg::SP, EVT::I64));
                     let at = dag.get_constant(offset as u128, EVT::I64);
                     let address = dag.get_node(ISD::Add, EVT::I64, &[sp, at]);
-                    // a `byval` argument: its bytes are copied there (`getMemcpy`)
+                    // a `byval` argument: its bytes are copied there
+                    // (`getMemcpy`)
                     if let Some(byval) = outs[index].byval {
                         let size = dag.get_constant(u128::from(byval.size), EVT::I64);
                         let copy = Self::block_copy(dag, MEMCPY_Q, chain, address, value, size)
@@ -609,7 +614,8 @@ impl TargetCalling for Aarch64Calling {
                     dag.get_copy_from_reg(chain, vreg, part.vt)
                 }
                 Location::Stack { offset, bytes } if part.byval.is_some() => {
-                    // `LowerFormalArguments`: a `byval` parameter is the address of its fixed object, written to
+                    // `LowerFormalArguments`: a `byval` parameter is the
+                    // address of its fixed object, written to
                     // (not immutable)
                     let index = fixed(bytes, offset, false);
                     dag.get_frame_index(EVT::I64, index)

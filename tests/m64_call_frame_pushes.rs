@@ -1,8 +1,9 @@
 //! x86-64 passes stack arguments with pushes where the pin does
 //! (`X86CallFrameOptimization`, `PUSH64`): two stack arguments are two pushes
-//! and one `add rsp, 16` after the call (the prologue's own `push rax` aligns). Selection made `sub rsp, 16` and two
-//! `mov [rsp+k], r` stores (os_locals_between_pushes -O2 was +21 B over the
-//! pin's llc), because only m32 emitted the call-frame pseudos the pass reads.
+//! and one `add rsp, 16` after the call (the prologue's own `push rax` aligns).
+//! Selection made `sub rsp, 16` and two `mov [rsp+k], r` stores
+//! (os_locals_between_pushes -O2 was +21 B over the pin's llc), because only
+//! m32 emitted the call-frame pseudos the pass reads.
 
 mod common;
 

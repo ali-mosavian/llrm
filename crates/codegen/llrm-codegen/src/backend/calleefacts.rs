@@ -105,9 +105,10 @@ pub struct CalleeFacts {
     uncalled: BTreeSet<String>,
 }
 
-/// The functions of `module` no other definition can replace and that are not otherwise
-/// opaque: defined with external linkage, hidden or protected (or default visibility where
-/// the module is not shared-library code: `shouldAssumeDSOLocal`), and not named but as a callee.
+/// The functions of `module` no other definition can replace and that are not
+/// otherwise opaque: defined with external linkage, hidden or protected (or
+/// default visibility where the module is not shared-library code:
+/// `shouldAssumeDSOLocal`), and not named but as a callee.
 fn local_definitions(module: &Module) -> BTreeSet<GlobalId> {
     use llrm_mir::module::{Linkage, Visibility};
     let named = llrm_mir::callgraph::addressed(module);
@@ -156,9 +157,10 @@ impl CalleeFacts {
         Self::of_binding(module, false)
     }
 
-    /// [`CalleeFacts::of`], where `binds_local` lets a function that binds locally
-    /// (`binds_local`) take part too: its callers in the module may rely on what it
-    /// writes though others call it by its convention, which it keeps.
+    /// [`CalleeFacts::of`], where `binds_local` lets a function that binds
+    /// locally (`binds_local`) take part too: its callers in the module may
+    /// rely on what it writes though others call it by its convention,
+    /// which it keeps.
     pub fn of_binding(
         module: &Module,
         binds_local: bool,
@@ -339,8 +341,9 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
     let root = |register: RegId| regs.root(register);
     let mut found = BTreeSet::new();
     for (at, one) in body.insns().into_iter().enumerate() {
-        // The entry's `delivers` is where the arguments arrive, not a write of them: the pin's
-        // `RegUsageInfoCollector` takes the registers the body modifies (IPRA-ARGHINT).
+        // The entry's `delivers` is where the arguments arrive, not a write of
+        // them: the pin's `RegUsageInfoCollector` takes the registers
+        // the body modifies (IPRA-ARGHINT).
         let arrival = at == 0 && one.call.is_none() && one.requires.is_empty();
         if let Some(what) = &one.what {
             for place in &what.dests {
@@ -358,7 +361,8 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
             None => found.extend(one.clobbers.iter().copied().map(root)),
         }
         let delivered: &[_] = if arrival { &[] } else { &one.delivers };
-        // A sibling call is a `jmp` that reads the registers it passes; what its callee writes is added by `record`.
+        // A sibling call is a `jmp` that reads the registers it passes; what
+        // its callee writes is added by `record`.
         let sibling = one.what.as_ref().is_some_and(|what| what.is_sibling_call());
         let required: &[_] = if sibling { &[] } else { &one.requires };
         found.extend(required.iter().chain(delivered).map(|(_, register)| root(*register)));
@@ -418,10 +422,11 @@ mod tests {
         assert!(!takes_part(cycle, "ping") && !takes_part(cycle, "pong"), "a cycle of calls");
     }
 
-    /// Every m32 function was entered at 8 whatever its convention: `-mabi=sysv`
-    /// code, whose System V convention keeps the stack 16-aligned at a call
-    /// (`calling.toml`), padded its calls to the default family's 8, and a
-    /// sysv `h` holding a double was framed for 8.
+    /// Every m32 function was entered at 8 whatever its convention:
+    /// `-mabi=sysv` code, whose System V convention keeps the stack
+    /// 16-aligned at a call (`calling.toml`), padded its calls to the
+    /// default family's 8, and a sysv `h` holding a double was framed for
+    /// 8.
     #[test]
     fn a_function_is_entered_at_its_conventions_stack_alignment() {
         let double = |cc: &str, name: &str| {

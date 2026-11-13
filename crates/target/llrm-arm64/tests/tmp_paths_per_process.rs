@@ -1,6 +1,7 @@
-//! A test that wrote into a fixed `/tmp/llrm-...` path raced with the same test in another
-//! session (llrm-m68k `llc_flags` failed 2026-11-09 on another run's half-written file).
-//! Scratch paths are `tempfile::tempdir()`s: unique per call, removed on drop.
+//! A test that wrote into a fixed `/tmp/llrm-...` path raced with the same test
+//! in another session (llrm-m68k `llc_flags` failed 2026-11-09 on another run's
+//! half-written file). Scratch paths are `tempfile::tempdir()`s: unique per
+//! call, removed on drop.
 
 #[test]
 fn scratch_paths_in_tests_are_not_fixed() {

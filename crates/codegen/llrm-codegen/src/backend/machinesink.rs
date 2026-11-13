@@ -28,10 +28,10 @@
 //!  b4: r = phi [b1: v] [b2: x]
 //! ```
 //!
-//! `hasStoreBetween` asks `Insn::may_alias` of each store (`StoreInstrCache`); an
-//! instruction with no `Insn::memory` may alias anything, so a body whose target
-//! states none (x86) counts every store, as `mayAlias` without operands does.
-//! (Was DEVIATE M7, row 44, retired 2026-11-09 by the memory operand.)
+//! `hasStoreBetween` asks `Insn::may_alias` of each store (`StoreInstrCache`);
+//! an instruction with no `Insn::memory` may alias anything, so a body whose
+//! target states none (x86) counts every store, as `mayAlias` without operands
+//! does. (Was DEVIATE M7, row 44, retired 2026-11-09 by the memory operand.)
 //!
 //! Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
 //! instruction goes to a post-dominating block when no in-cycle operand it
@@ -254,7 +254,10 @@ pub(crate) fn may_store(one: &Insn) -> bool {
 /// aliasing whatever it moves.
 pub(crate) fn ordered_access(one: &Insn) -> bool {
     let Some(what) = &one.what else { return true };
-    one.volatile() || one.call.is_some() || matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape)
+    one.volatile() || one.call.is_some() || matches!(
+        what.op,
+        Operation::Call | Operation::Barrier | Operation::Escape
+    )
 }
 
 /// `TII->isAsCheapAsAMove`: a copy or a move of a constant, the constant as
@@ -640,28 +643,22 @@ impl Sinker {
         // spelled through is not a read of one.
         // A local object's cell is a frame index in the pin too: `%stack.N`
         // carries no register until frame lowering, so its load sinks.
-        let frame_cell = one
-            .what
-            .as_ref()
-            .is_some_and(
-                |what| {
-                    let mut cells = what
-                        .sources
-                        .iter()
-                        .chain(&what.dests)
-                        .filter_map(
-                            |place| match place {
-                                Loc::Mem(mem) => Some(mem),
-                                _ => None,
-                            },
-                        );
-                    cells.clone().next().is_some()
-                        && cells.all(|mem| {
-                            mem.base.is_none()
-                                && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
-                        })
-                },
-            );
+        let frame_cell = one.what.as_ref().is_some_and(|what| {
+            let mut cells = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .filter_map(
+                    |place| match place {
+                        Loc::Mem(mem) => Some(mem),
+                        _ => None,
+                    },
+                );
+            cells.clone().next().is_some()
+                && cells.all(|mem| {
+                    mem.base.is_none() && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                })
+        });
         let fixed_stack = frame_cell || one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
         // DEVIATE (segment-reads): an access through the default data segment
@@ -2477,9 +2474,9 @@ mod tests {
 
     /// QCport host/bench.c, every level +6 B: a load of a local array element
     /// through a virtual index (`[bp+di-94]`) stayed above the branch whose
-    /// one arm pushed it, and was spilled (`mov ax,[bp+di-94]; mov [bp-118],ax`).
-    /// The pin's local is a frame index and its index register is virtual:
-    /// nothing physical is read, so it sinks.
+    /// one arm pushed it, and was spilled (`mov ax,[bp+di-94]; mov
+    /// [bp-118],ax`). The pin's local is a frame index and its index
+    /// register is virtual: nothing physical is read, so it sinks.
     #[test]
     fn test_a_load_of_an_indexed_local_cell_sinks_into_the_arm_that_reads_it() {
         use crate::model::ir::{Addr, Mem, Space};

@@ -518,8 +518,9 @@ impl DataLayout {
         (constant, variable)
     }
 
-    /// `collect_offset` and the type the last index selects (`GTI.getIndexedType()`
-    /// of the last operand; the source type for a lone index).
+    /// `collect_offset` and the type the last index selects
+    /// (`GTI.getIndexedType()` of the last operand; the source type for a
+    /// lone index).
     pub fn collect_offset_typed(
         &self,
         types: &Types,

@@ -264,15 +264,16 @@ pub fn assembly(
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
 }
 
-/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os byte model
-/// refused within its error, inlined in a second compile and kept per chain (caller and callees)
-/// if the backend writes those functions in fewer bytes. The model is within 25% of the written
-/// bytes for two functions in three, so a refusal that close is the backend's to decide.
+/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
+/// byte model refused within its error, inlined in a second compile and kept
+/// per chain (caller and callees) if the backend writes those functions in
+/// fewer bytes. The model is within 25% of the written bytes for two functions
+/// in three, so a refusal that close is the backend's to decide.
 ///
-/// Compile time: a program with no such refusal compiles once. One with some runs the mid-end
-/// twice and the backend on the functions whose bodies differ twice (`trial::differing`),
-/// never on the whole program; a chain set that is only partly kept compiles the mid-end a third
-/// time.
+/// Compile time: a program with no such refusal compiles once. One with some
+/// runs the mid-end twice and the backend on the functions whose bodies differ
+/// twice (`trial::differing`), never on the whole program; a chain set that is
+/// only partly kept compiles the mid-end a third time.
 fn trial_inlined(
     built: Program,
     text: &str,
@@ -280,19 +281,29 @@ fn trial_inlined(
 ) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
-    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions);
+    let limit = built
+        .target
+        .tti()
+        .and_then(|tti| tti.opt_size_inline_trial_limits())
+        .map_or(0, |(_, instructions)| instructions);
     if request.level != Level::Os || sites.is_empty() {
         return Ok((built, Vec::new()));
     }
     if instructions(&built) > limit {
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
-            eprintln!("trial inline: skipped, {} sites in {} instructions (limit {limit})", sites.len(), instructions(&built));
+            eprintln!(
+                "trial inline: skipped, {} sites in {} instructions (limit {limit})",
+                sites.len(),
+                instructions(&built)
+            );
         }
         return Ok((built, Vec::new()));
     }
     let kept_unroll = trial::take();
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
-    let chain = |program: &Program, cut: &std::collections::BTreeSet<String>| -> Option<std::collections::BTreeMap<String, i64>> {
+    let chain = |program: &Program,
+                 cut: &std::collections::BTreeSet<String>|
+     -> Option<std::collections::BTreeMap<String, i64>> {
         let mut only = program.clone();
         only.modules[0] = trial::only(&program.modules[0], cut);
         let rows = tail(only, request, false, true).ok()?.functions;
@@ -310,7 +321,13 @@ fn trial_inlined(
     };
     let flags = trial::accepted(&sites, &kept_bytes, &other_bytes);
     if debug {
-        eprintln!("trial inline: {} sites, {} kept; {} functions differ; {} instructions", sites.len(), flags.iter().filter(|one| **one).count(), cut.len(), instructions(&built));
+        eprintln!(
+            "trial inline: {} sites, {} kept; {} functions differ; {} instructions",
+            sites.len(),
+            flags.iter().filter(|one| **one).count(),
+            cut.len(),
+            instructions(&built)
+        );
     }
     if flags.iter().all(|one| !one) {
         trial::restore(kept_unroll);
@@ -663,10 +680,13 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
-    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the soft stack is not realigned and the
-    /// frame keeps `STACK_ALIGN` (1); an `align 2` local from the front end is clamped to it at pipeline entry, so
-    /// `ptr & 1` is no longer folded to 0 for an object on an odd frame. The pin states what a frame keeps the same
-    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and argument areas, then 2.
+    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the
+    /// soft stack is not realigned and the frame keeps `STACK_ALIGN` (1);
+    /// an `align 2` local from the front end is clamped to it at pipeline
+    /// entry, so `ptr & 1` is no longer folded to 0 for an object on an odd
+    /// frame. The pin states what a frame keeps the same
+    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and
+    /// argument areas, then 2.
     fn kept_stack_align(&self) -> Option<u64> {
         Some(crate::frame::STACK_ALIGN as u64)
     }
@@ -887,7 +907,8 @@ fn write_constant(
     }
 }
 
-/// The trips each block of each function runs, from the module a function was selected from.
+/// The trips each block of each function runs, from the module a function was
+/// selected from.
 fn estimate_weights(
     module: &llrm_mir::module::Module,
     names: &[String],

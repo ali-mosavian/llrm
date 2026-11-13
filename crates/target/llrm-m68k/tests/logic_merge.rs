@@ -124,10 +124,10 @@ fn a_word_row_after_a_long_one_leaves_the_upper_half_to_the_long_mask() {
     assert_eq!(merged(vec![row("AND32di", 0, 255), row("AND16di", 0, 1)]), one("AND32di", 1));
 }
 
-/// A call-frame row (`ADJCALLSTACKDOWN`, which sets the codes) the scheduler left between the
-/// byte mask and the mask of one kept `and.l #255,%d0` before `and.l #1,%d0` in
-/// overflow_builtins at m68k-68000 (+4 B). A row that only sets the codes
-/// cannot stop the merge: the second row sets them again.
+/// A call-frame row (`ADJCALLSTACKDOWN`, which sets the codes) the scheduler
+/// left between the byte mask and the mask of one kept `and.l #255,%d0` before
+/// `and.l #1,%d0` in overflow_builtins at m68k-68000 (+4 B). A row that only
+/// sets the codes cannot stop the merge: the second row sets them again.
 #[test]
 fn a_row_between_that_only_sets_the_codes_does_not_stop_the_merge() {
     let desc = local::code_of("ADJCALLSTACKDOWN").and_then(local::desc).expect("the call-frame row");

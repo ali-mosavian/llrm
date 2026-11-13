@@ -71,12 +71,14 @@ impl Level {
     }
 }
 
-/// The `-f` switches of the command line (`-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end run of the process: the
+/// The `-f` switches of the command line (`-fno-inline=NAME`,
+/// `-fexcess-precision=`), applied to every mid-end run of the process: the
 /// same parser as every other backend's `llc`.
 static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
     std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
 
-/// Records `flag` if the driver passes it on to a backend; false when it is not one.
+/// Records `flag` if the driver passes it on to a backend; false when it is not
+/// one.
 pub fn pass_flag(flag: &str) -> bool {
     POLICY.lock().unwrap().take(flag)
 }
@@ -164,7 +166,8 @@ fn prepared(
     if options.level != Level::O0 {
         module = optimized(module, options.level)?;
     }
-    // `PreISelIntrinsicLowering` runs `LowerConstantIntrinsics` at every level; at -O0 the mid-end has not.
+    // `PreISelIntrinsicLowering` runs `LowerConstantIntrinsics` at every level;
+    // at -O0 the mid-end has not.
     llrm_transforms::lowerconstantintrinsics::module_lowered(&mut module)?;
     llrm_mir::atomic::lowered_single_thread(&mut module)?;
     crate::fix_function_bitcasts::fix(&mut module)?;

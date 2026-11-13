@@ -125,13 +125,17 @@ pub fn mark_wide_shifts(module: &mut Module) {
     }
 }
 
-/// The attribute that lets every word times a constant of a function be a shift-add chain whatever its bytes: no word
-/// multiply of the module needs `__mulhi3`, and the chains together are smaller than the routine and the calls.
+/// The attribute that lets every word times a constant of a function be a
+/// shift-add chain whatever its bytes: no word multiply of the module needs
+/// `__mulhi3`, and the chains together are smaller than the routine and the
+/// calls.
 pub const WORD_CHAINS: &str = "llrm-mulhi3-chains";
 
-/// Marks every function with a body when each word multiply of the module is by a constant and has a chain, and the
-/// chains add fewer bytes over the calls (6 B each) than the 24 B routine is (`runtime/sizes.csv`). Strict levels only
-/// (above them the rate prices each site, `dagisel::pipeline::word_chain`). Pin-decomposed constants need no call.
+/// Marks every function with a body when each word multiply of the module is by
+/// a constant and has a chain, and the chains add fewer bytes over the calls (6
+/// B each) than the 24 B routine is (`runtime/sizes.csv`). Strict levels only
+/// (above them the rate prices each site, `dagisel::pipeline::word_chain`).
+/// Pin-decomposed constants need no call.
 pub fn mark_word_chains(module: &mut Module) {
     const ROUTINE: i64 = 24;
     let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
@@ -149,7 +153,8 @@ pub fn mark_word_chains(module: &mut Module) {
             let Some(&operand) = function.instruction(inst).operands.get(1) else { return };
             let Some(c) = constant_int_u64(&query, operand) else { return };
             let wide = module.context.types.int_bits(function.instruction(inst).ty) != Some(16);
-            // a long product is expanded to word products, some of them calls: the routine stays
+            // a long product is expanded to word products, some of them calls:
+            // the routine stays
             if wide {
                 if crate::dagisel::pipeline::pin_decomposes(c) {
                     continue;
@@ -220,9 +225,10 @@ pub fn mark_wide_divides(module: &mut Module) {
 /// (`driver::selections_with_alternatives`).
 pub const CONSTANT_FILL: &str = "llrm-fill";
 
-/// Marks every function with a body that calls `llvm.memset` with a constant count of two or more. The
-/// selection decides which of them reach `emit_memset` (a short fill is stored inline); one that does not
-/// leaves the two selections identical and the alternative is dropped.
+/// Marks every function with a body that calls `llvm.memset` with a constant
+/// count of two or more. The selection decides which of them reach
+/// `emit_memset` (a short fill is stored inline); one that does not leaves the
+/// two selections identical and the alternative is dropped.
 pub fn mark_constant_fills(module: &mut Module) {
     let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
     let names: Vec<String> = module
@@ -232,12 +238,14 @@ pub fn mark_constant_fills(module: &mut Module) {
             let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
             function.walk().any(|(_, call)| {
                 let Some(callee) = llrm_mir::memory::callee(&module.context, function, call) else { return false };
-                let is_memset = module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic)
-                    == Some(Intrinsic::MemSet);
+                let is_memset =
+                    module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic) == Some(Intrinsic::MemSet);
                 is_memset
-                    && function.instruction(call).operands.get(2).is_some_and(|&length| {
-                        constant_int_u64(&query, length).is_some_and(|bytes| bytes >= 2)
-                    })
+                    && function
+                        .instruction(call)
+                        .operands
+                        .get(2)
+                        .is_some_and(|&length| constant_int_u64(&query, length).is_some_and(|bytes| bytes >= 2))
             })
         })
         .filter_map(|(_, global, _)| global.name.owned())

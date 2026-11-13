@@ -35,7 +35,8 @@ fn a_mask_of_what_an_assert_zext_holds_is_dropped() {
     dag.set_root(and);
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false, hot_chains: false,
+        imul_if_smaller: false,
+        hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,

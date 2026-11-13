@@ -196,8 +196,8 @@ fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
 /// Twenty live incoming arguments in a loop: the pin's M68k marks nothing
 /// rematerializable, so each is stored to a frame slot and reloaded
 /// (`movem.l %d0, (N,%sp)`). Running the load of its own slot again where the
-/// value is read is the named deviation M68K-ARGREMAT, off for `Options::PINNED`,
-/// which this test compiles with.
+/// value is read is the named deviation M68K-ARGREMAT, off for
+/// `Options::PINNED`, which this test compiles with.
 #[test]
 fn spilled_incoming_arguments_go_through_frame_slots_as_the_pin_has_it() {
     let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();

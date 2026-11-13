@@ -160,7 +160,12 @@ fn ours_level(default: &'static str) -> &'static str {
 /// level and `BENCH_PAD`: two runs sharing `bench/<name>` raced on `pad.c` and
 /// the link files, and external-compiler cells came out n/a at random
 /// (2026-11-08: 22 of them in one Os log, the pad merge refused the logs).
-fn work_dir(root: &Path, level: &str, pad: &str, name: &str) -> PathBuf {
+fn work_dir(
+    root: &Path,
+    level: &str,
+    pad: &str,
+    name: &str,
+) -> PathBuf {
     root.join(format!("bench{level}-pad{pad}")).join(name)
 }
 

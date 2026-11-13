@@ -1,6 +1,7 @@
-//! `splat (fp128 2.0)` was refused ("expected a constant, found `splat`"), so clang IR holding a
-//! vector constant of one repeated element failed to compile (wasm32 `long_double_layout` -O2).
-//! It parses as the vector of that element, and the print parses again.
+//! `splat (fp128 2.0)` was refused ("expected a constant, found `splat`"), so
+//! clang IR holding a vector constant of one repeated element failed to compile
+//! (wasm32 `long_double_layout` -O2). It parses as the vector of that element,
+//! and the print parses again.
 
 use llrm_mir::{parse, print};
 

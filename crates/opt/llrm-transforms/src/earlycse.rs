@@ -1404,35 +1404,35 @@ impl FunctionPass for EarlyCse {
         // The walk and everything that reads the body as it was end in this
         // block, which frees the body for the edited copy to be put back.
         let (changed, copy, updated) = {
-        let mut walk = Walk {
-            context: unit.context,
-            function: Edited::of(before),
-            view: &view,
-            mssa: view_of_memory,
-            callees: outer.callees(),
-            tree: &tree,
-            analyses: &simplifier,
-            values: Scoped::new(),
-            loads: Scoped::new(),
-            invariants: Scoped::new(),
-            calls: Scoped::new(),
-            geps: Scoped::new(),
-            generation: 0,
-            clobber_counter: 0,
-            gone: Vec::new(),
-        };
-        let changed = walk.run();
-        let gone = std::mem::take(&mut walk.gone);
-        let mut function = walk.function;
-        let mut mssa = walk.mssa;
-        for inst in gone.into_iter().rev() {
-            if !function.is_erased(inst) {
-                mssa.remove_memory_access(&function, inst);
-                function.edit().erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
+            let mut walk = Walk {
+                context: unit.context,
+                function: Edited::of(before),
+                view: &view,
+                mssa: view_of_memory,
+                callees: outer.callees(),
+                tree: &tree,
+                analyses: &simplifier,
+                values: Scoped::new(),
+                loads: Scoped::new(),
+                invariants: Scoped::new(),
+                calls: Scoped::new(),
+                geps: Scoped::new(),
+                generation: 0,
+                clobber_counter: 0,
+                gone: Vec::new(),
+            };
+            let changed = walk.run();
+            let gone = std::mem::take(&mut walk.gone);
+            let mut function = walk.function;
+            let mut mssa = walk.mssa;
+            for inst in gone.into_iter().rev() {
+                if !function.is_erased(inst) {
+                    mssa.remove_memory_access(&function, inst);
+                    function.edit().erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
+                }
             }
-        }
-        let updated = if changed { mssa.into_mssa() } else { None };
-        (changed, function.into_copy(), updated)
+            let updated = if changed { mssa.into_mssa() } else { None };
+            (changed, function.into_copy(), updated)
         };
         if let Some(copy) = copy {
             *unit.function = copy;

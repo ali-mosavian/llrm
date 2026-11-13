@@ -289,8 +289,7 @@ impl Peephole {
                 if through.is_some_and(|through| {
                     let root = regs.root(through);
                     root == regs.root(regs.frame) || root == regs.root(regs.stack)
-                })
-                    && address.is_none_or(|address| address.space != Space::Frame)
+                }) && address.is_none_or(|address| address.space != Space::Frame)
                 {
                     return body;
                 }
@@ -327,10 +326,12 @@ impl LIRTransform for Peephole {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns a zero (`MOV32r0`) into `xor`
-        // where the flags are dead ([X86InstrInfo.cpp:6236]).
+        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns
+        // a zero (`MOV32r0`) into `xor` where the flags are dead
+        // ([X86InstrInfo.cpp:6236]).
         if !self.cpu.optimized {
-            // the flag liveness costs a dataflow: only a body with a zero to make pays it
+            // the flag liveness costs a dataflow: only a body with a zero to
+            // make pays it
             let has_zero = body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
                 one.what.as_ref().is_some_and(|what| {
                     matches!(
@@ -594,11 +595,11 @@ pub fn extensions(
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
 ///
-/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent target tuning): the
-/// pin keeps `movzx` on the i486 as on every x86 (X86InstrCompiler.td keeps
-/// `zextloadi8` as `MOVZX32rm8`); this pair is two clocks against three there.
-/// Both selectors run it since 2026-10-31 (textfill c -O2 m16, +4000 clocks
-/// over main with the movzx). Gated on
+/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent
+/// target tuning): the pin keeps `movzx` on the i486 as on every x86
+/// (X86InstrCompiler.td keeps `zextloadi8` as `MOVZX32rm8`); this pair is two
+/// clocks against three there. Both selectors run it since 2026-10-31 (textfill
+/// c -O2 m16, +4000 clocks over main with the movzx). Gated on
 /// `Profile::clears_before_byte_load`, so off for size and where the extension
 /// is no slower or the partial register stalls. x_life -O2 m32 has 12 more
 /// `xor` than the pin from it.
@@ -2504,7 +2505,8 @@ pub fn widened_moves(
 }
 
 /// A sign-extending word load as the dword load and the in-place extension
-/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`, `peephole.peep`).
+/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`,
+/// `peephole.peep`).
 pub fn split_loads(
     rules: &peep::Rules,
     body: &LirBody,

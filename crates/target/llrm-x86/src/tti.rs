@@ -231,7 +231,10 @@ impl X86 {
         let load = function.instruction(inst);
         let (Opcode::Load { volatile: false, .. }, Some(result)) = (&load.opcode, load.result) else { return false };
         let integer = context.types.int_bits(load.ty);
-        let float = matches!(context.types.get(load.ty), Type::Float(FloatKind::Float | FloatKind::Double));
+        let float = matches!(
+            context.types.get(load.ty),
+            Type::Float(FloatKind::Float | FloatKind::Double)
+        );
         if !float && !matches!(integer, Some(8 | 16 | 32)) && !(integer == Some(64) && self.native() == 64) {
             return false;
         }
@@ -241,9 +244,10 @@ impl X86 {
             return false;
         }
         let place = only.index as usize;
-        // The memory form needs a register for the other operand: against an immediate
-        // `cmp [m],imm` is longer than the shared load plus `test`/`cmp r,imm`, and
-        // `add r,imm` cannot take the load at all.
+        // The memory form needs a register for the other operand: against an
+        // immediate `cmp [m],imm` is longer than the shared load plus
+        // `test`/`cmp r,imm`, and `add r,imm` cannot take the load at
+        // all.
         let Some(&other) = function.instruction(only.user).operands.get(1 - place.min(1)) else { return false };
         if !matches!(other, llrm_mir::module::Operand::Value(_)) {
             return false;
@@ -701,9 +705,11 @@ fn intrinsic_price(
 }
 
 impl X86 {
-    /// The intrinsic's row of `tti_intrinsics.txt` for this profile: long mode has its own (`x64`), as the pin's
-    /// `X64CostTbl` and 64-bit legalization differ from the 32-bit ones. A `ctlz` or `cttz` called with a zero-poison
-    /// flag is priced from its own `.zp` row (the pin looks up `*_ZERO_POISON`).
+    /// The intrinsic's row of `tti_intrinsics.txt` for this profile: long mode
+    /// has its own (`x64`), as the pin's `X64CostTbl` and 64-bit
+    /// legalization differ from the 32-bit ones. A `ctlz` or `cttz` called with
+    /// a zero-poison flag is priced from its own `.zp` row (the pin looks
+    /// up `*_ZERO_POISON`).
     fn priced_intrinsic(
         &self,
         name: &str,
@@ -775,7 +781,8 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
-    /// -O1 is strict on bytes where the -Os trial is (`unroll_trial_bytes_strict`): a peel copies the loop body.
+    /// -O1 is strict on bytes where the -Os trial is
+    /// (`unroll_trial_bytes_strict`): a peel copies the loop body.
     fn peels_at_o1(&self) -> bool {
         !self.tuning.unroll_trial_bytes_strict
     }
@@ -838,9 +845,12 @@ impl Tti for X86 {
             .then(|| std::rc::Rc::new(X86 { size_bytes: true, ..self.clone() }) as std::rc::Rc<dyn Tti>)
     }
 
-    /// `Tuning::inline_trials_at_o1` alone gives the byte view to -O1 only: the -O2 and -O3 callers keep the
-    /// units their rate was fitted in.
-    fn inline_size_view_at(&self, speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+    /// `Tuning::inline_trials_at_o1` alone gives the byte view to -O1 only: the
+    /// -O2 and -O3 callers keep the units their rate was fitted in.
+    fn inline_size_view_at(
+        &self,
+        speed: bool,
+    ) -> Option<std::rc::Rc<dyn Tti>> {
         if speed && !self.tuning.inline_size_bytes { None } else { self.inline_size_view() }
     }
 
@@ -945,7 +955,10 @@ impl Tti for X86 {
         self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
-    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+    fn callee_saved_clocks(
+        &self,
+        peak: usize,
+    ) -> i64 {
         self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
             (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
         })
@@ -1070,7 +1083,10 @@ impl Tti for X86 {
         self.tuning.x87_zero_fill_at_size && !self.sse2
     }
 
-    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+    fn wide_float_to_int(
+        &self,
+        bits: u32,
+    ) -> Option<u32> {
         // `fistp` word, dword and qword: x87 only, where the SSE converts have
         // their own forms (a 32-bit result is a dword, `cvttsd2si`)
         (!self.sse2).then_some(match bits {
@@ -1223,14 +1239,18 @@ impl Tti for X86 {
     }
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
-        self.tuning.lsr_size_order.then(|| {
-            let model = if self.tuning.lsr_size_x86_64 {
-                crate::encoding::lsr_size_model_64()
-            } else {
-                llrm_mir::tti::LsrSizeModel::X86
-            };
-            llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
-        })
+        self.tuning
+            .lsr_size_order
+            .then(
+                || {
+                    let model = if self.tuning.lsr_size_x86_64 {
+                        crate::encoding::lsr_size_model_64()
+                    } else {
+                        llrm_mir::tti::LsrSizeModel::X86
+                    };
+                    llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
+                },
+            )
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {
@@ -1384,8 +1404,9 @@ impl Tti for X86 {
         false
     }
 
-    /// Long mode's DAG selects an access of any byte size (an `i24` is a 16-bit and an 8-bit access, an `i40` a
-    /// dword and a byte), as the pin's does: SROA cuts the slices where the pin cuts them.
+    /// Long mode's DAG selects an access of any byte size (an `i24` is a 16-bit
+    /// and an 8-bit access, an `i40` a dword and a byte), as the pin's
+    /// does: SROA cuts the slices where the pin cuts them.
     fn selects_odd_sized_integers(&self) -> bool {
         self.quad
     }
@@ -1442,7 +1463,8 @@ impl Tti for X86 {
         multiplier: Option<u128>,
     ) -> bool {
         let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, .. } = self.tuning;
-        // a shift-and-add chain is a shift and an add for each term past the first
+        // a shift-and-add chain is a shift and an add for each term past the
+        // first
         let chain = multiplier.map_or(i64::MAX, |m| 2 * (signed_digits(m) as i64 - 1).max(1));
         multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
     }
@@ -1492,7 +1514,11 @@ impl Tti for X86 {
             Logic::And if both_eq => CondMerging { base_cost: 3, likely_bias: 0, unlikely_bias: -1 },
             _ => CondMerging { base_cost: 2, likely_bias: 0, unlikely_bias: -1 },
         };
-        if params.base_cost <= extra { CondMerging::SPLIT } else { CondMerging { base_cost: params.base_cost - extra, ..params } }
+        if params.base_cost <= extra {
+            CondMerging::SPLIT
+        } else {
+            CondMerging { base_cost: params.base_cost - extra, ..params }
+        }
     }
 
     fn intrinsic_cost(
@@ -1745,10 +1771,11 @@ impl Tti for X86 {
         // address to it; the backend forms the symbol with a `lea` at every
         // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
         // -832 B, objects of m32 and non-PIE unchanged). 2026-11-08, same-tree
-        // A/B over 171 m64 cells with it off: 6 better (-162 B), 42 worse (+2712 B:
-        // particle O2 +396, scroll +121, stft_single +112, jpeg_single O2 +256).
-        // Exit: the backend shares one `lea sym` per loop (MachineLICM/CSE of
-        // the symbol), then the pin's legality; owner w12, exit 2026-12-15.
+        // A/B over 171 m64 cells with it off: 6 better (-162 B), 42 worse
+        // (+2712 B: particle O2 +396, scroll +121, stft_single +112,
+        // jpeg_single O2 +256). Exit: the backend shares one `lea sym`
+        // per loop (MachineLICM/CSE of the symbol), then the pin's
+        // legality; owner w12, exit 2026-12-15.
         if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
             return false;
         }

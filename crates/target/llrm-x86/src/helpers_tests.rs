@@ -360,7 +360,13 @@ fn the_size_divide_agrees_with_the_speed_divide_and_is_short() {
                     assert!(!wide, "a divisor of two dwords has a size routine");
                     continue;
                 };
-                assert!(small.code.len() * 3 < fast.code.len() * 2 || !wide, "{} {} B vs {} B", small.name, small.code.len(), fast.code.len());
+                assert!(
+                    small.code.len() * 3 < fast.code.len() * 2 || !wide,
+                    "{} {} B vs {} B",
+                    small.name,
+                    small.code.len(),
+                    fast.code.len()
+                );
                 for (a, b) in [
                     (0x1234_5678_9ABC_DEF0u64, 0x1_0000_0001u64),
                     (u64::MAX >> 1, 3),

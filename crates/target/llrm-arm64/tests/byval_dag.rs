@@ -9,20 +9,23 @@ fn selects(body: &str) -> String {
     driver::assembly(&format!("{LAYOUT}{body}"), Platform::Linux, true).unwrap_or_else(|why| panic!("{why}"))
 }
 
-/// `byval` was refused ("a parameter attribute that moves it"), so `tests/data/tail_calls` fell back to the hand
-/// selector. The pin makes the parameter the address of a fixed object in the caller's argument area
+/// `byval` was refused ("a parameter attribute that moves it"), so
+/// `tests/data/tail_calls` fell back to the hand selector. The pin makes the
+/// parameter the address of a fixed object in the caller's argument area
 /// (`LowerFormalArguments`, `CCPassByVal<8, 8>`), not a pointer passed in `x0`.
 #[test]
 fn a_byval_parameter_is_read_from_the_argument_area_not_through_x0() {
     let asm = selects(
         "%t = type { i64, i64, i64 }\ndefine i64 @f(ptr byval(%t) %r, i64 %n) {\n  %p = getelementptr %t, ptr %r, i32 0, i32 1\n  %v = load i64, ptr %p\n  %s = add i64 %v, %n\n  ret i64 %s\n}\n",
     );
-    // `%n` stays in `x0`: the aggregate takes no register, and its second field is at `sp + 8`.
+    // `%n` stays in `x0`: the aggregate takes no register, and its second field
+    // is at `sp + 8`.
     assert!(asm.contains("[sp, #8]"), "{asm}");
     assert!(!asm.contains("[x0"), "the aggregate is not read through x0:\n{asm}");
 }
 
-/// The caller copies the bytes to the top of its outgoing area (`getMemcpy` at the stack pointer).
+/// The caller copies the bytes to the top of its outgoing area (`getMemcpy` at
+/// the stack pointer).
 #[test]
 fn a_byval_argument_is_copied_to_the_stack_before_the_call() {
     let asm = selects(
@@ -34,8 +37,8 @@ fn a_byval_argument_is_copied_to_the_stack_before_the_call() {
     assert!(!asm.lines().any(|line| line.trim().starts_with("mov x") && line.trim().ends_with(", sp")), "{asm}");
 }
 
-/// `isEligibleForTailCallOptimization`: a caller's `byval` parameter is a pointer into the area a tail call would
-/// reuse, so the call stays a call.
+/// `isEligibleForTailCallOptimization`: a caller's `byval` parameter is a
+/// pointer into the area a tail call would reuse, so the call stays a call.
 #[test]
 fn a_caller_with_a_byval_parameter_makes_no_tail_call() {
     let asm = selects(

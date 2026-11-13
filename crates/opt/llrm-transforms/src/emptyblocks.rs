@@ -145,7 +145,8 @@ fn switch_predecessor(
     dest: BlockId,
 ) -> Option<BlockId> {
     let pred = function.sole_predecessor(block)?;
-    let ends_in_switch = function.terminator(pred).is_some_and(|last| function.instruction(last).opcode == Opcode::Switch);
+    let ends_in_switch =
+        function.terminator(pred).is_some_and(|last| function.instruction(last).opcode == Opcode::Switch);
     (ends_in_switch && !edges::phis(function, dest).is_empty()).then_some(pred)
 }
 
@@ -172,7 +173,10 @@ fn profitable(
     };
     let mut same: Vec<BlockId> = Vec::new();
     for &one in function.predecessors(dest).iter() {
-        if one != block && !same.contains(&one) && dest_phis.iter().all(|&phi| incoming(phi, block) == incoming(phi, one)) {
+        if one != block
+            && !same.contains(&one)
+            && dest_phis.iter().all(|&phi| incoming(phi, block) == incoming(phi, one))
+        {
             same.push(one);
         }
     }
@@ -186,7 +190,8 @@ fn profitable(
             together = together + freqs.get_block_freq(twin);
         }
     }
-    // Skipping costs the copy and a branch in the block, merging a copy in `pred`.
+    // Skipping costs the copy and a branch in the block, merging a copy in
+    // `pred`.
     together.mul_u64(FREQ_RATIO_TO_SKIP_MERGE).is_none_or(|limit| freqs.get_block_freq(pred) <= limit)
 }
 
@@ -251,9 +256,9 @@ pub fn eliminated(
     let preheaders = preheaders(function);
     let blocks: Vec<BlockId> = function.layout().iter().copied().skip(1).collect();
     // The pin's `BFI` is computed once, before the first merge.
-    let weighs = blocks
-        .iter()
-        .any(|&block| destination(function, block).is_some_and(|dest| switch_predecessor(function, block, dest).is_some()));
+    let weighs = blocks.iter().any(|&block| {
+        destination(function, block).is_some_and(|dest| switch_predecessor(function, block, dest).is_some())
+    });
     let freqs = weighs.then(|| analyses.get::<BlockFrequencies>(context, layout, function));
     for block in blocks {
         if !function.is_placed(block) {

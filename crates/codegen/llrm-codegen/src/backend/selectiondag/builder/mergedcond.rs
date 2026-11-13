@@ -219,7 +219,8 @@ impl Builder<'_> {
         // which always splits.
         let Some(tti) = self.target.tti.clone() else { return false };
         let tti = tti.0;
-        // The target's TTI asks the same at every level (m32; m16 has its table).
+        // The target's TTI asks the same at every level (m32; m16 has its
+        // table).
         if tti.splits_merged_conditions() {
             return false;
         }

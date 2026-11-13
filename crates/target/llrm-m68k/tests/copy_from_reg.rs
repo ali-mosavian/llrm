@@ -1,8 +1,8 @@
-//! `InstrEmitter::EmitCopyFromReg` uses a virtual register directly. The emitter
-//! copied a parameter loaded in the entry into a new register at the top of the
-//! loop, so `xor %a, 77777` read a register defined inside the loop and
-//! MachineLICM (which the pin runs on `f`: the xor goes to the preheader) found
-//! nothing invariant.
+//! `InstrEmitter::EmitCopyFromReg` uses a virtual register directly. The
+//! emitter copied a parameter loaded in the entry into a new register at the
+//! top of the loop, so `xor %a, 77777` read a register defined inside the loop
+//! and MachineLICM (which the pin runs on `f`: the xor goes to the preheader)
+//! found nothing invariant.
 
 use llrm_m68k::dagisel::function::select_function;
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -17,7 +17,10 @@ fn a_value_of_an_earlier_block_is_read_where_it_was_defined() {
     let function = emit_with("f", &blocks, Shape::PIN).expect("emits");
     let block_of = |register: u32| {
         function.blocks.iter().position(|block| {
-            block.insts.iter().any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(v)) if *v == register)))
+            block
+                .insts
+                .iter()
+                .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(v)) if *v == register)))
         })
     };
     let (at, xor) = function

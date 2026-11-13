@@ -1,8 +1,8 @@
 //! The budgets the mid-end's passes read: [`Limits`].
 //!
 //! The GCC-model `admitted` (is a complete copy of a counted loop worth it) was
-//! deleted with `Options::peel`, `Limits::grows` and the trip and operation caps
-//! only it read: nothing called it outside its tests, and the translated
+//! deleted with `Options::peel`, `Limits::grows` and the trip and operation
+//! caps only it read: nothing called it outside its tests, and the translated
 //! `LoopUnrollPass` decides the copies.
 
 /// The copy budgets and the price of a code byte the pipeline's passes read.
@@ -17,9 +17,6 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self {
-            target_percent: 0,
-            milliclocks_per_byte: 16_000,
-        }
+        Self { target_percent: 0, milliclocks_per_byte: 16_000 }
     }
 }

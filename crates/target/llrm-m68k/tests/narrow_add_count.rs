@@ -68,7 +68,8 @@ fn an_unknown_register_is_not_a_site() {
 }
 
 /// `0x7FF0 + 0x20 = 0x8010`: the word add sets N and V where the long add does
-/// not, so a reader of the codes after it blocks the rewrite and none allows it.
+/// not, so a reader of the codes after it blocks the rewrite and none allows
+/// it.
 #[test]
 fn a_sum_in_the_top_half_of_the_word_needs_the_codes_unread() {
     let base = vec![imm_row("AND32di", 0, 0x7FF0), imm_row("ADD32di", 0, 0x20)];
@@ -80,14 +81,19 @@ fn a_sum_in_the_top_half_of_the_word_needs_the_codes_unread() {
     assert!(read.len() == 1 && !read[0].codes_equal && !read[0].sound(), "{read:?}");
 }
 
-/// A write between forgets the bound, and an immediate `addq` can take is not a site.
+/// A write between forgets the bound, and an immediate `addq` can take is not a
+/// site.
 #[test]
 fn a_write_between_forgets_the_bound_and_a_small_immediate_is_left_to_addq() {
-    assert_eq!(found(vec![imm_row("AND32di", 0, 15), imm_row("XOR32di", 0, 0xFFFF_0000u32 as i64), imm_row("ADD32di", 0, 48)]), vec![]);
+    assert_eq!(
+        found(vec![imm_row("AND32di", 0, 15), imm_row("XOR32di", 0, 0xFFFF_0000u32 as i64), imm_row("ADD32di", 0, 48)]),
+        vec![]
+    );
     assert_eq!(found(vec![constant("MOVI32ri", 0, 3), imm_row("ADD32di", 0, 4)]), vec![]);
 }
 
-/// The value moves in a one-predecessor chain: the second block starts from the first's end.
+/// The value moves in a one-predecessor chain: the second block starts from the
+/// first's end.
 #[test]
 fn the_bound_crosses_a_block_with_one_predecessor_only() {
     let mut function = MFunction::new("f");
@@ -103,9 +109,10 @@ fn the_bound_crosses_a_block_with_one_predecessor_only() {
     assert_eq!(sites(&function, &assignment), vec![]);
 }
 
-/// hex printed `add.l #87` for a byte: its 15 came from `MOVI32ri`, the row selection
-/// emits for a constant, which the count did not know, so the chain
-/// `move.l #15; and.l; add.l #87` was not a site (0 of hex's 1) while 113 others were.
+/// hex printed `add.l #87` for a byte: its 15 came from `MOVI32ri`, the row
+/// selection emits for a constant, which the count did not know, so the chain
+/// `move.l #15; and.l; add.l #87` was not a site (0 of hex's 1) while 113
+/// others were.
 #[test]
 fn a_constant_loaded_by_the_selection_row_starts_a_bound() {
     let and = op_inst(

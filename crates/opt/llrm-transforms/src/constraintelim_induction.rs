@@ -40,8 +40,9 @@ pub struct Inductions {
 }
 
 impl Inductions {
-    /// Told whether the module declares `llvm.assume` (`Outer::assume_declared`):
-    /// each function does not scan every global for it.
+    /// Told whether the module declares `llvm.assume`
+    /// (`Outer::assume_declared`): each function does not scan every global
+    /// for it.
     pub fn new(
         q: &Query,
         tree: &DomTree,

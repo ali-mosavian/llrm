@@ -20,8 +20,9 @@ fn compiled(
     text(ir, "clear", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"))
 }
 
-/// pattern_fill -Os called `__memseta` for its two constant clears: 10 B a site and a 21 B routine linked for them,
-/// against 13 B a site for `ld (hl), v; ld e, l; ld d, h; inc de; ld bc, n - 1; ldir` and no routine (459 B against
+/// pattern_fill -Os called `__memseta` for its two constant clears: 10 B a site
+/// and a 21 B routine linked for them, against 13 B a site for `ld (hl), v; ld
+/// e, l; ld d, h; inc de; ld bc, n - 1; ldir` and no routine (459 B against
 /// 443, SDCC 440).
 #[test]
 fn constant_fills_are_inline_ldir_where_no_other_site_needs_the_routine() {
@@ -32,7 +33,8 @@ fn constant_fills_are_inline_ldir_where_no_other_site_needs_the_routine() {
     }
 }
 
-/// A fill of a variable count links `__memseta` anyway: the constant site is then 3 B smaller as the call.
+/// A fill of a variable count links `__memseta` anyway: the constant site is
+/// then 3 B smaller as the call.
 #[test]
 fn a_constant_fill_stays_a_call_where_the_routine_is_linked_anyway() {
     let ir = format!(
