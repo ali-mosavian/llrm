@@ -301,7 +301,7 @@ impl Collection<'_, '_> {
             return (solution, solution_cost);
         }
         assert_eq!(solution.len(), self.uses.len(), "Malformed solution!");
-        llrm_support::debug!("lsr", "chosen {:?} against {:?} as it stands", solution_cost.c, self.baseline_cost.c);
+        llrm_support::debug!("lsr", "chosen {:?} bytes {} against {:?} bytes {} as it stands", solution_cost.c, solution_cost.size_bytes, self.baseline_cost.c, self.baseline_cost.size_bytes);
         for (at, &chosen) in solution.iter().enumerate() {
             llrm_support::debug!("lsr", "  use {at} {:?}: {:?}", self.uses[at].kind, self.uses[at].formulae[chosen]);
         }

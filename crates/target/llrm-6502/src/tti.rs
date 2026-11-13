@@ -306,6 +306,10 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    fn address_index_max(&self) -> Option<u64> {
+        Some(u64::from(u8::MAX))
+    }
+
     /// DEVIATE LSR-SIZE (owner w12; row 6502-LSR-SIZE): the bytes of the code
     /// LSR's formulae leave behind, from the emitter's own instruction table.
     /// A byte counter steps with `inc zp` and starts with `lda #; sta zp`; each
@@ -333,6 +337,7 @@ impl Tti for Mos6502 {
             iv_step: OpCost::bytes(step),
             setup: OpCost::bytes(setup),
             setup_cap: 4,
+            setup_constant: OpCost::bytes(0),
             target_orders: true,
             step_per_byte: step_more,
             setup_per_byte: setup,

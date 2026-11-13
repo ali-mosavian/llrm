@@ -333,6 +333,9 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// A `setup` for a register that holds a global's address: 0 where the
+    /// address is the using instruction's own operand (the 6502's `abs,x`).
+    pub setup_constant: OpCost,
     /// The target orders the formulae itself ([`Tti::is_lsr_cost_less`], the
     /// pin's hook), reading the bytes this table counted in
     /// [`LsrCost::size_bytes`], not the shared key (instructions, registers,
@@ -357,6 +360,7 @@ impl LsrSizeModel {
         iv_step: OpCost::bytes(3),
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        setup_constant: OpCost::bytes(3),
         target_orders: false,
         step_per_byte: 0,
         setup_per_byte: 0,
@@ -2624,6 +2628,16 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE LSR-IDX (owner llrm-target-6502, exit 2026-11-24): the largest
+    /// value of an index register for which `global + index` is one address
+    /// (the 6502's `abs,x`: a byte). The pin's `isLegalAddressingMode` takes
+    /// no range; with this, a formula whose scaled register is a global's
+    /// index that ScalarEvolution bounds by it is folded (no base add). None:
+    /// the target's `is_legal_addressing_mode` alone.
+    fn address_index_max(&self) -> Option<u64> {
+        None
+    }
+
     /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
     /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
     /// none: the pass does not run.
@@ -3242,6 +3256,7 @@ mod size_model_tests {
         iv_step: OpCost::bytes(6),
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        setup_constant: OpCost::bytes(11),
         target_orders: false,
         step_per_byte: 8,
         setup_per_byte: 9,
@@ -3271,6 +3286,7 @@ mod size_model_tests {
         assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
         // no width scaling: a 64-bit step costs what a 32-bit one does
         assert_eq!((m.step_bytes(8), m.step_bytes(64), m.setup_bytes(8), m.setup_bytes(64)), (3, 3, 3, 3));
+        assert_eq!(m.setup_constant, m.setup, "a global's address is set up like any register on x86");
     }
 
     /// A wide register's step and setup cost more bytes, each from its own field.

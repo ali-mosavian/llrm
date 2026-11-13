@@ -675,7 +675,8 @@ impl Cost {
         if parts > 1 && inside {
             // Not the base and a possible second register, if the target folds
             // two.
-            let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
+            let folded = f.scale != 0
+                && (is_am_completely_folded(r.tti, lu, f) || is_global_byte_indexed(r, lu, f));
             self.c.num_base_adds += (parts - (1 + usize::from(folded))) as u32;
         }
         // DEVIATE LU2: the offset beside two registers is the displacement of
@@ -992,7 +993,14 @@ impl Cost {
         {
             // A `mov` or `lea` of the register's start in the preheader.
             let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
-            self.size_bytes += m.setup_bytes(bits) * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            // A global's address is the instruction's operand where the
+            // target says so (`LsrSizeModel::setup_constant`).
+            let each = if matches!(r.se.unknown_value(reg), Some(Operand::Constant(_))) {
+                m.setup_constant.bytes
+            } else {
+                m.setup_bytes(bits)
+            };
+            self.size_bytes += each * (self.c.setup_cost - prev_setup).min(m.setup_cap);
         }
         if let Some(m) = r.tti.lsr_bytes() {
             // A local set in the preheader, and a constant for each
@@ -1167,6 +1175,23 @@ pub fn setup_cost(
 
 /// Whether `s` takes no register in an address: a constant, or an address-space
 /// cast (a far pointer made of a segment, its offset zero).
+/// DEVIATE LSR-IDX: `global + index`, the index bounded by what the target's
+/// one-instruction form takes (`Tti::address_index_max`).
+fn is_global_byte_indexed(
+    r: &mut Rating,
+    lu: &Use,
+    f: &Formula,
+) -> bool {
+    let (Some(max), Some(index), [base]) = (r.tti.address_index_max(), f.scaled_reg, f.base_regs.as_slice()) else {
+        return false;
+    };
+    lu.kind == Kind::Address
+        && f.scale == 1
+        && !f.unfolded_offset.is_non_zero()
+        && matches!(r.se.unknown_value(*base), Some(Operand::Constant(_)))
+        && r.se.get_unsigned_range(r.cx, index).get_unsigned_max() <= llrm_mir::apint::Word::from_u128(u128::from(max))
+}
+
 fn holds_no_offset(
     r: &mut Rating,
     s: Scev,
