@@ -55,8 +55,8 @@ pub struct Plan {
     flush: HashSet<usize>,
     /// Argument stores whose push reads memory, with the load that read it.
     folded: HashMap<usize, usize>,
-    /// Argument stores kept as stores that read memory (`move.l (4,%sp), (%sp)`), with the load they
-    /// absorbed.
+    /// Argument stores kept as stores that read memory (`move.l (4,%sp),
+    /// (%sp)`), with the load they absorbed.
     fused: HashMap<usize, usize>,
     /// Argument stores whose push is `pea (k,An)`: the register and `k`.
     addressed: HashMap<usize, (llrm_lir::registers::RegId, i64)>,
@@ -161,7 +161,8 @@ struct Sequence {
     flush: usize,
     /// Stores that push what a load read, and the loads.
     folds: Vec<(usize, usize)>,
-    /// Stores kept as stores that move what a load read (priced in `kept`), and the loads.
+    /// Stores kept as stores that move what a load read (priced in `kept`), and
+    /// the loads.
     fusions: Vec<(usize, usize)>,
     /// Stores that push an address register plus a constant: the instructions
     /// that made the value, the register and the constant.
@@ -304,8 +305,8 @@ pub fn memory_push(load: &str) -> Option<&'static str> {
     })
 }
 
-/// The move from the memory `load` reads to where call-area store `store` puts it (`MOV32ap` and
-/// `MOV32jr` are `MOV32jp`).
+/// The move from the memory `load` reads to where call-area store `store` puts
+/// it (`MOV32ap` and `MOV32jr` are `MOV32jp`).
 pub fn memory_store(
     load: &str,
     store: &str,
@@ -840,8 +841,8 @@ fn sequences(
             if let Source::Register(src) = source
                 && !addresses.iter().any(|one| one.0 == store)
             {
-                // a kept store moves the load's memory itself, where that is cheaper than the
-                // load and the store
+                // a kept store moves the load's memory itself, where that is
+                // cheaper than the load and the store
                 let moved = foldable(insts, assignment, blocks, store, store, src, &stores, &[]).and_then(|load| {
                     let (Kind::Op(from), Kind::Op(to)) = (insts[load].kind, insts[store].kind) else { return None };
                     let mut operands = priced_operands(insts[store], assignment)?;
@@ -851,10 +852,13 @@ fn sequences(
                     let own = mc::Inst { opcode: from, operands: priced_operands(insts[load], assignment)? };
                     Some((load, fused, cost(&own, cpu).ok()?))
                 });
-                // Where bytes decide (-Os) the cheaper kept store counts in the choice between pushing and keeping.
-                // Elsewhere the prices stay as they were, so a sequence the pushes won keeps them (a kept store that is
-                // faster and larger would turn a push that wins bytes into a kept one, nbody -O1 +84 B): the fusion
-                // only improves a sequence that stays.
+                // Where bytes decide (-Os) the cheaper kept store counts in the
+                // choice between pushing and keeping. Elsewhere
+                // the prices stay as they were, so a sequence the pushes won
+                // keeps them (a kept store that is faster and
+                // larger would turn a push that wins bytes into a kept one,
+                // nbody -O1 +84 B): the fusion only improves a
+                // sequence that stays.
                 if let Some((load, fused, load_price)) = moved {
                     let folded = folds.last().is_some_and(|&(one, _)| one == store);
                     let alone = if folded { kept } else { add(kept, load_price) };

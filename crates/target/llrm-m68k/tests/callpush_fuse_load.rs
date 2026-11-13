@@ -1,7 +1,8 @@
-//! byval_inline -Os (68000/68020, +4 B against gcc, 4 cells): `report(g.a[0])` loaded a stack word into `%a1` and
-//! stored it into the call area (`move.l (4,%sp), %a1; move.l %a1, (%sp)`, 6 B). The area stays a store (a push
-//! costs a cleanup per call), and nothing moved the load into the store, which reads memory itself:
-//! `move.l (4,%sp), (%sp)`, 4 B.
+//! byval_inline -Os (68000/68020, +4 B against gcc, 4 cells): `report(g.a[0])`
+//! loaded a stack word into `%a1` and stored it into the call area (`move.l
+//! (4,%sp), %a1; move.l %a1, (%sp)`, 6 B). The area stays a store (a push costs
+//! a cleanup per call), and nothing moved the load into the store, which reads
+//! memory itself: `move.l (4,%sp), (%sp)`, 4 B.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -46,7 +47,8 @@ fn a_loaded_word_stored_into_the_call_area_is_moved_memory_to_memory() {
         let asm = assembly(IR, cpu_of(cpu).unwrap(), Level::Os).expect("compiles");
         let detours = asm.lines().filter(|line| line.trim_start().starts_with("move.l\t%a1, (%sp)")).count();
         assert_eq!(detours, 0, "{cpu}: a loaded word goes through %a1 to the call area:\n{asm}");
-        let fused = asm.lines().filter(|line| line.trim_start().starts_with("move.l\t(") && line.ends_with(", (%sp)")).count();
+        let fused =
+            asm.lines().filter(|line| line.trim_start().starts_with("move.l\t(") && line.ends_with(", (%sp)")).count();
         assert!(fused >= 2, "{cpu}: {fused} memory-to-memory stores into the call area:\n{asm}");
     }
 }

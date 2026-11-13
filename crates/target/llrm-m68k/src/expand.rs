@@ -658,7 +658,8 @@ pub fn finish_with(
             continue;
         }
         if let Some(load) = pushes.fused_load(index) {
-            // a kept store that moves what the load read: the store's address, then the load's memory
+            // a kept store that moves what the load read: the store's address,
+            // then the load's memory
             let (Kind::Op(from), Kind::Op(to)) = (insts[load].kind, inst.kind) else {
                 return Err("a fused store and load are instructions".to_owned());
             };
