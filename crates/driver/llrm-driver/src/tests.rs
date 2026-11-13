@@ -4587,6 +4587,35 @@ fn an_unaligned_16_byte_copy_is_movups_at_m64() {
     assert_eq!(count, 2, "{listing}");
 }
 
+/// A one-slot frame before a sibling call was `sub rsp, 8` ... `add rsp, 8` (8 B) where the pin's `emitSPUpdate` with
+/// `findDeadCallerSavedReg` of the tail call is `push rax` ... `pop` (2 B): shl_long_by_one `four` O1 +4 B.
+#[test]
+fn a_one_slot_frame_before_a_sibling_call_is_a_push_and_a_pop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @twice(i32)\n\
+                define i32 @four(i32 %x) {\n  %a = call i32 @twice(i32 %x)\n  %b = tail call i32 @twice(i32 %a)\n  ret i32 %b\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "four").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push rax") && listing.contains("pop r") && !listing.contains("rsp, 8"), "{listing}");
+}
+
+/// The register the one-slot `pop` takes at a sibling call is none the call's arguments are in
+/// (`findDeadCallerSavedReg` of a `TCRETURN` skips its uses): `rcx` carries the fourth.
+#[test]
+fn the_pop_of_a_one_slot_frame_spares_a_sibling_calls_arguments_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @pick(i32)\n\
+                declare i32 @four(i32, i32, i32, i32)\n\
+                define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %p = call i32 @pick(i32 %a)\n  %r = tail call i32 @four(i32 %p, i32 %b, i32 %c, i32 %d)\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let tail = listing.lines().rev().find(|line| line.trim().starts_with("pop")).unwrap_or("");
+    assert!(tail.contains("pop"), "the frame is a push and a pop: {listing}");
+    assert!(!["rdi", "rsi", "rdx", "rcx"].iter().any(|reg| tail.contains(reg)), "{listing}");
+}
+
 /// A leaf's 100-byte local paid `sub rsp, 104` / `add rsp, 104` (about 12 B);
 /// the pin keeps it in the 128-byte red zone below `rsp`. A call, `noredzone`
 /// and a frame past the zone keep their `sub`.
