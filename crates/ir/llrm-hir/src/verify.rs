@@ -46,7 +46,7 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
         | model::Op::LifetimeStart
         | model::Op::LifetimeEnd => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
-        model::Op::Divmod => Some(Some(2)),
+        model::Op::Divmod | model::Op::TruncateChecked => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
         _ => None,
     }
@@ -707,6 +707,15 @@ fn _function(
                     || types[&result_types[0]].kind != model::TypeKind::Integer)
             {
                 invalid!("{prefix}: truncate does not take a float to an integer");
+            }
+            if instruction.op == model::Op::TruncateChecked
+                && (operand_types.len() != 1
+                    || result_types.len() != 2
+                    || types[&operand_types[0]].kind != model::TypeKind::Float
+                    || types[&result_types[0]].kind != model::TypeKind::Integer
+                    || types[&result_types[1]].kind != model::TypeKind::Boolean)
+            {
+                invalid!("{prefix}: truncate_checked does not take a float to an integer and a boolean");
             }
             if _INTEGER.contains(&instruction.op) {
                 let involved: Vec<i64> = instruction
