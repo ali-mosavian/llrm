@@ -637,6 +637,11 @@ pub fn eliminate_phis_with<C: Copy>(
             }
             heads.push(Inst::copy(phi.result, temporary));
         }
+        // `LowerPHINode` inserts each copy before the earlier ones: the last
+        // phi's copy is first. A phi that reads another phi's old value then
+        // reads its register before that one is redefined, so the two can
+        // share one.
+        heads.reverse();
         function.blocks[at].insts.splice(0..0, heads);
     }
 }

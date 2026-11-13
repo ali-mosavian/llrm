@@ -479,6 +479,37 @@ fn a_phi_copy_is_not_hoisted_above_the_definition_of_its_source() {
     assert!(defines < reads, "{insts:?}");
 }
 
+/// The copies at the top of a loop run last phi first, as `LowerPHINode`
+/// inserts each before the earlier ones. In x87rotate (68020 -O2) they ran
+/// first phi first: a phi reading another's old value then read its register
+/// after that one was redefined, the coalescer saw the overlap and left 8
+/// copies, 17 values live against the pin's 10 (164 instructions to 136).
+#[test]
+fn the_copies_at_the_top_of_a_loop_run_last_phi_first() {
+    let mut function = MFunction::<()>::new("f");
+    function.classes = vec![(); 8];
+    function.blocks.push(Block { id: 0, insts: vec![], phis: vec![] });
+    function.blocks.push(Block {
+        id: 1,
+        insts: vec![],
+        phis: vec![
+            Phi { result: v(1), incoming: vec![(0, v(0)), (1, v(2))] },
+            Phi { result: v(2), incoming: vec![(0, v(0)), (1, v(1))] },
+        ],
+    });
+    eliminate_phis(&mut function);
+    let heads: Vec<_> = function.blocks[1]
+        .insts
+        .iter()
+        .take(2)
+        .filter_map(|i| match i.operands.first() {
+            Some(Operand::Def(d)) => Some(*d),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heads, vec![v(2), v(1)], "{:?}", function.blocks[1].insts);
+}
+
 /// Twenty values live together on two registers. A colouring round named only
 /// the first value it could not fit, so spilling took a round for each spill
 /// and the allocation of a long function took the square of its spills (a
