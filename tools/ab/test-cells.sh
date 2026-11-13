@@ -87,6 +87,10 @@ echo "x t -O2 $d/io.c" > "$d/list"
 : > "$d/args"; unset CELLS_INC
 "$cells" "$d" "$d/list" >/dev/null 2>&1
 grep -q -- "runtime/shared/posix" "$d/args" || { echo "FAIL: a bench_io.h source compiled without the posix runtime dir: $(cat "$d/args")"; exit 1; }
+# The posix dir must not shadow a target's own llrm_os.h (2026-11-13: -I put it first, and 16 os_screen/os_execute cells at x86_16-wat lost the DOS header's
+# LLRM_OS_TEXT_SCREEN): it goes with -idirafter, never -I.
+if grep -q -- "-I [^ ]*runtime/shared/posix" "$d/args"; then echo "FAIL: the posix runtime dir was given with -I, ahead of the target's own headers: $(cat "$d/args")"; exit 1; fi
+grep -q -- "-idirafter [^ ]*runtime/shared/posix" "$d/args" || { echo "FAIL: the posix runtime dir was not given with -idirafter: $(cat "$d/args")"; exit 1; }
 printf 'int main(void) { return 0; }\n' > "$d/plain.c"
 echo "x t -O2 $d/plain.c" > "$d/list"
 : > "$d/args"
