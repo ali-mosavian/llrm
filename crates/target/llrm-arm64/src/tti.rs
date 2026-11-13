@@ -436,7 +436,7 @@ fn vector_memory_op_cost(
 /// `mul` of `<2 x i64>` (14 in the pin: no `mul.2d`) and the integer divisions
 /// are not priced, so a loop that has one is not vectorized; `frem` of a vector
 /// (24 to 52 in the pin: libcalls) is not priced either.
-fn vector_arithmetic_cost(
+pub(crate) fn vector_arithmetic_cost(
     op: ArithOp,
     ty: VectorTy,
     kind: CostKind,
@@ -460,15 +460,23 @@ fn vector_arithmetic_cost(
 }
 
 impl Tti for AArch64 {
-    /// DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): gcc's ipa-cp copies
-    /// at speed; queens -O3 113741 -> 106011 instructions.
+    /// No default ipa-cp clones (IPACP-O2 is x86's): arm64 queens -O2 252 ->
+    /// 2,260 B, cells at or below both bars 18/20 with clones against 19/19
+    /// without (-O3 26/16 against 27/16), frames worse on both axes.
+    /// `-fipa-cp-clone` still clones.
     fn ipa_cp_clones_at_speed(&self) -> bool {
-        true
+        false
     }
 
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
     fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
+    /// `Tti::opt_size_inline_guard_yields_to_negative_cost`: where the pin's own
+    /// cost is below zero it counts the inline as shrinking the caller.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
 
@@ -568,6 +576,12 @@ impl Tti for AArch64 {
     /// and the rate below was fitted to that; x86-m32 sets 3500.)
     fn inline_o1_unit_bytes_milli(&self) -> i64 {
         BYTES_PER_COST_UNIT_MILLI
+    }
+
+    /// DEVIATE INL-O1-HOT: a hot -O1 site inlines where the code grows by no
+    /// more than the call it removes.
+    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
+        Some(100)
     }
 
     /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
@@ -790,6 +804,16 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Option<Cost> {
         vector_arithmetic_cost(op, ty, kind)
+    }
+
+    fn vector_reduction_cost(
+        &self,
+        kind: llrm_mir::intrinsics::ReduceKind,
+        ty: VectorTy,
+        ordered: bool,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::reduction_cost(kind, ty, ordered, cost_kind)
     }
 
     fn vector_cast_cost(

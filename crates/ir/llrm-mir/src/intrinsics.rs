@@ -23,6 +23,29 @@ pub fn length(
     u64::try_from(bits & mask(context.types.int_bits(constant.ty)?)).ok()
 }
 
+/// The operation of an `llvm.vector.reduce.*`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ReduceKind {
+    Add,
+    Mul,
+    And,
+    Or,
+    Xor,
+    SMax,
+    SMin,
+    UMax,
+    UMin,
+    FAdd,
+    FMul,
+}
+
+impl ReduceKind {
+    /// Whether the operation is on floats, and so has a start operand.
+    pub fn is_float(self) -> bool {
+        matches!(self, Self::FAdd | Self::FMul)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Intrinsic {
     /// `llvm.{s,u}{add,sub,mul}.with.overflow`: the wrapped result, and
@@ -82,6 +105,11 @@ pub enum Intrinsic {
         signed: bool,
     },
     FMulAdd,
+    /// `llvm.vector.reduce.*`: the lanes of its vector argument combined by
+    /// one operation. The float forms (`fadd`, `fmul`) take the value the
+    /// result starts from first, and add the lanes in order unless the call
+    /// carries the `reassoc` fast-math flag.
+    VectorReduce(ReduceKind),
     /// `llvm.copysign`: the first argument with the second's sign.
     CopySign,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
@@ -427,6 +455,11 @@ enum Kind {
 enum Slot {
     /// The nth overloaded type.
     Any(usize),
+    /// The nth overloaded type, a vector.
+    VectorOf(usize),
+    /// The element of the nth overloaded type, a vector: the result of a
+    /// reduction.
+    Lane(usize),
     /// `{ T, i1 }` of the nth overloaded type.
     WithFlag(usize),
     Int(u32),
@@ -473,6 +506,26 @@ const fn arithmetic(
         _ => &[Kind::Int],
     };
     Spec { name, intrinsic, overloads, returns, parameters, own: None }
+}
+
+const INT_REDUCE: &[Slot] = &[Slot::VectorOf(0)];
+const FLOAT_REDUCE: &[Slot] = &[Slot::Lane(0), Slot::VectorOf(0)];
+
+/// `llvm.vector.reduce.<op>.v<N><ty>`: a vector of integers to one integer;
+/// the float operations take the start value first.
+const fn reduce(
+    name: &'static str,
+    kind: ReduceKind,
+) -> Spec {
+    let float = matches!(kind, ReduceKind::FAdd | ReduceKind::FMul);
+    Spec {
+        name,
+        intrinsic: Intrinsic::VectorReduce(kind),
+        overloads: if float { &[Kind::Float] } else { &[Kind::Int] },
+        returns: Slot::Lane(0),
+        parameters: if float { FLOAT_REDUCE } else { INT_REDUCE },
+        own: None,
+    }
 }
 
 const fn overflow(
@@ -575,7 +628,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 88] = [
+const TABLE: [Spec; 99] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -629,6 +682,17 @@ const TABLE: [Spec; 88] = [
         &[Slot::Any(0), Slot::Any(0), Slot::Any(0)],
         Kind::Float,
     ),
+    reduce("llvm.vector.reduce.add", ReduceKind::Add),
+    reduce("llvm.vector.reduce.mul", ReduceKind::Mul),
+    reduce("llvm.vector.reduce.and", ReduceKind::And),
+    reduce("llvm.vector.reduce.or", ReduceKind::Or),
+    reduce("llvm.vector.reduce.xor", ReduceKind::Xor),
+    reduce("llvm.vector.reduce.smax", ReduceKind::SMax),
+    reduce("llvm.vector.reduce.smin", ReduceKind::SMin),
+    reduce("llvm.vector.reduce.umax", ReduceKind::UMax),
+    reduce("llvm.vector.reduce.umin", ReduceKind::UMin),
+    reduce("llvm.vector.reduce.fadd", ReduceKind::FAdd),
+    reduce("llvm.vector.reduce.fmul", ReduceKind::FMul),
     arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
@@ -1072,7 +1136,8 @@ pub fn is_reserved(name: &str) -> bool {
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
-fn mangle(
+/// The suffix an overloaded intrinsic's name has for `ty` (`i32`, `v4f32`).
+pub fn mangle(
     types: &Types,
     ty: TypeId,
 ) -> String {
@@ -1083,6 +1148,7 @@ fn mangle(
         Type::Float(FloatKind::X86Fp80) => "f80".to_owned(),
         Type::Float(FloatKind::F128) => "f128".to_owned(),
         Type::Pointer(space) => format!("p{space}"),
+        Type::Vector { element, count } => format!("v{count}{}", mangle(types, *element)),
         _ => types.display(ty),
     }
 }
@@ -1215,7 +1281,12 @@ impl Intrinsic {
         let mut bound: Vec<Option<TypeId>> = vec![None; spec.overloads.len()];
         let mut matches = |slot: Slot, ty: TypeId| -> bool {
             let mut overload = |at: usize, ty: TypeId| {
-                let kind = match types.get(ty) {
+                // `llvm_anyint_ty` and its kin take a vector of the kind too.
+                let lane = match types.get(ty) {
+                    Type::Vector { element, .. } => *element,
+                    _ => ty,
+                };
+                let kind = match types.get(lane) {
                     Type::Int(_) => Kind::Int,
                     Type::Float(_) => Kind::Float,
                     Type::Pointer(_) => Kind::Pointer,
@@ -1225,6 +1296,13 @@ impl Intrinsic {
             };
             match slot {
                 Slot::Any(at) => overload(at, ty),
+                Slot::VectorOf(at) => matches!(types.get(ty), Type::Vector { .. }) && overload(at, ty),
+                Slot::Lane(at) => bound[at].is_some_and(|vector| {
+                    matches!(
+                        types.get(vector),
+                        Type::Vector { element, .. } if *element == ty
+                    )
+                }),
                 Slot::WithFlag(at) => match types.get(ty) {
                     Type::Struct { fields, packed: false } => {
                         matches!(
@@ -1239,12 +1317,33 @@ impl Intrinsic {
                 Slot::Void => types.is_void(ty),
             }
         };
-        if !matches(spec.returns, *returns) {
+        // A lane of an overload is checked once the vector that binds it is
+        // known: the vector parameters first, the lanes (result, start) after.
+        let lane = |slot: &Slot| matches!(slot, Slot::Lane(_));
+        let returns_ok = |matches: &mut dyn FnMut(Slot, TypeId) -> bool| matches(spec.returns, *returns);
+        if !lane(&spec.returns) && !returns_ok(&mut matches) {
             return Err("Intrinsic has incorrect return type!".to_owned());
         }
         if *variadic
             || parameters.len() != spec.parameters.len()
-            || !spec.parameters.iter().zip(parameters).all(|(slot, ty)| matches(*slot, *ty))
+            || !spec
+                .parameters
+                .iter()
+                .zip(parameters)
+                .filter(|(slot, _)| !lane(slot))
+                .all(|(slot, ty)| matches(*slot, *ty))
+        {
+            return Err("Intrinsic has incorrect argument type!".to_owned());
+        }
+        if lane(&spec.returns) && !returns_ok(&mut matches) {
+            return Err("Intrinsic has incorrect return type!".to_owned());
+        }
+        if !spec
+            .parameters
+            .iter()
+            .zip(parameters)
+            .filter(|(slot, _)| lane(slot))
+            .all(|(slot, ty)| matches(*slot, *ty))
         {
             return Err("Intrinsic has incorrect argument type!".to_owned());
         }

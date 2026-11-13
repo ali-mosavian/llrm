@@ -513,6 +513,10 @@ pub struct SelectionDAG {
     /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
     /// address say. Empty where the layout may place an object lower.
     pub frame_alignments: Vec<u64>,
+    /// The alignment of each global the DAG addresses, by symbol
+    /// (`Value::getPointerAlignment`): what `computeKnownBits` of the global
+    /// says in `InferPtrAlign`.
+    pub global_alignments: HashMap<u32, u64>,
     /// The bytes of each static alloca's frame object, by frame index
     /// (`MachineFrameInfo::getObjectSize`), set where a `lifetime` marker names
     /// it; 0 where not known. The group of allocas that share an index (stack
@@ -616,6 +620,7 @@ impl SelectionDAG {
             shuffle_masks: Vec::new(),
             first_temporary: 0,
             frame_alignments: Vec::new(),
+            global_alignments: HashMap::default(),
             frame_object_bytes: Vec::new(),
             mem_locations: Vec::new(),
             var_args_frame_index: None,
@@ -1122,6 +1127,25 @@ impl SelectionDAG {
         events
     }
 
+    /// `refineAlignment` of a load's or store's memory operand: `node` is
+    /// accessed `align`-aligned, as the pin's `getLoad` of an existing node
+    /// with a better alignment records it.
+    pub fn refine_mem_alignment(
+        &mut self,
+        node: u32,
+        align: u32,
+    ) {
+        let NodeData::Mem(info) = self.nodes[node as usize].data else { return };
+        if align <= info.align {
+            return;
+        }
+        self.cse_forget(node);
+        self.nodes[node as usize].data = NodeData::Mem(MemInfo { align, ..info });
+        if let Some(hash) = self.key_of(node) {
+            self.cse_link(hash, node);
+        }
+    }
+
     /// `UpdateNodeOperands`: `node` reads `ops` instead. If that equals an
     /// existing node, that node is returned (and `node` stays as it was,
     /// unused); else `node` itself, re-entered in the CSE map.
@@ -1233,6 +1257,17 @@ impl SelectionDAG {
         value: SDValue,
     ) -> bool {
         matches!(self.opcode(value), ISD::Undef | ISD::Poison)
+    }
+
+    /// The bits of a `ConstantFPSDNode` (`ConstantFP` or `TargetConstantFP`).
+    pub fn fp_constant(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        match (self.opcode(value), self.node(value).data) {
+            (ISD::ConstantFP | ISD::TargetConstantFP, NodeData::ConstFp { bits, .. }) => Some(bits),
+            _ => None,
+        }
     }
 
     /// The value of a `ConstantSDNode` (`Constant` or `TargetConstant`).

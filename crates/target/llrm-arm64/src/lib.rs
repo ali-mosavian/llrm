@@ -19,6 +19,7 @@ pub mod frame;
 pub mod ipra;
 pub mod jumptable;
 pub mod layout;
+pub mod lir_place;
 pub mod ldst_update;
 pub mod licm;
 pub mod lir_body;

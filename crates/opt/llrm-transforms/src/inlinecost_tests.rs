@@ -55,6 +55,20 @@ fn priced_params(
     params: InlineParams,
     (calls, dies): (i64, bool),
 ) -> (i64, i64) {
+    priced_hot(text, at, sole, size, tti, params, (calls, dies), None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn priced_hot(
+    text: &str,
+    at: usize,
+    sole: bool,
+    size: CallerSize,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    params: InlineParams,
+    (calls, dies): (i64, bool),
+    frequency: Option<f64>,
+) -> (i64, i64) {
     let module: Module = parsed(text);
     let layout = DataLayout::default();
     let (caller_id, _, caller) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
@@ -80,7 +94,7 @@ fn priced_params(
         caller_recursive: false,
         callee_linear_recursive: false,
         caller_size: size,
-        relative_frequency: None,
+        relative_frequency: frequency,
         cold_frequency: None,
         entry_weight: None,
         planned: None,
@@ -1356,4 +1370,168 @@ b0:
         "declare { i32, i1 } @llvm.experimental.fptosi.checked.i32.f64(double)\n",
     );
     assert!(checked - plain < crate::inlinecost::CALL_PENALTY, "checked {checked} against plain {plain}");
+}
+
+/// x_jpeg_fixed -O2 (arm64): `emit(out, data, n)` with `out` a constant IPSCCP
+/// left unread. `deadargelim` removes it after the walk, so the guard prices
+/// the call it will contain: the callee is held exactly as the same callee
+/// without the parameter. Priced with it, the call read 3 units, growth fell
+/// under the call and the cold site inlined (+72 B, +151 k instructions).
+#[test]
+fn test_the_speed_guard_prices_a_call_without_the_arguments_nothing_reads() {
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let held = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&arm), params.clone(), (2, true));
+        cost >= threshold
+    };
+    // A body of `ops` instructions: the parameter that is unread flips no verdict at any size.
+    for ops in 2..16 {
+        let mut body = String::from("  %v0 = load i32, ptr @g\n");
+        for at in 1..ops {
+            body += &format!("  %v{at} = add i32 %v{}, %x\n", at - 1);
+        }
+        body += &format!("  store i32 %v{}, ptr @g\n  ret void\n}}\n", ops - 1);
+        let with = format!(
+            "{GLOBAL}define internal void @callee(i32 %unread, i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 1, i32 %y)\n  call void @callee(i32 1, i32 3)\n  ret void\n}}\n"
+        );
+        let without = format!(
+            "{GLOBAL}define internal void @callee(i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee(i32 3)\n  ret void\n}}\n"
+        );
+        assert_eq!(held(&with), held(&without), "{ops} instructions");
+    }
+}
+
+/// `PolicyOnly` with a byte-priced call sequence (8 B and 4 B an argument), as m68k and 6502 state theirs.
+struct Sequenced(PolicyOnly);
+
+impl llrm_mir::tti::Tti for Sequenced {
+    fn inline_policy(&self) -> llrm_mir::tti::InlinePolicy {
+        self.0.inline_policy()
+    }
+
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: llrm_mir::tti::CostKind,
+    ) -> Option<llrm_mir::tti::Cost> {
+        (kind == llrm_mir::tti::CostKind::CodeSize).then(|| llrm_mir::tti::Cost::of(8 + 4 * shape.arguments.len() as i64))
+    }
+
+    fn cmp_sel_cost(&self, kind: llrm_mir::tti::CmpSel, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cmp_sel_cost(kind, ty, cost)
+    }
+
+    fn memory_op_cost(&self, op: llrm_mir::tti::MemoryOp, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind, volatile: bool) -> llrm_mir::tti::Cost {
+        self.0.memory_op_cost(op, ty, cost, volatile)
+    }
+
+    fn cf_instr_cost(&self, phi: bool, kind: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(&self, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+        self.0.int_imm_cost(value, bits)
+    }
+
+    fn int_imm_cost_inst(&self, user: llrm_mir::tti::ImmUser, index: u32, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+        self.0.int_imm_cost_inst(user, index, value, bits)
+    }
+
+    fn is_truncate_free(&self, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty) -> bool {
+        self.0.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(&self, global: bool, offset: i64, base: bool, scale: i64) -> bool {
+        self.0.is_legal_addressing_mode(global, offset, base, scale)
+    }
+
+    fn cast_cost(&self, kind: llrm_mir::tti::CastKind, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cast_cost(kind, from, to, cost)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        lhs: llrm_mir::tti::OperandInfo,
+        rhs: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        self.0.arithmetic_cost(op, ty, cost, lhs, rhs)
+    }
+}
+
+/// m68k x_idioms 68000 -Os: `sumlong(L, 40)` twice kept its out-of-line copy until `deadargelim` ran after the walk,
+/// then its unread `n` was priced as an argument push (call 18 B against 8), the -Os guard saw the inline as no growth
+/// and the program grew +10 B. A target with a call sequence must price the call without the unread argument.
+#[test]
+fn test_the_size_guard_prices_a_call_sequence_without_the_arguments_nothing_reads() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false }), by_rate: 0 };
+    let tti = Sequenced(PolicyOnly(policy, None, false));
+    let params = InlineParams { compute_full_inline_cost: true, opt_size_threshold: 100_000, ..InlineParams::from_level(2) };
+    let held = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&tti), params.clone(), (2, true));
+        cost >= threshold
+    };
+    for ops in 2..48 {
+        let mut body = String::from("  %v0 = load i32, ptr @g\n");
+        for at in 1..ops {
+            body += &format!("  %v{at} = add i32 %v{}, %x\n", at - 1);
+        }
+        body += &format!("  store i32 %v{}, ptr @g\n  ret void\n}}\n", ops - 1);
+        let with = format!(
+            "{GLOBAL}define internal void @callee(i32 %unread, i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 1, i32 %y)\n  call void @callee(i32 1, i32 3)\n  ret void\n}}\n"
+        );
+        let without = format!(
+            "{GLOBAL}define internal void @callee(i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee(i32 3)\n  ret void\n}}\n"
+        );
+        assert_eq!(held(&with), held(&without), "{ops} instructions");
+    }
+}
+
+/// jpeg_fixed -O1 (arm64): `tmul`, a 5-instruction static callee with 6 sites,
+/// stayed a call in the idct loops (frequency 29,791 times the caller's
+/// entry): 6.9M of the kernel's 25.5M instructions against clang's 19.8M.
+/// The -O1 guard holds a growing inline; a locally hot site (the pin's
+/// `HotCallSiteRelFreq`) whose growth is within the call it removes inlines.
+/// A cold site stays held, and so does a target that states no budget.
+#[test]
+fn a_hot_o1_site_inlines_a_callee_that_grows_the_code_by_less_than_a_call() {
+    let text = "define internal i64 @callee(i64 %a, i64 %b) nounwind {
+entry:
+  %m = mul i64 %a, %b
+  %s = ashr i64 %m, 63
+  %l = lshr i64 %s, 54
+  %t = add i64 %m, %l
+  %u = xor i64 %t, %a
+  %v = add i64 %u, %b
+  %z = lshr i64 %v, 3
+  %r = ashr i64 %z, 10
+  ret i64 %r
+}
+define i64 @f(i64 %x, i64 %y) {
+entry:
+  %p = call i64 @callee(i64 %x, i64 %y)
+  %q = call i64 @callee(i64 %p, i64 %y)
+  %s = add i64 %p, %q
+  ret i64 %s
+}
+";
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let at = |tti: &dyn llrm_mir::tti::Tti, frequency| {
+        let (cost, threshold) =
+            priced_hot(text, 0, false, CallerSize::Speed, Some(tti), params.clone(), (6, true), Some(frequency));
+        cost < threshold
+    };
+    assert!(at(&arm, 29_791.0), "hot: inlined");
+    assert!(!at(&arm, 1.0), "cold: held");
+    let x86 = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    assert!(at(&x86, 29_791.0), "a target with no guard: the pin's verdict");
 }

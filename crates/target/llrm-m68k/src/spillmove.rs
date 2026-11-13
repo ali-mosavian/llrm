@@ -31,10 +31,10 @@ use crate::{REGISTER_INFO, mc, reg};
 /// Whether `inst` reads or sets the codes, first: `Some(true)` reads,
 /// `Some(false)` sets without reading, `None` neither. A call sets them (it
 /// leaves them undefined).
-fn touches(inst: &Inst) -> Option<bool> {
-    if inst.reads_flags && !inst.call {
+pub(crate) fn touches(inst: &Inst) -> Option<bool> {
+    if inst.reads_flags() && !inst.call {
         Some(true)
-    } else if inst.sets_flags || inst.call {
+    } else if inst.sets_flags() || inst.call {
         Some(false)
     } else {
         None
@@ -43,7 +43,7 @@ fn touches(inst: &Inst) -> Option<bool> {
 
 /// For each block, whether the codes are read on entry before anything sets
 /// them.
-fn live_in(function: &MFunction) -> Vec<bool> {
+pub(crate) fn live_in(function: &MFunction) -> Vec<bool> {
     let successors = successors(function);
     let mut live = vec![false; function.blocks.len()];
     loop {

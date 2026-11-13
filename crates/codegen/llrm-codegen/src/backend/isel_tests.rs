@@ -973,6 +973,7 @@ define cc1000 void @MAIN() addrspace(1) {
 
 /// m16 stft_single -O2: two string literals of 15 B came first, so `align 2` padded the next datum
 /// (+1 B of data against bcc, jpeg_single +2). A private constant of no alignment goes last.
+/// Two procedures read it: one reader alone moves it into its code segment (cs_tables).
 #[test]
 fn test_a_string_literal_follows_the_aligned_data_and_the_pool() {
     let text = "@.str = private unnamed_addr constant [3 x i8] c\"ab\\00\"
@@ -981,6 +982,11 @@ define cc1000 void @MAIN() addrspace(1) {
   %c = load i16, ptr @count
   %s = getelementptr i8, ptr @.str, i16 %c
   %v = load i8, ptr %s
+  store i8 %v, ptr @count
+  ret void
+}
+define cc1000 void @OTHER() addrspace(1) {
+  %v = load i8, ptr @.str
   store i8 %v, ptr @count
   ret void
 }

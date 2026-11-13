@@ -671,3 +671,30 @@ fn printed_lane_operations_parse_back_to_the_same_text() {
     let twice = crate::print::module(&parse::module(&once).expect("the printed form parses"));
     assert_eq!(once, twice, "{once}");
 }
+
+/// The horizontal step of a vectorized reduction: each `llvm.vector.reduce.*`
+/// folds the lanes (the float forms from their start value).
+#[test]
+fn a_vector_reduce_folds_the_lanes() {
+    let reduce = |op: &str, ty: &str, lane: &str, lanes: &str| {
+        result(&format!(
+            "declare {lane} @llvm.vector.reduce.{op}.{ty}(<4 x {lane}>)\n\
+             define {lane} @f() {{\n  %r = call {lane} @llvm.vector.reduce.{op}.{ty}(<4 x {lane}> {lanes})\n  ret {lane} %r\n}}\n"
+        ))
+    };
+    let v = "<i16 3, i16 -9, i16 7, i16 1>";
+    assert_eq!(reduce("add", "v4i16", "i16", v), int(2, 16));
+    assert_eq!(reduce("mul", "v4i16", "i16", v), int(0xff43, 16));
+    assert_eq!(reduce("smax", "v4i16", "i16", v), int(7, 16));
+    assert_eq!(reduce("smin", "v4i16", "i16", v), int(0xfff7, 16));
+    assert_eq!(reduce("umax", "v4i16", "i16", v), int(0xfff7, 16));
+    assert_eq!(reduce("umin", "v4i16", "i16", v), int(1, 16));
+    assert_eq!(reduce("xor", "v4i16", "i16", v), int(0xfff2, 16));
+    assert_eq!(reduce("and", "v4i16", "i16", v), int(1, 16));
+    assert_eq!(reduce("or", "v4i16", "i16", v), int(0xfff7, 16));
+    let float = result(
+        "declare float @llvm.vector.reduce.fadd.v4f32(float, <4 x float>)\n\
+         define float @f() {\n  %r = call float @llvm.vector.reduce.fadd.v4f32(float 10.0, <4 x float> <float 1.0, float 2.0, float 3.0, float 4.0>)\n  ret float %r\n}\n",
+    );
+    assert_eq!(float, Ok(Val::Float(FloatKind::Float, u64::from(20.0f32.to_bits()))));
+}
