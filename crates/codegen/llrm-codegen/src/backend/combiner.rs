@@ -48,7 +48,7 @@
 //! two calls arrive in order (still O(n)). A value made outside the block has
 //! depth 0 and the latency of its definition. Exit: a trace analysis on LIR.
 //!
-//! DEVIATE MC2 (owner llrm-target-x86-m64-c, exit 2026-11-30): the latency table is
+//! DEVIATE MC2 (owner llrm-target-x86-m64-c, exit 2026-11-24): the latency table is
 //! the default one written above, read from the operands (a memory source is a
 //! load); the pin asks the opcode's `mayLoad`. `imul` is 1 here, 3 in the
 //! pin's model, so `t = a * b; (t + c()) + d()` is left alone and the pin
