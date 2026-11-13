@@ -169,12 +169,6 @@ impl ProgramPass for ModuleIpo {
                 modules[at].changed(id);
             }
         }
-        for at in 0..count {
-            let ((removed, unsound), before) =
-                reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_with);
-            vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
-            changed |= !removed.is_empty();
-        }
         for one in &mut modules {
             one.invalidate_bodies(&PreservedAnalyses::none());
         }

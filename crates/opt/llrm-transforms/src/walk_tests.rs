@@ -3568,3 +3568,54 @@ fn a_hot_copy_the_model_prices_at_nothing_is_kept_for_the_call_it_drops() {
     assert!(!speed_keeps_at_size(16, 200_699.5, 0, 2, 9), "9 B for two sites");
     assert!(!speed_keeps_at_size(16, 200_699.5, -4, 2, 1), "the copy costs clocks");
 }
+
+/// x_idioms -Os (m32): `sumlong(L, 40)` called twice. IPSCCP leaves both
+/// parameters unread but the pin keeps them until `deadargelim` after the
+/// CGSCC walk, so the inliner prices the call with its arguments (cost -10,
+/// threshold 50: inlined). Dropped first, the call carried no credit, the
+/// cost read 0 and the -Os size guard kept two calls (+24 B against gcc).
+#[test]
+fn test_parameters_ipsccp_leaves_unread_are_dropped_after_the_walk_not_before() {
+    let text = "@L = global [40 x i32] zeroinitializer
+define internal i32 @sumlong(ptr %p, i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %s = phi i32 [ 0, %b0 ], [ %s1, %body ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %body, label %out
+body:
+  %x = sext i16 %i to i32
+  %w = add i32 %x, 1
+  %a = getelementptr i32, ptr %p, i32 %x
+  %v = load i32, ptr %a
+  %m = mul i32 %w, %v
+  %s1 = add i32 %s, %m
+  %i1 = add i16 %i, 1
+  br label %head
+out:
+  ret i32 %s
+}
+
+define i32 @run() {
+b0:
+  %a = call i32 @sumlong(ptr @L, i16 40)
+  %b = call i32 @sumlong(ptr @L, i16 40)
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux }),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    let run = printed.split("define").find(|one| one.contains("@run(")).expect("run");
+    assert_eq!(run.matches("@sumlong(").count(), 0, "{printed}");
+}
