@@ -6145,3 +6145,17 @@ fn a_call_returning_i1_can_be_inverted_selected_stored_and_branched_on_at_m32() 
         }
     }
 }
+
+/// After the i1 call-result truncate, `merge_icmps_fields` grew three
+/// `and edi, 1` (+16 B at m32/m64): the `zeroext` return's `AssertZext` was
+/// dropped, so widening the result was masked again.
+#[test]
+fn a_zeroext_i1_call_result_widened_needs_no_mask_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare zeroext i1 @p()\n\
+                define i32 @z() {\n  %1 = call zeroext i1 @p()\n  %2 = zext i1 %1 to i32\n  ret i32 %2\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-O2", "--isel=dag"]), text, "z").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains(", 1\n"), "{listing}");
+}

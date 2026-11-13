@@ -376,7 +376,8 @@ impl BuilderTarget {
     }
 
     /// This target with divides by constants of at most `bits` bits kept as
-    /// divides (`isIntDivCheap`, per width; see `DagConfig::int_div_cheap_narrow`).
+    /// divides (`isIntDivCheap`, per width; see
+    /// `DagConfig::int_div_cheap_narrow`).
     pub fn with_int_div_cheap_narrow(
         mut self,
         bits: u32,
@@ -3013,7 +3014,17 @@ impl Builder<'_> {
             // in `al`) is the register's truncate; left at
             // the register's type, `xor i1 %call, true` was an i8 xor with an
             // i1 constant that legalization refused.
-            self.dag.get_node(ISD::Truncate, vt, &[pieces[0]])
+            // The `zeroext`/`signext` of the return is
+            // `AssertZext`/`AssertSext` on the register, so the
+            // narrow value is known extended.
+            let one = match std::mem::take(&mut self.call_result_assert) {
+                Some(code) => {
+                    let narrow = self.dag.get_value_type_node(vt);
+                    self.dag.get_node(code, part_vt, &[pieces[0], narrow])
+                }
+                None => pieces[0],
+            };
+            self.dag.get_node(ISD::Truncate, vt, &[one])
         } else {
             pieces[0]
         };
