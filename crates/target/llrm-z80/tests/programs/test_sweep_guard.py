@@ -233,4 +233,4 @@ class LibraryChecks(unittest.TestCase):
         self.assertEqual(failed, {"bad.sh": "f64 div: xor differs"})
 
     def test_the_run_checks_are_the_three_scripts_that_hid_it(self):
-        self.assertEqual([Path(s).name for s in guard.LIBRARY_CHECKS], ["f64_div_clk.sh", "f64_mul_clk.sh", "z80_f64_split_test.sh"])
+        self.assertEqual([Path(s).name for s in guard.LIBRARY_CHECKS], ["f64_div_clk.sh", "f64_mul_clk.sh", "mul64_check.sh", "z80_f64_split_test.sh"])

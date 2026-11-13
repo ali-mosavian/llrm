@@ -397,6 +397,8 @@ impl Tti for Z80Tti {
 
     /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll is made at -O2/-O3 where the clocks it
     /// saves repay its bytes at the same rate, in place of the pin's threshold alone (0).
+    /// Audited 2026-11-13: rate 0 and this rate give identical bytes and T on all 124 `tests/run/c` programs at -O1/-O2/-O3/-Os/-Oz,
+    /// so the price refuses nothing there; it guards loops the corpus lacks. A rate of 10^9 unrolls none (the control).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         SPEED_MILLICLOCKS_PER_BYTE
     }

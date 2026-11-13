@@ -6,6 +6,25 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// What a reference to a spilled value adds in clocks when it folds into a
+/// memory operand, against the register form, and what one split copy costs
+/// (`Tuning::spill_fold`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpillFoldClocks {
+    /// A read folded (`add r, [slot]` for `add r, r2`).
+    pub read: i64,
+    /// A read and write of the same value folded (`inc [slot]` for `inc r`).
+    pub update: i64,
+    /// A write folded (`mov [slot], r`).
+    pub store: i64,
+    /// One split copy: the reload or store a region split inserts.
+    pub copy: i64,
+    /// What a copy of a value wider than the target's word adds (the
+    /// operand-size prefix of real-mode code); a folded form carries the same
+    /// prefix as the register form and adds nothing.
+    pub wide_copy: i64,
+}
+
 /// The tuning limits of a target: one default (the pin's value, which every
 /// target without an entry takes) and the overrides a target description
 /// states. The names are the pin's `TargetLoweringBase` fields.
@@ -120,6 +139,11 @@ pub struct Tuning {
     /// `Tti::inline_trial_keeps_shrinking_copy`: a priced inline trial keeps a copy that
     /// leaves the module no larger and saves clocks, though no callee goes with it.
     pub inline_trial_keeps_shrinking_copy: bool,
+    /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): `inline_size_bytes` at -O1
+    /// alone (the byte-measured size view, the second round, and the trial of a callee the bound
+    /// refused, kept where the caller comes out smaller); the -O2 and -O3 callers keep the units.
+    /// False: the bound's verdict stands.
+    pub inline_trials_at_o1: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -214,6 +238,13 @@ pub struct Tuning {
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
+    /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes (value setup, count,
+    /// string op and the inline tail), where the pin's unit is the destination's alignment: a
+    /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
+    /// `movabs`, a 3-byte op and a tail store. DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,
+    /// exit 2026-11-30): `X86SelectionDAGInfo::emitConstantSizeRepstos` takes the alignment's
+    /// unit. false: the pin's.
+    pub rep_stos_priced_unit: bool,
     /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
     /// not the library call: the setup is a few bytes against the call's push
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
@@ -319,6 +350,14 @@ pub struct Tuning {
     /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
     /// the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
+    /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
+    /// spilled value costs where its references fold into memory operands,
+    /// which `tryRegionSplit` weighs against the split's copies. The pin
+    /// splits any range with a compact region and never prices the spill,
+    /// which charges a reload and a store per reference (`calcSpillCost`)
+    /// even where `foldMemoryOperand` makes them memory operands. none: the
+    /// pin's.
+    pub spill_fold: Option<SpillFoldClocks>,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -395,6 +434,9 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// With `lsr_size_order`: price the code in x86-64's encodings (REX.W,
+    /// `llrm_x86::encoding`) and the exit test's compare.
+    pub lsr_size_x86_64: bool,
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.
     pub lsr_users_in_use_list_order: bool,
@@ -579,6 +621,7 @@ impl Tuning {
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
+        inline_trials_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -601,6 +644,7 @@ impl Tuning {
         imul_at_size: false,
         mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
+        rep_stos_priced_unit: false,
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
         merge_functions_at_size: false,
@@ -618,6 +662,7 @@ impl Tuning {
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
+        spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
@@ -634,6 +679,7 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
         unroll_promotion_fits_x87_stack: false,
