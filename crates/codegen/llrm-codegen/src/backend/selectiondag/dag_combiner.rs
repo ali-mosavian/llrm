@@ -109,6 +109,7 @@ pub trait CombineHooks {
         _vt: EVT,
         _c: u128,
         _signed: bool,
+        _x_dies: bool,
     ) -> bool {
         false
     }
@@ -4548,7 +4549,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
-        if !self.hooks.half_multiply_by_constant(vt, c, signed) {
+        if !self.hooks.half_multiply_by_constant(vt, c, signed, self.dag.has_one_use(x.node)) {
             return None;
         }
         let immediate = self.dag.get_constant(c & super::fold::mask(narrow), half.half);

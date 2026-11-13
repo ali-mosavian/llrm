@@ -126,3 +126,26 @@ fn a_halfword_times_a_constant_that_fits_it_is_one_muls_w() {
         }
     }
 }
+
+const NINE_LIVE: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 9\n  %r = sub i32 %m, %x\n  ret i32 %r\n}";
+const NINE_LAST: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 9\n  ret i32 %m\n}";
+
+/// algebra 68000 -Os +2 B: `(long)*a * 9 ... - (long)*a` took `muls.w` where the chain `x<<3 + x` stood. The half multiply
+/// overwrites its operand, so a live one costs a copy, which the chain's own move already counts.
+#[test]
+fn a_live_operand_costs_the_half_multiply_a_copy() {
+    for level in [Level::O1, Level::Os] {
+        let out = asm(NINE_LIVE, "68000", level);
+        assert!(!out.contains("muls"), "{level:?}:\n{out}");
+    }
+}
+
+/// algebra 68000 -O1 +2 B: the half multiply is smaller and slower than the chain, so at -O1 (each axis strict) it must beat
+/// the chain on both to replace it.
+#[test]
+fn at_o1_a_chain_the_half_multiply_does_not_beat_on_both_axes_stays() {
+    let out = asm(NINE_LAST, "68000", Level::O1);
+    assert!(!out.contains("muls"), "{out}");
+}
