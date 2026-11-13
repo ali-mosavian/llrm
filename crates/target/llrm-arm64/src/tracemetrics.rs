@@ -651,8 +651,11 @@ impl<'a> Traces<'a> {
                 for (i, phi) in phis {
                     let deps = self.deps(succ, &phi, Some(b));
                     let Some(&dep) = deps.first() else { continue };
-                    let height =
-                        if self.tb[b].succ.is_some() { self.cycles.get(&(succ, i)).copied().unwrap_or_default().height } else { 0 };
+                    let height = if self.tb[b].succ.is_some() {
+                        self.cycles.get(&(succ, i)).copied().unwrap_or_default().height
+                    } else {
+                        0
+                    };
                     if self.push_dep_height(dep, height, &mut heights) {
                         // The value the phi reads.
                         let value = phi.phi.as_ref().and_then(|p| p.iter().find(|(f, _)| *f == b)).map(|(_, v)| *v);

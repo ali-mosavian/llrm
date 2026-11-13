@@ -77,7 +77,8 @@ impl Arm64Model {
         insn: &Insn,
     ) -> Option<llrm_dagisel::sched::ClassData> {
         let opcode = *opcode_numbers().get(pin_opcode(insn)?)?;
-        // An opcode only the vector patterns emit has no class while the vectors are off: it was unmodeled before them.
+        // An opcode only the vector patterns emit has no class while the
+        // vectors are off: it was unmodeled before them.
         if !crate::machine::vectors_enabled() && llrm_dagisel::generated::aarch64::sched::dynamic_only(opcode) {
             return None;
         }
@@ -100,8 +101,8 @@ impl Arm64Model {
 /// `roW` for a 32-bit one; the shift is an operand, not part of the opcode).
 fn pin_opcode(insn: &Insn) -> Option<&'static str> {
     let name = insn.what.as_ref()?.name.as_deref()?;
-    // A floating-point zero is a pseudo (`FMOVS0`) until the pin expands it after
-    // allocation to `fmov s, wzr`; the scheduler sees the pseudo.
+    // A floating-point zero is a pseudo (`FMOVS0`) until the pin expands it
+    // after allocation to `fmov s, wzr`; the scheduler sees the pseudo.
     let zero_source = matches!(
         insn.what.as_ref()?.sources.first(),
         Some(Loc::Reg(reg)) if reg.register == crate::reg::XZR
@@ -114,11 +115,15 @@ fn pin_opcode(insn: &Insn) -> Option<&'static str> {
         "Zero" => return Some("COPY"),
         _ => {}
     }
-    let register_offset = name.split_once('.').and_then(|(head, suffix)| {
-        let digits = suffix.strip_prefix("ro")?.as_bytes();
-        let wide = matches!(digits.first()?, b'3' | b'7');
-        Some((format!("{head}.ro21"), if wide { "roX" } else { "roW" }))
-    });
+    let register_offset = name
+        .split_once('.')
+        .and_then(
+            |(head, suffix)| {
+                let digits = suffix.strip_prefix("ro")?.as_bytes();
+                let wide = matches!(digits.first()?, b'3' | b'7');
+                Some((format!("{head}.ro21"), if wide { "roX" } else { "roW" }))
+            },
+        );
     match register_offset {
         Some((row, tail)) => llvm_names(&row).iter().copied().find(|opcode| opcode.ends_with(tail)),
         None => llvm_names(name).first().copied(),
@@ -133,10 +138,9 @@ fn copy_physical(insn: &Insn) -> Option<(bool, bool)> {
     let what = insn.what.as_ref()?;
     match what.name.as_deref()? {
         "Zero" => Some((false, true)),
-        "COPY" | "COPY_FPR" => Some((
-            matches!(what.dests.first(), Some(Loc::Reg(_))),
-            matches!(what.sources.first(), Some(Loc::Reg(_))),
-        )),
+        "COPY" | "COPY_FPR" => {
+            Some((matches!(what.dests.first(), Some(Loc::Reg(_))), matches!(what.sources.first(), Some(Loc::Reg(_)))))
+        }
         _ => None,
     }
 }
@@ -351,7 +355,8 @@ fn pair_kind(insn: &Insn) -> Option<&str> {
     let name = insn.what.as_ref()?.name.as_deref()?;
     let (access, form) = name.split_once('.')?;
     let kind = access.get(3..)?;
-    (matches!(form, "ui" | "fi") && matches!(kind, "W" | "X" | "F4" | "F8" | "F16" | "SW")
+    (matches!(form, "ui" | "fi")
+        && matches!(kind, "W" | "X" | "F4" | "F8" | "F16" | "SW")
         && (kind != "SW" || access.starts_with("LDR")))
     .then_some(kind)
 }
@@ -527,7 +532,11 @@ mod tests {
         // `MOVIv2i32` only the vector patterns emit.
         let movi = Arc::new(form("MOVIv2i32", vec![imm(0)]));
         let priced_by_default = model.def_latency(&movi) == default_def_latency(&movi, 3);
-        assert_eq!(priced_by_default, !crate::machine::vectors_enabled(), "MOVIv2i32 has a class only with the vectors on");
+        assert_eq!(
+            priced_by_default,
+            !crate::machine::vectors_enabled(),
+            "MOVIv2i32 has a class only with the vectors on"
+        );
     }
 
     /// AArch64 schedules from both ends and keeps the latency heuristic on
@@ -543,8 +552,17 @@ mod tests {
         base: u32,
         offset: i64,
     ) -> Insn {
-        let cell = Loc::Mem(llrm_codegen::model::ir::Mem { base: Some(Held { value: base, width: 8, offset: 0 }), offset, ..llrm_codegen::model::ir::Mem::new(None, 8) });
-        let what = Semantics { name: Some(name.into()), dests: vec![held(1)], sources: vec![cell], ..Semantics::new(Operation::Move) };
+        let cell = Loc::Mem(llrm_codegen::model::ir::Mem {
+            base: Some(Held { value: base, width: 8, offset: 0 }),
+            offset,
+            ..llrm_codegen::model::ir::Mem::new(None, 8)
+        });
+        let what = Semantics {
+            name: Some(name.into()),
+            dests: vec![held(1)],
+            sources: vec![cell],
+            ..Semantics::new(Operation::Move)
+        };
         Insn::new(0, Some((0, 0)), Some(what), vec![1], vec![base])
     }
 

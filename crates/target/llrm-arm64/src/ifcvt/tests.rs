@@ -74,12 +74,15 @@ fn function(blocks: Vec<MBlock>) -> MFunc {
 /// `then`, which adds.
 fn triangle(then_ops: Vec<Op>) -> MFunc {
     function(vec![
-        block("head", vec![
-            Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
-            cmp(v(1)),
-            branch_if(Cond::Hi, "tail"),
-            jump("then"),
-        ]),
+        block(
+            "head",
+            vec![
+                Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
+                cmp(v(1)),
+                branch_if(Cond::Hi, "tail"),
+                jump("then"),
+            ],
+        ),
         block("then", then_ops.into_iter().chain([jump("tail")]).collect()),
         block("tail", vec![phi(v(4), &[(v(1), "head"), (v(3), "then")]), Op::Return { uses: vec![], tail: None }]),
     ])
@@ -109,10 +112,16 @@ fn a_triangle_around_an_add_becomes_a_select_and_one_block() {
 fn the_select_takes_the_branch_condition() {
     let mut f = triangle(vec![add(v(3), v(1), 2)]);
     run(&mut f, Mode::Stress);
-    let select = f.blocks[0].ops.iter().find_map(|op| match op {
-        Op::I(Inst::CondSelect { cond, rn, rm, .. }) => Some((*cond, *rn, *rm)),
-        _ => None,
-    });
+    let select = f
+        .blocks[0]
+        .ops
+        .iter()
+        .find_map(
+            |op| match op {
+                Op::I(Inst::CondSelect { cond, rn, rm, .. }) => Some((*cond, *rn, *rm)),
+                _ => None,
+            },
+        );
     // `b.hi tail`: the head value (v1) when hi, the arm's (v3) otherwise.
     assert_eq!(select, Some((Cond::Hi, v(1), v(3))));
 }
@@ -185,12 +194,15 @@ fn an_arm_longer_than_the_limit_stays_a_branch() {
 #[test]
 fn a_phi_of_one_value_is_a_copy() {
     let mut f = function(vec![
-        block("head", vec![
-            Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
-            cmp(v(1)),
-            branch_if(Cond::Hi, "tail"),
-            jump("then"),
-        ]),
+        block(
+            "head",
+            vec![
+                Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
+                cmp(v(1)),
+                branch_if(Cond::Hi, "tail"),
+                jump("then"),
+            ],
+        ),
         block("then", vec![add(v(3), v(1), 2), jump("tail")]),
         block("tail", vec![phi(v(4), &[(v(1), "head"), (v(1), "then")]), Op::Return { uses: vec![], tail: None }]),
     ]);
@@ -204,18 +216,24 @@ fn a_phi_of_one_value_is_a_copy() {
 #[test]
 fn a_join_with_another_predecessor_keeps_the_phi_over_the_select() {
     let mut f = function(vec![
-        block("entry", vec![
-            Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
-            cmp(v(1)),
-            branch_if(Cond::Eq, "tail"),
-            jump("head"),
-        ]),
+        block(
+            "entry",
+            vec![
+                Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
+                cmp(v(1)),
+                branch_if(Cond::Eq, "tail"),
+                jump("head"),
+            ],
+        ),
         block("head", vec![cmp(v(1)), branch_if(Cond::Hi, "tail"), jump("then")]),
         block("then", vec![add(v(3), v(1), 2), jump("tail")]),
-        block("tail", vec![
-            phi(v(4), &[(v(1), "entry"), (v(1), "head"), (v(3), "then")]),
-            Op::Return { uses: vec![], tail: None },
-        ]),
+        block(
+            "tail",
+            vec![
+                phi(v(4), &[(v(1), "entry"), (v(1), "head"), (v(3), "then")]),
+                Op::Return { uses: vec![], tail: None },
+            ],
+        ),
     ]);
     // One conversion, by hand: `head` (block 1) around `then`.
     let mut cfg = Cfg::of(&f);
@@ -233,22 +251,32 @@ fn a_join_with_another_predecessor_keeps_the_phi_over_the_select() {
 #[test]
 fn a_compare_branch_makes_its_own_compare_before_the_select() {
     let mut f = function(vec![
-        block("head", vec![
-            Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
-            Op::I(Inst::CompareBranch {
-                nonzero: false,
-                width: Width::X,
-                rt: v(1),
-                target: Target::Label("tail".to_owned()),
-            }),
-            jump("then"),
-        ]),
+        block(
+            "head",
+            vec![
+                Op::Copy { dst: Reg::Gpr(v(1)), src: Reg::Gpr(Gpr(0)) },
+                Op::I(Inst::CompareBranch {
+                    nonzero: false,
+                    width: Width::X,
+                    rt: v(1),
+                    target: Target::Label("tail".to_owned()),
+                }),
+                jump("then"),
+            ],
+        ),
         block("then", vec![add(v(3), v(1), 2), jump("tail")]),
         block("tail", vec![phi(v(4), &[(v(1), "head"), (v(3), "then")]), Op::Return { uses: vec![], tail: None }]),
     ]);
     assert_eq!(run(&mut f, Mode::Stress), 1);
     let ops = &f.blocks[0].ops;
-    let compare = ops.iter().position(|op| matches!(op, Op::I(Inst::AddSubImm { rd, imm12: 0, .. }) if *rd == Gpr(31)));
+    let compare = ops
+        .iter()
+        .position(
+            |op| matches!(
+                op,
+                Op::I(Inst::AddSubImm { rd, imm12: 0, .. }) if *rd == Gpr(31)
+            ),
+        );
     let select = ops.iter().position(|op| matches!(op, Op::I(Inst::CondSelect { cond: Cond::Eq, .. })));
     assert!(compare.is_some() && select.is_some() && compare < select, "{ops:?}");
 }

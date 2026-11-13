@@ -21,9 +21,9 @@
 //! # Not translated
 //! - IC1: the data-dependent branch analysis (`-enable-early-ifcvt-data-
 //!   dependent`, off by default in the pin).
-//! - IC2: a speculated operation that names a machine register (other than
-//!   the flags and the zero register) is refused; the pin tracks register
-//!   units and may move it.
+//! - IC2: a speculated operation that names a machine register (other than the
+//!   flags and the zero register) is refused; the pin tracks register units and
+//!   may move it.
 //! - IC3: the passes the pin runs ahead of it in `addILPOpts` (the condition
 //!   optimizer, conditional compares, `MachineCombiner`, `CondBrTuning`) and
 //!   the SSA passes before them (CSE, sinking, peepholes) are not run on this
@@ -249,7 +249,10 @@ pub fn can_insert_select(
     f: Reg,
     defs: &Defs,
 ) -> Option<(i32, i32, i32)> {
-    let same_class = |a: Reg, b: Reg| matches!((a, b), (Reg::Gpr(_), Reg::Gpr(_)) | (Reg::Fpr(_), Reg::Fpr(_)));
+    let same_class = |a: Reg, b: Reg| matches!(
+        (a, b),
+        (Reg::Gpr(_), Reg::Gpr(_)) | (Reg::Fpr(_), Reg::Fpr(_))
+    );
     if !same_class(t, f) || !same_class(dst, t) {
         return None;
     }
@@ -287,19 +290,30 @@ fn fold_into_select(
     let zero = |reg: Gpr| reg.0 == 31;
     match def {
         Op::Imm { value: 1, .. } => Some((Select::Csinc, None)),
-        Op::I(Inst::AddSubImm { op: AddSub { subtract: false, set_flags: false }, rn, imm12: 1, shift12: false, .. }) => {
-            Some((Select::Csinc, Some(Reg::Gpr(*rn))))
-        }
-        Op::I(Inst::AddSubShifted { op: AddSub { subtract: true, set_flags: false }, rn, rm, shift, amount: 0, .. })
-            if zero(*rn) && matches!(shift, crate::mc::inst::Shift::Lsl) =>
-        {
-            Some((Select::Csneg, Some(Reg::Gpr(*rm))))
-        }
-        Op::I(Inst::LogicShifted { op: Logic::Orr, invert: true, rn, rm, shift: crate::mc::inst::Shift::Lsl, amount: 0, .. })
-            if zero(*rn) =>
-        {
-            Some((Select::Csinv, Some(Reg::Gpr(*rm))))
-        }
+        Op::I(Inst::AddSubImm {
+            op: AddSub { subtract: false, set_flags: false },
+            rn,
+            imm12: 1,
+            shift12: false,
+            ..
+        }) => Some((Select::Csinc, Some(Reg::Gpr(*rn)))),
+        Op::I(Inst::AddSubShifted {
+            op: AddSub { subtract: true, set_flags: false },
+            rn,
+            rm,
+            shift,
+            amount: 0,
+            ..
+        }) if zero(*rn) && matches!(shift, crate::mc::inst::Shift::Lsl) => Some((Select::Csneg, Some(Reg::Gpr(*rm)))),
+        Op::I(Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: true,
+            rn,
+            rm,
+            shift: crate::mc::inst::Shift::Lsl,
+            amount: 0,
+            ..
+        }) if zero(*rn) => Some((Select::Csinv, Some(Reg::Gpr(*rm)))),
         _ => None,
     }
 }
@@ -550,12 +564,18 @@ impl IfConv {
         if !matches!(tail_ops.first(), Some(Op::Phi { .. })) {
             return None;
         }
-        let labels: HashMap<&str, usize> =
-            cfg.labels.iter().enumerate().filter(|(n, _)| cfg.order.contains(n)).map(|(n, l)| (l.as_str(), n)).collect();
+        let labels: HashMap<&str, usize> = cfg
+            .labels
+            .iter()
+            .enumerate()
+            .filter(|(n, _)| cfg.order.contains(n))
+            .map(|(n, l)| (l.as_str(), n))
+            .collect();
         let head_ops = &function.blocks[head].ops;
         let (cond, tbb, _, _) = analyze_branch(head_ops, &labels)?;
         let fbb = if tbb == s0 { s1 } else { s0 };
-        let mut conv = IfConv { head, tail, tbb, fbb, cond, phis: Vec::new(), insertion: 0, forward: HashMap::default() };
+        let mut conv =
+            IfConv { head, tail, tbb, fbb, cond, phis: Vec::new(), insertion: 0, forward: HashMap::default() };
         let (t_pred, f_pred) = (conv.t_pred(), conv.f_pred());
         let (t_label, f_label) = (&cfg.labels[t_pred], &cfg.labels[f_pred]);
         for (at, op) in tail_ops.iter().enumerate() {
@@ -571,7 +591,11 @@ impl IfConv {
                 head_defs.insert(*reg, at);
             }
         }
-        let mut speculation = Speculation { insert_after: HashSet::default(), forward: HashMap::default(), clobbered: HashSet::default() };
+        let mut speculation = Speculation {
+            insert_after: HashSet::default(),
+            forward: HashMap::default(),
+            clobbered: HashSet::default(),
+        };
         if conv.tbb != tail && !speculation.can_speculate(&function.blocks[conv.tbb].ops, &head_defs, head_ops, defs) {
             return None;
         }
@@ -779,8 +803,8 @@ impl IfConv {
                 if same {
                     selects.push((vec![Op::Copy { dst: info.dst, src: info.t }], info.dst));
                 } else {
-                    let ops = select_ops(info.dst, self.cond, info.t, info.f, defs)
-                        .expect("the select was found possible");
+                    let ops =
+                        select_ops(info.dst, self.cond, info.t, info.f, defs).expect("the select was found possible");
                     selects.push((ops, info.dst));
                 }
             } else if same {
@@ -790,8 +814,7 @@ impl IfConv {
                     Reg::Gpr(_) => Reg::Gpr(function.gpr()),
                     Reg::Fpr(_) => Reg::Fpr(function.fpr()),
                 };
-                let ops =
-                    select_ops(fresh, self.cond, info.t, info.f, defs).expect("the select was found possible");
+                let ops = select_ops(fresh, self.cond, info.t, info.f, defs).expect("the select was found possible");
                 selects.push((ops, fresh));
                 kept.push((info.dst, info.t, info.f, fresh));
             }
@@ -921,7 +944,10 @@ fn build_func(
                         ins.unit_uses.push(FLAGS);
                     }
                     ins.call = f.call;
-                    ins.transient = matches!(op, Op::Copy { .. } | Op::DbgValue { .. } | Op::I(Inst::Label(_) | Inst::Cfi(_) | Inst::Mark(_)));
+                    ins.transient = matches!(
+                        op,
+                        Op::Copy { .. } | Op::DbgValue { .. } | Op::I(Inst::Label(_) | Inst::Cfi(_) | Inst::Mark(_))
+                    );
                     if !ins.transient {
                         if let Some(insn) = crate::lir_body::insn_of(function, op) {
                             ins.latency = model.def_latency(&insn);
@@ -948,9 +974,8 @@ fn build_func(
             &self.succ
         }
     }
-    let nodes: Vec<N> = (0..count)
-        .map(|b| N { at: b as i64, succ: blocks[b].succ.iter().map(|&s| s as i64).collect() })
-        .collect();
+    let nodes: Vec<N> =
+        (0..count).map(|b| N { at: b as i64, succ: blocks[b].succ.iter().map(|&s| s as i64).collect() }).collect();
     let forest = llrm_codegen::analysis::loops::forest_of(&nodes, Some(0));
     let mut loops = tracemetrics::Loops { of: vec![None; count], ..Default::default() };
     for (i, one) in forest.loops.iter().enumerate() {
@@ -1000,9 +1025,9 @@ fn loop_invariant(
     if d.iter().any(|r| unit_of(*r).is_some()) || u.iter().any(|r| unit_of(*r).is_some()) {
         return false;
     }
-    u.iter().filter(|r| r.is_virtual()).all(|r| {
-        defs.block.get(r).is_none_or(|b| !func.loops.blocks[looped].contains(b))
-    })
+    u.iter()
+        .filter(|r| r.is_virtual())
+        .all(|r| defs.block.get(r).is_none_or(|b| !func.loops.blocks[looped].contains(b)))
 }
 
 /// `EarlyIfConverter::shouldConvertIf`.
@@ -1024,7 +1049,8 @@ fn should_convert(
             && let Some(def) = defs.get(&reg)
         {
             let ok = |op: &Op| loop_invariant(op, looped, func, defs);
-            let all_inputs = def.defs_and_uses().1.iter().filter(|r| r.is_virtual()).all(|r| defs.get(r).is_some_and(ok));
+            let all_inputs =
+                def.defs_and_uses().1.iter().filter(|r| r.is_virtual()).all(|r| defs.get(r).is_some_and(ok));
             if ok(def) || all_inputs {
                 return false;
             }
@@ -1161,7 +1187,13 @@ pub fn run(
                 continue;
             }
             if log {
-                eprintln!("ifcvt @{}: head {} tail {} phis {}", function.name, cfg.labels[head], cfg.labels[candidate.tail], candidate.phis.len());
+                eprintln!(
+                    "ifcvt @{}: head {} tail {} phis {}",
+                    function.name,
+                    cfg.labels[head],
+                    cfg.labels[candidate.tail],
+                    candidate.phis.len()
+                );
             }
             candidate.convert(function, &mut cfg, &mut defs);
             converted += 1;
@@ -1172,10 +1204,14 @@ pub fn run(
     if converted > 0 {
         let alive: HashSet<usize> = cfg.order.iter().copied().collect();
         let mut at = 0;
-        function.blocks.retain(|_| {
-            at += 1;
-            alive.contains(&(at - 1))
-        });
+        function
+            .blocks
+            .retain(
+                |_| {
+                    at += 1;
+                    alive.contains(&(at - 1))
+                },
+            );
     }
     converted
 }

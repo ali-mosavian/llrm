@@ -16,9 +16,10 @@
 //!   fcmp d0, d1 ; cset w8, mi ;              cset w9, ls
 //! ```
 
+use rustc_hash::FxHashMap as HashMap;
+
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegList, RegRef};
-use rustc_hash::FxHashMap as HashMap;
 use crate::mfunc::{MFunc, Op};
 
 /// Whether `inst` only compares: sets the flags and writes no register.
@@ -159,7 +160,12 @@ mod tests {
     }
 
     fn compares(function: &MFunc) -> usize {
-        function.blocks.iter().flat_map(|block| block.ops.iter()).filter(|op| matches!(op, Op::I(inst) if is_compare(inst))).count()
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter())
+            .filter(|op| matches!(op, Op::I(inst) if is_compare(inst)))
+            .count()
     }
 
     /// The second compare reads a copy of the first one's register: the flags
@@ -168,23 +174,27 @@ mod tests {
     #[test]
     fn a_compare_of_a_copy_is_the_compare_the_flags_hold() {
         let mut function = MFunc::new("f");
-        function.blocks.push(MBlock {
-            label: "b".to_owned(),
-            ops: vec![
-                Op::Copy { dst: Reg::Gpr(Gpr(66)), src: Reg::Gpr(Gpr(65)) },
-                compare(65),
-                Op::I(Inst::CondSelect {
-                    op: Select::Csel,
-                    width: Width::X,
-                    rd: Gpr(67),
-                    rn: Gpr(65),
-                    rm: Gpr(66),
-                    cond: Cond::Hi,
-                }),
-                compare(66),
-            ]
-            .into(),
-        });
+        function
+            .blocks
+            .push(
+                MBlock {
+                    label: "b".to_owned(),
+                    ops: vec![
+                        Op::Copy { dst: Reg::Gpr(Gpr(66)), src: Reg::Gpr(Gpr(65)) },
+                        compare(65),
+                        Op::I(Inst::CondSelect {
+                            op: Select::Csel,
+                            width: Width::X,
+                            rd: Gpr(67),
+                            rn: Gpr(65),
+                            rm: Gpr(66),
+                            cond: Cond::Hi,
+                        }),
+                        compare(66),
+                    ]
+                    .into(),
+                },
+            );
         // 65 and 66 are each defined once (65 by the caller's value, here a
         // second copy).
         function.blocks[0].ops.insert(0, Op::Copy { dst: Reg::Gpr(Gpr(65)), src: Reg::Gpr(Gpr(0)) });
@@ -197,18 +207,22 @@ mod tests {
     #[test]
     fn a_register_defined_twice_is_not_looked_through() {
         let mut function = MFunc::new("f");
-        function.blocks.push(MBlock {
-            label: "b".to_owned(),
-            ops: vec![
-                Op::Copy { dst: Reg::Gpr(Gpr(65)), src: Reg::Gpr(Gpr(0)) },
-                Op::Copy { dst: Reg::Gpr(Gpr(65)), src: Reg::Gpr(Gpr(1)) },
-                Op::Copy { dst: Reg::Gpr(Gpr(66)), src: Reg::Gpr(Gpr(65)) },
-                compare(65),
-                Op::Copy { dst: Reg::Gpr(Gpr(65)), src: Reg::Gpr(Gpr(2)) },
-                compare(66),
-            ]
-            .into(),
-        });
+        function
+            .blocks
+            .push(
+                MBlock {
+                    label: "b".to_owned(),
+                    ops: vec![
+                        Op::Copy { dst: Reg::Gpr(Gpr(65)), src: Reg::Gpr(Gpr(0)) },
+                        Op::Copy { dst: Reg::Gpr(Gpr(65)), src: Reg::Gpr(Gpr(1)) },
+                        Op::Copy { dst: Reg::Gpr(Gpr(66)), src: Reg::Gpr(Gpr(65)) },
+                        compare(65),
+                        Op::Copy { dst: Reg::Gpr(Gpr(65)), src: Reg::Gpr(Gpr(2)) },
+                        compare(66),
+                    ]
+                    .into(),
+                },
+            );
         run(&mut function);
         assert_eq!(compares(&function), 2);
     }
