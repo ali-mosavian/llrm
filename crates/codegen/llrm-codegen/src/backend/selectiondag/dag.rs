@@ -1235,6 +1235,17 @@ impl SelectionDAG {
         matches!(self.opcode(value), ISD::Undef | ISD::Poison)
     }
 
+    /// The bits of a `ConstantFPSDNode` (`ConstantFP` or `TargetConstantFP`).
+    pub fn fp_constant(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        match (self.opcode(value), self.node(value).data) {
+            (ISD::ConstantFP | ISD::TargetConstantFP, NodeData::ConstFp { bits, .. }) => Some(bits),
+            _ => None,
+        }
+    }
+
     /// The value of a `ConstantSDNode` (`Constant` or `TargetConstant`).
     pub fn constant(
         &self,
