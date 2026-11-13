@@ -65,6 +65,14 @@ corpus! {
     reduction => true,
     // Not vectorizing: Found a non-intrinsic callsite
     with_call => false,
+    // vectorized loop (an `llvm.smax` call is trivially vectorizable)
+    with_intrinsic => true,
+    // vectorized loop (`ctlz`'s second operand is a constant: scalar in every
+    // lane)
+    with_ctlz => true,
+    // loop not vectorized: call instruction cannot be vectorized (`sdiv.fix` is
+    // not in `isTriviallyVectorizable`)
+    with_sdiv_fix => false,
     // We can vectorize this loop! (`llvm.fmuladd` is trivially vectorizable)
     fp_fmuladd => true,
     // Can't vectorize due to memory conflicts
