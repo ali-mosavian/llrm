@@ -457,6 +457,12 @@ str_enum!(Op {
     // A float to an integer, rounded toward zero; CONVERT rounds as the
     // environment does.
     Truncate("TRUNCATE") = "truncate",
+    // TRUNCATE that says whether it fits instead of leaving a value outside the
+    // integer undefined: results the integer toward zero and a boolean, true
+    // where the float is in the integer's range (a NaN and an infinity are
+    // not). The integer is unspecified where the boolean is false. One operand,
+    // a float.
+    TruncateChecked("TRUNCATE_CHECKED") = "truncate_checked",
     SignExtend("SIGN_EXTEND") = "sign_extend",
     ZeroExtend("ZERO_EXTEND") = "zero_extend",
     Add("ADD") = "add",

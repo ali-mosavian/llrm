@@ -1079,7 +1079,8 @@ fn trip_total<'a>(
 
 /// DEVIATE, for `loopidiom`: whether `rep movs` over a length known only at
 /// run time is fewer code bytes than the loop over `blocks` it replaces. The
-/// pin lowers that copy to a libc call, which llrm has none of: the string
+/// pin lowers that copy to a libc call, which a target without one
+/// (`Tuning::libc_memcpy` false: m16) has none of: the string
 /// instruction takes ES, three registers, the count split in dwords and odd
 /// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
 /// 16 bytes over the loop each). Owner w2, exit 2026-11-20: the DAG's
@@ -1122,9 +1123,9 @@ pub(crate) fn fills_pay(
     // `clocks`' last entry is the cells the fill stores in all: a cell is a
     // `stos` of a dword, or the pattern's own cell.
     // The loop stays for the stores of computed values: a fill saves one
-    // store, less than itself.
+    // store, less than itself, unless the trips pay for it.
     if kept > 0 {
-        return false;
+        return fill_beside_computed_stores_pays(at_speed, clocks, stores - kept, fills);
     }
     // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
@@ -1155,6 +1156,21 @@ pub(crate) fn fills_pay(
             }
             clocks_pay(saved, rate, fill, trips * each)
         })
+}
+
+/// DEVIATE, for `loopidiom`: a loop that keeps a computed store beside the
+/// constant ones is filled at speed when the `removed` stores' clocks over the
+/// trips beat the `fills`' own (the rule the targets without a rate follow in
+/// `process`: `trips * store <= fill` keeps the loop). Not without trips and
+/// cells, nor at the size levels, where the loop stays. Exit: none.
+fn fill_beside_computed_stores_pays(
+    at_speed: bool,
+    clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
+    removed: i64,
+    fills: i64,
+) -> bool {
+    let (Some((clocks, _, Some(trips), Some(cells))), true) = (clocks, at_speed) else { return false };
+    trips * removed * clocks.store_immediate > fills * clocks.fill + cells * clocks.fill_cell
 }
 
 /// A fill the backend may store inline: `bytes` long, and the most stores a

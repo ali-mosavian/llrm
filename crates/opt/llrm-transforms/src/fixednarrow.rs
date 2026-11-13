@@ -38,6 +38,13 @@
 //!  (x and y small enough that x*y fits)
 //! ```
 //!
+//! A constant factor that is a whole `K << scale` needs no range: the product
+//! `x * K * 2^scale` fits 64 bits and shifts back to `x * K`, which is `mul x, K`
+//! at 32 bits, wrapping as the wide form's low half does.
+//! The pin folds only `X * (1 << scale) -> X` (`simplifyIntrinsic`) and a zero or
+//! undef factor; no InstCombine or DAGCombiner `smul.fix` fold takes a whole
+//! multiple. `smul.fix.sat` is another intrinsic and keeps its call.
+//!
 //! DEVIATE LP-3 (no pin pass: SelectionDAG expands `smul.fix`
 //! (`TargetLowering::expandFixedPointMul`); exit: isel does it and this is
 //! deleted; owner w10-instcombine; review 2026-11-20).
@@ -213,6 +220,17 @@ fn narrowable(
 ) -> Option<Narrow> {
     let operands = unit.function.instruction(inst).operands.clone();
     let mut scale = u32::try_from(int_constant(unit, operands[2])?).ok().filter(|&scale| scale < WIDTH)?;
+    // A factor `K << scale`: `(x * K * 2^scale) >> scale` is `x * K` in 64 bits
+    // whatever `x` is, and cut to 32 bits the `mul` that wraps, so no range of
+    // `x` is asked (`3 * y` in Q9 is `smul.fix(1536, y, 9)`).
+    for (constant, other) in [(operands[1], operands[0]), (operands[0], operands[1])] {
+        let Some(value) = Query::signed_constant(unit, constant, WIDTH) else { continue };
+        if scale > 0 && value != 0 && value % (1_i128 << scale) == 0 {
+            let ty = unit.function.instruction(inst).ty;
+            let whole = Operand::Constant(unit.context.int(ty, value >> scale));
+            return Some(Narrow { inst, a: other, b: whole, scale: 0, square: false });
+        }
+    }
     let mut range = |unit: &mut passes::Unit, one: Operand| -> Option<ConstantRange> {
         let mut query = Query { globals, assumptions, squares, lvi: &mut *lvi };
         Some(query.range(unit, one, inst, GUARD_DEPTH)).filter(|range| range.width == WIDTH)

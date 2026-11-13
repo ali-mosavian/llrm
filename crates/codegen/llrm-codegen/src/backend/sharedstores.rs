@@ -130,9 +130,10 @@ pub fn shared(
     // DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): at -O2/-O3 the load costs
     // a clock a run, so a run is shared only outside any cycle (it runs
     // once a call) and where its bytes at the speed rate outweigh that
-    // clock. DEVIATE ISS2 (owner x87, exit 2026-11-20, ruled 2026-11-09; the lone
-    // store dropped 2026-11-11, oversight): at -O1 the same rule with no rate,
-    // so a run of two or more outside any cycle is shared where it saves a byte (nbody -O1 kept 24 immediate stores of its f64
+    // clock. DEVIATE ISS2 (owner x87, exit 2026-11-20, ruled 2026-11-09; the
+    // lone store dropped 2026-11-11, oversight): at -O1 the same rule with
+    // no rate, so a run of two or more outside any cycle is shared where it
+    // saves a byte (nbody -O1 kept 24 immediate stores of its f64
     // constants, +82 B against gcc's 427 B with 3.8% fewer clocks; the pin
     // keeps them too). Every changed cell is slower by the `xor` (executed
     // clocks, tests/run/c at m32 -O1, cell +clk -B): bitcount_u32 +1 -2,
@@ -179,10 +180,20 @@ pub fn shared(
                         literal(one).is_some_and(|(wide, same)| same == value && (value == 0 || wide == width))
                     })
                     .count();
-                // A lone store is the pin's `mov m, imm` where no rate pays for the load (-O1: +1 clk for 3 B).
+                // A lone store is the pin's `mov m, imm` where no rate pays for
+                // the load (-O1: +1 clk for 3 B).
                 let shared = (run > 1 || !speed || rate > 0)
                     .then(|| {
-                        shared_run(regs, body.bits, &block.insns[at..at + run], value, &scratch, &dead, &flags_dead, rate)
+                        shared_run(
+                            regs,
+                            body.bits,
+                            &block.insns[at..at + run],
+                            value,
+                            &scratch,
+                            &dead,
+                            &flags_dead,
+                            rate,
+                        )
                     })
                     .flatten();
                 match shared {
@@ -269,23 +280,14 @@ fn shared_run(
 }
 
 /// The blocks on a cycle: a store there runs more than once a call, so a clock
-/// for the load is not free.
-fn blocks_in_cycles(body: &LirBody) -> crate::support::hash::HashSet<i64> {
-    let mut found = crate::support::hash::HashSet::default();
-    for block in &body.blocks {
-        let mut seen = crate::support::hash::HashSet::default();
-        let mut pending: Vec<i64> = block.succ.iter().copied().collect();
-        while let Some(at) = pending.pop() {
-            if at == block.at {
-                found.insert(block.at);
-                break;
-            }
-            if seen.insert(at) {
-                if let Some(next) = body.blocks.iter().find(|one| one.at == at) {
-                    pending.extend(next.succ.iter().copied());
-                }
-            }
-        }
-    }
-    found
+/// for the load is not free. One walk over the strongly connected components
+/// (`scc_iterator` is LLVM's), a block being on a cycle when its component has
+/// more than one block or it branches to itself.
+pub(crate) fn blocks_in_cycles(body: &LirBody) -> crate::support::hash::HashSet<i64> {
+    let place: crate::support::hash::HashMap<i64, usize> =
+        body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+    let successors: Vec<Vec<usize>> =
+        body.blocks.iter().map(|block| block.succ.iter().filter_map(|at| place.get(at).copied()).collect()).collect();
+    let (component, cyclic) = llrm_mir::callgraph::strong_components(&successors);
+    body.blocks.iter().enumerate().filter(|(index, _)| cyclic[component[*index]]).map(|(_, block)| block.at).collect()
 }
