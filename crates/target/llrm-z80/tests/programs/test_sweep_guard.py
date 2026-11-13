@@ -221,3 +221,16 @@ class SweepInstrument(unittest.TestCase):
                 with self.assertRaises(sweep.Void):
                     sweep.sdcc_cell(source, Path(work), "sdcc-x", [], ctx, [])
         self.assertEqual(seen, [3600])
+
+
+class LibraryChecks(unittest.TestCase):
+    def test_a_failing_library_script_fails_the_sweep_and_is_named(self):
+        """f64 divide gave 3.0/1.0 = 4 for a day (2026-11-13): tests/z80/f64_div_clk.sh failed, and no runner ran it."""
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (("good.sh", "exit 0"), ("bad.sh", "echo 'f64 div: xor differs'; exit 1")):
+                Path(d, name).write_text(body)
+            failed = guard.failed_library_checks(d, "llc", checks=("good.sh", "bad.sh"))
+        self.assertEqual(failed, {"bad.sh": "f64 div: xor differs"})
+
+    def test_the_run_checks_are_the_three_scripts_that_hid_it(self):
+        self.assertEqual([Path(s).name for s in guard.LIBRARY_CHECKS], ["f64_div_clk.sh", "f64_mul_clk.sh", "z80_f64_split_test.sh"])
