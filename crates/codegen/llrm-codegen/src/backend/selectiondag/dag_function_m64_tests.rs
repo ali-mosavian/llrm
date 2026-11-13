@@ -1533,3 +1533,38 @@ define i64 @f(i64 %a, i64 %b) {
     let count = |name: &str| names.iter().filter(|n| *n == name).count();
     assert_eq!((count("sub"), count("cmp"), count("test")), (0, 1, 0), "{names:?}");
 }
+
+/// `ctlz(x)` with a defined zero took `bsr; cmove; xor` at m64: `hasBitScanPassThrough` (is64Bit) lets the `bsr`
+/// keep its destination when `x` is zero, so a constant preloaded there is the answer (bitcount_u32 -O1, +7 B).
+#[test]
+fn an_m64_ctlz_with_a_defined_zero_is_a_bsr_with_no_cmov() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  %r = call i32 @llvm.ctlz.i32(i32 %x, i1 false)
+  ret i32 %r
+}
+declare i32 @llvm.ctlz.i32(i32, i1)
+",
+    );
+    assert!(names.iter().any(|n| n == "bsr"), "{names:?}");
+    assert!(names.iter().all(|n| !n.starts_with("cmov")), "{names:?}");
+}
+
+/// The same for `cttz(x)`: `bsf` passes its destination through, so no compare and no `cmove` (bitcount_u32 -O1).
+#[test]
+fn an_m64_cttz_with_a_defined_zero_is_a_bsf_with_no_cmov() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  %r = call i32 @llvm.cttz.i32(i32 %x, i1 false)
+  ret i32 %r
+}
+declare i32 @llvm.cttz.i32(i32, i1)
+",
+    );
+    assert!(names.iter().any(|n| n == "bsf"), "{names:?}");
+    assert!(names.iter().all(|n| !n.starts_with("cmov")), "{names:?}");
+}

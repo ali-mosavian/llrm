@@ -312,7 +312,11 @@ pub fn select_function(
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
+            // The objects a call made while the block was built (a variadic
+            // call's buffer) are the frame's too:
+            // `computeKnownBitsForFrameIndex` reads each object's alignment.
             one.dag.frame_alignments.clone_from(&alignments);
+            one.dag.frame_alignments.extend(info.objects.iter().map(|&(_, align)| u64::from(align)));
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
                     .map_err(|why| format!("{why:?}"))?;
