@@ -852,11 +852,13 @@ impl IfConv {
                 }
             }
             rename_incoming(function, &tail_label, &head_label);
+            function.joined.push((head_label.clone(), tail_label.clone()));
             cfg.pred[self.tail].clear();
             cfg.order.retain(|&n| n != self.tail);
             removed.push(self.tail);
         } else {
             function.blocks[head].ops.push(crate::mfunc::branch_to(&cfg.labels[self.tail]));
+            function.branched.push((head_label.clone(), cfg.labels[self.tail].clone()));
             cfg.succ[head] = vec![self.tail];
             cfg.pred[self.tail].push(head);
         }
@@ -1062,10 +1064,19 @@ fn should_convert(
     should
 }
 
-/// `LLRM_ARM64_IFCVT`: `stress` converts whenever legal (the pin's
-/// `-stress-early-ifcvt`); any other value runs the model.
-fn stress() -> bool {
-    std::env::var("LLRM_ARM64_IFCVT").is_ok_and(|mode| mode == "stress")
+/// How the pass decides (`LLRM_ARM64_IFCVT`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mode {
+    /// Convert whenever legal: the pin's `-stress-early-ifcvt`.
+    Stress,
+    /// Convert where the trace metrics say the branch costs more.
+    Model,
+}
+
+/// The mode `LLRM_ARM64_IFCVT` names; none: the pass does not run.
+pub fn mode_from_env() -> Option<Mode> {
+    let value = std::env::var("LLRM_ARM64_IFCVT").ok()?;
+    Some(if value == "stress" { Mode::Stress } else { Mode::Model })
 }
 
 /// The dominator tree's post order (`post_order(DomTree)`).
@@ -1111,8 +1122,12 @@ fn dominator_post_order(cfg: &Cfg) -> Vec<usize> {
 
 /// `EarlyIfConverter::run`: converts every candidate the model accepts, the
 /// innermost first. The number of conversions.
-pub fn run(function: &mut MFunc) -> usize {
-    if function.blocks.len() < 3 {
+pub fn run(
+    function: &mut MFunc,
+    mode: Mode,
+) -> usize {
+    // The odds are kept by the selector's block ids.
+    if function.blocks.len() < 3 || function.block_ids.is_empty() {
         return 0;
     }
     let model = crate::schedmodel::Arm64Model::generic();
@@ -1125,7 +1140,7 @@ pub fn run(function: &mut MFunc) -> usize {
     let log = std::env::var_os("LLRM_ARM64_IFCVT_LOG").is_some();
     // The traces live until a conversion changes the body they read.
     'epoch: loop {
-        let func = if stress() { None } else { Some(build_func(function, &cfg, &model)) };
+        let func = if mode == Mode::Stress { None } else { Some(build_func(function, &cfg, &model)) };
         let mut traces = func.as_ref().map(tracemetrics::Traces::new);
         while position < order.len() {
             let head = order[position];
@@ -1164,3 +1179,6 @@ pub fn run(function: &mut MFunc) -> usize {
     }
     converted
 }
+
+#[cfg(test)]
+mod tests;
