@@ -427,6 +427,14 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE INL-O1-TRIAL-M68K (owner m68k, exit 2026-11-24): at -O1 a callee
+    /// the growth bound refused is tried in the caller and kept where the
+    /// caller comes out smaller (uint64_to_float: `classify` x6 folds `main`
+    /// to constants, 368 B and 1514 B of routines against clang's 92 B).
+    fn inline_trials_at_o1(&self) -> bool {
+        true
+    }
+
     /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
     /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
     /// range check, the dispatch and a word a case.
