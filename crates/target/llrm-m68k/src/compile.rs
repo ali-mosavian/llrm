@@ -122,6 +122,10 @@ pub struct Options {
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
+    /// A spill slot lives in a free address register where one is free over
+    /// its range (DEVIATE SLOT-REG, [`crate::slotreg`]). `LLRM_SLOT_REG` sets
+    /// it.
+    pub slot_registers: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
     /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
     /// changed is also built without it and the cheaper kept
@@ -222,6 +226,7 @@ impl Options {
         reuse_shift_flags: false,
         reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
+        slot_registers: false,
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
@@ -263,6 +268,7 @@ impl Default for Options {
             reuse_shift_flags: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
+            slot_registers: false,
             shared_cse: true,
             direct_copies: false,
             shared_licm: false,
@@ -945,6 +951,9 @@ fn items_once(
         &crate::REGISTER_INFO,
         &slots,
     );
+    if options.short && (options.slot_registers || llrm_support::env_flag!("LLRM_SLOT_REG")) {
+        crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots);
+    }
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
         crate::spillmove::spills_as_moves(
