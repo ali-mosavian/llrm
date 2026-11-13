@@ -54,6 +54,17 @@ class SameWidth(unittest.TestCase):
             self.assertEqual(sw.double_literals(made[1].read_text()), [])
             self.assertEqual((tmp / "out" / "floats.out").read_text(), "4\n")
 
+    def test_a_long_double_program_is_not_rewritten_and_a_wrong_f32_output_is_width_void(self):
+        """--same-width over the corpus failed 11 programs: `long double` became `long float` (CLANG error), and values that
+        depend on f64 (double_to_int64, float_bits) read WRONG at f32. Neither is a lost program."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "ld.c").write_text("long double f(double y) { return y; }\n")
+            self.assertEqual(sw.prepare([tmp / "ld.c"], tmp / "out"), [tmp / "ld.c"])
+        reasons = {"a": {"ours": "WRONG value 0: got 1, want 2"}, "b": {"ours": "CLANG error"}, "c": {}}
+        self.assertEqual(sw.width_void({"a", "b", "c"}, reasons), {"a"})
+
 
 if __name__ == "__main__":
     unittest.main()

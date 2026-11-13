@@ -51,7 +51,8 @@ def prepare(sources, out):
     made = []
     for path in sources:
         text = path.read_text()
-        if not re.search(r"\bdouble\b", text):
+        # `long double` would become `long float`; those programs test the x87 width and stay as they are
+        if not re.search(r"\bdouble\b", text) or re.search(r"\blong\s+double\b", text):
             made.append(path)
             continue
         (out / path.name).write_text(same_width(text))
@@ -60,6 +61,11 @@ def prepare(sources, out):
             (out / expected.name).write_text(expected.read_text())
         made.append(out / path.name)
     return made
+
+
+def width_void(rewritten, reasons):
+    """The rewritten programs whose output is not the f64 one at single precision: no same-width comparison exists for them."""
+    return {name for name in rewritten if str(reasons.get(name, {}).get("ours", "")).startswith("WRONG")}
 
 
 def main():

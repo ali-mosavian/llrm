@@ -272,8 +272,10 @@ def main():
         ctx.graph = measure.runtime_calls(str(run.RUNTIME))
         ctx.harness_ours = harness(run.REPORT, run.CRT0)
         ctx.harness_sdcc = harness(REPORT_SDCC, CRT0_SDCC)
+        original = sources
         if ctx.same_width:
             sources = same_width.prepare(sources, Path(work) / "same-width")
+            ctx.rewritten = {made.stem for made, was in zip(sources, original) if made != was}
         with ThreadPoolExecutor(ctx.jobs) as pool:
             done = list(pool.map(one, [(s, work, ctx) for s in sources]))
     finally:
@@ -284,6 +286,8 @@ def main():
     reasons = {name: why for name, _, why in done}
     required = (lambda tag: tag.startswith("sdcc")) if ctx.sdcc_only else (lambda tag: tag == "ours")
     excused = {n for n, why in reasons.items() if why and ctx.sdcc_only}  # a recorded SDCC error is a gap in the bar
+    if ctx.same_width:  # a program whose f32 output is not the f64 one has no same-width cell: not a lost program
+        excused |= same_width.width_void(ctx.rewritten, reasons)
     lost = guard.dropped(expected, results, required, excused)
     with open(ctx.out, "w") as f:
         for name, rows in results:
