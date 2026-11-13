@@ -918,6 +918,9 @@ fn allocate_once_with(
     if std::env::var("LLRM_NO_Z80_BUMP").is_err() {
         crate::bump::step_by_flags(&mut function);
     }
+    if std::env::var("LLRM_NO_Z80_SINK").is_err() {
+        crate::sink_group::sink_closed_groups(&mut function);
+    }
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
         crate::forward::read_pairs_from_their_registers(&mut function);

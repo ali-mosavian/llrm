@@ -2461,3 +2461,17 @@ fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
         assert!(out.contains("bit 7, ") && !out.contains("sbc"), "{level:?}: {out}");
     }
 }
+
+/// A long step (`inc bc; ld a, b; or c; jr nz; inc de`) sat between a loop's exit test and its branch, so the test's
+/// byte in `a` was stored and reloaded around it (`ld -1(ix), a` ... `ld a, -1(ix)`, 38 T a trip, shift_until_idioms
+/// offset_count +10% T over SDCC). The step is on the continuing edge now: the test branches first.
+#[test]
+fn a_long_step_after_the_exit_test_does_not_spill_the_test() {
+    let out = text(include_str!("kernels/ir/step_after_test.ll"), "offset_count", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    let spilled = |line: &&str| {
+        let line = line.trim();
+        (line.starts_with("ld -") && line.ends_with("(ix), a")) || (line.starts_with("ld a, -") && line.ends_with("(ix)"))
+    };
+    assert!(!out.lines().any(|line| spilled(&line)), "the exit test is spilled around the step:\n{out}");
+}
