@@ -375,6 +375,16 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with divides by constants of at most `bits` bits kept as
+    /// divides (`isIntDivCheap`, per width; see `DagConfig::int_div_cheap_narrow`).
+    pub fn with_int_div_cheap_narrow(
+        mut self,
+        bits: u32,
+    ) -> BuilderTarget {
+        self.dag.int_div_cheap_narrow = bits;
+        self
+    }
+
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`.
     pub fn with_div_live_limit(
         mut self,
@@ -2998,6 +3008,12 @@ impl Builder<'_> {
         self.dag.set_root(chain);
         let result = if parts == 2 {
             self.dag.get_node_flags(ISD::BuildPair, vt, &pieces, pair_kind(vt, self.is_pointer_type(result_type)))
+        } else if part_vt != vt && part_vt.is_integer() && vt.is_integer() {
+            // `getCopyFromParts`: a value narrower than its register (an `i1`
+            // in `al`) is the register's truncate; left at
+            // the register's type, `xor i1 %call, true` was an i8 xor with an
+            // i1 constant that legalization refused.
+            self.dag.get_node(ISD::Truncate, vt, &[pieces[0]])
         } else {
             pieces[0]
         };

@@ -1281,7 +1281,9 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
             || moves_stack(&procedure.body)
             || procedure.registers.saved_first
             || !procedure.body.vector_saves.is_empty())
-        && procedure.callees.values().all(|one| one.code.is_empty())
+        // Inline code that cannot address the frame (a wide divide's register
+        // bytes) moves nothing with it.
+        && procedure.callees.values().all(|one| !may_address_frame(&one.code))
         && [false, true].iter().all(|omit| {
             // Nothing wrapped, or the frame and every register at the one Save
             // (the pin saves them together); a register saved later than the

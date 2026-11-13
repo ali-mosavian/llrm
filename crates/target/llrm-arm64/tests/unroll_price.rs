@@ -10,10 +10,10 @@ fn labels(source: &str) -> usize {
 
 /// nbody -O2: the triangular nest's inner copies were priced alone and kept
 /// rolled, 38,049 instructions where the pin runs 14,233. The unrolled nest
-/// has 10 labels.
+/// has 9 labels (10 before #9699: TailDupPlacement merges a block).
 #[test]
 fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
-    assert_eq!(labels(include_str!("data/bench_nbody_nest.ll")), 10);
+    assert_eq!(labels(include_str!("data/bench_nbody_nest.ll")), 9);
 }
 
 /// lru -O2: the estimate priced each copy's constant stores one by one
