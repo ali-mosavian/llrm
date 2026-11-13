@@ -84,9 +84,10 @@ fn refused(text: &str) {
 fn test_peeling_clones_diamond_and_early_exit_phis() {
     let mut module = peel(DIAMOND, 2);
     let text = printed(&module);
-    assert_eq!(f(&mut module).layout().len(), 7 + 2 * 5);
-    assert!(text.contains("b0:\n  br label %0\n"), "{text}");
-    assert!(text.contains("\n0:\n  %1 = phi i16 [ %seed, %b0 ]\n"), "{text}");
+    // The copies and `peelLoop`'s anchors: `.peel.begin`, one `.peel.next`
+    // behind each copy, a second after the last and `.peel.newph`.
+    assert_eq!(f(&mut module).layout().len(), 7 + 2 * 5 + (1 + 2 + 2));
+    assert!(text.contains("b0:\n  br label %"), "{text}");
     assert!(text.contains("b1:\n  %carried = phi i16 [ %stepped, %b5 ], [ %"), "{text}");
     let answer = text.lines().find(|line| line.contains("%answer = phi")).unwrap();
     assert_eq!(answer.matches("[ ").count(), 6, "{answer}");

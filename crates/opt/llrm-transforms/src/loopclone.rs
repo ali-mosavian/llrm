@@ -340,6 +340,21 @@ fn peeled_from(
             function.set_operands(phi, from_arms(&incoming));
         }
     }
+    // `peelLoop`'s anchors (LoopPeel.cpp:998): `InsertTop` (`.peel.begin`)
+    // ahead of the first copy, an `InsertBot` (`.peel.next`) behind each copy
+    // and, after the last, one more split and the new preheader
+    // (`.peel.newph`) before the loop. Each is a block of one `br`, which the
+    // unroller counts in the size of the loop around this one.
+    let (entry_block, header) = (cfg::block(entry), cfg::block(loop_.header));
+    edges::split_edge(function, entry_block, labels[0][&loop_.header]);
+    for (iteration, label) in labels.iter().enumerate() {
+        let target = labels.get(iteration + 1).map_or(header, |next| next[&loop_.header]);
+        let mut after = edges::split_edge(function, label[&latch], target);
+        if iteration + 1 == count {
+            after = edges::split_edge(function, after, header);
+            edges::split_edge(function, after, header);
+        }
+    }
     Ok(Some(labels))
 }
 
