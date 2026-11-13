@@ -1384,6 +1384,12 @@ impl Tti for X86 {
         false
     }
 
+    /// Long mode's DAG selects an access of any byte size (an `i24` is a 16-bit and an 8-bit access, an `i40` a
+    /// dword and a byte), as the pin's does: SROA cuts the slices where the pin cuts them.
+    fn selects_odd_sized_integers(&self) -> bool {
+        self.quad
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,

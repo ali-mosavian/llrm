@@ -1,10 +1,10 @@
-@a = dso_local global i32 5, align 4
-@b = dso_local global i32 0, align 4
-@c = dso_local constant [3 x i32] [i32 1, i32 2, i32 3], align 4
-@d = dso_local global i64 7, align 8
-@e = dso_local global i8 1, align 1
-@unused = dso_local global i16 9, align 2
-@s = dso_local global { i8, i32 } { i8 1, i32 2 }, align 4
+@a = hidden global i32 5, align 4
+@b = hidden global i32 0, align 4
+@c = hidden constant [3 x i32] [i32 1, i32 2, i32 3], align 4
+@d = hidden global i64 7, align 8
+@e = hidden global i8 1, align 1
+@unused = hidden global i16 9, align 2
+@s = hidden global { i8, i32 } { i8 1, i32 2 }, align 4
 define i32 @f() {
   %x = load i32, ptr @e
   %y = load i32, ptr @d
