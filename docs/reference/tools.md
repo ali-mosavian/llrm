@@ -94,6 +94,7 @@ name them in an environment variable, listed in the tool's header.
 | `dosbatch/gfxbench/` | Graphics primitives and text per screen mode on BCOM45, the llrm runtime in real mode, and flat, on virtual time |
 | `dosbatch/gorilla_aim.py`, `signal_gen.py` | Where a GORILLA banana lands, from a screenshot; the input of the `stft_*` benches |
 | `qlb.py` | Reads, checks, writes and lists Quick libraries (`.QLB`); [the format](../formats/qlb.md). `QB45_DIR`, `PDS71_DIR` and `VBDOS_DIR` point `test_qlb.py` at the shipped ones |
+| `qbbin.py` | Reads, checks, writes and dumps QuickBASIC 4.5 binary programs; [the format](../formats/qb-binary.md). `QB45_DIR` points `test_qbbin.py` at the kit's |
 
 ## MIR corpora
 

@@ -12,3 +12,4 @@ information each format carries. For contributors changing a writer or `-g`.
 | [codeview](codeview.md) | CodeView 4 in OMF objects: C7 form and BC's pre-link form |
 | [turbo-debugger](turbo-debugger.md) | Turbo Debugger records, `-gtd`, and loading them in Turbo Debugger |
 | [qlb](qlb.md) | QuickBASIC, PDS and VBDOS Quick libraries: the MZ file, its zero runs, symbol tables and relocations |
+| [qb-binary](qb-binary.md) | QuickBASIC 4.5 binary programs (*Fast Load and Save*): names, token streams, trailers, procedures |
