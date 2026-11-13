@@ -582,6 +582,16 @@ impl ProgramPass for Walk {
                                 let goes = crate::inlinecost::local_linkage(global.linkage)
                                     && !addressed.contains(&callee)
                                     && left == calls.len() as i64;
+                                // DEVIATE OS-INLINE-GROWTH: the by-size guard has already priced the callee over every call it
+                                // has left, the copies against the body that goes with the last (gcc's `estimate_growth`);
+                                // a trial of one site measures one caller alone and, accepting, lowers the count the next
+                                // caller's guard reads.
+                                let shared = crate::inlinecost::local_linkage(global.linkage)
+                                    && !addressed.contains(&callee)
+                                    && live.references().get(&callee).copied().unwrap_or(0) >= 2;
+                                if !goes && shared && size != crate::inlinecost::CallerSize::Speed && tti.inline_trial_defers_to_shared_growth() {
+                                    continue;
+                                }
                                 if goes {
                                     units.push((calls, body_size(module, &program.layout, tti, callee, size == crate::inlinecost::CallerSize::Speed)));
                                 } else if tti.inline_trial_groups_sites() && calls.len() > 1 {

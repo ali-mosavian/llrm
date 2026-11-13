@@ -316,6 +316,20 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     assert_eq!(listing.matches("movzx").count(), 5, "unrolled by 4 (DEVIATE PIE64) plus the remainder loop: {listing}");
 }
 
+/// A private callee called six times (`unpack`, three callers with two calls each) stayed out of line for the
+/// by-size guard, but the -Os trial of the first callers' sites measured -22 B a copy (the objects grew +5), accepted,
+/// and the guard of the last caller then saw two calls left and let its own through: all six inlined. gcc refuses at
+/// -Os where the growth over every call left is above zero (`estimate_growth`). m64 -Os sfm16_float_mul +39 B over
+/// the guard's verdict. DEVIATE OS-INLINE-GROWTH (gcc-bar only): the copies are 523 B against 553 B out of line here.
+#[test]
+fn a_callee_the_size_guard_keeps_out_of_line_is_not_inlined_by_the_trial_at_m64_os() {
+    let text = include_str!("testdata/shared_unpack.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f1").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let calls = listing.lines().filter(|line| line.trim().starts_with("call unpack")).count();
+    assert_eq!(calls, 6, "{listing}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the
