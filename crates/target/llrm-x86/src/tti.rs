@@ -1198,6 +1198,10 @@ impl Tti for X86 {
         self.tuning.lsr_phi_operand_uses
     }
 
+    fn splits_invariant_fmuladd(&self) -> bool {
+        self.tuning.splits_invariant_fmuladd
+    }
+
     fn lsr_users_in_use_list_order(&self) -> bool {
         self.tuning.lsr_users_in_use_list_order
     }
