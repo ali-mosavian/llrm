@@ -812,7 +812,7 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::address(form);
+            return crate::sizes::address(form, self.quad);
         }
         Cost::FREE
     }
