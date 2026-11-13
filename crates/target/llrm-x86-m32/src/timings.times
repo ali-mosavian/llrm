@@ -143,6 +143,7 @@ smul_max_w4     =    =
 smul_full_w2     -   = 
 # Intel 240440-002 Table 10.1 note 3: n = 3 for a positive multiplier, 5 for a negative one (the bits floor of 10 + max(bits, n)).
 smul_negative_bits  =    -
+smul_multiplier     =    -
 sdiv_w2         =    = 
 sdiv_w4         =    = 
 udiv_w2         =    = 

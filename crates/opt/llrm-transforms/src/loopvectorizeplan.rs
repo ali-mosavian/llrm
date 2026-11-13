@@ -85,6 +85,15 @@ pub enum Recipe {
     /// A select of `lane` values by the compare of `predicate`, if the loop
     /// makes the condition.
     Select { lane: Ty, predicate: Option<Predicate> },
+    /// A widened induction (`VPWidenIntOrFpInductionRecipe`): a vector phi of
+    /// `lane`s that steps by VF each iteration, priced as the vector `add`.
+    /// `truncated_from`: the scalar loop's `trunc` of the integer induction
+    /// (the recipe replaces it).
+    Induction { lane: Ty, truncated_from: Option<Ty> },
+    /// `VPDerivedIVRecipe`: the address induction `start + index * step` of a
+    /// loop whose induction does not start at zero or counts down; one `add`
+    /// of `lane` (the scalar loop has none: its phi is free).
+    DerivedIv { lane: Ty },
     /// An instruction the pin prices as a vector and this port does not (a
     /// uniform, reversed or grouped access, a cast without a table row): its
     /// scalar price is known, a vector factor cannot be weighed.
@@ -160,6 +169,16 @@ fn lane_bits(ty: Ty) -> u32 {
     }
 }
 
+/// The lane types of a recipe's vectors: its result's, and a conversion's
+/// source.
+fn recipe_lanes(recipe: &Recipe) -> impl Iterator<Item = Ty> {
+    let source = match *recipe {
+        Recipe::Cast { src, .. } => Some(src),
+        _ => None,
+    };
+    recipe_lane(recipe).into_iter().chain(source)
+}
+
 fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
     match *recipe {
         Recipe::Load { lane, .. }
@@ -168,9 +187,10 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
         | Recipe::FMulAdd { lane }
         | Recipe::Scalarized { lane, .. }
         | Recipe::Compare { lane, .. }
-        | Recipe::Select { lane, .. } => Some(lane),
+        | Recipe::Select { lane, .. }
+        | Recipe::Induction { lane, .. } => Some(lane),
         Recipe::Cast { dst, .. } => Some(dst),
-        Recipe::Unpriced { .. } => None,
+        Recipe::DerivedIv { .. } | Recipe::Unpriced { .. } => None,
     }
 }
 
@@ -253,19 +273,19 @@ fn iteration_cost(
     let kind = CostKind::RecipThroughput;
     let scalarized = recipes.iter().any(|recipe| matches!(recipe, Recipe::Scalarized { .. }));
     let mut total = if vf == 1 { scalar_control_cost(tti) } else { vector_control_cost(tti, scalarized) };
-    // DEVIATE LV-SPLIT: the pin prices a vector wider than one register as the
-    // parts the type legalizer splits it into (`SplitVectorResult`) and one
-    // narrower as its widened register (`WidenVectorResult`, the D-register
-    // types); the backends here do neither yet, so a VF is taken only when
-    // every recipe's vector fills one register exactly. Owner llrm-arm64-vec,
-    // exit LV-X4.
+    // DEVIATE LV-SPLIT: the pin prices a vector narrower than one register as
+    // its widened register (`WidenVectorResult`, the D-register types), which
+    // the backends here do not do yet, so a VF is taken only when every
+    // recipe's vectors (a conversion's source too) are one register or two
+    // (`SplitVectorResult` of a 256-bit type; no wider MVT exists yet). Owner
+    // llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
     if backend_limits
         && vf > 1
         && recipes
             .iter()
-            .filter_map(recipe_lane)
-            .any(|lane| u64::from(lane_bits(lane)) * u64::from(vf) != register_bits)
+            .flat_map(recipe_lanes)
+            .any(|lane| ![register_bits, 2 * register_bits].contains(&(u64::from(lane_bits(lane)) * u64::from(vf))))
     {
         return Err(NotTaken);
     }
@@ -339,6 +359,22 @@ fn iteration_cost(
                     tti.cmp_sel_cost(CmpSel::Select, lane, kind)
                 } else {
                     unknown(tti.vector_cmp_sel_cost(CmpSel::Select, vector(lane), predicate, kind))?
+                }
+            }
+            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free, the
+            // step an `add` of the vector.
+            Recipe::Induction { lane, truncated_from } => {
+                if vf == 1 {
+                    truncated_from.map_or(Cost::FREE, |src| tti.cast_cost(CastKind::Trunc, lane, src, kind))
+                } else {
+                    tti.vector_arithmetic_cost(ArithOp::Add, vector(lane), kind).ok_or(NotTaken)?
+                }
+            }
+            Recipe::DerivedIv { lane } => {
+                if vf == 1 {
+                    Cost::FREE
+                } else {
+                    tti.arithmetic_cost(ArithOp::Add, lane, kind, Default::default(), Default::default())
                 }
             }
             Recipe::Unpriced { scalar_cost } => {

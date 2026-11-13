@@ -377,6 +377,14 @@ pub struct Tuning {
     /// the mass and make the code after them cold (threshold 45, no bonuses).
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// Read-only data (a private constant, a jump table) that one procedure
+    /// only loads from follows that procedure in its code segment and is read
+    /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
+    /// puts it in the text section on a target whose data segment is scarce
+    /// (real mode: DS is DGROUP, code segments are not). false: the pin's
+    /// data section. Not when tuned for size: the `cs:` byte at every load
+    /// site outweighs the table's data bytes.
+    pub read_only_in_code: bool,
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
@@ -452,6 +460,9 @@ pub struct Tuning {
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
     /// `Tti::lsr_phi_operand_uses`.
     pub lsr_phi_operand_uses: bool,
+    /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+    /// `Tti::lsr_phi_users_first`.
+    pub lsr_phi_users_first: bool,
     /// `Tti::splits_invariant_fmuladd`.
     pub splits_invariant_fmuladd: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
@@ -678,6 +689,7 @@ impl Tuning {
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
+        read_only_in_code: false,
         min_jump_table_density: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,
@@ -695,6 +707,7 @@ impl Tuning {
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
+        lsr_phi_users_first: false,
         splits_invariant_fmuladd: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,

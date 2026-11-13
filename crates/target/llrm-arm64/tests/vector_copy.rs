@@ -302,3 +302,84 @@ fn a_loop_storing_two_element_widths_compiles() {
     );
     assert!(text.contains("report"), "{text}");
 }
+
+/// `a ^ b ^ c` over `<4 x i32>` selected `EOR3` ("machine opcode EOR3 has no
+/// arm64 instruction yet"): the one table is apple-m1's, which has SHA3, and
+/// `-mcpu=generic` (Linux) has not. Generic gets two `eor`s, as the pin's llc.
+#[test]
+fn a_three_way_xor_is_two_eors_without_sha3() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %x = load <4 x i32>, ptr %a, align 16\n\
+         \x20 %y = load <4 x i32>, ptr %b, align 16\n\
+         \x20 %z = load <4 x i32>, ptr %c, align 16\n\
+         \x20 %t = xor <4 x i32> %x, %y\n\
+         \x20 %r = xor <4 x i32> %t, %z\n\
+         \x20 store <4 x i32> %r, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(!text.contains("eor3"), "{text}");
+    assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("eor ")).count(), 2, "{text}");
+}
+
+/// A loop carrying a `<8 x i16>` phi (the widened induction `vec.ind`) panicked
+/// in live-range calculation ("a unique value"): a vector phi was given general
+/// registers, so its copies read a register nothing defined. It now lives in
+/// one `q` register and steps with `add v.8h`.
+#[test]
+fn a_loop_carried_vector_phi_lives_in_a_q_register() {
+    let text = assembly(
+        "define void @f(ptr noalias %a) {\n\
+         entry:\n  br label %body\n\
+         body:\n\
+         \x20 %index = phi i64 [ 0, %entry ], [ %next, %body ]\n\
+         \x20 %v = phi <8 x i16> [ splat (i16 3), %entry ], [ %vn, %body ]\n\
+         \x20 %p = getelementptr inbounds i16, ptr %a, i64 %index\n\
+         \x20 store <8 x i16> %v, ptr %p, align 2\n\
+         \x20 %next = add nuw i64 %index, 8\n\
+         \x20 %vn = add <8 x i16> %v, splat (i16 8)\n\
+         \x20 %done = icmp eq i64 %next, 2000\n\
+         \x20 br i1 %done, label %exit, label %body\n\
+         exit:\n  ret void\n}\n",
+    );
+    assert!(text.contains("add v") && text.contains(".8h"), "{text}");
+    assert!(text.contains("str q"), "{text}");
+}
+
+/// A store of the constant `<0, 1, .., 7>` was refused (`Legalize(custom
+/// lowering of BuildVector)`): a constant that is no splat is the pin's pool
+/// load (`adrp` + `ldr q`, the lanes in a 16-byte entry), and the widened
+/// induction's start is one.
+#[test]
+fn a_constant_vector_that_is_no_splat_is_a_pool_load() {
+    let text = assembly(
+        "define void @f(ptr %d) {\n\
+         \x20 store <8 x i16> <i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(text.contains("adrp") && text.contains("PAGEOFF"), "{text}");
+    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
+    // The lanes in memory order: 0, 1, 2, 3 then 4, 5, 6, 7 (16 bits each).
+    assert!(text.contains(".quad 0x3000200010000") && text.contains(".quad 0x7000600050004"), "{text}");
+}
+
+/// The unroller could not size a vector loop ("no cost for load"), so the
+/// 5-trip vector loop of scroll's splat fill stayed a loop of `str q` that
+/// clang's pin fully unrolls: ~21 more instructions per call.
+#[test]
+fn a_five_trip_vector_loop_is_fully_unrolled() {
+    let text = assembly(
+        "define void @fill(ptr noalias %a) {\n\
+         entry:\n  br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %next, %loop ]\n\
+         \x20 %d = getelementptr inbounds i16, ptr %a, i64 %i\n\
+         \x20 store i16 1824, ptr %d, align 2\n\
+         \x20 %next = add nuw nsw i64 %i, 1\n\
+         \x20 %done = icmp eq i64 %next, 80\n\
+         \x20 br i1 %done, label %exit, label %loop\n\
+         exit:\n  ret void\n}\n",
+    );
+    let branches = text.lines().filter(|l| l.trim().starts_with("b.") || l.trim().starts_with("cbnz")).count();
+    assert!(text.contains("q") && branches == 0, "{text}");
+}

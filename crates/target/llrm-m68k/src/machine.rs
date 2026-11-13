@@ -245,6 +245,17 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    /// A pair of `i64` divide and remainder is one call (`__divmoddi4`) where the multiply back is not the
+    /// 68020's `muls.l`: the pin's `DivRemPairs` would divide and then multiply the quotient by the divisor
+    /// with two `__mulsi3` calls (DEVIATE M68K-DIVMOD64: the pin's M68k has no such routine; exit: none).
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        bits == 64 && !self.cpu.has_wide_multiply()
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
     /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
     fn promote_va_list(&self) -> bool {
@@ -427,6 +438,14 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE INL-O1-TRIAL-M68K (owner m68k, exit 2026-11-24): at -O1 a callee
+    /// the growth bound refused is tried in the caller and kept where the
+    /// caller comes out smaller (uint64_to_float: `classify` x6 folds `main`
+    /// to constants, 368 B and 1514 B of routines against clang's 92 B).
+    fn inline_trials_at_o1(&self) -> bool {
+        true
+    }
+
     /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
     /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
     /// range check, the dispatch and a word a case.
@@ -457,6 +476,16 @@ impl Tti for M68k {
     /// driver keeps it where the finished functions are smaller (as x86-m32's
     /// 30). The pin never unrolls at -Os past its threshold.
     fn unroll_trial_at_size(&self) -> Option<u32> {
+        Some(100)
+    }
+
+    /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at
+    /// -O1, where the pin does not unroll past its threshold and gcc does:
+    /// the driver keeps the unrolled module where its finished functions are
+    /// no larger and no slower (float_in_memory_loop: 16 `fadd`s on a constant
+    /// fold to one, 100 B and 1264 B of soft-float routines against gcc's 70
+    /// B).
+    fn unroll_trial_threshold(&self) -> Option<u32> {
         Some(100)
     }
 
