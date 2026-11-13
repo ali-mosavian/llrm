@@ -127,6 +127,8 @@ pub fn slots_to_registers<T: Target>(
     let full = |reg: Reg| info.view(T::root(register(reg)), bits).map(Reg::Phys);
     let successors = successors(function);
     let mut moved = 0;
+    let mut live = PhysLiveness::of::<T>(function, assignment, info);
+    let mut stale = false;
     for &slot in slots {
         let mut accesses: Vec<(usize, usize, Access)> = Vec::new();
         let mut plain = true;
@@ -147,7 +149,10 @@ pub fn slots_to_registers<T: Target>(
             continue;
         }
         let before = live_ranges(function, slot, &successors);
-        let live = PhysLiveness::of::<T>(function, assignment, info);
+        if stale {
+            live = PhysLiveness::of::<T>(function, assignment, info);
+            stale = false;
+        }
         let free = |host: RegId| {
             if T::reserved(T::root(host)) {
                 return false;
@@ -186,6 +191,7 @@ pub fn slots_to_registers<T: Target>(
             function.blocks[b].insts[i] = copy;
         }
         moved += 1;
+        stale = true;
     }
     moved
 }

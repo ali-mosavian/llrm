@@ -268,7 +268,7 @@ impl Default for Options {
             reuse_shift_flags: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
-            slot_registers: false,
+            slot_registers: llrm_support::env_flag!("LLRM_SLOT_REG"),
             shared_cse: true,
             direct_copies: false,
             shared_licm: false,
@@ -459,6 +459,16 @@ fn items_trials(
             options = without;
         }
     }
+    // the address registers it takes may be the ones a later choice (the call
+    // target's) would have had, so it is judged with the rest built
+    if touched.slot_registers {
+        let without = Options { slot_registers: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     // last: the two builds compared are final, the other choices made
     if touched.carry_chain {
         let without = Options { carry_chain: false, ..options };
@@ -545,6 +555,8 @@ struct Touched {
     remat_constants: bool,
     /// The shared `MachineCSE` changed the function.
     shared_cse: bool,
+    /// A spill slot moved into an address register ([`crate::slotreg`]).
+    slot_registers: bool,
     /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
     /// trial credits clocks only inside loops, since a straight-line multiply
     /// may never run.
@@ -561,6 +573,7 @@ impl Touched {
             || self.global_copies
             || self.mul_trial
             || self.remat_constants
+            || self.slot_registers
     }
 }
 
@@ -624,6 +637,7 @@ pub fn libcalls_for(
                 global_copies: false,
                 relax_classes: false,
                 remat_constants: false,
+                slot_registers: false,
                 ..options
             };
             items_with(module, name, cpu, options).map(|items| items_bytes(&items))
@@ -951,8 +965,8 @@ fn items_once(
         &crate::REGISTER_INFO,
         &slots,
     );
-    if options.short && (options.slot_registers || llrm_support::env_flag!("LLRM_SLOT_REG")) {
-        crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots);
+    if options.short && options.slot_registers {
+        touched.slot_registers = crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots) > 0;
     }
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
