@@ -423,6 +423,13 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the module is compiled again with the copies of a
+    /// loop-holding callee at several sites of a loop refused, and the cheaper after allocation is kept
+    /// (`compile::effective`).
+    fn inline_loop_copy_trial(&self) -> bool {
+        true
+    }
+
     /// DEVIATE Z80-ROT (owner z80, exit 2026-11-21): -Oz keeps a counted loop proven to run bottom-tested (`djnz`, no
     /// test above the body), as the gcc tail rotate did until its deletion (#8017): 27 -Oz cells grew, sum4 +4 B.
     fn rotation_free_guard_at_minsize(&self) -> bool {
