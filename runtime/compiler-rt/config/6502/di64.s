@@ -1,7 +1,7 @@
 ; 64-bit multiply and divide for the 6502: u64 __muldi3(u64 a, u64 b) and __udivdi3 __umoddi3 __divdi3 __moddi3, llrm-6502 rc2-first layout: a0..a5 in rc2..rc7, a6:a7 at the
 ; caller's stack (rc0:rc1)+0/+1, b0..b7 at (rc0:rc1)+2..9 (read only). Result A:X:rc2..rc7. Scratch rc16..rc25 and BSS.
 ; Multiply: shift and add, one multiplier byte at a time from the lowest to the highest nonzero byte of b.
-; Divide: restoring, the divisor is shifted up to the dividend's bit length and steps down one bit at a time; the quotient bits roll into qv. Division by zero gives all ones and the dividend as remainder (lib/int/int64.c).
+; Divide: restoring, the divisor is shifted up to the dividend's bit length and steps down one bit at a time; the quotient bits roll into qv. A zero divisor is undefined in C: here the quotient is all ones and the remainder the dividend; the generic C members differ (0x0000FFFF0000FFFF), so do not depend on it.
 
 .setcpu "6502"
 .export __muldi3, __udivdi3, __divdi3
