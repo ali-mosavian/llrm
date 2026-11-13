@@ -123,8 +123,8 @@ pub struct Options {
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
     /// A spill slot lives in a free address register where one is free over
-    /// its range (DEVIATE SLOT-REG, [`crate::slotreg`]). `LLRM_SLOT_REG` sets
-    /// it.
+    /// its range (DEVIATE SLOT-REG, [`crate::slotreg`]). On in the shipped
+    /// options; `LLRM_NO_SLOT_REG` turns it off.
     pub slot_registers: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
     /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
@@ -268,7 +268,7 @@ impl Default for Options {
             reuse_shift_flags: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
-            slot_registers: llrm_support::env_flag!("LLRM_SLOT_REG"),
+            slot_registers: !llrm_support::env_flag!("LLRM_NO_SLOT_REG"),
             shared_cse: true,
             direct_copies: false,
             shared_licm: false,
@@ -337,27 +337,40 @@ pub fn items_with(
     // The relaxation is the last choice of a build, so it is made before the
     // two builds of the shared `MachineCSE` are compared.
     let prefixes = Prefixes::default();
-    let finished = |options: Options| -> Result<(Vec<Item>, bool), String> {
+    let wants_slots = options.slot_registers;
+    let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
         let (plain, saved, chosen, shared) =
             items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
         if !options.relax_classes || !saved {
-            return Ok((plain, shared));
+            return Ok((plain, shared, chosen));
         }
-        let (relaxed, touched) = items_once(module, name, cpu, Options { relax_classes: true, ..chosen }, &prefixes)?;
+        let relaxed_options = Options { relax_classes: true, ..chosen };
+        let (relaxed, touched) = items_once(module, name, cpu, relaxed_options, &prefixes)?;
         let relax = touched.relax_classes && crate::trial::keeps(&relaxed, &plain, cpu, price);
-        Ok((if relax { relaxed } else { plain }, shared))
+        Ok(if relax { (relaxed, shared, relaxed_options) } else { (plain, shared, chosen) })
     };
-    let (with, shared) = finished(options)?;
+    // The trials run without the slot registers, so their choices are the
+    // pass's being off; it is tried once on the build they end on.
+    let options = Options { slot_registers: false, ..options };
+    let (mut kept, shared, mut kept_options) = finished(options)?;
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
     if shared {
-        let (without, _) = finished(Options { shared_cse: false, ..options })?;
-        if !crate::trial::keeps(&with, &without, cpu, price) {
-            return Ok(without);
+        let (without, _, without_options) = finished(Options { shared_cse: false, ..options })?;
+        if !crate::trial::keeps(&kept, &without, cpu, price) {
+            (kept, kept_options) = (without, without_options);
         }
     }
-    Ok(with)
+    // A function with no spill slot has nothing to move.
+    if wants_slots && prefixes.had_slots.get() {
+        let (items, touched) =
+            items_once(module, name, cpu, Options { slot_registers: true, ..kept_options }, &prefixes)?;
+        if touched.slot_registers && crate::trial::keeps(&items, &kept, cpu, price) {
+            return Ok(items);
+        }
+    }
+    Ok(kept)
 }
 
 /// The trials of [`items_with`] on a module the mid-end has run on: the items,
@@ -453,16 +466,6 @@ fn items_trials(
     }
     if touched.remat_constants {
         let without = Options { remat_constants: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
-        if !crate::trial::keeps(&kept, &plain, cpu, price) {
-            kept = plain;
-            options = without;
-        }
-    }
-    // the address registers it takes may be the ones a later choice (the call
-    // target's) would have had, so it is judged with the rest built
-    if touched.slot_registers {
-        let without = Options { slot_registers: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
@@ -573,7 +576,6 @@ impl Touched {
             || self.global_copies
             || self.mul_trial
             || self.remat_constants
-            || self.slot_registers
     }
 }
 
@@ -734,6 +736,8 @@ struct Prefixes {
     emitted: Memo<Selection, Emission>,
     early: Memo<(Selection, String), Prepared>,
     late: Memo<(Selection, String), Prepared>,
+    /// Some build had a spill slot ([`crate::slotreg`] has something to move).
+    had_slots: std::cell::Cell<bool>,
 }
 
 /// The options that only the stages after `MachineCSE` read, left out of the
@@ -744,7 +748,7 @@ fn before_late_stage(options: Options) -> Options {
 
 /// The options that only allocation and the stages after it read.
 fn before_allocation(options: Options) -> Options {
-    Options { global_copies: false, tail_duplicate: false, return_dup: false, ..options }
+    Options { global_copies: false, tail_duplicate: false, return_dup: false, slot_registers: false, ..options }
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -1034,6 +1038,7 @@ fn items_once(
     }
     out.extend(jump_tables(&function, number));
     drop(sp);
+    prefixes.had_slots.set(prefixes.had_slots.get() || !slots.is_empty());
     Ok((out, touched))
 }
 
