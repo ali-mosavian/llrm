@@ -973,6 +973,10 @@ impl TargetLowering {
             MVT::V4I64,
             MVT::V8F32,
             MVT::V4F64,
+            MVT::V64I8,
+            MVT::V32I16,
+            MVT::V16I32,
+            MVT::V8I64,
         ];
         for vt in every_vector {
             for inner in every_vector {
