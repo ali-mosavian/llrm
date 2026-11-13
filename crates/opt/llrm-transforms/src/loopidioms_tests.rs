@@ -1566,8 +1566,9 @@ fn a_fill_in_a_loop_that_reads_its_object_is_kept() {
     assert!(!changed, "{after}");
 }
 
-/// A loop that keeps a computed store beside a constant one was never filled under a rate: the fill's own clocks
-/// were not weighed against the removed stores', so a 1200-trip `dst[i] = 0xEE` stayed in the loop beside
+/// A loop that keeps a computed store beside a constant one was never filled
+/// under a rate: the fill's own clocks were not weighed against the removed
+/// stores', so a 1200-trip `dst[i] = 0xEE` stayed in the loop beside
 /// `src[i] = ...` (memory_expansion `reset`, 13M T over the program).
 #[test]
 fn a_constant_store_beside_a_computed_one_is_filled_when_the_trips_pay() {
@@ -1579,15 +1580,50 @@ fn a_constant_store_beside_a_computed_one_is_filled_when_the_trips_pay() {
     assert!(!super::fill_beside_computed_stores_pays(true, None, 2, 1, 1));
 }
 
-/// The cells were those of every store in the loop: with the T-state sheet (a store 38 T, a fill 47 T and 84 T a
-/// dword cell) a computed and a constant store over 1200 trips priced 600 cells for the 300 the fill stores, 50k T
-/// against the 45.6k the removed store runs: the fill was refused (`fill_beside_computed`, red on release/next).
+/// The cells were those of every store in the loop: with the T-state sheet (a
+/// store 38 T, a fill 47 T and 84 T a dword cell) a computed and a constant
+/// store over 1200 trips priced 600 cells for the 300 the fill stores, 50k T
+/// against the 45.6k the removed store runs: the fill was refused
+/// (`fill_beside_computed`, red on release/next).
 #[test]
 fn the_fill_beside_a_computed_store_is_priced_for_the_cells_it_stores() {
     let sheet = llrm_mir::target::OperationCosts { store_immediate: 38, fill: 47, fill_cell: 84, ..Default::default() };
     let cells = (1200 * 2 + 3) / 4;
     assert!(super::fill_beside_computed_stores_pays(true, Some((&sheet, 3000, Some(1200), Some(cells))), 2, 1, 1));
-    // a fill of the same cells for a store that costs less than the fill's own does not pay
+    // a fill of the same cells for a store that costs less than the fill's own
+    // does not pay
     let cheap = llrm_mir::target::OperationCosts { store_immediate: 10, ..sheet };
     assert!(!super::fill_beside_computed_stores_pays(true, Some((&cheap, 3000, Some(1200), Some(cells))), 2, 1, 1));
+}
+
+/// A function of `loops` sequential guarded loops that each store the same byte
+/// to a masked cell, so `loopidioms` proves the trips of each and rewrites none
+/// (the mask is no stride): the body keeps one state through all of them.
+fn counter_loops(loops: usize) -> String {
+    let mut text = format!(
+        "@buf = global [64 x i8] zeroinitializer\n\n{MEMSET}define i16 @f(i16 %n) {{\nb0:\n  %b = trunc i16 %n to i8\n  br label %g0\n\n"
+    );
+    for k in 0..loops {
+        let next = if k + 1 == loops { "done".to_owned() } else { format!("g{}", k + 1) };
+        text += &format!(
+            "g{k}:\n  %go{k} = icmp slt i16 0, %n\n  br i1 %go{k}, label %pre{k}, label %x{k}\n\n\
+             pre{k}:\n  br label %l{k}\n\n\
+             l{k}:\n  %i{k} = phi i16 [ 0, %pre{k} ], [ %n{k}, %l{k} ]\n  %m{k} = and i16 %i{k}, 63\n  %p{k} = getelementptr [64 x i8], ptr @buf, i16 0, i16 %m{k}\n  store i8 %b, ptr %p{k}\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %n{k}, %n\n  br i1 %c{k}, label %l{k}, label %x{k}\n\n\
+             x{k}:\n  br label %{next}\n\n",
+        );
+    }
+    text + "done:\n  ret i16 %n\n}\n"
+}
+
+/// `loopidioms` asked for the body's `llvm.assume`s once for each loop and each
+/// idiom it tried: 80 sequential loops cost 160 whole-body searches, 60% of the
+/// pass at 80 loops (callgrind, 2026-11-13). It is one search for a body whose
+/// state does not change.
+#[test]
+fn test_a_bodys_assumptions_are_searched_once_for_all_its_loops() {
+    let before = llrm_analysis::assumptions::built();
+    let (after, changed) = fill(&counter_loops(6), &[&[0], &[3], &[40]]);
+    let searched = llrm_analysis::assumptions::built() - before;
+    assert!(!changed, "{after}");
+    assert!(searched <= 1, "{searched} searches for the assumptions of one body of 6 loops");
 }
