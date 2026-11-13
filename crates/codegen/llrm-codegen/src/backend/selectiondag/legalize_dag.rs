@@ -560,8 +560,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
-        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds CTTZ_ZERO_POISON): the value as is, the
-        // routine's `int` result sign-extended or truncated to the node's type.
+        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds
+        // CTTZ_ZERO_POISON): the value as is, the routine's `int`
+        // result sign-extended or truncated to the node's type.
         if matches!(op, ISD::CtLzZeroPoison | ISD::CtPop | ISD::CtTzZeroPoison) {
             let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
             let int = EVT::integer(self.tli.types.int_size());
@@ -964,7 +965,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let (src, dst) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let src_vt = self.dag.value_type(src);
         let EVT::Simple(src_mvt) = src_vt else { return None };
-        if !matches!(self.tli.operation_action(ISD::SIntToFp, src_vt), Action::Legal | Action::Custom) {
+        if !matches!(
+            self.tli.operation_action(ISD::SIntToFp, src_vt),
+            Action::Legal | Action::Custom
+        ) {
             return None;
         }
         if self.dag.node(node).flags.0 & SDNodeFlags::NON_NEG.0 != 0 {
@@ -1035,6 +1039,45 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(loaded)
     }
 
+    /// The vector operations `Expand` unrolls here: the pin's
+    /// `VectorLegalizer::Expand` unrolls any by default.
+    ///
+    /// DEVIATE VL1 (owner llrm-arm64-vec, exit 2026-11-27): there is no
+    /// `VectorLegalizer` phase, so only `MUL` (a `v2i64` product `LowerMUL`
+    /// declines) is unrolled; the other operations keep their own paths.
+    fn is_unrollable(op: ISD) -> bool {
+        op == ISD::Mul
+    }
+
+    /// `UnrollVectorOp`: the operation on each lane's scalars, put together
+    /// by a `BUILD_VECTOR`.
+    fn unroll_vector_op(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let op = self.dag.opcode(node);
+        let operands: Vec<SDValue> = self.dag.node(node).ops.to_vec();
+        let lanes: Vec<SDValue> = (0..vt.lanes())
+            .map(|lane| {
+                let index = self.dag.get_constant(u128::from(lane), self.dag.config().pointer);
+                let scalars: Vec<SDValue> = operands
+                    .iter()
+                    .map(|&operand| {
+                        let ty = self.dag.value_type(operand);
+                        if ty.is_vector() {
+                            self.dag.get_node(ISD::ExtractElement, ty.element(), &[operand, index])
+                        } else {
+                            operand
+                        }
+                    })
+                    .collect();
+                self.dag.get_node(op, vt.element(), &scalars)
+            })
+            .collect();
+        self.dag.get_build_vector(vt, &lanes)
+    }
+
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
     fn expand_node(
@@ -1044,6 +1087,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let op = self.dag.opcode(node);
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
+        if vt.is_vector() && Self::is_unrollable(op) {
+            return Some(vec![self.unroll_vector_op(node)]);
+        }
         match op {
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::SignExtendInReg => {
@@ -1233,8 +1279,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             // `expandVAArg`: load the list pointer, round it up to the
             // type's ABI alignment when that exceeds the minimum stack
-            // argument alignment (`getMinStackArgumentAlignment`), step it by the
-            // type's allocation size, store it back and load the value.
+            // argument alignment (`getMinStackArgumentAlignment`), step it by
+            // the type's allocation size, store it back and load the value.
             ISD::VAArg => {
                 let vt = self.dag.value_type(node);
                 let (chain, list) = (self.dag.operand(node, 0), self.dag.operand(node, 1));

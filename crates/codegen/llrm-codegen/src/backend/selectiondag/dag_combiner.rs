@@ -2300,9 +2300,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let from = self.dag.value_type(n0);
+        // `SignBitIsZero`: the sign bit of a lane, in a vector.
+        let lane_bits = if from.is_vector() { from.element().size_in_bits() } else { from.size_in_bits() };
         if self.tli?.is_sext_cheaper_than_zext(from, vt)
             || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
-            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
+            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (lane_bits - 1))
         {
             return None;
         }

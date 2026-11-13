@@ -315,3 +315,108 @@ fn a_multiply_of_an_extension_by_a_splat_uses_the_high_half_forms() {
     assert_eq!(count(&text, "xtn", ""), 0, "{text}");
     assert_eq!(count(&text, "mov", " d"), 0, "{text}");
 }
+
+/// `mul <2 x i64>` of two loaded vectors was refused ("custom lowering of
+/// Mul"; matmul did not compile): `LowerMUL` declines a product that is no
+/// long multiply and the pin expands it, one scalar `mul` per lane.
+#[test]
+fn a_plain_two_lane_64_bit_multiply_is_one_scalar_multiply_per_lane() {
+    let text = assembly(
+        "define void @f(ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %x = load <2 x i64>, ptr %a, align 8\n\
+         \x20 %y = load <2 x i64>, ptr %b, align 8\n\
+         \x20 %m = mul <2 x i64> %x, %y\n\
+         \x20 store <2 x i64> %m, ptr %c, align 8\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(
+        text.lines().filter(|l| l.trim_start().starts_with("mul ") || l.trim_start().starts_with("madd ")).count(),
+        2,
+        "{text}"
+    );
+}
+
+/// The extension and the splat of a multiply were made in the block before it
+/// (matmul's loop-invariant operands) and crossed as `v2i64` registers: the
+/// product was eight scalar `madd`s (matmul O2 3575 instructions). The pin's
+/// `isProfitableToSinkOperands` makes both again beside the multiply, which is
+/// then `smull`/`smlal` of the halves.
+#[test]
+fn an_extension_and_a_splat_made_in_another_block_are_sunk_to_the_multiply() {
+    let text = assembly(
+        "define void @f(ptr %a, ptr %c, i16 %x) {\n\
+         entry:\n\
+         \x20 %xs = sext i16 %x to i64\n\
+         \x20 %i = insertelement <8 x i64> poison, i64 %xs, i64 0\n\
+         \x20 %s = shufflevector <8 x i64> %i, <8 x i64> poison, <8 x i32> zeroinitializer\n\
+         \x20 br label %body\n\
+         body:\n\
+         \x20 %n = phi i64 [ 0, %entry ], [ %n1, %body ]\n\
+         \x20 %p = getelementptr inbounds <8 x i64>, ptr %c, i64 %n\n\
+         \x20 %q = getelementptr inbounds <8 x i16>, ptr %a, i64 %n\n\
+         \x20 %l2 = load <8 x i16>, ptr %q, align 2\n\
+         \x20 %e2 = sext <8 x i16> %l2 to <8 x i64>\n\
+         \x20 %m = mul nsw <8 x i64> %e2, %s\n\
+         \x20 store <8 x i64> %m, ptr %p, align 8\n\
+         \x20 %n1 = add nuw nsw i64 %n, 1\n\
+         \x20 %done = icmp eq i64 %n1, 8\n\
+         \x20 br i1 %done, label %exit, label %body\n\
+         exit:\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "smull2", ".2d"), 2, "{text}");
+    assert_eq!(count(&text, "smull", ".2d"), 2, "{text}");
+    assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("madd ")).count(), 0, "{text}");
+}
+
+/// A `v8i64` product of two `sext <8 x i16>` was split into `v2i64` pieces and
+/// scalarized (eight `madd`s). The pin's `performVectorExtCombine` multiplies
+/// at `v8i32` and extends: two `smull .4s`, four `sshll .2d`.
+#[test]
+fn a_wide_multiply_of_two_extensions_is_done_at_half_the_width_and_extended() {
+    let text = assembly(
+        "define void @f(ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %la = load <8 x i16>, ptr %a, align 2\n\
+         \x20 %lb = load <8 x i16>, ptr %b, align 2\n\
+         \x20 %ea = sext <8 x i16> %la to <8 x i64>\n\
+         \x20 %eb = sext <8 x i16> %lb to <8 x i64>\n\
+         \x20 %m = mul nsw <8 x i64> %ea, %eb\n\
+         \x20 store <8 x i64> %m, ptr %c, align 8\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "smull", ".4s") + count(&text, "smull2", ".4s"), 2, "{text}");
+    assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("madd ")).count(), 0, "{text}");
+}
+
+/// LoopVectorize refused any loop with a `sext` ("a loaded value used other
+/// than by a store or a binary operation"): `c[i] = (long)a[i] * x` over 64
+/// elements stayed scalar. The pin widens the cast (VF 8, 13 against 7 a
+/// lane at VF 1) and the product is `smull`/`smull2` of the halves.
+#[test]
+fn a_loop_of_widening_multiplies_by_a_scalar_is_vectorized() {
+    let text = assembly(
+        "define void @f(ptr noalias %a, ptr noalias %c, i16 %x16) {\n\
+         entry:\n\
+         \x20 %x = sext i16 %x16 to i64\n\
+         \x20 br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %n, %loop ]\n\
+         \x20 %p = getelementptr inbounds i16, ptr %a, i64 %i\n\
+         \x20 %v = load i16, ptr %p, align 2\n\
+         \x20 %e = sext i16 %v to i64\n\
+         \x20 %m = mul nsw i64 %e, %x\n\
+         \x20 %q = getelementptr inbounds i64, ptr %c, i64 %i\n\
+         \x20 store i64 %m, ptr %q, align 8\n\
+         \x20 %n = add nuw nsw i64 %i, 1\n\
+         \x20 %d = icmp eq i64 %n, 64\n\
+         \x20 br i1 %d, label %exit, label %loop\n\
+         exit:\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(count(&text, "smull", ".2d") + count(&text, "smull2", ".2d") >= 2, "{text}");
+    assert_eq!(
+        text.lines().filter(|l| l.trim_start().starts_with("madd ") || l.trim_start().starts_with("mul ")).count(),
+        0,
+        "{text}"
+    );
+}

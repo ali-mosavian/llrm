@@ -221,6 +221,43 @@ pub fn lower_build_vector(
     Some(vec)
 }
 
+/// `performVectorExtCombine`: an add, subtract or multiply of two extensions
+/// from the same narrow type, in a vector wider than a register, is done at
+/// half the width and extended: `mul (sext a), (sext b)` of `v8i16` to `v8i64`
+/// is `sext (mul (sext a), (sext b))` at `v8i32`.
+pub fn vector_ext_combine(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !vt.is_vector() || vt.size_in_bits() <= 128 {
+        return None;
+    }
+    let opcode = dag.opcode(node);
+    let (e0, e1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let is_ext = |dag: &SelectionDAG, n: SDValue| matches!(dag.opcode(n), ISD::SignExtend | ISD::ZeroExtend);
+    if !is_ext(dag, e0) || !is_ext(dag, e1) {
+        return None;
+    }
+    let (n0, n1) = (dag.operand(e0, 0), dag.operand(e1, 0));
+    if dag.value_type(n0) != dag.value_type(n1) {
+        return None;
+    }
+    if opcode == ISD::Mul && dag.opcode(e0) != dag.opcode(e1) {
+        return None;
+    }
+    let (s1, s2) = (dag.value_type(n0).element().size_in_bits(), vt.element().size_in_bits());
+    if !((s2 == 32 && s1 == 8) || (s2 == 64 && (s1 == 8 || s1 == 16))) {
+        return None;
+    }
+    let half = EVT::Simple(MVT::vector(MVT::integer(s2 / 2)?, vt.lanes())?);
+    let new0 = dag.get_node(dag.opcode(e0), half, &[n0]);
+    let new1 = dag.get_node(dag.opcode(e1), half, &[n1]);
+    let narrow = dag.get_node(opcode, half, &[new0, new1]);
+    let extend = if opcode == ISD::Mul { dag.opcode(e0) } else { ISD::SignExtend };
+    Some(dag.get_node(extend, vt, &[narrow]))
+}
+
 /// `UnrollVectorOp`: one scalar operation per lane, put together by a
 /// `BUILD_VECTOR`.
 fn unroll_vector_op(

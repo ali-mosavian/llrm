@@ -320,7 +320,8 @@ impl CombineHooks for Aarch64Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => super::combine::combine_mul(dag, node, level, self.opt_for_size),
+            ISD::Mul => super::vector::vector_ext_combine(dag, node)
+                .or_else(|| super::combine::combine_mul(dag, node, level, self.opt_for_size)),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
             ISD::Truncate => super::vector::truncate_combine(dag, node),
             ISD::Target(aarch64_isd::DUP) => {
@@ -334,8 +335,11 @@ impl CombineHooks for Aarch64Lowering {
                     CombineLevel::BeforeLegalizeTypes | CombineLevel::AfterLegalizeTypes
                 ),
             ),
-            ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
-            ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::Add => super::vector::vector_ext_combine(dag, node)
+                .or_else(|| super::combine::add_combine_for_shifted_operands(dag, node)),
+            ISD::Sub => {
+                super::vector::vector_ext_combine(dag, node).or_else(|| super::combine::conditional_sub(dag, node))
+            }
             ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::And | ISD::Or if level == CombineLevel::AfterLegalizeDag => {
                 super::ccmp::combine_and_or_csel(dag, node)
@@ -479,7 +483,9 @@ impl LegalizeHooks for Aarch64Lowering {
                 None if super::vector::is_constant_build_vector(dag, node) => return None,
                 None => None,
             },
-            ISD::Mul if dag.value_type(node).is_vector() => super::vector::lower_vector_mul(dag, node),
+            // `LowerMUL` answers none for a `v2i64` product that is not a
+            // widening one: "fall through to expand this", which unrolls it.
+            ISD::Mul if dag.value_type(node).is_vector() => return super::vector::lower_vector_mul(dag, node),
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.

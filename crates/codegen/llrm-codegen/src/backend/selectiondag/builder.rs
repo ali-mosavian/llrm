@@ -1001,6 +1001,21 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<(EVT, usize), Refused> {
+        // `getVectorTypeBreakdown`: a vector of more bits than a register is
+        // that many registers of the half it halves into.
+        if vt.is_vector() && self.target.dag.vector_register_bits != 0 {
+            let (mut part, mut count) = (vt, 1usize);
+            while part.size_in_bits() > self.target.dag.vector_register_bits && part.lanes() % 2 == 0 {
+                let lanes = part.lanes() / 2;
+                let lane = match part.element() {
+                    EVT::Simple(lane) => lane,
+                    EVT::Int(_) => return Err(Refused("vector of an odd lane")),
+                };
+                part = MVT::vector(lane, lanes).map(EVT::Simple).ok_or(Refused("vector with no register class"))?;
+                count *= 2;
+            }
+            return Ok((part, count));
+        }
         match self.register_type(vt) {
             Ok(reg_vt) => Ok((reg_vt, 1)),
             Err(_) => {
@@ -1088,11 +1103,36 @@ impl Builder<'_> {
         // `getCopyToParts`: a value narrower than its parts together (`i63` in
         // eight bytes) is extended to their width first.
         let total = part.size_in_bits() * count as u32;
-        let value = if self.dag.value_type(value).size_in_bits() < total {
+        let value = if !self.dag.value_type(value).is_vector() && self.dag.value_type(value).size_in_bits() < total {
             self.dag.get_node(ISD::AnyExtend, EVT::integer(total), &[value])
         } else {
             value
         };
+        if self.dag.value_type(value).is_vector() {
+            // `getCopyToParts` of a vector: the halves, as many times as the
+            // parts need.
+            let half = self.dag.value_type(value);
+            let lanes = u128::from(half.lanes() / 2);
+            let half = EVT::Simple(
+                MVT::vector(
+                    match half.element() {
+                        EVT::Simple(lane) => lane,
+                        EVT::Int(_) => unreachable!("a vector's lane is a simple type"),
+                    },
+                    half.lanes() / 2,
+                )
+                .expect("a half of a part count"),
+            );
+            let (zero, mid) = (self.dag.get_constant(0, EVT::I64), self.dag.get_constant(lanes, EVT::I64));
+            let low = self.dag.get_node(ISD::ExtractSubvector, half, &[value, zero]);
+            let high = self.dag.get_node(ISD::ExtractSubvector, half, &[value, mid]);
+            if count == 2 {
+                return vec![low, high];
+            }
+            let mut all = self.split_parts(low, part, count / 2);
+            all.extend(self.split_parts(high, part, count / 2));
+            return all;
+        }
         if count == 2 {
             return self.split_value(value, part).to_vec();
         }
@@ -1111,6 +1151,23 @@ impl Builder<'_> {
         pieces: &[SDValue],
         pointer: bool,
     ) -> SDValue {
+        if vt.is_vector() {
+            // `getCopyFromParts` of a vector: the parts concatenated.
+            if let [one] = pieces {
+                return *one;
+            }
+            let (low, high) = pieces.split_at(pieces.len() / 2);
+            let half = self.dag.value_type(low[0]);
+            let lane = match half.element() {
+                EVT::Simple(lane) => lane,
+                EVT::Int(_) => unreachable!("a vector's lane is a simple type"),
+            };
+            let half = EVT::Simple(
+                MVT::vector(lane, half.lanes() * (pieces.len() as u32 / 2)).expect("a vector of half the parts"),
+            );
+            let pair = [self.join_parts(half, low, false), self.join_parts(half, high, false)];
+            return self.dag.get_node(ISD::ConcatVectors, vt, &pair);
+        }
         // `getCopyFromParts`: parts wider together than the value (eight bytes
         // for an `i63`) are joined at their width and truncated.
         let total = pieces.iter().map(|piece| self.dag.value_type(*piece).size_in_bits()).sum::<u32>();

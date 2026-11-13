@@ -67,7 +67,7 @@ use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use llrm_mir::tti::{ArithOp, MemoryOp, Ty};
+use llrm_mir::tti::{ArithOp, ExtOperand, ExtUser, MemoryOp, Ty};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::lcssa::from_arms;
@@ -287,6 +287,16 @@ fn extract(
         },
         _ => true,
     };
+    // An operand that is a `sext` or `zext` (wherever it is computed): what
+    // the pin's widening costs read of `Args`.
+    let ext_of = |operand: Operand| -> Option<ExtOperand> {
+        let Operand::Value(value) = operand else { return None };
+        let llrm_mir::module::ValueDef::Instruction(def) = function.value(value).def else { return None };
+        let extension = function.instruction(def);
+        let Opcode::Cast(op @ (CastOp::SExt | CastOp::ZExt)) = extension.opcode else { return None };
+        let src = function.operand_type(cx.context, extension.operands[0])?;
+        Some(ExtOperand { kind: interleave::cast_kind(op)?, src: element_ty(cx, src)? })
+    };
     // Every use is a store's value or an integer binary operation of this
     // loop (the instruction itself is judged where it comes).
     let widened_users = |value: ValueId| {
@@ -489,7 +499,8 @@ fn extract(
                 if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
-                recipes.push(Recipe::Binary { op: arith, lane });
+                let ext = [ext_of(data.operands[0]), ext_of(data.operands[1])];
+                recipes.push(Recipe::Binary { op: arith, lane, ext });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -514,7 +525,7 @@ fn extract(
                 if matches!(operand, Source::Splat(_)) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
-                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane });
+                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane, ext: [None, None] });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -525,11 +536,6 @@ fn extract(
                     operands: [operand; 3],
                 }));
             }
-            // `VPWidenCastRecipe`: a conversion between integer and float
-            // lanes of one width. DEVIATE LV-X4 (owner llrm-arm64-vec, exit
-            // LV-W3b): the pin also widens `zext`/`sext`/`trunc` and the
-            // changes of width, which need the D-register and split
-            // legalization.
             Opcode::Cast(CastOp::Trunc)
                 if data.operands[0] == primary_phi
                     && !data.result.is_some_and(|result| address_arithmetic(function, header, result)) =>
@@ -552,9 +558,14 @@ fn extract(
                     truncated_from: Some(index_ty),
                 }));
             }
+            // `VPWidenCastRecipe`: an integer extension or truncation, and a
+            // conversion between integer and float lanes. DEVIATE LV-X4
+            // (owner llrm-arm64-vec, exit LV-W3b): the other casts are not
+            // widened.
             Opcode::Cast(op) => {
                 let kind = interleave::cast_kind(op).ok_or(Skipped("A cast the cost model does not know"))?;
-                if !matches!(
+                let integer_cast = matches!(op, CastOp::SExt | CastOp::ZExt | CastOp::Trunc);
+                if !integer_cast && !matches!(
                     op,
                     CastOp::SIToFP | CastOp::UIToFP | CastOp::FPToSI | CastOp::FPToUI
                 ) {
@@ -571,7 +582,7 @@ fn extract(
                 // exit LV-W4: `LowerVectorFP_TO_INT`).
                 let changes_width =
                     cx.layout.size_bits(&cx.context.types, source) != cx.layout.size_bits(&cx.context.types, data.ty);
-                if changes_width && !matches!(op, CastOp::SIToFP | CastOp::UIToFP) {
+                if changes_width && !integer_cast && !matches!(op, CastOp::SIToFP | CastOp::UIToFP) {
                     return Err(Skipped("A conversion to an integer that changes the lane width"));
                 }
                 if used_outside(inst) {
@@ -584,7 +595,45 @@ fn extract(
                 if matches!(operand, Source::Splat(_)) {
                     return Err(Skipped("A cast of a loop-invariant value"));
                 }
-                recipes.push(Recipe::Cast { kind, dst, src, folded: false });
+                // The scalar extension of a load is part of it (LVI1).
+                let of_load = matches!(
+                    data.operands[0],
+                    Operand::Value(loaded) if matches!(
+                        function.value(loaded).def,
+                        llrm_mir::module::ValueDef::Instruction(def)
+                            if matches!(function.instruction(def).opcode, Opcode::Load { .. })
+                    )
+                );
+                let folded = of_load && matches!(op, CastOp::SExt | CastOp::ZExt);
+                // What reads an extension may absorb it
+                // (`GetUserAbsorbedCastCost`).
+                let users = if matches!(op, CastOp::SExt | CastOp::ZExt) {
+                    function
+                        .users(value)
+                        .iter()
+                        .map(|one| {
+                            let user = function.instruction(one.user);
+                            let arith = match user.opcode {
+                                Opcode::Binary(BinaryOp::Add) => Some(ArithOp::Add),
+                                Opcode::Binary(BinaryOp::Sub) => Some(ArithOp::Sub),
+                                Opcode::Binary(BinaryOp::Mul) => Some(ArithOp::Mul),
+                                _ => None,
+                            };
+                            ExtUser {
+                                op: arith,
+                                operands: if arith.is_some() {
+                                    [ext_of(user.operands[0]), ext_of(user.operands[1])]
+                                } else {
+                                    [None, None]
+                                },
+                                index: one.index as usize,
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                recipes.push(Recipe::Cast { kind, dst, src, folded, users });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,

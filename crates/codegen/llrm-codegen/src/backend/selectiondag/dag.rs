@@ -281,6 +281,10 @@ pub struct DagConfig {
     /// the builder lowers a vector IR type only then; elsewhere it is
     /// refused as before.
     pub vectors: bool,
+    /// The bits of the widest vector register; a vector of more is carried
+    /// across blocks in as many registers as it halves into
+    /// (`getVectorTypeBreakdown`). 0 where `vectors` is off.
+    pub vector_register_bits: u32,
     /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
     /// index in its address at 64 bits, as an absolute `disp32`, where
     /// position-independent code reaches it from `%rip` alone.
@@ -295,8 +299,8 @@ pub struct DagConfig {
     pub div_live_max_bits: u32,
     /// The values live across the narrow divides of the block this DAG is of.
     pub div_live: u32,
-    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0 where none was
-    /// computed. DEVIATE DIV-HOT reads it.
+    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0
+    /// where none was computed. DEVIATE DIV-HOT reads it.
     pub block_frequency: f64,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
@@ -348,8 +352,10 @@ pub struct DagConfig {
     /// arm64 leaves it off (no `AliasOracle` is wired for it, as wasm's is).
     /// Exit: 2026-11-12, owner w15.
     pub use_aa: bool,
-    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the pin always does). DEVIATE: off by
-    /// default so the other targets' output stays as it was until their owners judge it. Exit: all targets judged.
+    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the
+    /// pin always does). DEVIATE: off by default so the other targets'
+    /// output stays as it was until their owners judge it. Exit: all targets
+    /// judged.
     pub known_bits_of_build_pair: bool,
 }
 
@@ -370,6 +376,7 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             defined_dso_local: false,
             vectors: false,
+            vector_register_bits: 0,
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
@@ -2274,7 +2281,8 @@ impl SelectionDAG {
         vt: EVT,
     ) -> Option<SDValue> {
         let bits = bits & super::fold::mask(vt.size_in_bits());
-        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false }).map(|node| SDValue { node, res: 0 })
+        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false })
+            .map(|node| SDValue { node, res: 0 })
     }
 
     /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.

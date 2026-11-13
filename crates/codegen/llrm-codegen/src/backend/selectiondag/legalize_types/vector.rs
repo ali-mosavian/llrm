@@ -221,6 +221,17 @@ impl TypeLegalizer<'_> {
             }
             // `ConcatVectors` of two halves is its operands.
             ISD::ConcatVectors => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
+            // `SplitVecRes_EXTRACT_SUBVECTOR`: each half is a subvector of the
+            // same vector, the second one half on.
+            ISD::ExtractSubvector => {
+                let (vector, at) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let Some(start) = self.dag.constant(at) else { return Err(unsupported("split result")) };
+                let mid = self.dag.get_constant(start + u128::from(lo_vt.lanes()), EVT::I64);
+                (
+                    self.dag.get_node(ISD::ExtractSubvector, lo_vt, &[vector, at]),
+                    self.dag.get_node(ISD::ExtractSubvector, hi_vt, &[vector, mid]),
+                )
+            }
             _ => return Err(unsupported("split result")),
         };
         self.set_split_vector(value, lo, hi);
@@ -306,6 +317,23 @@ impl TypeLegalizer<'_> {
                     self.dag.get_node_flags(op, out, &hi_ops, flags),
                 );
                 self.dag.get_node(ISD::ConcatVectors, result_vt, &[lo, hi])
+            }
+            // `SplitVecOp_EXTRACT_SUBVECTOR`: the result is legal; it is in
+            // the half the index names.
+            ISD::ExtractSubvector if at == 0 => {
+                let index = self.dag.operand(node, 1);
+                let Some(start) = self.dag.constant(index) else {
+                    return Err(unsupported("split extract of a subvector at a variable index"));
+                };
+                let (lo, hi) = self.split_vector(operand);
+                let low_lanes = u128::from(self.dag.value_type(lo).lanes());
+                let vt = self.dag.value_type(node);
+                if start < low_lanes {
+                    self.dag.get_node(ISD::ExtractSubvector, vt, &[lo, index])
+                } else {
+                    let rest = self.dag.get_constant(start - low_lanes, EVT::I64);
+                    self.dag.get_node(ISD::ExtractSubvector, vt, &[hi, rest])
+                }
             }
             // `SplitVecOp_EXTRACT_VECTOR_ELT`, a constant index.
             ISD::ExtractElement if at == 0 => {

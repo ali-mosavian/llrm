@@ -314,6 +314,8 @@ impl SelectionDAG {
         let n2_const = self.constant(n2);
         let is_i1 = vt == EVT::I1;
         match opcode {
+            // `getNode` of `EXTRACT_SUBVECTOR`: "Trivial extraction."
+            ISD::ExtractSubvector if vt == self.value_type(n1) => return Folded::Done(n1),
             ISD::TokenFactor => {
                 if self.opcode(n1) == ISD::EntryToken || n1 == n2 {
                     return Folded::Done(if self.opcode(n1) == ISD::EntryToken { n2 } else { n1 });
