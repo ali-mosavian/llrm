@@ -33,7 +33,7 @@
 
 use super::context::{compute_known_bits_from_context, is_implied_by_dom_condition, is_valid_assume_for_context};
 use super::guarantee::is_guaranteed_not_to_be_undef;
-use super::known::compute_known_bits;
+use super::known::{WithCache, compute_known_bits};
 use super::pattern::{IntrinsicId, binary, intrinsic_id};
 use super::query::Query;
 use super::signbits::compute_num_sign_bits;
@@ -113,8 +113,18 @@ pub fn compute_constant_range_including_known_bits(
     v: Operand,
     for_signed: bool,
 ) -> ConstantRange {
-    let cr1 = ConstantRange::from_known_bits(&compute_known_bits(q, v, 0), for_signed);
-    let cr2 = compute_constant_range(q, v, for_signed, 0);
+    compute_constant_range_including_cached_known_bits(q, &WithCache::new(v), for_signed)
+}
+
+/// `computeConstantRangeIncludingKnownBits(const WithCache<const Value *> &V,
+/// ...)`: the known bits come from `v`'s cache.
+pub fn compute_constant_range_including_cached_known_bits(
+    q: &Query,
+    v: &WithCache,
+    for_signed: bool,
+) -> ConstantRange {
+    let cr1 = ConstantRange::from_known_bits(v.known_bits(q), for_signed);
+    let cr2 = compute_constant_range(q, v.value(), for_signed, 0);
     let range_type = if for_signed { PreferredRangeType::Signed } else { PreferredRangeType::Unsigned };
     cr1.intersect_with(&cr2, range_type)
 }
@@ -161,8 +171,17 @@ pub fn compute_overflow_for_unsigned_add(
     lhs: Operand,
     rhs: Operand,
 ) -> OverflowResult {
-    let lhs_range = compute_constant_range_including_known_bits(q, lhs, false);
-    let rhs_range = compute_constant_range_including_known_bits(q, rhs, false);
+    compute_overflow_for_cached_unsigned_add(q, &WithCache::new(lhs), &WithCache::new(rhs))
+}
+
+/// `computeOverflowForUnsignedAdd` of two cached operands.
+pub fn compute_overflow_for_cached_unsigned_add(
+    q: &Query,
+    lhs: &WithCache,
+    rhs: &WithCache,
+) -> OverflowResult {
+    let lhs_range = compute_constant_range_including_cached_known_bits(q, lhs, false);
+    let rhs_range = compute_constant_range_including_cached_known_bits(q, rhs, false);
     map_overflow_result(lhs_range.unsigned_add_may_overflow(&rhs_range))
 }
 
@@ -171,10 +190,11 @@ pub fn compute_overflow_for_unsigned_add(
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7793>
 fn compute_overflow_for_signed_add_impl(
     q: &Query,
-    lhs: Operand,
-    rhs: Operand,
+    lhs_cache: &WithCache,
+    rhs_cache: &WithCache,
     add: Option<InstId>,
 ) -> OverflowResult {
+    let (lhs, rhs) = (lhs_cache.value(), rhs_cache.value());
     if let Some(add) = add
         && q.function.instruction(add).flags.contains(Flags::NSW)
     {
@@ -183,8 +203,8 @@ fn compute_overflow_for_signed_add_impl(
     if compute_num_sign_bits(q, lhs, 0) > 1 && compute_num_sign_bits(q, rhs, 0) > 1 {
         return OverflowResult::NeverOverflows;
     }
-    let lhs_range = compute_constant_range_including_known_bits(q, lhs, true);
-    let rhs_range = compute_constant_range_including_known_bits(q, rhs, true);
+    let lhs_range = compute_constant_range_including_cached_known_bits(q, lhs_cache, true);
+    let rhs_range = compute_constant_range_including_cached_known_bits(q, rhs_cache, true);
     let overflow = map_overflow_result(lhs_range.signed_add_may_overflow(&rhs_range));
     if overflow != OverflowResult::MayOverflow {
         return overflow;
@@ -212,7 +232,7 @@ pub fn compute_overflow_for_signed_add_operator(
     add: InstId,
 ) -> OverflowResult {
     let operands = &q.function.instruction(add).operands;
-    compute_overflow_for_signed_add_impl(q, operands[0], operands[1], Some(add))
+    compute_overflow_for_signed_add_impl(q, &WithCache::new(operands[0]), &WithCache::new(operands[1]), Some(add))
 }
 
 /// `computeOverflowForSignedAdd(LHS, RHS, ...)`.
@@ -221,6 +241,15 @@ pub fn compute_overflow_for_signed_add(
     q: &Query,
     lhs: Operand,
     rhs: Operand,
+) -> OverflowResult {
+    compute_overflow_for_cached_signed_add(q, &WithCache::new(lhs), &WithCache::new(rhs))
+}
+
+/// `computeOverflowForSignedAdd` of two cached operands.
+pub fn compute_overflow_for_cached_signed_add(
+    q: &Query,
+    lhs: &WithCache,
+    rhs: &WithCache,
 ) -> OverflowResult {
     compute_overflow_for_signed_add_impl(q, lhs, rhs, None)
 }
