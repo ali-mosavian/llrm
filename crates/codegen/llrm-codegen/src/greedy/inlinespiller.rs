@@ -449,8 +449,6 @@ impl<'a> InlineSpiller<'a> {
         if !self.tii.remat_shape(&def) || def.uses.contains(&reg) {
             return None;
         }
-        let what = def.what.clone()?;
-        let Loc::Held(defined) = what.dests[0] else { return None };
         let units: Vec<(usize, Vec<InstrKey>)> = Self::units(lis, reg)
             .into_iter()
             .filter(|(_, members)| !(members.len() == 1 && defs.contains(&members[0])))
@@ -470,6 +468,10 @@ impl<'a> InlineSpiller<'a> {
                 return None;
             }
         }
+        // After `def` is the live instruction: its operands name the registers
+        // now, not those of the snapshot it was found through.
+        let what = def.what.clone()?;
+        let Loc::Held(defined) = what.dests[0] else { return None };
         for (_, members) in &units {
             let first = lis.indexes.get_instruction_index(members[0]);
             if !def.uses.is_empty() && !vrai.all_uses_available_at(def.id(), &first, lis) {
