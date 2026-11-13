@@ -82,7 +82,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 
 ## Review fixes (2026-11-11, w15-arm64)
 
-- LV-M1: a loop LAA can only separate at run time (`RuntimePointerChecking::need`) stays scalar; the pin builds `vector.memcheck` (L1637). `b[i] = a[i]` over plain pointers was widened with no overlap test. Exit 2026-11-24.
+- LV-M1 (closed by slice 6): a loop LAA can only separate at run time (`RuntimePointerChecking::need`) is guarded by `vector.memcheck` (L1637), as the pin. Open: LV-M2, `isOutsideLoopWorkProfitable` (L7185) is not translated: the planner exposes no per-iteration costs and no TTI price of the check block, so a short loop may be widened where the pin's minimum trip count refuses it. Owner llrm-arm64-vec (planner), exit 2026-11-24. The SCEV-predicate checks (`vector.scevcheck`) stay out (LV-D5).
 - LV-F1: no loop is widened at -O1 (`VectorizeOnlyWhenForced`); the earlier O1 scroll rows no longer apply. Exit 2026-11-24.
 - IC is 1 wherever no epilogue is allowed (tiny trip count too), as `selectInterleaveCount` L3705.
 - `LLRM_ARM64_VECTORS=0` is off.

@@ -8,8 +8,9 @@
 //!
 //! DEVIATE VEC1: a `BUILD_VECTOR` that is a splat of a constant, the all-zeros
 //! and all-ones vectors, a splat of one value, or a value in lane 0 alone is
-//! lowered; any other (the pin loads it from a constant pool, or builds it
-//! with `INSERT_VECTOR_ELT`) is declined and the block refused. A constant
+//! lowered; a constant that is no splat is declined to the legalizer's pool
+//! load; any other (the pin builds it with `INSERT_VECTOR_ELT`) is declined
+//! and the block refused. A constant
 //! with undefined lanes is tried only as the splat of its defined lanes
 //! (`UndefBits` of `ConstantBuildVector` is not tried), and `FMOV`, the
 //! `FNEG` forms and SVE are not made. A shuffle is lowered where it is a
@@ -19,7 +20,7 @@
 use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_dagisel::generated::aarch64::ids::isd as aarch64_isd;
 
 /// `AArch64_AM::isAdvSIMDModImmType<n>`: whether the 64-bit pattern (two equal
@@ -147,6 +148,15 @@ fn constant_build_vector(
     attempt(dag, bits, false).or_else(|| attempt(dag, !bits, true))
 }
 
+/// Whether every defined lane of the `BUILD_VECTOR` is a constant.
+pub fn is_constant_build_vector(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    let lane_bits = dag.value_type(op).element().size_in_bits();
+    dag.node(op).ops.iter().all(|&lane| dag.is_undef(lane) || lane_constant(dag, lane, lane_bits).is_some())
+}
+
 /// `LowerBUILD_VECTOR`.
 pub fn lower_build_vector(
     dag: &mut SelectionDAG,
@@ -177,7 +187,7 @@ pub fn lower_build_vector(
             return constant_build_vector(dag, vt, unit)
                 .or_else(|| Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first])));
         }
-        // DEVIATE VEC1: a constant that is not a splat is loaded in the pin.
+        // Not a splat: the pin's `SDValue()`, the pool load of the legalizer.
         return None;
     }
     let low_only = lanes.iter().skip(1).all(Option::is_none);
@@ -190,7 +200,89 @@ pub fn lower_build_vector(
         // "Use DUP for non-constant splats."
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first]));
     }
-    None
+    // "If all else fails, just use a sequence of INSERT_VECTOR_ELT": lane 0 by
+    // `SCALAR_TO_VECTOR`, the others inserted. DEVIATE VEC6 (owner
+    // llrm-arm64-vec, exit 2026-11-27): the branches before it in the pin
+    // (`PreferDUPAndInsert`, a constant splat with other lanes inserted, two
+    // `DUP`s joined, `ReconstructShuffle`) are not translated.
+    let index_ty = EVT::I64;
+    let mut vec = dag.get_undef(vt);
+    let mut at = 0;
+    if lanes[0].is_some() {
+        vec = dag.get_node(ISD::ScalarToVector, vt, &[ops[0]]);
+        at = 1;
+    }
+    for lane in at..ops.len() {
+        if let Some(value) = lanes[lane] {
+            let index = dag.get_constant(lane as u128, index_ty);
+            vec = dag.get_node(ISD::InsertVectorElt, vt, &[vec, value, index]);
+        }
+    }
+    Some(vec)
+}
+
+/// `UnrollVectorOp`: one scalar operation per lane, put together by a
+/// `BUILD_VECTOR`.
+fn unroll_vector_op(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let opcode = dag.opcode(node);
+    let operand = dag.operand(node, 0);
+    let (from, to) = (dag.value_type(operand).element(), vt.element());
+    let lanes = (0..vt.lanes())
+        .map(|lane| {
+            let index = dag.get_constant(u128::from(lane), EVT::I64);
+            let element = dag.get_node(ISD::ExtractElement, from, &[operand, index]);
+            dag.get_node(opcode, to, &[element])
+        })
+        .collect::<Vec<_>>();
+    dag.get_build_vector(vt, &lanes)
+}
+
+/// `LowerVectorINT_TO_FP`. A conversion to a narrower float is unrolled when
+/// the target is `f32` (the pin: a conversion through `f64` rounds twice) and
+/// goes through the wider float otherwise; to a wider float the operand is
+/// extended first; one of the same size is as it is.
+///
+/// DEVIATE VEC7 (owner llrm-arm64-vec, exit 2026-11-27): the `f16` target of
+/// a split conversion, a conversion of a one-lane vector and the SVE forms are
+/// not translated.
+pub fn lower_vector_int_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (vt, operand) = (dag.value_type(node), dag.operand(node, 0));
+    let from = dag.value_type(operand);
+    let opcode = dag.opcode(node);
+    if vt.size_in_bits() < from.size_in_bits() {
+        if vt.element() == EVT::Simple(MVT::F32) {
+            return Some(unroll_vector_op(dag, node));
+        }
+        let wide = MVT::vector(MVT::F64, from.lanes())?;
+        let converted = dag.get_node(opcode, EVT::Simple(wide), &[operand]);
+        let exact = dag.get_constant(0, EVT::I64);
+        return Some(dag.get_node(ISD::FpRound, vt, &[converted, exact]));
+    }
+    if vt.size_in_bits() > from.size_in_bits() {
+        let extend = if opcode == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
+        let int = MVT::vector(MVT::integer(vt.element().size_in_bits())?, vt.lanes())?;
+        let extended = dag.get_node(extend, EVT::Simple(int), &[operand]);
+        return Some(dag.get_node(opcode, vt, &[extended]));
+    }
+    Some(node)
+}
+
+/// `LowerVectorFP_TO_INT`, the conversions of one size and to a wider integer
+/// the pin does with one instruction or a `fcvtl` first; anything else is
+/// declined.
+pub fn lower_vector_fp_to_int(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (vt, operand) = (dag.value_type(node), dag.operand(node, 0));
+    (vt.size_in_bits() == dag.value_type(operand).size_in_bits()).then_some(node)
 }
 
 /// `LowerVECTOR_SHUFFLE`, as far as a splat of a scalar.
