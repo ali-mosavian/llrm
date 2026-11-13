@@ -4137,6 +4137,8 @@ impl Builder<'_> {
         let high = self.dag.get_constant(u128::from(!mask) & self::mask(pointer.size_in_bits()), pointer);
         let size = self.dag.get_node(ISD::And, pointer, &[size, high]);
         let alignment = self.dag.get_constant(u128::from(alignment), pointer);
+        // `visitAlloca`: `CreateVariableSizedObject`.
+        self.info.has_var_sized_objects = true;
         let root = self.root();
         let node = self.dag.get_node_multi(ISD::DynamicStackAlloc, &[pointer, EVT::OTHER], &[root, size, alignment]);
         self.dag.set_root(SDValue { node: node.node, res: 1 });

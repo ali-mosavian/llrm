@@ -118,7 +118,8 @@ fn matcher(pattern: &str) -> Regex {
     while !rest.is_empty() {
         if let Some(inner) = rest.strip_prefix("{{") {
             let end = inner.find("}}").expect("an unclosed {{ in a pattern");
-            // Grouped, as FileCheck does: `{{si|di}}` is one alternation, not the end of the pattern.
+            // Grouped, as FileCheck does: `{{si|di}}` is one alternation, not
+            // the end of the pattern.
             out.push_str("(?:");
             out.push_str(&inner[..end]);
             out.push(')');
@@ -221,12 +222,14 @@ fn tool(name: &str) -> PathBuf {
 struct Ran {
     ran: usize,
     failures: Vec<String>,
-    /// The toolchain variables an `llrm-cc` RUN line needed and `env` lacked, with the lines skipped for it.
+    /// The toolchain variables an `llrm-cc` RUN line needed and `env` lacked,
+    /// with the lines skipped for it.
     skipped: std::collections::BTreeMap<&'static str, usize>,
 }
 
-/// Every RUN line of `all`; one that drives `llrm-cc` is skipped, and counted under the variables it lacks, where
-/// `env` lacks a toolchain variable it needs. Without that skip each such line failed with the same message: 115
+/// Every RUN line of `all`; one that drives `llrm-cc` is skipped, and counted
+/// under the variables it lacks, where `env` lacks a toolchain variable it
+/// needs. Without that skip each such line failed with the same message: 115
 /// false reds on a box without the Open Watcom headers.
 fn run_checks(
     root: &Path,
@@ -235,6 +238,10 @@ fn run_checks(
     compile: impl Fn(&[String]) -> std::io::Result<std::process::Output>,
 ) -> Ran {
     let mut done_all = Ran::default();
+    // A clang that is not the pin refuses every llrm-cc line alike: one line,
+    // and those lines are not run.
+    let unpinned = common::cc::unpinned_clangs(&env, common::cc::PIN, |path| common::cc::clang_sha(path));
+    done_all.failures.extend(unpinned.iter().cloned());
     for path in all {
         let Ok(source) = std::fs::read_to_string(&path) else { continue };
         for line in run_lines(&source) {
@@ -246,6 +253,9 @@ fn run_checks(
             let arguments: Vec<String> =
                 words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
             let done = if words[0] == "llrm-cc" {
+                if !unpinned.is_empty() {
+                    continue;
+                }
                 let missing = common::cc::missing_env_for(&arguments, &env);
                 if !missing.is_empty() {
                     for name in missing {
@@ -263,9 +273,12 @@ fn run_checks(
             let output = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
             let name = path.strip_prefix(root).unwrap().display();
             if done.status.success() == must_fail {
-                // The tool's own first line says why: a stale toolchain is one cause, not 114 silent reds.
+                // The tool's own first line says why: a stale toolchain is one
+                // cause, not 114 silent reds.
                 let why = output.lines().find(|one| !one.trim().is_empty()).unwrap_or("no output").trim().to_owned();
-                done_all.failures.push(format!("{name}: `{line}` {}: {why}", if must_fail { "succeeded" } else { "failed" }));
+                done_all
+                    .failures
+                    .push(format!("{name}: `{line}` {}: {why}", if must_fail { "succeeded" } else { "failed" }));
             } else if let Err(why) = filecheck(&output, &for_run(directives(&source), &line)) {
                 done_all.failures.push(format!("{name}: {why}\n{output}"));
             }
@@ -281,7 +294,8 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
     let mut all = Vec::new();
     files(&root, &mut all);
     all.sort();
-    let Ran { ran, failures, skipped } = run_checks(&root, all, common::cc::toolchain_env, |arguments| common::cc::llrm_c().args(arguments).output());
+    let Ran { ran, failures, skipped } =
+        run_checks(&root, all, common::cc::toolchain_env, |arguments| common::cc::llrm_c().args(arguments).output());
     println!("{ran} RUN lines");
     if !skipped.is_empty() {
         println!("SKIPPED llrm-cc RUN lines, toolchain missing (lines per variable): {skipped:?}");
@@ -290,26 +304,32 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
     assert!(failures.is_empty(), "{}", grouped(&failures));
 }
 
-/// The failures with the same cause once, and how many lines it hit: `name: `line` failed: <why>` lines share a `<why>`.
+/// The failures with the same cause once, and how many lines it hit: `name:
+/// `line` failed: <why>` lines share a `<why>`.
 fn grouped(failures: &[String]) -> String {
     let mut causes: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
     let mut other = Vec::new();
     for failure in failures {
         match failure.split_once("` failed: ") {
-            Some((head, why)) if !why.contains('\n') => causes.entry(why).or_default().push(head.split(':').next().unwrap_or(head)),
+            Some((head, why)) if !why.contains('\n') => {
+                causes.entry(why).or_default().push(head.split(':').next().unwrap_or(head))
+            }
             _ => other.push(failure.as_str()),
         }
     }
     let mut out: Vec<String> = causes
         .into_iter()
-        .map(|(why, names)| format!("{} lines failed alike ({}...): {why}", names.len(), names[..names.len().min(3)].join(", ")))
+        .map(|(why, names)| {
+            format!("{} lines failed alike ({}...): {why}", names.len(), names[..names.len().min(3)].join(", "))
+        })
         .collect();
     out.extend(other.iter().map(|one| (*one).to_owned()));
     out.join("\n")
 }
 
-/// A box without the Open Watcom headers, the pinned clang or the m16 clang failed every `llrm-cc` RUN line (115 on
-/// 2026-11-12): they are skipped, named once, and what does not need the toolchain still runs.
+/// A box without the Open Watcom headers, the pinned clang or the m16 clang
+/// failed every `llrm-cc` RUN line (115 on 2026-11-12): they are skipped, named
+/// once, and what does not need the toolchain still runs.
 #[test]
 fn test_a_missing_toolchain_skips_the_llrm_cc_lines_instead_of_failing_them() {
     let dir = std::env::temp_dir().join(format!("check-skip-{}", std::process::id()));
@@ -340,8 +360,9 @@ fn check(
     filecheck(output, &directives(source))
 }
 
-/// `div {{si|di}}` was the regex `div si|di`: it matched any line with "di", so lsr_real_mode_drop's
-/// `CHECK-NOT: imul` started ahead of the div and went red on the imul before it.
+/// `div {{si|di}}` was the regex `div si|di`: it matched any line with "di", so
+/// lsr_real_mode_drop's `CHECK-NOT: imul` started ahead of the div and went red
+/// on the imul before it.
 #[test]
 fn test_an_alternation_in_a_pattern_stays_inside_it() {
     assert!(!matcher("div {{si|di}}").is_match("    mov di, 1"));
@@ -432,9 +453,59 @@ fn test_an_unset_toolchain_variable_is_named() {
     assert_eq!(common::cc::missing_env(gone, false, true), ["LLRM_PIN_CLANG"], "a path that does not exist counts");
 }
 
-/// A stale cached m16 clang made `llrm-cc` refuse every line with "is not the pinned clang" on its stderr, which the
-/// harness dropped: 114 reds that all said "failed" (2026-11-12). The tool's first line is in the failure, and one cause is
-/// one line of the report.
+/// A clang that runs but is not the pin is refused up front, one line naming
+/// its version and the pin's.
+#[test]
+fn test_a_clang_that_is_not_the_pin_is_refused_with_both_versions() {
+    let pin = "d1106deb71cc81016406a1917d0508d2df296266\n7e3542bb5338616657772790c7499f26077216b8 # m16\n";
+    let set = |_: &str| Some(std::ffi::OsString::from("/x/clang"));
+    let at = |sha: &'static str| move |_: &std::ffi::OsStr| Some(sha.to_string());
+    let stale = common::cc::unpinned_clangs(set, pin, at("4b787ddb5b7f0000000000000000000000000000"));
+    assert_eq!(stale.len(), 2, "{stale:?}");
+    assert!(
+        stale[1].contains("LLRM_CLANG_M16") && stale[1].contains("4b787ddb5b7f") && stale[1].contains("7e3542bb5338")
+    );
+    let right = |path: &std::ffi::OsStr| {
+        Some(
+            if path == "/x/m16" {
+                "7e3542bb5338616657772790c7499f26077216b8"
+            } else {
+                "d1106deb71cc81016406a1917d0508d2df296266"
+            }
+            .to_string(),
+        )
+    };
+    let both = |name: &str| Some(std::ffi::OsString::from(if name == "LLRM_CLANG_M16" { "/x/m16" } else { "/x/pin" }));
+    assert!(common::cc::unpinned_clangs(both, pin, right).is_empty());
+    assert!(common::cc::unpinned_clangs(set, pin, |_| None).is_empty(), "one that does not run is missing_env's");
+}
+
+/// An unset clang variable left the 113 m16 lines unrun (2026-11-13): it
+/// resolves to the build the pin's sha names in the cache, and to nothing when
+/// that build is absent or a different sha.
+#[test]
+fn test_an_unset_clang_resolves_to_the_pinned_build_in_the_cache() {
+    let pin = "d1106deb71cc0000000000000000000000000000\n7e3542bb53380000000000000000000000000000 # m16\n";
+    let cache = std::env::temp_dir().join(format!("check-cache-{}", std::process::id()));
+    let make = |dir: &str| {
+        std::fs::create_dir_all(cache.join("llrm").join(dir).join("bin")).unwrap();
+        std::fs::write(cache.join("llrm").join(dir).join("bin/clang"), "").unwrap();
+    };
+    make("clang-m16-4b787ddb5b7f");
+    assert_eq!(common::cc::pinned_clang("LLRM_CLANG_M16", pin, &cache), None, "a stale sha is not the pin");
+    make("clang-m16-7e3542bb5338");
+    make("clang-d1106deb71cc");
+    let m16 = common::cc::pinned_clang("LLRM_CLANG_M16", pin, &cache).unwrap();
+    assert!(m16.ends_with("clang-m16-7e3542bb5338/bin/clang"), "{m16:?}");
+    assert!(common::cc::pinned_clang("LLRM_PIN_CLANG", pin, &cache).unwrap().ends_with("clang-d1106deb71cc/bin/clang"));
+    assert_eq!(common::cc::pinned_clang("OW_TREE", pin, &cache), None);
+    std::fs::remove_dir_all(&cache).ok();
+}
+
+/// A stale cached m16 clang made `llrm-cc` refuse every line with "is not the
+/// pinned clang" on its stderr, which the harness dropped: 114 reds that all
+/// said "failed" (2026-11-12). The tool's first line is in the failure, and one
+/// cause is one line of the report.
 #[test]
 fn test_one_toolchain_fault_is_one_line_with_its_message() {
     let dir = std::env::temp_dir().join(format!("check-stale-{}", std::process::id()));

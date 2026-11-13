@@ -216,3 +216,36 @@ done:
     let looped = body.blocks.iter().find(|block| block.succ.contains(&block.at)).expect("a block that loops");
     assert_eq!(body.loop_trip_counts, vec![(looped.at, 8)], "{:?}", body.loop_trip_counts);
 }
+
+/// d_faces -m32 -O2: every loop's trip proof found the body's `llvm.assume`s
+/// again, a walk of the whole function (`Unit::assumptions` builds them when
+/// the unit carries none): 120 M of 11,900 M on 160 loops, a loop times the
+/// function. They are found once for the body, as LLVM's `AssumptionCache`.
+#[test]
+fn a_functions_loops_have_their_trips_proved_over_one_search_for_assumptions() {
+    // Rotated loops, each entered by a guard on its bound: `for (i = 0; i < n;
+    // ++i)`.
+    let loops = 6;
+    let mut body = String::new();
+    for k in 0..loops {
+        body.push_str(&format!(
+            "g{k}:\n  %g{k}v = icmp sgt i32 %a, {k}\n  br i1 %g{k}v, label %p{k}, label %x{k}\np{k}:\n  br label %l{k}\nl{k}:\n  %i{k} = phi i32 [ 0, %p{k} ], [ %j{k}, %l{k} ]\n  %j{k} = add nuw nsw i32 %i{k}, 1\n  %c{k} = icmp slt i32 %j{k}, %a\n  br i1 %c{k}, label %l{k}, label %x{k}\nx{k}:\n  br label %{next}\n",
+            next = if k + 1 == loops { "done".to_string() } else { format!("g{}", k + 1) },
+        ));
+    }
+    let module = llrm_mir::parse::module(&format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %a) {{\nentry:\n  br label %g0\n{body}done:\n  ret i32 %a\n}}\n"
+    ))
+    .expect("parses");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let (_, _, function) = module.functions().next().expect("f");
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    let plain = llrm_analysis::memory::Unit::of(&module, &layout, function).with_shape(&shape);
+    let facts = llrm_analysis::consts::known(&plain);
+    let unit = plain.with_registers(&facts);
+    let before = llrm_analysis::assumptions::built();
+    let trips = crate::backend::isel::proven_trips(&unit, &shape, &facts, |block| Some(llrm_analysis::cfg::id(block)));
+    let searched = llrm_analysis::assumptions::built() - before;
+    assert_eq!(trips.len(), 0, "the counts are symbolic: {trips:?}");
+    assert!(searched <= 1, "{searched} searches for the assumptions of one body of {loops} loops");
+}

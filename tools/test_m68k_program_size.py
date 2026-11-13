@@ -79,3 +79,12 @@ def test_the_archive_cache_key_follows_the_runtime_sources(tmp_path, monkeypatch
     before = sweep.cache_dir(cc)
     (runtime / "lib/int/clzsi2.c").write_text("int b;\n")
     assert sweep.cache_dir(cc) != before
+
+
+def test_gcc_gets_the_programs_no_inline_in_its_own_spelling():
+    """The gcc column was built without the program's flags: frameless.c's gcc cell inlined what ours and the pin keep calls."""
+    source = HERE.parent / "tests/run/c/frameless.c"
+    flags = o0_sweep.flags_of(source.read_text(), "m68k-68000")
+    command = size.gcc_command("m68k-linux-gnu-", "68000", "Os", Path("x.s"), source, flags)
+    assert "-fno-inline" in command and "-fno-inline-functions" not in command, command
+    assert "-std=gnu17" in command, "gcc 15 reads C23: old_style_extra_args had no gcc cell"
