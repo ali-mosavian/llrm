@@ -314,7 +314,7 @@ impl OpCost {
 /// DEVIATE LSR-SIZE (owner w12): the target's byte table for the code LSR's
 /// formulae leave behind, in the place of the numbers `lsr_use.rs` held.
 /// `None` from [`Tti::lsr_size_model`] is the pin's order.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct LsrSizeModel {
     /// A displacement from a global's address.
     pub disp_global: OpCost,
@@ -327,12 +327,24 @@ pub struct LsrSizeModel {
     /// The add or lea for each register not folded into the address, with
     /// its immediate.
     pub base_add: OpCost,
-    /// The step added each trip to a counter.
-    pub iv_step: OpCost,
+    /// The bytes of the step added each trip to a `bits`-wide counter, by
+    /// the step where it is a constant.
+    pub step: fn(bits: u32, constant: Option<i64>) -> u32,
+    /// The bytes of loading a counter's constant start in the preheader, where
+    /// the target prices it by the value (a zero, a byte, a dword). `None`:
+    /// `setup` for each, as the pin counts them.
+    pub constant_start: Option<fn(bits: u32, value: i64) -> u32>,
     /// A `mov` or `lea` of a register's start in the preheader.
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
+    /// order stands (LG3's byte test included).
+    pub size_only: bool,
+    /// The `cmp` an exit test costs when the counter does not end at zero
+    /// (a count down to zero takes its flags from the step): its bytes for a
+    /// compare of `bits` against an immediate, or a register where `None`.
+    pub exit_compare: fn(bits: u32, immediate: Option<i64>) -> u32,
 }
 
 impl LsrSizeModel {
@@ -344,9 +356,12 @@ impl LsrSizeModel {
         disp_short: OpCost::bytes(1),
         disp_long: OpCost::bytes(4),
         base_add: OpCost::bytes(3),
-        iv_step: OpCost::bytes(3),
+        step: |_, _| 3,
+        constant_start: None,
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        size_only: false,
+        exit_compare: |_, _| 0,
     };
 
     /// The bytes of one address displacement.
@@ -3223,9 +3238,12 @@ mod size_model_tests {
         disp_short: OpCost::bytes(10),
         disp_long: OpCost::bytes(70),
         base_add: OpCost::bytes(5),
-        iv_step: OpCost::bytes(6),
+        step: |_, _| 6,
+        constant_start: None,
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        size_only: false,
+        exit_compare: |bits, _| bits,
     };
 
     /// Each displacement form is read from its own field; zero is free.
@@ -3249,6 +3267,6 @@ mod size_model_tests {
             (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes),
             (4, 2, 1, 4)
         );
-        assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
+        assert_eq!((m.base_add.bytes, (m.step)(32, Some(1)), m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
     }
 }
