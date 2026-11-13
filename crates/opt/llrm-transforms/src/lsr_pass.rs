@@ -434,8 +434,9 @@ fn plan_loop(
         // than the pin's. Both axes are strict at -O1, so a form that saves an
         // instruction for more bytes is a trade no bar counts (quicksort -O1
         // m32: 27 B larger for one instruction, over the bar on bytes).
-        let bytes_outweigh_saving =
-            bytes_strict && tti.lsr_size_model().is_some() && cost.size_bytes > pin_cost.size_bytes;
+        let bytes_outweigh_saving = bytes_strict
+            && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
+            && cost.size_bytes > pin_cost.size_bytes;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving
