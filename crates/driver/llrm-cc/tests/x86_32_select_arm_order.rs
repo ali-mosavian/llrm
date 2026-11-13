@@ -1,8 +1,9 @@
-//! x86-32 -Os: a select with even odds, expanded to a branch (the i486 has no `cmov`), falls through
-//! to the arm of the false value, as `EmitLoweredSelect`'s `copy0MBB` does. x_collatz had the true
-//! arm (`shr`) fall through: the hot even step paid `jne` + `jmp` and the odd one a taken `jne`,
-//! 4,833 clk over the pin's layout on a 168,668-clk run. Needs the Open Watcom tree
-//! (tools/ow-fetch.sh) and `LLRM_LLC`.
+//! x86-32 -Os: a select with even odds, expanded to a branch (the i486 has no
+//! `cmov`), falls through to the arm of the false value, as
+//! `EmitLoweredSelect`'s `copy0MBB` does. x_collatz had the true arm (`shr`)
+//! fall through: the hot even step paid `jne` + `jmp` and the odd one a taken
+//! `jne`, 4,833 clk over the pin's layout on a 168,668-clk run. Needs the Open
+//! Watcom tree (tools/ow-fetch.sh) and `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

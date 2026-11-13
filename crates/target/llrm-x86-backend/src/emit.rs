@@ -1687,7 +1687,8 @@ impl Emitter<'_, '_> {
         let target = Some(sink_at);
         let what = Semantics { target, name: Some(jump.into()), ..Semantics::new(Operation::Branch) };
         self.push_semantics(what);
-        // `thisMBB->addSuccessor(copy0MBB)` comes before `addSuccessor(sinkMBB)`.
+        // `thisMBB->addSuccessor(copy0MBB)` comes before
+        // `addSuccessor(sinkMBB)`.
         self.blocks.last_mut().expect("a block").fall_first = true;
         let phi = Phi { result: result.value, incoming: vec![(false_at, when_false.value), (this, when_true.value)] };
         self.blocks.push(EmitBlock { at: false_at, ..EmitBlock::default() });
