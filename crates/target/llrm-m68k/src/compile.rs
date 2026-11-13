@@ -325,7 +325,11 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        let narrow = !options.strict && !size_build(module, name, options);
+        let narrow = if !options.strict && !size_build(module, name, options) {
+            NarrowMultiplies::Speed
+        } else {
+            NarrowMultiplies::Off
+        };
         optimized = mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow)?;
         &optimized
     } else {
@@ -627,8 +631,9 @@ pub fn libcalls_for(
         options.size_libcalls,
         |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
         |name, kinds| {
-            // The price is one build: a call against a loop differs by far more than a
-            // trial moves, and each trial set costs several builds (x2.65 compile time).
+            // The price is one build: a call against a loop differs by far more
+            // than a trial moves, and each trial set costs several
+            // builds (x2.65 compile time).
             let options = Options {
                 libcalls: Some(crate::libcalls::mask(kinds)),
                 shared_cse: false,
@@ -1213,11 +1218,41 @@ pub fn mid_end_for(
     mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
-/// [`mid_end_for`], narrowing multiplies where `narrow_multiplies`.
+/// Where a multiply the range proves 16 bits wide is done as `mulu.w`
+/// (`narrowrange::multiplies_narrowed`, DEVIATE NRW-2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NarrowMultiplies {
+    Off,
+    /// Not in a size build: the extensions are bytes, and a 68020 multiplies
+    /// 32 bits in one instruction.
+    Speed,
+    /// Every build: no 32-bit multiply (68000, 68010) makes the multiply a
+    /// call, 16 B at the site beside `mulu.w`'s 2 B, and the routine's 54 B
+    /// for a program that calls it nowhere else.
+    Always,
+}
+
+impl NarrowMultiplies {
+    /// The policy for `cpu` at a level that is `speed` (-O2 and up) or not.
+    pub fn of(
+        cpu: Cpu,
+        optimizing: bool,
+        speed: bool,
+    ) -> Self {
+        match (optimizing, matches!(cpu, Cpu::M68000 | Cpu::M68010), speed) {
+            (false, ..) => Self::Off,
+            (true, true, _) => Self::Always,
+            (true, false, true) => Self::Speed,
+            (true, false, false) => Self::Off,
+        }
+    }
+}
+
+/// [`mid_end_for`], narrowing multiplies as `narrow_multiplies` says.
 pub fn mid_end_for_narrowing(
     module: &Module,
     cpu: Cpu,
-    narrow_multiplies: bool,
+    narrow_multiplies: NarrowMultiplies,
 ) -> Result<Module, String> {
     mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies)
 }
@@ -1229,16 +1264,16 @@ pub fn mid_end_described_by(
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, tti, machine, false)
+    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off)
 }
 
 /// [`mid_end_described_by`], narrowing the multiplies the range proves narrow
-/// (`narrow_multiplies`: -O2 and -O3, not for size).
+/// (`narrow_multiplies`).
 pub fn mid_end_narrowing(
     module: &Module,
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
-    narrow_multiplies: bool,
+    narrow_multiplies: NarrowMultiplies,
 ) -> Result<Module, String> {
     MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
@@ -1263,7 +1298,12 @@ pub fn mid_end_narrowing(
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
         // after it: it folds `zext (trunc iv)` back into the counter
         let for_size = has(&function.attrs, "optsize") || has(&function.attrs, "minsize");
-        if let (true, false, Some(limit)) = (narrow_multiplies, for_size, tti.range_narrowing_width()) {
+        let wanted = match narrow_multiplies {
+            NarrowMultiplies::Off => false,
+            NarrowMultiplies::Speed => !for_size,
+            NarrowMultiplies::Always => true,
+        };
+        if let (true, Some(limit)) = (wanted, tti.range_narrowing_width()) {
             llrm_transforms::narrowrange::multiplies_narrowed(context, &layout, function, &outer, limit);
         }
         // the ids the pass handed out for declarations name nothing until they
