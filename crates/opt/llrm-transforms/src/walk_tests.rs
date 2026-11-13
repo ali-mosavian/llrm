@@ -3568,3 +3568,145 @@ fn a_hot_copy_the_model_prices_at_nothing_is_kept_for_the_call_it_drops() {
     assert!(!speed_keeps_at_size(16, 200_699.5, 0, 2, 9), "9 B for two sites");
     assert!(!speed_keeps_at_size(16, 200_699.5, -4, 2, 1), "the copy costs clocks");
 }
+
+fn m32_costs() -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+    use llrm_target::Target;
+    let prices = llrm_target::CpuPrices {
+        costs: Vec::new(),
+        prefix: 1,
+        address_stall: 0,
+        registers: 6,
+        call_registers: 3,
+        float_registers: 0,
+        address_forms: Vec::new(),
+        operations: llrm_mir::target::OperationCosts::default(),
+        spaces: llrm_x86_m32::layout().spaces.roles,
+        private: None,
+        calling: None,
+        foreign: llrm_target::Foreign::none(),
+        ports: llrm_x86_m32::M32.flat_ports(),
+    };
+    (llrm_x86_m32::M32.cost_model())(&prices)
+}
+
+/// x_idioms -Os (m32): `sumlong(L, 40)` called twice. IPSCCP leaves both
+/// parameters unread and `deadargelim` drops them after the walk (the pin's
+/// order), so the -Os byte trial must price the calls as they ship: priced
+/// with the pushes it inlined both (+5 B at m32, +10 B at m68k 68000; gcc
+/// keeps two calls).
+#[test]
+fn test_the_size_trial_prices_calls_without_the_parameters_nothing_reads() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@L = global [40 x i32] zeroinitializer
+define internal i32 @sumlong(ptr %p, i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %s = phi i32 [ 0, %b0 ], [ %s1, %body ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %body, label %out
+body:
+  %x = sext i16 %i to i32
+  %w = add i32 %x, 1
+  %a = getelementptr i32, ptr %p, i32 %x
+  %v = load i32, ptr %a
+  %m = mul i32 %w, %v
+  %s1 = add i32 %s, %m
+  %i1 = add i16 %i, 1
+  br label %head
+out:
+  ret i32 %s
+}
+
+define i32 @run() {
+b0:
+  %a = call i32 @sumlong(ptr @L, i16 40)
+  store i32 7, ptr @L
+  %b = call i32 @sumlong(ptr @L, i16 40)
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        m32_costs(),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    let run = printed.split("define").find(|one| one.contains("@run(")).expect("run");
+    assert_eq!(run.matches("@sumlong(").count(), 2, "{printed}");
+}
+
+/// hanoi -O2: its three pegs are permuted and never read. The recursion
+/// copier works on the body without them, as gcc's IPA-SRA leaves it: copies
+/// merge the two calls into one and the function becomes a closed form (261 B
+/// at m32). With the pegs in place through the walk it kept two calls to
+/// itself (+23 B at m32, +2358 B at 6502).
+#[test]
+fn test_a_recursion_loses_its_unread_parameters_before_it_is_copied() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define internal i32 @hanoi(i32 %n, i32 %a, i32 %b, i32 %c) {
+b0:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %out, label %rec
+rec:
+  %m = sub i32 %n, 1
+  %x = call i32 @hanoi(i32 %m, i32 %a, i32 %c, i32 %b)
+  %y = call i32 @hanoi(i32 %m, i32 %c, i32 %b, i32 %a)
+  %s = add i32 %x, %y
+  %t = add i32 %s, 1
+  ret i32 %t
+out:
+  ret i32 0
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @hanoi(i32 %n, i32 1, i32 3, i32 2)
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::standard(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        m32_costs(),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    let top = printed.split("define").find(|one| one.contains("@top(")).expect("top");
+    assert!(top.matches("call ").count() <= 1, "{printed}");
+}
+
+/// arm64 queens -O2: `place` was cloned per constant `row` and the clones
+/// inlined (252 -> 2,260 B; -O3 308 -> 832 B), 18/20 cells at or below the
+/// bars against 19/19 without, and the clone made frames worse on both axes.
+/// The target states no default clones: the output is what `-fno-ipa-cp-clone`
+/// gives.
+#[test]
+fn test_arm64_makes_no_ipa_cp_clones_unless_asked() {
+    let run = |cp_clone: Option<bool>| {
+        let mut module = parsed(ROW_RECURSION);
+        let mut options = crate::pipeline::Options::standard();
+        options.inline.cp_clone = cp_clone;
+        let applied = crate::pipeline::Applied { options, ..Default::default() };
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux }),
+            |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+        )
+        .and_then(|done| done)
+        .expect("the pipeline runs");
+        llrm_mir::print::module(&module)
+    };
+    let asked_not = run(Some(false));
+    assert_eq!(run(None), asked_not);
+    assert_ne!(run(Some(true)), asked_not, "the premise: the clones change this module");
+}

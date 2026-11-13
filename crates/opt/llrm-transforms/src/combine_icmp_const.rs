@@ -287,6 +287,13 @@ fn fold_icmp_div_constant(
     // Fold: icmp pred ([us]div X, C2), C -> range test.
     let (c2, _) = query(c, None).int_constant(y)?;
 
+    // DEVIATE ICMPDIV-1 (`Tti::keeps_icmp_of_shared_division`): the quotient
+    // is needed anyway, so the range test only keeps `X` live beside it. A
+    // power of two is a shift, not a call: nothing is held across it.
+    if c.env.hooks.keeps_shared_division_compare && !has_one_use(c, div) && !c2.is_power_of_two() {
+        return None;
+    }
+
     // (x /s C2) <s C differs from (x /u C2) <u C, so a divide of the other
     // signedness than the compare bails, unless a positive divisor of a
     // non-negative dividend makes sdiv a udiv.
