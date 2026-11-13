@@ -204,6 +204,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         ScalarToVector => pin::SCALAR_TO_VECTOR,
         InsertVectorElt => pin::INSERT_VECTOR_ELT,
         ConcatVectors => pin::CONCAT_VECTORS,
+        ExtractSubvector => pin::EXTRACT_SUBVECTOR,
         // No pattern names it: a target lowers every shuffle first.
         VectorShuffle => u16::MAX,
         TargetExternalSymbolNode => pin::TargetExternalSymbol,

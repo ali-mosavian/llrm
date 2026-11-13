@@ -34,6 +34,7 @@ enum Complex {
     ArithExtendedRegister,
     ArithUxtxRegister,
     CvtFixedPos { reg_width: u32, reciprocal: bool },
+    ExtractHigh,
     Never,
 }
 
@@ -108,7 +109,8 @@ static COMPLEX: std::sync::LazyLock<Vec<Complex>> = std::sync::LazyLock::new(|| 
             f if f.starts_with("SelectAddrModeWRO") => Complex::Wro(size_of_name(f)),
             "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
             "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
-            "SelectExtractHigh" | "SelectDupZero" | "SelectRoundingVLShr" => Complex::Never,
+            "SelectExtractHigh" => Complex::ExtractHigh,
+            "SelectDupZero" | "SelectRoundingVLShr" => Complex::Never,
             // DEVIATE VEC5: the vector `fcvtzs v, v, #fbits` of a multiply by a
             // power of two is not matched; the multiply and the convert stay
             // two instructions. Exit: the float-vector conversion slice
@@ -192,6 +194,7 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
             Complex::CvtFixedPos { reg_width, reciprocal } => {
                 addr::cvt_fixed_pos(dag, value, reg_width, reciprocal).map(|v| push(&v)).is_some()
             }
+            Complex::ExtractHigh => addr::extract_high(dag, value).map(|v| push(&v)).is_some(),
             Complex::Never => false,
         }
     }

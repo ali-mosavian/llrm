@@ -313,6 +313,9 @@ fn branches() {
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
     }
+    for (lanes, index) in [(Arrangement::D2, 1), (Arrangement::S4, 3), (Arrangement::H8, 7), (Arrangement::B16, 15)] {
+        all.push(Inst::VectorDupScalar { lanes, rd: Vreg(5), rn: Vreg(17), index });
+    }
     for (high, wide) in [
         (false, Arrangement::H8),
         (true, Arrangement::H8),

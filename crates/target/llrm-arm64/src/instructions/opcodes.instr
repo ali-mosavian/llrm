@@ -210,6 +210,10 @@ FMLSv4f32                fmuladd x/x,x,x       -                        fp_arith
 FMLSv2f64                fmuladd x/x,x,x       -                        fp_arith   - - - -/-                FMLSv2f64
 DUPv16i8lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv16i8lane
 DUPv8i16lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv8i16lane
+DUPi8                    move     x/x,i         -                        fp_arith   - - - -/-                DUPi8
+DUPi16                   move     x/x,i         -                        fp_arith   - - - -/-                DUPi16
+DUPi32                   move     x/x,i         -                        fp_arith   - - - -/-                DUPi32
+DUPi64                   move     x/x,i         -                        fp_arith   - - - -/-                DUPi64
 DUPv4i32lane             move     x/x,i         -                        fp_arith   - - - -/-                DUPv4i32lane
 SSHLLv8i8_shift          binary   x/x,i         -                        fp_arith   - - - -/-                SSHLLv8i8_shift
 SSHLLv16i8_shift         binary   x/x,i         -                        fp_arith   - - - -/-                SSHLLv16i8_shift

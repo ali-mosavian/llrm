@@ -432,6 +432,10 @@ impl fmt::Display for Inst {
                 let lane = lane_letter(*lanes);
                 write!(out, "ins v{}.{lane}[{index}], v{}.{lane}[{src}]", rd.0, rn.0)
             }
+            Inst::VectorDupScalar { lanes, rd, rn, index } => {
+                let lane = lane_letter(*lanes);
+                write!(out, "mov {lane}{}, v{}.{lane}[{index}]", rd.0, rn.0)
+            }
             Inst::VectorDupLane { lanes, rd, rn, index } => {
                 let lane = lane_letter(*lanes);
                 write!(out, "dup v{}.{}, v{}.{lane}[{index}]", rd.0, lanes.suffix(), rn.0)

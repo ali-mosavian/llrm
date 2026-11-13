@@ -661,6 +661,23 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `DUPi64`: one lane of a vector register as a scalar.
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        let suffix = match lanes {
+            Arrangement::B16 => "i8",
+            Arrangement::H8 => "i16",
+            Arrangement::S4 => "i32",
+            Arrangement::D2 => "i64",
+        };
+        if name == format!("DUP{suffix}") {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Imm(index)] => {
+                    Ok(Inst::VectorDupScalar { lanes, rd, rn: *rn, index: *index as u8 })
+                }
+                _ => wrong(),
+            });
+        }
+    }
     // `DUPv4i32lane`, `DUPv2i64lane`: a lane of a vector register in every
     // lane (the float splat's `dup v.4s, v.s[0]`).
     if let Some(lanes) = name.strip_prefix("DUPv").and_then(|rest| rest.strip_suffix("lane")).and_then(lanes_of) {

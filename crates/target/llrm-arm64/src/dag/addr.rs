@@ -8,7 +8,7 @@
 //! signature (`SelectAddrModeIndexed`: base, scaled offset).
 //!
 //! DEVIATE SD522: not translated, and answering false (the pattern after it, or
-//! a refusal, follows): `SelectExtractHigh`, `SelectDupZero`;
+//! a refusal, follows): `SelectDupZero`;
 //! `SelectCVTFixedPos*` reads only a `ConstantFP`, not one loaded from the
 //! constant pool. Exit: vectors; the constant pool.
 //!
@@ -80,6 +80,49 @@ pub fn cvt_fixed_pos<D: AddrDag>(
         return None;
     }
     Some([dag.target_constant(i64::from(fbits), mvt::i32)])
+}
+
+/// The width in bits and the lane count of a vector type the extract-high
+/// patterns name: the 64-bit and 128-bit integer and float vectors.
+fn vector_shape(vt: Vt) -> Option<(u32, u32)> {
+    [
+        (mvt::v8i8, 64, 8),
+        (mvt::v4i16, 64, 4),
+        (mvt::v2i32, 64, 2),
+        (mvt::v2f32, 64, 2),
+        (mvt::v16i8, 128, 16),
+        (mvt::v8i16, 128, 8),
+        (mvt::v4i32, 128, 4),
+        (mvt::v2i64, 128, 2),
+        (mvt::v4f32, 128, 4),
+        (mvt::v2f64, 128, 2),
+    ]
+    .iter()
+    .find(|&&(known, ..)| known == vt)
+    .map(|&(_, width, lanes)| (width, lanes))
+}
+
+/// `SelectExtractHigh`: the 128-bit vector whose top half a 64-bit
+/// `extract_subvector` takes (through one `bitcast`).
+pub fn extract_high<D: AddrDag>(
+    dag: &mut D,
+    n: SDValue,
+) -> Option<[SDValue; 1]> {
+    let mut n = n;
+    if dag.opcode(n.node) == isd::BITCAST {
+        let inner = dag.operand(n.node, 0);
+        if dag.opcode(inner.node) == isd::EXTRACT_SUBVECTOR || dag.opcode(inner.node) == isd::BITCAST {
+            n = inner;
+        }
+    }
+    if dag.opcode(n.node) != isd::EXTRACT_SUBVECTOR {
+        return None;
+    }
+    let source = dag.operand(n.node, 0);
+    let (width, lanes) = vector_shape(dag.value_type(n))?;
+    let (source_width, _) = vector_shape(dag.value_type(source))?;
+    let index = zext(dag, dag.operand(n.node, 1))?;
+    (width == 64 && source_width == 128 && index == u64::from(lanes)).then_some([source])
 }
 
 /// `SelectArithImmed`: the immediate and its shifter operand.

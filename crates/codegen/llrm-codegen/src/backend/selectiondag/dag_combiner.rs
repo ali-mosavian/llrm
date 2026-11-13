@@ -2350,10 +2350,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => false,
         };
-        // `tryToFoldExtOfLoad`: `(!LegalOperations && !isVolatile) ||
-        // isLoadExtLegal`: after legalization, and for a volatile load, the
-        // extending load must be legal.
-        if (info.volatile || self.legal_operations()) && !legal {
+        // `tryToFoldExtOfLoad`: `(LegalOperations || VT.isFixedLengthVector()
+        // || !isSimple()) && !isLoadLegal`: after legalization, for a vector
+        // and for a volatile load, the extending load must be legal.
+        if (info.volatile || self.legal_operations() || wide.is_vector()) && !legal {
             return None;
         }
         if !others.is_empty() {

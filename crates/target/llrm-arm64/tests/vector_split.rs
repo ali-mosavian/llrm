@@ -218,6 +218,23 @@ fn a_truncated_vector_is_xtn() {
     assert_eq!(count(&text, "str", " d"), 1, "{text}");
 }
 
+/// `sext <8 x i16> to <8 x i64>` was refused ("split result"): the pin splits
+/// it in halves, extends in two steps (`SplitVecRes_ExtendOp`) and takes the
+/// high half with `sshll2` (`SelectExtractHigh`), not a `mov d, v.d[1]`.
+#[test]
+fn a_sign_extension_to_four_times_the_lane_is_a_chain_of_sshll() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a) {\n\
+         \x20 %x = load <8 x i16>, ptr %a, align 16\n\
+         \x20 %e = sext <8 x i16> %x to <8 x i64>\n\
+         \x20 store <8 x i64> %e, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "sshll2", ""), 3, "{text}");
+    assert_eq!(count(&text, "sshll", ""), 3, "{text}");
+    assert_eq!(count(&text, "mov", " d"), 0, "{text}");
+}
+
 /// A lane read as an integer (`scvtf s, x`) from a vector in a register is
 /// copied across the register files (`fmov x, d`): `SCVTFUXSri` took the `v`
 /// register as its operand ("operands are not those of its form").

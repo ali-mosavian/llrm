@@ -510,6 +510,10 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
             0x4E00_0400 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorDupScalar { lanes, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            0x5E00_0400 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorFpUnary { op, lanes, rd, rn } => {
             let (u, high, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);

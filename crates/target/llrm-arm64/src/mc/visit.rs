@@ -335,7 +335,7 @@ impl Inst {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
             }
-            Inst::VectorDupLane { rd, rn, .. } => {
+            Inst::VectorDupLane { rd, rn, .. } | Inst::VectorDupScalar { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }

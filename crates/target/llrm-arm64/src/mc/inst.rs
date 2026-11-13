@@ -1032,6 +1032,14 @@ pub enum Inst {
         rm: Vreg,
         index: u8,
     },
+    /// `mov d0, v1.d[index]` (`DUPi64`; `s`, `h`, `b` for the others): one
+    /// lane of `rn` as a scalar.
+    VectorDupScalar {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        index: u8,
+    },
     /// `sshll{2} v.8h, v.8b, #amount` / `ushll{2}`: each lane of the low (or,
     /// `high`, the top) half of `rn` extended to `wide`'s lane and shifted
     /// left; `wide` is `H8`, `S4` or `D2`.

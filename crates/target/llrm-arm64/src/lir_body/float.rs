@@ -207,6 +207,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), imm(i64::from(*index)), vreg_loc(*rn, 128), imm(i64::from(*src))],
             None,
         ),
+        Inst::VectorDupScalar { lanes, rd, rn, index } => semantics(
+            Operation::Move,
+            format!("DUP{}", ins_lane(*lanes)),
+            vec![vreg_loc(*rd, 64)],
+            vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+            None,
+        ),
         Inst::VectorDupLane { lanes, rd, rn, index } => semantics(
             Operation::Move,
             format!("DUPv{}lane", lane_name(*lanes)),
@@ -530,6 +537,14 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 rn: vreg_of(&s[2]),
                 index: value_of(&s[1]) as u8,
                 src: value_of(&s[3]) as u8,
+            });
+        }
+        if name == format!("DUP{}", ins_lane(lanes)) {
+            return Some(Inst::VectorDupScalar {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                index: value_of(&s[1]) as u8,
             });
         }
         if name == format!("DUPv{}lane", lane_name(lanes)) {

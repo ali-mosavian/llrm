@@ -70,7 +70,7 @@ fn is_elementwise(op: ISD) -> bool {
 fn is_conversion(op: ISD) -> bool {
     matches!(
         op,
-        ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend | ISD::FpRound
+        ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend | ISD::FpRound | ISD::Truncate
     )
 }
 
@@ -82,6 +82,44 @@ impl TypeLegalizer<'_> {
     ) -> (SDValue, SDValue) {
         let value = self.remap(value);
         *self.split.get(&value).expect("operand split before its user")
+    }
+
+    /// The type `SplitVecRes_ExtendOp` extends the source to first, when it
+    /// can: the lanes doubled, the source legal and its halves not, the
+    /// doubled type and its halves legal.
+    fn incremental_extend_type(
+        &self,
+        operand: SDValue,
+        dest: EVT,
+    ) -> Option<EVT> {
+        let (EVT::Simple(src), EVT::Simple(dest)) = (self.dag.value_type(operand), dest) else { return None };
+        let bits = |lane: MVT| EVT::Simple(lane).size_in_bits();
+        let (element, lanes) = (src.element()?, src.lanes()?);
+        if lanes % 2 != 0 || bits(element) * 2 >= bits(dest.element()?) {
+            return None;
+        }
+        let legal = |vt: Option<MVT>| vt.is_some_and(|vt| self.tli.types.is_type_legal(EVT::Simple(vt)));
+        let doubled = MVT::integer(bits(element) * 2).and_then(|wide| MVT::vector(wide, lanes));
+        let doubled_half = doubled.and_then(|vt| MVT::vector(vt.element()?, lanes / 2));
+        let src_half = MVT::vector(element, lanes / 2);
+        (legal(Some(src)) && !legal(src_half) && legal(doubled) && legal(doubled_half))
+            .then(|| EVT::Simple(doubled.unwrap()))
+    }
+
+    /// `SelectionDAG::SplitVectorOperand` for a legal vector: its two halves as
+    /// `EXTRACT_SUBVECTOR`s.
+    fn split_operand_by_hand(
+        &mut self,
+        operand: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        let vt = self.dag.value_type(operand);
+        let (half, _) = split_dest(vt)?;
+        let lanes = u128::from(half.lanes());
+        let (zero, mid) = (self.dag.get_constant(0, EVT::I64), self.dag.get_constant(lanes, EVT::I64));
+        Some((
+            self.dag.get_node(ISD::ExtractSubvector, half, &[operand, zero]),
+            self.dag.get_node(ISD::ExtractSubvector, half, &[operand, mid]),
+        ))
     }
 
     /// `SetSplitVector`.
@@ -149,12 +187,33 @@ impl TypeLegalizer<'_> {
             }
             // `SplitVecRes_UnaryOp`: the result type may differ from the
             // operand's, and the operand splits too.
+            // `SplitVecRes_ExtendOp`: an extension by more than one doubling of
+            // a legal source whose halves are no type is made in two steps,
+            // the first on the whole vector.
+            op @ (ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend) => {
+                let operand = self.dag.operand(value, 0);
+                if let Some(widened) = self.incremental_extend_type(operand, vt) {
+                    let step = self.dag.get_node_flags(op, widened, &[operand], flags);
+                    let (lo, hi) =
+                        self.split_operand_by_hand(step).ok_or_else(|| unsupported("split extend of a lone lane"))?;
+                    (self.dag.get_node_flags(op, lo_vt, &[lo], flags), self.dag.get_node_flags(op, hi_vt, &[hi], flags))
+                } else {
+                    let (lo, hi) = if self.action(self.dag.value_type(operand)) == TypeAction::SplitVector {
+                        self.split_vector(operand)
+                    } else {
+                        self.split_operand_by_hand(operand)
+                            .ok_or_else(|| unsupported("split extend of an operand with no half"))?
+                    };
+                    (self.dag.get_node_flags(op, lo_vt, &[lo], flags), self.dag.get_node_flags(op, hi_vt, &[hi], flags))
+                }
+            }
             op if is_conversion(op) => {
                 let ops = self.dag.node(value).ops.clone();
-                if self.action(self.dag.value_type(ops[0])) != TypeAction::SplitVector {
-                    return Err(unsupported("split conversion of an operand that does not split"));
-                }
-                let (lo, hi) = self.split_vector(ops[0]);
+                let (lo, hi) = if self.action(self.dag.value_type(ops[0])) == TypeAction::SplitVector {
+                    self.split_vector(ops[0])
+                } else {
+                    self.split_operand_by_hand(ops[0]).ok_or_else(|| unsupported("split conversion of a lone lane"))?
+                };
                 let (mut los, mut his) = (vec![lo], vec![hi]);
                 los.extend_from_slice(&ops[1..]);
                 his.extend_from_slice(&ops[1..]);

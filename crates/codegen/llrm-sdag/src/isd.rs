@@ -230,6 +230,9 @@ pub enum ISD {
     BuildVector,
     /// `CONCAT_VECTORS`: two vectors of one type, one of twice the lanes.
     ConcatVectors,
+    /// `EXTRACT_SUBVECTOR`: `(vector, index)`, the lanes from the constant
+    /// `index` on, as many as the result has.
+    ExtractSubvector,
     /// `SCALAR_TO_VECTOR`: the scalar in lane 0, the rest undefined.
     ScalarToVector,
     /// `INSERT_VECTOR_ELT`: `(vector, element, index)`.
@@ -429,6 +432,7 @@ impl ISD {
             IntrinsicVoid => "intrinsic_void",
             BuildVector => "BUILD_VECTOR",
             ConcatVectors => "concat_vectors",
+            ExtractSubvector => "extract_subvector",
             ScalarToVector => "scalar_to_vector",
             InsertVectorElt => "insert_vector_elt",
             VectorShuffle => "vector_shuffle",
