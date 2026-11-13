@@ -23,16 +23,16 @@
 //! Once per module in `driver::optimized`, after the mid-end: the intrinsic is
 //! opaque to it, and `constantfolding` folds a constant argument.
 //!
-//! DEVIATE FPTOINT-CHECKED (owner x87, exit 2026-11-24): LLVM has no checked
-//! float-to-integer (`llvm.fptosi.sat` saturates, and a float past the range is
-//! poison in `fptosi`); the structure is `TargetLowering::expandFP_TO_INT_SAT`
-//! / `X86TargetLowering::LowerFP_TO_INT_SAT`, which converts at a width the
-//! hardware has and decides the saturation on the integer
+//! DEVIATE FPTOINT-CHECKED (permanent): LLVM has no checked float-to-integer
+//! (`llvm.fptosi.sat` saturates, and a float past the range is poison in
+//! `fptosi`); the structure is `X86TargetLowering::LowerFP_TO_INT_SAT`, which
+//! converts at a width the hardware has and decides on the integer
 //! ([X86ISelLowering.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp)).
-//! The trap stays the caller's: the intrinsic returns `{ value, fits }`. Exit: by 2026-11-24 the SSE targets
-//! (`Tti::wide_float_to_int` is x87-only) get the hook where `cvttsd2si` has the wider form (x86-64: all
-//! widths), priced by an m64 A/B; a target where it does not shrink keeps the two compares, and the deviation
-//! from the pin's float clamp then stays documented as permanent: the clamp needs a float min/max the x87 lacks.
+//! The pin clamps the float first, which needs a float min/max the x87 lacks,
+//! so the check here is on the integer. The trap stays the caller's: the
+//! intrinsic returns `{ value, fits }`. Reopen when a Nib SSE or m64 target,
+//! or another frontend, emits the intrinsic: `Tti::wide_float_to_int` is
+//! x87-only because no program there could price an SSE form.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
