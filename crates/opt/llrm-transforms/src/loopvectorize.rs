@@ -217,6 +217,7 @@ fn fills_registers(
             |step| match step {
                 Step::Access(access) => whole(access.element),
                 Step::Operation(operation) => whole(operation.element) && whole(operation.operand_element),
+                Step::Induction(induction) => whole(induction.element),
             },
         )
 }
