@@ -132,11 +132,19 @@ fn add(
         ("loop-reduce", None) => manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false }),
         ("indvars", None) => manager.add(crate::indvars::IndVars { lftr: true, size: false }),
         ("indvars", Some("no-lftr")) => manager.add(crate::indvars::IndVars { lftr: false, size: false }),
-        ("loop-rotate", None) => {
-            manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false, check_exit_count: false, free_guard: false })
-        }
+        ("loop-rotate", None) => manager.add(crate::looprotate::LoopRotate {
+            duplicate_headers: true,
+            size: false,
+            check_exit_count: false,
+            free_guard: false,
+        }),
         ("loop-rotate", Some("header-duplication;no-prepare-for-lto;check-exit-count")) => {
-            manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false, check_exit_count: true, free_guard: false })
+            manager.add(crate::looprotate::LoopRotate {
+                duplicate_headers: true,
+                size: false,
+                check_exit_count: true,
+                free_guard: false,
+            })
         }
         ("loop-deletion", None) => manager.add(crate::loopdeletion::LoopDeletion),
         ("loop-simplify", None) => manager.add(crate::loopsimplify::LoopSimplify),
@@ -145,6 +153,8 @@ fn add(
         ("dce", None) => manager.add(crate::dead::Dead),
         ("adce", None) => manager.add(crate::adce::Adce),
         ("instcombine", None) => manager.add(crate::combine_pass::Combine { enabled: true, phi_constant_users: false }),
+        ("sroa", Some("modify-cfg")) | ("sroa", None) => manager.add(crate::sroa::SroaModifyCfg),
+        ("sroa", Some("preserve-cfg")) => manager.add(crate::sroa::Sroa),
         ("simplifycfg", None) => manager.add(crate::simplifycfg::SimplifyCfg::default()),
         (_, Some(params)) => return Err(unsupported(&format!("{name}<{params}>"))),
         _ => return Err(unsupported(name)),
@@ -166,6 +176,7 @@ pub fn legacy(flag: &str) -> Option<&'static str> {
         "adce",
         "instcombine",
         "simplifycfg",
+        "sroa",
     ];
     NAMES.iter().copied().find(|name| *name == flag)
 }
