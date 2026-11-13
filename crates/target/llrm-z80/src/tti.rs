@@ -159,7 +159,7 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
+    /// DEVIATE Z80-MERGEFUNC-LOCAL (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
     /// -O1, -O2 and -O3 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`, signbit_idioms `bit_i16`).
     fn merge_local_functions_at_speed(&self) -> bool {
         true

@@ -400,7 +400,7 @@ impl llrm_mir::target::Machine for Z80Machine {
 /// is the target's price, as m16's `Dos::tuning` is.
 const MEMCPY_STORES: usize = 1;
 
-/// `MaxStoresPerMemset` at every level: one store of the widest width, then the fill is an `ldir`. The pin's x86 limits
+/// `MaxStoresPerMemset` at every level (the pin's X86 values: 16, 8 at size): one store of the widest width, then the fill is an `ldir`. The pin's x86 limits
 /// (16 at speed, 8 at size) count 4-byte stores, which are two word stores of 3 B each through IX here: a 34 B zero fill
 /// was 102 B against an `ldir` fill of 13 B for 1.1% of its clocks (huffman_decode -O1 +70 B over the -Os form). At
 /// -O2/-O3 too: a 64 B row fill stored inline was 224 B and slower than its `ldir` (fill_nest 601 B against 348 B, +5 k T;
