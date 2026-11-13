@@ -520,10 +520,10 @@ fn copy_point(
     source: Reg,
 ) -> usize {
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
-    if !insts[first..].iter().any(|inst| inst.reads_flags) {
+    if !insts[first..].iter().any(|inst| inst.reads_flags()) {
         return first;
     }
-    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags) else { return first };
+    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags()) else { return first };
     let defines_source = insts[setter..first]
         .iter()
         .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(reg) if *reg == source)));
@@ -548,9 +548,9 @@ fn hoisted_point(
     let uses_source = |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Use(reg) if *reg == source));
     let Some(last) = insts[..point].iter().rposition(uses_source) else { return point };
     let strands_reader = (last..point).any(|at| {
-        insts[at].reads_flags
-            && !insts[at].sets_flags
-            && insts[..at].iter().rposition(|i| i.sets_flags).is_some_and(|setter| setter < last)
+        insts[at].reads_flags()
+            && !insts[at].sets_flags()
+            && insts[..at].iter().rposition(|i| i.sets_flags()).is_some_and(|setter| setter < last)
     });
     if strands_reader { point } else { last }
 }
