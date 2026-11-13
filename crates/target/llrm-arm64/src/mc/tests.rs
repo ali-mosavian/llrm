@@ -310,6 +310,23 @@ fn branches() {
         (VectorFma::Sub, Arrangement::D2),
     ] {
         all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+        all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
+        all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
+    }
+    for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
+        all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
+    }
+    for (lanes, index, src) in [
+        (Arrangement::B16, 3, 9),
+        (Arrangement::H8, 5, 2),
+        (Arrangement::S4, 0, 3),
+        (Arrangement::S4, 3, 1),
+        (Arrangement::D2, 1, 0),
+    ] {
+        all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
+        all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
+        all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
+        all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for (lanes, index) in
         [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)]
