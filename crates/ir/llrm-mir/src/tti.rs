@@ -996,7 +996,7 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE INL-O1-HOT (owner w10, exit 2026-11-27): where -O1 holds a
+    /// DEVIATE INL-O1-HOT (owner w10, exit 2026-11-24): where -O1 holds a
     /// growing inline (`by_size`), a site the pin calls locally hot
     /// (`HotCallSiteRelFreq`, 60 times the caller's entry) still inlines when
     /// its growth is at most this percent of the call sequence removed. None:
