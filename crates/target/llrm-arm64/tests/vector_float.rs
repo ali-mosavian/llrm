@@ -105,3 +105,30 @@ fn a_float_vector_constant_splat_is_a_dup() {
     assert!(has(&text, "fadd", "4s"), "{text}");
     assert!(text.lines().any(|l| l.trim().starts_with("dup v") && l.contains(".4s")), "{text}");
 }
+
+/// `sitofp`/`uitofp`/`fptosi`/`fptoui` of vectors of one lane width: the
+/// verifier said "cannot take <4 x i32> to <4 x float>", and then no
+/// instruction existed for `SCVTFv4f32`.
+#[test]
+fn vector_int_float_conversions_are_one_neon_instruction() {
+    for (op, from, to, mnemonic, suffix) in [
+        ("sitofp", "<4 x i32>", "<4 x float>", "scvtf", "4s"),
+        ("uitofp", "<4 x i32>", "<4 x float>", "ucvtf", "4s"),
+        ("fptosi", "<4 x float>", "<4 x i32>", "fcvtzs", "4s"),
+        ("fptoui", "<4 x float>", "<4 x i32>", "fcvtzu", "4s"),
+        ("sitofp", "<2 x i64>", "<2 x double>", "scvtf", "2d"),
+        ("fptosi", "<2 x double>", "<2 x i64>", "fcvtzs", "2d"),
+    ] {
+        let text = assembly(&format!(
+            "define void @f(ptr %d, ptr %a) {{\n\
+             \x20 %x = load {from}, ptr %a, align 16\n\
+             \x20 %z = {op} {from} %x to {to}\n\
+             \x20 store {to} %z, ptr %d, align 16\n\
+             \x20 ret void\n}}\n"
+        ));
+        let one = text.lines().any(|line| {
+            line.trim().strip_prefix(mnemonic).is_some_and(|rest| rest.matches(&format!(".{suffix}")).count() == 2)
+        });
+        assert!(one, "{op} {from}:\n{text}");
+    }
+}

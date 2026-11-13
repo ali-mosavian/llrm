@@ -224,6 +224,14 @@ FNEGv4f32                unary    x/x           -                        fp_arit
 FNEGv2f64                unary    x/x           -                        fp_arith   - - - -/-                FNEGv2f64
 FABSv4f32                unary    x/x           -                        fp_arith   - - - -/-                FABSv4f32
 FABSv2f64                unary    x/x           -                        fp_arith   - - - -/-                FABSv2f64
+SCVTFv4f32               unary    x/x           -                        fp_arith   - - - -/-                SCVTFv4f32
+SCVTFv2f64               unary    x/x           -                        fp_arith   - - - -/-                SCVTFv2f64
+UCVTFv4f32               unary    x/x           -                        fp_arith   - - - -/-                UCVTFv4f32
+UCVTFv2f64               unary    x/x           -                        fp_arith   - - - -/-                UCVTFv2f64
+FCVTZSv4f32              unary    x/x           -                        fp_arith   - - - -/-                FCVTZSv4f32
+FCVTZSv2f64              unary    x/x           -                        fp_arith   - - - -/-                FCVTZSv2f64
+FCVTZUv4f32              unary    x/x           -                        fp_arith   - - - -/-                FCVTZUv4f32
+FCVTZUv2f64              unary    x/x           -                        fp_arith   - - - -/-                FCVTZUv2f64
 # ---- pseudo operations (a call, a tail call and the return carry a variable number of
 # registers: no row, their effects are the contract's)
 COPY                     move     r/r           -                        alu        - - - -/-                COPY

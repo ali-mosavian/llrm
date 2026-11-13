@@ -457,9 +457,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x4E00_0400 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorFpUnary { op, lanes, rd, rn } => {
-            let (u, opcode) = op.fields();
+            let (u, high, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);
-            0x4EA0_0800 | u << 29 | sz << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x4E20_0800 | u << 29 | high << 23 | sz << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,

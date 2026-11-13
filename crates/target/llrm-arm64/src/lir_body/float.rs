@@ -324,7 +324,14 @@ fn vector_fp_name(
 }
 
 const VECTOR_FP_OPS: [VectorFpOp; 4] = [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div];
-const VECTOR_FP_UNARY: [VectorFpUnary; 2] = [VectorFpUnary::Neg, VectorFpUnary::Abs];
+const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
+    VectorFpUnary::Neg,
+    VectorFpUnary::Abs,
+    VectorFpUnary::Scvtf,
+    VectorFpUnary::Ucvtf,
+    VectorFpUnary::Fcvtzs,
+    VectorFpUnary::Fcvtzu,
+];
 
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
 fn vector_op_name(op: VectorOp, lanes: Arrangement) -> String {

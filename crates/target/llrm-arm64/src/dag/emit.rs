@@ -675,7 +675,14 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    for (stem, op) in [("FNEG", VectorFpUnary::Neg), ("FABS", VectorFpUnary::Abs)] {
+    for (stem, op) in [
+        ("FNEG", VectorFpUnary::Neg),
+        ("FABS", VectorFpUnary::Abs),
+        ("SCVTF", VectorFpUnary::Scvtf),
+        ("UCVTF", VectorFpUnary::Ucvtf),
+        ("FCVTZS", VectorFpUnary::Fcvtzs),
+        ("FCVTZU", VectorFpUnary::Fcvtzu),
+    ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
             continue;
         };

@@ -320,7 +320,14 @@ fn branches() {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             all.push(Inst::VectorFpBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
         }
-        for op in [VectorFpUnary::Neg, VectorFpUnary::Abs] {
+        for op in [
+            VectorFpUnary::Neg,
+            VectorFpUnary::Abs,
+            VectorFpUnary::Scvtf,
+            VectorFpUnary::Ucvtf,
+            VectorFpUnary::Fcvtzs,
+            VectorFpUnary::Fcvtzu,
+        ] {
             all.push(Inst::VectorFpUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
         }
     }

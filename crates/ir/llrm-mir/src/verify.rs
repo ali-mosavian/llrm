@@ -670,6 +670,21 @@ impl Checker<'_> {
         to: TypeId,
     ) -> Result<(), String> {
         let (a, b) = (self.ty(from), self.ty(to));
+        // `CastInst::castIsValid`: vectors of one lane count cast lane by
+        // lane; a bit cast keeps the total size.
+        if let (Type::Vector { element: x, count: m }, Type::Vector { element: y, count: n }) = (a, b) {
+            let bits = |ty: TypeId| match self.ty(ty) {
+                Type::Int(bits) => Some(u64::from(*bits)),
+                Type::Float(kind) => Some(u64::from(crate::datalayout::float_bits(*kind))),
+                _ => None,
+            };
+            let ok = if op == CastOp::BitCast {
+                matches!((bits(*x), bits(*y)), (Some(p), Some(q)) if p * u64::from(*m) == q * u64::from(*n))
+            } else {
+                m == n && self.cast(op, *x, *y).is_ok()
+            };
+            return if ok { Ok(()) } else { Err(format!("cannot take {} to {}", self.show(from), self.show(to))) };
+        }
         let ok = match (op, a, b) {
             (CastOp::Trunc, Type::Int(x), Type::Int(y)) => y < x,
             (CastOp::ZExt | CastOp::SExt, Type::Int(x), Type::Int(y)) => y > x,

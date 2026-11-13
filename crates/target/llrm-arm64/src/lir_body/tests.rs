@@ -255,7 +255,14 @@ pub(super) fn instructions() -> Vec<Inst> {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             out.push(Inst::VectorFpBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         }
-        for op in [VectorFpUnary::Neg, VectorFpUnary::Abs] {
+        for op in [
+            VectorFpUnary::Neg,
+            VectorFpUnary::Abs,
+            VectorFpUnary::Scvtf,
+            VectorFpUnary::Ucvtf,
+            VectorFpUnary::Fcvtzs,
+            VectorFpUnary::Fcvtzu,
+        ] {
             out.push(Inst::VectorFpUnary { op, lanes, rd: v(0), rn: v(1) });
         }
     }

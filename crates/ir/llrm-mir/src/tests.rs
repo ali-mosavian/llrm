@@ -552,6 +552,22 @@ fn an_overloaded_intrinsic_over_a_vector_verifies_with_its_vector_mangling() {
     assert!(found(wrong)[0].contains("Should be: llvm.fmuladd.v4f32"), "{:?}", found(wrong));
 }
 
+/// A cast of vectors of one lane count ("cannot take <4 x i32> to <4 x
+/// float>") was refused by the verifier: LoopVectorize could not widen a
+/// `sitofp`.
+#[test]
+fn a_cast_of_vectors_with_one_lane_count_verifies_lane_by_lane() {
+    let found = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    let body = |op: &str, from: &str, to: &str| {
+        format!("define void @f({from} %x) {{\n  %y = {op} {from} %x to {to}\n  ret void\n}}\n")
+    };
+    assert_eq!(found(&body("sitofp", "<4 x i32>", "<4 x float>")), Vec::<String>::new());
+    assert_eq!(found(&body("trunc", "<4 x i32>", "<4 x i16>")), Vec::<String>::new());
+    assert_eq!(found(&body("bitcast", "<4 x i32>", "<4 x float>")), Vec::<String>::new());
+    assert!(found(&body("sitofp", "<4 x i32>", "<2 x double>"))[0].contains("cannot take"));
+    assert!(found(&body("zext", "<4 x i32>", "<4 x i16>"))[0].contains("cannot take"));
+}
+
 /// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
 /// each verifies. The verifier said "an intrinsic MIR does not have" of all
 /// three, and the funnel-shift and abs folds of InstCombine could not build
