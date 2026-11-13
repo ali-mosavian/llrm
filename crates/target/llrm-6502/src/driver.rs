@@ -473,7 +473,7 @@ fn tail(
             let mut other = select_function(looped, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, looped, &selection, request)? {
+            if cheaper(module, name, &other, looped, &selection, request, crate::routines::copy_prices().byte_clocks.0, false)? {
                 selection = other;
                 as_called = false;
                 source = Some(looped);
@@ -483,7 +483,7 @@ fn tail(
             let mut other = select_function(paged, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, paged, &selection, request)? {
+            if cheaper(module, name, &other, paged, &selection, request, crate::routines::copy_prices().page_byte_clocks, true)? {
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
@@ -628,11 +628,13 @@ fn cheaper(
     alt_module: &llrm_mir::module::Module,
     selected: &crate::dagisel::function::Selection,
     request: &Request,
+    speed_byte_clocks: u64,
+    strict_at_o1: bool,
 ) -> Result<bool, String> {
     let prices = crate::routines::copy_prices();
     let routines = [("memcpy", prices.call_clocks)];
-    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { prices.byte_clocks.0 };
-    let cost = |module: &llrm_mir::module::Module, selection| -> Option<u64> {
+    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { speed_byte_clocks };
+    let cost = |module: &llrm_mir::module::Module, selection| -> Option<(u64, u64)> {
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
         let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
@@ -644,12 +646,16 @@ fn cheaper(
         crate::weights::by_branch_weights(module, function, &mut weights);
         let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
         let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
-        Some(priced.cycles + byte * u64::from(priced.bytes))
+        Some((priced.cycles, u64::from(priced.bytes)))
     };
-    Ok(matches!(
-        (cost(alt_module, alt), cost(module, selected)),
-        (Some(looped), Some(called)) if looped < called
-    ))
+    Ok(match (cost(alt_module, alt), cost(module, selected)) {
+        // -O1 keeps no more bytes and no more clocks (6502-UNROLL-O1)
+        (Some(alt), Some(kept)) if strict_at_o1 && request.level == Level::O1 => {
+            alt.0 <= kept.0 && alt.1 <= kept.1 && alt != kept
+        }
+        (Some(alt), Some(kept)) => alt.0 + byte * alt.1 < kept.0 + byte * kept.1,
+        _ => false,
+    })
 }
 
 fn llrm_6502_prepare(program: &mut Program) {

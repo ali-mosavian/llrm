@@ -14,6 +14,14 @@ typical_bytes = 10
 byte_clocks_speed = 500
 byte_clocks_size = 5000
 
+[page]
+# Policy: the exchange rate of a byte of code against the loop-weighted clocks, at speed, when a loop that
+# walks by page is priced against the loop as written. The scoreboard's -O2 rate is 1 B = 3 clocks of a run
+# and a loop weighs ten trips: 30. (The copy rate above buys a call out of a loop of unknown length; used
+# here it priced one byte at fifty clocks a trip and kept k_strncmp's counter-and-pointer loop, 84 B /
+# 1189 clocks paged against 83 B / 1297.)
+byte_clocks_speed = 30
+
 [compact]
 # A routine with a compact variant: the same result in fewer bytes and more clocks. The call is renamed
 # at size (-Os, -Oz); at speed the fast one stays. __udivhi3c is the bit loop without the short-divisor path; the
