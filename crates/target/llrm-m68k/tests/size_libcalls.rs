@@ -381,3 +381,59 @@ fn a_function_with_many_kinds_or_many_instructions_is_built_a_bounded_number_of_
     assert_eq!(builds(&format!("{pop}{ctz}{shl}"), 0), 0, "three kinds are not measured");
     assert_eq!(builds(pop, 1100), 0, "a long function is not measured");
 }
+
+/// A size-built function with variable `shl`, `lshr` and `ashr` of an `i64`,
+/// `each` sites of each.
+fn all_three_shifts(each: usize) -> String {
+    let mut body = String::from("  %s0 = add i64 %x, 0\n");
+    let mut last = 0;
+    for n in 0..each {
+        for (at, op) in ["shl", "lshr", "ashr"].into_iter().enumerate() {
+            let this = n * 3 + at;
+            body.push_str(&format!("  %t{this} = {op} i64 %s{last}, %n\n  %s{} = xor i64 %t{this}, %x\n", this + 1));
+            last = this + 1;
+        }
+    }
+    format!("{HEAD}define i64 @f(i64 %x, i64 %n) optsize {{\n{body}  ret i64 %s{last}\n}}\n")
+}
+
+/// `main` of `u64_shift_variable_kinds` has all three variable shifts: three
+/// kinds were past the cap, so every site stayed the 62 B inline loop and the
+/// program linked to 1578 B against gcc's 1050 (68000 and 68020, -Os).
+/// The three shifts are one build, and the 68000 chooses them like the 68020.
+#[test]
+fn a_function_with_all_three_shifts_calls_the_routines_when_that_is_smaller_at_every_cpu() {
+    let options = Options { mid_end: false, ..Options::default() };
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = asm(&all_three_shifts(6), "f", cpu, options);
+        for routine in ["__ashldi3", "__lshrdi3", "__ashrdi3"] {
+            assert!(out.contains(routine), "{cpu:?} {routine}\n{out}");
+        }
+        let one = asm(&all_three_shifts(1), "f", cpu, options);
+        assert!(!one.contains("jsr\t__"), "{cpu:?}: one site of each is cheaper inline\n{one}");
+    }
+}
+
+/// The three shifts are priced by one build: a function with all of them and a
+/// count is built 3 times, not 5.
+#[test]
+fn the_three_shifts_are_one_build() {
+    let ir = format!(
+        "{HEAD}declare i64 @llvm.ctpop.i64(i64)\n\
+         define i64 @f(i64 %x, i64 %n) optsize {{\n  %p = call i64 @llvm.ctpop.i64(i64 %x)\n  %l = shl i64 %x, %n\n  \
+         %r = lshr i64 %x, %n\n  %a = ashr i64 %x, %n\n  ret i64 %x\n}}\n"
+    );
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let count = std::cell::Cell::new(0);
+    llrm_m68k::libcalls::chosen(
+        &module,
+        Cpu::M68020,
+        Mode::Auto,
+        |_| true,
+        |_, _| {
+            count.set(count.get() + 1);
+            Ok(100)
+        },
+    );
+    assert_eq!(count.get(), 3);
+}
