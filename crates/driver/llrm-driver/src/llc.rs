@@ -504,8 +504,10 @@ pub fn compiled_dumping(
     let bytes = |built: &masm::Module| {
         objbuild::written_in(built, name, layout_of(flags, format), format, objects).ok().map(|object| object.len() as i64)
     };
+    // A bytes-strict target's trials compare the code the instructions fill (`Tti::unroll_trial_bytes_strict`).
+    let flat = options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.unroll_trial_bytes_strict());
     let unpadded = |built: &masm::Module| {
-        objbuild::unpadded_split(built, name, layout_of(flags, format), format, objects)
+        objbuild::unpadded_split(built, name, layout_of(flags, format), format, objects, flat)
             .ok()
             .map(|(code, data)| llrm_codegen::driver::trial::Sizes { code, data })
     };

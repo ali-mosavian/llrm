@@ -741,6 +741,11 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
+    /// -O1 is strict on bytes where the -Os trial is (`unroll_trial_bytes_strict`): a peel copies the loop body.
+    fn peels_at_o1(&self) -> bool {
+        !self.tuning.unroll_trial_bytes_strict
+    }
+
     fn unroll_trial_bytes_strict(&self) -> bool {
         self.tuning.unroll_trial_bytes_strict
     }
