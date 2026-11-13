@@ -325,6 +325,7 @@ fn a_loop_carried_vector_phi_lives_in_a_q_register() {
     );
     assert!(text.contains("add v") && text.contains(".8h"), "{text}");
     assert!(text.contains("str q"), "{text}");
+}
 
 /// A store of the constant `<0, 1, .., 7>` was refused (`Legalize(custom
 /// lowering of BuildVector)`): a constant that is no splat is the pin's pool
