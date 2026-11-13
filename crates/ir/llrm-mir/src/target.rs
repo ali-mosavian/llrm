@@ -45,6 +45,11 @@ pub struct Tuning {
     /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
     /// the pin's, which pops only at `minsize` (X86FrameLowering.cpp:4116).
     pub pops_arguments_at_size: bool,
+    /// The target has a libc `memcpy` to call, so LoopIdiomRecognize forms a
+    /// copy of run-time length whatever its size, as the pin does. false:
+    /// DEVIATE (loopidioms.rs `variable_copy_pays`): the copy stays a loop
+    /// where the inline `rep movs` that replaces it is more bytes.
+    pub libc_memcpy: bool,
     /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
     /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
     /// (`hardware_divide_wins`); false: the clocks and margin alone.
@@ -221,12 +226,6 @@ pub struct Tuning {
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
-    /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
-    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`), in blocks
-    /// that run at most once per call. DEVIATE PUSH-IMM-OS (owner x86-m32,
-    /// exit 2026-11-30): 5 clocks on the 486 against the `mov`'s 1, so never in
-    /// a loop.
-    pub push_imm_at_size: bool,
     /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
     /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
     /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
@@ -355,6 +354,15 @@ pub struct Tuning {
     /// Clocks a value held across an inner loop costs each outer trip: a store
     /// and a load.
     pub loop_carried_clocks: i64,
+    /// DEVIATE EXT-LOAD-COST (owner llrm-target-x86-m16, exit 2026-11-27):
+    /// the clocks a load that widens (`movzx`) costs over the plain load. CGP's
+    /// `optimizeExt` moves an extension next to its load, as the pin does where
+    /// the extending load is legal; above 0 an extension in another block
+    /// stays there, the load narrow: the extension is made only where it is
+    /// read, not on every path through the load's block (grep m16 -O2: the
+    /// i486 `movzx` is 3 clocks against 1, and the hit test runs every
+    /// trip). 0: the pin.
+    pub ext_load_extra_clocks: i64,
     /// DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): at size an
     /// `add`/`sub`/`and`/`or`/`xor` whose immediate has several users keeps
     /// the table's immediate form, where the pin's `X86DAGToDAGISel::Select`
@@ -482,6 +490,10 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE SELOPT-C (`selectoptimize::SelectOptimizePass`): SelectOptimize runs
+    /// at -O2/-O3 with constant-arm selects included. false: the pin's, which
+    /// runs it nowhere.
+    pub branch_constant_arm_selects: bool,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -552,6 +564,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        libc_memcpy: false,
         pops_arguments_at_size: true,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
@@ -592,7 +605,6 @@ impl Tuning {
         rep_stos_at_size: false,
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
-        push_imm_at_size: false,
         merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
@@ -616,6 +628,7 @@ impl Tuning {
         merged_condition_clocks: 0,
         multiply_clocks: 0,
         loop_carried_clocks: 0,
+        ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
@@ -649,6 +662,7 @@ impl Tuning {
         unroll_prices_nest: false,
         phi_constant_chains: false,
         sink_select_arms: false,
+        branch_constant_arm_selects: false,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,

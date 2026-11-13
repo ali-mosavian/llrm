@@ -64,6 +64,13 @@ The file is `tools/dosbatch/corpus.py`'s: fetched once from the Silesia site (th
 to the OS layer under llrm and to `<io.h>` under the references; `bench.py` copies it beside the Borland builds. Open Watcom has no row:
 its `clibm.lib` cannot link `open` here (`__doserror_`).
 
+## File I/O: Nib's std.io against a twin's bench_io
+
+A Nib bench that reads or writes a DOS file holds std.io's open, create, read and write calls in its object. Its C twin defines `BENCH_IO_FUNCTIONS` before
+including `bench_io.h`, which makes the five calls functions of the twin's object, so every compiler's bytes include them and both sides are gross.
+`io_skeleton = true` in the bench.toml has each level build `io_skeleton/io_skeleton.nib` (those calls and nothing else) and the empty `startup/startup.nib`;
+the difference is `io_skeleton_bytes` on the Nib cells and an `IO-SKELETON` line, informational: nothing is subtracted, so growth of our own I/O code shows.
+
 ## Size
 
 `code_bytes`, `data_bytes` and `bss_bytes` of each program's own object, from `tools/sizes.py`: the OMF object

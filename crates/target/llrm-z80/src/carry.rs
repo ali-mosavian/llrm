@@ -244,13 +244,13 @@ fn recognised(
         // (the instruction that sets them again may read them first: `cp16c`)
         let (mut others, mut chained) = (false, None);
         for (at, i) in insts[cp + 1..].iter().enumerate() {
-            if i.reads_flags && cp + 1 + at != set {
+            if i.reads_flags() && cp + 1 + at != set {
                 match i.kind {
                     Kind::Op("CP16C" | "CP16Ci") => chained = Some(cp + 1 + at),
                     _ => others = true,
                 }
             }
-            if i.sets_flags {
+            if i.sets_flags() {
                 break;
             }
         }
@@ -282,7 +282,7 @@ fn recognised(
                 Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => true,
             });
             let calm = |i: &Inst| !i.may_store && !i.call && !i.side_effects && !i.terminator;
-            (at > low_out && loads && calm(made) && !made.sets_flags && !made.reads_flags && insts[low_out + 1..at].iter().all(calm))
+            (at > low_out && loads && calm(made) && !made.sets_flags() && !made.reads_flags() && insts[low_out + 1..at].iter().all(calm))
                 .then_some(at)
         };
         let chain = (|| {

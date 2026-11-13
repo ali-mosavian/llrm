@@ -274,9 +274,7 @@ fn plan_loop(
     let env_users = Env {
         safe_to_speculate: &safe_to_speculate,
         ephemeral: &is_ephemeral,
-        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
-        // wide loop grew tail_calls by 354 bytes.
-        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+        native_widths: tti.lsr_native_integer_widths(),
         use_list_order: tti.lsr_users_in_use_list_order(),
         phi_operand_uses: tti.lsr_phi_operand_uses(),
     };
@@ -432,14 +430,15 @@ fn plan_loop(
                     > total(pin_cost.c.insns, pin_cost.c.setup_cost)
         };
         // DEVIATE LG3, where bytes outrank clocks (-Os, -O1): the end-biased
-        // solution is kept only if the target's byte table prices it no
-        // larger than the pin's, and at -O1, where clocks are the other axis,
-        // with no more instructions in the loop (x_radix -O1: a compare saved
-        // for 37 B of bases and negations; x_reverse's two base+index
-        // accesses).
+        // solution is refused when the target's byte table prices it larger
+        // than the pin's. At -O1 clocks are the other axis: it stays when it
+        // saves loop instructions (x_radix -O1: a compare saved, 1578 clk
+        // for 37 B), and is refused when it adds any.
+        let bytes_larger = cost.size_bytes > pin_cost.size_bytes;
+        let saves_insns = cost.c.insns < pin_cost.c.insns;
         let bytes_outweigh_saving = bytes_strict
             && tti.lsr_size_model().is_some()
-            && (cost.size_bytes > pin_cost.size_bytes || (!size && cost.c.insns > pin_cost.c.insns));
+            && if size { bytes_larger } else { cost.c.insns > pin_cost.c.insns || (bytes_larger && !saves_insns) };
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving

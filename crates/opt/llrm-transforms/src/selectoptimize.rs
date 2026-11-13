@@ -96,6 +96,9 @@ pub struct Target<'a> {
     pub predictable_branch_threshold: BranchProbability,
     /// `TSI::getMispredictionPenalty`, the scheduling model's.
     pub misprediction_penalty: u64,
+    /// DEVIATE SELOPT-C: a select whose arms are both constants is select-like.
+    /// The pin's `shouldTreatInstructionLikeSelect` leaves it a select.
+    pub constant_arm_selects: bool,
 }
 
 impl<'a> Target<'a> {
@@ -111,6 +114,7 @@ impl<'a> Target<'a> {
             predictable_select_expensive: false,
             predictable_branch_threshold: BranchProbability::new(99, 100),
             misprediction_penalty: 10,
+            constant_arm_selects: false,
         }
     }
 }
@@ -301,13 +305,14 @@ fn treated_like_select(
     context: &Context,
     function: &Function,
     inst: InstId,
+    constant_arms: bool,
 ) -> bool {
     let instruction = function.instruction(inst);
     if instruction.opcode != Opcode::Select {
         return false;
     }
     let [_, on_true, on_false] = instruction.operands[..] else { return false };
-    if matches!(on_true, Operand::Constant(_)) && matches!(on_false, Operand::Constant(_)) {
+    if !constant_arms && matches!(on_true, Operand::Constant(_)) && matches!(on_false, Operand::Constant(_)) {
         return false;
     }
     let boolean = context.types.int_bits(instruction.ty) == Some(1);
@@ -545,7 +550,7 @@ impl Analysis<'_> {
                 collector.process(context, function, inst)
             };
             let Some(info) = info else { continue };
-            if info.auxiliary || !treated_like_select(context, function, inst) {
+            if info.auxiliary || !treated_like_select(context, function, inst, self.target.constant_arm_selects) {
                 continue;
             }
             let condition = info.condition;
@@ -1170,6 +1175,15 @@ pub fn select_optimize(
     {
         return false;
     }
+    // A group needs a `select` (`treated_like_select`): without one the
+    // dominators, loops and block frequencies below would be built for nothing.
+    let has_select = function
+        .layout()
+        .iter()
+        .any(|&block| function.iter_block(block).any(|inst| function.instruction(inst).opcode == Opcode::Select));
+    if !has_select {
+        return false;
+    }
     let (mut groups, mut frequencies) = {
         let function: &Function = function;
         let tree = DomTree::of(function);
@@ -1190,6 +1204,53 @@ pub fn select_optimize(
     };
     convert_profitable_groups(env, function, declared, &mut frequencies, &mut groups);
     !groups.is_empty()
+}
+
+/// `SelectOptimize` as a pipeline pass, where the target asks for it
+/// (`Tti::branches_constant_arm_selects`).
+///
+/// DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): the pin runs the pass in no
+/// `llc` (`-disable-select-optimize` defaults to true) and its
+/// `shouldTreatInstructionLikeSelect` leaves a select of two constants alone.
+/// bintree -O3: `insert`'s `t[3*at + (key < k ? 1 : 2)]` walk is a loop-carried
+/// load-address chain; the select becomes `setg; sub` on it (19.5k clk, as
+/// clang) where gcc keeps the branch (10.8k). Here the pass's own loop cost
+/// model decides, constant arms included: 9.95k.
+pub struct SelectOptimizePass;
+
+impl llrm_mir::passes::FunctionPass for SelectOptimizePass {
+    fn name(&self) -> &'static str {
+        "selectoptimize"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        use llrm_mir::passes::PreservedAnalyses;
+        let Some(tti) = analyses.outer().target().tti().filter(|tti| tti.branches_constant_arm_selects()) else {
+            return PreservedAnalyses::all();
+        };
+        let mut target = Target::base(&*tti);
+        // x86: out-of-order cores; the Sandy Bridge model's penalty.
+        target.predictable_select_expensive = true;
+        target.misprediction_penalty = 16;
+        target.constant_arm_selects = true;
+        let outer = analyses.outer().clone();
+        let env = Env {
+            context: &*unit.context,
+            globals: &outer.globals,
+            metadata: unit.metadata,
+            layout: unit.layout,
+            callees: outer.callees(),
+        };
+        if select_optimize(&env, &target, unit.declared, unit.function) {
+            PreservedAnalyses::none()
+        } else {
+            PreservedAnalyses::all()
+        }
+    }
 }
 
 #[cfg(test)]

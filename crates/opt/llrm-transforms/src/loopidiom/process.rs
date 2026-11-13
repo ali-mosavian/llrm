@@ -763,12 +763,14 @@ impl LoopIdiomRecognize {
         // that may read or write the memory region we're storing to. This
         // includes the load that feeds the stores. Check for an alias by
         // generating the base address and checking everything.
-        // DEVIATE: at -Os a copy whose length is known only at run time stays
-        // a loop when the `rep movs` that replaces it is more bytes (no libc
-        // `memcpy` to call). At speed, DEVIATE MEM-1 inlines the copy. Exit
-        // 2026-11-20.
+        // DEVIATE, only where the target has no libc `memcpy` to call
+        // (`Tuning::libc_memcpy` false): at -Os a copy whose length is known
+        // only at run time stays a loop when the `rep movs` that replaces it
+        // is more bytes. Where there is one the pin's rule stands. At speed,
+        // DEVIATE MEM-1 inlines the copy. Exit 2026-11-20.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
+            && !run.tti.is_some_and(|tti| tti.libc_memcpy())
         {
             let blocks = run.cur_loop.get_blocks();
             if !crate::loopidioms::variable_copy_pays(
