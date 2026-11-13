@@ -7,8 +7,17 @@ static long sys3(long n, long a, long b, long c)
     __asm__ volatile("trap #0" : "+d"(d0) : "d"(d1), "d"(d2), "d"(d3) : "memory");
     return d0;
 }
+#ifdef VIA_CALLS /* the call sites come from m68k_divmod64_calls.c, built by llrm-cc: they must reach the pair */
+uint64_t f_upair(uint64_t, uint64_t, uint64_t *);
+int64_t f_spair(int64_t, int64_t, int64_t *);
+#define UPAIR f_upair
+#define SPAIR f_spair
+#else
 uint64_t __udivmoddi4(uint64_t, uint64_t, uint64_t *);
 int64_t __divmoddi4(int64_t, int64_t, int64_t *);
+#define UPAIR __udivmoddi4
+#define SPAIR __divmoddi4
+#endif
 #define W(h, l) (((uint64_t)(h) << 32) | (l))
 int main(void)
 {
@@ -18,8 +27,8 @@ int main(void)
         volatile uint64_t vn = W(v[0], v[1]), vd = W(v[2], v[3]);
         uint64_t n = vn, d = vd, ur = 0xdeadbeefdeadbeefull;
         int64_t sr = 0x0123456789abcdefll;
-        uint64_t uq = __udivmoddi4(n, d, &ur);
-        int64_t sq = __divmoddi4((int64_t)n, (int64_t)d, &sr);
+        uint64_t uq = UPAIR(n, d, &ur);
+        int64_t sq = SPAIR((int64_t)n, (int64_t)d, &sr);
         bad += uq != W(v[4], v[5]) || ur != W(v[6], v[7]);
         bad += (uint64_t)sq != W(v[8], v[9]) || (uint64_t)sr != W(v[10], v[11]);
     }
