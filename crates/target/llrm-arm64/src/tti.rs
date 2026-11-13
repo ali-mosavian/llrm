@@ -436,7 +436,7 @@ fn vector_memory_op_cost(
 /// `mul` of `<2 x i64>` (14 in the pin: no `mul.2d`) and the integer divisions
 /// are not priced, so a loop that has one is not vectorized; `frem` of a vector
 /// (24 to 52 in the pin: libcalls) is not priced either.
-fn vector_arithmetic_cost(
+pub(crate) fn vector_arithmetic_cost(
     op: ArithOp,
     ty: VectorTy,
     kind: CostKind,
@@ -804,6 +804,16 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Option<Cost> {
         vector_arithmetic_cost(op, ty, kind)
+    }
+
+    fn vector_reduction_cost(
+        &self,
+        kind: llrm_mir::intrinsics::ReduceKind,
+        ty: VectorTy,
+        ordered: bool,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::reduction_cost(kind, ty, ordered, cost_kind)
     }
 
     fn vector_cast_cost(
