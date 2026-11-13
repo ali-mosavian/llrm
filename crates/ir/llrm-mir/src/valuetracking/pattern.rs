@@ -323,6 +323,9 @@ pub fn intrinsic_call<'a>(
     base: &str,
 ) -> Option<(InstId, &'a [Operand])> {
     let (inst, instruction) = q.instruction_of(v)?;
+    // `m_Intrinsic` is a `CallInst` match first: anything else answers before
+    // `base` is resolved to an id.
+    let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
     let args = &instruction.operands[..instruction.operands.len().checked_sub(1)?];
     let Some(name) = q.callee_name(inst) else {
         // A callee this run declared is not among the module's globals yet:

@@ -55,6 +55,7 @@ impl Builder<'_> {
             }
             Intrinsic::MemSetPattern => self.visit_memset_pattern(instruction),
             Intrinsic::FunnelShift { left } => self.visit_funnel_shift(instruction, *left),
+            Intrinsic::VectorReduce(kind) => self.visit_vector_reduce(instruction, *kind),
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
@@ -454,7 +455,19 @@ impl Builder<'_> {
             || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
     }
 
-    /// DEVIATE REP-MOVS-OS keeps `rep movs` for any size at `-Os`, but moves the widest block the copy is a whole
+    /// `-Oz` is `rep movsb` whatever the size; REP-MOVS-OS keeps a block narrower than a dword to the
+    /// target's limit (the pin's 128 bytes on m32), past which the call copies by dwords.
+    fn rep_movs_within_limit(
+        &self,
+        bytes: u64,
+        alignment: u64,
+    ) -> bool {
+        self.has_min_size()
+            || alignment >= 4
+            || self.target.tti.as_ref().is_none_or(|tti| bytes <= tti.0.rep_movs_at_size_max())
+    }
+
+    /// DEVIATE REP-MOVS-OS keeps `rep movs` up to the target's limit at `-Os`, and moves the widest block the copy is a whole
     /// number of and the pointers are aligned to (`emitConstantSizeRepmov`'s `AVT`, without a tail): the same
     /// bytes as `rep movsb`, a block of 4 bytes for the same 3 clocks. A block of 2 carries the operand-size
     /// prefix in 32-bit code, one byte that 1.5 clocks a byte copied pay back from `REP_WORD_MIN_BYTES`.
@@ -1346,7 +1359,9 @@ impl Builder<'_> {
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
                     (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
-                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.rep_movsb_copy() => {
+                    (None, Intrinsic::MemCpy, Some(bytes))
+                        if strings_exist && self.rep_movsb_copy() && self.rep_movs_within_limit(bytes, alignment) =>
+                    {
                         self.rep_movs(root, dst, other, bytes, dst_align.min(src_align), dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
@@ -1458,7 +1473,10 @@ impl Builder<'_> {
                         if strings_exist
                             && (self.has_min_size()
                                 || (opt_size
-                                    && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_at_size()))
+                                    && self.target.tti.as_ref().is_some_and(|tti| {
+                                        tti.0.rep_stos_at_size()
+                                            && (alignment >= 4 || bytes <= tti.0.rep_stos_at_size_max())
+                                    }))
                                 || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?

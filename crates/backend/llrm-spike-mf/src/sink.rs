@@ -112,6 +112,16 @@ pub(crate) fn flags_live_after(
     false
 }
 
+thread_local! {
+    static LIVENESS_WORDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The bit-set words the liveness solver has visited on this thread: a count
+/// of its work a test can bound without reading a clock.
+pub fn liveness_words() -> usize {
+    LIVENESS_WORDS.with(std::cell::Cell::get)
+}
+
 struct Sink<'a, T: Target> {
     function: &'a mut MFunction<T::Class>,
     cfg: Cfg,
@@ -406,6 +416,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         while changed {
             changed = false;
             for block in (0..blocks).rev() {
+                LIVENESS_WORDS.with(|work| work.set(work.get() + words));
                 for w in 0..words {
                     let mut out = handed[block * words + w];
                     for &succ in &self.cfg.succs[block] {

@@ -203,6 +203,22 @@ ORRv16i8                 binary   x/x,x         -                        fp_arit
 ORNv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                ORNv16i8
 EORv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                EORv16i8
 NOTv16i8                 unary    x/x           -                        fp_arith   - - - -/-                NOTv16i8
+ADDVv16i8v               unary    x/x           -                        fp_arith   - - - -/-                ADDVv16i8v
+ADDVv8i16v               unary    x/x           -                        fp_arith   - - - -/-                ADDVv8i16v
+ADDVv4i32v               unary    x/x           -                        fp_arith   - - - -/-                ADDVv4i32v
+SMAXVv16i8v              unary    x/x           -                        fp_arith   - - - -/-                SMAXVv16i8v
+SMAXVv8i16v              unary    x/x           -                        fp_arith   - - - -/-                SMAXVv8i16v
+SMAXVv4i32v              unary    x/x           -                        fp_arith   - - - -/-                SMAXVv4i32v
+SMINVv16i8v              unary    x/x           -                        fp_arith   - - - -/-                SMINVv16i8v
+SMINVv8i16v              unary    x/x           -                        fp_arith   - - - -/-                SMINVv8i16v
+SMINVv4i32v              unary    x/x           -                        fp_arith   - - - -/-                SMINVv4i32v
+UMAXVv16i8v              unary    x/x           -                        fp_arith   - - - -/-                UMAXVv16i8v
+UMAXVv8i16v              unary    x/x           -                        fp_arith   - - - -/-                UMAXVv8i16v
+UMAXVv4i32v              unary    x/x           -                        fp_arith   - - - -/-                UMAXVv4i32v
+UMINVv16i8v              unary    x/x           -                        fp_arith   - - - -/-                UMINVv16i8v
+UMINVv8i16v              unary    x/x           -                        fp_arith   - - - -/-                UMINVv8i16v
+UMINVv4i32v              unary    x/x           -                        fp_arith   - - - -/-                UMINVv4i32v
+ADDPv2i64p               unary    x/x           -                        fp_arith   - - - -/-                ADDPv2i64p
 # ---- vector float arithmetic
 FMLAv4f32                fmuladd x/x,x,x       -                        fp_arith   - - - -/-                FMLAv4f32
 FMLAv2f64                fmuladd x/x,x,x       -                        fp_arith   - - - -/-                FMLAv2f64

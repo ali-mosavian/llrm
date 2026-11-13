@@ -416,6 +416,9 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE OS-INLINE-GROWTH (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
+                            // Tuning. m64 -Os sfm16_float_* -39 B each, vla_callee_constant +8 B.
+                            inline_trial_defers_to_shared_growth: true,
                             // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             ipra_binds_local: true,
                             // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
@@ -431,6 +434,7 @@ impl llrm_target::Target for M64 {
                             load_pre_off_at_size: true,
                             merge_functions_at_size: true,
                             rep_movs_at_size: true,
+                            rep_movs_at_size_max: u64::MAX,
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
@@ -445,6 +449,7 @@ impl llrm_target::Target for M64 {
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            rep_stos_at_size_max: u64::MAX,
                             // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
                             // `Tuning::rep_stos_priced_unit`. gcc fills a frame object with `rep stosb`.
                             rep_stos_priced_unit: true,

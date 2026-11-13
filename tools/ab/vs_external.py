@@ -5,8 +5,9 @@ Both external columns take `external_flags.flags` (no distro defaults: canary, e
 flags, gcc in the spelling `gcc_program_flags` gives. A program that splits on the compiler, or that gcc cannot take the flags
 of, has no gcc column (0). Unreadable cells print EMPTY.
 
-An external .o that calls a libgcc helper (`__popcountdi2`, `__udivti3`) has the helper's code outside it: the row ends with
-`gcc_calls` and `clang_calls`, each `name:member_bytes,...` or `-`, and the cell is no bar until those bytes are added."""
+An external .o that calls a libgcc helper (`__popcountdi2`, `__udivti3`) has the helper's code outside it: the program links
+those bytes too, so they are added to that column (the bytes of a call are the bytes of the routine too, as m68k's
+`libcall_choice`). The row ends with `gcc_calls` and `clang_calls`, each `name:member_bytes,...` or `-`, saying what was added."""
 import os
 import subprocess
 import sys
@@ -76,6 +77,14 @@ def library_calls(obj: Path) -> str:
     return ",".join(f"{name}:{member_bytes(archive, helpers[name])}" for name in called) or "-"
 
 
+def charged(
+    size: int,
+    calls: str,
+) -> int:
+    """`size` plus the bytes of the helpers `calls` (`library_calls`) names: what the program that links them holds."""
+    return size + sum(int(part.rsplit(":", 1)[1]) for part in calls.split(",") if ":" in part)
+
+
 def one(job):
     dist, level, src = job
     text = Path(src).read_text()
@@ -95,6 +104,7 @@ def one(job):
             sizes[name] = object_bytes.object_bytes("x86_64-linux", out)[0]
             if name in calls:
                 calls[name] = library_calls(out)
+                sizes[name] = charged(sizes[name], calls[name])
     return f"{src}\t{level}\t{sizes['ours']}\t{sizes['gcc']}\t{sizes['clang']}\t{calls['gcc']}\t{calls['clang']}"
 
 

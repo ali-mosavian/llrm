@@ -350,6 +350,9 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorDupLane { rd, .. }) => {
                 wide.insert(Reg::Fpr(*rd));
             }
+            Op::I(Inst::VectorReduce { rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+            }
             Op::I(Inst::VectorBinary { rd, rn, rm, .. })
             | Op::I(Inst::VectorFpBinary { rd, rn, rm, .. })
             | Op::I(Inst::VectorFma { rd, rn, rm, .. })

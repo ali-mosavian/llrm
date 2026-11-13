@@ -56,6 +56,14 @@ pub struct CpuTable {
     /// phis differ in the preheader alone, are carried twice through the
     /// loop. Off: the pin's rule.
     pub share_congruent_phis: bool,
+    /// The branch of a select made into a diamond (`EmitLoweredSelect`) is
+    /// stated the odds its flags carry: an x86 `jp` after a float compare is
+    /// the unordered case, 1 in 2^20 as `BranchProbabilityInfo` has it for the
+    /// branch (DEVIATE UNORDERED-ODDS, owner x87, exit 2026-11-24; not at -Os).
+    /// The pin states none, so `MachineSink` reads 1 in 2 and keeps the NaN
+    /// constant in the hot predecessor (`SplitEdgeProbabilityThreshold`).
+    /// Off: the pin's rule.
+    pub unordered_branch_odds: bool,
     /// The pin's stand-alone `TailDuplicator` runs after allocation, once this
     /// target's A/B has been made (`TailDuplicate` slot). DEVIATE TD-M64 (owner
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
@@ -231,6 +239,7 @@ impl Timings {
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
+                    ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
                     ("scalars", "pool_data_strict") => table.pool_data_strict = number()? != 0,
                     ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,
