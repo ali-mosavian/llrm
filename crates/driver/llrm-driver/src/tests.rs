@@ -6100,3 +6100,36 @@ fn a_static_pointer_offset_past_64k_fills_the_whole_dword_of_a_32_bit_object() {
     assert!(has(74565i32.to_le_bytes()), "0x12345 as 45 23 01 00");
     assert!(has((-74565i32).to_le_bytes()), "-0x12345 as bb dc fe ff");
 }
+
+/// `bool f(void) { return !p(); }` stopped at `Legalize(Unsupported Xor i1
+/// "promote operand")` at every level: a call's `i1` result stayed at the
+/// register's type (`i8`), so `xor i1 %call, true` became an i8 xor with an i1
+/// constant. Also `p() ? 0 : -1`, `g = !p()` and a branch on `!p()`.
+#[test]
+fn a_call_returning_i1_can_be_inverted_selected_stored_and_branched_on_at_m32() {
+    let head = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @g = global i8 0\n\
+                declare zeroext i1 @p()\n";
+    let bodies = [
+        ("f", "define zeroext i1 @f() {\n  %1 = call zeroext i1 @p()\n  %2 = xor i1 %1, true\n  ret i1 %2\n}\n"),
+        ("h", "define i32 @h() {\n  %1 = call zeroext i1 @p()\n  %2 = select i1 %1, i32 0, i32 -1\n  ret i32 %2\n}\n"),
+        (
+            "s",
+            "define void @s() {\n  %1 = call zeroext i1 @p()\n  %2 = xor i1 %1, true\n  %3 = zext i1 %2 to i8\n  store i8 %3, ptr @g\n  ret void\n}\n",
+        ),
+        (
+            "b",
+            "define i32 @b() {\n  %1 = call zeroext i1 @p()\n  %2 = xor i1 %1, true\n  br i1 %2, label %t, label %e\nt:\n  ret i32 1\ne:\n  ret i32 2\n}\n",
+        ),
+    ];
+    for level in ["-O0", "-O2"] {
+        for (name, body) in bodies {
+            let text = format!("{head}{body}");
+            let (built, _) = compiled(&flags(&["-mabi=sysv", level, "--isel=dag"]), &text, name)
+                .unwrap_or_else(|error| panic!("{name} {level}: {error}"));
+            let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+            assert!(listing.contains("call"), "{name} {level}: {listing}");
+        }
+    }
+}
