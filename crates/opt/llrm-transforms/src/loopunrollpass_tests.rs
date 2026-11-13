@@ -1465,6 +1465,11 @@ fn sandy_bridge_throughput() -> llrm_mir::target::Throughput {
 /// about 20 on a core with the SandyBridge resources); with that core's throughput model, or without any;
 /// whether the loop is gone.
 fn fill_unrolled(throughput: bool, call: bool) -> bool {
+    fill_unrolled_at(throughput, call, 600)
+}
+
+/// `fill_unrolled` at `rate` milliclocks a byte.
+fn fill_unrolled_at(throughput: bool, call: bool, rate: i64) -> bool {
     let (callee, first, folded, stored) = if call {
         // Called twice, so not an inline candidate of the loop's own metrics (one live use is): the inliner decides it
         // once the copies make the argument a constant.
@@ -1510,8 +1515,15 @@ done:
 }}
 "
     ));
-    unroll_on_core(&mut module, throughput, !call, 2, 0, 600);
+    unroll_on_core(&mut module, throughput, !call, 2, 0, rate);
     !printed(&module).contains("%i = phi")
+}
+
+/// The control: a rate that no saving repays keeps the loop rolled where 600 unrolls it, so the rate is read at all.
+#[test]
+fn test_an_absurd_rate_keeps_a_loop_rolled_that_a_real_one_unrolls() {
+    assert!(fill_unrolled_at(false, false, 600), "premise: unrolled at 600");
+    assert!(!fill_unrolled_at(false, false, 1_000_000_000), "a billion milliclocks a byte repays nothing");
 }
 
 /// The unroll pass on `@f` of `module` for x86-64 at `rate` milliclocks a byte (the test's knob), with or without

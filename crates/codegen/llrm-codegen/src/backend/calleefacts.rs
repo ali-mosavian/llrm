@@ -358,7 +358,10 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
             None => found.extend(one.clobbers.iter().copied().map(root)),
         }
         let delivered: &[_] = if arrival { &[] } else { &one.delivers };
-        found.extend(one.requires.iter().chain(delivered).map(|(_, register)| root(*register)));
+        // A sibling call is a `jmp` that reads the registers it passes; what its callee writes is added by `record`.
+        let sibling = one.what.as_ref().is_some_and(|what| what.is_sibling_call());
+        let required: &[_] = if sibling { &[] } else { &one.requires };
+        found.extend(required.iter().chain(delivered).map(|(_, register)| root(*register)));
     }
     found
 }
