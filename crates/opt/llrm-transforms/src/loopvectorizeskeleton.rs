@@ -62,12 +62,57 @@ pub(crate) struct Shape {
     pub preheader: BlockId,
     /// The one block the loop leaves to.
     pub exit: BlockId,
-    /// The induction phi, stepping by one.
+    /// The induction phi, stepping by one (by minus one if `reverse`).
     pub primary: InstId,
     /// The exit test and the operand of it that is the loop-invariant bound.
     pub compare: InstId,
     pub bound_operand: usize,
     pub index_ty: TypeId,
+    /// The induction counts down.
+    pub reverse: bool,
+    /// The exit test reads the phi, before the step, not the stepped value
+    /// (`for (i = n; i >= 0; --i)` leaves when `i == 0`): [`stepped_exit_test`]
+    /// moves it.
+    pub tests_phi: bool,
+}
+
+/// The exit test of a loop that tests the phi, on the stepped value instead:
+/// `phi == bound` is `stepped == bound + step` (the loop leaves on the same
+/// iteration), the form the trip count and the vector loop's end are written
+/// for. The bound is folded where it is a constant, else made in the preheader.
+pub(crate) fn stepped_exit_test(
+    context: &mut Context,
+    function: &mut Function,
+    shape: Shape,
+    before_checks: Option<InstId>,
+) -> Shape {
+    if !shape.tests_phi {
+        return shape;
+    }
+    let Shape { header, preheader, primary, compare, bound_operand, index_ty, reverse, .. } = shape;
+    let bits = bits_of(context, index_ty);
+    let stepped = arms(function, primary).into_iter().find(|&(_, from)| from == header).expect("a back edge").0;
+    let bound = function.instruction(compare).operands[bound_operand];
+    let step: u128 = if reverse { mask(bits) } else { 1 };
+    let moved = match constant_int(context, bound) {
+        Some(value) => {
+            Operand::Constant(context.constant(Constant {
+                ty: index_ty,
+                kind: ConstantKind::Int(value.wrapping_add(step) & mask(bits)),
+            }))
+        }
+        None => {
+            let by = Operand::Constant(context.constant(Constant { ty: index_ty, kind: ConstantKind::Int(step) }));
+            // Before the memory checks, which move to their own block.
+            let before = Position::Before(
+                before_checks.unwrap_or_else(|| function.terminator(preheader).expect("a terminated preheader")),
+            );
+            emit(function, before, Opcode::Binary(BinaryOp::Add), index_ty, vec![bound, by], "bound.next")
+        }
+    };
+    function.set_operand(compare, bound_operand, moved);
+    function.set_operand(compare, 1 - bound_operand, stepped);
+    Shape { tests_phi: false, ..shape }
 }
 
 /// The memory checks, made at the end of the preheader: the first instruction
@@ -144,6 +189,17 @@ fn constant_int(
     }
 }
 
+/// The iterations between a constant `start` and the `bound` the stepped
+/// induction meets (the bound less the start, the start less the bound counting
+/// down), not yet masked to the type.
+fn iterations(
+    reverse: bool,
+    start: u128,
+    bound: u128,
+) -> u128 {
+    if reverse { start.wrapping_sub(bound) } else { bound.wrapping_sub(start) }
+}
+
 fn mask(bits: u32) -> u128 {
     if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 }
 }
@@ -203,7 +259,8 @@ pub(crate) fn add_remainder(
     with_middle: bool,
     memory: Option<MemChecks>,
 ) -> Option<Skeleton> {
-    let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty } = shape;
+    let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, .. } = shape;
+    debug_assert!(!shape.tests_phi, "the exit test is on the stepped value");
     let bits = bits_of(context, index_ty);
     let preheader_term = function.terminator(preheader).expect("a terminated preheader");
     let void = function.instruction(preheader_term).ty;
@@ -213,7 +270,7 @@ pub(crate) fn add_remainder(
     let bound = function.instruction(compare).operands[bound_operand];
     let (start_value, bound_value) = (constant_int(context, start), constant_int(context, bound));
     if let (Some(start_value), Some(bound_value)) = (start_value, bound_value)
-        && (bound_value.wrapping_sub(start_value) & mask(bits)) < u128::from(vf_ic)
+        && (iterations(reverse, start_value, bound_value) & mask(bits)) < u128::from(vf_ic)
     {
         return None;
     }
@@ -263,8 +320,9 @@ pub(crate) fn add_remainder(
         && memory.is_none()
     {
         // Both ends known: the checks fold (the pin's constant folder).
-        let trip = bound_value.wrapping_sub(start_value) & mask(bits);
-        let end = constant(context, start_value + (trip - trip % u128::from(vf_ic)));
+        let trip = iterations(reverse, start_value, bound_value) & mask(bits);
+        let moved = trip - trip % u128::from(vf_ic);
+        let end = constant(context, if reverse { start_value.wrapping_sub(moved) } else { start_value + moved });
         function.set_operand(compare, bound_operand, end);
         let from = if with_middle {
             // The reductions are combined between the loop and its remainder.
@@ -285,8 +343,11 @@ pub(crate) fn add_remainder(
         let bool_ty = context.types.intern(Type::Int(1));
         // The iteration check comes before the memory checks.
         let before = Position::Before(memory.map_or(preheader_term, |checks| checks.first));
-        // n = bound - start, the iterations of the loop.
-        let trip = if start_value == Some(0) {
+        // n = bound - start (start - bound counting down), the iterations of
+        // the loop.
+        let trip = if reverse {
+            emit(function, before, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, bound], "n.trip")
+        } else if start_value == Some(0) {
             bound
         } else {
             emit(function, before, Opcode::Binary(BinaryOp::Sub), index_ty, vec![bound, start], "n.trip")
@@ -316,7 +377,9 @@ pub(crate) fn add_remainder(
             emit(function, at_vector, Opcode::Binary(BinaryOp::And), index_ty, vec![trip, lane_mask], "n.mod.vf");
         let vector_trip =
             emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![trip, remainder_lanes], "n.vec");
-        let end = if start_value == Some(0) {
+        let end = if reverse {
+            emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, vector_trip], "ind.end")
+        } else if start_value == Some(0) {
             vector_trip
         } else {
             emit(function, at_vector, Opcode::Binary(BinaryOp::Add), index_ty, vec![start, vector_trip], "ind.end")

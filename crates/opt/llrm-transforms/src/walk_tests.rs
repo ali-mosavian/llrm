@@ -3204,14 +3204,26 @@ b1:
     assert_eq!(three, one, "the callee goes once");
 }
 
+/// m68k qmove -O1: the count said 21 against 23 for `pl_ground_accel` into `bench_qmove` (an external callee that
+/// stays), the byte model +213 B; the trial kept the copy and the object grew 126 B. sfm16_dbg: -5 B by the model,
+/// +18 B built.
+#[test]
+fn test_an_o1_trial_that_does_not_shrink_the_caller_by_an_eighth_is_refused() {
+    assert!(!super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, true));
+    assert!(!super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, -4, 0, 600, true), "a shrink within the model's error is refused");
+    assert!(!super::trial_accepted(true, false, true, false, false, 17, 17, 0, 0, 0, 0, 600, true), "a tie at 0 B gains nothing at -O1");
+    assert!(super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, -80, 0, 600, true), "a shrink of an eighth of the caller stays");
+    assert!(super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, false), "-Os keeps the count's verdict");
+}
+
 /// m68k sfm16_float -Os: five calls to `canon`, 60 instructions against 57 and a credit of 4, so the count accepted the
 /// copies; the byte estimate said +28 B (built +28). A callee that goes with its last calls must not grow the bytes.
 #[test]
 fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it() {
-    assert!(!super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, 28, 0, 756));
-    assert!(super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, -4, 0, 756), "a copy that shrinks the code stays");
-    assert!(super::trial_accepted(false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756), "off the gate's targets the count decides");
-    assert!(super::trial_accepted(true, false, true, false, false, 57, 57, 4, 0, 12, 0, 756), "copies no larger than the caller are decided by the count");
+    assert!(!super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false));
+    assert!(super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, -4, 0, 756, false), "a copy that shrinks the code stays");
+    assert!(super::trial_accepted(false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false), "off the gate's targets the count decides");
+    assert!(super::trial_accepted(true, false, true, false, false, 57, 57, 4, 0, 12, 0, 756, false), "copies no larger than the caller are decided by the count");
 }
 
 /// z80 frame_address_stack_args -O2: `kernel` (external, so it stays) copied into `line` saved 123 clocks and 63 B, and
@@ -3219,17 +3231,17 @@ fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it(
 /// and the clocks stays; one that grows it without a callee going is still refused (jpeg `decode`, +441k instructions).
 #[test]
 fn test_a_priced_trial_that_shrinks_the_module_stays_without_a_dying_callee() {
-    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756));
-    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, 10, 3000, 756));
-    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756), "no clocks saved, no copy");
+    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, 10, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756, false), "no clocks saved, no copy");
 }
 
 /// arm64 -O3 jpeg: a priced trial kept copies that left the module no larger without a callee
 /// going, 5,828 -> 7,324 B and +1.2M instructions. Only a target that asks keeps them.
 #[test]
 fn test_a_shrinking_copy_without_a_dying_callee_stays_only_where_the_target_asks() {
-    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756));
-    assert!(!super::trial_accepted(true, false, false, true, false, 72, 79, 0, 123, -63, 3000, 756));
+    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, false, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
 }
 
 /// Whether `self_calls` takes `name` of `text` as a tree recursion.
@@ -3541,18 +3553,18 @@ b0:
 /// (78 against 62 + 13 for the callee) while a byte model said the copies shrink the module.
 #[test]
 fn a_trial_decided_by_bytes_keeps_the_copies_that_shrink_the_module() {
-    assert!(super::trial_accepted(false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400), "smaller: kept whatever the units say");
-    assert!(!super::trial_accepted(false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400), "larger: refused whatever the units say");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400), "no gain: refused");
+    assert!(super::trial_accepted(false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400, false), "smaller: kept whatever the units say");
+    assert!(!super::trial_accepted(false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400, false), "larger: refused whatever the units say");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "no gain: refused");
 }
 
 /// Two Os trials that tie to the byte were both refused, whatever the copies save: a tied pair is
 /// decided by the clocks, and a tie that saves none stays as written. Bytes never lose to clocks.
 #[test]
 fn a_trial_whose_bytes_tie_is_decided_by_the_clocks_it_saves() {
-    assert!(super::trial_accepted(false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400), "tied, faster: kept");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400), "tied, no faster: refused");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400), "larger by a byte: refused however fast");
+    assert!(super::trial_accepted(false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400, false), "tied, faster: kept");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "tied, no faster: refused");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400, false), "larger by a byte: refused however fast");
 }
 
 /// DEVIATE INL-SPEED-OS: jpeg_fixed -Os `receive` and `extend` (two sites each, 200,699 runs a call, +1 and -1 bytes):

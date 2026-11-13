@@ -874,7 +874,7 @@ impl ProgramPass for Walk {
                                         .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
                                         .collect(),
                                 });
-                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes);
+                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes, size == crate::inlinecost::CallerSize::Speed);
                                 let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
@@ -1757,6 +1757,7 @@ fn trial_accepted(
     growth: i64,
     rate: i64,
     kept_bytes: i64,
+    strict: bool,
 ) -> bool {
     if priced {
         // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
@@ -1767,7 +1768,16 @@ fn trial_accepted(
         // Bytes decide; clocks only where they tie exactly.
         return growth < 0 || (growth == 0 && saved > 0);
     }
-    (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
+    // -O1 is strict per axis: bytes decide, and the model's error is a few bytes a copy, so only a shrink of an
+    // eighth of the caller stays (switch_peeled_table: 17 against 17 and 0 B, built +44; sfm16_dbg: -5 B, built +18).
+    let counted = if byte_gate && strict {
+        -growth * 8 >= kept_bytes
+    } else if byte_gate {
+        tried <= best || (tried <= best + credit && growth <= 0)
+    } else {
+        tried <= best + credit
+    };
+    counted
         || (saved > 0 && growth * rate <= saved * 1000)
         || (rate == 0 && credit == 0 && -growth * 8 >= kept_bytes)
 }
