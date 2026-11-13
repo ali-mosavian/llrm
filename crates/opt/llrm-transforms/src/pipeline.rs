@@ -1889,7 +1889,11 @@ pub fn recorded(
     // CodeGenPrepare's sinking: compares, masks, address phis and the address
     // arithmetic of a block's accesses, made in the block that uses them.
     if applied.options.wanted("cgpaddr") {
-        manager.add(cgpaddr::CgpAddr);
+        if applied.options.prefers_size() || applied.options.at_o1() {
+            manager.add(cgpaddr::CgpAddrBytesStrict);
+        } else {
+            manager.add(cgpaddr::CgpAddr);
+        }
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
     if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {

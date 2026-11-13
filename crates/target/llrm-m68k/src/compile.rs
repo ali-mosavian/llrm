@@ -735,7 +735,7 @@ fn items_once(
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
-    // call the counts and shifts
+    // call the counts; their variable shifts are chosen like the 68020's
     let libcalls = if wants_size {
         let mut kinds =
             crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)));
