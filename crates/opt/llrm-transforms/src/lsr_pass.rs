@@ -437,7 +437,7 @@ fn plan_loop(
         let bytes_larger = cost.size_bytes > pin_cost.size_bytes;
         let saves_insns = cost.c.insns < pin_cost.c.insns;
         let bytes_outweigh_saving = bytes_strict
-            && tti.lsr_size_model().is_some()
+            && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
             && if size { bytes_larger } else { cost.c.insns > pin_cost.c.insns || (bytes_larger && !saves_insns) };
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
