@@ -1392,6 +1392,7 @@ fn staged(
     if let Some((push, _)) = registers.slot_scratch.filter(|_| !pop_order.is_empty()) {
         // No dead register: the pin's `emitSPUpdate` adjusts with `add`.
         registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
+        registers.slot_dead_checked = entry.is_some_and(|one| one.frame_slot_sibling);
     }
     registers.align = target.facts.stack_alignment(target.arch, name);
     registers.object_align = target.facts.object_alignment(target.arch, name);

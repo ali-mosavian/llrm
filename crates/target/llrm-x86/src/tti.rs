@@ -938,6 +938,10 @@ impl Tti for X86 {
         self.tuning.speed_inline_rate_at_o1
     }
 
+    fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
+        self.tuning.rotate_exiting_latch_when_guard_folds
+    }
+
     fn inline_trials_at_o1(&self) -> bool {
         self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
