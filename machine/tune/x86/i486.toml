@@ -83,6 +83,11 @@ smul_max_w2 = 26
 smul_min_w4 = 13
 smul_max_w4 = 42
 smul_negative_bits = 5
+# Which operand of a two- or three-operand IMUL the early-out reads (note 3's "multiplier"): 0 the destination register's
+# value, 1 the source (the immediate of the three-operand form, else the r/m), 2 the cheaper of the two. [U: Intel 240440-002
+# Table 10.1 names a multiplier only for the one-operand forms, p. 134; the 80386 reference's `multiplicand * multiplier`
+# with a memory multiplier costing three more puts it in the r/m, and gcc's i486 mult_bit prices the constant]
+smul_multiplier = 1
 sdiv_w2 = 27
 sdiv_w4 = 43
 udiv_w2 = 24
