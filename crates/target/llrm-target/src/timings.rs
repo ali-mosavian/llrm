@@ -69,6 +69,9 @@ pub struct CpuTable {
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
     /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
     pub post_ra_tail_duplicate: bool,
+    /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard and no three-block minimum
+    /// (T14 and D1 of jumps-tailmerge-check.md lifted). Off: the guards stand.
+    pub tail_merge_pin_faithful: bool,
     /// Runs of equal literal stores outside loops share a register at -O2/-O3 too, where
     /// the bytes outweigh the clock of loading it (DEVIATE ISS1, owner
     /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
@@ -239,6 +242,7 @@ impl Timings {
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
+                    ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
                     ("scalars", "pool_data_strict") => table.pool_data_strict = number()? != 0,
