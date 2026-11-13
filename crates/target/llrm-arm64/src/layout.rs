@@ -734,20 +734,40 @@ pub fn fold(
     // block forwarding can make one) keeps the layout order, as frequencies
     // need an entry that is no loop header. Exit: 11-12.
     let mut likelihood: HashMap<(String, String), u32> = HashMap::default();
+    let mut copies: Option<Vec<(usize, Vec<usize>)>> = None;
     let placed: Vec<usize> = if edges.iter().any(|next| next.contains(&0)) {
         reachable.clone()
     } else {
         let cfg = Cfg::from_successors(edges.clone());
         let graph = Graph::from_cfg(&cfg, &ids, vec![false; ids.len()], &odds, optsize);
+        let mut shares: HashMap<(usize, usize), u32> = HashMap::default();
         for (from, next) in edges.iter().enumerate() {
             for &to in next {
+                shares.insert((from, to), graph.probability(from, to).get_numerator());
                 likelihood.insert(
                     (blocks[reachable[from]].label.clone(), blocks[reachable[to]].label.clone()),
                     graph.probability(from, to).get_numerator(),
                 );
             }
         }
-        let pinned = place(&graph);
+        // DEVIATE (dev switch, removed before ready): LLRM_ARM64_PLACER=lir0 places on the shared placer with
+        // tail duplication off, `lir` with it on.
+        let pinned = match std::env::var("LLRM_ARM64_PLACER").as_deref() {
+            Ok(mode @ ("lir0" | "lir")) => {
+                let dense_of: HashMap<&str, usize> =
+                    reachable.iter().enumerate().map(|(new, &old)| (blocks[old].label.as_str(), new)).collect();
+                let kept: Vec<&Lowered> = reachable.iter().map(|&old| &blocks[old]).collect();
+                let dup = if mode == "lir0" { Some(0) } else { None };
+                let placed = crate::lir_place::order(&kept, &edges, &shares, &dense_of, optsize, dup);
+                let lens: Vec<usize> = kept.iter().map(|block| block.insts.len()).collect();
+                let starts: Vec<usize> = lens.iter().scan(0, |at, &len| { let start = *at; *at += len; Some(start) }).collect();
+                if placed.copied(&starts, &lens) {
+                    copies = Some(placed.blocks.clone());
+                }
+                placed.order()
+            }
+            _ => place(&graph),
+        };
         // DEVIATE: the old first-successor chain is kept where placement
         // executes more jumps by the same frequencies; the pin's
         // placement ignores that cost (quicksort's swap path gains a
@@ -809,11 +829,33 @@ pub fn fold(
             }
             placed
         };
-        let order = if jumps(&pinned) <= jumps(&identity) { pinned } else { identity };
+        // The comparison reads the blocks as they were: not meaningful once placement copied one.
+        let order = if copies.is_some() || jumps(&pinned) <= jumps(&identity) {
+            pinned
+        } else {
+            copies = None;
+            identity
+        };
         order.into_iter().map(|new| reachable[new]).collect()
     };
-    let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();
-    let mut ordered: Vec<Lowered> = placed.into_iter().map(|at| taken[at].take().expect("placed once")).collect();
+    let mut ordered: Vec<Lowered> = if let Some(list) = copies {
+        // The blocks the shared placer made: each instruction by the number
+        // `lir_place` gave it, over the reachable blocks in order.
+        let flat: Vec<(&Inst, Option<(u32, u32)>)> = reachable
+            .iter()
+            .flat_map(|&old| blocks[old].insts.iter().zip(blocks[old].locs.iter().copied()))
+            .collect();
+        list.into_iter()
+            .map(|(at, numbers)| Lowered {
+                label: blocks[reachable[at]].label.clone(),
+                insts: numbers.iter().map(|&k| flat[k].0.clone()).collect(),
+                locs: numbers.iter().map(|&k| flat[k].1).collect(),
+            })
+            .collect()
+    } else {
+        let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();
+        placed.into_iter().map(|at| taken[at].take().expect("placed once")).collect()
+    };
     // The pin copies in layout order (`TailDuplicator`, then
     // `MachineCopyPropagation`): a jump to the block next to it stays a
     // fall-through.
