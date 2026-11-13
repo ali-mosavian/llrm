@@ -64,6 +64,21 @@ pub struct Mos6502 {
 }
 
 impl Mos6502 {
+    /// DEVIATE LSR-MUL-BYTES (owner llrm-target-6502, exit 2026-11-24): the
+    /// bytes of the two terms the size model does not price. A multiply is the
+    /// call and its argument cells (`jsr`, two `sta`, two `lda`); the linked
+    /// routine is not counted yet (plan: the member's size, shared by the
+    /// loop's uses). An immediate is one byte-wide add of it (`lda; adc #;
+    /// sta`).
+    fn lsr_byte_weights() -> (u32, u32) {
+        let bytes = |mnemonic: &str, operand: &str| {
+            crate::timing::instruction(crate::dagisel::hooks::Cpu::Mos6502, mnemonic, operand)
+                .map_or(0, |cost| cost.bytes)
+        };
+        let (load, store) = (bytes("lda", "rc2"), bytes("sta", "rc2"));
+        (bytes("jsr", "__mulhi3") + 2 * (load + store), load + bytes("adc", "#0") + store)
+    }
+
     pub fn new() -> Mos6502 {
         let layout = DataLayout::parse(&Mos.layout().datalayout).expect("the 6502's datalayout parses");
         Mos6502 {
@@ -267,6 +282,19 @@ impl Tti for Mos6502 {
         a: &LsrCost,
         b: &LsrCost,
     ) -> bool {
+        // Where the model counted bytes (-Os): the bytes of the steps, setups,
+        // displacements and base adds it priced, and what it does not
+        // price (see `lsr_byte_weights`).
+        if a.size_bytes != 0 || b.size_bytes != 0 {
+            let (mul, imm) = Self::lsr_byte_weights();
+            let key = |c: &LsrCost| {
+                let bytes = u64::from(c.size_bytes)
+                    + u64::from(mul) * u64::from(c.num_iv_muls)
+                    + u64::from(imm) * u64::from(c.imm_cost);
+                (bytes, c.num_regs, c.scale_cost, c.setup_cost)
+            };
+            return key(a) < key(b);
+        }
         let key = |c: &LsrCost| {
             // u64: a rejected formula carries `u32::MAX` terms.
             let work = 3 * u64::from(c.add_rec_cost)
@@ -305,6 +333,7 @@ impl Tti for Mos6502 {
             iv_step: OpCost::bytes(step),
             setup: OpCost::bytes(setup),
             setup_cap: 4,
+            target_orders: true,
             step_per_byte: step_more,
             setup_per_byte: setup,
         })

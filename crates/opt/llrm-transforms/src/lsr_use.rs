@@ -542,6 +542,7 @@ impl Cost {
             setup_cost: u32::MAX,
             scale_cost: u32::MAX,
             spills: u32::MAX,
+            size_bytes: u32::MAX,
         };
     }
 
@@ -583,7 +584,8 @@ impl Cost {
         // the registers an address holds come next: LLVM's `NumRegs` comes
         // before the rest in `isLess`, and an address register is the scarcer
         // one there (DEVIATE LU8).
-        if (self.size || other.size) && tti.lsr_size_model().is_some() {
+        let model = tti.lsr_size_model();
+        if (self.size || other.size) && model.is_some_and(|m| !m.target_orders) {
             let restricted = tti.address_registers() < tti.number_of_gpr_registers();
             let key = |x: &Cost| {
                 let c = &x.c;
@@ -601,6 +603,10 @@ impl Cost {
                 )
             };
             return key(self) < key(other);
+        }
+        if model.is_some_and(|m| m.target_orders) {
+            let counted = |x: &Cost| LsrCost { size_bytes: if x.is_loser() { u32::MAX } else { x.size_bytes }, ..x.c };
+            return tti.is_lsr_cost_less(&counted(self), &counted(other));
         }
         tti.is_lsr_cost_less(&self.c, &other.c)
     }

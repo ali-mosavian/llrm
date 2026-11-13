@@ -333,6 +333,11 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// The target orders the formulae itself ([`Tti::is_lsr_cost_less`], the
+    /// pin's hook), reading the bytes this table counted in
+    /// [`LsrCost::size_bytes`], not the shared key (instructions, registers,
+    /// bytes, ...). x86: false.
+    pub target_orders: bool,
     /// Bytes `iv_step` grows by for each byte of the register's width past
     /// the first: a target with no wide registers (x86) has 0.
     pub step_per_byte: u32,
@@ -352,6 +357,7 @@ impl LsrSizeModel {
         iv_step: OpCost::bytes(3),
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        target_orders: false,
         step_per_byte: 0,
         setup_per_byte: 0,
     };
@@ -420,6 +426,10 @@ pub struct LsrCost {
     /// DEVIATE LU13: frame words a trip reloads or stores for the registers
     /// kept across a call that clobbers them (0 unless the target says so).
     pub spills: u32,
+    /// DEVIATE LSR-SIZE: the bytes of the formulae's code by the target's
+    /// [`LsrSizeModel`], filled in for [`Tti::is_lsr_cost_less`] when the
+    /// model leaves the order to the target; 0 where bytes are not counted.
+    pub size_bytes: u32,
 }
 
 /// `TTI::MemIndexedMode`.
@@ -3232,6 +3242,7 @@ mod size_model_tests {
         iv_step: OpCost::bytes(6),
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        target_orders: false,
         step_per_byte: 8,
         setup_per_byte: 9,
     };
