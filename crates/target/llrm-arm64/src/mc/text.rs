@@ -380,6 +380,27 @@ impl fmt::Display for Inst {
                 write!(out, "{name} v{}.{suffix}, v{}.{suffix}, #{amount}", rd.0, rn.0)
             }
             Inst::VectorNot { rd, rn } => write!(out, "mvn v{}.16b, v{}.16b", rd.0, rn.0),
+            Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorFma { op, lanes, rd, rn, rm } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorDupLane { lanes, rd, rn, index } => {
+                let lane = match lanes {
+                    Arrangement::B16 => "b",
+                    Arrangement::H8 => "h",
+                    Arrangement::S4 => "s",
+                    Arrangement::D2 => "d",
+                };
+                write!(out, "dup v{}.{}, v{}.{lane}[{index}]", rd.0, lanes.suffix(), rn.0)
+            }
+            Inst::VectorFpUnary { op, lanes, rd, rn } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
+            }
             Inst::FpBinary { op, size, rd, rn, rm } => {
                 let name = ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul"][*op as usize];
                 write!(out, "{name} {}, {}, {}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))

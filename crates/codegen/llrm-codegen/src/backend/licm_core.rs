@@ -301,6 +301,8 @@ pub fn hoist<I: Inst, P: Policy<I>>(
         let every_trip = |at: i64| at == lp.header || exiting.iter().all(|&out| dominance.dominates(at, out));
         let mut hoisted_values: HashSet<u32> = HashSet::default();
         let mut moved: Vec<I> = Vec::new();
+        // A hoist `EliminateCSE` folded into the preheader's copy moves nothing, and still edits the loop.
+        let mut folded = false;
         policy.begin(&Facts {
             inside: &inside,
             blocks: &blocks,
@@ -346,6 +348,7 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                         };
                         match there.or_else(|| moved.iter().find(same)) {
                             Some(before) => {
+                                folded = true;
                                 renames.extend(one.defines().iter().copied().zip(before.defines().iter().copied()));
                             }
                             None => moved.push(one.clone()),
@@ -405,6 +408,7 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             }
         }
         if moved.is_empty() {
+            changed |= folded;
             continue;
         }
         changed = true;
