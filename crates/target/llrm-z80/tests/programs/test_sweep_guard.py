@@ -221,3 +221,37 @@ class SweepInstrument(unittest.TestCase):
                 with self.assertRaises(sweep.Void):
                     sweep.sdcc_cell(source, Path(work), "sdcc-x", [], ctx, [])
         self.assertEqual(seen, [3600])
+
+
+class LibraryChecks(unittest.TestCase):
+    def test_a_failing_library_script_fails_the_sweep_and_is_named(self):
+        """f64 divide gave 3.0/1.0 = 4 for a day (2026-11-13): tests/z80/f64_div_clk.sh failed, and no runner ran it."""
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (("good.sh", "exit 0"), ("bad.sh", "echo 'f64 div: xor differs'; exit 1")):
+                Path(d, name).write_text(body)
+            failed = guard.failed_library_checks(d, "llc", checks=("good.sh", "bad.sh"))
+        self.assertEqual(failed, {"bad.sh": "f64 div: xor differs"})
+
+    def test_the_run_checks_are_the_three_scripts_that_hid_it(self):
+        self.assertEqual([Path(s).name for s in guard.LIBRARY_CHECKS], ["f64_div_clk.sh", "f64_mul_clk.sh", "mul64_check.sh", "z80_f64_split_test.sh"])
+
+
+class GccColumn(unittest.TestCase):
+    def test_a_program_without_an_sdcc_bar_gets_the_forks_cell_as_its_bar(self):
+        """36 programs had no SDCC row (error 101, wrong value, 32-bit double): 15 of them build and pass under the gcc-z80 fork and
+        read 'no bar' in the sweep's .nobar list, outside the counted cells."""
+        rows = guard.add_gcc_row([("ours", 1570, 18827)], (1779, 602269), None)
+        self.assertEqual(rows, [("ours", 1570, 18827), ("gcc", 1779, 602269)])
+        self.assertTrue(guard.has_bar(rows))
+        self.assertFalse(guard.has_bar([("ours", 1570, 18827)]))
+
+    def test_a_program_the_fork_computes_differently_gets_no_gcc_row(self):
+        """float_in_memory_loop passes under the fork with a 32-bit double: a bar of 298 B against our 64-bit program."""
+        rows = [("ours", 4000, 90000)]
+        self.assertEqual(guard.add_gcc_row(rows, (298, 63476), "double is 32 bits"), rows)
+
+    def test_the_gcc_column_reads_only_its_own_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "gcc.tsv"
+            path.write_text("builtin_expect\tgcc\t45\t776\nother\tsdcc-size\t1\t2\n")
+            self.assertEqual(guard.read_gcc_column(path), {"builtin_expect": (45, 776)})

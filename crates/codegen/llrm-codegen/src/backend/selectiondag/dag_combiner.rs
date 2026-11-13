@@ -340,6 +340,17 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TLI.isZExtFree(from, to)` (the `EVT` form): widening an integer
+    /// without a sign needs no instruction. The pin's default is false; x86-64
+    /// and AArch64 say yes for `i32` to `i64`.
+    fn is_zext_free(
+        &self,
+        _from: EVT,
+        _to: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `TargetLowering::shouldTransformSignedTruncationCheck`: `(add x,
     /// 1<<(k-1)) u< 1<<k` is `sext_inreg x, k == x`. The pin's default is
     /// false. Default false until x86 is judged.
@@ -1111,7 +1122,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
                 .fold_extend_of_cast(node)
                 .or_else(|| self.visit_extend(node))
-                .or_else(|| self.sext_of_non_negative(node)),
+                .or_else(|| self.sext_of_non_negative(node))
+                .or_else(|| self.zext_nneg_of_existing_sext(node)),
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
@@ -2074,6 +2086,34 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let folded = self.dag.get_node(op, vt, &[n0]);
             return (folded != node).then_some(folded);
         }
+        // `zext (and (trunc x), cst)` and `aext (and (trunc x), cst)` are
+        // `and x, cst` when a cast is not free
+        // ([L16515](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16515),
+        // [L16798](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16798)):
+        // the constant is zero-extended, not sign-extended, so a mask a
+        // later fold would widen stays the width it was.
+        if matches!(op, ISD::AnyExtend | ISD::ZeroExtend)
+            && self.dag.opcode(n0) == ISD::And
+            && let Some(constant) = self.dag.constant(self.dag.operand(n0, 1))
+            && self.dag.opcode(self.dag.operand(n0, 0)) == ISD::Truncate
+        {
+            let x = self.dag.operand(self.dag.operand(n0, 0), 0);
+            let narrow = self.dag.value_type(n0);
+            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
+            // isZExtFree(narrow, wide)`) `ShrinkDemandedOp` makes the narrow form
+            // this fold would undo, and the two would run in turn forever.
+            let narrows_free = self.hooks.free_narrowing(vt, narrow);
+            let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
+            let zext_free = self.hooks.is_zext_free(narrow, vt);
+            let sext_cheaper = self.tli.is_some_and(|tli| tli.is_sext_cheaper_than_zext(narrow, vt));
+            let fires = !narrows_free
+                && (!truncate_free || if op == ISD::ZeroExtend { !zext_free } else { !zext_free && !sext_cheaper });
+            if fires {
+                let wide = self.any_ext_or_trunc(x, vt);
+                let mask = self.dag.get_constant(constant & super::fold::mask(narrow.size_in_bits()), vt);
+                return Some(self.dag.get_node(ISD::And, vt, &[wide, mask]));
+            }
+        }
         let inner = self.dag.opcode(n0);
         if !matches!(
             inner,
@@ -2131,6 +2171,29 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// The closing arm of `visitZERO_EXTEND` ([L16730][pin]): `(zext nneg x)`
+    /// is the `(sext x)` that already exists, if the zext is not free: one
+    /// extension serves both, where two left a mask beside a `load16_s`.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16730
+    fn zext_nneg_of_existing_sext(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::ZeroExtend
+            || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+        {
+            return None;
+        }
+        let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
+        if self.hooks.is_zext_free(self.dag.value_type(n0), vt) {
+            return None;
+        }
+        let existing = self.dag.get_node_if_exists(ISD::SignExtend, &[vt], &[n0])?;
+        Some(SDValue { node: existing, res: 0 })
     }
 
     /// `visitSIGN_EXTEND` ([L16279][pin]): `(sext x)` is `(zext nneg x)` if the

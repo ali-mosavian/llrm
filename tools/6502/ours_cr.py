@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 HERE = Path(__file__).resolve().parent
 # OURS_CPU=65c02: the 65C02 target and cc65 target
 CPU = os.environ.get("OURS_CPU", "6502")
+# the flag verifier (`flagcheck`): a compile where a flag is cleared before its reader fails, not runs wrong
+os.environ.setdefault("LLRM_6502_CHECK_FLAGS", "1")
 SIM = "sim" + CPU
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
 OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)
@@ -245,7 +247,7 @@ def one(job):
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
     WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
-    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    import atexit, signal; signal.signal(signal.SIGTERM, lambda *_: sys.exit(143)); atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
     BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]

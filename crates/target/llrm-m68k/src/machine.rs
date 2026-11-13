@@ -445,11 +445,28 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the CPU has no 32-bit divide
+    /// instruction (68000, 68010) the divide is a libcall, and `divu.w` (16 bits) is one instruction.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        let has_long_divide = self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020);
+        (!has_long_divide).then_some(16)
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL (owner m68k, exit 2026-11-24): the unrolled size
     /// up to which a loop the -Os threshold refused is unrolled on trial; the
     /// driver keeps it where the finished functions are smaller (as x86-m32's
     /// 30). The pin never unrolls at -Os past its threshold.
     fn unroll_trial_at_size(&self) -> Option<u32> {
+        Some(100)
+    }
+
+    /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at
+    /// -O1, where the pin does not unroll past its threshold and gcc does:
+    /// the driver keeps the unrolled module where its finished functions are
+    /// no larger and no slower (float_in_memory_loop: 16 `fadd`s on a constant
+    /// fold to one, 100 B and 1264 B of soft-float routines against gcc's 70
+    /// B).
+    fn unroll_trial_threshold(&self) -> Option<u32> {
         Some(100)
     }
 

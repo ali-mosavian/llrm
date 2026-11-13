@@ -71,11 +71,10 @@ pub fn builder_target(
             pointer: pointer(width),
             offset_folding: true,
             global_addresses_constant: true,
-            // DEVIATE: clang marks every symbol `dso_local` under `-fno-pic`,
-            // which the IR parser drops, so every symbol is. The golden
-            // inputs carry the keyword. Exit: `GlobalValue` carries it, no
-            // later than 2026-11-20.
-            dso_local_symbols: true,
+            // `shouldAssumeDSOLocal` on wasm is the IR's: local linkage or a
+            // visibility other than default (clang marks every definition
+            // `hidden`; a declaration of default visibility is preemptible).
+            dso_local_symbols: false,
             boolean_contents: BooleanContents::ZeroOrOne,
             // The pin keeps `i32.div_s` for `sdiv x, 4` at every
             // level: `isIntDivCheap`.
@@ -180,6 +179,8 @@ pub struct Selected {
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    /// `MFI.hasVarSizedObjects()`, the same on every block.
+    pub has_var_sized: bool,
     /// `-g`: the metadata id of each variable declared by a `#dbg_declare` of
     /// a static alloca, and the frame index of that alloca. The same on every
     /// block.
@@ -311,7 +312,11 @@ pub fn select_function(
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
+            // The objects a call made while the block was built (a variadic
+            // call's buffer) are the frame's too:
+            // `computeKnownBitsForFrameIndex` reads each object's alignment.
             one.dag.frame_alignments.clone_from(&alignments);
+            one.dag.frame_alignments.extend(info.objects.iter().map(|&(_, align)| u64::from(align)));
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
                     .map_err(|why| format!("{why:?}"))?;
@@ -344,6 +349,7 @@ pub fn select_function(
                 accesses,
                 layout: Vec::new(),
                 frame: Vec::new(),
+                has_var_sized: false,
                 declared: Vec::new(),
                 argument_variables: Vec::new(),
                 stack_colors: Vec::new(),
@@ -383,6 +389,7 @@ pub fn select_function(
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
         block.frame.clone_from(&frame);
+        block.has_var_sized = info.has_var_sized_objects;
         block.declared.clone_from(&declared);
         block.argument_variables.clone_from(&argument_variables);
         block.stack_colors.clone_from(&stack_colors);

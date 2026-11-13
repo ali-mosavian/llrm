@@ -94,6 +94,11 @@ static COMPLEX: std::sync::LazyLock<Vec<Complex>> = std::sync::LazyLock::new(|| 
             "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
             "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
             "SelectExtractHigh" | "SelectDupZero" | "SelectRoundingVLShr" => Complex::Never,
+            // DEVIATE VEC5: the vector `fcvtzs v, v, #fbits` of a multiply by a
+            // power of two is not matched; the multiply and the convert stay
+            // two instructions. Exit: the float-vector conversion slice
+            // (LV-W3).
+            f if f.starts_with("SelectCVTFixedPointVec") => Complex::Never,
             f if f.starts_with("SelectCVTFixedPos") => {
                 Complex::CvtFixedPos { reg_width: size_of_name(f) * 8, reciprocal: f.contains("Recip") }
             }

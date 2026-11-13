@@ -693,6 +693,31 @@ pub fn unpadded_bytes(
     format: Format,
     objects: &dyn DebugObjectTarget,
 ) -> Result<i64, Error> {
+    let (code, data) = unpadded_split(module, source, layout, format, objects, false)?;
+    Ok(code + data)
+}
+
+/// [`unpadded_bytes`] as the functions' code and the data sections' images. `flat`: the code as the
+/// instructions fill it, without the alignment a block pads to inside a function either (a code-size
+/// column decodes the instructions and leaves the padding out).
+pub fn unpadded_split(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+    flat: bool,
+) -> Result<(i64, i64), Error> {
+    let mut unaligned;
+    let module = if flat {
+        unaligned = module.clone();
+        for block in unaligned.procedures.iter_mut().flat_map(|procedure| procedure.body.blocks.iter_mut()) {
+            block.align = 0;
+        }
+        &unaligned
+    } else {
+        module
+    };
     use llrm_object::{Definition, Role};
     let object = built_inner(module, source, layout, format, objects)?.object;
     let code: usize = object
@@ -709,7 +734,7 @@ pub fn unpadded_bytes(
         .filter(|section| matches!(section.role, Role::ROData | Role::Data))
         .map(|section| section.image.len())
         .sum();
-    Ok((code + data) as i64)
+    Ok((code as i64, data as i64))
 }
 
 /// What `format` says of the code it holds, from the target's table.

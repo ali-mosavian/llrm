@@ -130,6 +130,9 @@ impl Default for Z80Tti {
     }
 }
 
+/// A byte of code is worth 3 T at -O2 and -O3 (the rate the program table is judged at), in thousandths of a clock.
+pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
+
 impl Tti for Z80Tti {
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it): `va_list` is `char *`, so `va_start` is a
     /// store of the first variadic argument's address and the list lives in a register, as SDCC has it.
@@ -389,7 +392,21 @@ impl Tti for Z80Tti {
     /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
     /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        3000
+        SPEED_MILLICLOCKS_PER_BYTE
+    }
+
+    /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll is made at -O2/-O3 where the clocks it
+    /// saves repay its bytes at the same rate, in place of the pin's threshold alone (0).
+    /// Audited 2026-11-13: rate 0 and this rate give identical bytes and T on all 124 `tests/run/c` programs at -O1/-O2/-O3/-Os/-Oz,
+    /// so the price refuses nothing there; it guards loops the corpus lacks. A rate of 10^9 unrolls none (the control).
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        SPEED_MILLICLOCKS_PER_BYTE
+    }
+
+    /// The same rate for every speed decision that trades bytes for clocks (peeling, the combiner, the inliner's
+    /// walk, loop idioms, the backend's byte-for-clock choices): one place, not an inliner-only 3000.
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        SPEED_MILLICLOCKS_PER_BYTE
     }
 
     /// A loop whose bound the call's constants fix unrolls and folds in the copy, which the call's latency does not
@@ -529,15 +546,16 @@ impl Tti for Z80Tti {
         false
     }
 
-    // The long routines `__udivremsi4` and `__divremsi4` and the word ones
-    // (`__udivhi3` leaves the remainder in `hl`, `__divremhi4`) give both: a
-    // pair is one call. The byte routines do not.
+    // The long routines `__udivremsi4` and `__divremsi4`, the long long ones
+    // (`__udivmddi4`, `__divmddi4`) and the word ones (`__udivhi3` leaves
+    // the remainder in `hl`, `__divremhi4`) give both: a pair is one call. The
+    // byte routines do not.
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        matches!(bits, 16 | 32)
+        matches!(bits, 16 | 32 | 64)
     }
 
     fn cast_cost(

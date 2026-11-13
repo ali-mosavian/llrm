@@ -252,7 +252,9 @@ pub mod float2int;
 pub mod floatfold;
 pub mod floativ;
 pub mod floatloop;
+pub mod fmuladdsplit;
 pub mod fold;
+pub mod gepbyteindex;
 pub mod gepoffset;
 pub mod globalbool;
 pub mod globaldce;
@@ -370,6 +372,7 @@ pub mod mergeicmps;
 pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
+pub mod narrowrange;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;

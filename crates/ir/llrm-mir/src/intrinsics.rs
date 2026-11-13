@@ -89,6 +89,13 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
+    /// the float toward zero as an integer of the result's width, and whether
+    /// it fits that integer (NaN and a float past the range do not). The value
+    /// is unspecified where it does not fit, and no instruction faults.
+    FpToIntChecked {
+        signed: bool,
+    },
     /// `llvm.llrint`: `LRint` with a `long long` result, which a target
     /// without the instruction calls `llrint` for.
     LLRint,
@@ -568,7 +575,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 86] = [
+const TABLE: [Spec; 88] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -646,6 +653,22 @@ const TABLE: [Spec; 86] = [
         returns: Slot::Any(0),
         parameters: &[Slot::Any(1)],
         own: None,
+    },
+    Spec {
+        name: "llvm.experimental.fptosi.checked",
+        intrinsic: Intrinsic::FpToIntChecked { signed: true },
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::WithFlag(0),
+        parameters: &[Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
+    },
+    Spec {
+        name: "llvm.experimental.fptoui.checked",
+        intrinsic: Intrinsic::FpToIntChecked { signed: false },
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::WithFlag(0),
+        parameters: &[Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llvm.llrint",
@@ -1049,7 +1072,8 @@ pub fn is_reserved(name: &str) -> bool {
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
-fn mangle(
+/// The suffix an overloaded intrinsic's name has for `ty` (`i32`, `v4f32`).
+pub fn mangle(
     types: &Types,
     ty: TypeId,
 ) -> String {
@@ -1060,6 +1084,7 @@ fn mangle(
         Type::Float(FloatKind::X86Fp80) => "f80".to_owned(),
         Type::Float(FloatKind::F128) => "f128".to_owned(),
         Type::Pointer(space) => format!("p{space}"),
+        Type::Vector { element, count } => format!("v{count}{}", mangle(types, *element)),
         _ => types.display(ty),
     }
 }
@@ -1192,7 +1217,12 @@ impl Intrinsic {
         let mut bound: Vec<Option<TypeId>> = vec![None; spec.overloads.len()];
         let mut matches = |slot: Slot, ty: TypeId| -> bool {
             let mut overload = |at: usize, ty: TypeId| {
-                let kind = match types.get(ty) {
+                // `llvm_anyint_ty` and its kin take a vector of the kind too.
+                let lane = match types.get(ty) {
+                    Type::Vector { element, .. } => *element,
+                    _ => ty,
+                };
+                let kind = match types.get(lane) {
                     Type::Int(_) => Kind::Int,
                     Type::Float(_) => Kind::Float,
                     Type::Pointer(_) => Kind::Pointer,

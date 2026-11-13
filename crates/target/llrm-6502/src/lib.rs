@@ -9,6 +9,7 @@ pub mod dagisel;
 pub mod driver;
 pub mod elf;
 pub mod emit;
+pub mod flagcheck;
 pub mod frame;
 pub mod hotdivision;
 pub mod hotmultiply;

@@ -314,7 +314,7 @@ impl OpCost {
 /// DEVIATE LSR-SIZE (owner w12): the target's byte table for the code LSR's
 /// formulae leave behind, in the place of the numbers `lsr_use.rs` held.
 /// `None` from [`Tti::lsr_size_model`] is the pin's order.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct LsrSizeModel {
     /// A displacement from a global's address.
     pub disp_global: OpCost,
@@ -327,12 +327,27 @@ pub struct LsrSizeModel {
     /// The add or lea for each register not folded into the address, with
     /// its immediate.
     pub base_add: OpCost,
-    /// The step added each trip to a counter.
-    pub iv_step: OpCost,
+    /// The bytes of the step added each trip to a `bits`-wide counter, by
+    /// the step where it is a constant.
+    pub step: fn(bits: u32, constant: Option<i64>) -> u32,
+    /// The bytes of loading a counter's constant start in the preheader, where
+    /// the target prices it by the value (a zero, a byte, a dword). `None`:
+    /// `setup` for each, as the pin counts them.
+    pub constant_start: Option<fn(bits: u32, value: i64) -> u32>,
     /// A `mov` or `lea` of a register's start in the preheader.
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its counter in one
+    /// instruction a trip has no setup to count ([`Tuning::lsr_derived_setup_free`]).
+    pub derived_setup_free: bool,
+    /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
+    /// order stands (LG3's byte test included).
+    pub size_only: bool,
+    /// The `cmp` an exit test costs when the counter does not end at zero
+    /// (a count down to zero takes its flags from the step): its bytes for a
+    /// compare of `bits` against an immediate, or a register where `None`.
+    pub exit_compare: fn(bits: u32, immediate: Option<i64>) -> u32,
 }
 
 impl LsrSizeModel {
@@ -344,9 +359,13 @@ impl LsrSizeModel {
         disp_short: OpCost::bytes(1),
         disp_long: OpCost::bytes(4),
         base_add: OpCost::bytes(3),
-        iv_step: OpCost::bytes(3),
+        step: |_, _| 3,
+        constant_start: None,
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        derived_setup_free: false,
+        size_only: false,
+        exit_compare: |_, _| 0,
     };
 
     /// The bytes of one address displacement.
@@ -981,6 +1000,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE INL-O1-HOT (owner w10, exit 2026-11-24): where -O1 holds a
+    /// growing inline (`by_size`), a site the pin calls locally hot
+    /// (`HotCallSiteRelFreq`, 60 times the caller's entry) still inlines when
+    /// its growth is at most this percent of the call sequence removed. None:
+    /// the guard holds every growing inline.
+    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// What a call to a callee whose peak register pressure is `peak` values
     /// costs in clocks to save and restore the registers it must preserve (a
     /// register the callee takes beyond the scratch ones is pushed and popped
@@ -1029,6 +1057,11 @@ pub trait Tti {
     /// writes, not every caller-saved register (`-enable-ipra`; off in the
     /// pin, on in GCC from -O1).
     fn interprocedural_register_use(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE IPRA-DSO-LOCAL: see `Tuning::ipra_binds_local`.
+    fn ipra_binds_local(&self) -> bool {
         false
     }
 
@@ -1118,6 +1151,12 @@ pub trait Tti {
     /// bytes a loop. False: RS1 alone.
     fn rotation_hot_at_size(&self) -> bool {
         false
+    }
+
+    /// Bytes a loop ROTATION-HOT rotates may add where the finished code executes less. 0: the object
+    /// may not grow (-Os strict on bytes).
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        4
     }
 
     /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a
@@ -1343,6 +1382,11 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::unroll_trial_bytes_strict`.
+    fn unroll_trial_bytes_strict(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
         false
@@ -1387,8 +1431,18 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::libc_memcpy`.
+    fn libc_memcpy(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::keeps_sahf_where_bytes_are_held`.
+    fn keeps_sahf_where_bytes_are_held(&self) -> bool {
         false
     }
 
@@ -1502,11 +1556,6 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::push_imm_at_size`.
-    fn push_imm_at_size(&self) -> bool {
-        false
-    }
-
     /// `Tuning::sdiv_pow2_stays_at_size`.
     fn sdiv_pow2_stays_at_size(&self) -> bool {
         false
@@ -1519,6 +1568,11 @@ pub trait Tti {
 
     /// `Tuning::rep_stos_at_size`.
     fn rep_stos_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_stos_priced_unit`.
+    fn rep_stos_priced_unit(&self) -> bool {
         false
     }
 
@@ -1546,6 +1600,11 @@ pub trait Tti {
 
     /// `Tuning::sink_select_arms`.
     fn sinks_select_arms(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::branch_constant_arm_selects`.
+    fn branches_constant_arm_selects(&self) -> bool {
         false
     }
 
@@ -1701,6 +1760,16 @@ pub trait Tti {
     /// (`Tuning::x87_zero_fill_at_size`).
     fn x87_zero_fill_at_size(&self) -> bool {
         false
+    }
+
+    /// DEVIATE FPTOINT-CHECKED: the width of the integer a float is converted
+    /// into in one instruction (the x87's `fistp` stores a dword or a qword,
+    /// and NaN and overflow come out as its most negative value) when the
+    /// result is `bits` wide; none: the range of the integer is checked on the
+    /// float.
+    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+        let _ = bits;
+        None
     }
 
     /// `Tuning::size_fill`: the encoded bytes of a constant fill at size.
@@ -2321,6 +2390,17 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine leaves `icmp (udiv X, C), K` alone while the
+    /// quotient has another use. The pin folds it into a range test of `X`
+    /// on every target (`foldICmpDivConstant`). DEVIATE ICMPDIV-1 (owner
+    /// llrm-target-6502, exit 2026-11-24): where a divide is a library call,
+    /// the fold keeps the dividend live across it beside the quotient the
+    /// loop carries (digits Os: two callee-saved cells, 12 B of push and pop).
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2857)
+    fn keeps_icmp_of_shared_division(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
@@ -2498,8 +2578,8 @@ pub trait Tti {
     /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
     /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit
     /// counter, product or pointer is reduced. None: the datalayout's.
-    /// Owner llrm-target-6502; exit: 16-bit widths and `-Os` with a byte-aware
-    /// LSR cost, 2026-11-20.
+    /// Held at `-Os` too. Owner llrm-target-6502; exit: a byte-aware LSR cost
+    /// (`lsr_size_model`) for the 6502, 2026-11-24.
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
         &[]
     }
@@ -2520,6 +2600,15 @@ pub trait Tti {
     /// `i*300-81472` merging in one phi leave one of the two a multiply chain.
     /// x_cordic m32 -O3: 100 trips of a 5-instruction chain gcc does not pay.
     fn lsr_phi_operand_uses(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
+    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
+    /// `fmul` and `fadd`, the product then leaving the loop; true where the
+    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
+    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    fn splits_invariant_fmuladd(&self) -> bool {
         false
     }
 
@@ -2555,6 +2644,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE EXT-LOAD-COST: whether a load that widens costs clocks over
+    /// the plain load, so CGP's `optimizeExt` leaves an extension in the
+    /// block that reads it. The pin has no such cost: it moves it.
+    fn ext_load_costs_extra(&self) -> bool {
+        false
+    }
+
     /// The bits one general-purpose register holds: an `i32` takes one at 32,
     /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
     fn gpr_bits(&self) -> u32 {
@@ -2568,6 +2664,21 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// largest object offset a byte index reaches in one address instruction
+    /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
+    /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
+    fn address_index_max(&self) -> Option<u64> {
+        None
+    }
+
+    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
+    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
+    /// none: the pass does not run.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        None
     }
 
     /// Whether the loop as written keeps the bound of its exit test live next
@@ -2827,6 +2938,19 @@ pub trait Tti {
     ) -> Cost {
         let _ = (ret, args, kind);
         if is_free_intrinsic(name) { Cost::FREE } else { base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
+    }
+
+    /// `intrinsic_cost` of a `ctlz` or `cttz` whose `is_zero_poison` argument is the constant true: some targets
+    /// price it apart (`X86TTIImpl::getIntrinsicInstrCost`, `CTLZ_ZERO_POISON`). The same price as `intrinsic_cost`
+    /// where a target has no such rows.
+    fn zero_poison_intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        self.intrinsic_cost(name, ret, args, kind)
     }
 }
 
@@ -3178,9 +3302,13 @@ mod size_model_tests {
         disp_short: OpCost::bytes(10),
         disp_long: OpCost::bytes(70),
         base_add: OpCost::bytes(5),
-        iv_step: OpCost::bytes(6),
+        step: |_, _| 6,
+        constant_start: None,
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        derived_setup_free: false,
+        size_only: false,
+        exit_compare: |bits, _| bits,
     };
 
     /// Each displacement form is read from its own field; zero is free.
@@ -3204,6 +3332,6 @@ mod size_model_tests {
             (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes),
             (4, 2, 1, 4)
         );
-        assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
+        assert_eq!((m.base_add.bytes, (m.step)(32, Some(1)), m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
     }
 }

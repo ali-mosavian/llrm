@@ -20,6 +20,7 @@ clang = ["-target", "x86_64-unknown-linux-gnu"]
 llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
+unroll_at_o1 = true
 
 # `run` (optional) is the command that runs an executable of the target, the executable last; the checks use it.
 
@@ -53,6 +54,7 @@ llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
+thread_jumps_at_o1 = true
 
 # Real-mode DOS, Borland medium model: far code (function pointers and `P1` functions), near data, byte-packed
 # structs. `far`, `huge`, `near` are Borland's keywords on clang's address spaces.
@@ -156,6 +158,7 @@ llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-glibc-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
+thread_jumps_at_o1 = true
 
 # arm64 macOS, on an Apple-silicon Mac only; headers from SDKROOT (`export SDKROOT=$(xcrun --show-sdk-path)`). Untested.
 [arm64-macos]
@@ -170,6 +173,7 @@ llc_level = true
 object = "macho"
 link = ["clang", "-arch", "arm64", "-o", "{output}", "{objects}"]
 run = []
+thread_jumps_at_o1 = true
 
 # 32-bit Linux on the host's glibc (multilib), ELF32 objects linked by the system clang.
 [x86_32-linux]

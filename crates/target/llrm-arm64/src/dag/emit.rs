@@ -35,7 +35,9 @@ use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
-use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape, VectorOp, VectorShift};
+use crate::mc::inst::{
+    Arrangement, Atomic, Barrier, Fill, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorShift,
+};
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
@@ -629,9 +631,63 @@ fn vector_inst(
         "2i64" => Some(Arrangement::D2),
         _ => None,
     };
+    // `DUPv4i32lane`, `DUPv2i64lane`: a lane of a vector register in every
+    // lane (the float splat's `dup v.4s, v.s[0]`).
+    if let Some(lanes) = name.strip_prefix("DUPv").and_then(|rest| rest.strip_suffix("lane")).and_then(lanes_of) {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Imm(index)] => Ok(Inst::VectorDupLane { lanes, rd, rn: *rn, index: *index as u8 }),
+            _ => wrong(),
+        });
+    }
     if name == "NOTv16i8" {
         return Some(match operands {
             [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    // `FADDv4f32`, `FSUBv2f64`, `FNEGv4f32`: the float vector operations.
+    let fp_lanes = |text: &str| match text {
+        "4f32" => Some(Arrangement::S4),
+        "2f64" => Some(Arrangement::D2),
+        _ => None,
+    };
+    for (stem, op) in
+        [("FADD", VectorFpOp::Add), ("FSUB", VectorFpOp::Sub), ("FMUL", VectorFpOp::Mul), ("FDIV", VectorFpOp::Div)]
+    {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorFpBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
+            continue;
+        };
+        // The first operand is the accumulator `rd` starts as: the caller
+        // copies it in.
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                Ok(Inst::VectorFma { op, lanes, rd, rn: *rn, rm: *rm })
+            }
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [
+        ("FNEG", VectorFpUnary::Neg),
+        ("FABS", VectorFpUnary::Abs),
+        ("SCVTF", VectorFpUnary::Scvtf),
+        ("UCVTF", VectorFpUnary::Ucvtf),
+        ("FCVTZS", VectorFpUnary::Fcvtzs),
+        ("FCVTZU", VectorFpUnary::Fcvtzu),
+    ] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::VectorFpUnary { op, lanes, rd, rn: *rn }),
             _ => wrong(),
         });
     }
@@ -1877,6 +1933,11 @@ impl Emitter<'_> {
                         || vector_fill(name, &operands).is_some();
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
+                    // `FMLA` adds into the register it reads: `rd` is a copy of
+                    // the accumulator that the instruction then changes.
+                    if let (Inst::VectorFma { .. }, Some(Operand::Fpr(acc))) = (&inst, operands.first()) {
+                        self.ops.push(Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(*acc) });
+                    }
                     self.ops.push(Op::I(inst));
                     if float_result {
                         self.fvalues.insert((id, 0), rd);

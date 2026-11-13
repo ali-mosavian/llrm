@@ -1,0 +1,40 @@
+# std.io's file calls and nothing else: the library's own weight in a program (tools/test_std_io_weight.py).
+import std.io as io
+
+var block: i16[256] = [0] * 256
+var row: u16[129] = [0] * 129
+
+fn fill(file: &mut io.File, at: i16) -> bool:
+    unsafe:
+        let data: *near mut i16 = &mut block
+        match file.read_raw(data.offset(at).cast[u8]().far(), 256):
+            .ok(n):
+                return n == u16(256)
+            .err(_):
+                return false
+
+fn put(file: &mut io.File) -> bool:
+    unsafe:
+        let data: *near u16 = &row
+        match file.write_raw(data.cast[u8]().far(), 258):
+            .ok(n):
+                return n == u16(258)
+            .err(_):
+                return false
+
+fn main() -> i16:
+    match io.File.open("SIGNAL"):
+        .err(_):
+            return -1
+        .ok(opened):
+            let mut input = opened
+            match io.File.create("SPECTRA"):
+                .err(_):
+                    return -1
+                .ok(created):
+                    let mut output = created
+                    if !fill(input, 0):
+                        return -1
+                    if !put(output):
+                        return -1
+    return 0

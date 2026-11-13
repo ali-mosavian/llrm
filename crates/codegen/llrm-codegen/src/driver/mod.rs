@@ -663,6 +663,13 @@ pub fn optimized(
                 ),
             )
     })?;
+    timed("mir checked conversions", || {
+        let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(|module| crate::backend::checkedconv::expanded(module, |bits| tti.wide_float_to_int(bits)))
+    })?;
     timed("mir absolute values", || {
         program
             .modules

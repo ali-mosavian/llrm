@@ -179,14 +179,14 @@ fn fold_one(
                 || one.side_effects
                 || one.barrier
                 || one.terminator
-                || one.reads_flags
+                || one.reads_flags()
                 || touches(one, updated) && !late(at)),
         );
     // a store moved up past a load or store would change what they see
     let up = store.is_none()
         && between.iter().all(|one| {
-            !(one.sets_flags
-                || one.reads_flags
+            !(one.sets_flags()
+                || one.reads_flags()
                 || one.call
                 || one.barrier
                 || one.terminator
@@ -251,10 +251,10 @@ fn fold_one(
 pub(crate) fn swapped_readers(after: &[Inst]) -> Option<Vec<(usize, Inst)>> {
     let mut found = Vec::new();
     for (offset, inst) in after.iter().enumerate() {
-        if inst.sets_flags || inst.call {
+        if inst.sets_flags() || inst.call {
             break;
         }
-        if !inst.reads_flags {
+        if !inst.reads_flags() {
             continue;
         }
         let Kind::Op(name) = inst.kind else { return None };

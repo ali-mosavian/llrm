@@ -188,7 +188,9 @@ const TRIAL_MAX_UNITS: u64 = 700;
 /// [`lowered_once`], then at -Os DEVIATE UNROLL-OS-TRIAL (the shared
 /// `llrm_transforms::trial`, as x86's driver): the module compiled again with
 /// the loops the -Os threshold refused unrolled, kept if its functions that
-/// differ are smaller, bytes then clocks (`Price::Size`). A module with no
+/// differ are smaller, bytes then clocks (`Price::Size`). At -O1 the same
+/// trial (DEVIATE UNROLL-O1-TRIAL, `Tti::unroll_trial_threshold`) keeps them
+/// where the functions are no larger and no slower (`Price::Strict`). A module with no
 /// refused loop is compiled once.
 fn lowered(
     text: &str,
@@ -201,7 +203,7 @@ fn lowered(
     let _ = trial::take();
     let base = lowered_once(text, cpu, level, dump, policy)?;
     let (noted, units) = trial::take();
-    let limit = if matches!(level, Level::Os | Level::Oz) {
+    let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
         M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
     } else {
         None
@@ -213,7 +215,8 @@ fn lowered(
     if cut.is_empty() {
         return Ok(base);
     }
-    let backend = Options { size: true, mid_end: false, ..Options::default() };
+    let small = matches!(level, Level::Os | Level::Oz);
+    let backend = Options { size: small, strict: level == Level::O1, mid_end: false, ..Options::default() };
     let items = |module: &Module| -> Option<Vec<Item>> {
         Some(
             function_items(&trial::only(module, &cut), cpu, backend)
@@ -225,10 +228,10 @@ fn lowered(
     };
     let pays = matches!(
         (items(&other), items(&base)),
-        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::Size)
+        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, if small { crate::timing::Price::Size } else { crate::timing::Price::Strict })
     );
     if llrm_support::debug::enabled("trial") {
-        eprintln!("trial unroll-os: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
+        eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }
     Ok(if pays { other } else { base })
 }
@@ -261,7 +264,11 @@ fn lowered_once(
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
     // The mid-end is the module's, run once: `text_with` runs it over the whole
     // module for each function it is given.
-    crate::compile::mid_end_for(&program.modules[0], cpu)
+    crate::compile::mid_end_for_narrowing(
+        &program.modules[0],
+        cpu,
+        matches!(level, Level::O2 | Level::O3 | Level::Omax),
+    )
 }
 
 /// [`assembly`] with the debug lines and the stage dump chosen.

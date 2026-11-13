@@ -75,7 +75,8 @@ fn lane_constant(
     operand: SDValue,
     lane_bits: u32,
 ) -> Option<u64> {
-    let bits = dag.constant(operand)?;
+    // A float lane is its bits (`BuildVectorSDNode::isConstantSplat`).
+    let bits = dag.constant(operand).or_else(|| dag.fp_constant(operand))?;
     Some((bits & ((1u128 << lane_bits) - 1)) as u64)
 }
 

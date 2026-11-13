@@ -77,7 +77,7 @@ fn reusable(
             found = true;
             break;
         }
-        if before.sets_flags || before.reads_flags || before.call {
+        if before.sets_flags() || before.reads_flags() || before.call {
             return None;
         }
     }
@@ -86,14 +86,14 @@ fn reusable(
     }
     let mut readers = Vec::new();
     for (index, after) in insts.iter().enumerate().skip(at + 1) {
-        if after.reads_flags && !after.call {
+        if after.reads_flags() && !after.call {
             match after.kind {
                 Kind::Op("Bpl8" | "Bge8") => readers.push((index, "Bcc8")),
                 Kind::Op("Bmi8" | "Blt8") => readers.push((index, "Bcs8")),
                 _ => return None,
             }
         }
-        if after.sets_flags || after.call {
+        if after.sets_flags() || after.call {
             break;
         }
     }

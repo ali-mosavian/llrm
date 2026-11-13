@@ -102,10 +102,10 @@ pub(crate) fn flags_live_after(
     at: usize,
 ) -> bool {
     for later in &insts[at + 1..] {
-        if later.reads_flags {
+        if later.reads_flags() {
             return true;
         }
-        if later.sets_flags {
+        if later.sets_flags() {
             return false;
         }
     }
@@ -750,7 +750,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         if !safe_to_move(&self.function.fixed, &inst, saw_store) {
             return false;
         }
-        if inst.reads_flags || (inst.sets_flags && flags_live_after(&self.function.blocks[block].insts, at)) {
+        if inst.reads_flags() || (inst.sets_flags() && flags_live_after(&self.function.blocks[block].insts, at)) {
             return false;
         }
         let mut break_phi_edge = false;

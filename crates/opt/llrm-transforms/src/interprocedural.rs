@@ -798,7 +798,10 @@ pub fn optimized_with<E: From<String>>(
                     &private[at],
                     costs,
                     threshold.cp_clone.unwrap_or(false),
-                    threshold.cp_hint_clones,
+                    crate::ipacp::Tuning {
+                        hint_clones: threshold.cp_hint_clones,
+                        peel_limited: threshold.cp_peel_limited,
+                    },
                     cloning,
                 )
             });

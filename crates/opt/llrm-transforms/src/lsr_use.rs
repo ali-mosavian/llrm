@@ -498,6 +498,9 @@ pub struct Rating<'a, 'b> {
     pub other_register_units: u32,
     /// The compile is for size.
     pub size: bool,
+    /// The bytes of the code a formula leaves are counted (-Os, and -O1 where
+    /// bytes outrank clocks), which `size` alone did.
+    pub bytes_counted: bool,
     /// The loop calls, and the target's call takes every register (LU13).
     pub across_call: bool,
 }
@@ -709,7 +712,7 @@ impl Cost {
             }
         }
 
-        if self.size
+        if r.bytes_counted
             && let Some(m) = r.tti.lsr_size_model()
         {
             if lu.kind == Kind::Address {
@@ -720,6 +723,12 @@ impl Cost {
             }
             // An add or lea for each register not folded, and its immediate.
             self.size_bytes += m.base_add.bytes * (self.c.num_base_adds - prev_base_adds);
+            // The exit test's `cmp` unless the counter ends at zero.
+            if lu.kind == Kind::ICmpZero && !f.has_zero_end() {
+                let immediate = f.base_regs.len() == 1 && f.scaled_reg.is_none();
+                let immediate = immediate.then_some(f.base_offset.0);
+                self.size_bytes += (m.exit_compare)(narrowest_bits(r, lu, f), immediate);
+            }
         }
 
         // Scaling amounts that are not free.
@@ -921,10 +930,18 @@ impl Cost {
                 self.c.num_regs += 1;
             }
             if loop_cost > 0
-                && self.size
+                && r.bytes_counted
                 && let Some(m) = r.tti.lsr_size_model()
             {
-                self.size_bytes += m.iv_step.bytes;
+                let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
+                let (start, step) = match r.se.match_affine_add_rec(reg) {
+                    Some((start, step, _)) => (r.se.as_constant(start), r.se.as_constant(step)),
+                    None => (None, None),
+                };
+                self.size_bytes += (m.step)(bits, step.map(|c| c.sext_value() as i64));
+                if let (Some(start), Some(bytes)) = (start, m.constant_start) {
+                    self.size_bytes += bytes(bits, start.sext_value() as i64);
+                }
             }
             if loop_cost > 0
                 && let Some(m) = r.tti.lsr_bytes()
@@ -978,11 +995,28 @@ impl Cost {
         self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);
         // Even with the depth limit, the cost stays valid.
         self.c.setup_cost = self.c.setup_cost.min(1 << 16);
-        if self.size
+        if r.bytes_counted
             && let Some(m) = r.tti.lsr_size_model()
         {
-            // A `mov` or `lea` of the register's start in the preheader.
-            self.size_bytes += m.setup.bytes * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            // A `mov` or `lea` of the register's start in the preheader; a
+            // constant start the model prices by value is counted already.
+            let priced_start = m.constant_start.is_some()
+                && r.se.match_affine_add_rec(reg).is_some_and(|(start, _, _)| r.se.as_constant(start).is_some());
+            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew without
+            // it checked): not for an integer recurrence the loop as
+            // written derives from its counter by one instruction each trip
+            // (`i << 4`, `i - 192`): it is no register stepped from a start,
+            // so there is nothing to set up. The pin counts it a recurrence
+            // like any other; a byte model prices the two apart.
+            let derived = m.derived_setup_free
+                && r.as_written
+                && r.se.addrec_header(reg) == Some(r.l)
+                && !r.se.type_of(reg).is_pointer()
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_some())
+                && !is_existing_phi(r.se, r.cx, reg);
+            if !priced_start && !derived {
+                self.size_bytes += m.setup.bytes * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            }
         }
         if let Some(m) = r.tti.lsr_bytes() {
             // A local set in the preheader, and a constant for each
