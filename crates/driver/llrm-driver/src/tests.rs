@@ -6159,3 +6159,17 @@ fn a_zeroext_i1_call_result_widened_needs_no_mask_at_m32() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains(", 1\n"), "{listing}");
 }
+
+/// Same as the m32 case at m16: `merge_icmps_fields` grew three `and ax, 1`
+/// (O2 330 -> 342 B, Os 279 -> 291 B).
+#[test]
+fn a_zeroext_i1_call_result_widened_needs_no_mask_at_m16() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+                declare zeroext i1 @p()\n\
+                define i16 @z() {\n  %1 = call zeroext i1 @p()\n  %2 = zext i1 %1 to i16\n  ret i16 %2\n}\n";
+    for level in ["-O2", "-Os"] {
+        let (built, _) = compiled(&flags(&["-m16", level]), text, "z").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains(", 1\n"), "{level}: {listing}");
+    }
+}
