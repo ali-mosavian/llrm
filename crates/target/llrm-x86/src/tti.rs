@@ -723,8 +723,7 @@ impl X86 {
             CostKind::CodeSize => "code-size",
             CostKind::SizeAndLatency => "size-latency",
         };
-        let zero_poison_name = format!("{name}.zp");
-        let priced = if zero_poison { intrinsic_price(profile, kind, &zero_poison_name) } else { None };
+        let priced = if zero_poison { intrinsic_price(profile, kind, &format!("{name}.zp")) } else { None };
         match priced.or_else(|| intrinsic_price(profile, kind, name)) {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
@@ -814,6 +813,12 @@ impl Tti for X86 {
 
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
+    }
+
+    /// DEVIATE SYMPAIR-1: real mode keeps the two selects (see
+    /// `Tti::keeps_icmp_of_swapped_selects`).
+    fn keeps_icmp_of_swapped_selects(&self) -> bool {
+        self.real_mode.is_some()
     }
 
     fn keeps_sahf_where_bytes_are_held(&self) -> bool {

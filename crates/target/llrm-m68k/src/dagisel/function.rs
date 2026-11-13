@@ -161,6 +161,12 @@ pub fn select_function_with(
     let mut target = builder_target()
         .with_int_div_cheap(size && cpu.at_least(Cpu::M68020))
         .with_int_div_cheap_narrow(if size { 16 } else { 0 });
+    // The pin's O1 has no correlated-propagation to narrow a divide of values that fit 16 bits
+    // (`narrowSDivOrSRem`, `narrowUDivOrURem`): below the 68020 that is `__divsi3`, where one `divs.w`
+    // is 158 clk. DEVIATE M68K-NARROW-DIV (same as the 6502's): owner m68k. Exit: none.
+    if !cpu.at_least(Cpu::M68020) {
+        target = target.with_narrow_divrem(EVT::I16, false);
+    }
     target.ordered_copies = indexed;
     // DEVIATE M68K-JT-PRICE (`super::switchprice`): the table's limits are the
     // level's price of a table against the compare chain, not the pin's 4
