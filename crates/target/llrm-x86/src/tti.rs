@@ -842,7 +842,7 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::call(arguments);
+            return crate::sizes::call(arguments, self.quad);
         }
         Cost::BASIC * (arguments + 1)
     }
@@ -1472,7 +1472,7 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::cmp_sel(op, ty, self.cmov);
+            return crate::sizes::cmp_sel(op, ty, self.cmov, self.quad);
         }
         let Some((count, _)) = legalized(ty, self.native()) else { return Cost::INVALID };
         if let Some(each) = sse_cmp_sel(self, op, ty).and_then(|row| row[kind.index()]) {
@@ -1497,7 +1497,7 @@ impl Tti for X86 {
         stored_constant: bool,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::memory(op, ty, stored_constant);
+            return crate::sizes::memory(op, ty, stored_constant, self.quad);
         }
         // Load latency is not modelled here: the base answers 4.
         if op == MemoryOp::Load && kind == CostKind::Latency {
@@ -1946,7 +1946,7 @@ impl Tti for X86 {
     ) -> Cost {
         use ArithOp::*;
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::arithmetic(op, ty, second);
+            return crate::sizes::arithmetic(op, ty, second, self.quad);
         }
         let Some((count, legal)) = legalized(ty, self.native()) else { return Cost::INVALID };
         let none = OperandInfo::ANY;

@@ -29,10 +29,18 @@
 
 use llrm_mir::tti::{AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, MemoryOp, OperandInfo, Ty};
 
-/// The 32-bit pieces of a value of `ty`, and the prefix a 16-bit one takes.
-fn pieces(ty: Ty) -> (i64, i64) {
+/// The pieces of a value of `ty` in the integer registers (32 bits wide, 64 in long mode: `quad`), and the
+/// prefix bytes it takes: the 66h of a 16-bit one, the REX.W of a 64-bit one in long mode, the F2/F3 and 0Fh of
+/// an SSE scalar.
+fn pieces(
+    ty: Ty,
+    quad: bool,
+) -> (i64, i64) {
     match ty {
+        Ty::Int(bits) if quad => (i64::from(bits.div_ceil(64).max(1)), i64::from(bits == 16 || bits == 64)),
         Ty::Int(bits) => (i64::from(bits.div_ceil(32).max(1)), i64::from(bits == 16)),
+        Ty::Pointer if quad => (1, 1),
+        Ty::Float | Ty::Double if quad => (1, 2),
         Ty::Pointer | Ty::Float => (1, 0),
         Ty::Double => (2, 0),
         Ty::X87 => (3, 0),
@@ -59,12 +67,13 @@ pub fn arithmetic(
     op: ArithOp,
     ty: Ty,
     right: OperandInfo,
+    quad: bool,
 ) -> Cost {
     use ArithOp::*;
     if ty.is_float() || ty == Ty::X87 {
-        return Cost::of(if op == FRem { 25 } else { 2 });
+        return Cost::of(if op == FRem { 25 } else if quad && ty != Ty::X87 { 4 } else { 2 });
     }
-    let (parts, prefix) = pieces(ty);
+    let (parts, prefix) = pieces(ty, quad);
     let power = right.power_of_two || right.negated_power_of_two;
     Cost::of(match op {
         Add | Sub | And | Or | Xor => {
@@ -112,8 +121,9 @@ pub fn cmp_sel(
     op: CmpSel,
     ty: Ty,
     cmov: bool,
+    quad: bool,
 ) -> Cost {
-    let (parts, prefix) = pieces(ty);
+    let (parts, prefix) = pieces(ty, quad);
     Cost::of(match op {
         CmpSel::ICmp => 3 * parts + prefix,
         CmpSel::FCmp => 5,
@@ -126,8 +136,9 @@ pub fn memory(
     op: MemoryOp,
     ty: Ty,
     stored_constant: bool,
+    quad: bool,
 ) -> Cost {
-    let (parts, prefix) = pieces(ty);
+    let (parts, prefix) = pieces(ty, quad);
     let immediate = match (op, stored_constant, ty) {
         (MemoryOp::Store, true, Ty::Int(bits)) => i64::from(bits.div_ceil(8).min(4)) * parts,
         (MemoryOp::Store, true, _) => 2,
@@ -154,8 +165,15 @@ pub fn address(form: AddressForm) -> Cost {
 }
 
 /// Bytes of a direct call of `arguments` arguments: the call, a push per
-/// argument and the pop of them.
-pub fn call(arguments: i64) -> Cost {
+/// argument and the pop of them. In long mode the first six go in registers (a
+/// `mov r64,r64`, 3 bytes) and nothing is popped.
+pub fn call(
+    arguments: i64,
+    quad: bool,
+) -> Cost {
+    if quad {
+        return Cost::of(5 + 3 * arguments.min(6) + 4 * (arguments - 6).max(0));
+    }
     Cost::of(5 + 2 * arguments + if arguments > 0 { 3 } else { 0 })
 }
 
@@ -195,7 +213,7 @@ mod tests {
 
     #[test]
     fn a_dword_add_is_two_bytes_with_a_byte_immediate_three_and_with_a_word_one_six() {
-        let add = |right| arithmetic(ArithOp::Add, Ty::Int(32), right);
+        let add = |right| arithmetic(ArithOp::Add, Ty::Int(32), right, false);
         assert_eq!(add(OperandInfo::ANY), Cost::of(2));
         assert_eq!(add(OperandInfo::constant(5, 32)), Cost::of(3));
         assert_eq!(add(OperandInfo::constant(100_000, 32)), Cost::of(6));
@@ -216,7 +234,14 @@ mod tests {
     }
 
     #[test]
+    fn a_long_mode_quad_add_takes_the_rex_prefix_and_is_one_piece_where_a_dword_machine_has_two() {
+        let add = |quad| arithmetic(ArithOp::Add, Ty::Int(64), OperandInfo::ANY, quad);
+        assert_eq!((add(false), add(true)), (Cost::of(4), Cost::of(3)));
+        assert_eq!((call(3, true), call(8, true)), (Cost::of(14), Cost::of(31)));
+    }
+
+    #[test]
     fn a_direct_call_is_five_bytes_and_each_pushed_argument_two_with_the_pop() {
-        assert_eq!((call(0), call(2)), (Cost::of(5), Cost::of(12)));
+        assert_eq!((call(0, false), call(2, false)), (Cost::of(5), Cost::of(12)));
     }
 }
