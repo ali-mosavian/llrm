@@ -1409,7 +1409,11 @@ fn selected_in(
         frame: &frame,
         address_mode,
         opt_size: cpu.size || cpu.min_size,
-        stack_shares_data: contracts.is_some_and(|contracts| contracts.segments.stack_shares_data),
+        // A handler runs on the interrupted program's stack, which may not be
+        // the data group: no function of a module that has one reads a stack
+        // pointer through DS.
+        stack_shares_data: contracts.is_some_and(|contracts| contracts.segments.stack_shares_data)
+            && !module.functions().any(|(_, _, function)| function.calling_convention == llrm_mir::opcode::X86_INTR),
         reserved_calls: module
             .named(name)
             .and_then(|id| module.global(id).function())

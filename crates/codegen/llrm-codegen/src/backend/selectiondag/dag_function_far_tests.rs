@@ -1291,7 +1291,14 @@ define i16 @f(ptr addrspace(5) %p, i16 %i) {
 /// The segment of every memory cell `text`'s `f` reads or writes at m16 under
 /// `segments`.
 fn stack_pointer_segments(segments: &crate::backend::target::Segments) -> Vec<llrm_lir::registers::RegId> {
-    let module = crate::testing::module(STACK_POINTER_LOAD).expect("parses");
+    stack_pointer_segments_of(STACK_POINTER_LOAD, segments)
+}
+
+fn stack_pointer_segments_of(
+    text: &str,
+    segments: &crate::backend::target::Segments,
+) -> Vec<llrm_lir::registers::RegId> {
+    let module = crate::testing::module(text).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
         hole: 0,
         abi: &super::dag_function_tests::Stub { flags: false },
@@ -1334,4 +1341,16 @@ fn a_stack_pointer_is_read_through_ss_unless_the_start_up_shares_ss_with_ds() {
     let ss = |segments: &[RegId]| segments.contains(&RegId::SS);
     assert!(ss(&stack_pointer_segments(&crate::backend::target::BUILT_IN)), "the default keeps ss:");
     assert!(!ss(&stack_pointer_segments(&crate::backend::target::SHARED_STACK)), "a shared stack needs no ss:");
+}
+
+/// A handler runs on the stack of whatever it interrupted, so a module that
+/// has one keeps `ss:` on its stack pointers even where the start-up shares SS
+/// with DS.
+#[test]
+fn a_module_with_an_interrupt_handler_keeps_ss_on_its_stack_pointers() {
+    use llrm_lir::registers::RegId;
+    let number = llrm_mir::opcode::X86_INTR;
+    let text = format!("{STACK_POINTER_LOAD}define cc {number} void @h() addrspace(1) {{\n  ret void\n}}\n");
+    let segments = stack_pointer_segments_of(&text, &crate::backend::target::SHARED_STACK);
+    assert!(segments.contains(&RegId::SS), "{segments:?}");
 }
