@@ -303,6 +303,25 @@ fn a_loop_storing_two_element_widths_compiles() {
     assert!(text.contains("report"), "{text}");
 }
 
+/// `a ^ b ^ c` over `<4 x i32>` selected `EOR3` ("machine opcode EOR3 has no
+/// arm64 instruction yet"): the one table is apple-m1's, which has SHA3, and
+/// `-mcpu=generic` (Linux) has not. Generic gets two `eor`s, as the pin's llc.
+#[test]
+fn a_three_way_xor_is_two_eors_without_sha3() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %x = load <4 x i32>, ptr %a, align 16\n\
+         \x20 %y = load <4 x i32>, ptr %b, align 16\n\
+         \x20 %z = load <4 x i32>, ptr %c, align 16\n\
+         \x20 %t = xor <4 x i32> %x, %y\n\
+         \x20 %r = xor <4 x i32> %t, %z\n\
+         \x20 store <4 x i32> %r, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(!text.contains("eor3"), "{text}");
+    assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("eor ")).count(), 2, "{text}");
+}
+
 /// A loop carrying a `<8 x i16>` phi (the widened induction `vec.ind`) panicked
 /// in live-range calculation ("a unique value"): a vector phi was given general
 /// registers, so its copies read a register nothing defined. It now lives in

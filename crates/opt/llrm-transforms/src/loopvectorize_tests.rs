@@ -547,3 +547,47 @@ fn a_memory_check_keeps_the_remainder_of_a_divisible_constant_trip() {
     assert_eq!(count(&text, "scalar.ph:"), 1, "{text}");
     assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
 }
+
+const INDUCTION_TRUNC: &str = include_str!("../tests/lv/induction_trunc.ll");
+const INDUCTION_VALUE: &str = include_str!("../tests/lv/induction_value.ll");
+const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");
+
+/// `a[i] = ((i * 7) & 255) | 0x700` over `i16` (scroll's init loop) stayed
+/// scalar ("A value the loop computes that is not widened": the `trunc` of the
+/// induction); the pin takes VF 8, IC 2 on a `<8 x i16>` `vec.ind` that
+/// replaces the `trunc`.
+#[test]
+fn a_truncated_induction_is_widened_to_a_vec_ind() {
+    let text = run(INDUCTION_TRUNC);
+    assert!(
+        text.contains("<i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>"),
+        "{text}"
+    );
+    assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "step.add = add <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "vec.ind.next = add <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "mul <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "trunc"), 0, "{text}");
+}
+
+/// `a[i] = i + 5` over `i64`: the induction read as a value is a `<2 x i64>`
+/// `vec.ind` (pin VF 2, IC 2).
+#[test]
+fn an_induction_read_as_a_value_is_widened() {
+    let text = run(INDUCTION_VALUE);
+    assert!(text.contains("<i64 0, i64 1>"), "{text}");
+    assert_eq!(count(&text, "phi <2 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "add <2 x i64>"), 4, "{text}");
+    assert_eq!(count(&text, "store <2 x i64>"), 2, "{text}");
+}
+
+/// A run-time start: the lanes begin at the truncated start plus the lane
+/// numbers, made in the vector preheader (`induction`).
+#[test]
+fn an_induction_that_starts_at_a_run_time_value_is_widened() {
+    let text = run(INDUCTION_START);
+    assert!(text.contains("induction = add <8 x i16>"), "{text}");
+    assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+}
