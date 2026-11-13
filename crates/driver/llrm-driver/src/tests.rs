@@ -343,6 +343,17 @@ fn a_constant_load_left_with_one_reader_is_folded_into_it_at_m64() {
     assert_eq!(register_form, 0, "{listing}");
 }
 
+/// bench bintree's `Walk`: the descriptor's segment is an argument cell read at every access. `foldAsLoad` made its
+/// copy a load, the value stopped being one to remake, and each piece was spilled to a slot (`mov es, [bp+8]; mov
+/// [bp-6], es`) where it was loaded from the argument cell again: m16 -Os +6 B and +620 clk.
+#[test]
+fn an_argument_load_folded_into_its_copy_is_still_remade_at_m16() {
+    let text = include_str!("testdata/walk_far_descriptor.ll");
+    let (built, _) = compiled(&flags(&["-m16", "-Os", "-march=i386", "--isel=dag"]), text, "WALK&").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains(", es"), "a segment register is stored to a slot: {listing}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the

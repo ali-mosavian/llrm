@@ -1845,6 +1845,15 @@ impl InlineSpiller<'_> {
         }
         let folded = self.tii.fold_memory_operand(&reader, read, cell)?;
         let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(user));
+        // The pin asks the value number's def instruction each time; our tables hold what the body had at the
+        // start, so a copy folded into a load is entered as a value to remake (its split pieces remake the load).
+        if self.tii.remat_shape(&folded) && folded.uses.is_empty() {
+            let mut roots = self.tables.remat_roots.borrow_mut();
+            for value in &folded.defines {
+                self.tables.remat.borrow_mut().insert(*value);
+                roots.insert(*value, Arc::clone(&folded));
+            }
+        }
         lis.rewrite_instr(block, user, folded);
         Some(def)
     }
