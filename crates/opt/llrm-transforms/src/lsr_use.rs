@@ -985,7 +985,19 @@ impl Cost {
             && let Some(m) = r.tti.lsr_size_model()
         {
             // A `mov` or `lea` of the register's start in the preheader.
-            self.size_bytes += m.setup.bytes * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            // DEVIATE LSR-DERIVED: not for an integer recurrence the loop as
+            // written derives from its counter by one instruction each trip
+            // (`i << 4`, `i - 192`): it is no register stepped from a start,
+            // so there is nothing to set up. The pin counts it a recurrence
+            // like any other; a byte model prices the two apart.
+            if !(r.as_written
+                && r.se.addrec_header(reg) == Some(r.l)
+                && !r.se.type_of(reg).is_pointer()
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_some())
+                && !is_existing_phi(r.se, r.cx, reg))
+            {
+                self.size_bytes += m.setup.bytes * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            }
         }
         if let Some(m) = r.tti.lsr_bytes() {
             // A local set in the preheader, and a constant for each
