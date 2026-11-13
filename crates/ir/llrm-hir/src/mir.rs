@@ -2282,7 +2282,7 @@ fn asm_name(asm: &model::Asm) -> String {
 }
 
 /// What a block answers: nothing, its one register's value, or each as a field.
-/// `llrm.fp{to}{s,u}i.checked`'s name and signature for a float `from` taken
+/// `llvm.experimental.fp{to}{s,u}i.checked`'s name and signature for a float `from` taken
 /// to the integer `to`: `{ to, i1 }`.
 fn checked_conversion(
     types: &mut Types,
@@ -2299,7 +2299,7 @@ fn checked_conversion(
     let bits = types.int_bits(to)?;
     let flag = types.int(1);
     let returns = types.intern(Type::Struct { fields: vec![to, flag], packed: false });
-    Some((format!("llrm.fpto{}i.checked.i{bits}.{float}", if signed { 's' } else { 'u' }), returns))
+    Some((format!("llvm.experimental.fpto{}i.checked.i{bits}.{float}", if signed { 's' } else { 'u' }), returns))
 }
 
 fn asm_returns(

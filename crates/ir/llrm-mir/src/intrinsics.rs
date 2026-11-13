@@ -89,7 +89,7 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
-    /// `llrm.fp{to,}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
     /// the float toward zero as an integer of the result's width, and whether
     /// it fits that integer (NaN and a float past the range do not). The value
     /// is unspecified where it does not fit, and no instruction faults.
@@ -655,7 +655,7 @@ const TABLE: [Spec; 88] = [
         own: None,
     },
     Spec {
-        name: "llrm.fptosi.checked",
+        name: "llvm.experimental.fptosi.checked",
         intrinsic: Intrinsic::FpToIntChecked { signed: true },
         overloads: &[Kind::Int, Kind::Float],
         returns: Slot::WithFlag(0),
@@ -663,7 +663,7 @@ const TABLE: [Spec; 88] = [
         own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
-        name: "llrm.fptoui.checked",
+        name: "llvm.experimental.fptoui.checked",
         intrinsic: Intrinsic::FpToIntChecked { signed: false },
         overloads: &[Kind::Int, Kind::Float],
         returns: Slot::WithFlag(0),
@@ -1068,7 +1068,7 @@ pub fn is_wide_divide(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.fptosi.checked") || name.starts_with("llrm.fptoui.checked") || name.starts_with("llrm.vararg.")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.

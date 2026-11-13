@@ -1,4 +1,4 @@
-//! Expands `llrm.fp{to}{s,u}i.checked`, a float taken to an integer together
+//! Expands `llvm.experimental.fp{to}{s,u}i.checked`, a float taken to an integer together
 //! with whether it fits, before instruction selection.
 //!
 //! # How it works
@@ -14,7 +14,7 @@
 //!
 //! # Example
 //! ```text
-//! %p = call { i32, i1 } @llrm.fptosi.checked.i32.f64(double %x)
+//! %p = call { i32, i1 } @llvm.experimental.fptosi.checked.i32.f64(double %x)
 //! ==> %w = fptosi double %x to i64 ; %v = trunc %w to i32
 //!     %hi = trunc (lshr %w, 32) to i32 ; %s = ashr %v, 31 ; %ok = icmp eq %hi, %s
 //! ```

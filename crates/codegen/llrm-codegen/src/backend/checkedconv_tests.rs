@@ -10,7 +10,7 @@ fn conversion(
     float: &str,
 ) -> Module {
     let mangled = if float == "double" { "f64" } else { "f32" };
-    let name = format!("llrm.fpto{}i.checked.i{bits}.{mangled}", if signed { 's' } else { 'u' });
+    let name = format!("llvm.experimental.fpto{}i.checked.i{bits}.{mangled}", if signed { 's' } else { 'u' });
     let text = format!(
         "declare {{ i{bits}, i1 }} @{name}({float})\n\
          define i{bits} @f({float} %x) {{\nb0:\n  %p = call {{ i{bits}, i1 }} @{name}({float} %x)\n  \

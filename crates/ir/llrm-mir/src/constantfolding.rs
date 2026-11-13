@@ -2066,7 +2066,7 @@ pub fn constant_fold_integer_cast(
 enum Folded {
     Id(IntrinsicId),
     IsConstant,
-    /// `llrm.fp{to}{s,u}i.checked` (`Intrinsic::FpToIntChecked`): MIR's own.
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (`Intrinsic::FpToIntChecked`): MIR's own.
     FpToIntChecked { signed: bool },
 }
 
@@ -2074,7 +2074,7 @@ fn folded_intrinsic(name: &str) -> Option<Folded> {
     if name.strip_prefix("llvm.is.constant").is_some_and(|rest| rest.is_empty() || rest.starts_with('.')) {
         return Some(Folded::IsConstant);
     }
-    for (prefix, signed) in [("llrm.fptosi.checked", true), ("llrm.fptoui.checked", false)] {
+    for (prefix, signed) in [("llvm.experimental.fptosi.checked", true), ("llvm.experimental.fptoui.checked", false)] {
         if name.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('.')) {
             return Some(Folded::FpToIntChecked { signed });
         }
@@ -2394,7 +2394,7 @@ fn exact_rint(
     (-limit <= value && value < limit).then(|| int(context, width, (value as i128 as u128) & mask(width)))
 }
 
-/// `llrm.fp{to}{s,u}i.checked` of a float constant: the integer toward zero and
+/// `llvm.experimental.fp{to}{s,u}i.checked` of a float constant: the integer toward zero and
 /// `true`, or an unspecified value (poison) and `false` where the float is a
 /// NaN, an infinity or past the integer's range.
 fn fold_fp_to_int_checked(
