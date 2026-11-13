@@ -17,12 +17,11 @@
 //! of `_text_eq`, 325 instructions against 55).
 //!
 //! # Deviations
-//! - W1: `deadargelim` runs before the Simplify list, LLVM's after the CGSCC
-//!   walk (`PassBuilderPipelines.cpp` l.1335). Fact: nothing here cleans a body
-//!   after the walk (LLVM's later module optimization pipeline does), and the
-//!   argument a dropped parameter leaves behind is dead code only the list
-//!   removes. Issue: it sees bodies simplified by Early only. Exit: a post-walk
-//!   cleanup stage, then `deadargelim` after the walk.
+//! - W1: `deadargelim` runs after the walk (`ipa-deadargs.`), as LLVM's
+//!   (`PassBuilderPipelines.cpp` l.1335), except for a function that calls
+//!   itself, which loses its unread parameters before the walk: the recursion
+//!   copier works on the body gcc's IPA-SRA leaves. Exit: the copier prices a
+//!   body with its unread parameters dropped.
 //! - W2a: the walk is per function in callee-first order, not per SCC with the
 //!   inliner's own updates; the clocks inliner still runs afterwards;
 //!   `inlinecost::sites` stands for `decide` until it lands. Exit: W2.
@@ -168,6 +167,19 @@ impl ProgramPass for ModuleIpo {
             for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules, self.inline.single) {
                 modules[at].changed(id);
             }
+        }
+        // DEVIATE W1 (narrowed, owner w10, exit 2026-11-24): the pin's
+        // `deadargelim` follows the CGSCC walk, so the inliner prices a call
+        // with the arguments nothing reads (x_idioms -Os `sumlong`, cost -10).
+        // A function that calls itself loses them first: the recursion copier
+        // (gcc's `-finline-recursive`) works on the body gcc's IPA-SRA leaves,
+        // and with them in place the copies merge no calls (hanoi: a switch of
+        // nine copies and a closed form, against 23..2358 B more without).
+        for at in 0..count {
+            let ((removed, unsound), before) =
+                reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_from_recursions);
+            vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
+            changed |= !removed.is_empty();
         }
         for one in &mut modules {
             one.invalidate_bodies(&PreservedAnalyses::none());
