@@ -1538,6 +1538,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::rep_stos_priced_unit`.
+    fn rep_stos_priced_unit(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
