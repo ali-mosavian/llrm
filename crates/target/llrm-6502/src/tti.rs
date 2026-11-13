@@ -255,6 +255,13 @@ impl Tti for Mos6502 {
         &[16, 32]
     }
 
+    /// A divide is a call here: `v / 10 >= 10` stays a compare of the quotient
+    /// the loop carries, not `v >= 100` with `v` kept across the call
+    /// (DEVIATE ICMPDIV-1, `tti.rs` of llrm-mir).
+    fn keeps_icmp_of_shared_division(&self) -> bool {
+        true
+    }
+
     /// `isLSRCostLess` with the target's own instruction counts, the shape of
     /// the pin's x86 override ("instruction number 1st priority",
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)

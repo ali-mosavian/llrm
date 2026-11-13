@@ -284,6 +284,12 @@ fn fold_icmp_div_constant(
         return Some(c.replace_with_binop(inst, logic, x_big, y_one, Flags::default()));
     }
 
+    // DEVIATE ICMPDIV-1 (`Tti::keeps_icmp_of_shared_division`): the quotient
+    // is needed anyway, so the range test only keeps `X` live beside it.
+    if c.env.hooks.keeps_shared_division_compare && !has_one_use(c, div) {
+        return None;
+    }
+
     // Fold: icmp pred ([us]div X, C2), C -> range test.
     let (c2, _) = query(c, None).int_constant(y)?;
 

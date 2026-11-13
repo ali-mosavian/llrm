@@ -2367,6 +2367,17 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine leaves `icmp (udiv X, C), K` alone while the
+    /// quotient has another use. The pin folds it into a range test of `X`
+    /// on every target (`foldICmpDivConstant`). DEVIATE ICMPDIV-1 (owner
+    /// llrm-target-6502, exit 2026-11-24): where a divide is a library call,
+    /// the fold keeps the dividend live across it beside the quotient the
+    /// loop carries (digits Os: two callee-saved cells, 12 B of push and pop).
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2857)
+    fn keeps_icmp_of_shared_division(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
