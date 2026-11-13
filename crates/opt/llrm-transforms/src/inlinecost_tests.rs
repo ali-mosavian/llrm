@@ -1357,3 +1357,35 @@ b0:
     );
     assert!(checked - plain < crate::inlinecost::CALL_PENALTY, "checked {checked} against plain {plain}");
 }
+
+/// x_jpeg_fixed -O2 (arm64): `emit(out, data, n)` with `out` a constant IPSCCP
+/// left unread. `deadargelim` removes it after the walk, so the guard prices
+/// the call it will contain: the callee is held exactly as the same callee
+/// without the parameter. Priced with it, the call read 3 units, growth fell
+/// under the call and the cold site inlined (+72 B, +151 k instructions).
+#[test]
+fn test_the_speed_guard_prices_a_call_without_the_arguments_nothing_reads() {
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let held = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&arm), params.clone(), (2, true));
+        cost >= threshold
+    };
+    // A body of `ops` instructions: the parameter that is unread flips no verdict at any size.
+    for ops in 2..16 {
+        let mut body = String::from("  %v0 = load i32, ptr @g\n");
+        for at in 1..ops {
+            body += &format!("  %v{at} = add i32 %v{}, %x\n", at - 1);
+        }
+        body += &format!("  store i32 %v{}, ptr @g\n  ret void\n}}\n", ops - 1);
+        let with = format!(
+            "{GLOBAL}define internal void @callee(i32 %unread, i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 1, i32 %y)\n  call void @callee(i32 1, i32 3)\n  ret void\n}}\n"
+        );
+        let without = format!(
+            "{GLOBAL}define internal void @callee(i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee(i32 3)\n  ret void\n}}\n"
+        );
+        assert_eq!(held(&with), held(&without), "{ops} instructions");
+    }
+}

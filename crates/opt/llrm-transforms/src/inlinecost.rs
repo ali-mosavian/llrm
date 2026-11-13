@@ -2149,8 +2149,32 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
+        let size = size - self.unread_arguments_cost(llrm_mir::tti::CostKind::CodeSize);
         let percent = if self.measured() { view.as_deref().unwrap_or(tti).call_code_size_percent() } else { tti.call_code_size_percent() };
         (size * percent + 50) / 100 + self.byval_copy_size()
+    }
+
+    /// What the arguments of parameters the callee never reads add to the
+    /// call's price: `deadargelim` removes them after the walk (the pin's
+    /// order), so the code the inline replaces has no setup for them. The
+    /// pin's own cost keeps them; the guards below price the call the code
+    /// will contain, so an inline's verdict does not turn on a parameter that
+    /// is about to go (x_jpeg_fixed -O2: `emit`'s constant `out`).
+    fn unread_arguments_cost(&self, kind: llrm_mir::tti::CostKind) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let linkage = self.site.module.global(self.site.callee_id).linkage;
+        if !matches!(linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private) {
+            return 0;
+        }
+        let parameters = self.callee.parameters();
+        let unread = parameters.iter().filter(|&&value| self.callee.users(value).is_empty()).count() as i64;
+        if unread == 0 {
+            return 0;
+        }
+        let all = parameters.len() as i64;
+        let with = tti.direct_call_cost(all, kind);
+        let without = tti.direct_call_cost(all - unread, kind);
+        if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
