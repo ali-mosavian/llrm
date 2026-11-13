@@ -1536,7 +1536,10 @@ impl<'d> SplitEditor<'d> {
         while !dead.is_empty() {
             let round = std::mem::take(&mut dead);
             for def in cx.lis.erase_dead_defs(&round) {
-                if cx.env.is_copy_like(cx.lis.instr(def)) && cx.lis.instr(def).defines.len() == 1 {
+                let one = cx.lis.instr(def);
+                // `eliminateDeadDefs` goes on to any definition the erased one
+                // was the last reader of, a made-again literal or address too.
+                if (cx.env.is_copy_like(one) || cx.env.is_pure_def(one)) && one.defines.len() == 1 {
                     dead.push(def);
                 }
             }
@@ -1720,9 +1723,9 @@ mod tests {
 
         fn is_copy_like(
             &self,
-            _insn: &Insn,
+            insn: &Insn,
         ) -> bool {
-            false
+            insn.what.as_ref().is_some_and(|w| w.op == Operation::Move && matches!(w.sources.as_slice(), [Loc::Held(_)]))
         }
 
         fn is_pure_def(
@@ -1999,6 +2002,62 @@ mod tests {
             })
             .collect();
         assert_eq!(left, [8], "the dead `mov 7` is erased, the read `mov 8` kept");
+    }
+
+    /// The copy a split left unread goes, and so does the literal it copied:
+    /// `eliminateDeadDefs` goes on to a definition whose last reader was erased.
+    /// overflow_builtins m64 -O1: three `mov rcx, offset X` left before the
+    /// loop, never read (21 B).
+    #[test]
+    fn the_definition_a_dead_copy_read_is_erased_with_it() {
+        use crate::model::ir::Imm;
+        let literal = Arc::new(Insn::new(
+            0,
+            None,
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 3, width: 2, offset: 0 })],
+                sources: vec![Loc::Imm(Imm { value: 7, width: 2, address: None })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![3],
+            vec![],
+        ));
+        let copy = Arc::new(Insn::new(
+            0,
+            None,
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
+                sources: vec![Loc::Held(Held { value: 3, width: 2, offset: 0 })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![2],
+            vec![3],
+        ));
+        let insns = vec![insn(&[1], &[]), literal, copy, insn(&[], &[1])];
+        let body = LirBody::new(
+            "cascade",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let mut vrm = VirtRegMap::new();
+        let mut sa = SplitAnalysis::new(1);
+        let li = lis.interval_rc(1);
+        sa.analyze(&lis, &Env, li);
+        let mut delegate = NoDelegate;
+        let mut ed = SplitEditor::new();
+        ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
+        ed.edit_mut().create_from(&mut lis, &mut vrm, 2, 1);
+        lis.interval_rc(2);
+        lis.interval_rc(3);
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
+        ed.delete_remat_victims(&mut cx);
+        let left: Vec<u32> = lis.block_insns(0).iter().flat_map(|one| one.defines.clone()).collect();
+        assert_eq!(left, [1], "the dead copy and the literal it read are erased: {left:?}");
     }
 
     /// After `finish` no instruction names the parent, every operand names the
