@@ -216,6 +216,9 @@ impl TargetLoweringInfo {
                 MVT::V4F32,
                 MVT::V2F64,
                 MVT::V2F32,
+                MVT::V8I8,
+                MVT::V4I16,
+                MVT::V2I32,
             ],
             false,
         )
@@ -246,6 +249,11 @@ impl TargetLoweringInfo {
     /// m16: the same registers, and the far pointer (SD2).
     pub fn x86_16() -> TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true).with_int_size(16)
+    }
+
+    /// The vector types with a register class.
+    pub fn legal_vectors(&self) -> &[MVT] {
+        &self.vectors
     }
 
     /// `getTypeConversion`: the action for `vt` and the type it becomes.

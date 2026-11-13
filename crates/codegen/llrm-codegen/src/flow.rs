@@ -309,6 +309,7 @@ pub fn machine_with<'a>(
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
             loop_carried_flow: target.commutes_loop_carried_flow(),
+            to_known_register: target.converts_three_address_to_known_register(),
             unoptimized: !target.optimized,
         }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),

@@ -52,6 +52,8 @@ tail_dup_hot_threshold  8    8
 pairing                 =    =
 # DEVIATE TA-LC (owner anyisa, exit 2026-11-27): measured on the 486 (m32 A/B, 1984 cells); P5 off until measured.
 commute_loop_carried    1    0
+# DEVIATE TA-11 (owner x86-m32-b, exit 2026-11-24): see CpuTable::three_address_to_known_register. 486 measured, P5 off until measured.
+three_address_to_known_register 1 0
 # DEVIATE PHI-SHARE (owner x87, exit 2026-11-29): see CpuTable::share_congruent_phis.
 # DEVIATE UNORDERED-ODDS (owner x87, exit 2026-11-24): see CpuTable::unordered_branch_odds.
 unordered_branch_odds 1 1

@@ -577,6 +577,103 @@ pub enum VectorShift {
     Sshr,
 }
 
+/// The lane of the narrow operand of a long or wide vector operation: the
+/// result lanes are twice as wide (`8b` to `8h`, `4h` to `4s`, `2s` to `2d`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum NarrowLane {
+    B,
+    H,
+    S,
+}
+
+impl NarrowLane {
+    /// The narrow lane size in bits.
+    pub fn bits(self) -> u32 {
+        match self {
+            NarrowLane::B => 8,
+            NarrowLane::H => 16,
+            NarrowLane::S => 32,
+        }
+    }
+
+    /// `size` of the encodings.
+    pub(super) fn size(self) -> u32 {
+        match self {
+            NarrowLane::B => 0,
+            NarrowLane::H => 1,
+            NarrowLane::S => 2,
+        }
+    }
+
+    /// The arrangement of the narrow operand, `8b` or, for the `2` forms,
+    /// `16b`.
+    pub fn narrow_suffix(
+        self,
+        high: bool,
+    ) -> &'static str {
+        match (self, high) {
+            (NarrowLane::B, false) => "8b",
+            (NarrowLane::B, true) => "16b",
+            (NarrowLane::H, false) => "4h",
+            (NarrowLane::H, true) => "8h",
+            (NarrowLane::S, false) => "2s",
+            (NarrowLane::S, true) => "4s",
+        }
+    }
+
+    /// The arrangement of the result and of the wide operand.
+    pub fn wide_suffix(self) -> &'static str {
+        match self {
+            NarrowLane::B => "8h",
+            NarrowLane::H => "4s",
+            NarrowLane::S => "2d",
+        }
+    }
+}
+
+/// The vector operations whose result lanes are twice as wide as a narrow
+/// operand's: a shift left (`ushll`, `sshll`), an add of a narrow operand
+/// to a wide one (`uaddw`, `saddw`) and a multiply (`umull`, `smull`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorLongOp {
+    Ushll,
+    Sshll,
+    Uaddw,
+    Saddw,
+    Umull,
+    Smull,
+}
+
+impl VectorLongOp {
+    /// (`U`, the base of the encoding) of the three-register forms and of the
+    /// shift.
+    pub(super) fn fields(self) -> (u32, u32) {
+        match self {
+            VectorLongOp::Ushll => (1, 0x0F00_A400),
+            VectorLongOp::Sshll => (0, 0x0F00_A400),
+            VectorLongOp::Uaddw => (1, 0x0E20_1000),
+            VectorLongOp::Saddw => (0, 0x0E20_1000),
+            VectorLongOp::Umull => (1, 0x0E20_C000),
+            VectorLongOp::Smull => (0, 0x0E20_C000),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorLongOp::Ushll => "ushll",
+            VectorLongOp::Sshll => "sshll",
+            VectorLongOp::Uaddw => "uaddw",
+            VectorLongOp::Saddw => "saddw",
+            VectorLongOp::Umull => "umull",
+            VectorLongOp::Smull => "smull",
+        }
+    }
+
+    pub fn is_shift(self) -> bool {
+        matches!(self, VectorLongOp::Ushll | VectorLongOp::Sshll)
+    }
+}
+
 impl Arrangement {
     /// The lane size in bits.
     pub fn lane_bits(self) -> u32 {
@@ -1002,6 +1099,28 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
         amount: u8,
+    },
+    /// `ushll v.8h, v.8b, #0` (`extend`), `ushll2 v.8h, v.16b, #0`: the low or
+    /// high half of the 16-byte `rn` (the 8-byte register for the low half)
+    /// shifted left, lanes twice as wide.
+    VectorLongShift {
+        op: VectorLongOp,
+        lane: NarrowLane,
+        high: bool,
+        rd: Vreg,
+        rn: Vreg,
+        amount: u8,
+    },
+    /// `uaddw v.8h, v.8h, v.8b`, `umull v.8h, v.8b, v.8b` and their `2` forms:
+    /// the narrow `rm` (the high half of it with `high`), and `rn` (narrow
+    /// too for `umull`), into wide lanes.
+    VectorLong {
+        op: VectorLongOp,
+        lane: NarrowLane,
+        high: bool,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
     },
     /// `not v.16b` (`mvn`).
     VectorNot {

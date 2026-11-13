@@ -1115,6 +1115,7 @@ fn selected_in(
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
     builder_target.dag.absolute_symbols = !module.position_independent();
+    builder_target.dag.add_to_or_disjoint = machine.tti().is_some_and(|tti| tti.add_to_or_disjoint());
     let builder_target = builder_target
         .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
@@ -1409,6 +1410,11 @@ fn selected_in(
         frame: &frame,
         address_mode,
         opt_size: cpu.size || cpu.min_size,
+        // A handler runs on the interrupted program's stack, which may not be
+        // the data group: no function of a module that has one reads a stack
+        // pointer through DS.
+        stack_shares_data: contracts.is_some_and(|contracts| contracts.segments.stack_shares_data)
+            && !module.functions().any(|(_, _, function)| function.calling_convention == llrm_mir::opcode::X86_INTR),
         reserved_calls: module
             .named(name)
             .and_then(|id| module.global(id).function())

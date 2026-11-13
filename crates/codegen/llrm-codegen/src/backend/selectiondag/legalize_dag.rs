@@ -1030,6 +1030,29 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(loaded)
     }
 
+    /// `SelectionDAG::UnrollVectorOp` for the lane-wise operations: each lane
+    /// of the operands extracted, the scalar operation on each, a
+    /// `BUILD_VECTOR` of the results.
+    fn unroll_vector_op(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let (op, flags) = (self.dag.opcode(node), self.dag.node(node).flags);
+        let operands = self.dag.node(node).ops.clone();
+        let lanes: Vec<SDValue> = (0..vt.lanes())
+            .map(|lane| {
+                let index = self.dag.get_constant(u128::from(lane), EVT::I64);
+                let scalars: Vec<SDValue> = operands
+                    .iter()
+                    .map(|operand| self.dag.get_node(ISD::ExtractElement, vt.element(), &[*operand, index]))
+                    .collect();
+                self.dag.get_node_flags(op, vt.element(), &scalars, flags)
+            })
+            .collect();
+        self.dag.get_build_vector(vt, &lanes)
+    }
+
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
     fn expand_node(
@@ -1040,6 +1063,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
         match op {
+            // `VectorLegalizer::Expand`: a lane-wise operation the target has
+            // not is done a lane at a time.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor if vt.is_vector() => {
+                Some(vec![self.unroll_vector_op(node)])
+            }
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::SignExtendInReg => {
                 // An in-register sign extension of a boolean is a negation of

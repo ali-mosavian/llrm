@@ -228,8 +228,11 @@ pub enum ISD {
     /// `BUILD_VECTOR`: one scalar per lane. An operand may be wider than the
     /// lane (`PromoteIntOp_BUILD_VECTOR`): the extra bits are ignored.
     BuildVector,
-    /// `CONCAT_VECTORS`: two vectors of one type, one of twice the lanes.
+    /// `CONCAT_VECTORS`: vectors of one type, one of as many times the lanes.
     ConcatVectors,
+    /// `EXTRACT_SUBVECTOR`: `(vector, index)`, a constant first lane, a
+    /// multiple of the result's lane count.
+    ExtractSubvector,
     /// `SCALAR_TO_VECTOR`: the scalar in lane 0, the rest undefined.
     ScalarToVector,
     /// `INSERT_VECTOR_ELT`: `(vector, element, index)`.
@@ -458,6 +461,7 @@ impl ISD {
             IntrinsicVoid => "intrinsic_void",
             BuildVector => "BUILD_VECTOR",
             ConcatVectors => "concat_vectors",
+            ExtractSubvector => "extract_subvector",
             ScalarToVector => "scalar_to_vector",
             InsertVectorElt => "insert_vector_elt",
             VectorShuffle => "vector_shuffle",

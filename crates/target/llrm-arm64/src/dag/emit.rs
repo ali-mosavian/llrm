@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorReduce,
-    VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp,
+    VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -559,14 +559,17 @@ fn gpr_width(letter: &str) -> Option<Width> {
 }
 
 /// The values the float register file holds across blocks: floats and the
-/// 128-bit integer vectors.
+/// vectors.
 fn in_float_file(ty: EVT) -> bool {
-    ty.is_floating_point() || is_quad(ty)
+    ty.is_floating_point() || ty.is_vector() || is_quad(ty)
 }
 
 /// A value of 128 bits in a float register (`q`): `F128` and the vectors.
 fn is_quad(ty: EVT) -> bool {
-    matches!(ty, EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64))
+    matches!(
+        ty,
+        EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 | MVT::V4F32 | MVT::V2F64)
+    )
 }
 
 /// `DUPv8i16gpr`, `MOVIv2d_ns`, `MOVIv8i16`, `MVNIv4s_msl`: a vector made from
@@ -698,6 +701,44 @@ fn vector_inst(
     if let Some((op, lanes)) = reduction(name) {
         return Some(match operands {
             [Operand::Fpr(rn)] => Ok(Inst::VectorReduce { op, lanes, rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    // `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: a narrow
+    // operand (a half of a vector, with `2`) into wide lanes.
+    for op in [
+        VectorLongOp::Ushll,
+        VectorLongOp::Sshll,
+        VectorLongOp::Uaddw,
+        VectorLongOp::Saddw,
+        VectorLongOp::Umull,
+        VectorLongOp::Smull,
+    ] {
+        let Some(rest) = name.strip_prefix(&op.mnemonic().to_uppercase()).and_then(|rest| rest.strip_prefix('v'))
+        else {
+            continue;
+        };
+        let narrow = rest.split('_').next().unwrap_or(rest);
+        let Some((lane, high)) = [
+            ("8i8", NarrowLane::B, false),
+            ("16i8", NarrowLane::B, true),
+            ("4i16", NarrowLane::H, false),
+            ("8i16", NarrowLane::H, true),
+            ("2i32", NarrowLane::S, false),
+            ("4i32", NarrowLane::S, true),
+        ]
+        .into_iter()
+        .find(|(text, ..)| *text == narrow)
+        .map(|(_, lane, high)| (lane, high)) else {
+            continue;
+        };
+        return Some(match (op.is_shift(), operands) {
+            (true, [Operand::Fpr(rn), Operand::Imm(amount)]) => {
+                Ok(Inst::VectorLongShift { op, lane, high, rd, rn: *rn, amount: *amount as u8 })
+            }
+            (false, [Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorLong { op, lane, high, rd, rn: *rn, rm: *rm })
+            }
             _ => wrong(),
         });
     }

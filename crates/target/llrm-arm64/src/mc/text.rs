@@ -389,6 +389,37 @@ impl fmt::Display for Inst {
                 let suffix = lanes.suffix();
                 write!(out, "{name} v{}.{suffix}, v{}.{suffix}, #{amount}", rd.0, rn.0)
             }
+            Inst::VectorLongShift { op, lane, high, rd, rn, amount } => {
+                write!(
+                    out,
+                    "{}{} v{}.{}, v{}.{}, #{amount}",
+                    op.mnemonic(),
+                    if *high { "2" } else { "" },
+                    rd.0,
+                    lane.wide_suffix(),
+                    rn.0,
+                    lane.narrow_suffix(*high)
+                )
+            }
+            Inst::VectorLong { op, lane, high, rd, rn, rm } => {
+                // `uaddw` has a wide first operand; `umull` a narrow one.
+                let first = if matches!(op, VectorLongOp::Uaddw | VectorLongOp::Saddw) {
+                    lane.wide_suffix()
+                } else {
+                    lane.narrow_suffix(*high)
+                };
+                write!(
+                    out,
+                    "{}{} v{}.{}, v{}.{first}, v{}.{}",
+                    op.mnemonic(),
+                    if *high { "2" } else { "" },
+                    rd.0,
+                    lane.wide_suffix(),
+                    rn.0,
+                    rm.0,
+                    lane.narrow_suffix(*high)
+                )
+            }
             Inst::VectorNot { rd, rn } => write!(out, "mvn v{}.16b, v{}.16b", rd.0, rn.0),
             Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
                 let suffix = lanes.suffix();
