@@ -437,9 +437,15 @@ pub fn instruction_cost_known(
                 let ret = result;
                 return match arguments {
                     Some(arguments) => {
-                        let priced = tti.intrinsic_cost(name.unwrap_or(""), ret, &arguments, kind);
+                        let name = name.unwrap_or("");
+                        let zero_poison = (name.starts_with("llvm.ctlz.") || name.starts_with("llvm.cttz."))
+                            && operands.get(1).and_then(|&flag| constant_int(context, flag)) == Some(1);
+                        let priced = match zero_poison {
+                            true => tti.zero_poison_intrinsic_cost(name, ret, &arguments, kind),
+                            false => tti.intrinsic_cost(name, ret, &arguments, kind),
+                        };
                         match ret {
-                            Some(ty @ Ty::Int(_)) if !priced.valid && is_funnel_shift(name.unwrap_or("")) => {
+                            Some(ty @ Ty::Int(_)) if !priced.valid && is_funnel_shift(name) => {
                                 funnel_shift_cost(tti, ty, kind, operands, &|at| info(at))
                             }
                             _ => priced,
