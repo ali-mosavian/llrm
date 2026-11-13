@@ -222,6 +222,11 @@ impl CombineHooks for X86Lowering<'_> {
         self.cmov
     }
 
+    /// DEVIATE: off at m16 (`i16_mul_chains`), see the trait.
+    fn select_cc_to_shift_and(&self) -> bool {
+        !self.i16_mul_chains
+    }
+
     /// `convertSelectOfConstantsToMath`: false where SELB keeps the select.
     fn convert_select_of_constants_to_math(
         &self,
