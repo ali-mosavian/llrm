@@ -1119,20 +1119,28 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
-/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; the pin's llc
-/// writes `rep movsb` at `minsize`, gcc -Os inlines it too (memory_expansion
-/// 23405 B against 22295 and 22749): +1110 B, half of the 88 cells worse than
-/// the pin at the same rules. DEVIATE REP-MOVS-OS.
+/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; REP-MOVS-OS made it `rep movsb` (memory_expansion
+/// 23405 B against 22295 and 22749). A block under a dword stops at the pin's 128 bytes since the REP cap (scroll -Os:
+/// `rep movsw` of 4000 B ran twice as slow as the call): over it the copy is the call, up to it `rep movsb`.
 #[test]
-fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
-    let text = "target datalayout = \"@m32-datalayout@\"\n\
-                target triple = \"i486-unknown-linux-gnu\"\n\
-                declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
-                define void @f(ptr align 1 %d, ptr align 1 %s) optsize {\n\
-                \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 700, i1 false)\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
+fn a_constant_copy_of_bytes_at_m32_os_is_rep_movsb_up_to_128_and_a_call_past_it() {
+    let text = |bytes: u32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+             define void @f(ptr align 1 %d, ptr align 1 %s) optsize {{\n\
+             \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 {bytes}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |bytes| {
+        let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), &text(bytes), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let short = listing(128);
+    assert!(short.contains("rep movsb") && !short.contains("call"), "{short}");
+    let long = listing(700);
+    assert!(long.contains("call") && long.contains("memcpy") && !long.contains("rep movs"), "{long}");
 }
 
 /// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1, and the pin writes it at `minsize` only: at m32 -Os it
@@ -5987,8 +5995,9 @@ fn a_copy_loop_of_run_time_length_is_a_memcpy_call_at_m32_os() {
 }
 
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
-/// the same bytes, a third to a quarter of the clocks. scroll -Os copied 4000 bytes of two-byte-aligned shorts a byte at a
-/// time: 958,326 clk against clang's 536,067.
+/// the same bytes, a third to a quarter of the clocks. A block under a dword stops at 128 bytes (scroll -Os: 4000 bytes of
+/// two-byte-aligned shorts as `rep movsw` took 682,269 clk, the call 533,965); a dword-aligned copy stays `rep movsd`
+/// whatever its size, the library copies by dwords too.
 #[test]
 fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     let text = |align: u32, bytes: u32| {
@@ -6005,9 +6014,11 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
         let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), &text(align, bytes), "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    assert!(listing(2, 4000).contains("movsw"), "two-byte aligned:\n{}", listing(2, 4000));
+    assert!(listing(2, 120).contains("movsw"), "two-byte aligned, within 128:\n{}", listing(2, 120));
+    let call = listing(2, 4000);
+    assert!(call.contains("memcpy") && !call.contains("rep movs"), "two-byte aligned past 128 is the call:\n{call}");
     assert!(listing(4, 4000).contains("movsd"), "four-byte aligned:\n{}", listing(4, 4000));
-    assert!(listing(1, 4000).contains("movsb") && !listing(1, 4000).contains("movsw"), "unaligned stays bytes");
+    assert!(listing(1, 120).contains("movsb") && !listing(1, 120).contains("movsw"), "unaligned stays bytes");
     assert!(!listing(2, 30).contains("movsw"), "a short copy would pay the operand-size prefix for nothing:\n{}", listing(2, 30));
     assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
 }

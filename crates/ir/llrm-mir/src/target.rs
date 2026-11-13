@@ -480,6 +480,14 @@ pub struct Tuning {
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
     /// `Tti::lsr_phi_operand_uses`.
     pub lsr_phi_operand_uses: bool,
+    /// DEVIATE LU14 on a flat target (owner x86-m32, exit 2026-11-30): LSR's search also takes
+    /// the uses in the opposite order and keeps that solution where it saves an instruction.
+    /// Real mode always does (`Tti::lsr_solves_both_use_orders`). The pin's `SolveRecurse` rates
+    /// a use against the registers the uses before it chose, so which use comes first hides
+    /// cheaper combinations; with the use-list order of IU1 the first is edit history (x_dct
+    /// -Os: `sum += blk[i][i]` kept a pointer and a counter, 3 instructions, where the
+    /// count to zero over the other order is 2).
+    pub lsr_both_use_orders: bool,
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_phi_users_first`.
     pub lsr_phi_users_first: bool,
@@ -731,6 +739,7 @@ impl Tuning {
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
+        lsr_both_use_orders: false,
         lsr_phi_users_first: false,
         splits_invariant_fmuladd: false,
         unroll_promotion_fits_x87_stack: false,
