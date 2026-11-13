@@ -1195,6 +1195,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE RL-EXITING-LATCH: whether `LoopRotate` also rotates a loop whose latch already exits when the copy of
+    /// its header folds away in the preheader (the pin: only when a header phi dies or the latch's exit count
+    /// becomes computable). gcc's header copy does it. False: the pin's.
+    fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
+        false
+    }
+
     /// DEVIATE Z80-ROT: whether -Oz rotates a loop whose copied header folds
     /// away in the preheader, the pin's no-copy limit notwithstanding.
     /// False: the pin.
