@@ -369,6 +369,8 @@ fn an_argument_load_folded_into_its_copy_is_still_remade_at_m16() {
     let (built, _) = compiled(&flags(&["-m16", "-Os", "-march=i386", "--isel=dag"]), text, "WALK&").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains(", es"), "a segment register is stored to a slot: {listing}");
+}
+
 /// `n = rd(); while (n > 0) { report(..); n = rd(); }`: the loop's guard and its latch end in the same five
 /// instructions (`mov; mov; mov; call rd; test; jg`). The pin's `TailMergeBlocks` shares them, one `call rd`; we kept
 /// both: the merge was skipped for a body of three blocks, and for a latch that ends in a branch on a cycle.
