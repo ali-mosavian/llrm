@@ -3396,11 +3396,15 @@ impl Builder<'_> {
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
             // a far global: its offset and the selector of its segment
             ConstantKind::Global(global) if vt == MVT::Far.into() => {
+                self.note_global_alignment(id, global.0);
                 let offset = self.dag.get_global_address(EVT::I16, global.0, 0);
                 let segment = self.segment_of(Some(global.0));
                 Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[offset, segment], super::dag::SDNodeFlags::PAIR_FAR))
             }
-            ConstantKind::Global(global) => Ok(self.dag.get_global_address(vt, global.0, 0)),
+            ConstantKind::Global(global) => {
+                self.note_global_alignment(id, global.0);
+                Ok(self.dag.get_global_address(vt, global.0, 0))
+            }
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr {
                 source,
                 inbounds,
@@ -4214,6 +4218,21 @@ impl Builder<'_> {
         let node = self.dag.get_node(ISD::Select, vt, &[cond, then, other]);
         self.set_value(instruction.result.expect("a select has a result"), node);
         Ok(())
+    }
+
+    /// `Value::getPointerAlignment` of a global the DAG is about to address,
+    /// for `InferPtrAlign`.
+    fn note_global_alignment(
+        &mut self,
+        id: llrm_mir::context::ConstantId,
+        symbol: u32,
+    ) {
+        let query = llrm_mir::valuetracking::Query {
+            globals: &self.module.globals,
+            ..llrm_mir::valuetracking::Query::bare(&self.module.context, self.function, self.layout)
+        };
+        let align = llrm_mir::valuetracking::known::pointer_alignment(&query, Operand::Constant(id));
+        self.dag.global_alignments.insert(symbol, align);
     }
 
     fn mem_info(
