@@ -445,6 +445,10 @@ impl llrm_target::Target for M64 {
                             // small loop at -Os when the code does not grow.
                             unroll_trial_at_size: Some(30),
                             unroll_trial_bytes_strict: true,
+                            // DEVIATE UNROLL-O1, UNROLL-O1-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
+                            // m32 entries, see `Tuning::unroll_never_grows_at_o1`, `unroll_trial_at_o1`.
+                            unroll_never_grows_at_o1: true,
+                            unroll_trial_at_o1: Some(150),
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
                             // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.

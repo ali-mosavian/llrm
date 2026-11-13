@@ -487,6 +487,13 @@ pub(crate) fn gather_unrolling_preferences_of_target(
         up.partial_threshold = up.partial_opt_size_threshold;
         up.max_percent_threshold_boost = 100;
     }
+    // DEVIATE UNROLL-O1: where -O1 never grows the code (`unroll_never_grows_at_o1`), a partial or run-time
+    // unroll, which always copies the body, is left to the trial compile that keeps it only if the object
+    // is no larger.
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
+        up.partial = false;
+        up.runtime = false;
+    }
     up
 }
 
@@ -1903,6 +1910,7 @@ fn try_to_unroll_loop(
             });
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
+            let remainder_mark = run.function.mark();
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
             // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
             // was worked out in: an earlier loop's remainder guard, read while
@@ -1929,7 +1937,10 @@ fn try_to_unroll_loop(
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
-            run.scev = ScalarEvolution::new();
+            // `forgetTopmostLoop`: the one `ScalarEvolution` lives on, so the
+            // next loop does not work out every earlier loop's count again.
+            run.scev = session.into_scev();
+            forget_since(run, analyzed, remainder_mark);
             run.finished.insert(header);
             if let Some(epilog) = epilog {
                 run.finished.insert(epilog);
