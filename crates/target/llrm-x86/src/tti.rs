@@ -1208,6 +1208,13 @@ impl Tti for X86 {
         self.real_mode.is_none()
     }
 
+    fn lftr_expansion_budget(
+        &self,
+        optsize: bool,
+    ) -> u32 {
+        if optsize { self.tuning.lftr_size_budget } else { 4 }
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         self.tuning.inline_chain_trial
     }

@@ -315,6 +315,23 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     assert_eq!(listing.matches("movzx").count(), 9, "unrolled by 8 plus the remainder loop: {listing}");
 }
 
+/// `for (i = 0; i < n; ++i)` as a do-while: IndVarSimplify's test replacement made the exit `i != smax(n, 1)`, which costs
+/// `cmp; mov 1; cmovl` (8 B) before the loop where gcc keeps `inc; cmp; jl`. fib `k` m64 -Os 24 B against gcc's 22.
+/// DEVIATE LFTR-SIZE (gcc-bar only): the budget at size is one operation, so the limit that needs a `smax` stays `n`.
+#[test]
+fn a_loop_exit_limit_that_needs_a_clamp_is_not_replaced_at_m64_os() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @k(i32 %n) optsize {\nentry:\n  br label %loop\n\
+                loop:\n  %a = phi i32 [ 0, %entry ], [ %b, %loop ]\n  %b = phi i32 [ 1, %entry ], [ %s, %loop ]\n\
+                  %i = phi i32 [ 0, %entry ], [ %j, %loop ]\n  %s = add nuw nsw i32 %a, %b\n  %j = add nuw nsw i32 %i, 1\n\
+                  %c = icmp slt i32 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "k").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("cmov"), "the clamp of the exit limit is a cmov: {listing}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the
