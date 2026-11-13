@@ -192,6 +192,33 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         found.is_add || found.pre_shift != 0
     }
 
+    /// Whether a live remainder of the same operands sits beside the divide
+    /// `node` would expand: `x / c` and `x % c` share one quotient, so the
+    /// pair is priced as the remainder's sequence (quotient, multiply,
+    /// subtract) against the one `div` that leaves both, and decided once.
+    /// DEVIATE SD445 priced each node alone: the divide took the multiply-high
+    /// sequence and the remainder, dearer than its `div`, kept the `div`, so
+    /// both ran.
+    fn has_sibling_rem(
+        &self,
+        n0: SDValue,
+        n1: SDValue,
+        signed: bool,
+    ) -> bool {
+        let remainder = if signed { ISD::SRem } else { ISD::URem };
+        self.dag
+            .users(n0)
+            .any(
+                |user| {
+                    let at = SDValue { node: user, res: 0 };
+                    self.dag.opcode(at) == remainder
+                        && self.dag.operand(at, 0) == n0
+                        && self.dag.operand(at, 1) == n1
+                        && self.dag.has_users(at)
+                },
+            )
+    }
+
     /// `isIntDivCheap(VT)` priced per divisor: whether the target's
     /// `div`/`idiv` of a `vt` value costs fewer clocks than `BuildSDIV`/
     /// `BuildUDIV`'s multiply-high sequence for the constant `n1` (and, for a
@@ -357,7 +384,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         if self.dag.constant(n1).is_some()
             && !self.divide_stays(vt, n0, n1, true)
-            && !self.hardware_divide_wins(vt, n0, n1, true, false)
+            && !self.hardware_divide_wins(vt, n0, n1, true, self.has_sibling_rem(n0, n1, true))
         {
             // DEVIATE SD-DIVMAG: by a negative divisor the quotient is the
             // negation of the one by its magnitude, which the remainder
@@ -469,7 +496,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         if self.dag.constant(n1).is_some()
             && !self.divide_stays(vt, n0, n1, false)
-            && !self.hardware_divide_wins(vt, n0, n1, false, false)
+            && !self.hardware_divide_wins(vt, n0, n1, false, self.has_sibling_rem(n0, n1, false))
         {
             return self.build_udiv(n0, n1, node);
         }
