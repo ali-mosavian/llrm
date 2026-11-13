@@ -64,6 +64,16 @@ pub struct Mos6502 {
 }
 
 impl Mos6502 {
+    /// The instruction-count weights of the speed key: a step is `inc; bne;
+    /// inc` (3), a base add of two cells seven, a multiply a call (40), an
+    /// immediate added four. u64: a rejected formula carries `u32::MAX` terms.
+    fn lsr_work(c: &LsrCost) -> u64 {
+        3 * u64::from(c.add_rec_cost)
+            + 7 * u64::from(c.num_base_adds)
+            + 40 * u64::from(c.num_iv_muls)
+            + 4 * u64::from(c.imm_cost)
+    }
+
     /// DEVIATE LSR-MUL-BYTES (owner llrm-target-6502, exit 2026-11-24): the
     /// bytes of the two terms the size model does not price. A multiply is the
     /// call and its argument cells (`jsr`, two `sta`, two `lda`); the linked
@@ -291,18 +301,12 @@ impl Tti for Mos6502 {
                 let bytes = u64::from(c.size_bytes)
                     + u64::from(mul) * u64::from(c.num_iv_muls)
                     + u64::from(imm) * u64::from(c.imm_cost);
-                (bytes, c.num_regs, c.scale_cost, c.setup_cost)
+                // Equal bytes: the instruction-count order of the speed levels.
+                (bytes, Self::lsr_work(c), c.num_regs, c.scale_cost, c.setup_cost)
             };
             return key(a) < key(b);
         }
-        let key = |c: &LsrCost| {
-            // u64: a rejected formula carries `u32::MAX` terms.
-            let work = 3 * u64::from(c.add_rec_cost)
-                + 7 * u64::from(c.num_base_adds)
-                + 40 * u64::from(c.num_iv_muls)
-                + 4 * u64::from(c.imm_cost);
-            (work, c.num_regs, c.scale_cost, c.setup_cost)
-        };
+        let key = |c: &LsrCost| (Self::lsr_work(c), c.num_regs, c.scale_cost, c.setup_cost);
         key(a) < key(b)
     }
 
@@ -326,20 +330,29 @@ impl Tti for Mos6502 {
         };
         let step = bytes("inc", "rc2");
         let step_more = bytes("bne", "x") + bytes("inc", "rc2");
+        // Any other step is an add of the constant: `lda; clc; adc #; sta`, then `lda; adc #; sta` a byte.
+        let step_other_more = bytes("lda", "rc2") + bytes("adc", "#0") + bytes("sta", "rc2");
+        let step_other = bytes("clc", "") + step_other_more;
         let setup = bytes("lda", "#0") + bytes("sta", "rc2");
-        let add16 = bytes("clc", "") + 2 * (bytes("lda", "rc2") + bytes("adc", "#0") + bytes("sta", "rc2"));
+        // A byte add of two cells is `lda; clc; adc; sta`; each byte past the first `lda; adc; sta`.
+        let add_more = bytes("lda", "rc2") + bytes("adc", "rc3") + bytes("sta", "rc2");
+        let add8 = bytes("clc", "") + add_more;
+        let add16 = add8 + add_more;
         Some(LsrSizeModel {
             disp_global: OpCost::bytes(bytes("lda", "tbl,x") - 1),
             disp_frame: OpCost::bytes(bytes("ldy", "#0")),
             disp_short: OpCost::bytes(bytes("ldy", "#0")),
             disp_long: OpCost::bytes(add16),
-            base_add: OpCost::bytes(add16),
+            base_add: OpCost::bytes(add8),
             iv_step: OpCost::bytes(step),
             setup: OpCost::bytes(setup),
             setup_cap: 4,
             setup_constant: OpCost::bytes(0),
             target_orders: true,
             step_per_byte: step_more,
+            step_other: OpCost::bytes(step_other),
+            step_other_per_byte: step_other_more,
+            add_per_byte: add_more,
             setup_per_byte: setup,
         })
     }

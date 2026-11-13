@@ -729,7 +729,12 @@ impl Cost {
                 }
             }
             // An add or lea for each register not folded, and its immediate.
-            self.size_bytes += m.base_add.bytes * (self.c.num_base_adds - prev_base_adds);
+            let adds = self.c.num_base_adds - prev_base_adds;
+            if adds != 0 {
+                let register = f.scaled_reg.or(f.base_regs.first().copied());
+                let bits = register.map_or(u32::MAX, |reg| r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg)));
+                self.size_bytes += m.add_bytes(bits) * adds;
+            }
         }
 
         // Scaling amounts that are not free.
@@ -934,7 +939,12 @@ impl Cost {
                 && r.bytes_counted
                 && let Some(m) = r.tti.lsr_size_model()
             {
-                self.size_bytes += m.step_bytes(r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg)));
+                let unit = r
+                    .se
+                    .match_affine_add_rec(reg)
+                    .and_then(|(_, step, _)| r.se.as_constant(step))
+                    .is_some_and(|step| step.sext_value() == 1);
+                self.size_bytes += m.step_bytes(r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg)), unit);
             }
             if loop_cost > 0
                 && let Some(m) = r.tti.lsr_bytes()

@@ -344,6 +344,13 @@ pub struct LsrSizeModel {
     /// Bytes `iv_step` grows by for each byte of the register's width past
     /// the first: a target with no wide registers (x86) has 0.
     pub step_per_byte: u32,
+    /// The same for `base_add`.
+    pub add_per_byte: u32,
+    /// `iv_step` and its per-byte growth for a step other than one (the 6502
+    /// steps a counter by one with `inc` and any other amount with an add of
+    /// the constant). x86: the same as `iv_step`.
+    pub step_other: OpCost,
+    pub step_other_per_byte: u32,
     /// The same for `setup`.
     pub setup_per_byte: u32,
 }
@@ -363,15 +370,33 @@ impl LsrSizeModel {
         setup_constant: OpCost::bytes(3),
         target_orders: false,
         step_per_byte: 0,
+        add_per_byte: 0,
+        step_other: OpCost::bytes(3),
+        step_other_per_byte: 0,
         setup_per_byte: 0,
     };
 
-    /// The bytes of the step a register of `bits` takes each trip.
+    /// The bytes of the step a register of `bits` takes each trip: by one, or
+    /// by any other `amount`.
     pub fn step_bytes(
         &self,
         bits: u32,
+        unit: bool,
     ) -> u32 {
-        self.iv_step.bytes + self.step_per_byte * (bits.div_ceil(8).max(1) - 1)
+        let wide = bits.div_ceil(8).max(1) - 1;
+        if unit {
+            self.iv_step.bytes + self.step_per_byte * wide
+        } else {
+            self.step_other.bytes + self.step_other_per_byte * wide
+        }
+    }
+
+    /// The bytes of an add of registers of `bits`.
+    pub fn add_bytes(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        self.base_add.bytes + self.add_per_byte * (bits.div_ceil(8).max(1) - 1)
     }
 
     /// The bytes of a setup instruction for a register of `bits`.
@@ -3272,6 +3297,9 @@ mod size_model_tests {
         setup_constant: OpCost::bytes(11),
         target_orders: false,
         step_per_byte: 8,
+        add_per_byte: 11,
+        step_other: OpCost::bytes(12),
+        step_other_per_byte: 13,
         setup_per_byte: 9,
     };
 
@@ -3298,7 +3326,8 @@ mod size_model_tests {
         );
         assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
         // no width scaling: a 64-bit step costs what a 32-bit one does
-        assert_eq!((m.step_bytes(8), m.step_bytes(64), m.setup_bytes(8), m.setup_bytes(64)), (3, 3, 3, 3));
+        assert_eq!((m.step_bytes(8, true), m.step_bytes(64, false), m.setup_bytes(8), m.setup_bytes(64)), (3, 3, 3, 3));
+        assert_eq!((m.add_bytes(8), m.add_bytes(64)), (3, 3));
         assert_eq!(m.setup_constant, m.setup, "a global's address is set up like any register on x86");
     }
 
@@ -3306,7 +3335,9 @@ mod size_model_tests {
     #[test]
     fn a_register_steps_and_sets_up_by_its_width() {
         let m = DISTINCT;
-        assert_eq!((m.step_bytes(8), m.step_bytes(16), m.step_bytes(32)), (6, 14, 30));
+        assert_eq!((m.step_bytes(8, true), m.step_bytes(16, true), m.step_bytes(32, true)), (6, 14, 30));
+        assert_eq!((m.step_bytes(8, false), m.step_bytes(16, false)), (12, 25));
         assert_eq!((m.setup_bytes(8), m.setup_bytes(16), m.setup_bytes(32)), (7, 16, 34));
+        assert_eq!((m.add_bytes(8), m.add_bytes(16), m.add_bytes(32)), (5, 16, 38));
     }
 }
