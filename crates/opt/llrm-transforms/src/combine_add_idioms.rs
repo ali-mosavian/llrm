@@ -37,7 +37,7 @@
 use llrm_mir::context::mask;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::valuetracking::known::{NoCommonBitsSetResult, get_no_common_bits_set_result};
+use llrm_mir::valuetracking::known::{NoCommonBitsSetResult, WithCache, get_no_common_bits_set_result};
 use llrm_mir::valuetracking::range::compute_constant_range;
 use llrm_mir::valuetracking::{Query, pattern, signbits};
 
@@ -332,10 +332,11 @@ fn fold_extended_pair(
 fn fold_no_common_bits(
     c: &mut Combiner,
     inst: InstId,
-    lhs: Operand,
-    rhs: Operand,
+    lhs_cache: &WithCache,
+    rhs_cache: &WithCache,
 ) -> Option<Visit> {
-    let result = get_no_common_bits_set_result(&query(c, Some(inst)), lhs, rhs);
+    let (lhs, rhs) = (lhs_cache.value(), rhs_cache.value());
+    let result = get_no_common_bits_set_result(&query(c, Some(inst)), lhs_cache, rhs_cache);
     let flags = match result {
         NoCommonBitsSetResult::Known => Flags::DISJOINT,
         NoCommonBitsSetResult::OnlyIfUndefIgnored => Flags::default(),
@@ -462,22 +463,29 @@ pub fn fold_add_rest(
     if let Some(value) = check_for_negative_operand(c, inst, lhs, rhs) {
         return Visit::Replace(value);
     }
-    let folds: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 10] = [
+    type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
+    let before: [Fold; 6] = [
         fold_add_one_not,
         fold_add_const_not,
         fold_reassociated_add,
         fold_constant_sub,
         fold_masked_sign_bit,
         fold_extended_pair,
-        fold_no_common_bits,
-        fold_narrow_math,
-        fold_bitwise_pair,
-        fold_div_ceil,
     ];
-    if let Some(found) = folds.iter().find_map(|fold| fold(c, inst, lhs, rhs)) {
+    if let Some(found) = before.iter().find_map(|fold| fold(c, inst, lhs, rhs)) {
         return found;
     }
-    infer_wrap_flags(c, inst, lhs, rhs, flags)
+    // `LHSCache` and `RHSCache` of `visitAdd` (:1782): the known bits of an
+    // operand are computed once for the disjoint-or fold and the wrap flags.
+    let (lhs_cache, rhs_cache) = (WithCache::new(lhs), WithCache::new(rhs));
+    if let Some(found) = fold_no_common_bits(c, inst, &lhs_cache, &rhs_cache) {
+        return found;
+    }
+    let after: [Fold; 3] = [fold_narrow_math, fold_bitwise_pair, fold_div_ceil];
+    if let Some(found) = after.iter().find_map(|fold| fold(c, inst, lhs, rhs)) {
+        return found;
+    }
+    infer_wrap_flags(c, inst, &lhs_cache, &rhs_cache, flags)
 }
 
 /// The `willNotOverflowSignedAdd` / `willNotOverflowUnsignedAdd` block that
@@ -491,20 +499,20 @@ pub fn fold_add_rest(
 fn infer_wrap_flags(
     c: &mut Combiner,
     inst: InstId,
-    lhs: Operand,
-    rhs: Operand,
+    lhs: &WithCache,
+    rhs: &WithCache,
     flags: Flags,
 ) -> Visit {
     use llrm_mir::valuetracking::range::{
-        OverflowResult::NeverOverflows, compute_overflow_for_signed_add, compute_overflow_for_unsigned_add,
+        OverflowResult::NeverOverflows, compute_overflow_for_cached_signed_add, compute_overflow_for_cached_unsigned_add,
     };
     let mut new = flags;
     {
         let q = query(c, Some(inst));
-        if !flags.contains(Flags::NSW) && compute_overflow_for_signed_add(&q, lhs, rhs) == NeverOverflows {
+        if !flags.contains(Flags::NSW) && compute_overflow_for_cached_signed_add(&q, lhs, rhs) == NeverOverflows {
             new.insert(Flags::NSW);
         }
-        if !flags.contains(Flags::NUW) && compute_overflow_for_unsigned_add(&q, lhs, rhs) == NeverOverflows {
+        if !flags.contains(Flags::NUW) && compute_overflow_for_cached_unsigned_add(&q, lhs, rhs) == NeverOverflows {
             new.insert(Flags::NUW);
         }
     }
