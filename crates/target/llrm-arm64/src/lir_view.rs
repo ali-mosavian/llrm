@@ -687,41 +687,42 @@ pub fn allocate(
 /// registers come last).
 pub struct Arm64;
 
-/// Whether the target is Apple's: `x18` is the platform register there
-/// (`AArch64RegisterInfo::getReservedRegs`, `isTargetDarwin`), an ordinary
-/// caller-saved register on Linux.
-static DARWIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Per thread: a compile on another thread must not change this one's target.
+thread_local! {
+    static DARWIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FP_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SCRATCH_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Sets the target the next allocations are for.
 pub fn set_darwin(darwin: bool) {
-    DARWIN.store(darwin, std::sync::atomic::Ordering::Relaxed);
+    DARWIN.with(|flag| flag.set(darwin));
 }
 
+/// Whether the target is Apple's: `x18` is the platform register there
+/// (`AArch64RegisterInfo::getReservedRegs`, `isTargetDarwin`), an ordinary
+/// caller-saved register on Linux.
 fn darwin() -> bool {
-    DARWIN.load(std::sync::atomic::Ordering::Relaxed)
+    DARWIN.with(std::cell::Cell::get)
 }
 
-/// Whether the next function has no frame record, so `x29` is an ordinary
+/// Sets whether the next function has no frame record, so `x29` is an ordinary
 /// callee-saved register (`getReservedRegs` reserves it when `hasFP`).
-static FP_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 pub fn set_frame_pointer_free(free: bool) {
-    FP_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+    FP_FREE.with(|flag| flag.set(free));
 }
 
-/// Whether `x16` and `x17` may be allocated: the frame needs no scratch.
-static SCRATCH_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
+/// Sets whether `x16` and `x17` may be allocated: the frame needs no scratch.
 pub fn set_scratch_free(free: bool) {
-    SCRATCH_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+    SCRATCH_FREE.with(|flag| flag.set(free));
 }
 
 fn scratch_free() -> bool {
-    SCRATCH_FREE.load(std::sync::atomic::Ordering::Relaxed)
+    SCRATCH_FREE.with(std::cell::Cell::get)
 }
 
 fn frame_pointer_free() -> bool {
-    FP_FREE.load(std::sync::atomic::Ordering::Relaxed)
+    FP_FREE.with(std::cell::Cell::get)
 }
 
 /// The caller-saved general registers the allocator hands out.
