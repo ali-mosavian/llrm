@@ -576,3 +576,131 @@ fn an_induction_that_starts_at_a_run_time_value_is_widened() {
     assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
     assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
 }
+
+const REVERSE_COPY: &str = include_str!("../tests/lv/reverse_copy.ll");
+const REVERSE_SYMBOLIC: &str = include_str!("../tests/lv/reverse_symbolic.ll");
+const REVERSE_MIXED: &str = include_str!("../tests/lv/reverse_mixed.ll");
+const FORWARD_PHI_EXIT: &str = include_str!("../tests/lv/forward_phi_exit.ll");
+
+/// scroll's `for (i = 1919; i >= 0; --i) s[i + 80] = s[i]` stayed 1920 scalar
+/// iterations ("No integer induction that steps by one"); the pin takes VF 8,
+/// IC 2: loads at `-7` and `-15` elements from the address of the first
+/// iteration, stores likewise, no `shufflevector` (the reverses cancel), and
+/// the loop leaves when the stepped induction is `-1`.
+#[test]
+fn a_reverse_copy_is_widened_on_the_lowest_addresses_without_a_shuffle() {
+    let text = run(REVERSE_COPY);
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "i64 -7"), 2, "{text}");
+    assert_eq!(count(&text, "i64 -15"), 2, "{text}");
+    assert_eq!(count(&text, "shufflevector"), 0, "{text}");
+    assert!(text.contains("add nsw i64 %i, -16"), "{text}");
+    assert!(text.contains("icmp eq i64 %next, -1"), "{text}");
+}
+
+/// The same with a run-time start: the iterations are `start - bound`, the end
+/// `start - n.vec` (the pin: `sub %n, %n.vec`).
+#[test]
+fn a_reverse_copy_from_a_run_time_start_counts_its_iterations_down() {
+    let text = run(REVERSE_SYMBOLIC);
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert!(text.contains("n.trip = sub i64 %n, -1"), "{text}");
+    assert!(text.contains("ind.end = sub i64 %n, %n.vec"), "{text}");
+    assert!(text.contains("bc.resume.val"), "{text}");
+}
+
+/// A loop that counts down and writes forward keeps a reverse `shufflevector`
+/// in the pin (VF 8, IC 2); the arm64 selector declines it, so the loop stays
+/// scalar until LV-R1.
+#[test]
+fn a_loop_that_counts_down_and_writes_forward_stays_scalar() {
+    let text = run(REVERSE_MIXED);
+    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+}
+
+/// A loop counting up that tests the induction before its step (`i == 1919`)
+/// was left alone ("The exit test is not the stepped induction against a
+/// loop-invariant bound"); the pin takes VF 8, IC 2, and the test moves onto
+/// the step.
+#[test]
+fn an_exit_test_on_the_induction_before_its_step_is_moved_onto_the_step() {
+    let text = run(FORWARD_PHI_EXIT);
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert!(text.contains("icmp eq i64 %next, 1920"), "{text}");
+}
+
+/// The widened loops compute what the scalar ones do: a fill, then scroll's
+/// overlapping reverse copy (`s[i + 80] = s[i]`, `i` from 1919 down), then a
+/// checksum of elements across the seams, run by the interpreter before and
+/// after. A wrong lane order, an end pointer off by a lane or an exit never
+/// taken changes the answer (or exhausts the fuel).
+#[test]
+fn a_reverse_copy_keeps_the_answers_of_the_scalar_loop() {
+    let source = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"
+@s = global [2000 x i16] zeroinitializer, align 2
+define i64 @f() {
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %t = trunc i64 %i to i16
+  %m = mul i16 %t, 7
+  %v = add i16 %m, 3
+  %p = getelementptr inbounds i16, ptr @s, i64 %i
+  store i16 %v, ptr %p, align 2
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 2000
+  br i1 %fd, label %back, label %fill
+back:
+  br label %loop
+loop:
+  %j = phi i64 [ 1919, %back ], [ %next, %loop ]
+  %a = getelementptr inbounds i16, ptr @s, i64 %j
+  %x = load i16, ptr %a, align 2
+  %b = getelementptr inbounds i8, ptr %a, i64 160
+  store i16 %x, ptr %b, align 2
+  %next = add nsw i64 %j, -1
+  %done = icmp eq i64 %j, 0
+  br i1 %done, label %exit, label %loop
+exit:
+  %p0 = getelementptr inbounds i16, ptr @s, i64 0
+  %p1 = getelementptr inbounds i16, ptr @s, i64 79
+  %p2 = getelementptr inbounds i16, ptr @s, i64 80
+  %p3 = getelementptr inbounds i16, ptr @s, i64 81
+  %p4 = getelementptr inbounds i16, ptr @s, i64 1000
+  %p5 = getelementptr inbounds i16, ptr @s, i64 1999
+  %l0 = load i16, ptr %p0, align 2
+  %l1 = load i16, ptr %p1, align 2
+  %l2 = load i16, ptr %p2, align 2
+  %l3 = load i16, ptr %p3, align 2
+  %l4 = load i16, ptr %p4, align 2
+  %l5 = load i16, ptr %p5, align 2
+  %e0 = zext i16 %l0 to i64
+  %e1 = zext i16 %l1 to i64
+  %e2 = zext i16 %l2 to i64
+  %e3 = zext i16 %l3 to i64
+  %e4 = zext i16 %l4 to i64
+  %e5 = zext i16 %l5 to i64
+  %s1 = shl i64 %e1, 16
+  %s2 = shl i64 %e2, 32
+  %s3 = shl i64 %e3, 8
+  %s4 = shl i64 %e4, 24
+  %s5 = shl i64 %e5, 40
+  %o1 = xor i64 %e0, %s1
+  %o2 = xor i64 %o1, %s2
+  %o3 = xor i64 %o2, %s3
+  %o4 = xor i64 %o3, %s4
+  %o5 = xor i64 %o4, %s5
+  ret i64 %o5
+}
+";
+    let before = crate::testing::parsed(source);
+    let after = crate::testing::parsed(&run(source));
+    let answer = |module: &llrm_mir::module::Module| {
+        llrm_mir::interpret::run(module, "f", Vec::new(), 2_000_000).unwrap_or_else(|trap| panic!("{trap:?}"))
+    };
+    let text = run(source);
+    assert!(text.contains("<8 x i16>"), "the reverse loop was not widened:\n{text}");
+    assert_eq!(answer(&after), answer(&before), "{text}");
+}

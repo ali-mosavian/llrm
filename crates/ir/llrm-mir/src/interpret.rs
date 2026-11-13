@@ -1009,7 +1009,16 @@ impl<'m> Machine<'m> {
                         }
                         None
                     }
-                    Opcode::Binary(op) => Some(binary(*op, instruction.flags, value(self, 0)?, value(self, 1)?)?),
+                    // A vector operation is its scalar one on each lane.
+                    Opcode::Binary(op) => Some(match (value(self, 0)?, value(self, 1)?) {
+                        (Val::Aggregate(a), Val::Aggregate(b)) if a.len() == b.len() => Val::Aggregate(
+                            a.into_iter()
+                                .zip(b)
+                                .map(|(x, y)| binary(*op, instruction.flags, x, y))
+                                .collect::<Run<Vec<_>>>()?,
+                        ),
+                        (a, b) => binary(*op, instruction.flags, a, b)?,
+                    }),
                     Opcode::FNeg => Some(match value(self, 0)? {
                         Val::Float(kind, bits) => Val::Float(kind, bits ^ (1 << (float_bits(kind) - 1))),
                         other => other,
