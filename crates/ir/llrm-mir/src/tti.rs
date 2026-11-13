@@ -1403,6 +1403,11 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::libc_memcpy`.
+    fn libc_memcpy(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false

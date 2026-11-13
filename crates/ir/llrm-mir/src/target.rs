@@ -45,6 +45,11 @@ pub struct Tuning {
     /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
     /// the pin's, which pops only at `minsize` (X86FrameLowering.cpp:4116).
     pub pops_arguments_at_size: bool,
+    /// The target has a libc `memcpy` to call, so LoopIdiomRecognize forms a
+    /// copy of run-time length whatever its size, as the pin does. false:
+    /// DEVIATE (loopidioms.rs `variable_copy_pays`): the copy stays a loop
+    /// where the inline `rep movs` that replaces it is more bytes.
+    pub libc_memcpy: bool,
     /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
     /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
     /// (`hardware_divide_wins`); false: the clocks and margin alone.
@@ -550,6 +555,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        libc_memcpy: false,
         pops_arguments_at_size: true,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
