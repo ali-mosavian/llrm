@@ -25,8 +25,9 @@
 //!   block is predicated.
 //! - LV-D3 uncountable and early-exit loops (`isVectorizableEarlyExitLoop`): a
 //!   loop without an exact backedge-taken count is refused.
-//! - LV-D4 calls and intrinsics (`getVectorIntrinsicIDForCall`, the
-//!   `VFDatabase`): every call is refused.
+//! - LV-D4 calls: an intrinsic `getVectorIntrinsicIDForCall` takes is legal (a
+//!   scalar operand loop invariant, L965); a call the `VFDatabase` or
+//!   `isTLIScalarize` would take is refused. The transform widens fewer.
 //! - LV-D5 fixed-order recurrences and the coerced-AddRec induction retry
 //!   (`isFixedOrderRecurrence`, `PredicatedScalarEvolution`): such a phi is
 //!   refused as unidentified.
@@ -43,6 +44,7 @@ use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::scev::expr::Kind;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_analysis::vectorutils::{get_vector_intrinsic_id_for_call, is_vector_intrinsic_with_scalar_op_at_arg};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{InstId, Operand};
@@ -151,15 +153,16 @@ fn can_vectorize_instrs(
     Ok(())
 }
 
-/// The intrinsic `inst` calls, if the pin's `isTriviallyVectorizable` takes it
-/// and this port widens it. DEVIATE LV-D4 (owner llrm-arm64-vec, exit LV-W4):
-/// only `llvm.fmuladd`; the pin's list also has `fma`, `sqrt`, `fabs`, ... .
+/// The intrinsic `inst` calls, if legality takes it
+/// (`getVectorIntrinsicIDForCall`) and the transform widens it. DEVIATE LV-D4
+/// (owner llrm-arm64-vec, exit LV-W4): only `llvm.fmuladd` is widened; legality
+/// takes the pin's whole list, and a loop with any other is skipped where the
+/// transform meets it.
 pub(crate) fn widened_intrinsic(
     cx: &Cx,
     inst: InstId,
 ) -> Option<Intrinsic> {
-    let global = llrm_mir::memory::callee(cx.context, cx.function, inst)?;
-    cx.globals.get(global.0 as usize)?.intrinsic().filter(|id| *id == Intrinsic::FMulAdd)
+    get_vector_intrinsic_id_for_call(cx, inst).filter(|id| *id == Intrinsic::FMulAdd)
 }
 
 /// `canVectorizeInstr` (L840).
@@ -201,12 +204,24 @@ fn can_vectorize_instr(
         return Err(Refusal("Found an unidentified PHI"));
     }
 
-    // Calls: LV-D4. `getVectorIntrinsicIDForCall`: an intrinsic that is
-    // trivially vectorizable (see `widened_intrinsic`).
-    if matches!(data.opcode, Opcode::Call(_) | Opcode::Invoke(_))
-        && !(matches!(data.opcode, Opcode::Call(_)) && widened_intrinsic(cx, inst).is_some())
-    {
-        return Err(Refusal("Found a non-intrinsic callsite"));
+    // Calls (L930): an intrinsic `getVectorIntrinsicIDForCall` takes, else
+    // refused (LV-D4: no `VFDatabase` or TLI-scalarized calls).
+    if matches!(data.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+        let Some(id) = get_vector_intrinsic_id_for_call(cx, inst) else {
+            return Err(Refusal("Found a non-intrinsic callsite"));
+        };
+        // Some intrinsics have scalar arguments and should be the same in
+        // every lane (loop invariant) to be vectorized (L965). The callee is
+        // the last operand.
+        let arguments = &data.operands[..data.operands.len() - 1];
+        for (index, &argument) in arguments.iter().enumerate() {
+            if is_vector_intrinsic_with_scalar_op_at_arg(id, index) && !matches!(argument, Operand::Constant(_)) {
+                let scev = se.get_scev(cx, argument);
+                if !se.is_loop_invariant(cx, scev, Some(the_loop.get_header())) {
+                    return Err(Refusal("Found unvectorizable intrinsic"));
+                }
+            }
+        }
     }
 
     // The result type is widenable; a cast from an unwidenable type and
@@ -330,13 +345,6 @@ fn can_vectorize_memory(
         // canVectorizeIndirectUnsafeDependences: histograms are off in the pin
         // (LV-D6).
         return Err(Refusal("Can't vectorize due to memory conflicts"));
-    }
-    // The pin guards such a loop with `vector.memcheck` (LoopVectorize L1637)
-    // or refuses it in a low-trip loop (L7809). DEVIATE LV-M1: the guard block
-    // is not built, so a loop whose pointers LAA can only separate at run time
-    // is refused. Owner arm64-vec, exit 2026-11-24.
-    if lai.runtime_pointer_checking().need {
-        return Err(Refusal("Runtime memory checks are needed"));
     }
     if lai.has_load_store_dependence_involving_loop_invariant_address() {
         return Err(Refusal("We don't allow storing to uniform addresses"));

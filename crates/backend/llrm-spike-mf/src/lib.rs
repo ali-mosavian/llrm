@@ -19,6 +19,7 @@ pub mod regalloc;
 pub mod reloads;
 pub mod reschedule;
 pub mod sink;
+pub mod slotreg;
 pub mod spill;
 pub mod taildup;
 pub mod tailmerge;

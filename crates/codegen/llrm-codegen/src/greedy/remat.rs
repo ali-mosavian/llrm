@@ -98,7 +98,7 @@ pub fn is_trivially_re_materializable(
         // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L830-L860>
         (
             Operation::Move,
-            Some("mov" | "movss" | "movsd" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu"),
+            Some("mov" | "movss" | "movsd" | "movsd_x" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu"),
             [Loc::Mem(cell)],
         ) => {
             invariant
@@ -369,6 +369,19 @@ mod tests {
         let load = def(vec![Loc::Mem(cell)], Operation::Move, "mov");
         assert!(!is_trivially_re_materializable(&load, false), "a load nothing proves invariant stays");
         assert!(is_trivially_re_materializable(&load, true));
+    }
+
+    /// x86-64 names the scalar double load `movsd_x` (`movsd` is the string move at 8086): the list of loads had
+    /// `movsd` only, so a double constant read from the pool was spilled across a call and reloaded from the stack,
+    /// where the pin reads the pool again (soft_double_add_sub -O1 `main` +6 B).
+    #[test]
+    fn test_a_scalar_double_load_is_made_again_under_its_x86_64_name() {
+        let cell = Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 8);
+        let mut load = def(vec![Loc::Mem(cell)], Operation::Move, "movsd_x");
+        let Some(what) = load.what.as_mut() else { unreachable!("a def has semantics") };
+        what.dests = vec![Loc::Held(Held { value: 1, width: 8, offset: 0 })];
+        assert!(is_trivially_re_materializable(&load, true));
+        assert!(!is_trivially_re_materializable(&load, false), "a load nothing proves invariant stays");
     }
 
     /// arm64 names its literal move `MOVImm`: the predicate asked for the

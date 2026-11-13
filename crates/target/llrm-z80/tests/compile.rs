@@ -2471,7 +2471,11 @@ fn the_high_byte_is_loaded_into_a_before_its_sign_is_taken() {
         let out = text(ir, "__floatsisf", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
         let lines: Vec<&str> = out.lines().map(str::trim).collect();
         let sign = lines.iter().position(|line| *line == "add a, a").unwrap_or_else(|| panic!("{level:?}: no sign step\n{out}"));
-        assert!(lines[..sign].contains(&"ld a, d"), "{level:?}: `add a, a` reads a stale a\n{out}");
+        // the byte comes from the register that holds it (`ld a, d`, or `ld a, b` where the zero test kept a copy)
+        assert!(
+            lines[..sign].contains(&"ld a, d") || lines[..sign].contains(&"ld a, b"),
+            "{level:?}: `add a, a` reads a stale a\n{out}"
+        );
     }
 }
 
@@ -2487,6 +2491,20 @@ fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
         // the register is the convention's business (the high word of `a` is on the stack, loaded into bc)
         assert!(out.contains("bit 7, ") && !out.contains("sbc"), "{level:?}: {out}");
     }
+}
+
+/// A long step (`inc bc; ld a, b; or c; jr nz; inc de`) sat between a loop's exit test and its branch, so the test's
+/// byte in `a` was stored and reloaded around it (`ld -1(ix), a` ... `ld a, -1(ix)`, 38 T a trip, shift_until_idioms
+/// offset_count +10% T over SDCC). The step is on the continuing edge now: the test branches first.
+#[test]
+fn a_long_step_after_the_exit_test_does_not_spill_the_test() {
+    let out = text(include_str!("kernels/ir/step_after_test.ll"), "offset_count", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    let spilled = |line: &&str| {
+        let line = line.trim();
+        (line.starts_with("ld -") && line.ends_with("(ix), a")) || (line.starts_with("ld a, -") && line.ends_with("(ix)"))
+    };
+    assert!(!out.lines().any(|line| spilled(&line)), "the exit test is spilled around the step:\n{out}");
 }
 
 /// switch_peeled_table -O1: `main` kept the table index and the sum across `report` in two spill slots stored in

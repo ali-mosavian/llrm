@@ -661,3 +661,33 @@ fn the_interleave_factor_and_register_counts_follow_the_cpu() {
         (32, 31)
     );
 }
+
+/// The horizontal step of a vector reduction, priced as the pin's AArch64 table
+/// (`CostTblNoPairwise`, `faddp` per halving, 2 for a min or max). The expected
+/// costs are `opt -mtriple=aarch64 -passes='print<cost-model>'` on the same
+/// `llvm.vector.reduce.*` calls.
+#[test]
+fn a_vector_reduction_is_priced_by_the_pins_table() {
+    use llrm_mir::intrinsics::ReduceKind;
+    use llrm_mir::tti::{CostKind, Ty, VectorTy};
+    let tti = AArch64::of_cpu("generic").expect("a cpu");
+    let cost = |kind, lane, count, ordered| {
+        tti.vector_reduction_cost(kind, VectorTy { lane, count }, ordered, CostKind::RecipThroughput).map(|c| c.value)
+    };
+    // `addv`: 2 a register, plus 1 for each split.
+    assert_eq!(cost(ReduceKind::Add, Ty::Int(16), 8, false), Some(2));
+    assert_eq!(cost(ReduceKind::Add, Ty::Int(32), 8, false), Some(3));
+    // The or/xor/and sequences of the table, and the split's extra `orr`.
+    assert_eq!(cost(ReduceKind::Or, Ty::Int(32), 4, false), Some(5));
+    assert_eq!(cost(ReduceKind::Xor, Ty::Int(8), 16, false), Some(7));
+    assert_eq!(cost(ReduceKind::And, Ty::Int(32), 8, false), Some(6));
+    // `faddp` once per halving of the register.
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Float, 4, false), Some(2));
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Double, 2, false), Some(1));
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(16), 8, false), Some(2));
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(32), 8, false), Some(3));
+    // Not the pin's table: in lane order, a multiply, a 64-bit min.
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Float, 4, true), None);
+    assert_eq!(cost(ReduceKind::Mul, Ty::Int(32), 4, false), None);
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(64), 2, false), None);
+}
