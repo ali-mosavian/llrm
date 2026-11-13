@@ -6,7 +6,7 @@
 # then ` env: WORDS` when CELLS_FLAGS is set. CELLS_FLAGS was documented and never read: a `-fPIC` sweep (2026-11-10) compiled flagless.
 set -u
 . "$(dirname "$0")/../ab_env.sh"; ab_env_check || exit 2
-D=$1; L=$2
+D=$1; L=$2; repo=$(cd "$(dirname "$0")/../.." && pwd)
 for b in llrm-cc llrm-llc; do
   [ -f "$D/base/$b" ] && [ -f "$D/new/$b" ] || { echo "cells: missing $b in base or new" >&2; exit 2; }
   [ "$(md5sum < "$D/base/$b")" != "$(md5sum < "$D/new/$b")" ] || { echo "cells: base and new $b are the same binary" >&2; exit 2; }
@@ -36,11 +36,14 @@ while read -r _ tg lvl f; do
   # The program's own flags (`// flags:`, first variant): a cell built without them is another program (div_constants_*
   # without -fno-inline-functions inlined to 145 kB on z80 where the row is 17.5 kB).
   pf=$(python3 "$(dirname "$0")/cell_flags.py" "$f")
+  # A program that includes llrm_os.h or bench_io.h needs the posix runtime dir (and bench/): a sweep without it refused every one at every target
+  # ('llrm_os.h' file not found, 52 cells) and hid the real errors behind it. corpus_refusals.py gives the same two dirs. The posix dir goes after every other: a target's own llrm_os.h (x86-m16's DOS one has LLRM_OS_TEXT_SCREEN) must win.
+  os_inc=""; grep -qE '#[[:space:]]*include[[:space:]]*"[^"]*(llrm_os|bench_io)\.h"' "$f" 2>/dev/null && os_inc="-idirafter $repo/runtime/shared/posix -I $repo/bench"
   for v in base new; do
-    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>"$w/$v.err" || { why[$v]=$(first_error "$w/$v.err"); continue; }
+    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} $os_inc -c "$f" -o "$w/$v.o" >/dev/null 2>"$w/$v.err" || { why[$v]=$(first_error "$w/$v.err"); continue; }
     # wasm has no text output (`-S` writes the binary): its instructions are counted from the object's disassembly.
     case $tg in wasm*) cp "$w/$v.o" "$w/$v.s";; *)
-      LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>"$w/$v.err" || { why[$v]=$(first_error "$w/$v.err"); continue; };; esac
+      LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} $os_inc -S "$f" -o "$w/$v.s" >/dev/null 2>"$w/$v.err" || { why[$v]=$(first_error "$w/$v.err"); continue; };; esac
     [ -s "$w/$v.o" ] && [ -s "$w/$v.s" ] || continue
     # Code bytes of the object (object_bytes.py: per target; z80/6502 assemble their .s). Never the file's size: a failure is an EMPTY cell.
     read -r text[$v] dat[$v] _ < <(uv run -q --project "$(dirname "$0")/.." python "$(dirname "$0")/object_bytes.py" "$tg" "$w/$v.o" 2>>"$w/err") || { unset "text[$v]" "dat[$v]"; }
