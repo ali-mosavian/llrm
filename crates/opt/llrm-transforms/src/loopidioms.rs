@@ -139,6 +139,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::assumptions::Assumptions;
 use llrm_analysis::cfg::{self, Around};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop};
@@ -302,9 +303,12 @@ pub fn filled_with(
     // DEVIATE 17 (exit 2026-11-12, `Tti::memory_idioms_at_optsize`): a size
     // build keeps its loops where the call costs more bytes than the loop.
     let for_size = size
-        || function.attrs.iter().any(
-            |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
-        );
+        || function.attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            )
+        });
     if for_size && outer.target().tti().is_some_and(|tti| !tti.memory_idioms_at_optsize()) {
         return false;
     }
@@ -313,9 +317,13 @@ pub fn filled_with(
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
+        // One search of the body for `llvm.assume` per state of it, not one per
+        // loop and idiom asked (LLVM's AssumptionCache is
+        // per function).
+        let assumed = Assumptions::of(&Unit::within(context, layout, function, outer));
         for loop_ in shape.loops.iter().filter(|loop_| wanted(loop_)).cloned().collect::<Vec<_>>() {
             let found = {
-                let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+                let unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_assumptions(&assumed);
                 let facts = standing.of(&unit);
                 _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
@@ -326,7 +334,7 @@ pub fn filled_with(
                 continue 'again;
             }
             let split = if found.is_none() {
-                let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+                let unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_assumptions(&assumed);
                 let facts = standing.of(&unit);
                 _split(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             } else {
@@ -1047,13 +1055,16 @@ pub(crate) fn trip_clocks<'a>(
     trip_total(context, layout, function, callees, blocks, costs, true, false)
 }
 
-/// Whether `inst` is an instruction of its own in a trip's price: a phi is a register, an address
-/// an operand, a compare the flags of the branch it feeds.
+/// Whether `inst` is an instruction of its own in a trip's price: a phi is a
+/// register, an address an operand, a compare the flags of the branch it feeds.
 pub(crate) fn counted(
     function: &Function,
     inst: InstId,
 ) -> bool {
-    !matches!(function.instruction(inst).opcode, Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_))
+    !matches!(
+        function.instruction(inst).opcode,
+        Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
+    )
 }
 
 fn trip_total<'a>(
@@ -1171,8 +1182,10 @@ fn fill_beside_computed_stores_pays(
     fills: i64,
 ) -> bool {
     let (Some((clocks, _, Some(trips), Some(cells))), true) = (clocks, at_speed) else { return false };
-    // `cells` counts every store of the loop; the fills cover the `removed` ones' share (priced over all, a loop of
-    // one computed and one constant store stored twice the cells it fills: `reset`'s 1200 trips lost the fill).
+    // `cells` counts every store of the loop; the fills cover the `removed`
+    // ones' share (priced over all, a loop of one computed and one constant
+    // store stored twice the cells it fills: `reset`'s 1200 trips lost the
+    // fill).
     let fill_cells = cells * removed / stores.max(1);
     trips * removed * clocks.store_immediate > fills * clocks.fill + fill_cells * clocks.fill_cell
 }

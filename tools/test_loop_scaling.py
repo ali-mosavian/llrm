@@ -28,7 +28,7 @@ OWED = {
     "mir unroll": 4.8,
     "mir rotate": 11.3,
     "mir constraint-elimination": 9.6,
-    "mir loopidioms": 9.3,
+    "mir loopidioms": 5.2,
     "mir jumpthreading": 7.7,
 }
 PIN_FACTOR = 1.5  # a step of ours may grow this much more than the pin's own pass (tools/pin_scaling_ratios.json)
