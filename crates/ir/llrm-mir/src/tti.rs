@@ -1000,6 +1000,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE INL-O1-HOT (owner w10, exit 2026-11-24): where -O1 holds a
+    /// growing inline (`by_size`), a site the pin calls locally hot
+    /// (`HotCallSiteRelFreq`, 60 times the caller's entry) still inlines when
+    /// its growth is at most this percent of the call sequence removed. None:
+    /// the guard holds every growing inline.
+    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// What a call to a callee whose peak register pressure is `peak` values
     /// costs in clocks to save and restore the registers it must preserve (a
     /// register the callee takes beyond the scratch ones is pushed and popped
