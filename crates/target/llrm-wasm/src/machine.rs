@@ -198,13 +198,17 @@ impl Tti for Wasm {
     /// SZ1: a size build keeps a callee that inlining would copy into
     /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
     /// The pin's `OptSizeThreshold` 50 allows the growth.
-    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-24): the pin inlines it.
     /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
     /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245). On the whole
     /// corpus (198 rows, 2026-11-10) 20 -O1 rows were above it, +1 256 B: nine
     /// of them held inlines the pin prices below zero (next hook).
     /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
     /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
+    /// Off at tip 2f41481d12 (2026-11-13, 604 tests/run/c cells): 52 cells
+    /// larger, +45 189 B; 2 smaller, -36 B; above the pin 5 -> 8 (div8_os,
+    /// pattern_fill, shrink_wrapped_frame, shrink_wrapped_saves at -O1;
+    /// memcpy_libcall -Os). Closes byvalue_struct_address (49 -> 31 B).
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
     }
