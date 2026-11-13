@@ -856,7 +856,7 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Vec<usize> {
         if is_cmov(inst) {
             continue;
         }
-        if inst.reads_flags {
+        if inst.reads_flags() {
             if inst.terminator {
                 break;
             }
@@ -878,7 +878,7 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Vec<usize> {
                 readers.push(at);
             }
         }
-        if inst.sets_flags {
+        if inst.sets_flags() {
             break;
         }
     }
@@ -949,7 +949,7 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         // them and the join restores them before the first such reader.
         // DEVIATE from the pin, which orders the readers before the pseudo.
         if let Some(second) =
-            tail.iter().take_while(|inst| !inst.sets_flags).position(|inst| is_cmov(inst) || inst.reads_flags)
+            tail.iter().take_while(|inst| !inst.sets_flags()).position(|inst| is_cmov(inst) || inst.reads_flags())
         {
             function.classes.push(Class::Dr16);
             let kept = Reg::Virt(function.classes.len() as u32 - 1);
