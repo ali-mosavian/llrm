@@ -528,13 +528,15 @@ fn written_basic_inner(
     for (name, _items) in &module.data {
         if named.insert(name.clone()) {
             let private = module.private.contains(name);
-            segments.push(objbuild::Segment::new(name, Role::Data, !private));
+            segments.push(objbuild::Segment::new(name, uninitialised_role(name), !private));
         }
     }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.code_model());
+        let role = segments[index].role;
+        let held = if role == Role::Bss { holes(items) } else { items.clone() };
+        objbuild::_data(&mut segments[index], index, &held, &mut symbols, module.object.code_model());
     }
     if module.stack > 0 {
         let mut stack = objbuild::Segment::new("STACK", Role::Stack, true);
@@ -1249,6 +1251,24 @@ fn procedure(
         registers: machined.registers.clone(),
     };
     Ok((procedure, machined.landing, statics))
+}
+
+/// The BSS class's segments: the start-up zeroes them and the linker stores none of them.
+fn uninitialised_role(name: &str) -> Role {
+    if matches!(name, "_BSS" | "BSSB") { Role::Bss } else { Role::Data }
+}
+
+/// `items` with each run of zero bytes a hole: a zero byte in the image would make the linker store the segment up to it.
+fn holes(items: &[masm::Datum]) -> Vec<masm::Datum> {
+    items
+        .iter()
+        .map(|item| match item {
+            masm::Datum::Bytes(bytes) if bytes.iter().all(|byte| *byte == 0) => {
+                masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None })
+            }
+            other => other.clone(),
+        })
+        .collect()
 }
 
 /// `segment`'s data: a segment the module header names starts with its
