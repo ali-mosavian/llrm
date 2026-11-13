@@ -190,8 +190,8 @@ const TRIAL_MAX_UNITS: u64 = 700;
 /// the loops the -Os threshold refused unrolled, kept if its functions that
 /// differ are smaller, bytes then clocks (`Price::Size`). At -O1 the same
 /// trial (DEVIATE UNROLL-O1-TRIAL, `Tti::unroll_trial_threshold`) keeps them
-/// where the functions are no larger and no slower (`Price::Strict`). A module with no
-/// refused loop is compiled once.
+/// where the functions are no larger and no slower (`Price::Strict`). A module
+/// with no refused loop is compiled once.
 fn lowered(
     text: &str,
     cpu: Cpu,
@@ -267,7 +267,11 @@ fn lowered_once(
     crate::compile::mid_end_for_narrowing(
         &program.modules[0],
         cpu,
-        matches!(level, Level::O2 | Level::O3 | Level::Omax),
+        crate::compile::NarrowMultiplies::of(
+            cpu,
+            level != Level::O0,
+            matches!(level, Level::O2 | Level::O3 | Level::Omax),
+        ),
     )
 }
 
