@@ -1177,7 +1177,11 @@ pub fn select_optimize(
     }
     // A group needs a `select` (`treated_like_select`): without one the
     // dominators, loops and block frequencies below would be built for nothing.
-    if !function.layout().iter().any(|&block| function.iter_block(block).any(|inst| function.instruction(inst).opcode == Opcode::Select)) {
+    let has_select = function
+        .layout()
+        .iter()
+        .any(|&block| function.iter_block(block).any(|inst| function.instruction(inst).opcode == Opcode::Select));
+    if !has_select {
         return false;
     }
     let (mut groups, mut frequencies) = {
