@@ -459,7 +459,14 @@ impl LegalizeHooks for Aarch64Lowering {
                 let lanes = u128::from(dag.value_type(node).lanes());
                 dag.constant(dag.operand(node, 2)).filter(|&lane| lane < lanes).map(|_| node)
             }
-            ISD::BuildVector => super::vector::lower_build_vector(dag, node),
+            ISD::BuildVector => match super::vector::lower_build_vector(dag, node) {
+                Some(done) => Some(done),
+                // The pin's `SDValue()` for a constant that is no splat: the
+                // legalizer loads it from the constant pool
+                // (`ExpandBUILD_VECTOR`).
+                None if super::vector::is_constant_build_vector(dag, node) => return None,
+                None => None,
+            },
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
