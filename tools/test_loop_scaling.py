@@ -17,10 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
 SMALL, LARGE = 20, 80
-# What 4x the loops may cost (4 is linear). Steps not named are held to DEFAULT. The named ones are mid-end passes measured over
-# it on 2026-11-13 (20 -> 80 loops, release/next 1d2992e224, after the per-loop parts got their own spans) and are owed a fix (owner: compile-time-bench / w8): each limit is
-# the measured growth plus 15%, lowered when its step is fixed. `unroll` re-solves float liveness of the whole function for
-# every loop (liveness::pressure_in, DEVIATE U3); the others are not yet diagnosed.
+# What 4x the loops may cost (4 is linear). Steps not named are held to DEFAULT. The named ones are measured over it
+# (20 -> 80 loops, release/next 1d2992e224, 2026-11-13): each limit is the measured growth plus 15%, lowered when its step is fixed.
+# `unroll`/`loopfullunroll` re-solve float liveness of the whole function per loop (liveness::pressure_in, DEVIATE U3, owner w8): the pin's
+# LoopFullUnroll grows 4.5x on the same IR, ours 19x. rotate, constraint-elimination, indvars, loopidioms and jumpthreading grow in the pin's own
+# `opt -passes='default<O2>' -time-passes` too (LoopRotate 9.1x here, ours 9.7x): the ceilings keep them from growing further, they are not defects.
 DEFAULT = 6.0
 OWED = {
     "mir loopfullunroll": 22.0,
