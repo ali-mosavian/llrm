@@ -393,7 +393,7 @@ pub struct Tuning {
     /// are instruction bytes, not live values (`Tti::unroll_store_immediate_bits`).
     pub unroll_store_immediate_bits: u32,
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
-    /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
+    /// `Tti::lsr_size_model` (`LsrSizeModel::X86_M16`, `X86_M32` or `X86_M64`).
     pub lsr_size_order: bool,
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.

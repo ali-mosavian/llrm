@@ -950,6 +950,29 @@ mod tests {
         assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
     }
 
+    /// LSR's byte table is m32's own: `mov reg, imm32` is five bytes, where the
+    /// literals every width shared counted three.
+    #[test]
+    fn test_m32_prices_lsr_bytes_by_its_own_encodings() {
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
+        assert_eq!(tti.lsr_size_model(), Some(llrm_mir::tti::LsrSizeModel::X86_M32));
+    }
+
     /// CARRY-SI closed: carrying the coalescer's slot indexes through the
     /// scheduler (the pin's numbering) moved x86_32 -O1 14 cells +704 B, each
     /// still below the pin's own bytes (pindiff m32), so m32 takes it.

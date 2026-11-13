@@ -336,17 +336,38 @@ pub struct LsrSizeModel {
 }
 
 impl LsrSizeModel {
-    /// The bytes of x86's `[reg + disp]`, as `lsr_use.rs` counted them; one
-    /// number (3) for an add, lea or mov with its immediate.
-    pub const X86: Self = Self {
+    /// The bytes of x86's 32-bit mode, from the ISA encoding (Intel SDM vol. 2;
+    /// the pin keeps no x86 instruction-size table): a displacement 0 / 1 / 4, a
+    /// global's an absolute disp32, `add`, `lea` or `cmp` with an imm8 3, a
+    /// step `add reg, imm8` 3, `mov reg, imm32` 5. A frame slot's is 2: its
+    /// disp8 or disp32 is decided by the frame size, after the pass.
+    pub const X86_M32: Self = Self {
         disp_global: OpCost::bytes(4),
         disp_frame: OpCost::bytes(2),
         disp_short: OpCost::bytes(1),
         disp_long: OpCost::bytes(4),
         base_add: OpCost::bytes(3),
         iv_step: OpCost::bytes(3),
-        setup: OpCost::bytes(3),
+        setup: OpCost::bytes(5),
         setup_cap: 4,
+    };
+
+    /// 16-bit real mode: displacements and immediates are 16 bits wide
+    /// (disp16, `mov reg, imm16` 3).
+    pub const X86_M16: Self = Self {
+        disp_global: OpCost::bytes(2),
+        disp_long: OpCost::bytes(2),
+        setup: OpCost::bytes(3),
+        ..Self::X86_M32
+    };
+
+    /// Long mode: a global is RIP-relative (disp32), a 64-bit `add`, `lea` or
+    /// `cmp` with an imm8 carries a REX.W prefix (4), a step `add r64, imm8`
+    /// 4, `mov r32, imm32` 5.
+    pub const X86_M64: Self = Self {
+        base_add: OpCost::bytes(4),
+        iv_step: OpCost::bytes(4),
+        ..Self::X86_M32
     };
 
     /// The bytes of one address displacement.
@@ -3239,16 +3260,16 @@ mod size_model_tests {
         assert_eq!(m.displacement(128, false, false), 70);
     }
 
-    /// x86's table is the numbers `lsr_use.rs` held as literals (0/1/4, 2 for a
-    /// frame slot, 3 per add, step and setup, at most 4 setups): moving them
-    /// into the table changes no x86 object.
+    /// Each width states its own encodings: 16-bit displacements are two bytes,
+    /// a 32-bit `mov reg, imm` five against 16-bit's three, long mode's 64-bit
+    /// `add` and step one more for REX.W.
     #[test]
-    fn the_x86_table_is_the_numbers_lsr_held() {
-        let m = LsrSizeModel::X86;
-        assert_eq!(
-            (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes),
-            (4, 2, 1, 4)
-        );
-        assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
+    fn the_x86_tables_state_each_widths_encodings() {
+        let row = |m: LsrSizeModel| {
+            (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes, m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap)
+        };
+        assert_eq!(row(LsrSizeModel::X86_M32), (4, 2, 1, 4, 3, 3, 5, 4));
+        assert_eq!(row(LsrSizeModel::X86_M16), (2, 2, 1, 2, 3, 3, 3, 4));
+        assert_eq!(row(LsrSizeModel::X86_M64), (4, 2, 1, 4, 4, 4, 5, 4));
     }
 }

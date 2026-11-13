@@ -1175,7 +1175,15 @@ impl Tti for X86 {
     }
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
-        self.tuning.lsr_size_order.then_some(llrm_mir::tti::LsrSizeModel::X86)
+        use llrm_mir::tti::LsrSizeModel;
+        let model = if self.quad {
+            LsrSizeModel::X86_M64
+        } else if self.real_mode.is_some() {
+            LsrSizeModel::X86_M16
+        } else {
+            LsrSizeModel::X86_M32
+        };
+        self.tuning.lsr_size_order.then_some(model)
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {

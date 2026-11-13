@@ -602,6 +602,16 @@ mod tests {
         assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
     }
 
+    /// LSR's byte table is real mode's: displacements are 16 bits wide, where
+    /// the 32-bit table counted a disp32 (4 bytes) for a global's.
+    #[test]
+    fn the_lsr_byte_table_is_real_modes() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        assert_eq!(tti.lsr_size_model(), Some(llrm_mir::tti::LsrSizeModel::X86_M16));
+    }
+
     /// An address in real mode is a base (bx) and an index (si or di), the
     /// frame's bp in neither: three registers, where six hold values. LSR's
     /// pressure on the address class read the six.
