@@ -1021,6 +1021,16 @@ impl Tti for X86 {
         self.tuning.x87_zero_fill_at_size && !self.sse2
     }
 
+    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+        // `fistp` word, dword and qword: x87 only, where the SSE converts have
+        // their own forms (a 32-bit result is a dword, `cvttsd2si`)
+        (!self.sse2).then_some(match bits {
+            0..=16 => 32,
+            17..=32 => 64,
+            _ => return None,
+        })
+    }
+
     fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
         self.tuning.size_fill
     }
