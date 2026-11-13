@@ -2148,3 +2148,53 @@ fn test_a_conversion_of_the_increment_stays_off_the_x87_stack() {
     let after = reduced_next_converted(false);
     assert!(after.contains("sitofp"), "{after}");
 }
+
+/// The trip counts the session works out for the headers `h0..h{loops}`.
+fn session_counts(
+    session: &mut llrm_analysis::scev::analysis::ScevSession,
+    module: &mut llrm_mir::module::Module,
+    loops: usize,
+) -> usize {
+    let (data, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let (context, function) = (&*context, &*function);
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    let (se, env) = session.split(&data, &outer.globals, &outer.metadata);
+    let cx = env.cx(context, function);
+    for k in 0..loops {
+        let header = llrm_analysis::testing::block(function, &format!("h{k}"));
+        se.get_backedge_taken_count(&cx, header, llrm_analysis::scev::backedge::ExitCountKind::Exact);
+    }
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// An edge LSR splits dropped every expression of the function (the session's
+/// `forget_since` drops all where the CFG changed), so each loop after it
+/// worked out the trip counts of the loops before it again: 27 G of a 400-loop
+/// function's LSR. The pin edits the edge and keeps its one `ScalarEvolution`:
+/// only the loop whose blocks were touched is counted again.
+#[test]
+fn an_edge_split_makes_lsr_count_only_the_loop_it_touched_again() {
+    let mut module = parsed(&format!("{FLAT}{}", walks(3)));
+    let outer = Outer::of(&module, None);
+    let mut session = {
+        let (context, function) = module.function_mut("f").expect("@f");
+        llrm_analysis::scev::analysis::ScevSession::within(&*context, &outer.globals, &outer.metadata, &*function)
+    };
+    assert_eq!(session_counts(&mut session, &mut module, 3), 3, "premise: three loops, three counts");
+    let mark = module.function_mut("f").unwrap().1.mark();
+    {
+        let function = module.function_mut("f").expect("@f").1;
+        let (from, to) = (llrm_analysis::testing::block(function, "h0"), llrm_analysis::testing::block(function, "e1"));
+        crate::edges::split_edge(function, from, to);
+    }
+    let (data, outer) = (layout(&module), Outer::of(&module, None));
+    let kept = session.into_scev();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let (context, function) = (&*context, &*function);
+    let mut session =
+        llrm_analysis::scev::analysis::ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    session.adopt(kept);
+    session.forget_since_through_edges(context, &data, &outer.globals, &outer.metadata, function, mark);
+    assert_eq!(session_counts(&mut session, &mut module, 3), 1, "only the loop whose edge was split is counted again");
+}
