@@ -115,14 +115,15 @@ fn pick(items: &[i16], at: u16) -> i16:
 fn main() -> i16:
     return pick([4, 5, 6], 2)
 ";
-    // The runtime routine stays declared either way; only its calls go.
+    // The runtime routine stays declared either way; only its calls go. The
+    // three checks of `pick` share one call.
     let checks = |unchecked_bounds| {
         let module = super::parse(super::lex(source).unwrap()).unwrap();
         let hir =
             super::compile_module(module, "t", &super::Frontend { unchecked_bounds, ..crate::real_mode() }).unwrap();
         hir.replace([' ', '\n'], "").matches("\"callee\":\"N$EBND\"").count()
     };
-    assert_eq!(checks(false), 3);
+    assert_eq!(checks(false), 1);
     assert_eq!(checks(true), 0);
     let constant = "fn main() -> i16:\n    let values: i16[3] = [1, 2, 3]\n    return values[3]\n";
     let module = super::parse(super::lex(constant).unwrap()).unwrap();
