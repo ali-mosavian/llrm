@@ -79,9 +79,27 @@ pub fn constant_into_destination(
     }
 }
 
+/// A `move.l #n, mem` through a base register, with `n` a `moveq` makes and
+/// not zero (`clr.l` is 2 bytes already): the register store that replaces it
+/// and its operands, the immediate still last.
+fn immediate_store(
+    name: &str,
+    operands: &[Operand],
+) -> Option<(&'static str, Vec<Operand>)> {
+    let ok = |value: i64| value != 0 && (-128..=127).contains(&value);
+    match (name, operands) {
+        ("MOV32ji", [Operand::Use(_), Operand::Imm(value)]) if ok(*value) => Some(("MOV32jr", operands.to_vec())),
+        ("MOV32pi", [Operand::Imm(_), Operand::Use(_), Operand::Imm(value)]) if ok(*value) => {
+            Some(("MOV32pr", operands.to_vec()))
+        }
+        _ => None,
+    }
+}
+
 /// `and.l #15, %d2` where a data register is dead is `moveq #15, %dN; and.l
 /// %dN, %d2`: 4 bytes and 12 clocks on the 68000 for 6 and 16. Likewise `or`,
-/// `sub`, `cmp` and an `add` past `addq`'s 1 to 8, with an immediate a `moveq`
+/// `sub`, `cmp`, a store to memory (`move.l #5, (4,%sp)` is `moveq #5, %dN;
+/// move.l %dN, (4,%sp)`, 6 bytes for 8, 20 clocks for 24) and an `add` past `addq`'s 1 to 8, with an immediate a `moveq`
 /// makes (-128 to 127). The register is one nothing reads from there on, and
 /// the callee-saved ones only where the function already uses them, so no
 /// spill, copy or save is added. The register row leaves the condition codes
@@ -127,6 +145,40 @@ pub fn immediate_from_free_register(
         for at in (0..function.blocks[b].insts.len()).rev() {
             let inst = &function.blocks[b].insts[at];
             let Kind::Op(name) = inst.kind else { continue };
+            if let Some((store, operands)) = immediate_store(name, &inst.operands)
+                // a store into the call area is `callpush`'s: it pushes the
+                // constant with `pea`, 4 bytes
+                .filter(|(_, operands)| {
+                    !operands.iter().any(|one| matches!(one, Operand::Use(base) if root(*base) == reg::SP))
+                })
+            {
+                let before = liveness.live_before::<M68kRegisters>(function, assignment, &REGISTER_INFO, b, at);
+                let touched: Vec<_> = inst
+                    .operands
+                    .iter()
+                    .filter_map(|operand| match operand {
+                        Operand::Def(register) | Operand::Use(register) => Some(root(*register)),
+                        _ => None,
+                    })
+                    .collect();
+                let Some(&free) =
+                    candidates.iter().find(|&&one| !before.is_live(&REGISTER_INFO, one) && !touched.contains(&one))
+                else {
+                    continue;
+                };
+                let (Some(store_desc), Some(value)) =
+                    (local::code_of(store).and_then(local::desc), operands.last().cloned())
+                else {
+                    continue;
+                };
+                let Operand::Imm(value) = value else { continue };
+                let mut stored = operands;
+                *stored.last_mut().expect("a store has a source") = Operand::Use(Reg::Phys(free));
+                let load = op_inst("MOVI32ri", move_desc, vec![Operand::Def(Reg::Phys(free)), Operand::Imm(value)]);
+                function.blocks[b].insts[at] = op_inst(store, store_desc, stored);
+                function.blocks[b].insts.insert(at, load);
+                continue;
+            }
             let (row, uses_dest) = match (name, &inst.operands[..]) {
                 ("AND32di", [Operand::Def(_), Operand::Use(_), Operand::Imm(value)]) => ("AND32dd", *value),
                 ("OR32di", [Operand::Def(_), Operand::Use(_), Operand::Imm(value)]) => ("OR32dd", *value),
