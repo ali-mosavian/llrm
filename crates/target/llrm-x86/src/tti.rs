@@ -1885,7 +1885,7 @@ impl Tti for X86 {
     /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
     /// order-free.
     fn lsr_solves_both_use_orders(&self) -> bool {
-        self.real_mode.is_some()
+        self.real_mode.is_some() || self.tuning.lsr_both_use_orders
     }
 
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
