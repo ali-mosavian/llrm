@@ -856,6 +856,8 @@ pub struct Commuter<'a> {
     loop_carried: bool,
     /// DEVIATE TA-LC2 on (`Profile::commutes_loop_carried_flow`).
     loop_carried_flow: bool,
+    /// DEVIATE TA-11 on (`Profile::three_address_to_known_register`).
+    to_known_register: bool,
 }
 
 impl<'a> Commuter<'a> {
@@ -875,6 +877,21 @@ impl<'a> Commuter<'a> {
     ) -> Self {
         self.loop_carried_flow = on;
         self
+    }
+
+    /// The walk with DEVIATE TA-11 on or off.
+    pub fn with_to_known_register(
+        mut self,
+        on: bool,
+    ) -> Self {
+        self.to_known_register = on;
+        self
+    }
+
+    /// DEVIATE TA-11: whether a sum ending in a known register is made a
+    /// `lea` where its source has no known register.
+    pub fn converts_to_known_register(&self) -> bool {
+        self.to_known_register
     }
 
     /// The walk of `block`, at its first instruction.
@@ -903,6 +920,7 @@ impl<'a> Commuter<'a> {
             leas: Default::default(),
             loop_carried: false,
             loop_carried_flow: false,
+            to_known_register: false,
         }
     }
 
