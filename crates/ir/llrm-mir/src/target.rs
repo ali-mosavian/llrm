@@ -393,6 +393,8 @@ pub struct Tuning {
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
     /// `Tti::lsr_phi_operand_uses`.
     pub lsr_phi_operand_uses: bool,
+    /// `Tti::splits_invariant_fmuladd`.
+    pub splits_invariant_fmuladd: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -623,6 +625,7 @@ impl Tuning {
         lsr_size_order: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
+        splits_invariant_fmuladd: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,

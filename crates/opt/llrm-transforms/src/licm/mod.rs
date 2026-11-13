@@ -857,6 +857,11 @@ impl FunctionPass for Licm {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // DEVIATE FMULADD-SPLIT: an `llvm.fmuladd` whose product the loop does
+        // not change is two instructions before the loop is looked at.
+        if self.apply {
+            crate::fmuladdsplit::split(unit, analyses);
+        }
         let found = if self.apply { run(unit, analyses, self.speculate) } else { decide(unit, analyses) };
         let changed = found_changed(&found);
         let only_moved = found.reassociated.is_empty()

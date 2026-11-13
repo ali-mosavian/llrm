@@ -496,6 +496,10 @@ const OURS_ONLY: &[(&str, &str)] = &[
         "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
     ),
     ("823: loopsimplify@823 + lcssa@823 + licm@823", "-O1 only, as 669 (unverified slot by slot)"),
+    (
+        "676: fmuladdsplit@676",
+        "DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): the pin has no pass here; gcc fuses a multiply-add after loop motion",
+    ),
 ];
 
 #[derive(Debug)]

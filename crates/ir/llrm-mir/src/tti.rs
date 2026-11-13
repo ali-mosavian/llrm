@@ -2539,6 +2539,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
+    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
+    /// `fmul` and `fadd`, the product then leaving the loop; true where the
+    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
+    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    fn splits_invariant_fmuladd(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {

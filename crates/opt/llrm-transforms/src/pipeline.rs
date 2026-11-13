@@ -1177,6 +1177,8 @@ pub(crate) fn llvm_order(
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L675:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
+                // DEVIATE FMULADD-SPLIT: before the first InstCombine.
+                slot("fmuladdsplit@676", Box::new(crate::fmuladdsplit::FmuladdSplit)),
                 combine("combine@677"),
                 slot("aggressive-instcombine@678", Box::new(crate::aggressive_instcombine::AggressiveInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),

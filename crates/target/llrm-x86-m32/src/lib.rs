@@ -198,6 +198,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         lsr_size_order: true,
         // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
         lsr_phi_operand_uses: true,
+        // DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): see
+        // `Tti::splits_invariant_fmuladd`.
+        splits_invariant_fmuladd: true,
         narrow_divide_live_limit: 4,
         sink_spares_ranges: true,
         promote_va_list: true,
