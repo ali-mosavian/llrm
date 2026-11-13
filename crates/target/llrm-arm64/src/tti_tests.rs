@@ -678,3 +678,97 @@ fn a_vector_reduction_is_priced_by_the_pins_table() {
     assert_eq!(cost(ReduceKind::Mul, Ty::Int(32), 4, false), None);
     assert_eq!(cost(ReduceKind::SMax, Ty::Int(64), 2, false), None);
 }
+
+/// `getVectorInstrCost` of an `insertelement` and an `extractelement` equals
+/// the pinned `opt -passes='print<cost-model>'` (`-cost-kind` throughput and
+/// code-size, `-mcpu` generic and apple-m1; one-use load as the inserted
+/// scalar for the `ld1` rows). Before `vector_instr_cost` the hook answered
+/// `None` for every lane, so the SLP vectorizer could price no build-vector
+/// or external use.
+#[test]
+fn lane_instruction_costs_are_the_pinned_opts() {
+    let v = |lane, count| VectorTy { lane, count };
+    let (f4, i4, d2, i16x8, f8, i8x16, i64x2) = (
+        v(Ty::Float, 4),
+        v(Ty::Int(32), 4),
+        v(Ty::Double, 2),
+        v(Ty::Int(16), 8),
+        v(Ty::Float, 8),
+        v(Ty::Int(8), 16),
+        v(Ty::Int(64), 2),
+    );
+    for cpu in ["generic", "apple-m1"] {
+        let tti = AArch64::of_cpu(cpu).unwrap();
+        let cost = |op, ty, index, poison, context, kind| {
+            tti.vector_instr_cost(op, ty, Some(index), poison, context, kind).map(|c| c.value)
+        };
+        let t = CostKind::RecipThroughput;
+        let none = VectorInstrContext::None;
+        for (ty, index, expected) in [
+            (f4, 0, 0),
+            (f4, 1, 2),
+            (f4, 3, 2),
+            (i4, 0, 2),
+            (i4, 2, 2),
+            (d2, 1, 2),
+            (i16x8, 0, 2),
+            (f8, 5, 2),
+            (f8, 4, 0),
+            (i8x16, 9, 2),
+            (i64x2, 1, 2),
+        ] {
+            let got = cost(LaneOp::Extract, ty, index, false, none, t);
+            assert_eq!(got, Some(expected), "{cpu} extract {ty:?} lane {index}");
+        }
+        for (ty, index, poison, expected) in [
+            (f4, 0, false, 0),
+            (f4, 1, false, 2),
+            (i4, 0, false, 2),
+            (i4, 3, false, 2),
+            (d2, 1, false, 2),
+            (f4, 0, true, 0),
+            (f4, 1, true, 2),
+            (f8, 6, false, 2),
+        ] {
+            let got = cost(LaneOp::Insert, ty, index, poison, none, t);
+            assert_eq!(got, Some(expected), "{cpu} insert {ty:?} lane {index} poison {poison}");
+        }
+        // code size: one per moved lane, none for lane 0 of a float vector
+        let c = CostKind::CodeSize;
+        assert_eq!(cost(LaneOp::Extract, f4, 0, false, none, c), Some(0), "{cpu}");
+        assert_eq!(cost(LaneOp::Extract, f4, 1, false, none, c), Some(1), "{cpu}");
+        assert_eq!(cost(LaneOp::Insert, f4, 1, false, none, c), Some(1), "{cpu}");
+        assert_eq!(cost(LaneOp::Insert, f4, 1, true, none, c), Some(1), "{cpu}");
+        // an insert of a one-use load is a `ld1` lane: free on apple-m1, base
+        // plus one on generic, free in code size
+        let load = VectorInstrContext::Load;
+        let ld1 = if cpu == "apple-m1" { 0 } else { 3 };
+        assert_eq!(cost(LaneOp::Insert, i4, 2, false, load, t), Some(ld1), "{cpu}");
+        assert_eq!(cost(LaneOp::Insert, i4, 2, false, load, c), Some(0), "{cpu}");
+    }
+}
+
+/// `getStoreMinimumVF`: from the pin's source (AArch64TargetTransformInfo.h
+/// L537 over BasicTTIImpl L492), not queried: four or more `i8` stores in a
+/// power-of-two count are cut to 4; else the VF halves while a store of half
+/// the lanes fits one register.
+#[test]
+fn store_minimum_vf_is_the_pins() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let min = |vf, mem| tti.store_minimum_vf(vf, mem, mem);
+    assert_eq!((min(8, Ty::Int(8)), min(16, Ty::Int(8)), min(4, Ty::Int(8))), (4, 4, 4));
+    assert_eq!((min(2, Ty::Float), min(4, Ty::Float), min(8, Ty::Float)), (2, 2, 2));
+    // sixteen floats: a store of eight is two registers, not legal
+    assert_eq!(min(16, Ty::Float), 16);
+    // four doubles are 256 bits: not a legal store, so eight stay eight
+    assert_eq!((min(2, Ty::Int(32)), min(4, Ty::Int(16)), min(4, Ty::Double), min(8, Ty::Double)), (2, 2, 2, 8));
+}
+
+/// The SLP vectorizer's narrowest vector: 64 bits on both cpus
+/// (`AArch64Subtarget::MinVectorRegisterBitWidth` default).
+#[test]
+fn the_narrowest_vector_register_is_64_bits() {
+    for cpu in ["generic", "apple-m1"] {
+        assert_eq!(AArch64::of_cpu(cpu).unwrap().min_vector_register_bits(), 64, "{cpu}");
+    }
+}

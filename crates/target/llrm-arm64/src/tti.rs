@@ -846,6 +846,35 @@ impl Tti for AArch64 {
         crate::tti_vector::scalarization_overhead(ty, insert, extract, cost_kind)
     }
 
+    /// `AArch64Subtarget::MinVectorRegisterBitWidth`: 64 on `generic` and
+    /// `apple-m1` (128 only on named cores the port does not take).
+    fn min_vector_register_bits(&self) -> u32 {
+        64
+    }
+
+    fn store_minimum_vf(
+        &self,
+        vf: u32,
+        mem: Ty,
+        _value: Ty,
+    ) -> u32 {
+        crate::tti_vector::store_minimum_vf(vf, mem)
+    }
+
+    fn vector_instr_cost(
+        &self,
+        op: llrm_mir::tti::LaneOp,
+        ty: VectorTy,
+        index: Option<u32>,
+        into_poison: bool,
+        context: llrm_mir::tti::VectorInstrContext,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        // `FeatureFastLD1Single`, in the Apple A14 tune apple-m1 takes.
+        let fast_ld1_single = self.cpu == Cpu::AppleM1;
+        crate::tti_vector::vector_instr_cost(op, ty, index, into_poison, context, cost_kind, fast_ld1_single)
+    }
+
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
     /// `aarch64-br-merging-base-cost` 2 plus the `ccmp` bias 6, less the
     /// cbz/tbnz bias 6 where one side is already a single compare-and-branch
