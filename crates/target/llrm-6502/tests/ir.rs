@@ -32,6 +32,20 @@ fn set(
     format!("  lda #{}\n  sta {register}\n", value & 0xFF)
 }
 
+/// Word arguments as the caller sets them: the first in `a:x`, the next ones in
+/// `rc2:rc3`, `rc4:rc5`, `rc6:rc7` (`a` and `x` last: a cell is loaded through
+/// `a`).
+fn words(values: &[u16]) -> String {
+    let mut text = String::new();
+    for (at, value) in values.iter().enumerate().skip(1) {
+        text += &(set(&format!("rc{}", 2 * at), *value) + &set(&format!("rc{}", 2 * at + 1), *value >> 8));
+    }
+    if let Some(value) = values.first() {
+        text += &format!("  ldx #{}\n  lda #{}\n", (value >> 8) & 0xFF, value & 0xFF);
+    }
+    text
+}
+
 /// Byte arguments as the caller sets them: the first in `a`, the second in `x`,
 /// the rest in rc2.. (`a` and `x` last: a cell is loaded through `a`).
 fn bytes(values: &[u16]) -> String {
@@ -84,7 +98,7 @@ fn a_product_of_two_zero_extended_bytes_runs_as_a_widening_multiply() {
 #[test]
 fn a_word_add_runs() {
     let ir = "define i16 @add16(i16 %a, i16 %b) {\n  %r = add i16 %a, %b\n  ret i16 %r\n}";
-    let setup = set("rc2", 300) + &set("rc3", 300 >> 8) + &set("rc4", 5000) + &set("rc5", 5000 >> 8);
+    let setup = words(&[300, 5000]);
     assert_eq!(run("add16-lo", ir, "add16", &setup, ""), 180);
     assert_eq!(run("add16-hi", ir, "add16", &setup, "  txa\n"), 20);
 }
@@ -137,7 +151,7 @@ fn a_call_passes_a_byte_and_a_word() {
 
 /// Five bytes the memory tests point at; `rc2:rc3` gets their address.
 const BUFFER: &str = ".segment \"DATA\"\nbuf: .byte $10, $20, $30, $40, $50\n.segment \"CODE\"\n";
-const POINT: &str = "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n";
+const POINT: &str = "  lda #<buf\n  ldx #>buf\n";
 
 fn memory(
     name: &str,
@@ -147,7 +161,7 @@ fn memory(
     after: &str,
 ) -> i32 {
     let text = compile(ir, &[function]);
-    common::run_with(name, &format!("{POINT}{setup}  jsr {function}\n{after}"), &format!("{text}{BUFFER}"))
+    common::run_with(name, &format!("{setup}{POINT}  jsr {function}\n{after}"), &format!("{text}{BUFFER}"))
 }
 
 /// A byte through a pointer argument: `buf[0]` = 0x10 = 16.
@@ -176,7 +190,7 @@ fn a_word_load_runs() {
 #[test]
 fn a_byte_store_runs() {
     let ir = "define void @st(ptr %p, i8 %v) {\n  store i8 %v, ptr %p\n  ret void\n}";
-    let setup = set("rc4", 0x5A);
+    let setup = set("rc2", 0x5A);
     assert_eq!(memory("st-0", ir, "st", &setup, "  lda buf\n"), 0x5A);
     assert_eq!(memory("st-1", ir, "st", &setup, "  lda buf+1\n"), 0x20);
 }
@@ -186,7 +200,7 @@ fn a_byte_store_runs() {
 #[test]
 fn a_word_store_runs() {
     let ir = "define void @st16(ptr %p, i16 %v) {\n  store i16 %v, ptr %p\n  ret void\n}";
-    let setup = set("rc4", 0x1234) + &set("rc5", 0x12);
+    let setup = set("rc2", 0x1234) + &set("rc3", 0x12);
     assert_eq!(memory("st16-0", ir, "st16", &setup, "  lda buf\n"), 0x34);
     assert_eq!(memory("st16-1", ir, "st16", &setup, "  lda buf+1\n"), 0x12);
 }
@@ -238,16 +252,18 @@ fn a_phi_loop_runs() {
     }
 }
 
-const ADD32: &str = "define i32 @add32(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}";
-const PASS32: &str = "define i32 @pass32(i32 %a, i32 %b) {\n  %r = call i32 @add32(i32 %a, i32 %b)\n  ret i32 %r\n}";
+const ADD32: &str = "define i32 @add32(i32 %a, i32 %b, i16 %c) {\n  %z = zext i16 %c to i32\n  %h = shl i32 %z, 16\n  %s = add i32 %a, %b\n  %r = add i32 %s, %h\n  ret i32 %r\n}";
+const PASS32: &str =
+    "define i32 @pass32(i32 %a, i32 %b, i16 %c) {\n  %r = call i32 @add32(i32 %a, i32 %b, i16 %c)\n  ret i32 %r\n}";
 
-/// `a` = 0x0001F234 in rs1:rs2, `b` = 0x00011100 with its low word in rs3 and
-/// its high word, 0x0001, at the top of the soft stack (`rs0` = $8000). The low
-/// words carry (0xF234 + 0x1100 = 0x10334), so the sum is 0x00030334; without
-/// the carry it would be 0x00020334.
-const LONG_ARGS: &str = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  lda #1\n  sta $8000\n  lda #0\n  sta $8001\n\
-  lda #$34\n  sta rc2\n  lda #$F2\n  sta rc3\n  lda #1\n  sta rc4\n  lda #0\n  sta rc5\n\
-  lda #$00\n  sta rc6\n  lda #$11\n  sta rc7\n";
+/// `a` = 0x0001F234 in a:x and rs1, `b` = 0x00001100 in rs2:rs3 and `c` = 1,
+/// the fifth word, at the top of the soft stack (`rs0` = $8000), added as the
+/// high word. The low words carry (0xF234 + 0x1100 = 0x10334), so the sum is
+/// 0x00030334; without the carry it would be 0x00020334.
+fn long_args() -> String {
+    "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  lda #1\n  sta $8000\n  lda #0\n  sta $8001\n".to_owned()
+        + &words(&[0xF234, 0x0001, 0x1100, 0x0000])
+}
 
 /// The long comes back as `a`, `x`, `rc2`, `rc3`: 0x34, 0x03, 0x03, 0x00. The
 /// carry out of the low word crosses the stack argument's address arithmetic,
@@ -256,7 +272,11 @@ const LONG_ARGS: &str = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  lda #1\n 
 #[test]
 fn a_long_add_with_a_stack_argument_runs() {
     for (after, want) in [("", 0x34), ("  txa\n", 0x03), ("  lda rc2\n", 0x03), ("  lda rc3\n", 0x00)] {
-        assert_eq!(run(&format!("add32-{want}-{}", after.len()), ADD32, "add32", LONG_ARGS, after), want, "{after:?}");
+        assert_eq!(
+            run(&format!("add32-{want}-{}", after.len()), ADD32, "add32", &long_args(), after),
+            want,
+            "{after:?}"
+        );
     }
 }
 
@@ -267,7 +287,7 @@ fn a_long_add_with_a_stack_argument_runs() {
 fn a_call_with_a_stack_argument_runs() {
     let text = compile(&format!("{ADD32}\n{PASS32}"), &["add32", "pass32"]);
     for (after, want) in [("", 0x34), ("  txa\n", 0x03), ("  lda rc2\n", 0x03), ("  lda rc3\n", 0x00)] {
-        let main = format!("{LONG_ARGS}  jsr pass32\n{after}");
+        let main = format!("{}  jsr pass32\n{after}", long_args());
         assert_eq!(common::run_with(&format!("pass32-{want}-{}", after.len()), &main, &text), want, "{after:?}");
     }
 }
@@ -298,7 +318,7 @@ fn a_switch_with_five_cases_runs() {
 #[test]
 fn a_long_return_keeps_the_byte_in_a() {
     let ir = "define i32 @id32(i32 %a) {\n  ret i32 %a\n}";
-    let setup = set("rc2", 0x9810) + &set("rc3", 0x98) + &set("rc4", 0x02) + &set("rc5", 0);
+    let setup = words(&[0x9810, 0x0002]);
     for (after, want) in [("", 0x10), ("  txa\n", 0x98), ("  lda rc2\n", 0x02), ("  lda rc3\n", 0x00)] {
         assert_eq!(run(&format!("id32-{want}"), ir, "id32", &setup, after), want, "{after:?}");
     }
@@ -352,11 +372,7 @@ fn binary(
 ) -> u32 {
     let ir = format!("define {ty} @func({ty} %a, {ty} %b) {{\n  %r = {op} {ty} %a, %b\n  ret {ty} %r\n}}");
     let word = ty == "i16";
-    let setup = if word {
-        set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8)
-    } else {
-        bytes(&[a, b])
-    };
+    let setup = if word { words(&[a, b]) } else { bytes(&[a, b]) };
     let key = format!("{ty}-{op}-{a}-{b}");
     let low = run(&format!("{key}-lo"), &ir, "func", &setup, "") as u32;
     if word { (run(&format!("{key}-hi"), &ir, "func", &setup, "  txa\n") as u32) << 8 | low } else { low }
@@ -425,11 +441,7 @@ fn comparisons_as_values_run() {
         let ir = format!(
             "define i8 @func({ty} %a, {ty} %b) {{\n  %c = icmp {cc} {ty} %a, %b\n  %r = zext i1 %c to i8\n  ret i8 %r\n}}"
         );
-        let setup = if ty == "i16" {
-            set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8)
-        } else {
-            bytes(&[a, b])
-        };
+        let setup = if ty == "i16" { words(&[a, b]) } else { bytes(&[a, b]) };
         assert_eq!(run(&format!("cmp-{ty}-{cc}-{a}-{b}"), &ir, "func", &setup, ""), want, "{ty} {cc} {a} {b}");
     }
 }
@@ -444,20 +456,15 @@ fn a_signed_byte_widens_by_its_sign() {
     }
 }
 
-/// `a op b` on longs through `func(a, b)`: `a` in rs1:rs2, `b` in rs3 and at
-/// the top of the soft stack; the result is read from `a`, `x`, `rc2`, `rc3`.
+/// `a op b` on longs through `func(a, b)`: `a` in a:x and rs1, `b` in rs2:rs3;
+/// the result is read from `a`, `x`, `rc2`, `rc3`.
 fn long_binary(
     op: &str,
     a: u32,
     b: u32,
 ) -> u32 {
     let ir = format!("define i32 @func(i32 %a, i32 %b) {{\n  %r = {op} i32 %a, %b\n  ret i32 %r\n}}");
-    let mut setup = STACK.to_owned();
-    for (at, cell) in ["rc2", "rc3", "rc4", "rc5"].iter().enumerate() {
-        setup += &set(cell, (a >> (8 * at)) as u16);
-    }
-    setup += &(set("rc6", b as u16) + &set("rc7", (b >> 8) as u16));
-    setup += &format!("  lda #{}\n  sta $8000\n  lda #{}\n  sta $8001\n", (b >> 16) & 0xFF, b >> 24);
+    let setup = STACK.to_owned() + &words(&[a as u16, (a >> 16) as u16, b as u16, (b >> 16) as u16]);
     let key = format!("{op}-{a}-{b}");
     [("", 0), ("  txa\n", 8), ("  lda rc2\n", 16), ("  lda rc3\n", 24)]
         .iter()
@@ -491,10 +498,7 @@ fn long_operations_run() {
 #[test]
 fn a_long_shift_by_a_constant_runs() {
     let ir = "define i32 @func(i32 %a) {\n  %r = shl i32 %a, 4\n  ret i32 %r\n}";
-    let mut setup = STACK.to_owned();
-    for (at, cell) in ["rc2", "rc3", "rc4", "rc5"].iter().enumerate() {
-        setup += &set(cell, (0x1234_5678u32 >> (8 * at)) as u16);
-    }
+    let setup = STACK.to_owned() + &words(&[0x5678, 0x1234]);
     let got: u32 = [("", 0), ("  txa\n", 8), ("  lda rc2\n", 16), ("  lda rc3\n", 24)]
         .iter()
         .map(|(after, shift)| (run(&format!("shl4-{shift}"), ir, "func", &setup, after) as u32) << shift)

@@ -97,10 +97,7 @@ fn the_sequences_agree_with_repeated_addition() {
     let mut main = String::from("  lda #0\n  sta bad\n  sta ia\nouter:\n  lda #0\n  sta ib\ninner:\n");
     main += "  lda ia\n  sta xb0\n  sta xb3\n  lda ib\n  sta xb1\n  sta xb2\n";
     for (n, k) in constants.iter().enumerate() {
-        main += &format!(
-            "  lda xb0\n  sta rc2\n  lda xb1\n  sta rc3\n  lda xb2\n  sta rc4\n  lda xb3\n  sta rc5\n  jsr {}\n",
-            name(*k)
-        );
+        main += &format!("  lda xb2\n  sta rc2\n  lda xb3\n  sta rc3\n  ldx xb1\n  lda xb0\n  jsr {}\n", name(*k));
         main += "  sta r0\n  stx r1\n  lda rc2\n  sta r2\n  lda rc3\n  sta r3\n";
         main +=
             &format!("  lda #0\n  sta a0\n  sta a1\n  sta a2\n  sta a3\n  ldy #{}\nadd{n}:\n  clc\n", k.unsigned_abs());

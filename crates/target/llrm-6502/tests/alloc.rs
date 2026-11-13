@@ -78,6 +78,59 @@ fn bytes(values: &[u16]) -> String {
     text
 }
 
+/// One argument of a call, as the `mos` convention places it.
+enum Arg {
+    Byte(String),
+    /// the low and the high byte, as operands (`#<sym`, `#>sym`)
+    Word(String, String),
+}
+
+fn byte(value: u16) -> Arg {
+    Arg::Byte(format!("#{}", value & 0xFF))
+}
+
+fn w16(value: u16) -> Arg {
+    Arg::Word(format!("#{}", value & 0xFF), format!("#{}", value >> 8))
+}
+
+/// The address of a symbol, a word.
+fn sym(name: &str) -> Arg {
+    Arg::Word(format!("#<{name}"), format!("#>{name}"))
+}
+
+/// The setup of a call: a byte takes the first free of `a`, `x`, `rc2`...; a
+/// word the first free pair of (`a`,`x`), (`rc2`,`rc3`)...; `x` and then `a`
+/// are loaded last.
+fn args(arguments: &[Arg]) -> String {
+    let mut slots: [Option<&str>; 8] = [None; 8];
+    for argument in arguments {
+        match argument {
+            Arg::Byte(value) => {
+                let at = slots.iter().position(Option::is_none).expect("a free register");
+                slots[at] = Some(value);
+            }
+            Arg::Word(low, high) => {
+                let at = (0..8).step_by(2).find(|at| slots[*at].is_none()).expect("a free pair");
+                slots[at] = Some(low);
+                slots[at + 1] = Some(high);
+            }
+        }
+    }
+    let mut text = String::new();
+    for (at, value) in slots.iter().enumerate().skip(2) {
+        if let Some(value) = value {
+            text += &format!("  lda {value}\n  sta rc{at}\n");
+        }
+    }
+    if let Some(value) = slots[1] {
+        text += &format!("  ldx {value}\n");
+    }
+    if let Some(value) = slots[0] {
+        text += &format!("  lda {value}\n");
+    }
+    text
+}
+
 const ADD16: &str = "define i16 @add16(i16 %a, i16 %b) {\n  %r = add i16 %a, %b\n  ret i16 %r\n}";
 
 /// A word add kept its low byte in `y` while the high byte was added; the cell
@@ -88,7 +141,7 @@ fn a_word_add_keeps_its_low_byte_in_a_register() {
     assert!(text.contains("  tay\n") && text.contains("  tya\n"), "{text}");
     assert!(!text.contains("sta rc"), "{text}");
     // 300 + 5000 = 5300 = 0x14B4
-    let setup = set("rc2", 300) + &set("rc3", 300 >> 8) + &set("rc4", 5000) + &set("rc5", 5000 >> 8);
+    let setup = args(&[w16(300), w16(5000)]);
     let run = |after: &str| common::run_with("alloc-add16", &format!("{setup}  jsr add16\n{after}"), &text);
     assert_eq!(run(""), 0xB4);
     assert_eq!(run("  txa\n"), 0x14);
@@ -185,7 +238,7 @@ fn a_word_select_returns_the_larger_word() {
     // no jump over arms
     assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cm")), "{text}");
     for (a, b, lo, hi) in [(300u16, 5000u16, 0x88, 0x13), (700, 20, 0xBC, 0x02)] {
-        let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
+        let setup = args(&[w16(a), w16(b)]);
         let run = |after: &str| common::run_with("alloc-max16", &format!("{setup}  jsr max16\n{after}"), &text);
         assert_eq!(run(""), lo);
         assert_eq!(run("  txa\n"), hi);
@@ -300,7 +353,7 @@ fn a_sum_through_a_pointer_runs_on_the_allocator() {
     let text = compile(SUMP, "sump");
     assert!(text.contains("),y"), "{text}");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
-    let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #4\n  sta rc4\n";
+    let setup = &args(&[sym("vals"), byte(4)]);
     assert_eq!(common::run_with("alloc-sump", &format!("{setup}  jsr sump\n"), &format!("{text}{data}")), 9);
 }
 
@@ -322,8 +375,9 @@ fn a_pointer_live_across_a_call_survives_it() {
     assert!(on_the_allocator(ir, "keep"));
     let text = compile(ir, "keep");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
-    let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
-    assert!(text.contains("s_keep_"), "no spill:\n{text}");
+    let setup = &args(&[sym("vals"), byte(5)]);
+    // the pair is kept in callee-saved cells, saved around the body
+    assert!(text.contains("pha") && text.contains("sta rc9"), "no spill:\n{text}");
     assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
 }
 
@@ -444,7 +498,7 @@ fn a_loaded_byte_widened_into_a_word_subtract_runs() {
     let ir = "define i16 @widen(ptr %p, i16 %k) {\n  %b = load i8, ptr %p\n  %w = zext i8 %b to i16\n  %r = sub i16 %k, %w\n  ret i16 %r\n}";
     let text = compile(ir, "widen");
     let data = ".segment \"DATA\"\nval: .byte 7\n.segment \"CODE\"\n";
-    let setup = "  lda #<val\n  sta rc2\n  lda #>val\n  sta rc3\n  lda #<1000\n  sta rc4\n  lda #>1000\n  sta rc5\n";
+    let setup = &args(&[sym("val"), w16(1000)]);
     let run = |after: &str| {
         common::run_with("alloc-widen", &format!("{setup}  jsr widen\n{after}"), &format!("{text}{data}"))
     };
@@ -513,7 +567,7 @@ done:\n\
 fn a_reload_between_a_compare_and_its_branch_keeps_the_flags() {
     let text = compile(CRC16, "crc16");
     let data = ".segment \"DATA\"\nbytes: .byte 3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8\n.segment \"CODE\"\n";
-    let setup = "  lda #<bytes\n  sta rc2\n  lda #>bytes\n  sta rc3\n  lda #12\n  sta rc4\n";
+    let setup = &args(&[sym("bytes"), byte(12)]);
     let run = |after: &str| {
         common::run_with("alloc-crc16", &format!("{setup}  jsr crc16\n{after}"), &format!("{text}{data}"))
     };
@@ -597,7 +651,7 @@ const CALL_THROUGH: &str = "define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  r
 fn an_indirect_call_enters_the_callee_and_returns() {
     let text = compile(CALL_THROUGH, "via") + &compile(CALL_THROUGH, "twice");
     // via(&twice, 20) = 41
-    let setup = "  lda #<twice\n  sta rc2\n  lda #>twice\n  sta rc3\n  lda #20\n  sta rc4\n";
+    let setup = &args(&[sym("twice"), byte(20)]);
     assert_eq!(common::run_with("alloc-indirect", &format!("{setup}  jsr via\n"), &text), 41);
 }
 
@@ -610,7 +664,7 @@ fn a_function_reentered_through_a_pointer_keeps_its_values() {
               ret i8 0\nstep:\n  %m = sub i8 %n, 1\n  %r = call i8 %f(ptr %f, i8 %m)\n  %s = add i8 %r, %n\n  ret i8 %s\n}";
     let text = compile(ir, "sum");
     // sum(&sum, 4) = 4 + 3 + 2 + 1 = 10
-    let setup = "  lda #<sum\n  sta rc2\n  lda #>sum\n  sta rc3\n  lda #4\n  sta rc4\n";
+    let setup = &args(&[sym("sum"), byte(4)]);
     assert_eq!(common::run_with("alloc-reenter", &format!("{setup}  jsr sum\n"), &text), 10);
 }
 
@@ -631,8 +685,7 @@ fn structs(entry: &str) -> String {
 fn a_struct_passed_byval_and_returned_through_sret_round_trips() {
     for entry in ["pass", "take"] {
         let text = structs(entry);
-        let run =
-            common::run_with("alloc-struct", &format!("{}  jsr {entry}\n", set("rc2", 5) + &set("rc3", 0)), &text);
+        let run = common::run_with("alloc-struct", &format!("{}  jsr {entry}\n", args(&[w16(5)])), &text);
         assert_eq!(run, 11, "{entry}");
     }
 }
@@ -644,8 +697,7 @@ fn a_word_sign_test_reads_only_the_high_byte() {
     let ir = "define i8 @neg(i16 %x) {\n  %c = icmp slt i16 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}";
     let text = compile(ir, "neg");
     assert!(!text.contains("sbc"), "{text}");
-    let run =
-        |x: u16| common::run_with("alloc-neg", &format!("{}  jsr neg\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+    let run = |x: u16| common::run_with("alloc-neg", &format!("{}  jsr neg\n", args(&[w16(x)])), &text);
     assert_eq!((run(0xFFFF), run(0x8000), run(0x7FFF), run(0), run(5)), (7, 7, 9, 9, 9));
 }
 
@@ -679,7 +731,7 @@ fn a_pointer_bumped_in_a_loop_stays_a_pair() {
         assert!(text.contains(if k == 1 { "inc rc" } else { "bcc walk_pa" }), "k={k}: {text}");
         assert!(!text.contains("tay") && !text.contains("s_walk"), "k={k}: {text}");
         for (p, n) in [(0x0100u16, 4u16), (0x01FE, 2), (0x01FF, 3), (0x12FF, 1)] {
-            let setup = set("rc2", p) + &set("rc3", p >> 8) + &set("rc4", n);
+            let setup = args(&[w16(p), byte(n)]);
             let low = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n"), &text);
             let high = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n  txa\n"), &text);
             assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), p + k * n, "k={k} p={p:#06x} n={n}");
@@ -698,7 +750,7 @@ fn a_branch_on_two_compares_is_two_branches() {
         // "ab\0" at the pointer in rc2:rc3 = data, c in rc4: returns the index
         // of c, or -1 at the end
         let data = ".segment \"DATA\"\ns: .byte 97, 98, 0\n.segment \"CODE\"\n";
-        let setup = "  lda #<s\n  sta rc2\n  lda #>s\n  sta rc3\n".to_owned() + &set("rc4", c);
+        let setup = args(&[sym("s"), byte(c)]);
         common::run_with("alloc-schr", &format!("{setup}  jsr schr\n"), &format!("{text}{data}"))
     };
     assert_eq!((run(97), run(98), run(99)), (0, 1, 255));
@@ -712,7 +764,7 @@ fn a_widened_byte_added_to_a_word_adds_an_immediate_zero() {
     let text = compile(ir, "addb");
     assert!(text.contains("adc #0"), "{text}");
     for (a, b) in [(0x01FFu16, 1u16), (0x1234, 0xFF), (0, 0)] {
-        let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b);
+        let setup = args(&[w16(a), byte(b)]);
         let low = common::run_with("alloc-addb", &format!("{setup}  jsr addb\n"), &text);
         let high = common::run_with("alloc-addb", &format!("{setup}  jsr addb\n  txa\n"), &text);
         assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), a + b);
@@ -730,7 +782,7 @@ fn a_byte_index_into_a_pointer_loads_and_stores_through_y() {
     assert!(!text.contains("adc rc"), "{text}");
     // table[3] = 7 becomes 8 and 7 comes back
     let data = ".segment \"DATA\"\ntable: .byte 1, 2, 3, 7, 5\n.segment \"CODE\"\n";
-    let setup = "  lda #<table\n  sta rc2\n  lda #>table\n  sta rc3\n  lda #3\n  sta rc4\n";
+    let setup = &args(&[sym("table"), byte(3)]);
     let run =
         |after: &str| common::run_with("alloc-index", &format!("{setup}  jsr bump\n{after}"), &format!("{text}{data}"));
     assert_eq!(run(""), 7);
@@ -746,9 +798,9 @@ fn a_widened_byte_loaded_at_a_byte_index_uses_y() {
               %v = load i8, ptr %q\n  %x = zext i8 %v to i16\n  %s2 = add i16 %s, %x\n  %i2 = add i8 %i, 1\n  \
               %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  ret i16 %s2\n}";
     let text = compile(ir, "sum");
-    assert!(!text.contains("adc rc2") && !text.contains("sta rc3"), "{text}");
+    assert!(text.contains("adc (rc") && !text.contains("adc rc"), "{text}");
     let data = ".segment \"DATA\"\ntable: .byte 1, 2, 3, 200, 5\n.segment \"CODE\"\n";
-    let setup = "  lda #<table\n  sta rc2\n  lda #>table\n  sta rc3\n  lda #4\n  sta rc4\n";
+    let setup = &args(&[sym("table"), byte(4)]);
     let run =
         |after: &str| common::run_with("alloc-at", &format!("{setup}  jsr sum\n{after}"), &format!("{text}{data}"));
     // 1 + 2 + 3 + 200 = 206
@@ -919,9 +971,9 @@ fn a_function_short_of_cells_saves_and_restores_the_callee_saved_ones() {
         check += &format!("  lda rc{}\n  eor #{v}\n  ora rc2\n  sta rc2\n", 8 + i);
     }
     check += "  lda rc2\n";
-    // p in rc2:rc3, f in rc4:rc5, n in a
-    let args = "  lda #<tab\n  sta rc2\n  lda #>tab\n  sta rc3\n  lda #<twice\n  sta rc4\n  lda #>twice\n  sta rc5\n  lda #4\n";
+    // p in a:x, n in rc2, f in rc3:rc4
     for (name, call, want) in [("quad", false, 58), ("quadcall", true, 116)] {
+        let args = if call { args(&[sym("tab"), byte(4), sym("twice")]) } else { args(&[sym("tab"), byte(4)]) };
         let ir = quad_ir(name, call);
         let text = compile(&ir, name) + &compile(&ir, "twice");
         assert!((8..16).any(|n| text.contains(&format!("rc{n}"))), "uses no callee-saved cell:\n{text}");
@@ -963,7 +1015,7 @@ fn run_word(
     name: &str,
     x: u16,
 ) -> u16 {
-    let setup = set("rc2", x) + &set("rc3", x >> 8);
+    let setup = args(&[w16(x)]);
     let low = common::run_with(tag, &format!("{setup}  jsr {name}\n"), text);
     let high = common::run_with(tag, &format!("{setup}  jsr {name}\n  txa\n"), text);
     ((high as u16) << 8) | (low as u16 & 0xFF)
@@ -1026,8 +1078,7 @@ fn a_word_non_negative_test_reads_only_the_high_byte() {
     let ir = "define i8 @pos(i16 %x) {\n  %c = icmp sge i16 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}";
     let text = compile(ir, "pos");
     assert!(!text.contains("sbc"), "{text}");
-    let run =
-        |x: u16| common::run_with("alloc-pos", &format!("{}  jsr pos\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+    let run = |x: u16| common::run_with("alloc-pos", &format!("{}  jsr pos\n", args(&[w16(x)])), &text);
     assert_eq!((run(0xFFFF), run(0x8000), run(0x7FFF), run(0), run(5)), (9, 9, 7, 7, 7));
 }
 
@@ -1080,11 +1131,10 @@ fn a_word_equality_against_a_constant_has_no_constant_cells() {
         let text = compile(&ir, "cmpk");
         assert!(!text.contains("lda #0\n  sta rc") && !text.contains("sta rc4"), "{op} {k}: {text}");
         if k == 0 {
-            assert!(text.contains("ora rc3"), "{op} {k}: {text}");
+            assert!(text.contains("ora rc"), "{op} {k}: {text}");
         }
         for x in [0u16, 1, 0x0100, 300, 0x002C, 0x012D, 0x2C00, 0x2C01, 0xFFFF] {
-            let run =
-                common::run_with("alloc-cmpk", &format!("{}  jsr cmpk\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+            let run = common::run_with("alloc-cmpk", &format!("{}  jsr cmpk\n", args(&[w16(x)])), &text);
             let equal = x == k;
             assert_eq!(run, if (op == "eq") == equal { 7 } else { 9 }, "{op} {k} against {x:#06x}");
         }
@@ -1165,7 +1215,7 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
         check += &format!("  lda rc{}\n  eor #{v}\n  ora rc2\n  sta rc2\n", 8 + i);
     }
     check += "  lda rc2\n";
-    let args = "  lda #<tab\n  sta rc2\n  lda #>tab\n  sta rc3\n  lda #4\n  sta rc4\n";
+    let pushed_args = args(&[sym("tab"), byte(4)]);
     let base = quad_ir("quad", false);
     let word = base
         .replace("define i8 @quad(", "define i16 @quad(")
@@ -1181,20 +1231,20 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
     let text = compile(&word, "quad");
     assert!(text.contains("  pla\n") && text.contains("  tay\n"), "pops with a result live:\n{text}");
     let program = format!("{text}{data}");
-    let low = common::run_with("alloc-pushed-lo", &format!("{set}{args}  jsr quad\n"), &program);
-    let high = common::run_with("alloc-pushed-hi", &format!("{set}{args}  jsr quad\n  txa\n"), &program);
+    let low = common::run_with("alloc-pushed-lo", &format!("{set}{pushed_args}  jsr quad\n"), &program);
+    let high = common::run_with("alloc-pushed-hi", &format!("{set}{pushed_args}  jsr quad\n  txa\n"), &program);
     assert_eq!((low, high), (58, 58));
-    let kept = common::run_with("alloc-pushed-kept", &format!("{set}{args}  jsr quad\n{check}"), &program);
+    let kept = common::run_with("alloc-pushed-kept", &format!("{set}{pushed_args}  jsr quad\n{check}"), &program);
     assert_eq!(kept, 0, "the word version changed a callee-saved cell");
     // no result: the output byte arrives through a pointer in rc2:rc3, the
     // table in rc4:rc5, the count in rc6
     let text = compile(&void, "quad");
     assert!(!text.contains("  tay\n  pla"), "no result to keep:\n{text}");
     let program = format!("{text}{data}");
-    let args = "  lda #<out\n  sta rc2\n  lda #>out\n  sta rc3\n  lda #<tab\n  sta rc4\n  lda #>tab\n  sta rc5\n  lda #4\n  sta rc6\n";
-    let result = common::run_with("alloc-pushed-void", &format!("{set}{args}  jsr quad\n  lda out\n"), &program);
+    let void_args = args(&[sym("out"), sym("tab"), byte(4)]);
+    let result = common::run_with("alloc-pushed-void", &format!("{set}{void_args}  jsr quad\n  lda out\n"), &program);
     assert_eq!(result, 58);
-    let kept = common::run_with("alloc-pushed-void-kept", &format!("{set}{args}  jsr quad\n{check}"), &program);
+    let kept = common::run_with("alloc-pushed-void-kept", &format!("{set}{void_args}  jsr quad\n{check}"), &program);
     assert_eq!(kept, 0, "the void version changed a callee-saved cell");
 }
 
@@ -1230,7 +1280,7 @@ fn a_zero_or_sign_test_does_not_compare_again() {
         let run = |x: u16, y: u16| {
             let setup = match name {
                 "sum" => bytes(&[x, y]),
-                _ => format!("{}{}  lda #{x}\n  sta $0300\n", set("rc2", 0), set("rc3", 3)),
+                _ => format!("  lda #{x}\n  sta $0300\n{}", args(&[w16(0x0300)])),
             };
             common::run_with("alloc-nzt", &format!("{setup}  jsr {name}\n"), &text)
         };
@@ -1273,7 +1323,7 @@ fn a_product_takes_its_operands_as_they_arrive() {
     for (first, second) in [("%s", "%b"), ("%b", "%s")] {
         let text = compile(&sum(first, second), "mulk");
         for (a, b, want) in [(5u16, 7u16, 42u16), (299, 200, 60000), (0xFFFF, 9, 0)] {
-            let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
+            let setup = args(&[w16(a), w16(b)]);
             let low = common::run_with("alloc-mulk", &format!("{setup}  jsr mulk\n"), &text);
             let high = common::run_with("alloc-mulk", &format!("{setup}  jsr mulk\n  txa\n"), &text);
             assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), want, "({first}) * ({second}) at a={a} b={b}");
@@ -1321,7 +1371,7 @@ fn a_bump_the_exit_does_not_need_is_made_only_on_the_looping_path() {
                 %c = load i8, ptr %q\n  %q2 = getelementptr i8, ptr %q, i16 1\n  %z = icmp eq i8 %c, 0\n  br i1 %z, label %done, label %loop\n\
                 done:\n  %a = ptrtoint ptr %q to i16\n  %b = ptrtoint ptr %p to i16\n  %d = sub i16 %a, %b\n  ret i16 %d\n}";
     let data = ".segment \"DATA\"\ns: .byte \"hello world\",0\n.segment \"CODE\"\n";
-    let setup = "  lda #<s\n  sta rc2\n  lda #>s\n  sta rc3\n";
+    let setup = args(&[sym("s")]);
     for (name, ir, tail) in [("endp", end, "  sec\n  sbc #<s\n"), ("dist", dist, "")] {
         let text = compile(ir, name);
         // the cell that is bumped is the one the byte was read through: no copy
@@ -1455,7 +1505,7 @@ fn a_word_times_a_power_of_two_plus_or_minus_one_is_a_shift_and_add() {
         assert!(!text.contains("__mulhi3"), "{c}: a call to the multiply:\n{text}");
         for x in [0u16, 1, 7, 300, 1234, 65535] {
             let want = (x.wrapping_mul(c as u16) >> 8) as i32;
-            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+            let setup = args(&[w16(x)]);
             assert_eq!(
                 common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n"), &text),
                 want,
@@ -1545,13 +1595,7 @@ fn a_quotient_and_remainder_are_one_divide() {
         for (x, y) in cases {
             let want = (((x / y) << 2) ^ (x % y)) & mask;
             let (low, high) = if bits == 16 {
-                (
-                    set("rc2", x as u16 & 0xFF)
-                        + &set("rc3", (x >> 8) as u16)
-                        + &set("rc4", y as u16 & 0xFF)
-                        + &set("rc5", (y >> 8) as u16),
-                    true,
-                )
+                (args(&[w16(x as u16), w16(y as u16)]), true)
             } else {
                 (bytes(&[x as u16, y as u16]), false)
             };
@@ -1580,11 +1624,7 @@ fn a_remainder_alone_is_the_remainder_routine() {
         let text = compile(&ir, name);
         assert!(text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")), "{bits}: {text}");
         assert!(!text.contains("rc6"), "{bits}: {text}");
-        let setup = if bits == 16 {
-            set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", y & 0xFF) + &set("rc5", y >> 8)
-        } else {
-            bytes(&[x, y])
-        };
+        let setup = if bits == 16 { args(&[w16(x), w16(y)]) } else { bytes(&[x, y]) };
         assert_eq!(common::run_with(&format!("alloc-{name}"), &format!("{setup}  jsr {name}\n"), &text), 4);
     }
 }
@@ -1609,7 +1649,7 @@ fn a_widened_or_of_compares_does_not_test_its_own_result() {
     assert!(!text.contains("cmp #0"), "{text}");
     for c in [0u16, 47, 48, 57, 58, 64, 65, 70, 71, 96, 97, 102, 103, 0x130, 0xFFC1] {
         let want = matches!(c, 48..=57 | 65..=70 | 97..=102) as i32;
-        let setup = set("rc2", c & 0xFF) + &set("rc3", c >> 8);
+        let setup = args(&[w16(c)]);
         let lo = common::run_with(&format!("alloc-hex-lo-{c}"), &format!("{setup}  jsr hex\n"), &text);
         let hi = common::run_with(&format!("alloc-hex-hi-{c}"), &format!("{setup}  jsr hex\n  txa\n"), &text);
         assert_eq!((lo, hi), (want, 0), "{c}");
@@ -1677,7 +1717,7 @@ fn a_greater_than_a_constant_compares_against_the_next_constant() {
             };
             let setup = match bits {
                 8 => bytes(&[x as u16]),
-                _ => set("rc2", (x & 0xFF) as u16) + &set("rc3", (x >> 8) as u16),
+                _ => args(&[w16(x as u16)]),
             };
             let got = common::run_with(&format!("alloc-cc{n}-{x}"), &format!("{setup}  jsr t{n}\n"), &text);
             assert_eq!(got, i32::from(truth), "{pred} {ty} {x} vs {c}");
@@ -1696,7 +1736,7 @@ fn a_select_between_two_consecutive_constants_picks_by_the_condition() {
         );
         let text = compile(&ir, &format!("k{n}"));
         for (x, want) in [(0u16, yes), (98, yes), (99, no), (1000, no)] {
-            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+            let setup = args(&[w16(x)]);
             let got = common::run_with(&format!("alloc-k{n}-{x}"), &format!("{setup}  jsr k{n}\n"), &text);
             assert_eq!(got, i32::from(want), "x = {x}, {yes} or {no}");
         }
@@ -1788,7 +1828,7 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
             for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
                 let shifted = if op == "shl" { x << k } else { x >> k };
                 let want = shifted.wrapping_add(x);
-                let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+                let setup = args(&[w16(x)]);
                 let run = |after: &str| {
                     common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), text)
                 };
@@ -1805,8 +1845,13 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
 /// 1, digits(10) = 2, digits(99) = 2, digits(100) = 3, digits(65535) = 5.
 #[test]
 fn three_saved_cells_are_shared_helpers_at_the_size_level_only() {
-    let ir = "define i8 @digits(i16 %v) {
+    // the word is read from a global: an argument in A:X is live at entry,
+    // where `__csave` (which changes a, x and y) cannot run, and the
+    // function then pushes the cells inline (6502-AX-CSAVE)
+    let ir = "@g = external global i16
+define i8 @digits() {
 entry:
+  %v = load volatile i16, ptr @g
   %c = icmp ugt i16 %v, 9
   br i1 %c, label %loop, label %done
 loop:
@@ -1827,13 +1872,13 @@ done:
     assert!(inline.contains("pha") && !inline.contains("__csave"), "{inline}");
     for (v, want) in [(5u16, 1), (10, 2), (99, 2), (100, 3), (65535, 5)] {
         for (name, text) in [("shared", &shared), ("inline", &inline)] {
-            let setup =
-                set("rc2", v & 0xFF) + &set("rc3", v >> 8) + &set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3);
+            let setup = set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &set("g", v) + &set("g+1", v >> 8);
+            let text = format!("g = $C0\n{text}");
             // the callee-saved cells come back as they were
             let after = "  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  pla\n  rts\nbad:\n  lda #99\n  rts\n";
             let program = format!("{setup}  jsr digits\n  pha\n{}", after);
             assert_eq!(
-                common::run_with(&format!("alloc-digits-{name}-{v}"), &program, text),
+                common::run_with(&format!("alloc-digits-{name}-{v}"), &program, &text),
                 want,
                 "{name} digits({v})"
             );
@@ -1849,8 +1894,9 @@ done:
 fn the_save_helpers_are_linked_only_where_their_users_pay_for_them() {
     let digits = |name: &str| {
         format!(
-            "define i8 @{name}(i16 %v) {{
+            "define i8 @{name}() {{
 entry:
+  %v = load volatile i16, ptr @g
   %c = icmp ugt i16 %v, 9
   br i1 %c, label %loop, label %done
 loop:
@@ -1869,7 +1915,7 @@ done:
     };
     let module_of = |users: usize| {
         let names: Vec<String> = (0..users).map(|n| format!("dig{n}")).collect();
-        let ir: String = names.iter().map(|n| digits(n)).collect();
+        let ir: String = "@g = external global i16\n".to_owned() + &names.iter().map(|n| digits(n)).collect::<String>();
         let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
         let mut module = llrm_mir::parse::module(&text).expect("parses");
         llrm_6502::prepare::split_phi_edges(&mut module);
@@ -1894,15 +1940,12 @@ done:
         }
         for (v, want) in [(5u16, 1), (100, 3), (65535, 5)] {
             for name in &names {
-                let setup = set("rc2", v & 0xFF)
-                    + &set("rc3", v >> 8)
-                    + &set("rc8", 0xA1)
-                    + &set("rc9", 0xB2)
-                    + &set("rc10", 0xC3);
+                let setup =
+                    set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &set("g", v) + &set("g+1", v >> 8);
                 let after = "  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  pla\n  rts\nbad:\n  lda #99\n  rts\n";
                 let program = format!("{setup}  jsr {name}\n  pha\n{after}");
                 assert_eq!(
-                    common::run_with(&format!("alloc-{users}-{name}-{v}"), &program, &all),
+                    common::run_with(&format!("alloc-{users}-{name}-{v}"), &program, &format!("g = $C0\n{all}")),
                     want,
                     "{users} users, {name}({v})"
                 );
@@ -1934,7 +1977,7 @@ define i8 @rot3(i8 %x) {
     let rotl16 = |x: u16, n: u32| x.rotate_left(n);
     let word = |name: &str, x: u16, n: u8| {
         let text = compile(ir, name);
-        let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", u16::from(n));
+        let setup = args(&[w16(x), byte(u16::from(n))]);
         let run = |after: &str| {
             common::run_with(&format!("alloc-{name}-{x}-{n}"), &format!("{setup}  jsr {name}\n{after}"), &text)
         };
@@ -1952,7 +1995,7 @@ define i8 @rot3(i8 %x) {
     for x in [0u16, 1, 0x81, 0xFF, 0x5A] {
         let want = (x as u8).rotate_left(3);
         assert_eq!(
-            common::run_with(&format!("alloc-rot3-{x}"), &format!("{}  jsr rot3\n", set("rc2", x)), &text),
+            common::run_with(&format!("alloc-rot3-{x}"), &format!("{}  jsr rot3\n", bytes(&[x])), &text),
             i32::from(want)
         );
     }
@@ -2072,18 +2115,19 @@ define i8 @tfrozen(i8 %a) {
   %r = select i1 %f, i8 3, i8 4
   ret i8 %r
 }";
-    for (name, args) in [("tword", [0x0100u16, 0]), ("tword", [0x0001, 0]), ("tfrozen", [2, 0]), ("tfrozen", [3, 0])] {
+    for (name, values) in [("tword", [0x0100u16, 0]), ("tword", [0x0001, 0]), ("tfrozen", [2, 0]), ("tfrozen", [3, 0])]
+    {
         let text = compile_within_ten_seconds(ir, name);
-        let want = if args[0] & 1 == 1 { 3 } else { 4 };
+        let want = if values[0] & 1 == 1 { 3 } else { 4 };
         let setup = match name {
-            "tfrozen" => bytes(&args[..1]),
-            _ => set("rc2", args[0] & 0xFF) + &set("rc3", args[0] >> 8),
+            "tfrozen" => bytes(&values[..1]),
+            _ => args(&[w16(values[0])]),
         };
         assert_eq!(
-            common::run_with(&format!("alloc-trunc-{name}-{}", args[0]), &format!("{setup}  jsr {name}\n"), &text),
+            common::run_with(&format!("alloc-trunc-{name}-{}", values[0]), &format!("{setup}  jsr {name}\n"), &text),
             want,
             "{name} {:#x}",
-            args[0]
+            values[0]
         );
     }
 }
@@ -2108,7 +2152,7 @@ define i16 @sloadx(ptr %p) {
     for name in ["sload", "sloadx"] {
         let text = compile_within_ten_seconds(ir, name);
         for byte in [0u16, 5, 0x7F, 0x80, 0xFF] {
-            let setup = format!("{}{}  lda #{byte}\n  sta $0300\n", set("rc2", 0), set("rc3", 3));
+            let setup = format!("  lda #{byte}\n  sta $0300\n{}", args(&[w16(0x0300)]));
             let extended = byte as u8 as i8 as i16 as u16;
             let want = i32::from(if name == "sloadx" { extended ^ 1456 } else { extended });
             let low = common::run_with(&format!("alloc-{name}-{byte}"), &format!("{setup}  jsr {name}\n"), &text);
@@ -2780,9 +2824,7 @@ exit:
     // n ^ 5, then + 0x10001 twice
     for n in [0u32, 0x1234_5678, 0xFFFF_FFFF] {
         let want = ((n ^ 5).wrapping_add(2 * 65537)) as u16;
-        let byte = |k: u32| ((n >> (8 * k)) & 0xFF) as u16;
-        let setup =
-            format!("{}{}{}{}", set("rc2", byte(0)), set("rc3", byte(1)), set("rc4", byte(2)), set("rc5", byte(3)));
+        let setup = args(&[w16(n as u16), w16((n >> 16) as u16)]);
         let lo = common::run_with(&format!("alloc-wphi-{n}"), &format!("{setup}  jsr wphi\n"), &text);
         let hi = common::run_with(&format!("alloc-wphih-{n}"), &format!("{setup}  jsr wphi\n  txa\n"), &text);
         assert_eq!(((hi << 8) | lo) as u16, want, "n = {n:#x}");
@@ -2879,7 +2921,7 @@ fn a_long_result_set_before_the_frame_is_released_is_returned_whole() {
     let ir = "define i32 @widen(i16 %a) {\n  %slot = alloca i16\n  store i16 %a, ptr %slot\n  %v = load i16, ptr %slot\n  %r = zext i16 %v to i32\n  ret i32 %r\n}";
     let text = compile(ir, "widen");
     // rc2:rc3 hold the argument 0x1234 on entry and must hold zero on return
-    let setup = set("rc2", 0x1234) + &set("rc3", 0x1234 >> 8);
+    let setup = args(&[w16(0x1234)]);
     let run = |after: &str| common::run_with("alloc-long-result", &format!("{setup}  jsr widen\n{after}"), &text);
     assert_eq!(run("  lda rc2\n"), 0, "{text}");
     assert_eq!(run("  lda rc3\n"), 0, "{text}");
@@ -3200,8 +3242,9 @@ fn a_load_into_x_is_dead_before_a_call_that_does_not_take_x() {
     assert_eq!(asm.text(), code("walk"));
 }
 
-/// A branch on the zero or sign between `ldx m` and its `txa` reads the flags the load set: deleting the
-/// load leaves it testing whatever came before (found by reading, 2026-11-13). A carry branch does not read them.
+/// A branch on the zero or sign between `ldx m` and its `txa` reads the flags
+/// the load set: deleting the load leaves it testing whatever came before
+/// (found by reading, 2026-11-13). A carry branch does not read them.
 #[test]
 fn a_zero_branch_between_the_load_and_its_transfer_keeps_the_load() {
     use llrm_6502::peephole::load_straight_into_a;
@@ -3215,7 +3258,11 @@ fn a_zero_branch_between_the_load_and_its_transfer_keeps_the_load() {
     let mut asm = Asm::parse(&code("bcs"));
     asm.no_x_result = true;
     load_straight_into_a(&mut asm);
-    assert_eq!(asm.text(), "  sta rc4\n  bcs out\n  lda rc7\n  sta rc5\n  rts\nout:\n  rts\n", "a carry branch does not");
+    assert_eq!(
+        asm.text(),
+        "  sta rc4\n  bcs out\n  lda rc7\n  sta rc5\n  rts\nout:\n  rts\n",
+        "a carry branch does not"
+    );
 }
 
 /// The same for `y`: PTRSTEP, `ldy rc3; lda rc2; cmp rc4; bne; tya; cmp rc5`
@@ -3367,10 +3414,12 @@ mod post_ra {
         assert!(copies(&f).is_empty(), "the copy into y goes: {:?}", copies(&f));
     }
 
-    /// div_constants_short at -Os (2026-11-12): a narrowed 12-trip counter in `a` steps with
-    /// `clc; adc #1`, which clears the carry the compare of its old value set. The compare moved
-    /// above it, `bcs` read the step's carry, and the loop ran 256 trips (239 wrong quotients).
-    /// On the 6502 the step in `a` stays above the compare; the 65C02's `inc a` leaves the carry.
+    /// div_constants_short at -Os (2026-11-12): a narrowed 12-trip counter in
+    /// `a` steps with `clc; adc #1`, which clears the carry the compare of
+    /// its old value set. The compare moved above it, `bcs` read the step's
+    /// carry, and the loop ran 256 trips (239 wrong quotients). On the 6502
+    /// the step in `a` stays above the compare; the 65C02's `inc a` leaves the
+    /// carry.
     #[test]
     fn a_step_in_the_accumulator_keeps_the_compare_below_it_unless_it_leaves_the_carry() {
         let cmp = || {
@@ -3415,7 +3464,7 @@ fn a_short_word_shift_stays_in_a_where_that_is_shorter() {
     assert!(text.matches("asl a").count() == 3, "{text}");
     for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
         let want = x.wrapping_mul(9);
-        let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+        let setup = args(&[w16(x)]);
         let run = |after: &str| common::run_with(&format!("alloc-m9-{x}"), &format!("{setup}  jsr m9\n{after}"), &text);
         assert_eq!(run(""), i32::from(want & 0xFF), "{x} * 9, low byte");
         assert_eq!(run("  txa\n"), i32::from(want >> 8), "{x} * 9, high byte");
@@ -3569,7 +3618,7 @@ fn counted_shift_loops_are_chosen_by_final_size_for_other_shapes_too() {
                 "shr3" => x >> 3,
                 _ => x << 4,
             };
-            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", y & 0xFF) + &set("rc5", y >> 8);
+            let setup = args(&[w16(x), w16(y)]);
             let run = |after: &str| {
                 common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), &size)
             };

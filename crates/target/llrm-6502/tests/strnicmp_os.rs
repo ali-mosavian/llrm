@@ -66,9 +66,11 @@ fn a_case_fold_at_os_costs_no_more_than_llvm_mos_104_bytes() {
     assert!(bytes <= 104, "{bytes} B\n{body}");
 }
 
-/// The row's own number: a further regression is not hidden by the row.
+/// The row's own number: a further regression is not hidden by the row. 113 B:
+/// the 109 B of 6502-LSR-SIZE and the 4 B the two pointers cost arriving in A:X
+/// and rc2:rc3 (6502-AX-CELLS).
 #[test]
-fn a_case_fold_at_os_stays_within_its_row_109_bytes() {
+fn a_case_fold_at_os_stays_within_its_row_113_bytes() {
     let (bytes, body) = k_strnicmp_bytes();
-    assert!(bytes <= 109, "{bytes} B\n{body}");
+    assert!(bytes <= 113, "{bytes} B\n{body}");
 }

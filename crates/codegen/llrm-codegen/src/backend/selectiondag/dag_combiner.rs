@@ -345,9 +345,10 @@ pub trait CombineHooks {
         false
     }
 
-    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another reader
-    /// takes narrow may be widened for an extension only if the truncate back is free.
-    /// The pin asks the same query as everywhere else; a target may answer it apart.
+    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another
+    /// reader takes narrow may be widened for an extension only if the
+    /// truncate back is free. The pin asks the same query as everywhere
+    /// else; a target may answer it apart.
     fn extend_uses_truncate_free(
         &self,
         from: EVT,
@@ -410,6 +411,17 @@ pub trait CombineHooks {
             return false;
         }
         !(dag.opcode(operand) == ISD::SignExtend && !dag.has_one_use(dag.operand(operand, 0).node))
+    }
+
+    /// Whether `combineShiftOfShiftedLogic` may split `shift` over its one-use
+    /// logic operand. The pin always does; DEVIATE 6502-PAIR-SHIFT: a target
+    /// whose word is two byte registers keeps a shift of a joined pair whole.
+    fn wants_shift_of_shifted_logic(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+    ) -> bool {
+        true
     }
 
     /// `visitSRL`'s `shift (shift x, c1), c2` as one shift by the sum, and
@@ -2118,8 +2130,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the loaded
-    /// value (its chain may have users).
+    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the
+    /// loaded value (its chain may have users).
     fn reduce_load_width(
         &mut self,
         node: SDValue,
@@ -2195,8 +2207,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         {
             let x = self.dag.operand(self.dag.operand(n0, 0), 0);
             let narrow = self.dag.value_type(n0);
-            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
-            // isZExtFree(narrow, wide)`) `ShrinkDemandedOp` makes the narrow form
+            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide,
+            // narrow) && isZExtFree(narrow, wide)`)
+            // `ShrinkDemandedOp` makes the narrow form
             // this fold would undo, and the two would run in turn forever.
             let narrows_free = self.hooks.free_narrowing(vt, narrow);
             let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
@@ -2279,8 +2292,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
-        if self.dag.opcode(node) != ISD::ZeroExtend
-            || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+        if self.dag.opcode(node) != ISD::ZeroExtend || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
         {
             return None;
         }
@@ -2302,7 +2314,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &self,
         ptr: SDValue,
     ) -> Option<u64> {
-        let common = |align: u64, offset: u64| if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) };
+        let common =
+            |align: u64, offset: u64| if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) };
         if let Some((symbol, offset)) = self.global_plus_offset(ptr) {
             if let Some(&align) = self.dag.global_alignments.get(&symbol) {
                 if align > 1 {
@@ -2334,7 +2347,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         ptr: SDValue,
     ) -> Option<(u32, i64)> {
         match (self.dag.opcode(ptr), self.dag.node(ptr).data) {
-            (ISD::GlobalAddress | ISD::TargetGlobalAddress, NodeData::Global { symbol, offset }) => Some((symbol, offset)),
+            (ISD::GlobalAddress | ISD::TargetGlobalAddress, NodeData::Global { symbol, offset }) => {
+                Some((symbol, offset))
+            }
             (ISD::Add, _) => {
                 let (a, b) = (self.dag.operand(ptr, 0), self.dag.operand(ptr, 1));
                 let signed = |c: SDValue| {
@@ -3230,7 +3245,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let logic_op = self.dag.opcode(logic);
-        if !matches!(logic_op, ISD::And | ISD::Or | ISD::Xor) {
+        if !matches!(logic_op, ISD::And | ISD::Or | ISD::Xor)
+            || !self.hooks.wants_shift_of_shifted_logic(self.dag, node)
+        {
             return None;
         }
         // "Do not turn a 'not' into a regular xor."
@@ -4445,8 +4462,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let source = self.dag.operand(value, 0);
         let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
-        // `canCombineTruncStore`: `isTruncStoreLegal` after operation legalization, `isTruncStoreLegalOrCustom`
-        // before; both need the value type to be legal (a soft-float target has no `f64` to store narrowed).
+        // `canCombineTruncStore`: `isTruncStoreLegal` after operation
+        // legalization, `isTruncStoreLegalOrCustom` before; both need
+        // the value type to be legal (a soft-float target has no `f64` to store
+        // narrowed).
         let takes = if self.legal_operations() {
             tli.is_trunc_store_legal(wide, narrow)
         } else {
@@ -4530,7 +4549,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));
             }
         }
-        // x * c with x and c in the half: the half multiply, before a chain or the full multiply.
+        // x * c with x and c in the half: the half multiply, before a chain or
+        // the full multiply.
         if let (Some(c), false) = (c1, opaque) {
             if let Some(half) = self.hooks.mul_of_halves(vt).filter(|half| half.constant) {
                 if let Some(product) = self.half_multiply_by_constant(n0, c, vt, half) {
@@ -4625,7 +4645,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let high = super::fold::mask(width) & !super::fold::mask(narrow);
         let signed = if super::known_bits::masked_value_is_zero(self.dag, x, high) && c & high == 0 {
             false
-        } else if super::known_bits::num_sign_bits(self.dag, x) > width - narrow && matches!(c >> (narrow - 1), 0) | (c >> (narrow - 1) == super::fold::mask(width) >> (narrow - 1)) {
+        } else if super::known_bits::num_sign_bits(self.dag, x) > width - narrow
+            && matches!(c >> (narrow - 1), 0) | (c >> (narrow - 1) == super::fold::mask(width) >> (narrow - 1))
+        {
             true
         } else {
             return None;
@@ -4829,8 +4851,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
         }
-        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits to
-        // spare (DAGCombiner.cpp#L17478): the shifted-in zeros are all sign.
+        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits
+        // to spare (DAGCombiner.cpp#L17478): the shifted-in zeros are
+        // all sign.
         if self.dag.opcode(n0) == ISD::Srl
             && let Some(amount) = self.dag.constant(self.dag.operand(n0, 1))
             && amount <= u128::from(bits - ext_bits)
