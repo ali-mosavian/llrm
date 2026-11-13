@@ -230,6 +230,14 @@ USHLLv4i32_shift         binary   x/x,i         -                        fp_arit
 XTNv8i8                  unary    x/x           -                        fp_arith   - - - -/-                XTNv8i8
 XTNv4i16                 unary    x/x           -                        fp_arith   - - - -/-                XTNv4i16
 XTNv2i32                 unary    x/x           -                        fp_arith   - - - -/-                XTNv2i32
+UZP1v16i8                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v16i8
+UZP1v8i16                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v8i16
+UZP1v4i32                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v4i32
+UZP1v2i64                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v2i64
+UZP2v16i8                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v16i8
+UZP2v8i16                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v8i16
+UZP2v4i32                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v4i32
+UZP2v2i64                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v2i64
 SMULLv8i8_v8i16          binary   x/x,x         -                        fp_arith   - - - -/-                SMULLv8i8_v8i16
 SMULLv16i8_v8i16         binary   x/x,x         -                        fp_arith   - - - -/-                SMULLv16i8_v8i16
 SMULLv4i16_v4i32         binary   x/x,x         -                        fp_arith   - - - -/-                SMULLv4i16_v4i32

@@ -423,6 +423,11 @@ impl fmt::Display for Inst {
                 let narrow = wide.narrowed(*high);
                 write!(out, "{name}{two} v{}.{}, v{}.{narrow}, v{}.{narrow}", rd.0, wide.suffix(), rn.0, rm.0)
             }
+            Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
+                let name = if *second { "uzp2" } else { "uzp1" };
+                let s = lanes.suffix();
+                write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
+            }
             Inst::VectorNarrow { high, wide, rd, rn } => {
                 let two = if *high { "2" } else { "" };
                 write!(out, "xtn{two} v{}.{}, v{}.{}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())

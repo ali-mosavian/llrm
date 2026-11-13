@@ -1070,6 +1070,15 @@ pub enum Inst {
         rn: Vreg,
         rm: Vreg,
     },
+    /// `uzp1 v.8h, v.8h, v.8h` (`UZP1v8i16`; `uzp2`): the even (`second`: the
+    /// odd) lanes of `rn`, then of `rm`.
+    VectorUnzip {
+        second: bool,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
     /// `xtn{2} v.8b, v.8h`: each lane of `rn` (`wide`'s lanes) halved, into
     /// the low half of `rd` or, `high`, its top half (`rd` is then read too).
     VectorNarrow {

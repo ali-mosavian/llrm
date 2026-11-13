@@ -190,6 +190,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::VectorUnzip { second, lanes, rd, rn, rm } => semantics(
+            Operation::Binary,
+            unzip_name(*second, *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
         Inst::VectorNarrow { high, wide, rd, rn } => semantics(
             if *high { Operation::Binary } else { Operation::Unary },
             format!("XTN{}", narrow_name(*wide, *high)),
@@ -404,6 +411,20 @@ fn vector_fp_name(
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
+/// `UZP1v8i16`: the pin's name of an unzip.
+fn unzip_name(
+    second: bool,
+    lanes: Arrangement,
+) -> String {
+    let lanes = match lanes {
+        Arrangement::B16 => "v16i8",
+        Arrangement::H8 => "v8i16",
+        Arrangement::S4 => "v4i32",
+        Arrangement::D2 => "v2i64",
+    };
+    format!("UZP{}{lanes}", if second { 2 } else { 1 })
+}
+
 /// `SMULLv2i32_v2i64`, `UMLALv4i32_v2i64`: the pin's name of a long multiply.
 fn mul_long_name(
     signed: bool,
@@ -552,6 +573,17 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                     rm: vreg_of(&s[at + 1]),
                 });
             }
+        }
+    }
+    for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
+        if name == unzip_name(second, lanes) {
+            return Some(Inst::VectorUnzip {
+                second,
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                rm: vreg_of(&s[1]),
+            });
         }
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {

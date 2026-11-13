@@ -420,3 +420,20 @@ fn a_loop_of_widening_multiplies_by_a_scalar_is_vectorized() {
         "{text}"
     );
 }
+
+/// `trunc <8 x i32> to <8 x i8>` stopped the compile ("split conversion with
+/// no half result type": `v4i8` is no type; `mem_length_boundaries_m32` at
+/// arm64 -O2 after LoopVectorize widened its `(unsigned char)` stores). The
+/// pin truncates in two steps (`SplitVecOp_TruncateHelper`): `uzp1 .8h`, `xtn .8b`.
+#[test]
+fn a_truncation_to_under_half_the_lane_of_a_split_vector_is_two_steps() {
+    let text = assembly(
+        "define void @f(ptr %a, ptr %c) {\n\
+         \x20 %l = load <8 x i32>, ptr %a, align 4\n\
+         \x20 %t = trunc <8 x i32> %l to <8 x i8>\n\
+         \x20 store <8 x i8> %t, ptr %c, align 1\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "uzp1", ".8h"), 1, "{text}");
+    assert_eq!(count(&text, "xtn", ".8b"), 1, "{text}");
+}

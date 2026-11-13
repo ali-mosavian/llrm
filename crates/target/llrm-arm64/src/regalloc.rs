@@ -347,6 +347,9 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
                     wide.extend([Reg::Fpr(*rn), Reg::Fpr(*rm)]);
                 }
             }
+            Op::I(Inst::VectorUnzip { rd, rn, rm, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
+            }
             Op::I(Inst::VectorNarrow { high, rd, rn, .. }) => {
                 wide.insert(Reg::Fpr(*rn));
                 if *high {

@@ -258,6 +258,10 @@ pub(super) fn instructions() -> Vec<Inst> {
         out.push(Inst::VectorMulLong { signed: high, high, accumulate: !high, wide, rd: v(0), rn: v(1), rm: v(2) });
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        out.push(Inst::VectorUnzip { second: false, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        out.push(Inst::VectorUnzip { second: true, lanes, rd: v(0), rn: v(1), rm: v(2) });
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
         out.push(Inst::VectorInsLane { lanes, rd: v(0), rn: v(1), index: 1, src: 0 });
         out.push(Inst::VectorUmov { lanes, rd: Gpr(3), rn: v(1), index: 1 });
@@ -354,6 +358,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorExtendLong { .. } => "VectorExtendLong",
         Inst::VectorMulLong { .. } => "VectorMulLong",
         Inst::VectorNarrow { .. } => "VectorNarrow",
+        Inst::VectorUnzip { .. } => "VectorUnzip",
         Inst::VectorDupScalar { .. } => "VectorDupScalar",
         Inst::VectorDupLane { .. } => "VectorDupLane",
         Inst::VectorFpBinary { .. } => "VectorFpBinary",
@@ -370,7 +375,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 64] = [
+const ALL: [&str; 65] = [
     "Mark",
     "Label",
     "Cfi",
@@ -425,6 +430,7 @@ const ALL: [&str; 64] = [
     "VectorExtendLong",
     "VectorMulLong",
     "VectorNarrow",
+    "VectorUnzip",
     "VectorDupScalar",
     "VectorDupLane",
     "VectorFpBinary",

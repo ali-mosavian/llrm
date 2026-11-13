@@ -483,6 +483,16 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             };
             base | u32::from(*high) << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
+            let size = match lanes {
+                Arrangement::B16 => 0,
+                Arrangement::H8 => 1,
+                Arrangement::S4 => 2,
+                Arrangement::D2 => 3,
+            };
+            let base = if *second { 0x4E00_5800 } else { 0x4E00_1800 };
+            base | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorNarrow { high, wide, rd, rn } => {
             let size = match wide {
                 Arrangement::H8 => 0,

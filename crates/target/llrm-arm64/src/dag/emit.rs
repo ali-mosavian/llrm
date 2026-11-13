@@ -770,6 +770,24 @@ fn vector_inst(
             }
         }
     }
+    // `UZP1v8i16`: two sources, no tied register.
+    for (second, lanes) in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .flat_map(|lanes| [(false, lanes), (true, lanes)])
+    {
+        let lane = match lanes {
+            Arrangement::B16 => "v16i8",
+            Arrangement::H8 => "v8i16",
+            Arrangement::S4 => "v4i32",
+            Arrangement::D2 => "v2i64",
+        };
+        if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorUnzip { second, lanes, rd, rn: *rn, rm: *rm }),
+                _ => wrong(),
+            });
+        }
+    }
     // `FMULv4i32_indexed`: the multiplier is a lane of `rm`.
     if let Some(lanes) =
         name.strip_prefix("FMULv").and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {

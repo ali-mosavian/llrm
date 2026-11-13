@@ -262,6 +262,17 @@ impl TypeLegalizer<'_> {
         Some((lo, hi))
     }
 
+    /// The truncation whose result lane is under half its operand's: the pin
+    /// does it in two steps (`SplitVecOp_TruncateHelper`).
+    fn truncates_by_more_than_half(
+        &self,
+        node: SDValue,
+        operand: SDValue,
+    ) -> bool {
+        let (result, source) = (self.dag.value_type(node), self.dag.value_type(operand));
+        result.is_vector() && source.is_vector() && result.element().size_in_bits() * 2 < source.element().size_in_bits()
+    }
+
     /// `SplitVectorOperand`: an operand `at` of node `n` is a vector to split.
     /// True if `n` was updated in place and must be looked at again.
     pub(super) fn split_vector_operand(
@@ -296,6 +307,26 @@ impl TypeLegalizer<'_> {
             }
             // `SplitVecOp_UnaryOp`: the result is legal, the operand splits:
             // each half converted to half the result, then joined.
+            // `SplitVecOp_TruncateHelper`: a truncation to less than half the
+            // lane is two: each half to half the lane (a legal result
+            // type), joined, then the rest.
+            ISD::Truncate if at == 0 && self.truncates_by_more_than_half(node, operand) => {
+                let result_vt = self.dag.value_type(node);
+                let (lo, hi) = self.split_vector(operand);
+                let lanes = self.dag.value_type(lo).lanes();
+                let half_bits = self.dag.value_type(operand).element().size_in_bits() / 2;
+                let half = MVT::integer(half_bits)
+                    .and_then(|element| MVT::vector(element, lanes))
+                    .map(EVT::Simple)
+                    .ok_or_else(|| unsupported("split truncation with no half-lane type"))?;
+                let inter = MVT::integer(half_bits)
+                    .and_then(|element| MVT::vector(element, lanes * 2))
+                    .map(EVT::Simple)
+                    .ok_or_else(|| unsupported("split truncation with no half-lane type"))?;
+                let (lo, hi) = (self.dag.get_node(ISD::Truncate, half, &[lo]), self.dag.get_node(ISD::Truncate, half, &[hi]));
+                let joined = self.dag.get_node(ISD::ConcatVectors, inter, &[lo, hi]);
+                self.dag.get_node(ISD::Truncate, result_vt, &[joined])
+            }
             op if at == 0 && is_conversion(op) => {
                 let result_vt = self.dag.value_type(node);
                 let (lo, hi) = self.split_vector(operand);
