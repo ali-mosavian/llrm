@@ -61,15 +61,16 @@ use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_mir::tti::{ArithOp, Ty};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
-use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step};
+use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
 use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, ScalarFacts, choose_interleave, pin_may_vectorize, plan};
 use crate::loopvectorizeskeleton::{self as skeleton, Shape, Skeleton};
 
@@ -107,21 +108,34 @@ struct Access {
     stored: Option<Source>,
 }
 
-/// What a widened operation computes: a binary operation, or `fneg`.
+/// What a widened operation computes: a binary operation, `fneg`, or the
+/// call of `llvm.fmuladd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WideOp {
     Binary(BinaryOp),
     FNeg,
+    FMulAdd,
 }
 
-/// A binary operation or `fneg` of the loop, widened lane by lane.
+impl WideOp {
+    fn arity(self) -> usize {
+        match self {
+            WideOp::Binary(_) => 2,
+            WideOp::FNeg => 1,
+            WideOp::FMulAdd => 3,
+        }
+    }
+}
+
+/// A binary operation, `fneg` or `fmuladd` of the loop, widened lane by lane.
 #[derive(Clone, Copy, Debug)]
 struct Operation {
     inst: InstId,
     op: WideOp,
     flags: Flags,
     element: TypeId,
-    operands: [Source; 2],
+    /// The first `op.arity()` are read.
+    operands: [Source; 3],
 }
 
 /// An instruction of the loop that is widened, in program order.
@@ -230,6 +244,7 @@ fn extract(
                     && match function.instruction(one.user).opcode {
                         Opcode::Store { .. } => one.index == 0,
                         Opcode::Binary(_) | Opcode::FNeg => true,
+                        Opcode::Call(_) => widened_intrinsic(cx, one.user).is_some(),
                         _ => false,
                     },
             )
@@ -395,7 +410,7 @@ fn extract(
                     op: WideOp::Binary(op),
                     flags: data.flags,
                     element: data.ty,
-                    operands,
+                    operands: [operands[0], operands[1], operands[1]],
                 }));
             }
             // `VPWidenRecipe` of `fneg`: one widened or loop-invariant operand.
@@ -419,7 +434,36 @@ fn extract(
                     op: WideOp::FNeg,
                     flags: data.flags,
                     element: data.ty,
-                    operands: [operand, operand],
+                    operands: [operand; 3],
+                }));
+            }
+            // `VPWidenIntrinsicRecipe` of `llvm.fmuladd`: the call's arguments
+            // (the callee is the last operand), widened or loop-invariant.
+            Opcode::Call(_) if widened_intrinsic(cx, inst) == Some(Intrinsic::FMulAdd) => {
+                let value = data.result.expect("an fmuladd");
+                let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                if used_outside(inst) {
+                    return Err(Skipped("A call used after the loop"));
+                }
+                if !widened_users(value) {
+                    return Err(Skipped("A call result used other than by a store or a binary operation"));
+                }
+                let operands = [
+                    source_of(data.operands[0], &widened)?,
+                    source_of(data.operands[1], &widened)?,
+                    source_of(data.operands[2], &widened)?,
+                ];
+                if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
+                    return Err(Skipped("A call of loop-invariant values"));
+                }
+                recipes.push(Recipe::FMulAdd { lane });
+                widened.push(inst);
+                steps.push(Step::Operation(Operation {
+                    inst,
+                    op: WideOp::FMulAdd,
+                    flags: data.flags,
+                    element: data.ty,
+                    operands,
                 }));
             }
             Opcode::Binary(BinaryOp::Add) if inst == step => {
@@ -636,6 +680,7 @@ fn widen_access(
 fn execute(
     context: &mut llrm_mir::context::Context,
     function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
     widening: &Widening,
     plan: Plan,
     splat_block: BlockId,
@@ -665,7 +710,7 @@ fn execute(
                 let vector_ty = vector_of(context, operation.element);
                 let mut parts = Vec::new();
                 for part in 0..plan.ic as usize {
-                    let arity = if operation.op == WideOp::FNeg { 1 } else { 2 };
+                    let arity = operation.op.arity();
                     let operands = operation
                         .operands
                         .map(
@@ -681,16 +726,39 @@ fn execute(
                                 &mut splats,
                             ),
                         );
-                    let made = function.create_instruction(
-                        match operation.op {
-                            WideOp::Binary(op) => Opcode::Binary(op),
-                            WideOp::FNeg => Opcode::FNeg,
-                        },
-                        vector_ty,
-                        operands[..arity].to_vec(),
-                        operation.flags,
-                        None,
-                    );
+                    let mut operands = operands[..arity].to_vec();
+                    let opcode = match operation.op {
+                        WideOp::Binary(op) => Opcode::Binary(op),
+                        WideOp::FNeg => Opcode::FNeg,
+                        WideOp::FMulAdd => {
+                            // `llvm.fmuladd.v4f32` of the widened arguments.
+                            let function_type = context
+                                .types
+                                .intern(
+                                    Type::Function {
+                                        returns: vector_ty,
+                                        parameters: vec![vector_ty; 3],
+                                        variadic: false,
+                                    },
+                                );
+                            let name =
+                                format!("llvm.fmuladd.{}", llrm_mir::intrinsics::mangle(&context.types, vector_ty));
+                            let callee = declared.declare(&name, function_type);
+                            let pointer = context.types.ptr(0);
+                            operands.push(Operand::Constant(
+                                context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }),
+                            ));
+                            Opcode::Call(Box::new(CallInfo {
+                                function_type,
+                                calling_convention: 0,
+                                return_attrs: Vec::new(),
+                                argument_attrs: vec![Vec::new(); 3],
+                                attrs: Vec::new(),
+                                tail: Tail::default(),
+                            }))
+                        }
+                    };
+                    let made = function.create_instruction(opcode, vector_ty, operands, operation.flags, None);
                     function.insert(made, before).expect("the operation's block");
                     parts.push(function.instruction(made).result.expect("a binary operation"));
                 }
@@ -915,7 +983,7 @@ impl FunctionPass for LoopVectorize {
             match planned {
                 Planned::Vector(chosen, widening) => {
                     why(unit, &outer, header, &format!("vectorized VF {} IC {}", chosen.vf, chosen.ic));
-                    execute(unit.context, unit.function, &widening, chosen, skeleton.vector_ph);
+                    execute(unit.context, unit.function, unit.declared, &widening, chosen, skeleton.vector_ph);
                 }
                 Planned::Interleave(ic, extracted) => {
                     why(unit, &outer, header, &format!("interleaved IC {ic}"));

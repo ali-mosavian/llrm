@@ -46,6 +46,7 @@ const SHIFT: &str = include_str!("../tests/lv/binop_shift.ll");
 const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
+const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
 const FP_SUB_DOUBLE: &str = include_str!("../tests/lv/fp_sub_double.ll");
 const FP_NEG_DOUBLE: &str = include_str!("../tests/lv/fp_neg_double.ll");
 
@@ -75,6 +76,18 @@ fn a_float_multiply_add_of_loaded_arrays_is_widened() {
     assert_eq!(count(&text, "store <4 x float>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
     assert_eq!(count(&text, "load float"), 0, "{text}");
+}
+
+/// `d[i] = fmuladd(a[i], k, b[i])`: "Found a non-intrinsic callsite" kept the
+/// loop scalar; the pin widens the call (VF 4, IC 2: two `llvm.fmuladd.v4f32`,
+/// `k` splatted, step 8).
+#[test]
+fn a_float_fmuladd_call_is_widened_to_a_vector_intrinsic() {
+    let text = run(FP_FMULADD);
+    assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
+    assert_eq!(count(&text, "call float @llvm.fmuladd.f32"), 0, "{text}");
+    assert_eq!(count(&text, "load <4 x float>"), 4, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
 }
 
 /// `double` lanes: pin VF 2, IC 2 (step 4).

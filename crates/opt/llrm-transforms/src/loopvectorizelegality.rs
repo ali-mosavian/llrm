@@ -43,6 +43,7 @@ use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::scev::expr::Kind;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -150,6 +151,17 @@ fn can_vectorize_instrs(
     Ok(())
 }
 
+/// The intrinsic `inst` calls, if the pin's `isTriviallyVectorizable` takes it
+/// and this port widens it. DEVIATE LV-D4 (owner llrm-arm64-vec, exit LV-W4):
+/// only `llvm.fmuladd`; the pin's list also has `fma`, `sqrt`, `fabs`, ... .
+pub(crate) fn widened_intrinsic(
+    cx: &Cx,
+    inst: InstId,
+) -> Option<Intrinsic> {
+    let global = llrm_mir::memory::callee(cx.context, cx.function, inst)?;
+    cx.globals.get(global.0 as usize)?.intrinsic().filter(|id| *id == Intrinsic::FMulAdd)
+}
+
 /// `canVectorizeInstr` (L840).
 fn can_vectorize_instr(
     cx: &Cx,
@@ -189,8 +201,11 @@ fn can_vectorize_instr(
         return Err(Refusal("Found an unidentified PHI"));
     }
 
-    // Calls: LV-D4.
-    if matches!(data.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+    // Calls: LV-D4. `getVectorIntrinsicIDForCall`: an intrinsic that is
+    // trivially vectorizable (see `widened_intrinsic`).
+    if matches!(data.opcode, Opcode::Call(_) | Opcode::Invoke(_))
+        && !(matches!(data.opcode, Opcode::Call(_)) && widened_intrinsic(cx, inst).is_some())
+    {
         return Err(Refusal("Found a non-intrinsic callsite"));
     }
 

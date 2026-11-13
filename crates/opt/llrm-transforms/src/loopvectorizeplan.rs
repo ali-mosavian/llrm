@@ -70,6 +70,9 @@ pub enum Recipe {
     Store { lane: Ty, align: u64 },
     /// A binary operation of `lane`, integer or floating point.
     Binary { op: ArithOp, lane: Ty },
+    /// `llvm.fmuladd` of `lane`s (`VPWidenIntrinsicRecipe`): AArch64 prices it
+    /// as one `fmul` (`getIntrinsicInstrCost`, L797).
+    FMulAdd { lane: Ty },
     /// An access whose addresses are not consecutive and not a pattern the
     /// pin widens (an interleave group, a reversal, a uniform address): one
     /// scalar access per lane (`CM_Scalarize`), a load's lanes put together
@@ -162,6 +165,7 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
         Recipe::Load { lane, .. }
         | Recipe::Store { lane, .. }
         | Recipe::Binary { lane, .. }
+        | Recipe::FMulAdd { lane }
         | Recipe::Scalarized { lane, .. }
         | Recipe::Compare { lane, .. }
         | Recipe::Select { lane, .. } => Some(lane),
@@ -279,6 +283,13 @@ fn iteration_cost(
                     Cost { value: access.value + address, valid: access.valid }
                 } else {
                     tti.vector_memory_op_cost(op, vector(lane), align, kind).ok_or(NotTaken)?
+                }
+            }
+            Recipe::FMulAdd { lane } => {
+                if vf == 1 {
+                    tti.arithmetic_cost(ArithOp::FMul, lane, kind, Default::default(), Default::default())
+                } else {
+                    unknown(tti.vector_arithmetic_cost(ArithOp::FMul, vector(lane), kind))?
                 }
             }
             Recipe::Binary { op, lane } => {

@@ -1049,7 +1049,8 @@ pub fn is_reserved(name: &str) -> bool {
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
-fn mangle(
+/// The suffix an overloaded intrinsic's name has for `ty` (`i32`, `v4f32`).
+pub fn mangle(
     types: &Types,
     ty: TypeId,
 ) -> String {
