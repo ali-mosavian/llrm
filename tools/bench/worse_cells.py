@@ -32,10 +32,10 @@ def rate() -> int:
     return bench.rate_for("c", "O2")
 
 
-def with_footprint(row: dict) -> dict:
+def with_footprint(row: dict, program: str = "", name: str = "") -> dict:
     import bench
 
-    return bench.with_footprint(row)
+    return bench.with_footprint(row, bench.run_time_arrays(program, name))
 
 
 def program_of(key: str) -> str:
@@ -70,9 +70,9 @@ def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tu
         program, language, level = program_of(key), key.split("/")[-2], key.split("/")[-1]
         if language not in REFERENCES or "code_bytes" not in ours:
             continue
-        ours = with_footprint(ours)
+        ours = with_footprint(ours, program, language)
         found = references(bench, program, language, level)
-        found = None if found is None else {name: with_footprint(numbers) for name, numbers in found.items()}
+        found = None if found is None else {name: with_footprint(numbers, program, name) for name, numbers in found.items()}
         if found is None:
             none.append(program)
             continue
