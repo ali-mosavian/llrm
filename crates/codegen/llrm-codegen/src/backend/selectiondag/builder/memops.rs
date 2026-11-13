@@ -7,6 +7,13 @@
 /// A `rep movsw` in 32-bit code is a byte longer than `rep movsb`: copies of at least this many bytes win 48 clocks for it.
 const REP_WORD_MIN_BYTES: u64 = 32;
 
+/// Encoded sizes of the fill value in the accumulator, for `cheapest_fill_unit`.
+const XOR_OR_MOV_AL: u64 = 2;
+const MOV_AX: u64 = 4;
+const MOV_EAX: u64 = 5;
+const MOV_RAX_MINUS_ONE: u64 = 7;
+const MOVABS_RAX: u64 = 10;
+
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Instruction, Operand, ValueDef};
@@ -2250,11 +2257,11 @@ impl Builder<'_> {
     fn cheapest_fill_unit(block: u64, size: u64, byte: u64) -> u64 {
         let bytes = |unit: u64| {
             let value = match (byte, unit) {
-                (0, _) | (_, 1) => 2,
-                (_, 2) => 4,
-                (_, 4) => 5,
-                (0xff, _) => 7,
-                _ => 10,
+                (0, _) | (_, 1) => XOR_OR_MOV_AL,
+                (_, 2) => MOV_AX,
+                (_, 4) => MOV_EAX,
+                (0xff, _) => MOV_RAX_MINUS_ONE,
+                _ => MOVABS_RAX,
             };
             let op = if unit == 1 || unit == 4 { 2 } else { 3 };
             let left = size % unit;

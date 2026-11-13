@@ -670,6 +670,10 @@ mod tests {
             // counter it makes beside the conversion counts the same trips (beyond the pin); the
             // increment is read, never rewritten.
             "lsr_prepare.rs",
+            // `gepbyteindex` requires `inbounds` on the GEP it narrows (the object extent bounds the
+            // index) and gives the `mul nuw` and `gep inbounds` it builds those flags itself; it
+            // rewrites no flag of an existing instruction.
+            "gepbyteindex.rs",
             // `zeromerge` makes one `inbounds` GEP per member of the new
             // `alloca` it builds (llrm only); it reads no flag off an
             // existing instruction.

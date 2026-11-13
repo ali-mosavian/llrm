@@ -325,4 +325,20 @@ fn a_loop_carried_vector_phi_lives_in_a_q_register() {
     );
     assert!(text.contains("add v") && text.contains(".8h"), "{text}");
     assert!(text.contains("str q"), "{text}");
+
+/// A store of the constant `<0, 1, .., 7>` was refused (`Legalize(custom
+/// lowering of BuildVector)`): a constant that is no splat is the pin's pool
+/// load (`adrp` + `ldr q`, the lanes in a 16-byte entry), and the widened
+/// induction's start is one.
+#[test]
+fn a_constant_vector_that_is_no_splat_is_a_pool_load() {
+    let text = assembly(
+        "define void @f(ptr %d) {\n\
+         \x20 store <8 x i16> <i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(text.contains("adrp") && text.contains("PAGEOFF"), "{text}");
+    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
+    // The lanes in memory order: 0, 1, 2, 3 then 4, 5, 6, 7 (16 bits each).
+    assert!(text.contains(".quad 0x3000200010000") && text.contains(".quad 0x7000600050004"), "{text}");
 }

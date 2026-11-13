@@ -453,13 +453,32 @@ impl LegalizeHooks for Aarch64Lowering {
                 _ => return None,
             },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
-            ISD::BuildVector => super::vector::lower_build_vector(dag, node),
+            // `LowerINSERT_VECTOR_ELT`: a constant lane in range is as it is
+            // (`INS`); any other index is declined.
+            ISD::InsertVectorElt => {
+                let lanes = u128::from(dag.value_type(node).lanes());
+                dag.constant(dag.operand(node, 2)).filter(|&lane| lane < lanes).map(|_| node)
+            }
+            ISD::BuildVector => match super::vector::lower_build_vector(dag, node) {
+                Some(done) => Some(done),
+                // The pin's `SDValue()` for a constant that is no splat: the
+                // legalizer loads it from the constant pool
+                // (`ExpandBUILD_VECTOR`).
+                None if super::vector::is_constant_build_vector(dag, node) => return None,
+                None => None,
+            },
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp if dag.value_type(node).is_vector() => {
+                super::vector::lower_vector_int_to_fp(dag, node)
+            }
+            ISD::FpToSInt | ISD::FpToUInt if dag.value_type(node).is_vector() => {
+                super::vector::lower_vector_fp_to_int(dag, node)
+            }
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
             ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
