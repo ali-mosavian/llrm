@@ -600,6 +600,10 @@ pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
     }
 }
 
+/// The `MFunction` form of the shared `PHIElimination` (`phielimination.rs`),
+/// which m68k and z80 run it in place of while their allocators take an
+/// `MFunction` (`CompileOptions::shared_prelude` is the bridge, off: the corpus
+/// was tuned on this). Keep the two in the pin's order.
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
 /// register at the end of its predecessor, and a copy of that register into
 /// the phi's at the top of its block, so parallel phis do not overwrite each
@@ -637,6 +641,11 @@ pub fn eliminate_phis_with<C: Copy>(
             }
             heads.push(Inst::copy(phi.result, temporary));
         }
+        // `LowerPHINode` inserts each copy before the earlier ones: the last
+        // phi's copy is first. A phi that reads another phi's old value then
+        // reads its register before that one is redefined, so the two can
+        // share one.
+        heads.reverse();
         function.blocks[at].insts.splice(0..0, heads);
     }
 }
