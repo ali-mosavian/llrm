@@ -412,6 +412,7 @@ impl<'a> InlineSpiller<'a> {
         // The instruction that defines `reg`: what goes once it is made again.
         let own = Arc::clone(lis.instr(*defs.first()?));
         let mut def = Arc::clone(&own);
+        let mut live_original = false;
         if by_value_number {
             // `scanRemattable` asks the original's value number at the copy
             // (`OrigVNI`), and `isRematerializable` is of that one value
@@ -435,9 +436,13 @@ impl<'a> InlineSpiller<'a> {
             // it already.
             if !(self.tii.remat_shape(&own) && own.uses.is_empty()) {
                 let root = Arc::clone(self.tables.remat_roots.borrow().get(&self.original)?);
-                if self.tii.copy_source(&own).is_none() || !root.uses.is_empty() {
+                if self.tii.copy_source(&own).is_none() {
                     return None;
                 }
+                // A root that reads registers is not remade from the snapshot
+                // (its registers may be split since): `reMaterializeFor`'s
+                // `DefMI` is the instruction now at the original value's def.
+                live_original = !root.uses.is_empty();
                 def = root;
             }
         }
@@ -450,6 +455,21 @@ impl<'a> InlineSpiller<'a> {
             .into_iter()
             .filter(|(_, members)| !(members.len() == 1 && defs.contains(&members[0])))
             .collect();
+        if live_original {
+            let mut found: Option<Arc<Insn>> = None;
+            for (_, members) in &units {
+                let at = lis.indexes.get_instruction_index(members[0]);
+                let here = self.original_def_at(lis, &at)?;
+                if found.as_ref().is_some_and(|one| one.id() != here.id()) {
+                    return None;
+                }
+                found = Some(here);
+            }
+            def = found?;
+            if !self.tii.remat_shape(&def) || def.uses.contains(&reg) {
+                return None;
+            }
+        }
         for (_, members) in &units {
             let first = lis.indexes.get_instruction_index(members[0]);
             if !def.uses.is_empty() && !vrai.all_uses_available_at(def.id(), &first, lis) {
@@ -605,6 +625,19 @@ impl<'a> InlineSpiller<'a> {
             at = found;
         }
         None
+    }
+
+    /// The instruction that defines the original register's value at `at`
+    /// (`OrigLI.getVNInfoAt(UseIdx)`, `getInstructionFromIndex(OrigVNI->def)`),
+    /// as it stands in the body now.
+    fn original_def_at(
+        &self,
+        lis: &mut LiveIntervals,
+        at: &crate::liveness::slotindex::SlotIndex,
+    ) -> Option<Arc<Insn>> {
+        let value = lis.interval_rc(self.original).query(at).value_in()?;
+        let site = lis.indexes.get_instruction_from_index(&value.def())?;
+        Some(Arc::clone(lis.instr(site)))
     }
 
     /// A parallel copy that reads the register is a load: `mov %d, %reg` as a
