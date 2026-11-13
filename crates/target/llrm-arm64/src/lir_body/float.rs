@@ -5,8 +5,8 @@
 use super::*;
 use crate::mc::inst::Cond;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding, VectorFpOp, VectorFpUnary,
-    VectorOp, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding, VectorFma, VectorFpOp,
+    VectorFpUnary, VectorOp, VectorShift,
 };
 
 const UNARY: [(FpUnary, &str); 11] = [
@@ -141,6 +141,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
         Inst::VectorNot { rd, rn } => {
             semantics(Operation::Unary, "NOTv16i8", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
         }
+        Inst::VectorFma { op, lanes, rd, rn, rm } => semantics(
+            Operation::FloatMultiplyAdd,
+            vector_fp_name(op.mnemonic(), *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
         Inst::VectorDupLane { lanes, rd, rn, index } => semantics(
             Operation::Move,
             format!("DUPv{}lane", lane_name(*lanes)),
@@ -345,6 +352,13 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let (dest, s) = (what.dests.first(), &what.sources);
     if name == "NOTv16i8" {
         return Some(Inst::VectorNot { rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        for op in [VectorFma::Add, VectorFma::Sub] {
+            if name == vector_fp_name(op.mnemonic(), lanes) {
+                return Some(Inst::VectorFma { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) });
+            }
+        }
     }
     for lanes in ARRANGEMENTS {
         if name == format!("DUPv{}lane", lane_name(lanes)) {

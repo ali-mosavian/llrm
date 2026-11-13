@@ -303,7 +303,17 @@ fn branches() {
         }
     }
     all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
-    for (lanes, index) in [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)] {
+    for (op, lanes) in [
+        (VectorFma::Add, Arrangement::S4),
+        (VectorFma::Add, Arrangement::D2),
+        (VectorFma::Sub, Arrangement::S4),
+        (VectorFma::Sub, Arrangement::D2),
+    ] {
+        all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+    }
+    for (lanes, index) in
+        [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)]
+    {
         all.push(Inst::VectorDupLane { lanes, rd: Vreg(5), rn: Vreg(26), index });
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {

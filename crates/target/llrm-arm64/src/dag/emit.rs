@@ -35,7 +35,9 @@ use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
-use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape, VectorFpOp, VectorFpUnary, VectorOp, VectorShift};
+use crate::mc::inst::{
+    Arrangement, Atomic, Barrier, Fill, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorShift,
+};
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
@@ -657,6 +659,19 @@ fn vector_inst(
         };
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorFpBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
+            continue;
+        };
+        // The first operand is the accumulator `rd` starts as: the caller
+        // copies it in.
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                Ok(Inst::VectorFma { op, lanes, rd, rn: *rn, rm: *rm })
+            }
             _ => wrong(),
         });
     }
@@ -1911,6 +1926,11 @@ impl Emitter<'_> {
                         || vector_fill(name, &operands).is_some();
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
+                    // `FMLA` adds into the register it reads: `rd` is a copy of
+                    // the accumulator that the instruction then changes.
+                    if let (Inst::VectorFma { .. }, Some(Operand::Fpr(acc))) = (&inst, operands.first()) {
+                        self.ops.push(Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(*acc) });
+                    }
                     self.ops.push(Op::I(inst));
                     if float_result {
                         self.fvalues.insert((id, 0), rd);

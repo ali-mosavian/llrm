@@ -338,7 +338,9 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorDupLane { rd, .. }) => {
                 wide.insert(Reg::Fpr(*rd));
             }
-            Op::I(Inst::VectorBinary { rd, rn, rm, .. }) | Op::I(Inst::VectorFpBinary { rd, rn, rm, .. }) => {
+            Op::I(Inst::VectorBinary { rd, rn, rm, .. })
+            | Op::I(Inst::VectorFpBinary { rd, rn, rm, .. })
+            | Op::I(Inst::VectorFma { rd, rn, rm, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
             Op::Copy { dst: dst @ Reg::Fpr(_), src } => copies.push((*dst, *src)),

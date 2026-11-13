@@ -478,6 +478,22 @@ impl VectorFpOp {
     }
 }
 
+/// `fmla` and `fmls`: `rd += rn * rm` and `rd -= rn * rm`, every lane.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorFma {
+    Add,
+    Sub,
+}
+
+impl VectorFma {
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorFma::Add => "fmla",
+            VectorFma::Sub => "fmls",
+        }
+    }
+}
+
 /// The one-register float vector operations: `fneg v.4s, v.4s`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VectorFpUnary {
@@ -946,6 +962,15 @@ pub enum Inst {
     /// v.4s`; `lanes` is `S4` or `D2`.
     VectorFpBinary {
         op: VectorFpOp,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// `fmla v.4s, v.4s, v.4s`: `rd` is read and written; `lanes` is `S4` or
+    /// `D2`.
+    VectorFma {
+        op: VectorFma,
         lanes: Arrangement,
         rd: Vreg,
         rn: Vreg,

@@ -540,6 +540,18 @@ fn an_invariant_start_with_a_wrong_result_is_a_wrong_signature() {
     assert!(error.contains("incorrect return type"), "{error}");
 }
 
+/// An overloaded intrinsic over a vector (`llvm.fmuladd.v4f32`) was refused as
+/// "incorrect return type" and its vector name as badly mangled: LoopVectorize
+/// could not widen a call, and the verifier stopped the module.
+#[test]
+fn an_overloaded_intrinsic_over_a_vector_verifies_with_its_vector_mangling() {
+    let found = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    let right = "declare <4 x float> @llvm.fmuladd.v4f32(<4 x float>, <4 x float>, <4 x float>)\n";
+    assert_eq!(found(right), Vec::<String>::new());
+    let wrong = "declare <4 x float> @llvm.fmuladd.v4f64(<4 x float>, <4 x float>, <4 x float>)\n";
+    assert!(found(wrong)[0].contains("Should be: llvm.fmuladd.v4f32"), "{:?}", found(wrong));
+}
+
 /// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
 /// each verifies. The verifier said "an intrinsic MIR does not have" of all
 /// three, and the funnel-shift and abs folds of InstCombine could not build
