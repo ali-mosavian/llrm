@@ -29,17 +29,19 @@
 //! or size folds to compares and a select (`search.rs`). `strcpy`, `stpcpy`,
 //! `strcat`, `strncat` and `strncpy` of a string of known length are an
 //! `llvm.memcpy` of it with its NUL (`copy.rs`), `strlen` finding the end where
-//! the compile states it.
+//! the compile states it. `strlen` of a constant string is its length, of a
+//! `select` of two the `select` of their lengths, and `strlen(x) == 0` is
+//! `*x == 0` (`length.rs`).
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
 //!   formed only where the compile states them in `Options::library`, as
 //!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
 //!   `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
-//!   are untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations. The `memcpy`
-//!   family is `memops.rs`.
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`,
+//!   math) are untranslated, and so are `iprintf`/`__small_printf`,
+//!   `optimizeErrorReporting` and the argument annotations. The `memcpy` family
+//!   is `memops.rs`.
 //! - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
 //!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
 //!   the character compare the pin makes of a `strchr` or `strstr` tested
@@ -78,6 +80,7 @@ use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 mod compare;
 mod copy;
+mod length;
 mod memops;
 mod search;
 
@@ -588,6 +591,7 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &outer),
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
+                LibFunc::Strlen => length::str_len(unit, &site),
                 LibFunc::Strchr => search::str_chr(unit, &site),
                 LibFunc::Memchr => search::mem_chr(unit, &site),
                 LibFunc::Strcpy => copy::str_cpy(unit, &site),
