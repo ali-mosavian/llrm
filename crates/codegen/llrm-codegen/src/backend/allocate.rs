@@ -313,6 +313,12 @@ pub fn greedy_rewritten(
             basic_semantics,
             address_reference_milliweight: targets::profile(cpu)
                 .map_or(1000, |profile| profile.target().tuning().address_reference_milliweight),
+            // Priced in clocks: where bytes are held (-O1, size) a fold is no
+            // gain by that price.
+            fold_spill: targets::profile(cpu)
+                .ok()
+                .filter(|profile| !profile.bytes_strict())
+                .and_then(|profile| profile.target().tuning().spill_fold),
         },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
@@ -613,8 +619,13 @@ impl RegAlloc {
         pins.extend(required);
         if !cpu.optimized {
             // -O0: the pin's RegAllocFast.
-            match crate::backend::regallocfast::allocate(&body, &pins, &segments, &self.classes, &mut frame.borrow_mut())
-            {
+            match crate::backend::regallocfast::allocate(
+                &body,
+                &pins,
+                &segments,
+                &self.classes,
+                &mut frame.borrow_mut(),
+            ) {
                 Ok(placed) => {
                     drop(base);
                     llrm_support::debug!("regalloc", "{}: fast", body.name);
