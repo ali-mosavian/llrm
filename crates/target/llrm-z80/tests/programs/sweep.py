@@ -247,6 +247,7 @@ def main():
     ap.add_argument("--runtime", default=str(run.RUNTIME), help="the z80_rt.s to link (the compiler's own build of it)")
     ap.add_argument("--allow-runtime-mismatch", action="store_true")
     ap.add_argument("--no-library-checks", action="store_true", help="skip the soft-float library's own run checks (a full sweep runs them first)")
+    ap.add_argument("--same-width", action="store_true", help="build every source that names `double` as float with single-precision literals (SDCC's double is 32 bits): ours and SDCC run the same width")
     ap.add_argument("--no-softfloat", action="store_true", help="run without Z80_LIBC_EXTRA: the float programs will not link")
     ctx = ap.parse_args()
     run.RUNTIME = Path(ctx.runtime)
@@ -271,6 +272,8 @@ def main():
         ctx.graph = measure.runtime_calls(str(run.RUNTIME))
         ctx.harness_ours = harness(run.REPORT, run.CRT0)
         ctx.harness_sdcc = harness(REPORT_SDCC, CRT0_SDCC)
+        if ctx.same_width:
+            sources = same_width.prepare(sources, Path(work) / "same-width")
         with ThreadPoolExecutor(ctx.jobs) as pool:
             done = list(pool.map(one, [(s, work, ctx) for s in sources]))
     finally:

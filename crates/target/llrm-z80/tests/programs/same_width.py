@@ -44,6 +44,24 @@ def same_width(text):
     return out
 
 
+def prepare(sources, out):
+    """`sources` with every one that names `double` replaced by its same-width copy in `out` (with its `.out`); the rest as they are."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    made = []
+    for path in sources:
+        text = path.read_text()
+        if not re.search(r"\bdouble\b", text):
+            made.append(path)
+            continue
+        (out / path.name).write_text(same_width(text))
+        expected = path.with_suffix(".out")
+        if expected.exists():
+            (out / expected.name).write_text(expected.read_text())
+        made.append(out / path.name)
+    return made
+
+
 def main():
     src, out, names = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3:]
     out.mkdir(parents=True, exist_ok=True)

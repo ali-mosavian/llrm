@@ -40,6 +40,20 @@ class SameWidth(unittest.TestCase):
         self.assertEqual(sw.f64_helpers("\tcall __extendsfdf2\n\tcall __adddf3\n\tcall __adddf3\n\tcall __truncdfsf2\n"), ["__adddf3", "__extendsfdf2", "__truncdfsf2"])
         self.assertEqual(sw.f64_helpers("\tcall __addsf3\n\tcall _report\n"), [])
 
+    def test_prepare_rewrites_only_the_sources_that_name_double(self):
+        """--same-width must leave an integer program byte for byte (its cell would otherwise move) and give a float program the same-width copy."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "ints.c").write_text("int f(void) { return 2; }\n")
+            (tmp / "floats.c").write_text("double f(double y) { return y * 2.0; }\n")
+            (tmp / "floats.out").write_text("4\n")
+            made = sw.prepare([tmp / "ints.c", tmp / "floats.c"], tmp / "out")
+            self.assertEqual(made[0], tmp / "ints.c")
+            self.assertEqual(made[1], tmp / "out" / "floats.c")
+            self.assertEqual(sw.double_literals(made[1].read_text()), [])
+            self.assertEqual((tmp / "out" / "floats.out").read_text(), "4\n")
+
 
 if __name__ == "__main__":
     unittest.main()
