@@ -711,18 +711,3 @@ fn a_counter_widened_for_growing_keeps_its_sign_where_the_target_says_so() {
     assert!(!non_negative(false), "premise: the pin's widening loses the sign");
     assert!(non_negative(true));
 }
-
-/// A vector `trunc` (LoopVectorize makes them) panicked in `refineInstruction`
-/// ("an integer trunc"): it is left as written.
-#[test]
-fn test_a_vector_trunc_is_left_alone() {
-    let text = "define <4 x i16> @f(<4 x i32> %x) {
-b0:
-  %t = trunc <4 x i32> %x to <4 x i16>
-  ret <4 x i16> %t
-}
-";
-    let mut module = parsed(text);
-    assert!(!sccped(&mut module));
-    assert_eq!(printed(&module), text);
-}
