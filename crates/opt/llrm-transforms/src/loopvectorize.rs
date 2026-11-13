@@ -112,6 +112,9 @@ struct Access {
     stride: i64,
     /// For a store, the value it stores.
     stored: Option<Source>,
+    /// The loop counts down and the access moves with it: the lanes are the
+    /// elements below the address, in memory order.
+    reverse: bool,
 }
 
 /// What a widened operation computes: a binary operation, `fneg`, or the
@@ -179,6 +182,8 @@ struct Widening {
     index_ty: TypeId,
     /// Where the control flow around the vector loop is made.
     shape: Shape,
+    /// The induction counts down.
+    reverse: bool,
 }
 
 /// Why a loop is left alone (LV: Not vectorizing: ...).
@@ -244,6 +249,36 @@ pub(crate) fn primary_and_step(
     Ok((primary, step))
 }
 
+/// [`primary_and_step`], for a loop the widening takes: the integer induction
+/// steps by one or by minus one. Whether it counts down is the third value.
+fn primary_step_and_direction(
+    se: &mut ScalarEvolution,
+    legality: &Legality,
+) -> Result<(InstId, InstId, bool), Skipped> {
+    let (primary, reverse) = legality
+        .inductions
+        .iter()
+        .filter(|(_, descriptor)| descriptor.kind == InductionKind::Int)
+        .find_map(|(phi, descriptor)| {
+            let step = const_int_step(se, descriptor)?;
+            if step.is_one() {
+                Some((*phi, false))
+            } else if step.is_all_ones() {
+                Some((*phi, true))
+            } else {
+                None
+            }
+        })
+        .ok_or(Skipped("No integer induction that steps by one"))?;
+    let step = legality
+        .inductions
+        .iter()
+        .find(|(phi, _)| *phi == primary)
+        .and_then(|(_, descriptor)| descriptor.induction_bin_op)
+        .ok_or(Skipped("The induction has no step instruction"))?;
+    Ok((primary, step, reverse))
+}
+
 /// The recipes of `header`'s loop, and what the transform rewrites (LVP3), or
 /// why not.
 fn extract(
@@ -256,7 +291,7 @@ fn extract(
     let header = the_loop.get_header();
     // The pin's VPlan makes its own canonical IV, so the original induction may
     // start anywhere: an integer one stepping by one is all the widening needs.
-    let (primary, step) = primary_and_step(se, legality)?;
+    let (primary, step, reverse) = primary_step_and_direction(se, legality)?;
     if !legality.reductions.is_empty() {
         return Err(Skipped("Reductions are not widened yet"));
     }
@@ -331,6 +366,7 @@ fn extract(
     let mut widened: Vec<InstId> = Vec::new();
     let mut step_operand = None;
     let mut exit_compare = None;
+    let mut tests_phi = false;
     for inst in function.iter_block(header).collect::<Vec<_>>() {
         let data = function.instruction(inst);
         match data.opcode {
@@ -351,12 +387,19 @@ fn extract(
                     one.user != step
                         && match function.instruction(one.user).opcode {
                             Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::Trunc) => false,
+                            // The exit test (its own arm judges it).
+                            Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne) => {
+                                !invariant(function.instruction(one.user).operands[1 - one.index as usize])
+                            }
                             _ => !function
                                 .instruction(one.user)
                                 .result
                                 .is_some_and(|result| address_arithmetic(function, header, result)),
                         }
                 });
+                if read_as_value && reverse {
+                    return Err(Skipped("The induction is read as a value in a loop that counts down"));
+                }
                 if read_as_value {
                     let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
                     recipes.push(Recipe::Induction { lane, truncated_from: None });
@@ -410,9 +453,19 @@ fn extract(
                 // of up to 4 is an interleave group and a reversal, a uniform
                 // address another decision, none translated here (the planner
                 // leaves them `Unpriced`); any other stride is scalarized.
+                // A loop that counts down: an access that moves down with it
+                // is a reverse access (`CM_Widen_Reverse`), widened on the
+                // lowest address of its lanes. The pin's reverses cancel
+                // (`simplifyReverses`) when every access of the loop is one,
+                // and then no lane is permuted. DEVIATE LV-R1 (owner
+                // llrm-arm64-lv, exit 2026-11-27): any other access of such a
+                // loop would keep a reverse `shufflevector`, which the arm64
+                // selector declines (VEC1).
                 let stride = match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {
-                    Some(1) => 1,
-                    Some(stride) if !(-4..=4).contains(&stride) => stride,
+                    Some(1) if !reverse => 1,
+                    Some(-1) if reverse => 1,
+                    Some(stride) if !reverse && !(-4..=4).contains(&stride) => stride,
+                    _ if reverse => return Err(Skipped("An access of a loop that counts down is not a reverse one")),
                     _ => return Err(Skipped("An access that is not consecutive")),
                 };
                 let size = cx.layout.size_bits(&cx.context.types, value_ty) / 8;
@@ -441,7 +494,7 @@ fn extract(
                 if is_load {
                     widened.push(inst);
                 }
-                steps.push(Step::Access(Access { inst, is_load, element: value_ty, align, stride, stored }));
+                steps.push(Step::Access(Access { inst, is_load, element: value_ty, align, stride, stored, reverse }));
             }
             Opcode::Binary(op) if inst != step => {
                 let value = data.result.expect("a binary operation");
@@ -535,6 +588,9 @@ fn extract(
                     && !data.result.is_some_and(|result| address_arithmetic(function, header, result)) =>
             {
                 let value = data.result.expect("a cast");
+                if reverse {
+                    return Err(Skipped("The induction is read as a value in a loop that counts down"));
+                }
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
                 let src = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
                 if used_outside(inst) {
@@ -648,13 +704,17 @@ fn extract(
                 // widened induction meets it.
                 let stepped = function.instruction(step).result.map(Operand::Value);
                 let (a, b) = (data.operands[0], data.operands[1]);
-                let bound_operand = if Some(a) == stepped && invariant(b) {
+                // Or the induction before its step (`i == 0` of a loop that
+                // counts down): the skeleton moves the test onto the step.
+                let tested = |one: Operand| Some(one) == stepped || one == primary_phi;
+                let bound_operand = if tested(a) && invariant(b) {
                     Some(1)
-                } else if Some(b) == stepped && invariant(a) {
+                } else if tested(b) && invariant(a) {
                     Some(0)
                 } else {
                     None
                 };
+                tests_phi = bound_operand.is_some_and(|at| data.operands[1 - at] == primary_phi);
                 let Some(bound_operand) =
                     bound_operand.filter(|_| matches!(predicate, IntPredicate::Eq | IntPredicate::Ne))
                 else {
@@ -671,8 +731,17 @@ fn extract(
     if !steps.iter().any(|one| matches!(one, Step::Access(_))) {
         return Err(Skipped("No memory access to widen"));
     }
-    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty };
-    Ok((recipes, Widening { steps, step, step_operand, index_ty, shape }))
+    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, tests_phi };
+    // `VPDerivedIVRecipe`: the induction of the addresses is the canonical one
+    // (from zero, by one) or `start + index * step`, an `add` of the scalar
+    // type that is priced (`computeCost`).
+    let starts_at_zero = matches!(primary_start, Operand::Constant(c)
+        if matches!(cx.context.get(c).kind, ConstantKind::Int(0) | ConstantKind::Zero));
+    if reverse || !starts_at_zero {
+        let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
+        recipes.push(Recipe::DerivedIv { lane });
+    }
+    Ok((recipes, Widening { steps, step, step_operand, index_ty, shape, reverse }))
 }
 
 /// Whether every use of `value` is the index of an address (a `gep`) of the
@@ -922,11 +991,19 @@ fn widen_access(
     let ptr_ty = function.value(pointer_value).ty;
     let mut parts = Vec::new();
     for part in 0..plan.ic {
-        // Part 0 uses the scalar address; part k is k x VF elements on from it.
-        let address = if part == 0 {
+        // Part 0 uses the scalar address; part k is k x VF elements on from it
+        // (`VPVectorPointerRecipe`). A reverse access is the lowest address of
+        // the part's lanes: the lane 0 address less the part's offset and
+        // `VF - 1` (`VPVectorEndPointerRecipe`).
+        let address = if part == 0 && !access.reverse {
             pointer
         } else {
-            let offset = int_constant(context, widening.index_ty, u64::from(part) * u64::from(plan.vf));
+            let offset = if access.reverse {
+                let below = i128::from(part) * i128::from(plan.vf) + i128::from(plan.vf) - 1;
+                Operand::Constant(context.int(widening.index_ty, -below))
+            } else {
+                int_constant(context, widening.index_ty, u64::from(part) * u64::from(plan.vf))
+            };
             let gep = function.create_instruction(
                 Opcode::GetElementPtr { source: access.element },
                 ptr_ty,
@@ -1168,8 +1245,9 @@ fn execute(
     for inst in erased.iter().rev() {
         function.erase(*inst).expect("an instruction nothing uses");
     }
-    // The induction steps by VF x IC.
-    let step = int_constant(context, widening.index_ty, u64::from(plan.vf) * u64::from(plan.ic));
+    // The induction steps by VF x IC (down, if it counts down).
+    let lanes = i128::from(plan.vf) * i128::from(plan.ic);
+    let step = Operand::Constant(context.int(widening.index_ty, if widening.reverse { -lanes } else { lanes }));
     function.set_operand(widening.step, widening.step_operand, step);
 }
 
@@ -1399,14 +1477,24 @@ impl FunctionPass for LoopVectorize {
             // A constant trip count the lanes divide needs no remainder (LVP1),
             // but for the one a memory conflict runs.
             let with_middle = !reduced.is_empty();
-            let skeleton = if trip_count != 0 && trip_count % lanes == 0 && memory.is_none() {
+            let divisible = trip_count != 0 && trip_count % lanes == 0 && memory.is_none();
+            if !divisible && !exit_phis_are_invariant(unit.function, shape, &reduced) {
+                why(unit, &outer, header, "recipes: An exit phi of a value the loop defines");
+                continue;
+            }
+            // An exit test on the phi moves onto the step (before the
+            // remainder is copied from the loop).
+            let shape = skeleton::stepped_exit_test(
+                unit.context,
+                unit.function,
+                shape,
+                memory.as_ref().map(|checks| checks.first),
+            );
+            let skeleton = if divisible {
                 let branch = unit.function.terminator(header).expect("a terminated loop");
                 skeleton::mark_vectorized(unit.context, unit.declared, unit.metadata, unit.function, branch);
                 let middle = with_middle.then(|| skeleton::add_middle(unit.function, shape));
                 Skeleton { vector_ph: shape.preheader, middle, scalar_ph: None, remainder: None }
-            } else if !exit_phis_are_invariant(unit.function, shape, &reduced) {
-                why(unit, &outer, header, "recipes: An exit phi of a value the loop defines");
-                continue;
             } else {
                 match skeleton::add_remainder(
                     unit.context,

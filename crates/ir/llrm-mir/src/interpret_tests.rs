@@ -698,3 +698,19 @@ fn a_vector_reduce_folds_the_lanes() {
     );
     assert_eq!(float, Ok(Val::Float(FloatKind::Float, u64::from(20.0f32.to_bits()))));
 }
+
+/// `add <4 x i16>` gave poison for the whole vector (the scalar operation of
+/// two aggregates): a vectorized loop could not be run to compare its answers
+/// with the scalar loop's. Each lane is now its scalar operation.
+#[test]
+fn a_vector_binary_operation_works_on_each_lane() {
+    let lanes = |op: &str, a: &str, b: &str| {
+        result(&format!(
+            "define i16 @f() {{\n  %r = {op} <4 x i16> {a}, {b}\n  %l = extractelement <4 x i16> %r, i64 2\n  ret i16 %l\n}}\n"
+        ))
+    };
+    let a = "<i16 3, i16 -9, i16 7, i16 1>";
+    assert_eq!(lanes("add", a, "<i16 10, i16 10, i16 10, i16 10>"), int(17, 16));
+    assert_eq!(lanes("mul", a, "<i16 2, i16 2, i16 3, i16 2>"), int(21, 16));
+    assert_eq!(lanes("xor", a, "splat (i16 1)"), int(6, 16));
+}
