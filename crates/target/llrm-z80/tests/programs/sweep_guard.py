@@ -12,6 +12,7 @@ import subprocess
 LIBRARY_CHECKS = (
     "runtime/compiler-rt/tests/z80/f64_div_clk.sh",
     "runtime/compiler-rt/tests/z80/f64_mul_clk.sh",
+    "runtime/compiler-rt/tests/z80/mul64_check.sh",
     "runtime/compiler-rt/tests/z80_f64_split_test.sh",
 )
 

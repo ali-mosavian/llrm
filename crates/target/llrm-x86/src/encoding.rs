@@ -272,7 +272,8 @@ pub fn imul_ri(
     prefix(width, rex_extra) + 2 + immediate(width, imm)
 }
 
-/// `idiv r`, `div r`, `neg r`, `not r`, `mul r`: `F7 /n`.
+/// `idiv r`, `div r`, `neg r`, `not r`, `mul r` (`F7 /n`), `inc r`, `dec r`
+/// (`FF /n`).
 pub fn unary(
     width: Width,
     rex_extra: bool,
@@ -356,6 +357,73 @@ pub fn sse_rm(
 /// `cvtsi2sd xmm,r64` and the other conversions with a 64-bit integer side:
 /// REX.W after the mandatory prefix.
 pub const SSE_CONVERT_WIDE: i64 = 5;
+
+/// The bytes loop strength reduction orders formulae by at x86-64, read off
+/// the table: the displacement a base register gains, an add, a step and a
+/// setup `lea` on 64-bit registers, and the exit test's `cmp`.
+pub fn lsr_size_model_64() -> llrm_mir::tti::LsrSizeModel {
+    use llrm_mir::tti::{LsrSizeModel, OpCost};
+    let bytes = |n: i64| OpCost::bytes(n as u32);
+    let reg = Mem::new(Base::Reg, false, 0);
+    let past_register = |m: Mem| mem(&m) - mem(&reg);
+    LsrSizeModel {
+        disp_global: bytes(past_register(Mem::new(Base::Rip, false, 0))),
+        disp_frame: bytes(past_register(Mem::new(Base::Rsp, false, 8))),
+        disp_short: bytes(past_register(Mem::new(Base::Reg, false, 8))),
+        disp_long: bytes(past_register(Mem::new(Base::Reg, false, 4096))),
+        base_add: bytes(lea(Width::B64, &Mem::new(Base::Reg, true, 0), false)),
+        step,
+        constant_start: Some(constant_start),
+        setup: bytes(lea(Width::B64, &Mem::new(Base::Reg, false, 8), false)),
+        setup_cap: 4,
+        size_only: true,
+        exit_compare,
+    }
+}
+
+/// The operand width a counter of `bits` is held at.
+fn counter_width(bits: u32) -> Width {
+    match bits {
+        0..=8 => Width::B8,
+        9..=16 => Width::B16,
+        17..=32 => Width::B32,
+        _ => Width::B64,
+    }
+}
+
+/// `inc` or `dec` for a step of one, `add r,imm` for another constant, `add
+/// r,r` for a register's.
+fn step(
+    bits: u32,
+    constant: Option<i64>,
+) -> u32 {
+    let width = counter_width(bits);
+    (match constant {
+        Some(1 | -1) => unary(width, false),
+        Some(imm) => alu_ri(width, imm, false),
+        None => alu_rr(width, false),
+    }) as u32
+}
+
+/// `xor r32,r32` for zero, else the `mov` of the value.
+fn constant_start(
+    bits: u32,
+    value: i64,
+) -> u32 {
+    literal_move_bytes(value, false, i64::from(bits.div_ceil(8).next_power_of_two().min(8)), 4) as u32
+}
+
+/// A `cmp` of a `bits`-wide counter against an immediate, or a register.
+fn exit_compare(
+    bits: u32,
+    immediate: Option<i64>,
+) -> u32 {
+    let width = counter_width(bits);
+    (match immediate {
+        Some(imm) => alu_ri(width, imm, false),
+        None => alu_rr(width, false),
+    }) as u32
+}
 
 #[cfg(test)]
 mod tests {
@@ -751,5 +819,41 @@ mod tests {
         assert_eq!(imul_immediate_bytes(446, 4, 4), length(i));
         let i = Instruction::with3(Code::Imul_r32_rm32_imm8, Register::EAX, Register::EBX, 5).unwrap();
         assert_eq!(imul_immediate_bytes(5, 4, 4), length(i));
+    }
+
+    #[test]
+    fn the_lsr_model_prices_a_counter_as_the_encoder_does() {
+        let m = lsr_size_model_64();
+        // -O1 keeps the pin's order: its 11 cells that differ with the model
+        // trade bytes for up to +20% instructions (tile).
+        assert!(m.size_only);
+        let cases = [
+            ((m.step)(32, Some(1)), Instruction::with1(Code::Inc_rm32, Register::EBX).unwrap()),
+            ((m.step)(32, Some(-1)), Instruction::with1(Code::Dec_rm32, Register::EBX).unwrap()),
+            ((m.step)(64, Some(1)), Instruction::with1(Code::Inc_rm64, Register::RBX).unwrap()),
+            ((m.step)(16, Some(1)), Instruction::with1(Code::Inc_rm16, Register::BX).unwrap()),
+            ((m.step)(32, Some(4)), Instruction::with2(Code::Add_rm32_imm8, Register::EBX, 4).unwrap()),
+            ((m.step)(64, Some(1000)), Instruction::with2(Code::Add_rm64_imm32, Register::RBX, 1000).unwrap()),
+            ((m.step)(64, None), Instruction::with2(Code::Add_rm64_r64, Register::RBX, Register::RCX).unwrap()),
+            (
+                (m.constant_start.unwrap())(32, 0),
+                Instruction::with2(Code::Xor_r32_rm32, Register::EBX, Register::EBX).unwrap(),
+            ),
+            ((m.constant_start.unwrap())(32, 8), Instruction::with2(Code::Mov_r32_imm32, Register::EBX, 8).unwrap()),
+            ((m.constant_start.unwrap())(16, 8), Instruction::with2(Code::Mov_r16_imm16, Register::BX, 8).unwrap()),
+            ((m.exit_compare)(32, Some(8)), Instruction::with2(Code::Cmp_rm32_imm8, Register::EBX, 8).unwrap()),
+            ((m.exit_compare)(16, Some(8)), Instruction::with2(Code::Cmp_rm16_imm8, Register::BX, 8).unwrap()),
+            ((m.exit_compare)(64, Some(1000)), Instruction::with2(Code::Cmp_rm64_imm32, Register::RBX, 1000).unwrap()),
+            ((m.exit_compare)(32, None), Instruction::with2(Code::Cmp_rm32_r32, Register::EBX, Register::ECX).unwrap()),
+        ];
+        for (priced, instruction) in cases {
+            assert_eq!(i64::from(priced), length(instruction), "{instruction}");
+        }
+        // A value a register's width holds: the 64-bit start below 2^32 is
+        // the zero-extending dword `mov`.
+        assert_eq!(
+            i64::from((m.constant_start.unwrap())(64, 8)),
+            length(Instruction::with2(Code::Mov_r32_imm32, Register::EBX, 8).unwrap())
+        );
     }
 }
