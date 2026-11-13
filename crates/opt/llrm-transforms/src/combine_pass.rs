@@ -104,6 +104,10 @@ impl FunctionPass for Combine {
                 fixed_shift_count: outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
                 select_to_cmp: outer.target().tti().is_some_and(|tti| tti.folds_select_to_cmp()),
                 icmp_of_constant_phi: outer.target().tti().is_some_and(|tti| tti.folds_icmp_of_constant_phi()),
+                keeps_shared_division_compare: outer
+                    .target()
+                    .tti()
+                    .is_some_and(|tti| tti.keeps_icmp_of_shared_division()),
                 // Where the target trades bytes for clocks (wasm and the
                 // targets without a rate are strict at every level).
                 phi_constant_users: self.phi_constant_users
