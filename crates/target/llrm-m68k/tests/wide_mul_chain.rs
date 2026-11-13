@@ -1,6 +1,8 @@
-//! sysv_abi 68000 -Os/-O1 (+38/+62 B against gcc): `b + b + b` on a `long long` is `b * 3`, and the pair's multiply
-//! by a constant was 16-bit partial products (72 B, `mulu` per half) where gcc's pair of `add.l` and `addx.l`
-//! is 28 B. From the 68020 the inline multiply is shorter than the chain and stays.
+//! sysv_abi 68000 -Os/-O1 (+38/+62 B against gcc): `b + b + b` on a `long long`
+//! is `b * 3`, and the pair's multiply by a constant was 16-bit partial
+//! products (72 B, `mulu` per half) where gcc's pair of `add.l` and `addx.l` is
+//! 28 B. From the 68020 the inline multiply is shorter than the chain and
+//! stays.
 
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly};
