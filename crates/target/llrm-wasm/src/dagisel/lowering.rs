@@ -27,11 +27,13 @@ use llrm_codegen::backend::selectiondag::target_calling::{Ext, In, Out, TargetCa
 use llrm_codegen::backend::selectiondag::{
     Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG, TargetLowering,
 };
+use llrm_lir::registers::RegId;
 
 use super::generated::ids::isd as ids;
 use super::hooks::Cpu;
 use crate::dag::call::WasmCalling;
 use crate::features::Features;
+use crate::reg;
 
 /// The pin's `WebAssemblyISD` numbers, as the matcher table names them.
 pub mod wasmisd {
@@ -89,6 +91,9 @@ pub fn target_lowering(
         );
     }
     set(&[StackSave, StackRestore], &[MVT::Other], Action::Expand);
+    // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value type
+    // is asked.
+    set(&[StackSave], &[pointer(cpu)], Action::Expand);
     set(&[DynamicStackAlloc], &[pointer(cpu)], Action::Expand);
     set(&[FrameIndex], &words, Action::Custom);
     set(&[BrCC, SelectCC], &words, Action::Expand);
@@ -171,9 +176,18 @@ fn f32_name(name: &'static str) -> &'static str {
 /// `MJTI`.
 pub struct WasmLowering<'a> {
     pub tables: &'a [Vec<u32>],
+    pub cpu: Cpu,
 }
 
 impl Hooks for WasmLowering<'_> {
+    /// `setStackPointerRegisterToSaveRestore(SP32 / SP64)` and the 16-byte
+    /// stack alignment: the shared expansion of `DYNAMIC_STACKALLOC`,
+    /// `STACKSAVE` and `STACKRESTORE` copies from and to that register.
+    fn stack_pointer(&self) -> Option<(RegId, u64)> {
+        let register = if self.cpu == Cpu::Wasm64 { reg::SP64 } else { reg::SP32 };
+        Some((register, 16))
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
