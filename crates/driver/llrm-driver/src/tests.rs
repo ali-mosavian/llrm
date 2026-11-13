@@ -329,6 +329,20 @@ fn a_callee_the_size_guard_keeps_out_of_line_is_not_inlined_by_the_trial_at_m64_
     assert_eq!(calls, 6, "{listing}");
 }
 
+/// `n = rd(); while (n > 0) { report(..); n = rd(); }`: the loop's guard and its latch end in the same five
+/// instructions (`mov; mov; mov; call rd; test; jg`). The pin's `TailMergeBlocks` shares them, one `call rd`; we kept
+/// both: the merge was skipped for a body of three blocks, and for a latch that ends in a branch on a cycle.
+/// bench_io m64 -O1 212 B against 197 with the merge (clang 207).
+/// Lifted at m64 (`tail_merge_pin_faithful`): T14 and D1 of docs/architecture/jumps-tailmerge-check.md.
+#[test]
+fn a_loop_guard_and_its_latch_share_their_call_at_m64() {
+    let text = include_str!("testdata/read_loop_calls.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let reads = listing.lines().filter(|line| line.trim() == "call rd").count();
+    assert_eq!(reads, 1, "{listing}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the
