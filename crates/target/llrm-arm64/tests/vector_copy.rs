@@ -318,6 +318,8 @@ fn a_constant_vector_that_is_no_splat_is_a_pool_load() {
     assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
     // The lanes in memory order: 0, 1, 2, 3 then 4, 5, 6, 7 (16 bits each).
     assert!(text.contains(".quad 0x3000200010000") && text.contains(".quad 0x7000600050004"), "{text}");
+}
+
 /// A loop carrying a `<8 x i16>` phi (the widened induction `vec.ind`) panicked
 /// in live-range calculation ("a unique value"): a vector phi was given general
 /// registers, so its copies read a register nothing defined. It now lives in
