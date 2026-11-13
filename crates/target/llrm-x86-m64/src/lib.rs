@@ -431,6 +431,7 @@ impl llrm_target::Target for M64 {
                             load_pre_off_at_size: true,
                             merge_functions_at_size: true,
                             rep_movs_at_size: true,
+                            rep_movs_at_size_max: u64::MAX,
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
@@ -445,6 +446,7 @@ impl llrm_target::Target for M64 {
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            rep_stos_at_size_max: u64::MAX,
                             // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
                             // `Tuning::rep_stos_priced_unit`. gcc fills a frame object with `rep stosb`.
                             rep_stos_priced_unit: true,
