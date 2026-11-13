@@ -1886,10 +1886,10 @@ impl Printer<'_> {
         let mut readers: Vec<Inst> = Vec::new();
         let mut scan = |insts: &[Inst]| {
             for inst in insts {
-                if inst.reads_flags {
+                if inst.reads_flags() {
                     readers.push(inst.clone());
                 }
-                if inst.sets_flags {
+                if inst.sets_flags() {
                     return true;
                 }
             }
@@ -1999,10 +1999,10 @@ impl Printer<'_> {
 /// neither.
 fn flags_first(insts: &[Inst]) -> Option<bool> {
     for inst in insts {
-        if inst.reads_flags {
+        if inst.reads_flags() {
             return Some(false);
         }
-        if inst.sets_flags {
+        if inst.sets_flags() {
             return Some(true);
         }
     }

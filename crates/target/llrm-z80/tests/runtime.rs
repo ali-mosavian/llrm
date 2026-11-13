@@ -187,6 +187,32 @@ fn the_programs_of_this_crate_run_and_print_what_c_does() {
     assert!(done.status.success() && all, "{text}");
 }
 
+/// `bench/` programs run whole on ucsim through the crate's compiler, so a pass that moves clocks (#9540's phi order:
+/// frames +9.2M T for +13 B) is measured by T-states, not by object bytes alone. A bench program that stops linking
+/// or running leaves no row, and the whole-program T of every cell with it.
+#[test]
+fn a_bench_program_gets_a_whole_program_row_of_bytes_and_t_states() {
+    let clang = std::env::var("LLRM_PIN_CLANG")
+        .unwrap_or_else(|_| format!("{}/scratch/llvm-build/bin/clang", std::env::var("HOME").unwrap_or_default()));
+    if !have("sdasz80") || !have("sdldz80") || !have("ucsim_z80") || !std::path::Path::new(&clang).exists() {
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rows.tsv");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/programs/sweep.py"), env!("CARGO_BIN_EXE_llrm-z80-llc")])
+        .arg(&out)
+        .args(["--clang", &clang, "--ours-only", "--no-softfloat", "--no-library-checks", "--jobs", "1", "--src", &format!("{dir}/../../../bench/recchop"), "recchop"])
+        .env("TMPDIR", tmp.path())
+        .output()
+        .expect("python3 runs");
+    let rows = std::fs::read_to_string(&out).unwrap_or_default();
+    let cols: Vec<&str> = rows.lines().next().unwrap_or("").split('\t').collect();
+    let measured = cols.len() == 4 && cols[1] == "ours" && cols[2].parse::<u64>().is_ok_and(|b| b > 0) && cols[3].parse::<u64>().is_ok_and(|t| t > 0);
+    assert!(measured, "no row: {rows:?}\n{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+}
+
 /// The corpus byte counts charge a program for the runtime routines it reaches.
 /// The graph missed a fall-through (`__modsi3` into `__udivmodsi4`) and a jump
 /// into a local label (`__udivdi3` into `udivmoddi`, under `__moddi3`),

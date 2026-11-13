@@ -83,7 +83,7 @@ fn flags_read_after<T: Target>(
     let mut later = false;
     for (at, inst) in block.insts.iter().enumerate().rev() {
         wanted[at] = later;
-        if inst.sets_flags || inst.operands.iter().any(|operand| matches!(operand, Operand::Def(reg) if named(reg))) {
+        if inst.sets_flags() || inst.operands.iter().any(|operand| matches!(operand, Operand::Def(reg) if named(reg))) {
             later = false;
         }
         if inst.operands.iter().any(|operand| matches!(operand, Operand::Use(reg) if named(reg))) {
@@ -437,10 +437,10 @@ impl<T: Target> Converted<T> {
                         };
                         let (mut reads, mut writes) = (named(&one.uses), named(&one.defines));
                         let bundle = one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(BUNDLE));
-                        if inst.reads_flags || bundle {
+                        if inst.reads_flags() || bundle {
                             reads.extend(flags.iter().copied());
                         }
-                        if inst.sets_flags || bundle {
+                        if inst.sets_flags() || bundle {
                             writes.extend(flags.iter().copied());
                         }
                         if inst.may_load {
@@ -695,10 +695,10 @@ fn convert<T: Target>(
                 .insts
                 .get(position + 1)
                 .filter(
-                    |next| inst.sets_flags
+                    |next| inst.sets_flags()
                         && !inst.terminator
                         && !inst.call
-                        && next.reads_flags
+                        && next.reads_flags()
                         && T::reads_flags_set_just_before(next),
                 );
             match reader {
@@ -1248,7 +1248,7 @@ impl<T: Target> Made<'_, T> {
             Operation::Move
         } else if inst.rematerializable {
             Operation::Move
-        } else if defines.is_empty() && inst.sets_flags {
+        } else if defines.is_empty() && inst.sets_flags() {
             Operation::Compare
         } else if !defines.is_empty() && !uses.is_empty() {
             Operation::Binary
@@ -1266,7 +1266,7 @@ impl<T: Target> Made<'_, T> {
         // the operands before it keep their numbers.
         if self.ssa_pins
             && self.flags_wanted
-            && inst.sets_flags
+            && inst.sets_flags()
             && let Some(flags) = T::flags_register()
         {
             let (value, width) = self.pinned_write(flags);
@@ -2969,7 +2969,7 @@ pub fn from_lir<T: Target>(
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
             }
             if insn.rematerialized && T::remade_sets_no_flags() {
-                made.remade_sets_flags = made.sets_flags;
+                made.remade_sets_flags = made.sets_flags();
                 made.sets_flags = false;
             }
             // a branch `PhiElimination` pointed at the block of an edge
@@ -3252,7 +3252,7 @@ fn place_spill(
     spill: Inst,
 ) -> Result<(), String> {
     let at = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
-    if at < insts.len() && spill.sets_flags && insts[at..].iter().any(|inst| inst.reads_flags) {
+    if at < insts.len() && spill.sets_flags() && insts[at..].iter().any(|inst| inst.reads_flags()) {
         return Err("a spill between a flag setter and the terminator that reads the flags".into());
     }
     insts.insert(at, spill);

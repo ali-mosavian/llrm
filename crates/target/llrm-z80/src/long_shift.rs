@@ -118,7 +118,7 @@ fn fuse_block(
         if insts[adc + 2..]
             .iter()
             .take_while(|i| !i.operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == flags)))
-            .any(|i| i.reads_flags)
+            .any(|i| i.reads_flags())
         {
             continue;
         }
