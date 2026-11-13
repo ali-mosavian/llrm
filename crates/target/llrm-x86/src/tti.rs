@@ -796,8 +796,14 @@ impl Tti for X86 {
 
     /// DEVIATE INL-O1 SIZE: the inliner counts a callee in bytes of code.
     fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
-        (self.tuning.inline_size_bytes && !self.size_bytes)
+        ((self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1) && !self.size_bytes)
             .then(|| std::rc::Rc::new(X86 { size_bytes: true, ..self.clone() }) as std::rc::Rc<dyn Tti>)
+    }
+
+    /// `Tuning::inline_trials_at_o1` alone gives the byte view to -O1 only: the -O2 and -O3 callers keep the
+    /// units their rate was fitted in.
+    fn inline_size_view_at(&self, speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+        if speed && !self.tuning.inline_size_bytes { None } else { self.inline_size_view() }
     }
 
     fn access_address_cost(
@@ -890,15 +896,15 @@ impl Tti for X86 {
     }
 
     fn inline_trials_at_o1(&self) -> bool {
-        self.tuning.inline_size_bytes
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
     fn inline_size_view_is_measured(&self) -> bool {
-        self.tuning.inline_size_bytes
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
     fn inline_second_round_at_o1(&self) -> bool {
-        self.tuning.inline_size_bytes
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
     fn callee_saved_clocks(&self, peak: usize) -> i64 {
