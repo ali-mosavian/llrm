@@ -2506,3 +2506,14 @@ fn a_long_step_after_the_exit_test_does_not_spill_the_test() {
     };
     assert!(!out.lines().any(|line| spilled(&line)), "the exit test is spilled around the step:\n{out}");
 }
+
+/// switch_peeled_table -O1: `main` kept the table index and the sum across `report` in two spill slots stored in
+/// one order and reloaded in the same order, so the first stayed in the IX frame: `ld -2(ix), c` ... `ld c, -2(ix)`
+/// and 13 B of frame, 230 B against SDCC's 225. Reloaded in reverse both are `push`/`pop`, no frame, 207 B.
+#[test]
+fn two_words_kept_across_a_call_are_pushes_not_frame_slots() {
+    let ir = include_str!("kernels/ir/switch_peeled_main.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix)"), "{out}");
+    assert!(out.contains("push bc") && out.contains("pop bc"), "{out}");
+}

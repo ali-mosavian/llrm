@@ -4,7 +4,7 @@
 
 use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
 use llrm_spike_mf::regalloc::Assignment;
-use llrm_z80::compile::{frameless_slots_are_a_stack, slots_are_a_stack, stack_slot_report_by};
+use llrm_z80::compile::{frameless_slots_are_a_stack, nest_reloads, slots_are_a_stack, stack_slot_report_by};
 use llrm_z80::reg;
 use llrm_z80::regalloc::Class;
 
@@ -171,4 +171,24 @@ fn a_slot_that_needs_a_copy_never_takes_another_slot_from_the_stack() {
     let report = stack_slot_report_by(&mut f, &Assignment(Vec::new()), false, false);
     assert_eq!(report.pushed, [0]);
     assert_eq!(f.blocks[0].insts[1].kind, Kind::Op("SPILL8"));
+}
+
+/// switch_peeled_table -O1: two words saved around a call and read back in the order they were saved left the
+/// first one in the IX frame (`ld -2(ix), c` ... `ld c, -2(ix)`, 12 B and a frame of 13 B) where reads in the
+/// reverse order make both a `push`/`pop`.
+#[test]
+fn words_saved_in_order_and_read_in_order_are_read_in_reverse_so_both_pop() {
+    let save = |slot, from| Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(slot), Operand::Use(Reg::Phys(from))]);
+    let read = |slot, into| Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(Reg::Phys(into)), Operand::Frame(slot)]);
+    let body = || {
+        let mut f = MFunction::new("f");
+        f.blocks = vec![Block { id: 0, insts: vec![save(0, reg::BC), save(1, reg::DE), read(0, reg::BC), read(1, reg::DE)], phis: Vec::new() }];
+        f
+    };
+    let crossed = stack_slot_report_by(&mut body(), &Assignment(Vec::new()), false, false);
+    assert_eq!(crossed.pushed.len(), 1, "the control: without the pass one slot stays in the frame");
+    let mut f = body();
+    assert!(nest_reloads(&mut f, &Assignment(Vec::new())));
+    let nested = stack_slot_report_by(&mut f, &Assignment(Vec::new()), false, false);
+    assert_eq!(nested.pushed, [0, 1]);
 }

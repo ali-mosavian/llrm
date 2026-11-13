@@ -1408,6 +1408,7 @@ impl Builder<'_> {
                     }
                     _ => self.mem_libcall(
                         info,
+                        operands[0],
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
                         &[dst, other],
@@ -1482,7 +1483,7 @@ impl Builder<'_> {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
-                    _ => self.mem_libcall(info, "memset", root, &[dst, other], size)?,
+                    _ => self.mem_libcall(info, operands[0], "memset", root, &[dst, other], size)?,
                 }
             }
         };
@@ -1988,10 +1989,13 @@ impl Builder<'_> {
     }
 
     /// `getMemcpy`'s libcall: `name(dst, src, size)` for a copy, `name(dst,
-    /// value, size)` for a set; the result is read and dropped.
+    /// value, size)` for a set; the result is read, and dropped unless the
+    /// target's routines return the destination (`mem_libcalls_return_dest`),
+    /// where later uses of `destination` read it.
     fn mem_libcall(
         &mut self,
         info: &CallInfo,
+        destination: Operand,
         name: &str,
         chain_in: SDValue,
         first_two: &[SDValue],
@@ -2051,7 +2055,14 @@ impl Builder<'_> {
             let _ = self.lower_call(target_symbol, values, &extends, &[], &tail_plan, first, void, false)?;
         } else {
             let plan = plan_of(self, pointer_type)?;
-            let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+            let result = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+            // DEVIATE MEMLIB-RETURNED (owner llrm-target-6502, exit 2026-12-05):
+            // the pin keeps `dst` across the call.
+            if let (true, Some(result), Operand::Value(destination)) =
+                (self.target.mem_libcalls_return_dest, result, destination)
+            {
+                self.node_map.insert(destination, result);
+            }
         }
         Ok(self.dag.get_root())
     }
