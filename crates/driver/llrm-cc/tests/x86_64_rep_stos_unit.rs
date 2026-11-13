@@ -31,3 +31,13 @@ fn a_frame_object_fill_at_size_is_a_rep_stosb_when_that_is_fewer_bytes() {
     assert!(text.contains("rep stosb"), "no rep stosb:\n{text}");
     assert!(!text.contains("movabs") && !text.contains("stosq"), "the quadword form:\n{text}");
 }
+
+/// A loop storing a copied byte and a constant became a `rep movs` and kept the constant stores as a 21 B loop
+/// (`mov byte [rsp+rax], 0xee; inc; cmp; jne`), which the fill left over after the copy is judged again only at speed
+/// (memory_expansion `lr<N>` -Os +4 B each, 31 functions).
+#[test]
+fn a_fill_left_beside_a_copied_store_is_a_rep_stos_at_size() {
+    let text = assembly("rep_stos_fused.c");
+    assert!(text.contains("rep movs"), "no rep movs:\n{text}");
+    assert!(text.contains("rep stosb"), "the fill stayed a loop:\n{text}");
+}
