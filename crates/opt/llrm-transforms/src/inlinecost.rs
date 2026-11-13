@@ -2167,7 +2167,7 @@ impl<'a> Analyzer<'a> {
             return 0;
         }
         let parameters = self.callee.parameters();
-        let unread = parameters.iter().filter(|&&value| self.callee.users(value).is_empty()).count() as i64;
+        let unread = self.unread_parameters().iter().filter(|&&one| one).count() as i64;
         if unread == 0 {
             return 0;
         }
@@ -2175,6 +2175,13 @@ impl<'a> Analyzer<'a> {
         let with = tti.direct_call_cost(all, kind);
         let without = tti.direct_call_cost(all - unread, kind);
         if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
+    }
+
+    /// Per parameter: nothing reads it and `deadargelim` will drop it (an internal or private callee).
+    fn unread_parameters(&self) -> Vec<bool> {
+        let linkage = self.site.module.global(self.site.callee_id).linkage;
+        let droppable = matches!(linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private);
+        self.callee.parameters().iter().map(|&value| droppable && self.callee.users(value).is_empty()).collect()
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
@@ -2191,7 +2198,10 @@ impl<'a> Analyzer<'a> {
         let call = self.site.caller.instruction(self.site.call);
         let info = call_info(self.site.caller, self.site.call)?;
         let arguments = call.operands.len().saturating_sub(1);
+        // an argument for a parameter nothing reads is gone once `deadargelim` runs after the walk
+        let unread = self.unread_parameters();
         let arguments = (0..arguments)
+            .filter(|&index| !unread.get(index).copied().unwrap_or(false))
             .map(|index| {
                 let byval = info
                     .argument_attrs

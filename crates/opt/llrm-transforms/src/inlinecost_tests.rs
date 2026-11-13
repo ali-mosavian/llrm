@@ -1389,3 +1389,94 @@ define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee
         assert_eq!(held(&with), held(&without), "{ops} instructions");
     }
 }
+
+/// `PolicyOnly` with a byte-priced call sequence (8 B and 4 B an argument), as m68k and 6502 state theirs.
+struct Sequenced(PolicyOnly);
+
+impl llrm_mir::tti::Tti for Sequenced {
+    fn inline_policy(&self) -> llrm_mir::tti::InlinePolicy {
+        self.0.inline_policy()
+    }
+
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: llrm_mir::tti::CostKind,
+    ) -> Option<llrm_mir::tti::Cost> {
+        (kind == llrm_mir::tti::CostKind::CodeSize).then(|| llrm_mir::tti::Cost::of(8 + 4 * shape.arguments.len() as i64))
+    }
+
+    fn cmp_sel_cost(&self, kind: llrm_mir::tti::CmpSel, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cmp_sel_cost(kind, ty, cost)
+    }
+
+    fn memory_op_cost(&self, op: llrm_mir::tti::MemoryOp, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind, volatile: bool) -> llrm_mir::tti::Cost {
+        self.0.memory_op_cost(op, ty, cost, volatile)
+    }
+
+    fn cf_instr_cost(&self, phi: bool, kind: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(&self, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+        self.0.int_imm_cost(value, bits)
+    }
+
+    fn int_imm_cost_inst(&self, user: llrm_mir::tti::ImmUser, index: u32, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+        self.0.int_imm_cost_inst(user, index, value, bits)
+    }
+
+    fn is_truncate_free(&self, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty) -> bool {
+        self.0.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(&self, global: bool, offset: i64, base: bool, scale: i64) -> bool {
+        self.0.is_legal_addressing_mode(global, offset, base, scale)
+    }
+
+    fn cast_cost(&self, kind: llrm_mir::tti::CastKind, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cast_cost(kind, from, to, cost)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        lhs: llrm_mir::tti::OperandInfo,
+        rhs: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        self.0.arithmetic_cost(op, ty, cost, lhs, rhs)
+    }
+}
+
+/// m68k x_idioms 68000 -Os: `sumlong(L, 40)` twice kept its out-of-line copy until `deadargelim` ran after the walk,
+/// then its unread `n` was priced as an argument push (call 18 B against 8), the -Os guard saw the inline as no growth
+/// and the program grew +10 B. A target with a call sequence must price the call without the unread argument.
+#[test]
+fn test_the_size_guard_prices_a_call_sequence_without_the_arguments_nothing_reads() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false }), by_rate: 0 };
+    let tti = Sequenced(PolicyOnly(policy, None, false));
+    let params = InlineParams { compute_full_inline_cost: true, opt_size_threshold: 100_000, ..InlineParams::from_level(2) };
+    let held = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&tti), params.clone(), (2, true));
+        cost >= threshold
+    };
+    for ops in 2..48 {
+        let mut body = String::from("  %v0 = load i32, ptr @g\n");
+        for at in 1..ops {
+            body += &format!("  %v{at} = add i32 %v{}, %x\n", at - 1);
+        }
+        body += &format!("  store i32 %v{}, ptr @g\n  ret void\n}}\n", ops - 1);
+        let with = format!(
+            "{GLOBAL}define internal void @callee(i32 %unread, i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 1, i32 %y)\n  call void @callee(i32 1, i32 3)\n  ret void\n}}\n"
+        );
+        let without = format!(
+            "{GLOBAL}define internal void @callee(i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee(i32 3)\n  ret void\n}}\n"
+        );
+        assert_eq!(held(&with), held(&without), "{ops} instructions");
+    }
+}
