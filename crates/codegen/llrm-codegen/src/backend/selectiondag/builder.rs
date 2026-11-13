@@ -375,6 +375,16 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with divides by constants of at most `bits` bits kept as
+    /// divides (`isIntDivCheap`, per width; see `DagConfig::int_div_cheap_narrow`).
+    pub fn with_int_div_cheap_narrow(
+        mut self,
+        bits: u32,
+    ) -> BuilderTarget {
+        self.dag.int_div_cheap_narrow = bits;
+        self
+    }
+
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`.
     pub fn with_div_live_limit(
         mut self,
