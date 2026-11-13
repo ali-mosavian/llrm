@@ -120,6 +120,11 @@ pub struct Tuning {
     /// `Tti::inline_trial_keeps_shrinking_copy`: a priced inline trial keeps a copy that
     /// leaves the module no larger and saves clocks, though no callee goes with it.
     pub inline_trial_keeps_shrinking_copy: bool,
+    /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): `inline_size_bytes` at -O1
+    /// alone (the byte-measured size view, the second round, and the trial of a callee the bound
+    /// refused, kept where the caller comes out smaller); the -O2 and -O3 callers keep the units.
+    /// False: the bound's verdict stands.
+    pub inline_trials_at_o1: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -582,6 +587,7 @@ impl Tuning {
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
+        inline_trials_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
