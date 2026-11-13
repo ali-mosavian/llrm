@@ -994,10 +994,13 @@ pub(crate) fn llvm_order(
     };
     let earlycse = |name, memory_ssa| slot(name, Box::new(crate::earlycse::EarlyCse { memory_ssa }));
     // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
-    // `LLRM_NO_LICM` the slot stays and holds nothing.
+    // `LLRM_NO_LICM` the slot stays and holds nothing. DEVIATE FMULADD-SPLIT:
+    // each one splits the products it could hoist first, loops at -O1 having
+    // no other slot where the factors stand outside.
     let licm = |name, speculate| -> Box<dyn FunctionPass> {
         if applied.options.licm {
-            slot(name, Box::new(crate::licm::Licm { apply: true, speculate }))
+            let split = Box::new(crate::fmuladdsplit::FmuladdSplit { size: applied.options.prefers_size() });
+            Box::new(Together { name, parts: vec![split, Box::new(crate::licm::Licm { apply: true, speculate })] })
         } else {
             Box::new(Together { name, parts: Vec::new() })
         }
