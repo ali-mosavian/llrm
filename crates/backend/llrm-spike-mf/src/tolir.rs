@@ -3151,7 +3151,7 @@ fn allocate_greedy_pinned<T: Target>(
     if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
         converted.coalesce_pinned(registers, size, joins_pinned);
     }
-    if T::schedules_before_allocation() && !llrm_support::env_flag!("LLRM_NO_PRESCHED") {
+    if T::schedules_before_allocation() && !function.optnone && !llrm_support::env_flag!("LLRM_NO_PRESCHED") {
         converted.schedule(function, registers);
     }
     let order = |value: u32| converted.order(value);

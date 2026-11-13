@@ -1770,22 +1770,29 @@ pub fn stack_slot_report_by(
             return Some((slot, StackRefusal::LoadNotOnTop));
         }
         // the other half of a pair a byte slot saves is dead once the pair is
-        // restored
+        // restored. One backward sweep a block, so the liveness after each load is stepped to once, not
+        // recomputed from the block's end; the first load in program order is the one reported.
         for (b, block) in function.blocks.iter().enumerate() {
-            for (at, inst) in block.insts.iter().enumerate() {
-                let Some((false, slot, register)) = spill(inst) else { continue };
-                if !chosen.contains(&slot) {
-                    continue;
-                }
-                let pair = stack_pair(register).expect("checked above");
-                if register != pair {
-                    let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, at + 1);
-                    let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
-                    let mate = if register == lo { hi } else { lo };
-                    if after.is_live(&REGISTER_INFO, mate) {
-                        return Some((slot, StackRefusal::ByteMateLive));
+            let mut after =
+                live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, block.insts.len());
+            let mut first = None;
+            for (at, inst) in block.insts.iter().enumerate().rev() {
+                if let Some((false, slot, register)) = spill(inst)
+                    && chosen.contains(&slot)
+                {
+                    let pair = stack_pair(register).expect("checked above");
+                    if register != pair {
+                        let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
+                        let mate = if register == lo { hi } else { lo };
+                        if after.is_live(&REGISTER_INFO, mate) {
+                            first = Some(slot);
+                        }
                     }
                 }
+                after.step_backward::<Z80Registers>(&REGISTER_INFO, assignment, inst);
+            }
+            if let Some(slot) = first {
+                return Some((slot, StackRefusal::ByteMateLive));
             }
         }
         None
@@ -1844,10 +1851,11 @@ pub fn stack_slot_report_by(
 /// Reloads that sit side by side and read different slots come back in the reverse of the order the slots were
 /// stored, so each slot is on top when it is loaded and every one can be a `pop` (`switch_peeled_table` -O1: `bc`
 /// stored before `de` and reloaded first kept `bc` in the IX frame, 25 B with its frame). The reloads write
-/// different registers and read no register, so the order is free. A run is reordered only where that makes more
+/// different registers and read no register, so the order is free. The reorder is kept only where it makes more
 /// slots pushes: a slot read again later can lose its `pop` and `push` peek to a reorder (frameless -O1 +4 B,
 /// rep_count -O2 +2 T a trip). Beyond the pin, which has only frame slots (DEVIATE Z80-SLOT-NEST, owner z80-c,
-/// exit 2026-11-24: spill placement that knows the stack). One report per run that would move. Whether any run moved.
+/// exit 2026-11-24: spill placement that knows the stack). All the runs move at once and stay where that makes more
+/// slots pushes: one report each way, so the cost is linear in the function. Whether they moved.
 pub fn nest_reloads(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -1861,10 +1869,10 @@ pub fn nest_reloads(
         _ => None,
     };
     let pushed = |function: &MFunction| stack_slot_report_by(&mut function.clone(), assignment, true, false).pushed.len();
+    let before = function.clone();
     let mut stored_at = std::collections::BTreeMap::new();
-    let mut have = None;
-    let mut moved = false;
     let mut now = 0usize;
+    let mut reordered = false;
     for b in 0..function.blocks.len() {
         let mut at = 0;
         while at < function.blocks[b].insts.len() {
@@ -1884,26 +1892,24 @@ pub fn nest_reloads(
                 run[i + 1..].iter().all(|(other, other_slot)| !Z80Registers::overlaps(*reg, *other) && slot != other_slot)
             });
             if independent && end - at > 1 {
-                let original = insts[at..end].to_vec();
-                let mut sorted = original.clone();
+                let mut sorted = insts[at..end].to_vec();
                 sorted.sort_by_key(|inst| std::cmp::Reverse(reload(inst).map_or(0, |(_, slot)| stored_at.get(&slot).copied().unwrap_or(0))));
-                if sorted != original {
-                    let was = *have.get_or_insert_with(|| pushed(function));
+                if sorted != insts[at..end] {
                     function.blocks[b].insts.splice(at..end, sorted);
-                    let now_pushed = pushed(function);
-                    if now_pushed > was {
-                        have = Some(now_pushed);
-                        moved = true;
-                    } else {
-                        function.blocks[b].insts.splice(at..end, original);
-                    }
+                    reordered = true;
                 }
             }
             now += end - at;
             at = end;
         }
     }
-    moved
+    // one report for the function, not one per run: a slot read from many places comes back to the stack only
+    // where every one of them is nested
+    if reordered && pushed(function) > pushed(&before) {
+        return true;
+    }
+    *function = before;
+    false
 }
 
 /// Moves the entry block's spills of argument registers up to its start while

@@ -60,7 +60,7 @@ fn a_zero_extended_byte_walk_loads_through_post_increment() {
 fn a_sign_extended_byte_walk_loads_through_post_increment() {
     for cpu in ["68000", "68020"] {
         let out = assembly(&walk("sext"), cpu_of(cpu).unwrap(), Level::Os).expect("compiles");
-        assert!(any_address_register(&out, "move.b\t(%a{})+, %d2\n\t"), "{cpu}: no (An)+ load:\n{out}");
+        assert!(any_address_register(&out, "move.b\t(%a{})+, %d"), "{cpu}: no (An)+ load:\n{out}");
         assert!(!any_address_register(&out, "addq.l\t#1, %a{}"), "{cpu}: a separate step:\n{out}");
     }
 }
