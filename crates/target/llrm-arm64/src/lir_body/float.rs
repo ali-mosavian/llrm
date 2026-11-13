@@ -169,6 +169,20 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::VectorExtendLong { signed, high, wide, rd, rn, amount } => semantics(
+            Operation::Binary,
+            format!("{}LL{}_shift", if *signed { "SSH" } else { "USH" }, narrow_name(*wide, *high)),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, if *high { 128 } else { 64 }), imm(i64::from(*amount))],
+            None,
+        ),
+        Inst::VectorNarrow { high, wide, rd, rn } => semantics(
+            if *high { Operation::Binary } else { Operation::Unary },
+            format!("XTN{}", narrow_name(*wide, *high)),
+            vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
+            if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] },
+            None,
+        ),
         Inst::VectorFmulLane { lanes, rd, rn, rm, index } => semantics(
             Operation::Binary,
             format!("FMULv{}_indexed", if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }),
@@ -368,6 +382,23 @@ fn vector_fp_name(
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
+/// `v8i8`, `v16i8`, `v4i16`, ...: the narrow arrangement of an `xtn` or
+/// the source of a `sshll`, as the pin names it.
+fn narrow_name(
+    wide: Arrangement,
+    high: bool,
+) -> &'static str {
+    match (wide, high) {
+        (Arrangement::H8, false) => "v8i8",
+        (Arrangement::H8, true) => "v16i8",
+        (Arrangement::S4, false) => "v4i16",
+        (Arrangement::S4, true) => "v8i16",
+        (Arrangement::D2, false) => "v2i32",
+        (Arrangement::D2, true) => "v4i32",
+        (Arrangement::B16, _) => unreachable!("no lane is narrower than a byte"),
+    }
+}
+
 /// `i8`, `i16`, `i32`, `i64`: the lane of an `INSvi32lane`.
 fn ins_lane(lanes: Arrangement) -> &'static str {
     match lanes {
@@ -436,6 +467,31 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 rm: vreg_of(&s[2]),
                 index: value_of(&s[3]) as u8,
             });
+        }
+    }
+    for (wide, high) in [
+        (Arrangement::H8, false),
+        (Arrangement::H8, true),
+        (Arrangement::S4, false),
+        (Arrangement::S4, true),
+        (Arrangement::D2, false),
+        (Arrangement::D2, true),
+    ] {
+        let narrow = narrow_name(wide, high);
+        for signed in [true, false] {
+            if name == format!("{}LL{narrow}_shift", if signed { "SSH" } else { "USH" }) {
+                return Some(Inst::VectorExtendLong {
+                    signed,
+                    high,
+                    wide,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[0]),
+                    amount: value_of(&s[1]) as u8,
+                });
+            }
+        }
+        if name == format!("XTN{narrow}") {
+            return Some(Inst::VectorNarrow { high, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
         }
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {

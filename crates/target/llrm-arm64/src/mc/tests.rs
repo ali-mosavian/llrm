@@ -313,6 +313,19 @@ fn branches() {
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
     }
+    for (high, wide) in [
+        (false, Arrangement::H8),
+        (true, Arrangement::H8),
+        (false, Arrangement::S4),
+        (true, Arrangement::S4),
+        (false, Arrangement::D2),
+        (true, Arrangement::D2),
+    ] {
+        for (signed, amount) in [(true, 0), (false, 0), (true, 3)] {
+            all.push(Inst::VectorExtendLong { signed, high, wide, rd: Vreg(5), rn: Vreg(17), amount });
+        }
+        all.push(Inst::VectorNarrow { high, wide, rd: Vreg(6), rn: Vreg(30) });
+    }
     for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
         all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
     }

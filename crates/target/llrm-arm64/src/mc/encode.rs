@@ -464,6 +464,19 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorExtendLong { signed, high, wide, rd, rn, amount } => {
+            let immhb = wide.lane_bits() / 2 + u32::from(*amount);
+            let base = if *signed { 0x0F00_A400 } else { 0x2F00_A400 };
+            base | u32::from(*high) << 30 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorNarrow { high, wide, rd, rn } => {
+            let size = match wide {
+                Arrangement::H8 => 0,
+                Arrangement::S4 => 1,
+                _ => 2,
+            };
+            0x0E21_2800 | u32::from(*high) << 30 | size << 22 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
             let index = u32::from(*index);
             let (size, h, l) =

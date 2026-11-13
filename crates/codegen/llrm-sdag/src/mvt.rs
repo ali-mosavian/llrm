@@ -26,6 +26,10 @@ pub enum MVT {
     V2F64,
     /// `v2f32`: the 64-bit float vector `FPR64` holds (`addDRTypeForNEON`).
     V2F32,
+    /// `v8i8`, `v4i16`, `v2i32`: the 64-bit integer vectors `FPR64` holds.
+    V8I8,
+    V4I16,
+    V2I32,
     /// The 256-bit vectors no register holds: the type legalizer splits each
     /// in two (`TypeSplitVector`).
     V32I8,
@@ -74,6 +78,9 @@ impl MVT {
             (MVT::F32, 4) => MVT::V4F32,
             (MVT::F64, 2) => MVT::V2F64,
             (MVT::F32, 2) => MVT::V2F32,
+            (MVT::I8, 8) => MVT::V8I8,
+            (MVT::I16, 4) => MVT::V4I16,
+            (MVT::I32, 2) => MVT::V2I32,
             (MVT::I8, 32) => MVT::V32I8,
             (MVT::I16, 16) => MVT::V16I16,
             (MVT::I32, 8) => MVT::V8I32,
@@ -94,6 +101,9 @@ impl MVT {
                 | MVT::V4F32
                 | MVT::V2F64
                 | MVT::V2F32
+                | MVT::V8I8
+                | MVT::V4I16
+                | MVT::V2I32
                 | MVT::V32I8
                 | MVT::V16I16
                 | MVT::V8I32
@@ -106,9 +116,9 @@ impl MVT {
     /// `getVectorElementType`.
     pub fn element(self) -> Option<MVT> {
         Some(match self {
-            MVT::V16I8 | MVT::V32I8 => MVT::I8,
-            MVT::V8I16 | MVT::V16I16 => MVT::I16,
-            MVT::V4I32 | MVT::V8I32 => MVT::I32,
+            MVT::V16I8 | MVT::V32I8 | MVT::V8I8 => MVT::I8,
+            MVT::V8I16 | MVT::V16I16 | MVT::V4I16 => MVT::I16,
+            MVT::V4I32 | MVT::V8I32 | MVT::V2I32 => MVT::I32,
             MVT::V2I64 | MVT::V4I64 => MVT::I64,
             MVT::V4F32 | MVT::V8F32 | MVT::V2F32 => MVT::F32,
             MVT::V2F64 | MVT::V4F64 => MVT::F64,
@@ -121,9 +131,9 @@ impl MVT {
         Some(match self {
             MVT::V32I8 => 32,
             MVT::V16I8 | MVT::V16I16 => 16,
-            MVT::V8I16 | MVT::V8I32 | MVT::V8F32 => 8,
-            MVT::V4I32 | MVT::V4F32 | MVT::V4I64 | MVT::V4F64 => 4,
-            MVT::V2I64 | MVT::V2F64 | MVT::V2F32 => 2,
+            MVT::V8I16 | MVT::V8I32 | MVT::V8F32 | MVT::V8I8 => 8,
+            MVT::V4I32 | MVT::V4F32 | MVT::V4I64 | MVT::V4F64 | MVT::V4I16 => 4,
+            MVT::V2I64 | MVT::V2F64 | MVT::V2F32 | MVT::V2I32 => 2,
             _ => return None,
         })
     }
@@ -202,7 +212,7 @@ impl EVT {
                 MVT::I8 => 8,
                 MVT::I16 => 16,
                 MVT::I32 | MVT::F32 | MVT::Far => 32,
-                MVT::I64 | MVT::F64 | MVT::V2F32 => 64,
+                MVT::I64 | MVT::F64 | MVT::V2F32 | MVT::V8I8 | MVT::V4I16 | MVT::V2I32 => 64,
                 MVT::F80 => 80,
                 MVT::I128 | MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 | MVT::V4F32 | MVT::V2F64 => {
                     128

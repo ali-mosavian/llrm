@@ -407,6 +407,15 @@ impl fmt::Display for Inst {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
             }
+            Inst::VectorExtendLong { signed, high, wide, rd, rn, amount } => {
+                let name = if *signed { "sshll" } else { "ushll" };
+                let two = if *high { "2" } else { "" };
+                write!(out, "{name}{two} v{}.{}, v{}.{}, #{amount}", rd.0, wide.suffix(), rn.0, wide.narrowed(*high))
+            }
+            Inst::VectorNarrow { high, wide, rd, rn } => {
+                let two = if *high { "2" } else { "" };
+                write!(out, "xtn{two} v{}.{}, v{}.{}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())
+            }
             Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "fmul v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", rd.0, rn.0, rm.0)

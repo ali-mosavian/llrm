@@ -188,6 +188,36 @@ fn a_multiply_by_a_splat_is_fmul_by_element() {
     assert_eq!(count(&text, "fmul", ".s[0]"), 1, "{text}");
 }
 
+/// `<4 x i16>` had no register class ("vector with no register class"): the
+/// 64-bit integer vectors are `FPR64` (`addDRTypeForNEON`), loaded with `ldr
+/// d`.
+#[test]
+fn a_zero_extended_64_bit_vector_is_ushll() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a) {\n\
+         \x20 %x = load <4 x i16>, ptr %a, align 8\n\
+         \x20 %e = zext <4 x i16> %x to <4 x i32>\n\
+         \x20 store <4 x i32> %e, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "ldr", " d"), 1, "{text}");
+    assert_eq!(count(&text, "ushll", ".4s, v"), 1, "{text}");
+}
+
+/// `trunc <4 x i32> to <4 x i16>` had no instruction (`XTNv4i16`).
+#[test]
+fn a_truncated_vector_is_xtn() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a) {\n\
+         \x20 %x = load <4 x i32>, ptr %a, align 16\n\
+         \x20 %t = trunc <4 x i32> %x to <4 x i16>\n\
+         \x20 store <4 x i16> %t, ptr %d, align 8\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "xtn", ".4h, v"), 1, "{text}");
+    assert_eq!(count(&text, "str", " d"), 1, "{text}");
+}
+
 /// A lane read as an integer (`scvtf s, x`) from a vector in a register is
 /// copied across the register files (`fmov x, d`): `SCVTFUXSri` took the `v`
 /// register as its operand ("operands are not those of its form").

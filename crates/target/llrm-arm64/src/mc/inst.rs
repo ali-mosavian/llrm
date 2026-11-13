@@ -383,6 +383,23 @@ impl Arrangement {
         }
     }
 
+    /// The arrangement of the lanes half as wide (`xtn`'s result, `sshll`'s
+    /// source): the low half's, or the whole register's when `high`.
+    pub fn narrowed(
+        self,
+        high: bool,
+    ) -> &'static str {
+        match (self, high) {
+            (Arrangement::H8, false) => "8b",
+            (Arrangement::H8, true) => "16b",
+            (Arrangement::S4, false) => "4h",
+            (Arrangement::S4, true) => "8h",
+            (Arrangement::D2, false) => "2s",
+            (Arrangement::D2, true) => "4s",
+            (Arrangement::B16, _) => unreachable!("no lane is narrower than a byte"),
+        }
+    }
+
     pub fn suffix(self) -> &'static str {
         match self {
             Arrangement::B16 => "16b",
@@ -1014,6 +1031,25 @@ pub enum Inst {
         rn: Vreg,
         rm: Vreg,
         index: u8,
+    },
+    /// `sshll{2} v.8h, v.8b, #amount` / `ushll{2}`: each lane of the low (or,
+    /// `high`, the top) half of `rn` extended to `wide`'s lane and shifted
+    /// left; `wide` is `H8`, `S4` or `D2`.
+    VectorExtendLong {
+        signed: bool,
+        high: bool,
+        wide: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        amount: u8,
+    },
+    /// `xtn{2} v.8b, v.8h`: each lane of `rn` (`wide`'s lanes) halved, into
+    /// the low half of `rd` or, `high`, its top half (`rd` is then read too).
+    VectorNarrow {
+        high: bool,
+        wide: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
     },
     /// `fmul v.4s, v.4s, v.s[index]` (`FMULv4i32_indexed`): `lanes` is `S4` or
     /// `D2`; nothing of `rd` is read.
