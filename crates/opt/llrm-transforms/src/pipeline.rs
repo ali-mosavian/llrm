@@ -141,7 +141,7 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
+    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
@@ -516,7 +516,7 @@ impl Options {
             "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => {
                 self.strength && self.lsr
             }
-            "indvars" | "window" | "gepoffset" | "narrowrange" => self.strength,
+            "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
@@ -994,10 +994,13 @@ pub(crate) fn llvm_order(
     };
     let earlycse = |name, memory_ssa| slot(name, Box::new(crate::earlycse::EarlyCse { memory_ssa }));
     // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
-    // `LLRM_NO_LICM` the slot stays and holds nothing.
+    // `LLRM_NO_LICM` the slot stays and holds nothing. DEVIATE FMULADD-SPLIT:
+    // each one splits the products it could hoist first, loops at -O1 having
+    // no other slot where the factors stand outside.
     let licm = |name, speculate| -> Box<dyn FunctionPass> {
         if applied.options.licm {
-            slot(name, Box::new(crate::licm::Licm { apply: true, speculate }))
+            let split = Box::new(crate::fmuladdsplit::FmuladdSplit { size: applied.options.prefers_size() });
+            Box::new(Together { name, parts: vec![split, Box::new(crate::licm::Licm { apply: true, speculate })] })
         } else {
             Box::new(Together { name, parts: Vec::new() })
         }
@@ -1874,6 +1877,10 @@ pub fn recorded(
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
+    }
+    // After gepoffset, which leaves the constant part of an address in its own `gep`.
+    if applied.options.wanted("gepbyteindex") {
+        manager.add(gepbyteindex::GepByteIndex);
     }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.

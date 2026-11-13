@@ -700,6 +700,40 @@ fn intrinsic_price(
     None
 }
 
+impl X86 {
+    /// The intrinsic's row of `tti_intrinsics.txt` for this profile: long mode has its own (`x64`), as the pin's
+    /// `X64CostTbl` and 64-bit legalization differ from the 32-bit ones. A `ctlz` or `cttz` called with a zero-poison
+    /// flag is priced from its own `.zp` row (the pin looks up `*_ZERO_POISON`).
+    fn priced_intrinsic(
+        &self,
+        name: &str,
+        kind: CostKind,
+        zero_poison: bool,
+    ) -> Cost {
+        let profile = if self.quad {
+            "x64"
+        } else if self.sse2 {
+            "sse2"
+        } else {
+            "nosse"
+        };
+        let kind = match kind {
+            CostKind::RecipThroughput => "throughput",
+            CostKind::Latency => "latency",
+            CostKind::CodeSize => "code-size",
+            CostKind::SizeAndLatency => "size-latency",
+        };
+        let zero_poison_name = format!("{name}.zp");
+        let priced = if zero_poison { intrinsic_price(profile, kind, &zero_poison_name) } else { None };
+        match priced.or_else(|| intrinsic_price(profile, kind, name)) {
+            Some(Some(cost)) => Cost::of(cost),
+            Some(None) => Cost::INVALID,
+            None if is_free_intrinsic(name) => Cost::FREE,
+            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+        }
+    }
+}
+
 impl Tti for X86 {
     fn name(&self) -> &'static str {
         "X86"
@@ -780,6 +814,10 @@ impl Tti for X86 {
 
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
+    }
+
+    fn keeps_sahf_where_bytes_are_held(&self) -> bool {
+        self.tuning.keeps_sahf_where_bytes_are_held
     }
 
     fn narrow_divide_live_limit(&self) -> u32 {
@@ -1186,16 +1224,21 @@ impl Tti for X86 {
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
         self.tuning.lsr_size_order.then(|| {
-            if self.tuning.lsr_size_x86_64 {
+            let model = if self.tuning.lsr_size_x86_64 {
                 crate::encoding::lsr_size_model_64()
             } else {
                 llrm_mir::tti::LsrSizeModel::X86
-            }
+            };
+            llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
         })
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {
         self.tuning.lsr_phi_operand_uses
+    }
+
+    fn splits_invariant_fmuladd(&self) -> bool {
+        self.tuning.splits_invariant_fmuladd
     }
 
     fn lsr_users_in_use_list_order(&self) -> bool {
@@ -1341,6 +1384,12 @@ impl Tti for X86 {
         false
     }
 
+    /// Long mode's DAG selects an access of any byte size (an `i24` is a 16-bit and an 8-bit access, an `i40` a
+    /// dword and a byte), as the pin's does: SROA cuts the slices where the pin cuts them.
+    fn selects_odd_sized_integers(&self) -> bool {
+        self.quad
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,
@@ -1460,19 +1509,21 @@ impl Tti for X86 {
                 false => base_intrinsic_cost(name).map_or(Cost::INVALID, |units| units * 4),
             });
         }
-        let profile = if self.sse2 { "sse2" } else { "nosse" };
-        let kind = match kind {
-            CostKind::RecipThroughput => "throughput",
-            CostKind::Latency => "latency",
-            CostKind::CodeSize => "code-size",
-            CostKind::SizeAndLatency => "size-latency",
-        };
-        match intrinsic_price(profile, kind, name) {
-            Some(Some(cost)) => Cost::of(cost),
-            Some(None) => Cost::INVALID,
-            None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+        self.priced_intrinsic(name, kind, false)
+    }
+
+    fn zero_poison_intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        let _ = (ret, args);
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return self.intrinsic_cost(name, ret, args, kind);
         }
+        self.priced_intrinsic(name, kind, true)
     }
 
     fn cmp_sel_cost(

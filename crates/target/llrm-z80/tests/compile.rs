@@ -1876,6 +1876,33 @@ fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
     }
 }
 
+/// A long long divided and taken the remainder of by the same operands was a
+/// divide call and a 64-bit multiply-back (`x - (x / d) * d`: 16 `__mulsi3` and 8
+/// `__umulhisi3` call sites in int64_divmod_edges, O1 +85 B against SDCC). They
+/// are one call; a divide alone, or a remainder of other operands, keeps its own.
+#[test]
+fn a_long_long_divide_and_remainder_of_the_same_operands_are_one_call() {
+    let body = |attr: &str, ops: [&str; 2]| {
+        format!(
+            "define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = {} i64 %a, %b\n  %r = {} i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}",
+            ops[0], ops[1]
+        )
+    };
+    for (ops, pair, other) in [(["udiv", "urem"], "divmddi4", "__udivdi3"), (["sdiv", "srem"], "divmddi4", "__divdi3")] {
+        // the routine's family (speed or size) is the module price's: a long long divide is priced by relative regret
+        for (attr, level) in [("", Level::O2), ("optsize", Level::Os), ("", Level::O1)] {
+            let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{}", body(attr, ops));
+            let out = text(&ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr} {level:?}: {out}");
+            assert!(out.contains(pair), "{ops:?} {attr} {level:?}: {out}");
+            assert!(!out.contains("__mulsi3") && !out.contains("__umulhisi3"), "{ops:?} {attr} {level:?}: {out}");
+        }
+        let alone =
+            compiled(&format!("define i64 @f(i64 %a, i64 %b) {{\n  %q = {} i64 %a, %b\n  ret i64 %q\n}}", ops[0]), "f");
+        assert!(alone.contains(&format!("call {other}")) && !alone.contains("rem"), "{ops:?} alone: {alone}");
+    }
+}
+
 /// A word divided and taken the remainder of by the same operands was a divide,
 /// a multiply and a subtract (`x % d` as `x - (x / d) * d`: `__udivhi3`,
 /// `__mulhi3`, 14 B a site more than the remainder call). They are one call;
@@ -2444,7 +2471,11 @@ fn the_high_byte_is_loaded_into_a_before_its_sign_is_taken() {
         let out = text(ir, "__floatsisf", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
         let lines: Vec<&str> = out.lines().map(str::trim).collect();
         let sign = lines.iter().position(|line| *line == "add a, a").unwrap_or_else(|| panic!("{level:?}: no sign step\n{out}"));
-        assert!(lines[..sign].contains(&"ld a, d"), "{level:?}: `add a, a` reads a stale a\n{out}");
+        // the byte comes from the register that holds it (`ld a, d`, or `ld a, b` where the zero test kept a copy)
+        assert!(
+            lines[..sign].contains(&"ld a, d") || lines[..sign].contains(&"ld a, b"),
+            "{level:?}: `add a, a` reads a stale a\n{out}"
+        );
     }
 }
 
@@ -2460,4 +2491,29 @@ fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
         // the register is the convention's business (the high word of `a` is on the stack, loaded into bc)
         assert!(out.contains("bit 7, ") && !out.contains("sbc"), "{level:?}: {out}");
     }
+}
+
+/// A long step (`inc bc; ld a, b; or c; jr nz; inc de`) sat between a loop's exit test and its branch, so the test's
+/// byte in `a` was stored and reloaded around it (`ld -1(ix), a` ... `ld a, -1(ix)`, 38 T a trip, shift_until_idioms
+/// offset_count +10% T over SDCC). The step is on the continuing edge now: the test branches first.
+#[test]
+fn a_long_step_after_the_exit_test_does_not_spill_the_test() {
+    let out = text(include_str!("kernels/ir/step_after_test.ll"), "offset_count", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    let spilled = |line: &&str| {
+        let line = line.trim();
+        (line.starts_with("ld -") && line.ends_with("(ix), a")) || (line.starts_with("ld a, -") && line.ends_with("(ix)"))
+    };
+    assert!(!out.lines().any(|line| spilled(&line)), "the exit test is spilled around the step:\n{out}");
+}
+
+/// switch_peeled_table -O1: `main` kept the table index and the sum across `report` in two spill slots stored in
+/// one order and reloaded in the same order, so the first stayed in the IX frame: `ld -2(ix), c` ... `ld c, -2(ix)`
+/// and 13 B of frame, 230 B against SDCC's 225. Reloaded in reverse both are `push`/`pop`, no frame, 207 B.
+#[test]
+fn two_words_kept_across_a_call_are_pushes_not_frame_slots() {
+    let ir = include_str!("kernels/ir/switch_peeled_main.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix)"), "{out}");
+    assert!(out.contains("push bc") && out.contains("pop bc"), "{out}");
 }

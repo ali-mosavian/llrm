@@ -73,6 +73,9 @@ corpus! {
     // loop not vectorized: call instruction cannot be vectorized (`sdiv.fix` is
     // not in `isTriviallyVectorizable`)
     with_sdiv_fix => false,
+    // vectorized loop (plain pointers: the pin guards them
+    // with `vector.memcheck`)
+    memcheck_copy => true,
     // We can vectorize this loop! (`llvm.fmuladd` is trivially vectorizable)
     fp_fmuladd => true,
     // Can't vectorize due to memory conflicts

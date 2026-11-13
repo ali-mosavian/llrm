@@ -338,6 +338,9 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its counter in one
+    /// instruction a trip has no setup to count ([`Tuning::lsr_derived_setup_free`]).
+    pub derived_setup_free: bool,
     /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
     /// order stands (LG3's byte test included).
     pub size_only: bool,
@@ -360,6 +363,7 @@ impl LsrSizeModel {
         constant_start: None,
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        derived_setup_free: false,
         size_only: false,
         exit_compare: |_, _| 0,
     };
@@ -996,6 +1000,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE INL-O1-HOT (owner w10, exit 2026-11-24): where -O1 holds a
+    /// growing inline (`by_size`), a site the pin calls locally hot
+    /// (`HotCallSiteRelFreq`, 60 times the caller's entry) still inlines when
+    /// its growth is at most this percent of the call sequence removed. None:
+    /// the guard holds every growing inline.
+    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// What a call to a callee whose peak register pressure is `peak` values
     /// costs in clocks to save and restore the registers it must preserve (a
     /// register the callee takes beyond the scratch ones is pushed and popped
@@ -1425,6 +1438,11 @@ pub trait Tti {
 
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::keeps_sahf_where_bytes_are_held`.
+    fn keeps_sahf_where_bytes_are_held(&self) -> bool {
         false
     }
 
@@ -2372,6 +2390,17 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine leaves `icmp (udiv X, C), K` alone while the
+    /// quotient has another use. The pin folds it into a range test of `X`
+    /// on every target (`foldICmpDivConstant`). DEVIATE ICMPDIV-1 (owner
+    /// llrm-target-6502, exit 2026-11-24): where a divide is a library call,
+    /// the fold keeps the dividend live across it beside the quotient the
+    /// loop carries (digits Os: two callee-saved cells, 12 B of push and pop).
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2857)
+    fn keeps_icmp_of_shared_division(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
@@ -2574,6 +2603,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
+    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
+    /// `fmul` and `fadd`, the product then leaving the loop; true where the
+    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
+    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    fn splits_invariant_fmuladd(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
@@ -2626,6 +2664,14 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// largest object offset a byte index reaches in one address instruction
+    /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
+    /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
+    fn address_index_max(&self) -> Option<u64> {
+        None
     }
 
     /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
@@ -2892,6 +2938,19 @@ pub trait Tti {
     ) -> Cost {
         let _ = (ret, args, kind);
         if is_free_intrinsic(name) { Cost::FREE } else { base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
+    }
+
+    /// `intrinsic_cost` of a `ctlz` or `cttz` whose `is_zero_poison` argument is the constant true: some targets
+    /// price it apart (`X86TTIImpl::getIntrinsicInstrCost`, `CTLZ_ZERO_POISON`). The same price as `intrinsic_cost`
+    /// where a target has no such rows.
+    fn zero_poison_intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        self.intrinsic_cost(name, ret, args, kind)
     }
 }
 
@@ -3247,6 +3306,7 @@ mod size_model_tests {
         constant_start: None,
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        derived_setup_free: false,
         size_only: false,
         exit_compare: |bits, _| bits,
     };
