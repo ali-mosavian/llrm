@@ -2444,7 +2444,11 @@ fn the_high_byte_is_loaded_into_a_before_its_sign_is_taken() {
         let out = text(ir, "__floatsisf", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
         let lines: Vec<&str> = out.lines().map(str::trim).collect();
         let sign = lines.iter().position(|line| *line == "add a, a").unwrap_or_else(|| panic!("{level:?}: no sign step\n{out}"));
-        assert!(lines[..sign].contains(&"ld a, d"), "{level:?}: `add a, a` reads a stale a\n{out}");
+        // the byte comes from the register that holds it (`ld a, d`, or `ld a, b` where the zero test kept a copy)
+        assert!(
+            lines[..sign].contains(&"ld a, d") || lines[..sign].contains(&"ld a, b"),
+            "{level:?}: `add a, a` reads a stale a\n{out}"
+        );
     }
 }
 
