@@ -480,3 +480,93 @@ b4:
     let b2 = rest.split_once("b3:").expect("a block b3").0;
     assert!(!b2.contains("%p"), "the store makes its address from the base and the offset: {after}");
 }
+
+/// grep m16 -O2: a byte loaded and compared where it is loaded, widened only
+/// on the hit arm. `optimizeExt` moved the `zext` up next to the load, so every
+/// trip ran `xor; mov; test` for a compare of memory (+7.9% clocks): the i486
+/// `movzx` is 3 clocks against the load's 1. It stays in its arm there.
+const HIT: &str = "define i32 @f(ptr %p, i32 %a) {
+b0:
+  %l = load i8, ptr %p
+  %c = icmp eq i8 %l, 0
+  br i1 %c, label %cold, label %hot
+
+hot:
+  %z = zext i8 %l to i32
+  %s = add i32 %a, %z
+  ret i32 %s
+
+cold:
+  ret i32 %a
+}
+";
+
+fn extended(machine: llrm_x86_m16::Dos) -> String {
+    let mut module = parsed(&format!("{HEAD}{HIT}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(CgpAddr);
+    manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+    printed(&module)
+}
+
+#[test]
+fn test_an_extension_stays_in_its_arm_where_the_extending_load_costs_clocks() {
+    let after = extended(llrm_x86_m16::Dos::default());
+    let (entry, _) = after.split_once("hot:").expect("the hot arm");
+    assert!(!entry.contains("zext"), "the extension is not hoisted next to the load: {after}");
+}
+
+/// The pin's tuning has no such cost: the extension is moved next to its load.
+#[test]
+fn test_an_extension_moves_next_to_its_load_without_the_cost() {
+    let after = extended(llrm_x86_m16::Dos { pin_tuning: true, ..llrm_x86_m16::Dos::default() });
+    let (entry, _) = after.split_once("hot:").expect("the hot arm");
+    assert!(entry.contains("zext"), "premise: the pin moves it: {after}");
+}
+
+/// Where bytes outrank clocks (-O1, -Os) the extension moves next to its load
+/// as the pin does: the narrow load and the arm's widening are two
+/// instructions more than the one `movzx` (m32 -Os idioms +4 B, rep_tails +6
+/// B).
+#[test]
+fn test_an_extension_moves_next_to_its_load_where_bytes_outrank_clocks() {
+    let mut module = parsed(&format!("{HEAD}{HIT}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::CgpAddrBytesStrict);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    let (entry, _) = after.split_once("hot:").expect("the hot arm");
+    assert!(entry.contains("zext"), "{after}");
+}
+
+/// parity/branch m16 -O2 (+14 B): both arms widen the value the compare read
+/// narrow, so every path pays the extension: it moves next to the load, one
+/// where there were two.
+#[test]
+fn test_an_extension_every_path_pays_moves_next_to_its_load() {
+    let mut module = parsed(&format!(
+        "{HEAD}define i32 @g(ptr %p) {{
+b0:
+  %l = load i16, ptr %p
+  %c = icmp slt i16 %l, 0
+  br i1 %c, label %neg, label %pos
+
+neg:
+  %a = sext i16 %l to i32
+  %m = mul i32 %a, 7
+  ret i32 %m
+
+pos:
+  %b = sext i16 %l to i32
+  %n = mul i32 %b, 5
+  ret i32 %n
+}}
+"
+    ));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(CgpAddr);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    let (entry, _) = after.split_once("neg:").expect("the first arm");
+    assert!(entry.contains("sext"), "{after}");
+}

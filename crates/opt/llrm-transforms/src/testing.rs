@@ -157,6 +157,8 @@ pub struct Tuned {
     pub folds_masks: bool,
     /// `Machine::two_address`.
     pub two_address: bool,
+    /// The target's library has `memset_pattern16`, as a Darwin one does.
+    pub memset_pattern: bool,
     /// A global is never a base, and a register and an index are the only
     /// forms.
     pub no_global_base: bool,
@@ -356,6 +358,30 @@ impl llrm_mir::tti::Tti for Flagged {
     }
 }
 
+/// A library of the pin's defaults for an unknown OS, with `memset_pattern16`.
+struct WithMemsetPattern;
+
+impl llrm_mir::libfunc::Library for WithMemsetPattern {
+    fn int_bits(&self) -> u32 {
+        32
+    }
+
+    fn size_t_bits(&self) -> u32 {
+        32
+    }
+
+    fn availability(
+        &self,
+        func: llrm_mir::libfunc::LibFunc,
+    ) -> llrm_mir::libfunc::Availability {
+        if func == llrm_mir::libfunc::LibFunc::MemsetPattern16 {
+            llrm_mir::libfunc::Availability::Standard
+        } else {
+            llrm_mir::libfunc::Generic { int_bits: 32, size_t_bits: 32 }.availability(func)
+        }
+    }
+}
+
 struct FoldsMasks;
 
 impl llrm_mir::lowering::Lowering for FoldsMasks {
@@ -365,6 +391,10 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        self.memset_pattern.then(|| std::rc::Rc::new(WithMemsetPattern) as _)
+    }
+
     fn tuning(&self) -> llrm_mir::target::Tuning {
         let inline = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset };
         let inline_size = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size };

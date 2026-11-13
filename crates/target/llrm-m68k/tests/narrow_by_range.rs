@@ -26,3 +26,21 @@ fn the_libcall_stays_where_the_extensions_cost_more_bytes() {
     assert_eq!(calls("68000", Level::Os, "__udivsi3"), 1, "-Os keeps the smaller call");
     assert_eq!(calls("68020", Level::O2, "__udivsi3"), 0, "the 68020 has divu.l: nothing to narrow to, no call either");
 }
+
+/// `u - (u / v) * v` of two byte counters kept `__mulsi3` for `q * v` (u8b: 1
+/// call per trip, 68000 -O2): the quotient is a byte, the counter a
+/// range-proved byte, and the narrowing wrapper the pipeline made was folded
+/// back into the counter by the target's own strength reduction before
+/// selection. Made after it, selection sees two halves and emits `mulu`.
+#[test]
+fn a_quotient_times_a_counter_is_a_half_multiply_at_o2() {
+    assert_eq!(calls("68000", Level::O2, "__mulsi3"), 0);
+    let asm = assembly(KERNEL, cpu_of("68000").unwrap(), Level::O2).unwrap();
+    assert!(asm.lines().any(|line| line.trim_start().starts_with("mulu")), "{asm}");
+}
+
+#[test]
+fn the_multiply_libcall_stays_at_size_and_o1() {
+    assert_eq!(calls("68000", Level::Os, "__mulsi3"), 1);
+    assert_eq!(calls("68000", Level::O1, "__mulsi3"), 1);
+}

@@ -189,7 +189,6 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
-        push_imm_at_size: true,
         // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30):
         // see `Tuning::merge_functions_at_size`.
         merge_functions_at_size: true,

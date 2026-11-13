@@ -261,7 +261,11 @@ fn lowered_once(
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
     // The mid-end is the module's, run once: `text_with` runs it over the whole
     // module for each function it is given.
-    crate::compile::mid_end_for(&program.modules[0], cpu)
+    crate::compile::mid_end_for_narrowing(
+        &program.modules[0],
+        cpu,
+        matches!(level, Level::O2 | Level::O3 | Level::Omax),
+    )
 }
 
 /// [`assembly`] with the debug lines and the stage dump chosen.

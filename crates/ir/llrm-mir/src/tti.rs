@@ -1523,11 +1523,6 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::push_imm_at_size`.
-    fn push_imm_at_size(&self) -> bool {
-        false
-    }
-
     /// `Tuning::sdiv_pow2_stays_at_size`.
     fn sdiv_pow2_stays_at_size(&self) -> bool {
         false
@@ -2588,6 +2583,13 @@ pub trait Tti {
     /// in an addressing mode, so as the base of an address it costs no
     /// register of its own.
     fn frame_address_is_free(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE EXT-LOAD-COST: whether a load that widens costs clocks over
+    /// the plain load, so CGP's `optimizeExt` leaves an extension in the
+    /// block that reads it. The pin has no such cost: it moves it.
+    fn ext_load_costs_extra(&self) -> bool {
         false
     }
 
