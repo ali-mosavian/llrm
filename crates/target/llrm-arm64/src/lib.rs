@@ -4,6 +4,7 @@ pub mod cc;
 pub mod cfi;
 pub mod cmpzero;
 pub mod combine;
+pub mod condbrtuning;
 pub mod copyprop;
 pub mod dag;
 pub mod data;

@@ -272,6 +272,10 @@ fn lower_function(
     dump("CmpZero", &machine);
     crate::flagcse::run(&mut machine);
     dump("FlagCse", &machine);
+    // The pin runs it after MachineCSE and MachineCombiner, which make the
+    // value read once and the `msub` it must leave alone.
+    crate::condbrtuning::run(&mut machine);
+    dump("CondBrTuning", &machine);
     crate::memcluster::run(&mut machine);
     dump("MemCluster", &machine);
     crate::sibcall::run(&mut machine);
