@@ -811,7 +811,10 @@ pub trait Tti {
     /// [`Self::inline_size_view`] for a caller lowered for `speed` (-O2,
     /// -O3), where the target's lowering of an operation is larger than a
     /// size caller's. The default is the one view.
-    fn inline_size_view_at(&self, _speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+    fn inline_size_view_at(
+        &self,
+        _speed: bool,
+    ) -> Option<std::rc::Rc<dyn Tti>> {
         self.inline_size_view()
     }
 
@@ -1140,8 +1143,8 @@ pub trait Tti {
         false
     }
 
-    /// Bytes a loop ROTATION-HOT rotates may add where the finished code executes less. 0: the object
-    /// may not grow (-Os strict on bytes).
+    /// Bytes a loop ROTATION-HOT rotates may add where the finished code
+    /// executes less. 0: the object may not grow (-Os strict on bytes).
     fn rotation_hot_bytes_per_loop(&self) -> i64 {
         4
     }
@@ -1165,6 +1168,16 @@ pub trait Tti {
     /// and the frame could no longer start after the guard (shrink wrapping).
     /// False: the pin's rule.
     fn licm_speculation_keeps_frame_late(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-27): LICM may hoist
+    /// a load behind a loop guard when SCEV bounds the offset of its pointer
+    /// inside the object it is based on (`licm::range_deref`), not only where
+    /// the pin's constant-offset rule proves it dereferenceable. Not at
+    /// `optsize` or `minsize`: the hoisted value costs a register for the
+    /// loop's length. False: the pin's rule.
+    fn licm_range_deref(&self) -> bool {
         false
     }
 
@@ -1611,8 +1624,8 @@ pub trait Tti {
 
     /// DEVIATE LG1, LG2: `GenerateICmpZeroScales` scales a compare against zero
     /// by a factor whose product may wrap, where it is still a zero test
-    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as the
-    /// pin has it (wasm). owner: wasm, exit: 2026-12-04.
+    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as
+    /// the pin has it (wasm). owner: wasm, exit: 2026-12-04.
     fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
         true
     }
@@ -1651,8 +1664,9 @@ pub trait Tti {
     }
 
     /// DEVIATE IPACP-O3: whether a function is copied for the constants its
-    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone` (on at -O3) does and the
-    /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
+    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone`
+    /// (on at -O3) does and the pin's pipeline does not;
+    /// `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
     }
@@ -1744,7 +1758,10 @@ pub trait Tti {
     /// and NaN and overflow come out as its most negative value) when the
     /// result is `bits` wide; none: the range of the integer is checked on the
     /// float.
-    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+    fn wide_float_to_int(
+        &self,
+        bits: u32,
+    ) -> Option<u32> {
         let _ = bits;
         None
     }
@@ -2623,9 +2640,9 @@ pub trait Tti {
         0
     }
 
-    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
-    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
-    /// none: the pass does not run.
+    /// The width of the narrow divide instruction, where an unsigned divide or
+    /// remainder whose operands ScalarEvolution proves that narrow is done
+    /// in the narrow type (`narrowrange`); none: the pass does not run.
     fn range_narrowing_width(&self) -> Option<u32> {
         None
     }
@@ -3263,10 +3280,7 @@ mod size_model_tests {
     #[test]
     fn the_x86_table_is_the_numbers_lsr_held() {
         let m = LsrSizeModel::X86;
-        assert_eq!(
-            (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes),
-            (4, 2, 1, 4)
-        );
+        assert_eq!((m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes), (4, 2, 1, 4));
         assert_eq!((m.base_add.bytes, (m.step)(32, Some(1)), m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
     }
 }
