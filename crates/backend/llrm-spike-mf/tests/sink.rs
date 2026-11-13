@@ -4,7 +4,7 @@ mod common;
 
 use common::{Two, branch, op, v};
 use llrm_mir::blockfrequency::BranchProbability;
-use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, machine_sink};
+use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, liveness_words, machine_sink};
 
 /// `b0: x = add a, a; branch b2` falls into `b1`, which falls into
 /// `b2: r = phi [b0: x] [b1: a]; ret r`. `x` is used by the phi only.
@@ -194,11 +194,13 @@ fn loop_of_diamonds(count: u32) -> MFunction<()> {
 
 #[test]
 fn sinking_in_a_loop_of_many_blocks_solves_liveness_with_bit_sets() {
+    // 1.68 M words today: a solve per sunk instruction, a few sweeps each. The
+    // bound is work, not wall clock, which flaked at load 60 (2026-11-13).
     let mut function = loop_of_diamonds(200);
-    let start = std::time::Instant::now();
+    let before = liveness_words();
     assert!(machine_sink::<Wide>(&mut function), "nothing sank: the test measures nothing");
-    let took = start.elapsed();
-    assert!(took.as_millis() < 150, "{} blocks took {took:?}", function.blocks.len());
+    let words = liveness_words() - before;
+    assert!(words < 2_000_000, "{} blocks visited {words} liveness words", function.blocks.len());
 }
 
 /// `diamond` whose `add` is as cheap as a move, with the head's edge to the
