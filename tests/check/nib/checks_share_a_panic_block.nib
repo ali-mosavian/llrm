@@ -1,0 +1,15 @@
+# RUN: llrm-nib %s -O1 -march=i486 -S -o /dev/stdout
+# The checks of a function share one block per panic routine, as clang shares its trap block: three
+# float-to-integer conversions called N$ECNV from three blocks, each behind its own `fldcw` (qmove
+# -O1, 12 B over Open Watcom).
+# CHECK-LABEL: _three proc
+# CHECK: N$ECNV
+# CHECK-NOT: N$ECNV
+# CHECK: _three endp
+@noipa
+fn three(a: f64, b: f64, c: f64) -> i32:
+    return i32(a) + i32(b) + i32(c)
+
+fn main() -> i16:
+    print(three(1.5, 2.5, 3.5))
+    return 0
