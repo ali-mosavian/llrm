@@ -900,6 +900,29 @@ fn inst(
     mc::Inst { opcode, operands }
 }
 
+/// The plain load of `from` bits (8 or 16) through addressing mode `mode`:
+/// the row an extending load of that mode moves with.
+pub(crate) fn plain_load(
+    from: u32,
+    mode: char,
+) -> Option<&'static str> {
+    Some(match (from, mode) {
+        (8, 'o') => "MOV8do",
+        (8, 'j') => "MOV8dj",
+        (8, 'p') => "MOV8dp",
+        (8, 'f') => "MOV8df",
+        (8, 'q') => "MOV8dq",
+        (8, 'k') => "MOV8dk",
+        (16, 'o') => "MOV16do",
+        (16, 'j') => "MOV16rj",
+        (16, 'p') => "MOV16rp",
+        (16, 'f') => "MOV16rf",
+        (16, 'q') => "MOV16rq",
+        (16, 'k') => "MOV16rk",
+        _ => return None,
+    })
+}
+
 /// `ExpandMOVSZX_RR` and `ExpandMOVSZX_RM`: clear the destination and move
 /// into its low part, or move and then extend (`AddSExt`, `AddZExt`).
 ///
@@ -959,21 +982,7 @@ fn expand_extension(
         }
         return Ok(out);
     }
-    let load: &'static str = match (from, mode) {
-        (8, 'o') => "MOV8do",
-        (8, 'j') => "MOV8dj",
-        (8, 'p') => "MOV8dp",
-        (8, 'f') => "MOV8df",
-        (8, 'q') => "MOV8dq",
-        (8, 'k') => "MOV8dk",
-        (16, 'o') => "MOV16do",
-        (16, 'j') => "MOV16rj",
-        (16, 'p') => "MOV16rp",
-        (16, 'f') => "MOV16rf",
-        (16, 'q') => "MOV16rq",
-        (16, 'k') => "MOV16rk",
-        _ => return Err(format!("{name}: addressing mode {mode} is not translated")),
-    };
+    let load = plain_load(from, mode).ok_or_else(|| format!("{name}: addressing mode {mode} is not translated"))?;
     let load = match scale {
         Some(scale) => {
             crate::dagisel::scaled::scaled_name(load, scale).ok_or_else(|| format!("{name}: no scaled {load}"))?
