@@ -64,6 +64,12 @@ impl Arm64Model {
         Self { model: &CORTEX_A510_MODEL, disable_latency: false }
     }
 
+    /// `MCSchedModel::MispredictPenalty`: the cycles a mispredicted branch
+    /// costs.
+    pub fn mispredict_penalty(&self) -> u32 {
+        self.model.mispredict_penalty
+    }
+
     /// The model's class data for `insn`, or `None` where the model says
     /// nothing.
     fn class(

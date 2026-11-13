@@ -15,6 +15,7 @@ pub mod emit;
 pub mod expand_imm;
 pub mod facts;
 pub mod flagcse;
+pub mod ifcvt;
 pub mod frame;
 pub mod ipra;
 pub mod jumptable;
@@ -36,6 +37,7 @@ pub mod shrinkwrap;
 pub mod sibcall;
 pub mod sinkfold;
 pub mod taildup;
+pub mod tracemetrics;
 pub mod trial;
 pub mod tti;
 #[cfg(test)]

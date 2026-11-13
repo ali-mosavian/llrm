@@ -689,6 +689,20 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     Ok(Lowered { body, debug_values, tied })
 }
 
+/// `op` as the scheduling model reads an instruction: its form and operands.
+/// `None` where the form has no mapping.
+pub fn insn_of(
+    function: &MFunc,
+    op: &Op,
+) -> Option<Insn> {
+    let wide: Vec<Reg> = Vec::new();
+    let mut symbols = Vec::new();
+    let _file = enter(Regs(&crate::REGISTER_INFO));
+    let what = one(&mut To { function, symbols: &mut symbols, wide: &wide }, op).ok()?;
+    let (defines, uses) = values_of(&what);
+    Some(Insn::new(0, None, Some(what), defines, uses))
+}
+
 fn show(
     place: &Loc,
     symbols: &[String],
