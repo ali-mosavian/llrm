@@ -1204,6 +1204,23 @@ impl Printer<'_> {
                     self.folded_word = Some((self.register(inst, 0)?, [slots[0].clone(), slots[1].clone()]));
                     return Ok(());
                 }
+                // a pair read in one byte only: that byte alone is loaded
+                // (`InlineSpiller::foldMemoryOperand` loads the used
+                // sub-register of a reload)
+                if op == "RELOAD16" {
+                    let pair = self.register(inst, register)?;
+                    let unused = |byte| self.lane_unused_after(pair, byte, rest);
+                    let lone = match (unused(lo), unused(hi)) {
+                        (false, true) => Some(0),
+                        (true, false) => Some(1),
+                        _ => None,
+                    };
+                    if let Some(lane) = lone {
+                        let (byte, slot) = ([lo, hi][lane], slots[lane].clone());
+                        self.push(format!("ld {}, {slot}", name(byte)));
+                        return Ok(());
+                    }
+                }
                 for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
                         format!("ld {slot}, {}", name(byte))
@@ -1429,6 +1446,51 @@ impl Printer<'_> {
             .liveness
             .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
         ![pair, lo, hi].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
+    }
+
+    /// Nothing reads `byte` of `pair` after this instruction before it is
+    /// written: the first mention of the byte or the pair is a write, or
+    /// the block ends with the allocator's liveness showing neither live.
+    /// `LO` and `HI` read the one byte of the pair they name.
+    fn lane_unused_after(
+        &self,
+        pair: RegId,
+        byte: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        let is_low = lanes(pair).is_ok_and(|(lo, _)| lo == byte);
+        for inst in rest {
+            let reads = inst.operands.iter().any(|operand| match operand {
+                Operand::Use(r) => {
+                    let r = self.physical(*r);
+                    r == byte
+                        || (r == pair
+                            && match inst.kind {
+                                Kind::Op("LO") => is_low,
+                                Kind::Op("HI") => !is_low,
+                                _ => true,
+                            })
+                }
+                _ => false,
+            });
+            if reads {
+                return false;
+            }
+            let writes = inst
+                .operands
+                .iter()
+                .any(|operand| matches!(operand, Operand::Def(r) if [pair, byte].contains(&self.physical(*r))));
+            if writes {
+                return true;
+            }
+        }
+        if matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET"))) {
+            return true;
+        }
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        ![pair, byte].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
     }
 
     /// Whether the byte register `register` holds nothing a later instruction

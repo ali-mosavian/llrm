@@ -329,7 +329,34 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
             unsigned: u32::from(opcode::UMULd32d16),
             signed: u32::from(opcode::SMULd32d16),
             has_full_multiply: !matches!(self.cpu, Cpu::M68000 | Cpu::M68010),
+            constant: true,
         })
+    }
+
+    /// DEVIATE M68K-HALF-MUL-CONST (owner m68k, exit 2026-11-24):
+    /// the pin has no half multiply, so `(short n) * 1000` is `ext.l` and
+    /// `muls.l` or `__mulsi3`; gcc has `muls.w #1000,%d1` (4 B). A multiply by a
+    /// constant that fits the half is `muls.w` / `mulu.w` with the constant as
+    /// the immediate unless the level's price takes a chain under it.
+    fn half_multiply_by_constant(
+        &self,
+        vt: EVT,
+        c: u128,
+        signed: bool,
+        x_dies: bool,
+    ) -> bool {
+        if !self.half_mul || vt != EVT::I32 {
+            return false;
+        }
+        let text = if signed { format!("muls.w #{},%d0", c as u32 as i32 as i16) } else { format!("mulu.w #{},%d0", c as u16) };
+        let mut half = super::mulprice::one(self.cpu, &text, 4);
+        if !x_dies {
+            // the half multiply overwrites its operand, a copy the chain's own moves already include
+            half = super::mulprice::sum([half, super::mulprice::one(self.cpu, "move.l %d0,%d1", 2)]);
+        }
+        // a chain the price takes over the full multiply stays unless the half multiply beats it (at -O1 the two
+        // are each better on one axis: the chain keeps the pin's choice)
+        super::synth::plan(self.cpu, self.price, 32, c).is_none() || super::synth::cheapest(self.cpu, self.price, c).is_none_or(|chain| self.price.beats(self.cpu, half, chain))
     }
 
     fn is_indexed_legal(
