@@ -18,8 +18,8 @@
 //! subtract-with-borrow); equality is `CMPZ`, whose Z covers both bytes.
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
-use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::known_bits::{masked_value_is_zero, num_sign_bits};
+use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{
     Action, LoadExt, MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG,
@@ -70,7 +70,8 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
     );
     tl.init_actions();
-    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    // SD241: the shift routine stays for a variable amount known small until an
+    // inline policy is priced
     tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -141,8 +142,10 @@ pub fn target_lowering() -> TargetLowering {
         tl.set_operation_action(op, MVT::I8, Action::Legal);
     }
     tl.set_operation_action(Undef, MVT::I1, Action::Expand);
-    // `va_start` stores the address of the first unnamed argument (`lower_vastart_frame_index`, as llvm-mos's
-    // `legalizeVAStart` stores `VarArgsStackIndex`); the rest of a `va_list` is a pointer the generic expansions walk
+    // `va_start` stores the address of the first unnamed argument
+    // (`lower_vastart_frame_index`, as llvm-mos's `legalizeVAStart` stores
+    // `VarArgsStackIndex`); the rest of a `va_list` is a pointer the generic
+    // expansions walk
     tl.set_operation_action(VAStart, MVT::Other, Action::Custom);
     for op in [VAEnd, VACopy] {
         tl.set_operation_action(op, MVT::Other, Action::Expand);
@@ -221,8 +224,8 @@ impl Hooks for MosLowering {
     /// external symbol; a long or a long long travels as words, low first.
     ///
     /// DEVIATE: a shift count goes as a word. Reason: the routines are libgcc's
-    /// `__ashldi3 (u64, int)` and `int` is a word here, the pin passes the count
-    /// at the target's shift type (a byte). Exit: none.
+    /// `__ashldi3 (u64, int)` and `int` is a word here, the pin passes the
+    /// count at the target's shift type (a byte). Exit: none.
     fn make_lib_call(
         &mut self,
         dag: &mut SelectionDAG,
@@ -275,7 +278,15 @@ impl Hooks for MosLowering {
         let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
         let part_vt = if count > 1 { EVT::I16 } else { ret };
         let ins = vec![
-            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any, byval: None };
+            In {
+                vt: part_vt,
+                pointer: false,
+                arg_vt: ret,
+                split: count > 1,
+                sret: false,
+                ext: Ext::Any,
+                byval: None
+            };
             count as usize
         ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
@@ -407,11 +418,13 @@ fn lower_widening_multiply(
     node: SDValue,
 ) -> Option<SDValue> {
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    // a constant factor is the combiner's to shift and add, or a call kept for size
+    // a constant factor is the combiner's to shift and add, or a call kept for
+    // size
     if dag.constant(a).is_some() || dag.constant(b).is_some() {
         return None;
     }
-    // the factor with a zero high byte walks the fewer bits: it is the multiplier
+    // the factor with a zero high byte walks the fewer bits: it is the
+    // multiplier
     let narrow = |dag: &SelectionDAG, v| masked_value_is_zero(dag, v, 0xFF00);
     let (a, b) = if narrow(dag, a) && !narrow(dag, b) { (b, a) } else { (a, b) };
     let upper = 0xFFFF_0000;
@@ -459,7 +472,10 @@ fn distinct_objects(
     a: MemBase,
     b: MemBase,
 ) -> bool {
-    matches!((a, b), (MemBase::Global(_) | MemBase::Stack(_), MemBase::Global(_) | MemBase::Stack(_))) && a != b
+    matches!(
+        (a, b),
+        (MemBase::Global(_) | MemBase::Stack(_), MemBase::Global(_) | MemBase::Stack(_))
+    ) && a != b
 }
 
 /// A word loaded only to be stored to another object is copied a byte at a
@@ -496,7 +512,11 @@ fn lower_word_copy(
     let (high_from, high_to) = (dag.get_object_ptr_offset(from, 1), dag.get_object_ptr_offset(to, 1));
     let low = dag.get_load(EVT::I8, load_chain, from, load_info);
     let low_chain = SDValue { node: low.node, res: 1 };
-    let before_store = if chain == (SDValue { node: value.node, res: 1 }) { low_chain } else { dag.get_token_factor(&[low_chain, chain]) };
+    let before_store = if chain == (SDValue { node: value.node, res: 1 }) {
+        low_chain
+    } else {
+        dag.get_token_factor(&[low_chain, chain])
+    };
     let low_store = dag.get_store(before_store, low, to, store_info);
     let high = dag.get_load(EVT::I8, low_store, high_from, load_info);
     let high_store = dag.get_store(SDValue { node: high.node, res: 1 }, high, high_to, store_info);
@@ -534,7 +554,10 @@ fn lower_extend(
     // the flag of an overflow op is not a condition yet: its expansion makes
     // one, and the extension is lowered when that is done (`condition_byte` has
     // no byte for it and would widen the flag with this very node)
-    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO | ISD::UMulO) {
+    if matches!(
+        dag.opcode(condition),
+        ISD::SAddO | ISD::SSubO | ISD::SMulO | ISD::UMulO
+    ) {
         return node;
     }
     let vt = dag.value_type(node);
@@ -636,7 +659,23 @@ fn equality_operands(
     op1: SDValue,
 ) -> (SDValue, SDValue) {
     let incoming = |value: SDValue| dag.opcode(value) == ISD::CopyFromReg;
-    if incoming(op0) && !incoming(op1) && dag.constant(op1).is_none() { (op1, op0) } else { (op0, op1) }
+    let loaded = |value: SDValue| dag.opcode(value) == ISD::Load;
+    if incoming(op0) && !incoming(op1) && !loaded(op1) && dag.constant(op1).is_none() { (op1, op0) } else { (op0, op1) }
+}
+
+/// A load nothing else reads, not extending, not volatile: `cmp g` and
+/// `cmp g,x` take it from memory.
+fn foldable_load(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.opcode(value) == ISD::Load
+        && value.res == 0
+        && matches!(
+            dag.node(value).data,
+            NodeData::Mem(info) if info.ext.is_none() && !info.volatile && info.ordering.is_none()
+        )
+        && dag.has_one_use(value.node)
 }
 
 /// The code a comparison of `op0` with `op1` branches on, and the operands to
@@ -648,6 +687,13 @@ fn translate_cc(
     op1: SDValue,
 ) -> (u128, SDValue, SDValue) {
     use CondCode::*;
+    // `TranslateX86CC`: a foldable load on the left and none on the right
+    // flips the condition, so the load is the memory operand of the compare
+    let (cc, op0, op1) = if foldable_load(dag, op0) && !foldable_load(dag, op1) && dag.constant(op1).is_none() {
+        (cc.swapped_operands(), op1, op0)
+    } else {
+        (cc, op0, op1)
+    };
     let against_zero = dag.is_null_constant(op1);
     // `x > C` is `x >= C + 1`: the constant stays the right-hand side, an
     // immediate of the compare (AArch64's `getAArch64Cmp` adjusts the
@@ -761,7 +807,8 @@ fn sign_compare(
 /// high words with their sign bits flipped.
 ///
 /// The pin's `IntegerExpandSetCCOperands` makes the node when the target has
-/// it ([LegalizeIntegerTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp));
+/// it
+/// ([LegalizeIntegerTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp));
 /// ours is `legalize_types.rs`. Without it a compare of two words was a select
 /// of the compares of its halves, each a chain.
 fn lower_setcc_carry(
