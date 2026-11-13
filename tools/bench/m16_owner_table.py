@@ -2,7 +2,7 @@
 
 One row per program, language and level of ours, judged per axis against the best external (C: ow, bcc, tc, tcpp; BASIC: bc, pds71, vbdos): O1 and Os strict on code,
 clocks, data and static; O2 priced (1 clk = 2 B) plus strict data and static. A Nib row's bar is the C compilers on the C twin that has the Nib semantics
-(`bench.bar_program`: `NAME~init`, `NAME~bounds`), the compilers on the plain source stay beside it (`plain_ext_*`); a twin's own row is reference-only (verdict TWIN).
+(`bench.bar_program`: `NAME~init`, `NAME~bounds`), the compilers on the plain source stay beside it (`plain_ext_*`); a twin's own row is reference-only (verdict TWIN); a Nib program with a twin on disk and none measured is NO_TWIN, never judged on the plain source.
 The header names the dist, the md5 of its compilers, the harness commit and `date -u`: a table without them is not evidence.
 """
 
@@ -27,6 +27,12 @@ def counts(row: dict | None) -> dict | None:
     if not row or "error" in row or "clocks" not in row or "code_bytes" not in row:
         return None
     return {"code": row["code_bytes"], "clocks": row["clocks"], "data": row.get("data_bytes", 0), "static": row.get("data_bytes", 0) + row.get("bss_bytes", 0)}
+
+
+def has_twin_source(program: str) -> bool:
+    """A Nib program with a C twin on disk (`bench/NAME/twin/SEMANTIC.c`): its bar is that twin, whose object holds the same I/O functions
+    (BENCH_IO_FUNCTIONS) and bounds checks as the Nib program's. The plain source has neither."""
+    return any((bench.BENCH / program / "twin" / f"{semantic}.c").exists() for semantic in bench.TWINS)
 
 
 def findings(level: str, ours: dict, refs: dict) -> list[str]:
@@ -70,6 +76,9 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             row = (program, language, level, "", "", "", "", "", "", "", verdict, why)
         elif bench.is_twin_name(program):
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "TWIN", "reference only: the bar of its program's Nib row")
+        elif language == "nib" and bar == program and has_twin_source(program):
+            # The twin was not measured: the plain source's bar lacks the Nib semantics and the I/O, so it is no bar (2026-11-13: six Nib cells read WORSE so).
+            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_TWIN", f"twin of {program} not measured")
         elif not have:
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_BAR", "")
         else:
@@ -94,7 +103,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         f"# harness commit {harness}; bench.py --opt O1 O2 Os --references --no-judge; flags -march=i386",
         "# bytes: code (CODE), data (initialised), static (data+bss); judged per axis: O1/Os strict on code/clocks/data/static; O2 priced (1 clk = 2 B) plus strict data/static;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
-        "# verdicts: OK, WORSE, WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
+        "# verdicts: OK, WORSE, WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
     ]
     columns = "prog\tlang\tlevel\tcode_B\tdata_B\tstatic_B\tclk\tbest_ext_code\tbest_ext_clk\trefs_missing\tverdict\tfindings\tplain_ext_code\tplain_ext_clk\tours_isa\trefs_isa"

@@ -221,6 +221,8 @@ def one(job):
             reasons[column] = str(why)
         except Exception as error:  # a cell that raises is a cell without a row, not a missing program
             reasons[column] = f"EXC {type(error).__name__}: {str(error)[:80]}"
+    if ctx.gcc_column and not ctx.sdcc_only:
+        rows = guard.add_gcc_row(rows, ctx.gcc_column.get(path.stem), not_a_bar)
     shutil.rmtree(w, True)
     return path.stem, rows, reasons
 
@@ -246,10 +248,12 @@ def main():
     ap.add_argument("--sdcc-only", action="store_true")
     ap.add_argument("--runtime", default=str(run.RUNTIME), help="the z80_rt.s to link (the compiler's own build of it)")
     ap.add_argument("--allow-runtime-mismatch", action="store_true")
+    ap.add_argument("--gcc-column", help="the gcc-z80 fork's run at this level (run.py of the spike): its cells are a bar beside SDCC's")
     ap.add_argument("--no-library-checks", action="store_true", help="skip the soft-float library's own run checks (a full sweep runs them first)")
     ap.add_argument("--same-width", action="store_true", help="build every source that names `double` as float with single-precision literals (SDCC's double is 32 bits): ours and SDCC run the same width")
     ap.add_argument("--no-softfloat", action="store_true", help="run without Z80_LIBC_EXTRA: the float programs will not link")
     ctx = ap.parse_args()
+    ctx.gcc_column = guard.read_gcc_column(ctx.gcc_column) if ctx.gcc_column else {}
     run.RUNTIME = Path(ctx.runtime)
     if why := guard.softfloat_library_missing(os.environ, ctx.sdcc_only, ctx.no_softfloat):
         sys.exit(f"sweep.py: {why}")
@@ -298,7 +302,7 @@ def main():
         f.writelines(f"{n}\t{why(n)}\n" for n in sorted(lost))
     with open(ctx.out + ".nobar", "w") as f:
         for name, rows in results:
-            if not any(c.startswith("sdcc") for c, _, _ in rows):
+            if not guard.has_bar(rows):
                 f.write(f"{name}\t" + "; ".join(f"{c}: {r}" for c, r in sorted(reasons[name].items())) + "\n")
     line, ok = guard.summary(expected, results, {n: why(n) for n in lost}, required, excused)
     print(line)
