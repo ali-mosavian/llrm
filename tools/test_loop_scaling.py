@@ -27,7 +27,7 @@ OWED = {
     "mir unroll": 4.8,
     "mir rotate": 11.3,
     "mir constraint-elimination": 9.6,
-    "mir loopidioms": 9.3,
+    "mir loopidioms": 5.2,
     "mir jumpthreading": 7.7,
 }
 FLOOR_MINSTR = 12.0  # a step under this many M at LARGE is noise
