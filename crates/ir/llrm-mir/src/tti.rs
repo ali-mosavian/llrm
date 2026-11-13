@@ -1607,6 +1607,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::branch_constant_arm_selects`.
+    fn branches_constant_arm_selects(&self) -> bool {
+        false
+    }
+
     /// Whether `sinks_select_arms` also holds in a size build: the branch form
     /// leaves out the copy of the other arm, so it is not longer.
     fn sinks_select_arms_for_size(&self) -> bool {
@@ -1759,6 +1764,16 @@ pub trait Tti {
     /// (`Tuning::x87_zero_fill_at_size`).
     fn x87_zero_fill_at_size(&self) -> bool {
         false
+    }
+
+    /// DEVIATE FPTOINT-CHECKED: the width of the integer a float is converted
+    /// into in one instruction (the x87's `fistp` stores a dword or a qword,
+    /// and NaN and overflow come out as its most negative value) when the
+    /// result is `bits` wide; none: the range of the integer is checked on the
+    /// float.
+    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+        let _ = bits;
+        None
     }
 
     /// `Tuning::size_fill`: the encoded bytes of a constant fill at size.
@@ -2628,12 +2643,10 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE LSR-IDX (owner llrm-target-6502, exit 2026-11-24): the largest
-    /// value of an index register for which `global + index` is one address
-    /// (the 6502's `abs,x`: a byte). The pin's `isLegalAddressingMode` takes
-    /// no range; with this, a formula whose scaled register is a global's
-    /// index that ScalarEvolution bounds by it is folded (no base add). None:
-    /// the target's `is_legal_addressing_mode` alone.
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// largest object offset a byte index reaches in one address instruction
+    /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
+    /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
     fn address_index_max(&self) -> Option<u64> {
         None
     }

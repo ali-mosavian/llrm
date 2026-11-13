@@ -132,6 +132,12 @@ impl ScalarEvolution {
         touched: &llrm_mir::touched::Touched,
         keep_counts: bool,
     ) {
+        // `forgetBlockAndLoopDispositions()`: a block made or an edge changed
+        // moves what dominates what.
+        if !touched.cfg.is_empty() || !touched.blocks_created.is_empty() || !touched.blocks_erased.is_empty() {
+            self.block_dispositions.clear();
+            self.loop_dispositions.clear();
+        }
         let removed: Vec<Scev> = touched.values_removed.iter().filter_map(|v| self.value_expr_map.remove(&v)).collect();
         self.forget_memoized_results(&removed);
         for v in touched.operands_changed.iter().filter(|_| !keep_counts) {

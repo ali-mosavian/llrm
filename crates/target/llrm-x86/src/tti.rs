@@ -741,6 +741,11 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
+    /// -O1 is strict on bytes where the -Os trial is (`unroll_trial_bytes_strict`): a peel copies the loop body.
+    fn peels_at_o1(&self) -> bool {
+        !self.tuning.unroll_trial_bytes_strict
+    }
+
     fn unroll_trial_bytes_strict(&self) -> bool {
         self.tuning.unroll_trial_bytes_strict
     }
@@ -1021,6 +1026,16 @@ impl Tti for X86 {
         self.tuning.x87_zero_fill_at_size && !self.sse2
     }
 
+    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+        // `fistp` word, dword and qword: x87 only, where the SSE converts have
+        // their own forms (a 32-bit result is a dword, `cvttsd2si`)
+        (!self.sse2).then_some(match bits {
+            0..=16 => 32,
+            17..=32 => 64,
+            _ => return None,
+        })
+    }
+
     fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
         self.tuning.size_fill
     }
@@ -1086,6 +1101,10 @@ impl Tti for X86 {
 
     fn sinks_select_arms(&self) -> bool {
         self.tuning.sink_select_arms
+    }
+
+    fn branches_constant_arm_selects(&self) -> bool {
+        self.tuning.branch_constant_arm_selects
     }
 
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
