@@ -114,17 +114,17 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     assert_eq!(plan(&tti, &size), Ok(Plan { vf: 8, ic: 1 }));
 }
 
-/// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) took VF 8 for a
-/// loop storing `i16` and `i64`: a `<8 x i64>` the backend cannot split, so
-/// arm64 refused the whole function ("vector with no register class"); at VF 2
-/// the `<2 x i16>` has no register either. With no VF filling a register for
-/// every type, the loop stays scalar (LV-SPLIT).
+/// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) takes VF 8 for a
+/// loop storing `i16` and `i64`. It was held scalar (LV-SPLIT) while the
+/// backend could not split a `<8 x i64>`; it splits it into four registers
+/// now, as the pin does.
 #[test]
-fn a_loop_whose_types_fill_no_common_register_is_not_vectorized() {
+fn a_loop_whose_types_need_split_registers_is_vectorized_as_the_pin_does() {
     let tti = AArch64::of_cpu("generic").unwrap();
     let store = |bits: u32| Recipe::Store { lane: Ty::Int(bits), align: u64::from(bits / 8) };
     let mixed = LoopFacts { recipes: vec![store(16), store(64)], ..facts(16, 64, false) };
-    assert!(plan(&tti, &mixed).is_err(), "{:?}", plan(&tti, &mixed));
+    let plan = plan(&tti, &mixed).expect("the backend splits a <8 x i64> into four registers");
+    assert_eq!(plan.vf, 8, "{plan:?}");
 }
 
 fn loop_of(recipes: Vec<Recipe>) -> LoopFacts {
