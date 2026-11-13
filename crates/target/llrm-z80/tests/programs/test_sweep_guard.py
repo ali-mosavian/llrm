@@ -36,6 +36,17 @@ class NotABar(unittest.TestCase):
         self.assertIsNone(guard.incomparable((corpus / "volatile_bitfield_aligned.c").read_text()))
 
 
+    def test_a_program_that_names_long_double_is_not_a_bar(self):
+        """long_double_arguments read 7801 B / 241,900 T against SDCC's 3167 / 87,501 (x2.76 on both axes at every level): SDCC's
+        long double is 32 bits, ours the x87's 80 (f64 library). Every program the z80 sweep selects that names `long double` in code
+        says so with a `// bar: not comparable` line, or its SDCC columns grade a different program."""
+        import re
+        corpus = run.ROOT / "tests" / "run" / "c"
+        code = lambda text: re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", text, flags=re.S))
+        unmarked = [p.stem for p in run.selected(corpus) if re.search(r"\blong\s+double\b", code(p.read_text())) and guard.incomparable(p.read_text()) is None]
+        self.assertEqual(unmarked, [])
+
+
 class RowCount(unittest.TestCase):
     def test_a_program_with_no_row_fails_the_run_and_is_named(self):
         """The sweep printed `112 programs 0 failed` with 3 rows missing (2026-11-09): a program that left neither an
