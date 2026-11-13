@@ -3,6 +3,7 @@
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
+use llrm_z80::expand::{Line, price};
 
 fn unjoined() {
     assert!(llrm_z80::abi::z80().pinned_copies_unjoined);
@@ -33,14 +34,22 @@ fn the_convention_states_whether_the_argument_copies_are_joined() {
 
 /// With the argument copy left in place, digits copied the dividend `hl` to
 /// `de` at entry for the first compare, and the loop head copied it back: the
-/// compare reads `hl` where the copy is made, the loop head's copy moves to the
-/// back edge (an `ex de, hl` there), and the entry copy has no reader left.
+/// compare reads `hl` where the copy is made (no `ld e, l`), and the loop's
+/// back edge is the latch's own `jr nc`, not a `jp` to the head. The pair of
+/// `ex de, hl` the folded loop uses is 50 B for the function against 55 B with
+/// the `jp`, and 5 T a trip less (the guard and latch fold, #9454).
 #[test]
 fn a_word_compared_after_its_copy_reads_the_copys_source() {
     unjoined();
     let ir = include_str!("kernels/ir/digits.ll");
     let out = text(ir, "digits", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(!out.contains("ld e, l") && out.matches("ex de, hl").count() == 1, "{out}");
+    let lines: Vec<Line> = out
+        .lines()
+        .filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.'))
+        .map(|line| Line::Inst(line.trim().into()))
+        .collect();
+    assert!(!out.contains("ld e, l") && !out.contains("jp "), "{out}");
+    assert!(price(&lines).0 <= 50, "{}\n{out}", price(&lines).0);
 }
 
 /// With the argument copy left in place, crc16 copied `a` to `b` to store it

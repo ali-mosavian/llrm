@@ -231,12 +231,6 @@ pub struct Tuning {
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
-    /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
-    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`), in blocks
-    /// that run at most once per call. DEVIATE PUSH-IMM-OS (owner x86-m32,
-    /// exit 2026-11-30): 5 clocks on the 486 against the `mov`'s 1, so never in
-    /// a loop.
-    pub push_imm_at_size: bool,
     /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
     /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
     /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
@@ -606,7 +600,6 @@ impl Tuning {
         rep_stos_at_size: false,
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
-        push_imm_at_size: false,
         merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
