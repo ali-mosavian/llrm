@@ -1586,6 +1586,16 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::rep_movs_at_size_max`.
+    fn rep_movs_at_size_max(&self) -> u64 {
+        128
+    }
+
+    /// `Tuning::rep_stos_at_size_max`.
+    fn rep_stos_at_size_max(&self) -> u64 {
+        128
+    }
+
     /// `Tuning::rep_stos_at_size`.
     fn rep_stos_at_size(&self) -> bool {
         false
