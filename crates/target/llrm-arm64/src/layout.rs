@@ -242,6 +242,9 @@ fn common_tail(
 /// exits was written twice (`rectwo` -O2: +16 B), and `jpeg` -Os wrote the
 /// same calls on four paths.
 ///
+/// Blocks identical from top to bottom merge at any length, as the pin's
+/// `AfterPlacement` rule does (lru -O1: three copies of `mov; b join`, +16 B).
+///
 /// DEVIATE: the pin also merges a shorter tail where a block is only the
 /// tail and the other can fall into it, and two instructions at -Os; and it
 /// takes the pairs by the hash of their ends, not by the last instruction.
@@ -300,7 +303,13 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
                         && blocks[*one].insts.len() == 1
                         && blocks[*other].insts.len() == 1;
                     let found = (*one.min(other), *one.max(other), length);
-                    if real >= TAIL_MERGE_SIZE
+                    // Two blocks that are the same from top to bottom and end in a
+                    // jump: `ProfitableToMerge`'s `AfterPlacement` rule merges
+                    // them whatever their length, since neither falls through.
+                    let identical = length == blocks[*one].insts.len()
+                        && length == blocks[*other].insts.len()
+                        && real >= 1;
+                    if (real >= TAIL_MERGE_SIZE || identical)
                         && !whole
                         && best.is_none_or(|(a, b, longest)| length > longest || (length == longest && (found.0, found.1) < (a, b)))
                     {
@@ -977,6 +986,31 @@ mod tests {
             shift: Shift::Lsl,
             amount: 0,
         }
+    }
+
+    /// Three early exits each reached a block of their own that only set the
+    /// same constant and jumped to the join: the pin's `BranchFolder` merges
+    /// blocks identical from top to bottom after placement (lru -O1: three
+    /// `mov w13, #15; b join` blocks, +16 B over the pin).
+    #[test]
+    fn blocks_identical_from_top_to_bottom_are_one() {
+        let blocks = vec![
+            block("entry", vec![cbz(0, "a")]),
+            block("mid", vec![cbz(1, "b")]),
+            block("body", vec![cbz(2, "c"), go("d")]),
+            block("a", vec![movz(9, 15), go("join")]),
+            block("b", vec![movz(9, 15), go("join")]),
+            block("c", vec![movz(9, 15), go("join")]),
+            block("d", vec![movz(9, 14), go("join")]),
+            block("join", vec![Inst::Ret { rn: Gpr(30) }]),
+        ];
+        let out = fold(blocks, &mut [], &Odds::default(), false, &[]);
+        let fifteens = out
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter(|inst| matches!(inst, Inst::MoveWide { imm16: 15, .. }))
+            .count();
+        assert_eq!(fifteens, 1, "{out:?}");
     }
 
     fn go(to: &str) -> Inst {
