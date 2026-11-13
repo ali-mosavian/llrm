@@ -507,6 +507,10 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_9000 | size << 22 | l << 21 | vreg(*rm)? << 16 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorMulLane { rd, rn, rm, index } => {
+            let index = u32::from(*index);
+            0x4F80_8000 | (index & 1) << 21 | vreg(*rm)? << 16 | (index >> 1) << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorStoreLane { lanes, rt, index, base } => {
             let index = u32::from(*index);
             // Q:S:size is the index, as many bits of it as the lane leaves

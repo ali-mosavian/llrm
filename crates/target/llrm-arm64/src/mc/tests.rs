@@ -338,6 +338,7 @@ fn branches() {
     }
     for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
         all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
+        all.push(Inst::VectorMulLane { rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
     }
     for (lanes, index, src) in [
         (Arrangement::B16, 3, 9),

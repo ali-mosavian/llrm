@@ -651,8 +651,21 @@ pub fn lower_vector_shuffle(
     if dag.opcode(v1) == ISD::BuildVector && dag.constant(dag.operand(v1, lane as usize)).is_none() {
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[dag.operand(v1, lane as usize)]));
     }
-    // DEVIATE VEC1: `constructDup` (a lane of a vector) is not translated.
-    None
+    // `constructDup`: `DUPLANE` of the lane of the vector. DEVIATE VEC1
+    // (owner llrm-arm64-vec, exit 2026-11-27): only a 128-bit source of the
+    // result's own type; the pin also widens a 64-bit one and extracts a
+    // lane from a wider one.
+    if dag.value_type(v1) != vt || vt.size_in_bits() != 128 {
+        return None;
+    }
+    let opcode = match vt.element().size_in_bits() {
+        8 => aarch64_isd::DUPLANE8,
+        16 => aarch64_isd::DUPLANE16,
+        32 => aarch64_isd::DUPLANE32,
+        _ => aarch64_isd::DUPLANE64,
+    };
+    let index = dag.get_constant(lane as u128, EVT::I64);
+    Some(dag.get_node(ISD::Target(opcode), vt, &[v1, index]))
 }
 
 /// The constant every lane of `operand` is, at the lane's width

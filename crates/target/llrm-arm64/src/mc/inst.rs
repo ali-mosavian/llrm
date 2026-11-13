@@ -1096,6 +1096,15 @@ pub enum Inst {
         rm: Vreg,
         index: u8,
     },
+    /// `mul v.4s, v.4s, v.s[index]` (`MULv4i32_indexed`): nothing of `rd` is
+    /// read. DEVIATE MUL5 (owner llrm-arm64-vec, exit 2026-11-27): the `.8h`
+    /// form takes `rm` from `v0`..`v15`, which the allocator does not keep to.
+    VectorMulLane {
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
     /// `st1 { v.s }[index], [base]`: one lane of `rt` stored at `[base]`
     /// (`ST1i32`).
     VectorStoreLane {

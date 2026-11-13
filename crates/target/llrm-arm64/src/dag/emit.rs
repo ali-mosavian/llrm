@@ -788,6 +788,15 @@ fn vector_inst(
             });
         }
     }
+    // `MULv4i32_indexed`: the multiplier is a lane of `rm`.
+    if name == "MULv4i32_indexed" {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::VectorMulLane { rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
     // `FMULv4i32_indexed`: the multiplier is a lane of `rm`.
     if let Some(lanes) =
         name.strip_prefix("FMULv").and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
@@ -2032,6 +2041,13 @@ impl Emitter<'_> {
                     let size = match self.dag.value_type(node.ops[2]) {
                         EVT::Simple(MVT::F32) => FpSize::S,
                         EVT::Simple(MVT::F64) => FpSize::D,
+                        // A quad vector (the undefined half of a split splat
+                        // read in another block): `movi v.2d, #0`.
+                        ty if is_quad(ty) => {
+                            self.mf.wide.extend([Reg::Fpr(dst)]);
+                            self.ops.push(Op::I(Inst::VectorFill { rd: dst, fill: Fill::Zero }));
+                            return Ok(());
+                        }
                         other => return Err(format!("a copy of an undefined {other:?}")),
                     };
                     let width = if size == FpSize::D { Width::X } else { Width::W };

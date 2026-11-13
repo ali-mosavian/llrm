@@ -437,3 +437,33 @@ fn a_truncation_to_under_half_the_lane_of_a_split_vector_is_two_steps() {
     assert_eq!(count(&text, "uzp1", ".8h"), 1, "{text}");
     assert_eq!(count(&text, "xtn", ".8b"), 1, "{text}");
 }
+
+/// A splat of an `i32` made in one block and multiplied in a loop at 16 lanes
+/// was refused in four steps (LoopVectorize widened `bigframe` at VF 16):
+/// "split result" of `VectorShuffle` (`SplitVecRes_VECTOR_SHUFFLE`), "custom
+/// lowering of VectorShuffle" (`constructDup`: `DUPLANE32` of a register),
+/// "a copy of an undefined V4I32", and `MULv4i32_indexed` with no instruction.
+/// The pin: four `mul v.4s, v.4s, v0.s[0]`.
+#[test]
+fn a_sixteen_lane_splat_made_in_another_block_multiplies_by_element() {
+    let text = assembly(
+        "define void @f(ptr %c, i32 %x) {\n\
+         entry:\n\
+         \x20 %i = insertelement <16 x i32> poison, i32 %x, i64 0\n\
+         \x20 %s = shufflevector <16 x i32> %i, <16 x i32> poison, <16 x i32> zeroinitializer\n\
+         \x20 br label %body\n\
+         body:\n\
+         \x20 %n = phi i64 [ 0, %entry ], [ %n1, %body ]\n\
+         \x20 %p = getelementptr inbounds <16 x i32>, ptr %c, i64 %n\n\
+         \x20 %l = load <16 x i32>, ptr %p, align 4\n\
+         \x20 %m = mul <16 x i32> %l, %s\n\
+         \x20 store <16 x i32> %m, ptr %p, align 4\n\
+         \x20 %n1 = add nuw nsw i64 %n, 1\n\
+         \x20 %d = icmp eq i64 %n1, 8\n\
+         \x20 br i1 %d, label %exit, label %body\n\
+         exit:\n\
+         \x20 ret void\n}\n",
+    );
+    let by_element = text.lines().filter(|l| l.trim_start().starts_with("mul v") && l.contains(".s[0]")).count();
+    assert_eq!(by_element, 4, "{text}");
+}

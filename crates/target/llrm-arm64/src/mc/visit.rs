@@ -328,7 +328,7 @@ impl Inst {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
             }
-            Inst::VectorFmulLane { rd, rn, rm, .. } => {
+            Inst::VectorFmulLane { rd, rn, rm, .. } | Inst::VectorMulLane { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);

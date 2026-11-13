@@ -265,6 +265,7 @@ UMLALv4i32_v2i64         fmuladd  x/x,x,x       -                        fp_arit
 XTNv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv16i8
 XTNv8i16                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv8i16
 XTNv4i32                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv4i32
+MULv4i32_indexed         binary   x/x,x,i       -                        fp_arith   - - - -/-                MULv4i32_indexed
 FMULv4i32_indexed        binary   x/x,x,i       -                        fp_arith   - - - -/-                FMULv4i32_indexed
 FMULv2i64_indexed        binary   x/x,x,i       -                        fp_arith   - - - -/-                FMULv2i64_indexed
 FMLAv4i32_indexed        fmuladd  x/x,x,x,i     -                        fp_arith   - - - -/-                FMLAv4i32_indexed

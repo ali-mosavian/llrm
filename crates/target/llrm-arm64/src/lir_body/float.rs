@@ -211,6 +211,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::VectorMulLane { rd, rn, rm, index } => semantics(
+            Operation::Binary,
+            "MULv4i32_indexed".to_string(),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
+            None,
+        ),
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
             semantics(
@@ -585,6 +592,14 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 rm: vreg_of(&s[1]),
             });
         }
+    }
+    if name == "MULv4i32_indexed" {
+        return Some(Inst::VectorMulLane {
+            rd: vreg_of(dest?),
+            rn: vreg_of(&s[0]),
+            rm: vreg_of(&s[1]),
+            index: value_of(&s[2]) as u8,
+        });
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {
         let lane = if lanes == Arrangement::D2 { "2i64" } else { "4i32" };
