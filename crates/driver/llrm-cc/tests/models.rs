@@ -276,3 +276,39 @@ fn the_llc_is_looked_up_in_the_cargo_target_dir_when_one_is_set() {
     assert_eq!(target_dir::from(root, Some("/elsewhere".into())), Path::new("/elsewhere"));
     assert_eq!(target_dir::from(root, None), Path::new("/repo/target"));
 }
+
+/// A byte fill loop is a `memset` call at a row whose runtime defines `memset`
+/// (`runtime/shared/dos/m32/memfuncs.inc`), as the pin's `-O2` at a hosted
+/// target: the x86_32-dos row passed `-ffreestanding`, which keeps clang from
+/// recognising the loop, so QuickrBasic's fill/copy loops stayed loops while
+/// the gcc/clang columns called libc. `-ffreestanding` on the command line
+/// still keeps the loop.
+#[test]
+fn a_byte_fill_loop_is_a_memset_call_at_the_flat_dos_row_unless_freestanding() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 names no i8086 clang");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-fill-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.c"), "void f(char *p, int n) { for (int i = 0; i < n; i++) p[i] = 7; }\n").unwrap();
+    let listing = |extra: &[&str]| {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "x86_32-dos")
+            .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
+            .args(["-O2", "-w", "-S", "-o"])
+            .arg(dir.join("a.s"))
+            .arg(dir.join("a.c"))
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+        std::fs::read_to_string(dir.join("a.s")).unwrap()
+    };
+    let hosted = listing(&[]);
+    let freestanding = listing(&["-ffreestanding"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(hosted.contains("memset"), "{hosted}");
+    assert!(!freestanding.contains("memset"), "{freestanding}");
+}

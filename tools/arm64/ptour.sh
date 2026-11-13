@@ -6,7 +6,7 @@ P=$1; L=$2; D=${3:-$DIST}; H=$(cd "$(dirname "$0")" && pwd); B=$(cd "$H/../.." &
 PIN=${PIN_LLC:?PIN_LLC}; SRC=${CELL_SRC:-$B/bench/$P}; W=${WORK:-$HOME/scratch/stg}/$P.$L; rm -rf "$W"; mkdir -p "$W"
 N=$(python3 "$H/flagset.py" --neutral); NC=${N/-fzero-init-padding-bits=standard/}
 T="--target=aarch64-unknown-linux-gnu -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h"
-LLRM_ARM64_SYSROOT=${LLRM_ARM64_SYSROOT:-/usr/aarch64-linux-gnu} LLRM_MIR_STAGES=$W/d "$D/llrm-cc" $T $NC -O$L -ffreestanding -c "$SRC/$P.c" -o "$W/ours.o" 2>/dev/null || { echo "$P $L cc-failed"; exit 0; }
+LLRM_ARM64_SYSROOT=${LLRM_ARM64_SYSROOT:-/usr/aarch64-linux-gnu} LLRM_MIR_STAGES=$W/d "$D/llrm-cc" $T $NC -O$L -c "$SRC/$P.c" -o "$W/ours.o" 2>/dev/null || { echo "$P $L cc-failed"; exit 0; }
 F=$(ls "$W"/d/*.ll | sort | tail -1)
 python3 "$H/ptour_ir.py" "$F" "$W/ours.ll" || { echo "$P $L refused"; exit 0; }
 O=$L; [ "$L" = s ] && O=2

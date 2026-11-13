@@ -32,7 +32,7 @@ description = "x86-m32"
 clang_env = "LLRM_CLANG_M16"
 triple = "i486-unknown-linux-gnu"
 datalayout = "{datalayout:x86-m32}"
-clang = ["-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
+clang = ["-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
   "-U__linux__", "-U__linux", "-U__gnu_linux__", "-Ulinux", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-include", "{root}/toolchain/clang/flat.h"]
 llc = ["-fobject-format=omf", "-mabi=sysv"]
 object = "omf"
@@ -47,7 +47,7 @@ thread_jumps_at_o1 = true
 description = "arm64"
 triple = "aarch64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
-clang = ["-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
+clang = ["-target", "aarch64-unknown-linux-gnu"]
 llc = []
 llc_program = "llrm-arm64-llc"
 llc_level = true
@@ -100,7 +100,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
   "-nostdinc", "-isystem", "{root}/toolchain/clang/borland", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
 ]
