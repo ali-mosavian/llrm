@@ -1831,9 +1831,10 @@ pub fn stack_slot_report_by(
 /// Reloads that sit side by side and read different slots come back in the reverse of the order the slots were
 /// stored, so each slot is on top when it is loaded and every one can be a `pop` (`switch_peeled_table` -O1: `bc`
 /// stored before `de` and reloaded first kept `bc` in the IX frame, 25 B with its frame). The reloads write
-/// different registers and read no register, so the order is free. Beyond the pin, which has only frame slots
-/// (DEVIATE Z80-SLOT-NEST, owner z80-c, exit 2026-11-24: spill placement that knows the stack). Linear. Whether any
-/// reload moved.
+/// different registers and read no register, so the order is free. A run is reordered only where that makes more
+/// slots pushes: a slot read again later can lose its `pop` and `push` peek to a reorder (frameless -O1 +4 B,
+/// rep_count -O2 +2 T a trip). Beyond the pin, which has only frame slots (DEVIATE Z80-SLOT-NEST, owner z80-c,
+/// exit 2026-11-24: spill placement that knows the stack). One report per run that would move. Whether any run moved.
 pub fn nest_reloads(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -1846,29 +1847,44 @@ pub fn nest_reloads(
         (Kind::Op("RELOAD8" | "RELOAD16"), [Operand::Def(reg), Operand::Frame(slot)]) => Some((register(*reg), *slot)),
         _ => None,
     };
+    let pushed = |function: &MFunction| stack_slot_report_by(&mut function.clone(), assignment, true, false).pushed.len();
     let mut stored_at = std::collections::BTreeMap::new();
+    let mut have = None;
     let mut moved = false;
     let mut now = 0usize;
-    for block in &mut function.blocks {
+    for b in 0..function.blocks.len() {
         let mut at = 0;
-        while at < block.insts.len() {
+        while at < function.blocks[b].insts.len() {
             now += 1;
-            if let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), _]) = (block.insts[at].kind, &block.insts[at].operands[..]) {
+            let inst = &function.blocks[b].insts[at];
+            if let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), _]) = (inst.kind, &inst.operands[..]) {
                 stored_at.insert(*slot, now);
             }
-            if reload(&block.insts[at]).is_none() {
+            if reload(inst).is_none() {
                 at += 1;
                 continue;
             }
-            let end = (at..block.insts.len()).find(|&one| reload(&block.insts[one]).is_none()).unwrap_or(block.insts.len());
-            let run: Vec<(RegId, i32)> = block.insts[at..end].iter().filter_map(reload).collect();
+            let insts = &function.blocks[b].insts;
+            let end = (at..insts.len()).find(|&one| reload(&insts[one]).is_none()).unwrap_or(insts.len());
+            let run: Vec<(RegId, i32)> = insts[at..end].iter().filter_map(reload).collect();
             let independent = run.iter().enumerate().all(|(i, (reg, slot))| {
                 run[i + 1..].iter().all(|(other, other_slot)| !Z80Registers::overlaps(*reg, *other) && slot != other_slot)
             });
             if independent && end - at > 1 {
-                let before: Vec<i32> = run.iter().map(|(_, slot)| *slot).collect();
-                block.insts[at..end].sort_by_key(|inst| std::cmp::Reverse(reload(inst).map_or(0, |(_, slot)| stored_at.get(&slot).copied().unwrap_or(0))));
-                moved |= block.insts[at..end].iter().filter_map(reload).map(|(_, slot)| slot).ne(before);
+                let original = insts[at..end].to_vec();
+                let mut sorted = original.clone();
+                sorted.sort_by_key(|inst| std::cmp::Reverse(reload(inst).map_or(0, |(_, slot)| stored_at.get(&slot).copied().unwrap_or(0))));
+                if sorted != original {
+                    let was = *have.get_or_insert_with(|| pushed(function));
+                    function.blocks[b].insts.splice(at..end, sorted);
+                    let now_pushed = pushed(function);
+                    if now_pushed > was {
+                        have = Some(now_pushed);
+                        moved = true;
+                    } else {
+                        function.blocks[b].insts.splice(at..end, original);
+                    }
+                }
             }
             now += end - at;
             at = end;
