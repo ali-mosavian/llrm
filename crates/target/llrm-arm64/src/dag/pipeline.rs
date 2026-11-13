@@ -468,6 +468,14 @@ impl LegalizeHooks for Aarch64Lowering {
                 None => None,
             },
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
+            ISD::VecReduceAdd
+            | ISD::VecReduceAnd
+            | ISD::VecReduceOr
+            | ISD::VecReduceXor
+            | ISD::VecReduceSMax
+            | ISD::VecReduceSMin
+            | ISD::VecReduceUMax
+            | ISD::VecReduceUMin => super::vector::lower_vec_reduce(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),

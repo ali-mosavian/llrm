@@ -138,6 +138,14 @@ pub trait CombineHooks {
         true
     }
 
+    /// `foldSelectCCToShiftAnd` (the "gzip trick"): `x < 0 ? A : 0` is `and
+    /// (sra x, bits-1), A`. The pin runs it everywhere. DEVIATE: m16 opts out,
+    /// its nbody_fixed -Os grows 9 B (a real-mode dword shift is two ops).
+    /// Exit: none while the m16 cell is above its bar.
+    fn select_cc_to_shift_and(&self) -> bool {
+        true
+    }
+
     /// `visitBRCOND`'s `rebuildSetCC` and `SimplifySetCC`'s `assertzext i1`
     /// case: a branch on `xor x, y` is a branch on `setcc x, y, ne` (`xor
     /// (xor x, y), -1` on `eq`), before the types are legal. DEVIATE: off
@@ -1602,6 +1610,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // folds `sext (setlt x, 0)` to `sra`. Neither is translated, so the
         // sign folds run first, with the same result. Whatever the width of
         // the condition (wasm's compare is an `i32`).
+        if self.hooks.select_cc_to_shift_and() {
+            if let Some(mask) = self.select_cc_to_shift_and(n0, n1, n2) {
+                return Some(mask);
+            }
+        }
         if let Some(mask) = self.select_sign_folds(n0, n1, n2) {
             return Some(mask);
         }
@@ -1756,6 +1769,69 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(dag.get_node(ISD::Or, vt, &[not, then]));
         }
         None
+    }
+
+    /// `foldSelectCCToShiftAnd` ([L31156][pin]), the "gzip trick": a select of
+    /// `A` or zero on the sign of `x` is a mask from the sign bit instead of a
+    /// branch (an `i486` has no `cmov`): `select (x < 0), A, 0` is
+    /// `and (sra x, size(x) - 1), A`, `select (x < 1), x, 0` is the same, and
+    /// a single-bit `A` takes `srl x, size(x) - log2(A) - 1`. The `x > -1` and
+    /// `x > 0` forms take the inverted mask, only where the target has `and
+    /// not` (`TLI.hasAndNot`). `shouldAvoidTransformToShift` is false for x86.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L31156
+    fn select_cc_to_shift_and(
+        &mut self,
+        cond: SDValue,
+        then: SDValue,
+        other: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(cond) != ISD::SetCC || self.dag.constant(other) != Some(0) {
+            return None;
+        }
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(cond, 2)).data else { return None };
+        let (x, bound) = (self.dag.operand(cond, 0), self.dag.operand(cond, 1));
+        let (x_vt, a_vt) = (self.dag.value_type(x), self.dag.value_type(then));
+        if !x_vt.is_integer() || !a_vt.is_integer() || x_vt.size_in_bits() < a_vt.size_in_bits() {
+            return None;
+        }
+        let bound = self.dag.constant(bound);
+        let invert = match cc {
+            // `(X > -1) ? A : 0` and `(X > 0) ? X : 0` (the canonical signed
+            // max).
+            CondCode::SetGt if self.has_and_not(then) => {
+                if !(bound == Some(super::fold::mask(x_vt.size_in_bits())) || (bound == Some(0) && x == then)) {
+                    return None;
+                }
+                true
+            }
+            // `(X < 0) ? A : 0` and `(X < 1) ? X : 0` (an un-canonicalized
+            // signed min).
+            CondCode::SetLt => {
+                if !(bound == Some(0) || (bound == Some(1) && x == then)) {
+                    return None;
+                }
+                false
+            }
+            _ => return None,
+        };
+        let single_bit = self.dag.constant(then).filter(|a| *a != 0 && a & (a - 1) == 0);
+        let shift = match single_bit {
+            Some(a) => {
+                let amount = self.shift_amount(x_vt, x_vt.size_in_bits() - a.trailing_zeros() - 1);
+                self.dag.get_node(ISD::Srl, x_vt, &[x, amount])
+            }
+            None => {
+                let amount = self.shift_amount(x_vt, x_vt.size_in_bits() - 1);
+                self.dag.get_node(ISD::Sra, x_vt, &[x, amount])
+            }
+        };
+        let mut shift = self.dag.get_zext_or_trunc(shift, a_vt);
+        if invert {
+            shift = self.dag.get_not(shift, a_vt);
+        }
+        Some(self.dag.get_node(ISD::And, a_vt, &[shift, then]))
     }
 
     /// `SimplifySelectCC`, the sign folds: `select (x > -1), C, ~C` is

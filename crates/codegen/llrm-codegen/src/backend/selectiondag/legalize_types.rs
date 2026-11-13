@@ -564,6 +564,15 @@ impl<'a> TypeLegalizer<'a> {
                     )
                 } else {
                     let bits = from.size_in_bits();
+                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a value known non-negative (`nneg`, or
+                    // a clear sign bit), where the target asks (`TargetLowering::signed_conversion_of_nonneg`)
+                    let nonneg = op == ISD::UIntToFp
+                        && self.tli.signed_conversion_of_nonneg()
+                        && (self.dag.node(value).flags.0 & SDNodeFlags::NON_NEG.0 != 0
+                            || bits < INT_BITS
+                            || (bits <= INT_BITS
+                                && super::known_bits::masked_value_is_zero(self.dag, operand, 1u128 << (bits - 1))));
+                    let op = if nonneg { ISD::SIntToFp } else { op };
                     let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
                     let arg =
                         if bits < INT_BITS { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
@@ -915,6 +924,12 @@ impl<'a> TypeLegalizer<'a> {
                 let (lhs, rhs) = (self.promoted_integer(lhs), self.promoted_integer(rhs));
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
+            }
+            // `PromoteIntRes_VECREDUCE`: the result type changes, the vector
+            // does not.
+            op if op.vec_reduce_base_opcode().is_some() => {
+                let vector = self.dag.operand(value, 0);
+                self.dag.get_node(op, to, &[vector])
             }
             op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
                 // `PromoteIntRes_SimpleIntBinOp` with `SExtPromotedInteger` for

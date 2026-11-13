@@ -55,6 +55,7 @@ impl Builder<'_> {
             }
             Intrinsic::MemSetPattern => self.visit_memset_pattern(instruction),
             Intrinsic::FunnelShift { left } => self.visit_funnel_shift(instruction, *left),
+            Intrinsic::VectorReduce(kind) => self.visit_vector_reduce(instruction, *kind),
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }

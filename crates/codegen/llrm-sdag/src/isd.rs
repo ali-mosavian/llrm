@@ -237,12 +237,41 @@ pub enum ISD {
     /// `VECTOR_SHUFFLE`: `(v1, v2)` and a mask of `v1`'s lane count in
     /// `NodeData::Shuffle`; -1 is an undefined lane, `n..2n` picks `v2`.
     VectorShuffle,
+    /// `VECREDUCE_ADD` and its kin: one operand, a vector, and the scalar its
+    /// lanes combine to. The result may be wider than a lane (promotion of
+    /// an `i8` result), the extra bits undefined.
+    VecReduceAdd,
+    VecReduceMul,
+    VecReduceAnd,
+    VecReduceOr,
+    VecReduceXor,
+    VecReduceSMax,
+    VecReduceSMin,
+    VecReduceUMax,
+    VecReduceUMin,
 
     Target(u16),
     Machine(u32),
 }
 
 impl ISD {
+    /// `ISD::getVecReduceBaseOpcode`: the scalar operation a reduction
+    /// applies to its lanes, `None` for any other node.
+    pub fn vec_reduce_base_opcode(self) -> Option<ISD> {
+        Some(match self {
+            ISD::VecReduceAdd => ISD::Add,
+            ISD::VecReduceMul => ISD::Mul,
+            ISD::VecReduceAnd => ISD::And,
+            ISD::VecReduceOr => ISD::Or,
+            ISD::VecReduceXor => ISD::Xor,
+            ISD::VecReduceSMax => ISD::SMax,
+            ISD::VecReduceSMin => ISD::SMin,
+            ISD::VecReduceUMax => ISD::UMax,
+            ISD::VecReduceUMin => ISD::UMin,
+            _ => return None,
+        })
+    }
+
     /// `SDNode::getOperationName`, as the dump prints it.
     pub fn name(self) -> String {
         use ISD::*;
@@ -432,6 +461,15 @@ impl ISD {
             ScalarToVector => "scalar_to_vector",
             InsertVectorElt => "insert_vector_elt",
             VectorShuffle => "vector_shuffle",
+            VecReduceAdd => "vecreduce_add",
+            VecReduceMul => "vecreduce_mul",
+            VecReduceAnd => "vecreduce_and",
+            VecReduceOr => "vecreduce_or",
+            VecReduceXor => "vecreduce_xor",
+            VecReduceSMax => "vecreduce_smax",
+            VecReduceSMin => "vecreduce_smin",
+            VecReduceUMax => "vecreduce_umax",
+            VecReduceUMin => "vecreduce_umin",
             Target(code) => return super::target_names::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
