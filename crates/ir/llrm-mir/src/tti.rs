@@ -1214,6 +1214,11 @@ pub trait Tti {
         false
     }
 
+    /// `visitADD`'s or-disjoint for adds of operands that share no bits (`Tuning::add_to_or_disjoint`).
+    fn add_to_or_disjoint(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         false
     }

@@ -371,6 +371,18 @@ fn an_argument_load_folded_into_its_copy_is_still_remade_at_m16() {
     assert!(!listing.contains(", es"), "a segment register is stored to a slot: {listing}");
 }
 
+/// `x + (c > 0 ? 640 : -640)` was `mov 640; mov -640; cmovg; add`: the pin's `pushAddIntoCmovOfConsts` pushes the
+/// add through the select, `lea x+640; lea x-640; cmovg`, with no constant in a register (frame_address_stack_args
+/// m64 -Os `line` 77 B against the pin's 74).
+#[test]
+fn an_add_of_a_select_of_constants_is_pushed_through_the_select_at_m64() {
+    let text = include_str!("testdata/add_of_select_constants.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let moves = listing.lines().filter(|line| line.trim().starts_with("mov ") && line.contains(", 640")).count();
+    assert!(listing.contains("cmovg") && listing.matches("lea").count() == 2 && moves == 0, "{listing}");
+}
+
 /// `n = rd(); while (n > 0) { report(..); n = rd(); }`: the loop's guard and its latch end in the same five
 /// instructions (`mov; mov; mov; call rd; test; jg`). The pin's `TailMergeBlocks` shares them, one `call rd`; we kept
 /// both: the merge was skipped for a body of three blocks, and for a latch that ends in a branch on a cycle.
@@ -6124,4 +6136,51 @@ fn a_static_pointer_offset_past_64k_fills_the_whole_dword_of_a_32_bit_object() {
     let has = |bytes: [u8; 4]| omf.windows(4).any(|window| window == bytes);
     assert!(has(74565i32.to_le_bytes()), "0x12345 as 45 23 01 00");
     assert!(has((-74565i32).to_le_bytes()), "-0x12345 as bb dc fe ff");
+}
+
+/// `bool f(void) { return !p(); }` stopped at `Legalize(Unsupported Xor i1
+/// "promote operand")` at every level: a call's `i1` result stayed at the
+/// register's type (`i8`), so `xor i1 %call, true` became an i8 xor with an i1
+/// constant. Also `p() ? 0 : -1`, `g = !p()` and a branch on `!p()`.
+#[test]
+fn a_call_returning_i1_can_be_inverted_selected_stored_and_branched_on_at_m32() {
+    let head = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @g = global i8 0\n\
+                declare zeroext i1 @p()\n";
+    let bodies = [
+        ("f", "define zeroext i1 @f() {\n  %1 = call zeroext i1 @p()\n  %2 = xor i1 %1, true\n  ret i1 %2\n}\n"),
+        ("h", "define i32 @h() {\n  %1 = call zeroext i1 @p()\n  %2 = select i1 %1, i32 0, i32 -1\n  ret i32 %2\n}\n"),
+        (
+            "s",
+            "define void @s() {\n  %1 = call zeroext i1 @p()\n  %2 = xor i1 %1, true\n  %3 = zext i1 %2 to i8\n  store i8 %3, ptr @g\n  ret void\n}\n",
+        ),
+        (
+            "b",
+            "define i32 @b() {\n  %1 = call zeroext i1 @p()\n  %2 = xor i1 %1, true\n  br i1 %2, label %t, label %e\nt:\n  ret i32 1\ne:\n  ret i32 2\n}\n",
+        ),
+    ];
+    for level in ["-O0", "-O2"] {
+        for (name, body) in bodies {
+            let text = format!("{head}{body}");
+            let (built, _) = compiled(&flags(&["-mabi=sysv", level, "--isel=dag"]), &text, name)
+                .unwrap_or_else(|error| panic!("{name} {level}: {error}"));
+            let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+            assert!(listing.contains("call"), "{name} {level}: {listing}");
+        }
+    }
+}
+
+/// After the i1 call-result truncate, `merge_icmps_fields` grew three
+/// `and edi, 1` (+16 B at m32/m64): the `zeroext` return's `AssertZext` was
+/// dropped, so widening the result was masked again.
+#[test]
+fn a_zeroext_i1_call_result_widened_needs_no_mask_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare zeroext i1 @p()\n\
+                define i32 @z() {\n  %1 = call zeroext i1 @p()\n  %2 = zext i1 %1 to i32\n  ret i32 %2\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-O2", "--isel=dag"]), text, "z").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains(", 1\n"), "{listing}");
 }

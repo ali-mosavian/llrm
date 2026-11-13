@@ -139,3 +139,17 @@ ipa-cp clones at -O2 on x86-m32 and x86-m64 (`Tti::ipa_cp_clones_at_speed`; arm6
 - Wins (full A/B, 121 m32, 78 m64, 80 arm64 programs): m32 -O2 queens -11.9 k clk, x_jpeg_fixed -42 k, bintree -1.6 k; m64 queens -12.5 k (-O2), -28.4 k (-O3); none worse at m32 -O2 or m64 (the arm64 part is removed, above).
 - Worse, named cause: m32 -O3 frames +48 k (+1.05%) vs release/next. A copy with two callers is not inlined back and nothing merges the calls to one pure callee in different functions: m64 -O2 fib(20) ran fib(16) three times (+50%). Where release/next copied fib(24) and the clones were inlined back (m32 -O3) it gained 1%; the rule cannot tell them apart before inlining.
 - Fix: price a chain by whether its clones are inlined back into one caller.
+
+## REC-10 (2026-11-13, x86-m32): the recursive-edge bar is 22 at -O2 too
+
+`Tuning::recursive_edge_growth` was (12, 22): a body past 12 `gcc_insns` was copied at -O3 only. recchop's `chop` is 14 and gcc copies it at -O2 (its dump: size 21, "Performing recursive inlining"), so recchop -O2 was 7183 clk / 167 B against gcc's 5818 / 1239 (+16.6% at the rate). bintree's `walk` is also 14 and gcc leaves it at -O2: no size bar separates the two. Bar (22, 22), A/B on 121 programs against the same tip: 5 -O2 programs change, all faster; no -O3 cell changes.
+
+| program (-O2) | clk | bytes |
+|---|---|---|
+| recchop | 7183 -> 5397 | 167 -> 608 |
+| x_hanoi2 | 219202 -> 160540 | 223 -> 929 |
+| quicksort | 219700 -> 202049 | 282 -> 1121 |
+| queens | 140249 -> 134585 | 478 -> 931 |
+| bintree | 60877 -> 57532 | 290 -> 693 |
+
+Tried and refused: `priced_self_inlining` (m16's price rule) at m32, depth 2..4, ceilings 100..200: fib 19 k -> 358 k clk, rectwo 348 k -> 1.8 M, frames +52%; its saving ignores the pure calls GVN merges across copies. Owner x86-m32, exit 2026-12-10 (gcc's own size count replaces the fit, as REC-2).

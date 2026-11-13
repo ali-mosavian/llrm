@@ -13,7 +13,8 @@ use crate::mc::inst::{
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
-    Addr, Arrangement, Gpr, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorReduce, VectorShift,
+    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp,
+    VectorReduce, VectorShift,
 };
 use crate::mfunc::Callee;
 
@@ -247,6 +248,16 @@ pub(super) fn instructions() -> Vec<Inst> {
     for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
         out.push(Inst::VectorShift { op, lanes: Arrangement::H8, rd: v(0), rn: v(1), amount: 3 });
     }
+    for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+        for high in [false, true] {
+            for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
+                out.push(Inst::VectorLongShift { op, lane, high, rd: v(0), rn: v(1), amount: 0 });
+            }
+            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+                out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
+            }
+        }
+    }
     out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
@@ -348,6 +359,8 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBinary { .. } => "VectorBinary",
         Inst::VectorShift { .. } => "VectorShift",
         Inst::VectorNot { .. } => "VectorNot",
+        Inst::VectorLongShift { .. } => "VectorLongShift",
+        Inst::VectorLong { .. } => "VectorLong",
         Inst::VectorFma { .. } => "VectorFma",
         Inst::VectorInsGpr { .. } => "VectorInsGpr",
         Inst::VectorInsLane { .. } => "VectorInsLane",
@@ -371,7 +384,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 61] = [
+const ALL: [&str; 63] = [
     "Mark",
     "Label",
     "Cfi",
@@ -416,6 +429,8 @@ const ALL: [&str; 61] = [
     "VectorBinary",
     "VectorShift",
     "VectorNot",
+    "VectorLongShift",
+    "VectorLong",
     "VectorFma",
     "VectorInsGpr",
     "VectorInsLane",
