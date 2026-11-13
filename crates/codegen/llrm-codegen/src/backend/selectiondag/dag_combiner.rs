@@ -2297,6 +2297,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let from = self.dag.value_type(n0);
+        // DEVIATE: the known bits of a vector are not modelled (the pin asks
+        // for the sign bit of each lane).
+        if vt.is_vector() {
+            return None;
+        }
         if self.tli?.is_sext_cheaper_than_zext(from, vt)
             || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
             || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
@@ -2351,9 +2356,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             _ => false,
         };
         // `tryToFoldExtOfLoad`: `(!LegalOperations && !isVolatile) ||
-        // isLoadExtLegal`: after legalization, and for a volatile load, the
-        // extending load must be legal.
-        if (info.volatile || self.legal_operations()) && !legal {
+        // isLoadExtLegal`: after legalization, for a volatile load and for a
+        // fixed-length vector, the extending load must be legal.
+        if (info.volatile || self.legal_operations() || wide.is_vector()) && !legal {
             return None;
         }
         if !others.is_empty() {

@@ -302,6 +302,18 @@ fn branches() {
             }
         }
     }
+    for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+        for high in [false, true] {
+            for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
+                for amount in [0, 1, lane.bits() as u8 - 1] {
+                    all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(4), rn: Vreg(27), amount });
+                }
+            }
+            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+                all.push(Inst::VectorLong { op, lane, high, rd: Vreg(4), rn: Vreg(27), rm: Vreg(19) });
+            }
+        }
+    }
     all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
     for (op, lanes) in [
         (VectorFma::Add, Arrangement::S4),

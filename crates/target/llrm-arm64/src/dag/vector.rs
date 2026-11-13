@@ -358,3 +358,124 @@ pub fn lower_vector_shift(
     let flags = dag.node(op).flags;
     Some(dag.get_node_flags(ISD::Target(opcode), vt, &[value, count], flags))
 }
+
+/// `performVectorExtCombine`
+/// ([L21463](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L21463)):
+/// an operation on two extensions of one narrow type, in a vector wider than a
+/// register, is made at half the width and extended.
+pub fn perform_vector_ext_combine(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !vt.is_vector() || vt.size_in_bits() <= 128 {
+        return None;
+    }
+    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let is_extend = |dag: &SelectionDAG, op: SDValue| matches!(dag.opcode(op), ISD::ZeroExtend | ISD::SignExtend);
+    if !is_extend(dag, op0) || !is_extend(dag, op1) {
+        return None;
+    }
+    let (n0, n1) = (dag.operand(op0, 0), dag.operand(op1, 0));
+    if dag.value_type(n0) != dag.value_type(n1) {
+        return None;
+    }
+    let opcode = dag.opcode(node);
+    if opcode == ISD::Mul && dag.opcode(op0) != dag.opcode(op1) {
+        return None;
+    }
+    let (from, to) = (dag.value_type(n0).element().size_in_bits(), vt.element().size_in_bits());
+    if !((to == 32 && from == 8) || (to == 64 && (from == 8 || from == 16))) {
+        return None;
+    }
+    let half = EVT::Simple(MVT::vector(MVT::integer(to / 2)?, vt.lanes())?);
+    let new0 = dag.get_node(dag.opcode(op0), half, &[n0]);
+    let new1 = dag.get_node(dag.opcode(op1), half, &[n1]);
+    let narrow = dag.get_node(opcode, half, &[new0, new1]);
+    let extend = if opcode == ISD::Mul { dag.opcode(op0) } else { ISD::SignExtend };
+    Some(dag.get_node(extend, vt, &[narrow]))
+}
+
+/// `selectUmullSmull`
+/// ([L6101](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L6101)):
+/// the widening multiply both operands allow, if any.
+///
+/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-11-27): only the first two
+/// tests (both operands extended the same way). The `MaskedValueIsZero` and
+/// `ComputeNumSignBits` tests for one extended operand, the
+/// `isExtendedBUILD_VECTOR` constants and the `(a + b) * c` form
+/// are not translated; such a multiply is a plain `MUL`.
+fn select_umull_smull(
+    dag: &SelectionDAG,
+    n0: SDValue,
+    n1: SDValue,
+) -> Option<u16> {
+    let signed = |op: SDValue| matches!(dag.opcode(op), ISD::SignExtend | ISD::AnyExtend);
+    let unsigned = |op: SDValue| matches!(dag.opcode(op), ISD::ZeroExtend | ISD::AnyExtend);
+    if signed(n0) && signed(n1) {
+        return Some(aarch64_isd::SMULL);
+    }
+    (unsigned(n0) && unsigned(n1)).then_some(aarch64_isd::UMULL)
+}
+
+/// `convertMulToShlAdd`
+/// ([L6164](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L6164)):
+/// a multiply of a `v2i64` by a splat of `2^n` plus or minus `2^m` is shifts
+/// and an add or subtract.
+fn convert_mul_to_shl_add(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let splat = splat_constant(dag, dag.operand(node, 1))? as i64;
+    let negative = splat < 0;
+    let mut value = splat.unsigned_abs();
+    if value == 0 {
+        return None;
+    }
+    let zeros = value.trailing_zeros();
+    value >>= zeros;
+    let (math, shift) = if (value - 1).is_power_of_two() {
+        (ISD::Add, (value - 1).ilog2())
+    } else if (value + 1).is_power_of_two() {
+        (ISD::Sub, (value + 1).ilog2())
+    } else {
+        return None;
+    };
+    let lhs = dag.operand(node, 0);
+    let amount = dag.get_constant(u128::from(shift + zeros), vt);
+    let shifted = dag.get_node(ISD::Shl, vt, &[lhs, amount]);
+    let low = if zeros != 0 {
+        let amount = dag.get_constant(u128::from(zeros), vt);
+        dag.get_node(ISD::Shl, vt, &[lhs, amount])
+    } else {
+        lhs
+    };
+    let combined = dag.get_node(math, vt, &[shifted, low]);
+    Some(if negative { dag.get_negative(combined, vt) } else { combined })
+}
+
+/// `LowerMUL`
+/// ([L6202](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L6202))
+/// for the 128-bit types: two extensions of half-width lanes are `SMULL` or
+/// `UMULL` of the narrow operands. A `v2i64` multiply that is none is declined
+/// (`SDValue()`), so the legalizer unrolls it, unless it is a shift and add.
+/// The `v4i16`, `v2i32` and `v1i64` multiplies are not `Custom` here (VEC8).
+pub fn lower_mul(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let Some(widening) = select_umull_smull(dag, n0, n1) else {
+        if vt == EVT::Simple(MVT::V2I64) {
+            return convert_mul_to_shl_add(dag, node);
+        }
+        return Some(node);
+    };
+    // `skipExtensionForVectorMULL`: the operand at half the lane width.
+    let half = EVT::Simple(MVT::vector(MVT::integer(vt.element().size_in_bits() / 2)?, vt.lanes())?);
+    let narrow0 = dag.get_node(ISD::Truncate, half, &[n0]);
+    let narrow1 = dag.get_node(ISD::Truncate, half, &[n1]);
+    Some(dag.get_node(ISD::Target(widening), vt, &[narrow0, narrow1]))
+}

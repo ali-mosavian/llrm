@@ -335,6 +335,27 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             | Op::I(Inst::VectorFpUnary { rd, rn, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
             }
+            Op::I(Inst::VectorLongShift { rd, rn, high, .. }) => {
+                wide.insert(Reg::Fpr(*rd));
+                if *high {
+                    wide.insert(Reg::Fpr(*rn));
+                }
+            }
+            // `uaddw`'s first operand is wide and its second narrow; `umull`'s
+            // are both narrow.
+            Op::I(Inst::VectorLong { op, rd, rn, rm, high, .. }) => {
+                wide.insert(Reg::Fpr(*rd));
+                let adds = matches!(op, VectorLongOp::Uaddw | VectorLongOp::Saddw);
+                if adds {
+                    wide.insert(Reg::Fpr(*rn));
+                }
+                if *high {
+                    wide.insert(Reg::Fpr(*rm));
+                    if !adds {
+                        wide.insert(Reg::Fpr(*rn));
+                    }
+                }
+            }
             Op::I(Inst::VectorInsGpr { rd, .. }) => {
                 wide.insert(Reg::Fpr(*rd));
             }

@@ -320,10 +320,13 @@ impl CombineHooks for Aarch64Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => super::combine::combine_mul(dag, node, level, self.opt_for_size),
+            ISD::Mul => super::vector::perform_vector_ext_combine(dag, node)
+                .or_else(|| super::combine::combine_mul(dag, node, level, self.opt_for_size)),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
-            ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
-            ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::Add => super::vector::perform_vector_ext_combine(dag, node)
+                .or_else(|| super::combine::add_combine_for_shifted_operands(dag, node)),
+            ISD::Sub => super::vector::perform_vector_ext_combine(dag, node)
+                .or_else(|| super::combine::conditional_sub(dag, node)),
             ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::And | ISD::Or if level == CombineLevel::AfterLegalizeDag => {
                 super::ccmp::combine_and_or_csel(dag, node)
@@ -469,6 +472,9 @@ impl LegalizeHooks for Aarch64Lowering {
             },
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
+            // Declined for a `v2i64` that is no widening multiply: the
+            // legalizer unrolls it.
+            ISD::Mul => return super::vector::lower_mul(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),

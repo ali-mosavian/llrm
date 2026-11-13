@@ -441,6 +441,22 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             };
             0x4F00_0400 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorLongShift { op, lane, high, rd, rn, amount } => {
+            let (u, base) = op.fields();
+            // `immh:immb` is `esize + shift`; the lane size is its highest set
+            // bit.
+            let immhb = lane.bits() + u32::from(*amount);
+            base | u32::from(*high) << 30 | u << 29 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorLong { op, lane, high, rd, rn, rm } => {
+            let (u, base) = op.fields();
+            base | u32::from(*high) << 30
+                | u << 29
+                | lane.size() << 22
+                | vreg(*rm)? << 16
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
         Inst::VectorNot { rd, rn } => 0x6E20_5800 | vreg(*rn)? << 5 | vreg(*rd)?,
         Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
             let (u, a, opcode) = op.fields();
