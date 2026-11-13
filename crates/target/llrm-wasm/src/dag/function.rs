@@ -180,6 +180,8 @@ pub struct Selected {
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    /// `MFI.hasVarSizedObjects()`, the same on every block.
+    pub has_var_sized: bool,
     /// `-g`: the metadata id of each variable declared by a `#dbg_declare` of
     /// a static alloca, and the frame index of that alloca. The same on every
     /// block.
@@ -344,6 +346,7 @@ pub fn select_function(
                 accesses,
                 layout: Vec::new(),
                 frame: Vec::new(),
+                has_var_sized: false,
                 declared: Vec::new(),
                 argument_variables: Vec::new(),
                 stack_colors: Vec::new(),
@@ -383,6 +386,7 @@ pub fn select_function(
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
         block.frame.clone_from(&frame);
+        block.has_var_sized = info.has_var_sized_objects;
         block.declared.clone_from(&declared);
         block.argument_variables.clone_from(&argument_variables);
         block.stack_colors.clone_from(&stack_colors);
