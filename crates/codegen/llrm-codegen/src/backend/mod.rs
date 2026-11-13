@@ -124,6 +124,7 @@
 //! The phase map: [`crate::backend`].
 
 pub mod absolute;
+pub mod checkedconv;
 pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;

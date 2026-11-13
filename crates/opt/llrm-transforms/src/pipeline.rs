@@ -1855,6 +1855,11 @@ pub fn recorded(
     }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
+    // The pin's `addIRPasses` slot for SelectOptimize, before CodeGenPrepare;
+    // DEVIATE SELOPT-C at the speed rate.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::SelectOptimizePass);
+    }
     // The pin's `addCodeGenPrepare` runs TypePromotion, then CodeGenPrepare.
     if applied.options.wanted("typepromotion") {
         manager.add(typepromotion_pass::TypePromotion);

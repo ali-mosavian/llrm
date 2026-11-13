@@ -255,7 +255,7 @@ pub fn compiled_module_trying(
     unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
     if let Some(limit) = o1_unroll_limit(options) {
-        return compiled_module_at_o1(module, name, options, limit, bytes);
+        return compiled_module_at_o1(module, name, options, limit, bytes, unpadded);
     }
     let dimensions = Dimension::of(options);
     if dimensions.is_empty() {
@@ -276,7 +276,11 @@ fn compiled_module_at_o1(
     options: &Options,
     limit: u32,
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
+    // A bytes-strict target (`unroll_trial_bytes_strict`) compares the code alone, as at -Os: the constants a
+    // loop's removal frees are data, which a code-size column does not count (call_cleanup_keeps_pair +13 B).
+    let strict = options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.unroll_trial_bytes_strict());
     let _ = trial::take();
     let kept = optimized_program(module.clone(), options)?;
     if trial::take().0.is_empty() {
@@ -289,7 +293,7 @@ fn compiled_module_at_o1(
     let other = assembled(&other, name, &again)?;
     let price = |built: &masm::Module| -> Option<(i64, f64)> {
         let work = built.procedures.iter().map(|one| executed::work(&one.body)).sum::<Option<f64>>()?;
-        Some((bytes(built)?, work))
+        Some((if strict { unpadded(built)?.code } else { bytes(built)? }, work))
     };
     let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
     let added = other_price.0 - kept_price.0;
