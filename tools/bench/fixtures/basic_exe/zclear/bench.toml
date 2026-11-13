@@ -1,0 +1,6 @@
+description = "scratch: CLEAR and ERASE zero static variables and arrays"
+repetitions = 1
+references = false
+
+[region]
+bas = "BenchZ"
