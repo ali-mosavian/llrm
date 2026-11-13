@@ -207,6 +207,8 @@ def main():
         p = sh([args.z80c, f"-O{args.level}", ir_path], w)
         if "REFUSED" in p.stderr or p.returncode:
             return None, (p.stderr.strip().splitlines() or ["failed"])[0]
+        if not p.stdout.strip():
+            return None, "no assembly on stdout: --z80c is the z80c example, not llc"
         open(f"{w}/{stem}.s", "w").write(p.stdout)
         q = sh(["sdasz80", "-g", "-o", f"{stem}.rel", f"{stem}.s"], w)
         return (f"{stem}.rel", None) if q.returncode == 0 else (None, "sdasz80: " + (q.stdout + q.stderr)[-200:])
