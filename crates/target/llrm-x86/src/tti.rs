@@ -733,6 +733,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn ipra_binds_local(&self) -> bool {
+        self.tuning.ipra_binds_local
+    }
+
     fn unroll_trial_at_size(&self) -> Option<u32> {
         self.tuning.unroll_trial_at_size
     }
@@ -763,6 +767,10 @@ impl Tti for X86 {
 
     fn pops_arguments_at_size(&self) -> bool {
         self.tuning.pops_arguments_at_size
+    }
+
+    fn libc_memcpy(&self) -> bool {
+        self.tuning.libc_memcpy
     }
 
     fn multiply_by_clocks(&self) -> bool {

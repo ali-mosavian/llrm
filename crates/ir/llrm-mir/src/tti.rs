@@ -1032,6 +1032,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPRA-DSO-LOCAL: see `Tuning::ipra_binds_local`.
+    fn ipra_binds_local(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
@@ -1396,6 +1401,11 @@ pub trait Tti {
     /// `Tuning::pops_arguments_at_size`.
     fn pops_arguments_at_size(&self) -> bool {
         true
+    }
+
+    /// `Tuning::libc_memcpy`.
+    fn libc_memcpy(&self) -> bool {
+        false
     }
 
     /// `Tuning::multiply_by_clocks`.
@@ -2579,6 +2589,13 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
+    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
+    /// none: the pass does not run.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        None
     }
 
     /// Whether the loop as written keeps the bound of its exit test live next

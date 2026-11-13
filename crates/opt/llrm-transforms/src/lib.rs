@@ -370,6 +370,7 @@ pub mod mergeicmps;
 pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
+pub mod narrowrange;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
