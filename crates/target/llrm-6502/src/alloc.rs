@@ -1524,7 +1524,11 @@ impl Builder {
         }
         let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
         if !up {
-            operands.push(Operand::Def(Reg::Phys(reg::A)));
+            // the `lda lo` that tests for the borrow: a dead value in `a`, a virtual register so
+            // that the sink may move the step to the successor that reads it
+            let scratch = self.fresh();
+            self.require(scratch, Class(Class::A))?;
+            operands.push(Operand::Def(scratch));
         }
         self.push(Inst::new(Kind::Op(if up { "INC16" } else { "DEC16" }), operands));
         Ok(true)
