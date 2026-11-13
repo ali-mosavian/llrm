@@ -55,6 +55,9 @@ pub struct Plan {
     flush: HashSet<usize>,
     /// Argument stores whose push reads memory, with the load that read it.
     folded: HashMap<usize, usize>,
+    /// Argument stores kept as stores that read memory (`move.l (4,%sp), (%sp)`), with the load they
+    /// absorbed.
+    fused: HashMap<usize, usize>,
     /// Argument stores whose push is `pea (k,An)`: the register and `k`.
     addressed: HashMap<usize, (llrm_lir::registers::RegId, i64)>,
     /// Instructions that vanish into a push: loads, and copies and adds.
@@ -95,6 +98,14 @@ impl Plan {
         at: usize,
     ) -> Option<usize> {
         self.folded.get(&at).copied()
+    }
+
+    /// The load whose memory the kept store `at` moves itself.
+    pub fn fused_load(
+        &self,
+        at: usize,
+    ) -> Option<usize> {
+        self.fused.get(&at).copied()
     }
 
     /// The register and displacement of the `pea` that is the push of store
@@ -150,6 +161,8 @@ struct Sequence {
     flush: usize,
     /// Stores that push what a load read, and the loads.
     folds: Vec<(usize, usize)>,
+    /// Stores kept as stores that move what a load read (priced in `kept`), and the loads.
+    fusions: Vec<(usize, usize)>,
     /// Stores that push an address register plus a constant: the instructions
     /// that made the value, the register and the constant.
     addresses: Vec<(usize, Vec<usize>, llrm_lir::registers::RegId, i64)>,
@@ -287,6 +300,32 @@ pub fn memory_push(load: &str) -> Option<&'static str> {
         b'b' => "MOV32eb",
         b'k' => "MOV32ek",
         b'q' => "MOV32eq",
+        _ => return None,
+    })
+}
+
+/// The move from the memory `load` reads to where call-area store `store` puts it (`MOV32ap` and
+/// `MOV32jr` are `MOV32jp`).
+pub fn memory_store(
+    load: &str,
+    store: &str,
+) -> Option<&'static str> {
+    memory_push(load)?;
+    let [_, source] = load.strip_prefix("MOV32")?.as_bytes() else { return None };
+    let [to, b'r'] = store.strip_prefix("MOV32")?.as_bytes() else { return None };
+    Some(match (to, source) {
+        (b'j', b'j') => "MOV32jj",
+        (b'j', b'p') => "MOV32jp",
+        (b'j', b'f') => "MOV32jf",
+        (b'j', b'b') => "MOV32jb",
+        (b'j', b'k') => "MOV32jk",
+        (b'j', b'q') => "MOV32jq",
+        (b'p', b'j') => "MOV32pj",
+        (b'p', b'p') => "MOV32pp",
+        (b'p', b'f') => "MOV32pf",
+        (b'p', b'b') => "MOV32pb",
+        (b'p', b'k') => "MOV32pk",
+        (b'p', b'q') => "MOV32pq",
         _ => return None,
     })
 }
@@ -763,6 +802,7 @@ fn sequences(
         }
         let mut priced = ((0usize, 0u32), (0usize, 0u32));
         let mut folds = Vec::new();
+        let mut fusions = Vec::new();
         let mut addresses = Vec::new();
         for &(store, _, source, kept, pushed) in &parts {
             let (mut kept, mut pushed) = (kept, pushed);
@@ -797,6 +837,38 @@ fn sequences(
                     pushed = read;
                 }
             }
+            if let Source::Register(src) = source
+                && !addresses.iter().any(|one| one.0 == store)
+            {
+                // a kept store moves the load's memory itself, where that is cheaper than the
+                // load and the store
+                let moved = foldable(insts, assignment, blocks, store, store, src, &stores, &[]).and_then(|load| {
+                    let (Kind::Op(from), Kind::Op(to)) = (insts[load].kind, insts[store].kind) else { return None };
+                    let mut operands = priced_operands(insts[store], assignment)?;
+                    operands.pop();
+                    operands.extend(priced_operands(insts[load], assignment)?.into_iter().skip(1));
+                    let fused = cost(&mc::Inst { opcode: memory_store(from, to)?, operands }, cpu).ok()?;
+                    let own = mc::Inst { opcode: from, operands: priced_operands(insts[load], assignment)? };
+                    Some((load, fused, cost(&own, cpu).ok()?))
+                });
+                // Where bytes decide (-Os) the cheaper kept store counts in the choice between pushing and keeping.
+                // Elsewhere the prices stay as they were, so a sequence the pushes won keeps them (a kept store that is
+                // faster and larger would turn a push that wins bytes into a kept one, nbody -O1 +84 B): the fusion
+                // only improves a sequence that stays.
+                if let Some((load, fused, load_price)) = moved {
+                    let folded = folds.last().is_some_and(|&(one, _)| one == store);
+                    let alone = if folded { kept } else { add(kept, load_price) };
+                    if cheaper(fused, alone, price, cpu) {
+                        fusions.push((store, load));
+                        if size {
+                            kept = fused;
+                            if !folded {
+                                pushed = add(pushed, load_price);
+                            }
+                        }
+                    }
+                }
+            }
             priced.0 = add(priced.0, kept);
             priced.1 = add(priced.1, pushed);
         }
@@ -814,6 +886,7 @@ fn sequences(
             deferred: !in_order,
             flush,
             folds,
+            fusions,
             addresses,
             kept: priced.0,
             pushed: add(priced.1, cost(&cleanup, cpu)?),
@@ -935,6 +1008,12 @@ pub fn plan(
     }
     let mut plan = Plan::default();
     for (one, pushed) in found.iter().zip(&best.0) {
+        if !*pushed {
+            for &(store, load) in &one.fusions {
+                plan.fused.insert(store, load);
+                plan.dropped.insert(load);
+            }
+        }
         if *pushed {
             for &(store, load) in &one.folds {
                 plan.folded.insert(store, load);
