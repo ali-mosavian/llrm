@@ -233,8 +233,53 @@ fn edge_probabilities(
                 all.insert((from, to), odds);
             }
         }
+        if let Some(nan) = nan_test_successor(body, block) {
+            if let Some(&to) = position.get(&nan) {
+                let unordered = BranchProbability::new(1, 1 << 20);
+                for (&(_, other), odds) in all.iter_mut().filter(|((one, _), _)| *one == from) {
+                    *odds = if other == to { unordered } else { unordered.get_compl() };
+                }
+            }
+        }
     }
     all
+}
+
+/// DEVIATE MS-NAN (owner w10, exit 2026-11-24): the successor a NaN takes
+/// when `block` ends in a `jp`/`jnp` on a float compare of a value with
+/// itself and isel stated no odds for it (a select's diamond, which the pin
+/// leaves at 1/2). `x != x` holds only for a NaN, so that edge is as unlikely
+/// as `FPH_UNO_WEIGHT` makes it (`BranchProbabilityInfo.cpp`), and a constant
+/// made for it is worth an edge of its own: gcc runs it on the NaN path
+/// alone. sfm16_float_add -O1 m32 made `mov 0x7fc00000` every trip.
+fn nan_test_successor(
+    body: &LirBody,
+    block: &Block,
+) -> Option<i64> {
+    if block.succ.len() != 2 || block.succ.iter().any(|&to| body.odds.probability(block.at, to).is_some()) {
+        return None;
+    }
+    let branch = block.insns.last()?.what.as_ref()?;
+    let parity = match branch.name.as_deref()? {
+        "jp" => true,
+        "jnp" => false,
+        _ => return None,
+    };
+    let taken = branch.target?;
+    let compare = block.insns.iter().rev().find_map(|one| {
+        let what = one.what.as_ref()?;
+        (what.op == Operation::Compare).then_some(what)
+    })?;
+    let [first, second] = &compare.sources[..] else { return None };
+    let named = |place: &Loc| match place {
+        Loc::Held(held) => Some(held.value),
+        _ => None,
+    };
+    if named(first).is_none() || named(first) != named(second) {
+        return None;
+    }
+    let other = block.succ.iter().copied().find(|&to| to != taken)?;
+    Some(if parity { taken } else { other })
 }
 
 /// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `isSafeToMove`'s
@@ -2213,6 +2258,60 @@ mod tests {
     #[test]
     fn test_a_constant_made_in_the_entry_stays_when_its_edge_is_over_40_percent() {
         let moved = sunk(&constant_past_an_arm(0.5), false);
+        assert!(made_in_entry(&moved));
+        assert_eq!(moved.blocks.len(), 3);
+    }
+
+    /// `if (x != x) r = NaN` as a select's diamond: `fcom x, other; jp join`
+    /// with no odds stated, the entry making the NaN the join's phi reads past
+    /// the arm. The pin leaves such an edge at 1/2, so the constant stayed in
+    /// the loop's hot block and ran every trip (sfm16_float_add -O1 m32: 5599
+    /// instructions, 4820 with the constant on the NaN edge).
+    fn nan_test_diamond(other: u32) -> LirBody {
+        let imm = Loc::Imm(crate::model::ir::Imm { value: 0x7fc0_0000, width: 4, address: None });
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let mut jump = (*insn(2, Operation::Branch, "jp", vec![], vec![], vec![], vec![])).clone();
+        jump.what.as_mut().expect("semantics").target = Some(2);
+        let entry = block(
+            0,
+            vec![1, 2],
+            vec![
+                insn(0, Operation::Move, "mov", vec![held(3)], vec![imm], vec![3], vec![]),
+                insn(1, Operation::Compare, "fcom", vec![], vec![held(1), held(other)], vec![], vec![1, other]),
+                Arc::new(jump),
+            ],
+        );
+        let arm =
+            block(1, vec![2], vec![insn(3, Operation::Move, "mov", vec![held(4)], vec![held(1)], vec![4], vec![1])]);
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 5, incoming: vec![(0, 3), (1, 4)] }].into(),
+            ..block(2, vec![], vec![insn(4, Operation::Return, "ret", vec![], vec![held(5)], vec![], vec![5])])
+        };
+        let mut body = LirBody::new(
+            "nan",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 6].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body
+    }
+
+    #[test]
+    fn test_a_constant_for_the_nan_edge_of_a_self_compare_is_made_on_that_edge() {
+        let moved = sunk(&nan_test_diamond(1), false);
+        assert!(!made_in_entry(&moved), "the NaN is made on the edge a NaN takes");
+        assert_eq!(moved.blocks.len(), 4, "a block on the edge to the join");
+    }
+
+    /// The control: two different values may be unordered for many reasons
+    /// and the pin's 1/2 stands.
+    #[test]
+    fn test_a_constant_for_a_compare_of_two_values_stays_in_the_entry() {
+        let moved = sunk(&nan_test_diamond(6), false);
         assert!(made_in_entry(&moved));
         assert_eq!(moved.blocks.len(), 3);
     }
