@@ -359,6 +359,8 @@ fn foldable(
         return None;
     }
     let address = reads(inst, assignment);
+    // until another instruction sets them, the codes are the load's
+    let mut load_codes = true;
     for i in load + 1..=point {
         if i == store {
             continue;
@@ -390,9 +392,12 @@ fn foldable(
         let writes = !own_store && (other.may_store || other.side_effects || other.call);
         // the load's codes go with it: a reader of them (`sne`) would see older
         // ones
-        let reads_codes = other.reads_flags && !other.call;
+        let reads_codes = load_codes && other.reads_flags && !other.call;
         if names_root || defines_address || writes || reads_codes {
             return None;
+        }
+        if other.sets_flags || other.call {
+            load_codes = false;
         }
     }
     // the load goes with its push: a later store of the same register still

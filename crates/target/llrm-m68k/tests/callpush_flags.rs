@@ -16,7 +16,7 @@ fn phys(register: llrm_lir::registers::RegId) -> Reg {
     Reg::Phys(register)
 }
 
-fn folded(reader: bool) -> Option<usize> {
+fn folded(between: Vec<Inst>) -> Option<usize> {
     let sp = || Operand::Use(phys(reg::SP));
     let mut call = Inst::new(Kind::Op("JSR32"), vec![]);
     call.call = true;
@@ -24,12 +24,8 @@ fn folded(reader: bool) -> Option<usize> {
         Inst::new(Kind::Op("MOV32rp"), vec![Operand::Def(phys(reg::D0)), Operand::Imm(0), Operand::Use(phys(reg::A2))]);
     load.may_load = true;
     load.sets_flags = true;
-    let mut sne = Inst::new(Kind::Op("SETd8eq"), vec![Operand::Def(phys(reg::D1))]);
-    sne.reads_flags = true;
     let mut insts = vec![Inst::new(Kind::Op("ADJCALLSTACKDOWN"), vec![Operand::Imm(4)]), load];
-    if reader {
-        insts.push(sne);
-    }
+    insts.extend(between);
     insts.push(Inst::new(Kind::Op("MOV32jr"), vec![sp(), Operand::Use(phys(reg::D0))]));
     let store = insts.len() - 1;
     insts.push(call);
@@ -46,12 +42,27 @@ fn folded(reader: bool) -> Option<usize> {
 /// Premise: with nothing reading the load's codes the load does fold.
 #[test]
 fn a_load_with_no_reader_of_its_codes_folds_into_the_push() {
-    assert_eq!(folded(false), Some(1));
+    assert_eq!(folded(vec![]), Some(1));
 }
 
 #[test]
 fn a_load_whose_codes_are_read_stays() {
-    assert_eq!(folded(true), None);
+    assert_eq!(folded(vec![sne()]), None);
+}
+
+/// A `tst` between the load and the reader gives the reader its own codes
+/// (wc_mixed 68000 -O1: the first form of the guard kept the load, +2 B).
+#[test]
+fn a_reader_of_a_later_setters_codes_leaves_the_load_folding() {
+    let mut tst = Inst::new(Kind::Op("TST32d"), vec![Operand::Use(phys(reg::D3))]);
+    tst.sets_flags = true;
+    assert_eq!(folded(vec![tst, sne()]), Some(1));
+}
+
+fn sne() -> Inst {
+    let mut sne = Inst::new(Kind::Op("SETd8eq"), vec![Operand::Def(phys(reg::D1))]);
+    sne.reads_flags = true;
+    sne
 }
 
 #[test]
