@@ -693,6 +693,20 @@ fn vector_inst(
         });
     }
     // `FMLAv4i32_indexed`: the multiplier is a lane of `rm`.
+    if let Some(lanes) =
+        name.strip_prefix("FMULv").and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
+            "4i32" => Some(Arrangement::S4),
+            "2i64" => Some(Arrangement::D2),
+            _ => None,
+        })
+    {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::VectorFmulLane { lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
     for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
         let Some(lanes) =
             name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {

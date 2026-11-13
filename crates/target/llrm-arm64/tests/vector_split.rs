@@ -171,6 +171,23 @@ fn a_multiply_add_by_a_splat_is_fmla_by_element() {
     assert_eq!(count(&text, "fmla", ".s[0]"), 1, "{text}");
 }
 
+/// A float vector multiplied by a splatted scalar selected `FMULv4i32_indexed`,
+/// which had no MC form: `(float)a[i] * 2.5f` loops, compiled before the
+/// narrowing convert was widened, were refused ("has no arm64 instruction").
+#[test]
+fn a_multiply_by_a_splat_is_fmul_by_element() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a, float %c) {\n\
+         \x20 %x = load <4 x float>, ptr %a, align 16\n\
+         \x20 %i = insertelement <4 x float> poison, float %c, i64 0\n\
+         \x20 %s = shufflevector <4 x float> %i, <4 x float> poison, <4 x i32> zeroinitializer\n\
+         \x20 %m = fmul <4 x float> %x, %s\n\
+         \x20 store <4 x float> %m, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "fmul", ".s[0]"), 1, "{text}");
+}
+
 /// A lane read as an integer (`scvtf s, x`) from a vector in a register is
 /// copied across the register files (`fmov x, d`): `SCVTFUXSri` took the `v`
 /// register as its operand ("operands are not those of its form").

@@ -310,6 +310,11 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
+            Inst::VectorFmulLane { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
             Inst::VectorStoreLane { rt, base, .. } => {
                 f(Fpr(rt), Role::Use);
                 f(G(base), Role::Use);

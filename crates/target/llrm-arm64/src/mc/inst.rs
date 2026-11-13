@@ -1015,6 +1015,15 @@ pub enum Inst {
         rm: Vreg,
         index: u8,
     },
+    /// `fmul v.4s, v.4s, v.s[index]` (`FMULv4i32_indexed`): `lanes` is `S4` or
+    /// `D2`; nothing of `rd` is read.
+    VectorFmulLane {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
     /// `st1 { v.s }[index], [base]`: one lane of `rt` stored at `[base]`
     /// (`ST1i32`).
     VectorStoreLane {

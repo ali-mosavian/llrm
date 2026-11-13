@@ -169,6 +169,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::VectorFmulLane { lanes, rd, rn, rm, index } => semantics(
+            Operation::Binary,
+            format!("FMULv{}_indexed", if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
+            None,
+        ),
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
             semantics(
@@ -428,6 +435,18 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 rn: vreg_of(&s[1]),
                 rm: vreg_of(&s[2]),
                 index: value_of(&s[3]) as u8,
+            });
+        }
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        let lane = if lanes == Arrangement::D2 { "2i64" } else { "4i32" };
+        if name == format!("FMULv{lane}_indexed") {
+            return Some(Inst::VectorFmulLane {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                rm: vreg_of(&s[1]),
+                index: value_of(&s[2]) as u8,
             });
         }
     }

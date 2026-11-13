@@ -407,6 +407,10 @@ impl fmt::Display for Inst {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
             }
+            Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
+                let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
+                write!(out, "fmul v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", rd.0, rn.0, rm.0)
+            }
             Inst::VectorStoreLane { lanes, rt, index, base } => {
                 write!(out, "st1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
             }

@@ -464,6 +464,12 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
+            let index = u32::from(*index);
+            let (size, h, l) =
+                if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
+            0x4F00_9000 | size << 22 | l << 21 | vreg(*rm)? << 16 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorStoreLane { lanes, rt, index, base } => {
             let index = u32::from(*index);
             // Q:S:size is the index, as many bits of it as the lane leaves
