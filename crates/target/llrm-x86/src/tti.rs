@@ -1784,6 +1784,10 @@ impl Tti for X86 {
         true
     }
 
+    fn ext_load_costs_extra(&self) -> bool {
+        self.tuning.ext_load_extra_clocks > 0
+    }
+
     /// 64 in long mode, else 32 (also at m16, on a 386 or later).
     fn gpr_bits(&self) -> u32 {
         if self.quad { 64 } else { 32 }
