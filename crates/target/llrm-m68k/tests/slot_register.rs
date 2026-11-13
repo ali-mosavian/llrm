@@ -28,4 +28,12 @@ fn a_spilled_byte_lives_in_a_free_address_register() {
     assert!(frame_references(&off) > 0, "premise: the build spills\n{off}");
     assert!(frame_references(&on) < frame_references(&off), "{on}");
     assert!(on.contains("%a0") || on.contains("%a1"), "{on}");
+    assert!(frame_size(&on) < frame_size(&off), "a slot in a register still has a frame slot\n{on}");
+}
+
+/// The bytes the prologue's `lea (-N,%sp),%sp` opens.
+fn frame_size(text: &str) -> i32 {
+    text.lines()
+        .find_map(|line| line.trim_start().strip_prefix("lea\t(-")?.split(',').next()?.parse().ok())
+        .unwrap_or(0)
 }

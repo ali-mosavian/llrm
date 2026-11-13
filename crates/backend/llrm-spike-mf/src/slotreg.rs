@@ -119,14 +119,14 @@ pub fn slots_to_registers<T: Target>(
     may_load: impl Fn(&MFunction<T::Class>, usize, usize) -> bool,
     worth: impl Fn(&MFunction<T::Class>, RegId, usize) -> bool,
     finish: impl Fn(&mut Inst, bool),
-) -> usize {
+) -> Vec<i32> {
     let register = |reg: Reg| match reg {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(id) => id,
     };
     let full = |reg: Reg| info.view(T::root(register(reg)), bits).map(Reg::Phys);
     let successors = successors(function);
-    let mut moved = 0;
+    let mut moved = Vec::new();
     let mut live = PhysLiveness::of::<T>(function, assignment, info);
     let mut stale = false;
     for &slot in slots {
@@ -190,7 +190,7 @@ pub fn slots_to_registers<T: Target>(
             finish(&mut copy, into_host);
             function.blocks[b].insts[i] = copy;
         }
-        moved += 1;
+        moved.push(slot);
         stale = true;
     }
     moved

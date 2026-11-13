@@ -15,12 +15,12 @@ use crate::mfunc::MFunction;
 use crate::regalloc::{Assignment, M68kRegisters};
 use crate::{REGISTER_INFO, reg, spillmove};
 
-/// Moves the slots of `slots` into address registers; returns how many.
+/// Moves the slots of `slots` into address registers; returns those moved.
 pub fn slots_in_address_registers(
     function: &mut MFunction,
     assignment: &Assignment,
     slots: &[i32],
-) -> usize {
+) -> Vec<i32> {
     let live = spillmove::live_in(function);
     let successors = successors(function);
     let dead_after = |function: &MFunction, b: usize, i: usize| match function.blocks[b].insts[i + 1..]

@@ -935,7 +935,7 @@ fn items_once(
         )?
     };
     drop(allocating);
-    let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    let mut slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     let sp = llrm_support::debug::span("m68k postalloc");
     verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
@@ -966,7 +966,9 @@ fn items_once(
         &slots,
     );
     if options.short && options.slot_registers {
-        touched.slot_registers = crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots) > 0;
+        let moved = crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots);
+        touched.slot_registers = !moved.is_empty();
+        slots.retain(|slot| !moved.contains(slot));
     }
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
