@@ -200,6 +200,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
         lsr_size_order: true,
+        // DEVIATE IU1-M32 (owner w12, exit 2026-11-24): the m64 entry at m32; see
+        // `Tti::lsr_users_in_use_list_order`. x_transpose -O1 139,335 -> 122,886 clk, 237 -> 217 B.
+        lsr_users_in_use_list_order: true,
         // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
         lsr_phi_operand_uses: true,
         // DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): see

@@ -492,8 +492,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Int(_) => Action::Expand,
         };
         // `EXTRACT_ELEMENT` lies about being legal: when it claims to be, it is
-        // expanded.
-        if self.dag.opcode(node) == ISD::ExtractElement && action == Action::Legal {
+        // expanded. The same node taking a vector is `EXTRACT_VECTOR_ELT`.
+        if self.dag.opcode(node) == ISD::ExtractElement
+            && action == Action::Legal
+            && !self.dag.value_type(self.dag.operand(node, 0)).is_vector()
+        {
             action = Action::Expand;
         }
         if self.dag.opcode(node) == ISD::SetCC
@@ -977,6 +980,53 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
     }
 
+    /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
+    /// constants or undefined is loaded from the constant pool, its lanes laid
+    /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
+    /// is left to the target (`ExpandVectorBuildThroughStack` is not
+    /// translated).
+    fn expand_build_vector(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let bits = vt.size_in_bits();
+        if !vt.is_vector() || bits > 128 {
+            return None;
+        }
+        let lane_bits = vt.element().size_in_bits();
+        let mask = u128::MAX >> (128 - lane_bits);
+        let mut image = 0u128;
+        for (at, lane) in self.dag.node(node).ops.clone().into_iter().enumerate() {
+            if self.dag.is_undef(lane) {
+                continue;
+            }
+            // A float lane is its bits; the operand may be wider than the
+            // lane (an implicit truncation).
+            let value = self.dag.constant(lane).or_else(|| self.dag.fp_constant(lane))?;
+            image |= (value & mask) << (at as u32 * lane_bits);
+        }
+        let pointer = self.dag.config().pointer;
+        let index = self.dag.get_constant_pool(pointer, image, vt, false);
+        let NodeData::PoolIndex(entry, _) = self.dag.node(index).data else {
+            unreachable!("a pool node has its entry")
+        };
+        let info = MemInfo {
+            mem_vt: vt,
+            align: bits / 8,
+            volatile: false,
+            base: MemBase::ConstantPool(entry),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let chain = self.dag.entry_node();
+        let loaded = self.dag.get_load(vt, chain, index, info);
+        // The pool is read-only memory: `isDereferenceableInvariantLoad`.
+        self.dag.invariant_loads.insert(loaded.node);
+        Some(loaded)
+    }
+
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
     fn expand_node(
@@ -987,6 +1037,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
         match op {
+            ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::SignExtendInReg => {
                 // An in-register sign extension of a boolean is a negation of
                 // the masked bit; any other width is a shift pair.
