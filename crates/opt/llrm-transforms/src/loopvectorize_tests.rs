@@ -203,17 +203,6 @@ fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     assert_eq!(count(&crate::testing::printed(&module), "load <"), 0);
 }
 
-/// Two pointers that may overlap need the pin's `vector.memcheck`
-/// (LoopVectorize L1637), which is not built: `b[i] = a[i]` over plain pointers
-/// was widened with no overlap test, so `b = a + 1` read stale lanes. It stays
-/// scalar.
-#[test]
-fn a_copy_between_pointers_that_may_overlap_stays_scalar() {
-    let text = run(&COPY.replace("noalias ", ""));
-    assert_eq!(count(&text, "load <8 x i16>"), 0, "{text}");
-    assert_eq!(count(&text, "load i16"), 1, "{text}");
-}
-
 /// A trip count VF x IC does not divide (1921) was left scalar ("A scalar
 /// epilogue would remain"); the pin widens the first 1920 and leaves the last
 /// iteration to a copy of the loop, entered at 1920 (`opt

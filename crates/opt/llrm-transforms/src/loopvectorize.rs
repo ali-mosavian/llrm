@@ -1052,7 +1052,8 @@ impl FunctionPass for LoopVectorize {
                     }
                 };
                 // Hard cutoff on the checks one loop may need
-                // (`VectorizeMemoryCheckThreshold`, `GeneratedRTChecks::create`).
+                // (`VectorizeMemoryCheckThreshold`,
+                // `GeneratedRTChecks::create`).
                 let rtc = lai.runtime_pointer_checking();
                 if rtc.need && rtc.number_of_checks() > VECTORIZE_MEMORY_CHECK_THRESHOLD {
                     why(unit, &outer, header, "legality: too many memory checks needed");
