@@ -64,6 +64,11 @@ pub fn peephole_opt(f: &mut Function) -> bool {
         let mut copy_srcs: HashMap<VReg, VReg> = HashMap::new();
         for at in 0..f.blocks[block].len() {
             let Some((dst, src)) = copy_regs(&f.blocks[block][at]) else { continue };
+            // `SP32` is a physical register here, which the pin's copy rewrites
+            // leave alone; it has more than one definition.
+            if Some(dst) == f.sp || Some(src) == f.sp {
+                continue;
+            }
             let src = replaced.get(&src).copied().unwrap_or(src);
             // `optimizeCoalescableCopy`.
             if let Some(&(b, i)) = defs.get(&src)

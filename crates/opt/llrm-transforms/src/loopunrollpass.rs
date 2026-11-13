@@ -1806,10 +1806,15 @@ fn try_to_unroll_loop(
     // keep nothing across them (x_jpeg_single -O3: three 8-trip loops of 9
     // floats, held to 150 and 2.3M clocks slower than the pin's unroll).
     // Owner llrm-target-x86-m32, exit 2026-11-20.
-    if let Some(peak) = float_stack_overflow(run, lp) {
+    // The bar only matters where it is above the default: the liveness is not
+    // solved for a loop it cannot change.
+    if !opt_for_size
+        && up.threshold > UNROLL_THRESHOLD_DEFAULT
+        && let Some(peak) = float_stack_overflow(run, lp)
+    {
         let kept = if trip_count == 0 { usize::MAX } else { price::forwarded_floats(run, analyzed, lp, trip_count) };
         let depth = run.tti.x87_stack_slots().map_or(0, |slots| slots as usize);
-        if !opt_for_size && up.threshold > UNROLL_THRESHOLD_DEFAULT && peak.saturating_add(kept) > peak.max(depth) {
+        if peak.saturating_add(kept) > peak.max(depth) {
             why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
             up.threshold = UNROLL_THRESHOLD_DEFAULT;
         }
