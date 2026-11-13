@@ -670,6 +670,9 @@ fn pure_writes(inst: &Inst) -> Option<Writes> {
     use Op::*;
     let plain = matches!(inst.operand, Operand::Imm(_)) || inst.operand.is_cell();
     let (register, carry, nz) = match inst.op {
+        // an identity on `a`: only the zero and sign flags it sets are left
+        Ora | Eor if matches!(&inst.operand, Operand::Imm(v) if v == "0") => (None, false, true),
+        And if matches!(&inst.operand, Operand::Imm(v) if v == "255") => (None, false, true),
         Lda | And | Ora | Eor if plain => (Some(Registers::A), false, true),
         Ldx if plain => (Some(Registers::X), false, true),
         Ldy if plain => (Some(Registers::Y), false, true),

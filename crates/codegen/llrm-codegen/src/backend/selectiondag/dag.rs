@@ -289,6 +289,11 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// `isIntDivCheap` for a type of at most this many bits where
+    /// `int_div_cheap` is off: a target with a narrow divide instruction and a
+    /// libcall for the wide one (the 68000's `divs.w` against `__divsi3`).
+    /// DEVIATE: the pin's hooks answer for every width at once. Owner m68k.
+    pub int_div_cheap_narrow: u32,
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
     pub div_live_limit: u32,
     /// The widest divide `div_live_limit` governs.
@@ -373,6 +378,7 @@ impl Default for DagConfig {
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            int_div_cheap_narrow: 0,
             div_live_limit: 0,
             div_live_max_bits: 31,
             div_live: 0,

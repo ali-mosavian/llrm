@@ -2906,6 +2906,17 @@ pub trait Tti {
         )
     }
 
+    /// `getFPOpCost(ty) == TCC_Expensive`
+    /// ([BasicTTIImpl.h:698](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L698)):
+    /// no legal `FADD` on `ty`, so a float operation or cast on it is a library
+    /// call. Default: legal (an FPU, or the x87).
+    fn fp_op_expensive(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
     /// `haveFastSqrt`: a legal `FSQRT` on `ty`
     /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
     /// Default: none, for a target without an FPU or a sqrt instruction.

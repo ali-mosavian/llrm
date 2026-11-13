@@ -447,6 +447,11 @@ pub struct Tuning {
     /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
     /// meet the constants together, as the pin's callee-first order gives. One round.
     pub inline_chain_trial: bool,
+    /// DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): the operations
+    /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit in a function built for size
+    /// (`Tti::lftr_expansion_budget`; the pin's `SCEVCheapExpansionBudget` is 4). gcc keeps `i < n` where
+    /// the zero-test form needs `smax(n, 1)` (fib `k`: cmp, mov, cmovl = 8 B before the loop).
+    pub lftr_size_budget: u32,
     /// DEVIATE OS-INLINE-GROWTH: an -Os caller's SZ2 trial does not re-decide a site the by-size guard refused
     /// where the callee stays and has two or more calls left: the guard's growth over all of them stands, as gcc's
     /// `estimate_growth` at -Os. Its byte estimate was -22 B a copy where the objects grew +5.
@@ -729,6 +734,7 @@ impl Tuning {
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
+        lftr_size_budget: 4,
         inline_trial_defers_to_shared_growth: false,
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
