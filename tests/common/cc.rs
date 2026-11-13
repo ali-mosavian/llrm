@@ -48,6 +48,45 @@ pub fn missing_env(
     wanted
 }
 
+/// The sha `clang --version` prints in its parentheses, if it ran.
+pub fn clang_sha(path: &OsStr) -> Option<String> {
+    let out = Command::new(path).arg("--version").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let tail = &text[text.find("llvm-project.git ")? + "llvm-project.git ".len()..];
+    Some(tail.chars().take_while(char::is_ascii_hexdigit).collect())
+}
+
+/// One line per clang variable that runs but is not the pin
+/// `toolchain/clang/pin` names (line 1 `LLRM_PIN_CLANG`,
+/// line 2 `LLRM_CLANG_M16`): a stale cached clang refused every llrm-cc line,
+/// 114 reds on 2026-11-12. `sha` is how a path reports its version.
+pub fn unpinned_clangs(
+    value: impl Fn(&str) -> Option<OsString>,
+    pin: &str,
+    sha: impl Fn(&OsStr) -> Option<String>,
+) -> Vec<String> {
+    let want: Vec<&str> = pin.lines().map(|line| line.split_whitespace().next().unwrap_or("")).collect();
+    ["LLRM_PIN_CLANG", "LLRM_CLANG_M16"]
+        .iter()
+        .zip(want)
+        .filter_map(|(name, want)| {
+            let path = value(name).filter(|path| !path.is_empty())?;
+            let have = sha(&path).filter(|have| !have.is_empty())?;
+            (!want.starts_with(&have) && !have.starts_with(want)).then(|| {
+                format!(
+                    "{name}={} is clang {}, toolchain/clang/pin wants {}",
+                    path.to_string_lossy(),
+                    &have[..12.min(have.len())],
+                    &want[..12.min(want.len())]
+                )
+            })
+        })
+        .collect()
+}
+
+/// The pin file, as the tests were built against it.
+pub const PIN: &str = include_str!("../../toolchain/clang/pin");
+
 /// `missing_env` for a compile with `arguments` (`-m32` is wide, `-m64` flat).
 pub fn missing_env_for<S: AsRef<std::ffi::OsStr>>(
     arguments: &[S],
@@ -57,7 +96,8 @@ pub fn missing_env_for<S: AsRef<std::ffi::OsStr>>(
     missing_env(value, has("-m32"), has("-m64"))
 }
 
-/// The process environment, with the Open Watcom tree where this machine keeps it.
+/// The process environment, with the Open Watcom tree where this machine keeps
+/// it.
 pub fn toolchain_env(name: &str) -> Option<OsString> {
     if name == "OW_TREE" { Some(llrm_cc::ow_tree().into()) } else { std::env::var_os(name) }
 }
