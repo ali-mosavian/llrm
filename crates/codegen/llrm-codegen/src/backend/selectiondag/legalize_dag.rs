@@ -399,6 +399,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         let vt = self.dag.value_type(node);
         let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        // A memory type a register holds (`isTypeLegal(SrcVT)`): a plain load
+        // and the extension of it.
+        if info.mem_vt.is_vector() && self.tli.types.is_type_legal(info.mem_vt) {
+            let load = self.dag.get_load(info.mem_vt, chain, ptr, MemInfo { ext: None, ..info });
+            let op = if ext == super::actions::LoadExt::SExtLoad { ISD::SignExtend } else { ISD::ZeroExtend };
+            let value = self.dag.get_node(op, vt, &[load]);
+            return Some((value, SDValue { node: load.node, res: 1 }));
+        }
         let any =
             self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, ptr, MemInfo { ext: None, ..info });
         let value = if ext == super::actions::LoadExt::SExtLoad {

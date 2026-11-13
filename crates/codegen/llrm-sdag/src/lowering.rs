@@ -216,6 +216,9 @@ impl TargetLoweringInfo {
                 MVT::V4F32,
                 MVT::V2F64,
                 MVT::V2F32,
+                MVT::V8I8,
+                MVT::V4I16,
+                MVT::V2I32,
             ],
             false,
         )

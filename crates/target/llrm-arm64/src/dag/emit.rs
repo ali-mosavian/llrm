@@ -692,7 +692,44 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    // `FMLAv4i32_indexed`: the multiplier is a lane of `rm`.
+    // `SSHLLv4i16_shift`, `XTNv8i16`: the long shifts and the narrowing move
+    // (the name is the arrangement of the narrow side).
+    for (wide, high) in [
+        (Arrangement::H8, false),
+        (Arrangement::H8, true),
+        (Arrangement::S4, false),
+        (Arrangement::S4, true),
+        (Arrangement::D2, false),
+        (Arrangement::D2, true),
+    ] {
+        let narrow = match (wide, high) {
+            (Arrangement::H8, false) => "v8i8",
+            (Arrangement::H8, true) => "v16i8",
+            (Arrangement::S4, false) => "v4i16",
+            (Arrangement::S4, true) => "v8i16",
+            (Arrangement::D2, false) => "v2i32",
+            _ => "v4i32",
+        };
+        for (stem, signed) in [("SSHLL", true), ("USHLL", false)] {
+            if name == format!("{stem}{narrow}_shift") {
+                return Some(match operands {
+                    [Operand::Fpr(rn), Operand::Imm(amount)] => {
+                        Ok(Inst::VectorExtendLong { signed, high, wide, rd, rn: *rn, amount: *amount as u8 })
+                    }
+                    _ => wrong(),
+                });
+            }
+        }
+        if name == format!("XTN{narrow}") {
+            return Some(match operands {
+                [Operand::Fpr(rn)] | [Operand::Fpr(_), Operand::Fpr(rn)] => {
+                    Ok(Inst::VectorNarrow { high, wide, rd, rn: *rn })
+                }
+                _ => wrong(),
+            });
+        }
+    }
+    // `FMULv4i32_indexed`: the multiplier is a lane of `rm`.
     if let Some(lanes) =
         name.strip_prefix("FMULv").and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
             "4i32" => Some(Arrangement::S4),
@@ -2090,6 +2127,7 @@ impl Emitter<'_> {
                     if let (
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
+                        | Inst::VectorNarrow { high: true, .. }
                         | Inst::VectorInsGpr { .. }
                         | Inst::VectorInsLane { .. },
                         Some(Operand::Fpr(acc)),
