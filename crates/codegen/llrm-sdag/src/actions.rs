@@ -149,6 +149,10 @@ pub struct TargetLowering {
     libcall_for_small_variable_shift: bool,
     /// A float constant is canonically positive (gcc's `negate_expr_p`): only a negative one is cheap to negate.
     positive_fp_constants: bool,
+    /// DEVIATE SOFT-UITOFP-NONNEG (owner m68k, exit 2026-11-24): a soft-float `uitofp` of a value known to
+    /// be non-negative calls the signed routine (gcc's `floatunsisf` is a different, larger one), so a program
+    /// that converts with both links one.
+    signed_conversion_of_nonneg: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
     /// multiply is not the library call outside functions tuned for size.
     inline_constant_mul: Option<fn(u128) -> bool>,
@@ -230,6 +234,7 @@ impl TargetLowering {
             force_shift_calls: false,
             libcall_for_small_variable_shift: false,
             positive_fp_constants: false,
+            signed_conversion_of_nonneg: false,
             inline_constant_mul: None,
             small_divide: false,
             fast_divide_in_loops: false,
@@ -380,6 +385,14 @@ impl TargetLowering {
 
     pub fn positive_fp_constants(&self) -> bool {
         self.positive_fp_constants
+    }
+
+    pub fn set_signed_conversion_of_nonneg(&mut self) {
+        self.signed_conversion_of_nonneg = true;
+    }
+
+    pub fn signed_conversion_of_nonneg(&self) -> bool {
+        self.signed_conversion_of_nonneg
     }
 
     pub fn libcall_for_small_variable_shift(&self) -> bool {
@@ -992,7 +1005,26 @@ impl TargetLowering {
                 t.set_trunc_store_action(vt, mem, Expand);
             }
         }
-        t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
+        // `initActions`: "Vector reduction default to expand". The float
+        // kinds have no node here.
+        let reductions = [
+            VecReduceAdd,
+            VecReduceMul,
+            VecReduceAnd,
+            VecReduceOr,
+            VecReduceXor,
+            VecReduceSMax,
+            VecReduceSMin,
+            VecReduceUMax,
+            VecReduceUMin,
+        ];
+        t.set_ops(&reductions, &MVT::vectors().collect::<Vec<_>>(), Expand);
+        // L1439: the NEON reductions are `LowerVECREDUCE`
+        // ([L18443](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18443)),
+        // for the 128-bit types (the 64-bit ones are not types here); `v2i64`
+        // has no min or max across lanes.
+        t.set_ops(&[VecReduceAdd, VecReduceAnd, VecReduceOr, VecReduceXor], &vectors, Custom);
+        t.set_ops(&[VecReduceSMax, VecReduceSMin, VecReduceUMax, VecReduceUMin], &vectors[..3], Custom);
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the
         // operand's type.

@@ -315,6 +315,12 @@ fn branches() {
         }
     }
     all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
+    for op in [VectorReduce::Addv, VectorReduce::Smaxv, VectorReduce::Sminv, VectorReduce::Umaxv, VectorReduce::Uminv] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4] {
+            all.push(Inst::VectorReduce { op, lanes, rd: Vreg(3), rn: Vreg(28) });
+        }
+    }
+    all.push(Inst::VectorReduce { op: VectorReduce::Addp, lanes: Arrangement::D2, rd: Vreg(3), rn: Vreg(28) });
     for (op, lanes) in [
         (VectorFma::Add, Arrangement::S4),
         (VectorFma::Add, Arrangement::D2),

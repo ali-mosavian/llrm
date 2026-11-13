@@ -14,7 +14,7 @@
 //! `SplitVecRes_BUILD_VECTOR`, `SplitVecRes_INSERT_VECTOR_ELT` (a constant
 //! index), `SplitVecRes_LOAD`, `SplitVecRes_BinOp`, `SplitVecRes_UnaryOp`,
 //! `SplitVecRes_TernaryOp` (`fma`), `SplitVecOp_STORE`, `SplitVecOp_UnaryOp`,
-//! `SplitVecOp_EXTRACT_VECTOR_ELT` (a constant index),
+//! `SplitVecOp_EXTRACT_VECTOR_ELT` (a constant index), `SplitVecOp_VECREDUCE`,
 //! `SplitVecRes_CONCAT_VECTORS`, `SplitVecRes_EXTRACT_SUBVECTOR`,
 //! `SplitVecOp_EXTRACT_SUBVECTOR` (a piece inside one half, or the high half),
 //! `SplitVecRes_ExtendOp`, all of
@@ -342,6 +342,16 @@ impl TypeLegalizer<'_> {
                     self.dag.get_node_flags(op, out, &hi_ops, flags),
                 );
                 self.dag.get_node(ISD::ConcatVectors, result_vt, &[lo, hi])
+            }
+            // `SplitVecOp_VECREDUCE`: the halves combined by the scalar
+            // operation, then reduced.
+            op if op.vec_reduce_base_opcode().is_some() => {
+                let base = op.vec_reduce_base_opcode().expect("a reduction");
+                let (lo, hi) = self.split_vector(operand);
+                let half = self.dag.value_type(lo);
+                let flags = self.dag.node(node).flags;
+                let partial = self.dag.get_node_flags(base, half, &[lo, hi], flags);
+                self.dag.get_node_flags(op, self.dag.value_type(node), &[partial], flags)
             }
             // `SplitVecOp_EXTRACT_VECTOR_ELT`, a constant index.
             ISD::ExtractElement if at == 0 => {

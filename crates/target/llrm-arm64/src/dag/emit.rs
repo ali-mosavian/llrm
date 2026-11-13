@@ -37,7 +37,7 @@ use crate::mc::inst::{
 };
 use crate::mc::inst::{
     Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp,
-    VectorOp, VectorShift,
+    VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -620,6 +620,31 @@ fn vector_fill(
     None
 }
 
+/// `ADDVv4i32v`, `SMAXVv16i8v`: every lane into a scalar register;
+/// `ADDPv2i64p`: the two `d` lanes. The pin types the result `i32`, but it
+/// is in a float register.
+fn reduction(name: &str) -> Option<(VectorReduce, Arrangement)> {
+    let lanes_of = |text: &str| match text {
+        "16i8" => Some(Arrangement::B16),
+        "8i16" => Some(Arrangement::H8),
+        "4i32" => Some(Arrangement::S4),
+        _ => None,
+    };
+    [
+        ("ADDV", VectorReduce::Addv),
+        ("SMAXV", VectorReduce::Smaxv),
+        ("SMINV", VectorReduce::Sminv),
+        ("UMAXV", VectorReduce::Umaxv),
+        ("UMINV", VectorReduce::Uminv),
+    ]
+    .into_iter()
+    .find_map(|(stem, op)| {
+        let lanes = name.strip_prefix(stem)?.strip_prefix('v')?.strip_suffix('v').and_then(lanes_of)?;
+        Some((op, lanes))
+    })
+    .or_else(|| (name == "ADDPv2i64p").then_some((VectorReduce::Addp, Arrangement::D2)))
+}
+
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`, `SHLv8i16_shift`, `NOTv16i8`: an
 /// integer vector operation on whole 128-bit registers.
 fn vector_inst(
@@ -670,6 +695,12 @@ fn vector_inst(
     if let Some(lanes) = name.strip_prefix("DUPv").and_then(|rest| rest.strip_suffix("lane")).and_then(lanes_of) {
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Imm(index)] => Ok(Inst::VectorDupLane { lanes, rd, rn: *rn, index: *index as u8 }),
+            _ => wrong(),
+        });
+    }
+    if let Some((op, lanes)) = reduction(name) {
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::VectorReduce { op, lanes, rd, rn: *rn }),
             _ => wrong(),
         });
     }
@@ -2014,8 +2045,27 @@ impl Emitter<'_> {
             }
             ISD::CopyToReg => {
                 let (dst, _) = self.register_operand(node.ops[1])?;
-                let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };
-                self.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(src) });
+                match self.operand(node.ops[2])? {
+                    Operand::Reg(src) => self.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(src) }),
+                    // An integer the pattern left in a float register (the
+                    // lane an `addv` reduced into): `fmov w, s`, the pin's
+                    // cross-class `COPY`.
+                    Operand::Fpr(src) => {
+                        let (width, size) = if self.dag.value_type(node.ops[2]).size_in_bits() == 64 {
+                            (Width::X, FpSize::D)
+                        } else {
+                            (Width::W, FpSize::S)
+                        };
+                        self.ops.push(Op::I(Inst::FpInt {
+                            op: FpConvert::Bits { to_fp: false },
+                            width,
+                            size,
+                            gpr: dst,
+                            fpr: src,
+                        }));
+                    }
+                    _ => return Err("a copy of a constant".into()),
+                }
                 Ok(())
             }
             ISD::Machine(code) => {
@@ -2132,7 +2182,8 @@ impl Emitter<'_> {
                     // ours: it reads as an `i64`.
                     let float_result = node.values[0].is_floating_point()
                         || node.values[0].is_vector()
-                        || vector_fill(name, &operands).is_some();
+                        || vector_fill(name, &operands).is_some()
+                        || reduction(name).is_some();
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     // `FMLA` adds into the register it reads: `rd` is a copy of

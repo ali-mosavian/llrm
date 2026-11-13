@@ -3,6 +3,8 @@
 //! type legalizer had no `SplitVecRes_ExtendOp`, `CONCAT_VECTORS` of more than
 //! two operands or `EXTRACT_SUBVECTOR`, and `v2i64` multiply had no lowering.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::process::Command;
 
 const HEAD: &str = "target triple = \"aarch64-unknown-linux-gnu\"\n\
@@ -259,4 +261,136 @@ fn a_vector_i64_multiply_by_33_is_shift_and_add() {
     assert_eq!(count(&text, "shl", ".2d"), 1, "{text}");
     assert_eq!(count(&text, "add", ".2d"), 1, "{text}");
     assert_eq!(count(&text, "madd", " x"), 0, "{text}");
+}
+
+/// The pin's `llc`, where it is built.
+fn pin(body: &str) -> Option<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let build = std::env::var("LLVM_BUILD").unwrap_or_else(|_| format!("{home}/scratch/llvm-build-aarch64"));
+    let llc = PathBuf::from(build).join("bin/llc");
+    if !llc.exists() {
+        eprintln!("skipped the pin comparison: no {}", llc.display());
+        return None;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, format!("{HEAD}{body}")).unwrap();
+    let said =
+        Command::new(llc).args(["-mtriple=aarch64-unknown-linux-gnu", "-O2", "-o", "-"]).arg(&input).output().unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    Some(String::from_utf8(said.stdout).unwrap())
+}
+
+/// The instructions of a listing, by mnemonic.
+fn mnemonics(text: &str) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for line in text.lines() {
+        let Some(name) = line.split_whitespace().next() else { continue };
+        if name.starts_with('.') || name.starts_with("//") || name.ends_with(':') {
+            continue;
+        }
+        *counts.entry(name.to_owned()).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// `be1_tf` as the vectorizer writes it: the `<16 x i64>` accumulators are
+/// reduced after the loop. `llvm.vector.reduce.add.v16i64` is split down to
+/// `v2i64` and ends in `addp`; the loop is the same sixteen `uaddw`/`uaddw2`
+/// as with a store. The pin widens the bytes with `tbl` (a CodeGenPrepare hook
+/// not translated), so only the instructions around the widening are compared.
+#[test]
+fn the_reduced_wide_byte_loop_is_uaddw_chains_and_an_addp() {
+    let body = "define i64 @tf(ptr %p) {\n\
+         entry:\n\
+         \x20 br label %l\n\
+         l:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %i2, %l ]\n\
+         \x20 %a = phi <16 x i64> [ zeroinitializer, %entry ], [ %a2, %l ]\n\
+         \x20 %b = phi <16 x i64> [ zeroinitializer, %entry ], [ %b2, %l ]\n\
+         \x20 %q = getelementptr inbounds i8, ptr %p, i64 %i\n\
+         \x20 %q2 = getelementptr inbounds i8, ptr %q, i64 16\n\
+         \x20 %x = load <16 x i8>, ptr %q, align 1\n\
+         \x20 %y = load <16 x i8>, ptr %q2, align 1\n\
+         \x20 %xz = zext <16 x i8> %x to <16 x i64>\n\
+         \x20 %yz = zext <16 x i8> %y to <16 x i64>\n\
+         \x20 %a2 = add <16 x i64> %a, %xz\n\
+         \x20 %b2 = add <16 x i64> %b, %yz\n\
+         \x20 %i2 = add nuw i64 %i, 32\n\
+         \x20 %c = icmp eq i64 %i2, 4000\n\
+         \x20 br i1 %c, label %x1, label %l\n\
+         x1:\n\
+         \x20 %s = add <16 x i64> %b2, %a2\n\
+         \x20 %r = tail call i64 @llvm.vector.reduce.add.v16i64(<16 x i64> %s)\n\
+         \x20 ret i64 %r\n}\n\
+         declare i64 @llvm.vector.reduce.add.v16i64(<16 x i64>)\n";
+    let text = assembly(body);
+    let looped = loop_body(&text);
+    assert_eq!(count_dest(&looped, "uaddw", ".2d"), 16, "{text}");
+    assert_eq!(count(&looped, "mov", " v") + count(&looped, "fmov", " d"), 0, "copied in the loop:\n{text}");
+    assert!(!looped.contains("[sp"), "spilled in the loop:\n{text}");
+    if let Some(pinned) = pin(body) {
+        let (ours, theirs) = (mnemonics(&text), mnemonics(&pinned));
+        for name in ["uaddw", "uaddw2", "addp", "subs", "b.ne"] {
+            assert_eq!(ours.get(name), theirs.get(name), "{name}\nours:\n{text}\npin:\n{pinned}");
+        }
+    }
+}
+
+/// `be1_mulred`: `<8 x i64>` sum of products of sign-extended halfwords,
+/// reduced after the loop. The same instructions, as many of each, as the pin.
+#[test]
+fn the_reduced_wide_product_loop_matches_the_pin() {
+    let body = "define i64 @mulred(ptr %p, ptr %q) {\n\
+         entry:\n\
+         \x20 br label %l\n\
+         l:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %i2, %l ]\n\
+         \x20 %a = phi <8 x i64> [ zeroinitializer, %entry ], [ %a2, %l ]\n\
+         \x20 %pp = getelementptr inbounds i16, ptr %p, i64 %i\n\
+         \x20 %qq = getelementptr inbounds i16, ptr %q, i64 %i\n\
+         \x20 %x = load <8 x i16>, ptr %pp, align 2\n\
+         \x20 %y = load <8 x i16>, ptr %qq, align 2\n\
+         \x20 %xs = sext <8 x i16> %x to <8 x i64>\n\
+         \x20 %ys = sext <8 x i16> %y to <8 x i64>\n\
+         \x20 %m = mul nsw <8 x i64> %xs, %ys\n\
+         \x20 %a2 = add <8 x i64> %a, %m\n\
+         \x20 %i2 = add nuw i64 %i, 8\n\
+         \x20 %c = icmp eq i64 %i2, 800\n\
+         \x20 br i1 %c, label %x1, label %l\n\
+         x1:\n\
+         \x20 %r = tail call i64 @llvm.vector.reduce.add.v8i64(<8 x i64> %a2)\n\
+         \x20 ret i64 %r\n}\n\
+         declare i64 @llvm.vector.reduce.add.v8i64(<8 x i64>)\n";
+    let text = assembly(body);
+    let looped = loop_body(&text);
+    assert_eq!(count_dest(&looped, "smull", ".4s"), 2, "{text}");
+    assert_eq!(count_dest(&looped, "saddw", ".2d"), 4, "{text}");
+    assert!(!looped.contains("[sp"), "spilled in the loop:\n{text}");
+    if let Some(pinned) = pin(body) {
+        // The widening, the accumulation and the reduction are the pin's, in
+        // its order. Not compared: the zero accumulators (the pin remakes each
+        // with `movi`, we copy one) and the counter's `adds` against its
+        // `add`+`cmp`, neither of which is a wide-vector matter.
+        let wide = |listing: &str| -> Vec<String> {
+            let lines: Vec<&str> = listing.lines().collect();
+            let first = lines.iter().position(|line| line.contains("ldr")).unwrap();
+            lines[first..]
+                .iter()
+                .filter_map(|line| line.split_whitespace().next())
+                .filter(|name| ["ldr", "smull", "smull2", "saddw", "saddw2", "add", "addp", "fmov"].contains(name))
+                .map(str::to_owned)
+                .collect()
+        };
+        let (ours, theirs) = (wide(&text), wide(&pinned));
+        // Their `add x8` counter is the one extra `add`.
+        let without_counter = |names: Vec<String>| {
+            let mut names = names;
+            if let Some(at) = names.iter().position(|name| name == "add") {
+                names.remove(at);
+            }
+            names
+        };
+        assert_eq!(ours, without_counter(theirs), "ours:\n{text}\npin:\n{pinned}");
+    }
 }

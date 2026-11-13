@@ -225,6 +225,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT | ISD::VAArg => EVT::OTHER,
             ISD::SIntToFp | ISD::UIntToFp | ISD::LRint | ISD::LLRint => self.dag.value_type(self.dag.operand(node, 0)),
+            // `VectorLegalizer::LegalizeOp`: a reduction is asked of its
+            // vector's type.
+            op if op.vec_reduce_base_opcode().is_some() => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
                 NodeData::ValueType(inner) => inner,
                 _ => self.dag.value_type(node),
