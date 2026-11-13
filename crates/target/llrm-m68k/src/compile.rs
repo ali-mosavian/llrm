@@ -606,7 +606,20 @@ pub fn libcalls_for(
         options.size_libcalls,
         |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
         |name, kinds| {
-            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            // The price is one build: a call against a loop differs by far more than a
+            // trial moves, and each trial set costs several builds (x2.65 compile time).
+            let options = Options {
+                libcalls: Some(crate::libcalls::mask(kinds)),
+                shared_cse: false,
+                tail_duplicate: false,
+                return_dup: false,
+                class_split: false,
+                compare_destinations: false,
+                global_copies: false,
+                relax_classes: false,
+                remat_constants: false,
+                ..options
+            };
             items_with(module, name, cpu, options).map(|items| items_bytes(&items))
         },
     );
@@ -735,7 +748,7 @@ fn items_once(
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
-    // call the counts and shifts
+    // call the counts; their variable shifts are chosen like the 68020's
     let libcalls = if wants_size {
         let mut kinds =
             crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)));

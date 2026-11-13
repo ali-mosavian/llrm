@@ -58,3 +58,15 @@ fn a_caller_still_saves_registers_across_a_default_visibility_leaf_in_shared_cod
     let text = assembly_with("ipra_local_leaf.c", &["-fPIC"]);
     assert!(saves_a_register(&text), "the caller relied on an interposable leaf:\n{text}");
 }
+
+/// A callee that only reads `edi` and `esi` leaves them alone: the caller kept `a` and `b` in them across both
+/// calls. The arrival of the arguments was counted as a write, so every call of `f` and `g` was preceded by
+/// `mov edi, ..; mov esi, ..` (4 moves for 2 calls; select_of_constants `main` +1963 B).
+#[test]
+fn a_caller_keeps_its_arguments_in_the_argument_registers_across_a_callee_that_only_reads_them() {
+    let text = assembly("ipra_arg_copy.c");
+    let chain = text.split("chain proc near").nth(1).and_then(|rest| rest.split("chain endp").next()).expect("a chain body");
+    let moves: Vec<&str> =
+        chain.lines().map(str::trim).filter(|line| line.starts_with("mov ") && (line.contains(" edi,") || line.contains(" esi,"))).collect();
+    assert!(moves.is_empty(), "argument copies before the calls: {moves:?}\n{chain}");
+}
