@@ -66,7 +66,7 @@ use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use llrm_mir::tti::{ArithOp, Ty};
+use llrm_mir::tti::{ArithOp, MemoryOp, Ty};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
@@ -104,6 +104,9 @@ struct Access {
     /// The scalar element type.
     element: TypeId,
     align: u64,
+    /// The elements the address moves by per iteration: 1 is consecutive;
+    /// any other is scalarized (`CM_Scalarize`: a scalar access per lane).
+    stride: i64,
     /// For a store, the value it stores.
     stored: Option<Source>,
 }
@@ -330,9 +333,15 @@ fn extract(
                     (function.operand_type(cx.context, value).ok_or(Skipped("An untyped store"))?, data.operands[1])
                 };
                 let lane = element_ty(cx, value_ty).ok_or(Skipped("An element type the target has no vector of"))?;
-                if get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) != Some(1) {
-                    return Err(Skipped("An access that is not consecutive"));
-                }
+                // `getWideningDecision`: consecutive addresses widen; a stride
+                // of up to 4 is an interleave group and a reversal, a uniform
+                // address another decision, none translated here (the planner
+                // leaves them `Unpriced`); any other stride is scalarized.
+                let stride = match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {
+                    Some(1) => 1,
+                    Some(stride) if !(-4..=4).contains(&stride) => stride,
+                    _ => return Err(Skipped("An access that is not consecutive")),
+                };
                 let size = cx.layout.size_bits(&cx.context.types, value_ty) / 8;
                 let align = align.unwrap_or(size);
                 let mut stored = None;
@@ -343,29 +352,29 @@ fn extract(
                     if !widened_users(value) {
                         return Err(Skipped("A loaded value used other than by a store or a binary operation"));
                     }
-                    recipes.push(Recipe::Load { lane, align });
+                    recipes.push(if stride == 1 {
+                        Recipe::Load { lane, align }
+                    } else {
+                        Recipe::Scalarized { op: MemoryOp::Load, lane }
+                    });
                 } else {
                     stored = Some(source_of(data.operands[0], &widened)?);
-                    recipes.push(Recipe::Store { lane, align });
+                    recipes.push(if stride == 1 {
+                        Recipe::Store { lane, align }
+                    } else {
+                        Recipe::Scalarized { op: MemoryOp::Store, lane }
+                    });
                 }
                 if is_load {
                     widened.push(inst);
                 }
-                steps.push(Step::Access(Access { inst, is_load, element: value_ty, align, stored }));
+                steps.push(Step::Access(Access { inst, is_load, element: value_ty, align, stride, stored }));
             }
             Opcode::Binary(op) if inst != step => {
                 let value = data.result.expect("a binary operation");
                 // An index offset: only addresses use it (the accesses use the
                 // gep, not the sum).
-                let offsets_address = op == BinaryOp::Add
-                    && matches!(data.operands[1], Operand::Constant(_))
-                    && function.users(value).iter().all(|one| {
-                        function.parent(one.user) == Some(header)
-                            && matches!(
-                                function.instruction(one.user).opcode,
-                                Opcode::GetElementPtr { .. }
-                            )
-                    });
+                let offsets_address = address_arithmetic(function, header, value);
                 if offsets_address {
                     continue;
                 }
@@ -564,6 +573,34 @@ fn extract(
     Ok((recipes, Widening { steps, step, step_operand, index_ty, shape }))
 }
 
+/// Whether every use of `value` is the index of an address (a `gep`) of the
+/// loop, or an integer operation that is itself one: the scalar `shl`, `or`
+/// and `add` that make `&a[i * 8 + 3]` are not widened; each lane of a
+/// scalarized access has its own.
+fn address_arithmetic(
+    function: &Function,
+    header: BlockId,
+    value: ValueId,
+) -> bool {
+    function
+        .users(value)
+        .iter()
+        .all(
+            |one| {
+                let user = function.instruction(one.user);
+                function.parent(one.user) == Some(header)
+                    && match user.opcode {
+                        Opcode::GetElementPtr { .. } => one.index > 0,
+                        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or)
+                        | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc) => {
+                            user.result.is_some_and(|result| address_arithmetic(function, header, result))
+                        }
+                        _ => false,
+                    }
+            },
+        )
+}
+
 fn int_constant(
     context: &llrm_mir::context::Context,
     ty: TypeId,
@@ -641,6 +678,114 @@ fn source_part(
     }
 }
 
+/// `VPReplicateRecipe` of a strided access: per part, one scalar access per
+/// lane at `pointer + (part * VF + lane) * stride` elements, a load's lanes
+/// put together by `insertelement` and a store's taken apart by
+/// `extractelement`.
+fn scalarize_access(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    widening: &Widening,
+    plan: Plan,
+    splat_block: BlockId,
+    void_ty: TypeId,
+    access: Access,
+    wide: &mut Vec<(InstId, Vec<ValueId>)>,
+    splats: &mut Vec<(Operand, Operand)>,
+) {
+    let before = Position::Before(access.inst);
+    let vector_ty = context.types.intern(Type::Vector { element: access.element, count: plan.vf });
+    let lane_index = context.types.intern(Type::Int(64));
+    let pointer = if access.is_load {
+        function.instruction(access.inst).operands[0]
+    } else {
+        function.instruction(access.inst).operands[1]
+    };
+    let ptr_ty = match pointer {
+        Operand::Value(value) => function.value(value).ty,
+        _ => unreachable!("an address is a gep"),
+    };
+    let mut parts = Vec::new();
+    for part in 0..plan.ic {
+        let stored = (!access.is_load).then(|| {
+            source_part(
+                context,
+                function,
+                splat_block,
+                vector_ty,
+                plan.vf,
+                access.stored.expect("a store stores a value"),
+                part as usize,
+                wide,
+                splats,
+            )
+        });
+        let mut gathered = Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Poison }));
+        for lane in 0..plan.vf {
+            let moved = (i128::from(part) * i128::from(plan.vf) + i128::from(lane)) * i128::from(access.stride);
+            let address = if moved == 0 {
+                pointer
+            } else {
+                let offset = Operand::Constant(context.int(widening.index_ty, moved));
+                let gep = function.create_instruction(
+                    Opcode::GetElementPtr { source: access.element },
+                    ptr_ty,
+                    vec![pointer, offset],
+                    Flags::default(),
+                    Some("gep.lane"),
+                );
+                function.insert(gep, before).expect("the access's block");
+                Operand::Value(function.instruction(gep).result.expect("a gep"))
+            };
+            let at = Operand::Constant(context.int(lane_index, i128::from(lane)));
+            if let Some(vector) = stored {
+                let one = function.create_instruction(
+                    Opcode::ExtractElement,
+                    access.element,
+                    vec![vector, at],
+                    Flags::default(),
+                    None,
+                );
+                function.insert(one, before).expect("the access's block");
+                let value = Operand::Value(function.instruction(one).result.expect("an extractelement"));
+                let store = function.create_instruction(
+                    Opcode::Store { align: Some(access.align), volatile: false },
+                    void_ty,
+                    vec![value, address],
+                    Flags::default(),
+                    None,
+                );
+                function.insert(store, before).expect("the access's block");
+            } else {
+                let load = function.create_instruction(
+                    Opcode::Load { align: Some(access.align), volatile: false },
+                    access.element,
+                    vec![address],
+                    Flags::default(),
+                    None,
+                );
+                function.insert(load, before).expect("the access's block");
+                let value = Operand::Value(function.instruction(load).result.expect("a load"));
+                let inserted = function.create_instruction(
+                    Opcode::InsertElement,
+                    vector_ty,
+                    vec![gathered, value, at],
+                    Flags::default(),
+                    Some("wide.gather"),
+                );
+                function.insert(inserted, before).expect("the access's block");
+                gathered = Operand::Value(function.instruction(inserted).result.expect("an insertelement"));
+            }
+        }
+        if let Operand::Value(value) = gathered {
+            parts.push(value);
+        }
+    }
+    if access.is_load {
+        wide.push((access.inst, parts));
+    }
+}
+
 /// The wide loads or stores of one access: `IC` parts, part `k` at `k * VF`
 /// elements past the first.
 fn widen_access(
@@ -656,6 +801,10 @@ fn widen_access(
 ) {
     let before = Position::Before(access.inst);
     let vector_ty = context.types.intern(Type::Vector { element: access.element, count: plan.vf });
+    if access.stride != 1 {
+        scalarize_access(context, function, widening, plan, splat_block, void_ty, access, wide, splats);
+        return;
+    }
     let pointer = if access.is_load {
         function.instruction(access.inst).operands[0]
     } else {

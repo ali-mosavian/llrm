@@ -46,6 +46,7 @@ const SHIFT: &str = include_str!("../tests/lv/binop_shift.ll");
 const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
+const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
 const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
 const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
 const FP_SUB_DOUBLE: &str = include_str!("../tests/lv/fp_sub_double.ll");
@@ -101,6 +102,20 @@ fn an_int_to_float_conversion_is_widened_with_its_operand() {
     assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
     assert_eq!(count(&text, "load <4 x i32>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// The IDCT pass-1 shape (two stride-8 `i32` loads, `sitofp`, `fmuladd`,
+/// consecutive store): "An access that is not consecutive" kept it scalar; the
+/// pin makes four scalar loads per access and puts them together with
+/// `insertelement` (`CM_Scalarize`, VF 4).
+#[test]
+fn strided_loads_are_scalarized_and_put_together() {
+    let text = run(FP_STRIDED);
+    assert_eq!(count(&text, "load i32"), 8, "{text}");
+    assert_eq!(count(&text, "insertelement <4 x i32>"), 8, "{text}");
+    assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
 }
 
 /// `double` lanes: pin VF 2, IC 2 (step 4).
