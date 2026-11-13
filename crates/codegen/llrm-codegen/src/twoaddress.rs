@@ -1122,8 +1122,14 @@ impl<'a> Commuter<'a> {
         if written.is_empty() {
             return;
         }
-        self.src.retain(|_, to| match to {
-            Mapped::Register(register) => !written.iter().any(|clobbered| Self::compatible(*clobbered, *register)),
+        // What `one` delivers is mapped after the clobber: in the pin the
+        // `COPY $rax` follows the call, so a call's own result keeps its entry
+        // and the older results of the block lose theirs.
+        let delivered: Vec<u32> = one.delivers.iter().map(|(held, _)| held.value).collect();
+        self.src.retain(|value, to| match to {
+            Mapped::Register(register) => {
+                delivered.contains(value) || !written.iter().any(|clobbered| Self::compatible(*clobbered, *register))
+            }
             Mapped::Value(_) => true,
         });
     }

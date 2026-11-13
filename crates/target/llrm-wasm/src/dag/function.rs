@@ -71,11 +71,10 @@ pub fn builder_target(
             pointer: pointer(width),
             offset_folding: true,
             global_addresses_constant: true,
-            // DEVIATE: clang marks every symbol `dso_local` under `-fno-pic`,
-            // which the IR parser drops, so every symbol is. The golden
-            // inputs carry the keyword. Exit: `GlobalValue` carries it, no
-            // later than 2026-11-20.
-            dso_local_symbols: true,
+            // `shouldAssumeDSOLocal` on wasm is the IR's: local linkage or a
+            // visibility other than default (clang marks every definition
+            // `hidden`; a declaration of default visibility is preemptible).
+            dso_local_symbols: false,
             boolean_contents: BooleanContents::ZeroOrOne,
             // The pin keeps `i32.div_s` for `sdiv x, 4` at every
             // level: `isIntDivCheap`.
@@ -313,7 +312,11 @@ pub fn select_function(
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
+            // The objects a call made while the block was built (a variadic
+            // call's buffer) are the frame's too:
+            // `computeKnownBitsForFrameIndex` reads each object's alignment.
             one.dag.frame_alignments.clone_from(&alignments);
+            one.dag.frame_alignments.extend(info.objects.iter().map(|&(_, align)| u64::from(align)));
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
                     .map_err(|why| format!("{why:?}"))?;

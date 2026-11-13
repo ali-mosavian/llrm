@@ -1441,6 +1441,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::keeps_sahf_where_bytes_are_held`.
+    fn keeps_sahf_where_bytes_are_held(&self) -> bool {
+        false
+    }
+
     /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24):
     /// `Tuning::narrow_divide_live_limit`.
     fn narrow_divide_live_limit(&self) -> u32 {
@@ -2650,6 +2655,14 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// largest object offset a byte index reaches in one address instruction
+    /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
+    /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
+    fn address_index_max(&self) -> Option<u64> {
+        None
+    }
+
     /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
     /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
     /// none: the pass does not run.
@@ -2914,6 +2927,19 @@ pub trait Tti {
     ) -> Cost {
         let _ = (ret, args, kind);
         if is_free_intrinsic(name) { Cost::FREE } else { base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
+    }
+
+    /// `intrinsic_cost` of a `ctlz` or `cttz` whose `is_zero_poison` argument is the constant true: some targets
+    /// price it apart (`X86TTIImpl::getIntrinsicInstrCost`, `CTLZ_ZERO_POISON`). The same price as `intrinsic_cost`
+    /// where a target has no such rows.
+    fn zero_poison_intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        self.intrinsic_cost(name, ret, args, kind)
     }
 }
 

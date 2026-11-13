@@ -29,6 +29,7 @@ def load(name, path):
 run = load("run", HERE / "run.py")
 measure = load("measure", HERE.parent / "kernels" / "measure.py")
 guard = load("sweep_guard", HERE / "sweep_guard.py")
+same_width = load("same_width", HERE / "same_width.py")
 
 SDCC = [
     ("sdcc-size", ["--fsigned-char", "--opt-code-size"]),
@@ -172,6 +173,8 @@ def ours_cell(path, w, ctx, want):
         raise Void(f"SLOW llc over {ctx.compile_timeout} s of cpu")
     if p.returncode:
         raise Void("COMPILE " + (p.stderr.strip()[-100:] or "llc failed"))
+    if path.read_text().startswith("#define double float\n") and (calls := same_width.f64_helpers((w / "p.s").read_text())):
+        raise Void("WIDTH f64 helper called in a same-width source: " + " ".join(calls)[:80])
     (w / "rt.s").write_text(run.RUNTIME.read_text())
     assemble(w, run.REPORT, run.CRT0)
     for stem in ("rt", "p"):

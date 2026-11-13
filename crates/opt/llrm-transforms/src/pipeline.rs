@@ -141,7 +141,7 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
+    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
@@ -516,7 +516,7 @@ impl Options {
             "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => {
                 self.strength && self.lsr
             }
-            "indvars" | "window" | "gepoffset" | "narrowrange" => self.strength,
+            "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
@@ -1877,6 +1877,10 @@ pub fn recorded(
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
+    }
+    // After gepoffset, which leaves the constant part of an address in its own `gep`.
+    if applied.options.wanted("gepbyteindex") {
+        manager.add(gepbyteindex::GepByteIndex);
     }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
