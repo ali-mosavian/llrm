@@ -392,11 +392,11 @@ fn foldable(
         let writes = !own_store && (other.may_store || other.side_effects || other.call);
         // the load's codes go with it: a reader of them (`sne`) would see older
         // ones
-        let reads_codes = load_codes && other.reads_flags && !other.call;
+        let reads_codes = load_codes && other.reads_flags() && !other.call;
         if names_root || defines_address || writes || reads_codes {
             return None;
         }
-        if other.sets_flags || other.call {
+        if other.sets_flags() || other.call {
             load_codes = false;
         }
     }
@@ -508,7 +508,7 @@ fn address_of(
                 Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
                 _ => false,
             });
-            if names_root || (other.reads_flags && !other.call) {
+            if names_root || (other.reads_flags() && !other.call) {
                 return None;
             }
         }
@@ -520,10 +520,10 @@ fn address_of(
             break;
         }
         // read first: `addx` reads the codes it sets
-        if other.reads_flags || other.terminator {
+        if other.reads_flags() || other.terminator {
             return None;
         }
-        if other.sets_flags {
+        if other.sets_flags() {
             break;
         }
     }
@@ -779,13 +779,13 @@ fn codes_live_across(
     let set_before = (0..at)
         .rev()
         .take_while(|&i| blocks[i] == blocks[at])
-        .find(|&i| insts[i].sets_flags || insts[i].call)
-        .is_some_and(|i| insts[i].sets_flags && !insts[i].call);
+        .find(|&i| insts[i].sets_flags() || insts[i].call)
+        .is_some_and(|i| insts[i].sets_flags() && !insts[i].call);
     set_before
         && (at..insts.len())
             .take_while(|&i| blocks[i] == blocks[at])
-            .find(|&i| insts[i].reads_flags || insts[i].sets_flags || insts[i].call)
-            .is_some_and(|i| insts[i].reads_flags && !insts[i].call)
+            .find(|&i| insts[i].reads_flags() || insts[i].sets_flags() || insts[i].call)
+            .is_some_and(|i| insts[i].reads_flags() && !insts[i].call)
 }
 
 /// The pushes to make in `insts`. `frame_price(n)` is the price of the

@@ -576,6 +576,12 @@ impl Tti for AArch64 {
         BYTES_PER_COST_UNIT_MILLI
     }
 
+    /// DEVIATE INL-O1-HOT: a hot -O1 site inlines where the code grows by no
+    /// more than the call it removes.
+    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
+        Some(100)
+    }
+
     /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
     /// clocks, the median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
