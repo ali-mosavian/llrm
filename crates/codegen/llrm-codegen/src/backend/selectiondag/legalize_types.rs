@@ -564,6 +564,15 @@ impl<'a> TypeLegalizer<'a> {
                     )
                 } else {
                     let bits = from.size_in_bits();
+                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a value known non-negative (`nneg`, or
+                    // a clear sign bit), where the target asks (`TargetLowering::signed_conversion_of_nonneg`)
+                    let nonneg = op == ISD::UIntToFp
+                        && self.tli.signed_conversion_of_nonneg()
+                        && (self.dag.node(value).flags.0 & SDNodeFlags::NON_NEG.0 != 0
+                            || bits < INT_BITS
+                            || (bits <= INT_BITS
+                                && super::known_bits::masked_value_is_zero(self.dag, operand, 1u128 << (bits - 1))));
+                    let op = if nonneg { ISD::SIntToFp } else { op };
                     let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
                     let arg =
                         if bits < INT_BITS { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };

@@ -97,6 +97,7 @@ pub fn target_lowering_with(
     tl.init_actions();
     // no FPU at any CPU: every float operation is a compiler-rt call
     tl.set_soft_float_libcall_names();
+    tl.set_signed_conversion_of_nonneg();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
