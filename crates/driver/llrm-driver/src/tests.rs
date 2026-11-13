@@ -329,6 +329,18 @@ fn a_callee_the_size_guard_keeps_out_of_line_is_not_inlined_by_the_trial_at_m64_
     assert_eq!(calls, 6, "{listing}");
 }
 
+/// `x + (c > 0 ? 640 : -640)` was `mov 640; mov -640; cmovg; add`: the pin's `pushAddIntoCmovOfConsts` pushes the
+/// add through the select, `lea x+640; lea x-640; cmovg`, with no constant in a register (frame_address_stack_args
+/// m64 -Os `line` 77 B against the pin's 74).
+#[test]
+fn an_add_of_a_select_of_constants_is_pushed_through_the_select_at_m64() {
+    let text = include_str!("testdata/add_of_select_constants.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let moves = listing.lines().filter(|line| line.trim().starts_with("mov ") && line.contains(", 640")).count();
+    assert!(listing.contains("cmovg") && listing.matches("lea").count() == 2 && moves == 0, "{listing}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the

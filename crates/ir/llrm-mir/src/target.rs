@@ -462,6 +462,10 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// `visitADD`'s `(add a, b)` -> `(or disjoint a, b)` for operands that share no bits, which runs before the
+    /// target's `combineAdd` (so `pushAddIntoCmovOfConsts` meets only the adds that stay adds). Off: x86's rows
+    /// until judged per target (DEVIATE, owner llrm-target-x86-m64 at m64, exit 2026-11-24).
+    pub add_to_or_disjoint: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as written derives from its
     /// counter in one instruction a trip (`i << 4`) pays no setup bytes. Only a target whose byte
     /// model was checked sets it: m16 grew 28 QCport modules and `huge` +27% B without (#9587).
@@ -729,6 +733,7 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        add_to_or_disjoint: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,

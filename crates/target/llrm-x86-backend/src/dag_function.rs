@@ -1115,6 +1115,7 @@ fn selected_in(
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
     builder_target.dag.absolute_symbols = !module.position_independent();
+    builder_target.dag.add_to_or_disjoint = machine.tti().is_some_and(|tti| tti.add_to_or_disjoint());
     let builder_target = builder_target
         .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
