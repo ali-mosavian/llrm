@@ -242,6 +242,11 @@ pub struct Tuning {
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
+    /// The largest constant fill (bytes) of less than dword alignment `rep_stos_at_size` takes; a larger one is the pin's
+    /// `memset` call (`emitConstantSizeRepstos`: `Size > MaxInlineSizeThreshold`, 128). Like
+    /// `rep_movs_at_size_max`; DEVIATE REP-STOS-OS bounds itself to the pin's limit (owner
+    /// x86-m32, exit 2026-11-30).
+    pub rep_stos_at_size_max: u64,
     /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes (value setup, count,
     /// string op and the inline tail), where the pin's unit is the destination's alignment: a
     /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
@@ -250,11 +255,17 @@ pub struct Tuning {
     /// unit. Assumes ERMS/FSRM: `rep stosb` is no slower than `rep stosq` plus a tail (measured
     /// 24..4000 B, Zen 5); a target whose CPUs lack it must not set this. false: the pin's.
     pub rep_stos_priced_unit: bool,
-    /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
+    /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, up to `rep_movs_at_size_max`),
     /// not the library call: the setup is a few bytes against the call's push
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
+    /// The largest constant copy (bytes) of less than dword alignment `rep_movs_at_size` takes; a larger one is the pin's
+    /// `memcpy` call (`emitConstantSizeRepmov`: `Size > MaxInlineSizeThreshold`, 128). The
+    /// library copies by dwords, twice as fast as `rep movsw` of a 2-aligned block (scroll
+    /// -Os, 4000 B: 682,269 against 533,965 clk). DEVIATE REP-MOVS-OS bounds itself to the pin's limit
+    /// (owner x86-m32, exit 2026-11-30).
+    pub rep_movs_at_size_max: u64,
     /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`, or a `minsize` function, always).
     /// The pin expands at `-Os` (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only; clang
     /// `-Os` does not set `minsize`), so no target sets this. m32 did from #8672 to 2026-11-11: stft_fixed `-Os` 96.8M ->
@@ -436,6 +447,10 @@ pub struct Tuning {
     /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
     /// meet the constants together, as the pin's callee-first order gives. One round.
     pub inline_chain_trial: bool,
+    /// DEVIATE OS-INLINE-GROWTH: an -Os caller's SZ2 trial does not re-decide a site the by-size guard refused
+    /// where the callee stays and has two or more calls left: the guard's growth over all of them stands, as gcc's
+    /// `estimate_growth` at -Os. Its byte estimate was -22 B a copy where the objects grew +5.
+    pub inline_trial_defers_to_shared_growth: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
@@ -667,8 +682,10 @@ impl Tuning {
         imul_at_size: false,
         mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
+        rep_stos_at_size_max: 128,
         rep_stos_priced_unit: false,
         rep_movs_at_size: false,
+        rep_movs_at_size_max: 128,
         sdiv_pow2_stays_at_size: false,
         merge_functions_at_size: false,
         unroll_threshold: None,
@@ -700,6 +717,7 @@ impl Tuning {
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
+        inline_trial_defers_to_shared_growth: false,
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,

@@ -27,3 +27,19 @@ fn a_read_of_an_uninitialised_local_compiles() {
     );
     assert!(asm.contains("rts"), "{asm}");
 }
+
+/// value_of_valueless: `int nothing(int) {}` is `ret i32 undef`; the copy of it into `%d0` made `moveq #0,%d0`
+/// (and a second move for an i64) where gcc and the pin's `EmitCopyToRegNode` leave the register alone: +6 B a
+/// function, 6 cells against gcc.
+#[test]
+fn a_return_of_undef_is_a_bare_rts() {
+    for level in [Level::O1, Level::O2, Level::Os] {
+        for ty in ["i8", "i16", "i32", "i64"] {
+            let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine {ty} @f() {{\n  ret {ty} undef\n}}\n");
+            let asm = assembly(&ir, cpu_of("68000").unwrap(), level).expect("compiles");
+            let body: Vec<&str> =
+                asm.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('.') && !line.ends_with(':')).collect();
+            assert_eq!(body, ["rts"], "{ty} {level:?}:\n{asm}");
+        }
+    }
+}
