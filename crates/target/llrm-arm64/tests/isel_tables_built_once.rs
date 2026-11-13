@@ -54,10 +54,10 @@ fn making_the_selection_hooks_decodes_no_table() {
     use llrm_arm64::dag::hooks::Aarch64Hooks;
 
     let globals = Globals::default();
-    drop(Aarch64Hooks::new(globals.clone(), false));
+    drop(Aarch64Hooks::new(globals.clone(), false, false));
     let (_, made) = counted(|| {
         for _ in 0..20 {
-            drop(std::hint::black_box(Aarch64Hooks::new(globals.clone(), false)));
+            drop(std::hint::black_box(Aarch64Hooks::new(globals.clone(), false, false)));
         }
     });
     assert_eq!(made, 0, "{made} allocations for 20 hooks");

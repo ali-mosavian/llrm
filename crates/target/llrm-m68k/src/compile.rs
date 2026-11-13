@@ -122,6 +122,10 @@ pub struct Options {
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
+    /// A spill slot lives in a free address register where one is free over
+    /// its range (DEVIATE SLOT-REG, [`crate::slotreg`]). On in the shipped
+    /// options; `LLRM_NO_SLOT_REG` turns it off.
+    pub slot_registers: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
     /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
     /// changed is also built without it and the cheaper kept
@@ -222,6 +226,7 @@ impl Options {
         reuse_shift_flags: false,
         reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
+        slot_registers: false,
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
@@ -263,6 +268,7 @@ impl Default for Options {
             reuse_shift_flags: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
+            slot_registers: !llrm_support::env_flag!("LLRM_NO_SLOT_REG"),
             shared_cse: true,
             direct_copies: false,
             shared_licm: false,
@@ -319,7 +325,11 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        let narrow = !options.strict && !size_build(module, name, options);
+        let narrow = if !options.strict && !size_build(module, name, options) {
+            NarrowMultiplies::Speed
+        } else {
+            NarrowMultiplies::Off
+        };
         optimized = mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow)?;
         &optimized
     } else {
@@ -331,27 +341,40 @@ pub fn items_with(
     // The relaxation is the last choice of a build, so it is made before the
     // two builds of the shared `MachineCSE` are compared.
     let prefixes = Prefixes::default();
-    let finished = |options: Options| -> Result<(Vec<Item>, bool), String> {
+    let wants_slots = options.slot_registers;
+    let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
         let (plain, saved, chosen, shared) =
             items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
         if !options.relax_classes || !saved {
-            return Ok((plain, shared));
+            return Ok((plain, shared, chosen));
         }
-        let (relaxed, touched) = items_once(module, name, cpu, Options { relax_classes: true, ..chosen }, &prefixes)?;
+        let relaxed_options = Options { relax_classes: true, ..chosen };
+        let (relaxed, touched) = items_once(module, name, cpu, relaxed_options, &prefixes)?;
         let relax = touched.relax_classes && crate::trial::keeps(&relaxed, &plain, cpu, price);
-        Ok((if relax { relaxed } else { plain }, shared))
+        Ok(if relax { (relaxed, shared, relaxed_options) } else { (plain, shared, chosen) })
     };
-    let (with, shared) = finished(options)?;
+    // The trials run without the slot registers, so their choices are the
+    // pass's being off; it is tried once on the build they end on.
+    let options = Options { slot_registers: false, ..options };
+    let (mut kept, shared, mut kept_options) = finished(options)?;
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
     if shared {
-        let (without, _) = finished(Options { shared_cse: false, ..options })?;
-        if !crate::trial::keeps(&with, &without, cpu, price) {
-            return Ok(without);
+        let (without, _, without_options) = finished(Options { shared_cse: false, ..options })?;
+        if !crate::trial::keeps(&kept, &without, cpu, price) {
+            (kept, kept_options) = (without, without_options);
         }
     }
-    Ok(with)
+    // A function with no spill slot has nothing to move.
+    if wants_slots && prefixes.had_slots.get() {
+        let (items, touched) =
+            items_once(module, name, cpu, Options { slot_registers: true, ..kept_options }, &prefixes)?;
+        if touched.slot_registers && crate::trial::keeps(&items, &kept, cpu, price) {
+            return Ok(items);
+        }
+    }
+    Ok(kept)
 }
 
 /// The trials of [`items_with`] on a module the mid-end has run on: the items,
@@ -539,6 +562,8 @@ struct Touched {
     remat_constants: bool,
     /// The shared `MachineCSE` changed the function.
     shared_cse: bool,
+    /// A spill slot moved into an address register ([`crate::slotreg`]).
+    slot_registers: bool,
     /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
     /// trial credits clocks only inside loops, since a straight-line multiply
     /// may never run.
@@ -606,8 +631,9 @@ pub fn libcalls_for(
         options.size_libcalls,
         |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
         |name, kinds| {
-            // The price is one build: a call against a loop differs by far more than a
-            // trial moves, and each trial set costs several builds (x2.65 compile time).
+            // The price is one build: a call against a loop differs by far more
+            // than a trial moves, and each trial set costs several
+            // builds (x2.65 compile time).
             let options = Options {
                 libcalls: Some(crate::libcalls::mask(kinds)),
                 shared_cse: false,
@@ -618,6 +644,7 @@ pub fn libcalls_for(
                 global_copies: false,
                 relax_classes: false,
                 remat_constants: false,
+                slot_registers: false,
                 ..options
             };
             items_with(module, name, cpu, options).map(|items| items_bytes(&items))
@@ -714,6 +741,8 @@ struct Prefixes {
     emitted: Memo<Selection, Emission>,
     early: Memo<(Selection, String), Prepared>,
     late: Memo<(Selection, String), Prepared>,
+    /// Some build had a spill slot ([`crate::slotreg`] has something to move).
+    had_slots: std::cell::Cell<bool>,
 }
 
 /// The options that only the stages after `MachineCSE` read, left out of the
@@ -724,7 +753,7 @@ fn before_late_stage(options: Options) -> Options {
 
 /// The options that only allocation and the stages after it read.
 fn before_allocation(options: Options) -> Options {
-    Options { global_copies: false, tail_duplicate: false, return_dup: false, ..options }
+    Options { global_copies: false, tail_duplicate: false, return_dup: false, slot_registers: false, ..options }
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -915,7 +944,7 @@ fn items_once(
         )?
     };
     drop(allocating);
-    let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    let mut slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     let sp = llrm_support::debug::span("m68k postalloc");
     verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
@@ -945,6 +974,11 @@ fn items_once(
         &crate::REGISTER_INFO,
         &slots,
     );
+    if options.short && options.slot_registers {
+        let moved = crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots);
+        touched.slot_registers = !moved.is_empty();
+        slots.retain(|slot| !moved.contains(slot));
+    }
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
         crate::spillmove::spills_as_moves(
@@ -1009,6 +1043,7 @@ fn items_once(
     }
     out.extend(jump_tables(&function, number));
     drop(sp);
+    prefixes.had_slots.set(prefixes.had_slots.get() || !slots.is_empty());
     Ok((out, touched))
 }
 
@@ -1183,11 +1218,41 @@ pub fn mid_end_for(
     mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
-/// [`mid_end_for`], narrowing multiplies where `narrow_multiplies`.
+/// Where a multiply the range proves 16 bits wide is done as `mulu.w`
+/// (`narrowrange::multiplies_narrowed`, DEVIATE NRW-2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NarrowMultiplies {
+    Off,
+    /// Not in a size build: the extensions are bytes, and a 68020 multiplies
+    /// 32 bits in one instruction.
+    Speed,
+    /// Every build: no 32-bit multiply (68000, 68010) makes the multiply a
+    /// call, 16 B at the site beside `mulu.w`'s 2 B, and the routine's 54 B
+    /// for a program that calls it nowhere else.
+    Always,
+}
+
+impl NarrowMultiplies {
+    /// The policy for `cpu` at a level that is `speed` (-O2 and up) or not.
+    pub fn of(
+        cpu: Cpu,
+        optimizing: bool,
+        speed: bool,
+    ) -> Self {
+        match (optimizing, matches!(cpu, Cpu::M68000 | Cpu::M68010), speed) {
+            (false, ..) => Self::Off,
+            (true, true, _) => Self::Always,
+            (true, false, true) => Self::Speed,
+            (true, false, false) => Self::Off,
+        }
+    }
+}
+
+/// [`mid_end_for`], narrowing multiplies as `narrow_multiplies` says.
 pub fn mid_end_for_narrowing(
     module: &Module,
     cpu: Cpu,
-    narrow_multiplies: bool,
+    narrow_multiplies: NarrowMultiplies,
 ) -> Result<Module, String> {
     mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies)
 }
@@ -1199,16 +1264,16 @@ pub fn mid_end_described_by(
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, tti, machine, false)
+    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off)
 }
 
 /// [`mid_end_described_by`], narrowing the multiplies the range proves narrow
-/// (`narrow_multiplies`: -O2 and -O3, not for size).
+/// (`narrow_multiplies`).
 pub fn mid_end_narrowing(
     module: &Module,
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
-    narrow_multiplies: bool,
+    narrow_multiplies: NarrowMultiplies,
 ) -> Result<Module, String> {
     MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
@@ -1233,7 +1298,12 @@ pub fn mid_end_narrowing(
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
         // after it: it folds `zext (trunc iv)` back into the counter
         let for_size = has(&function.attrs, "optsize") || has(&function.attrs, "minsize");
-        if let (true, false, Some(limit)) = (narrow_multiplies, for_size, tti.range_narrowing_width()) {
+        let wanted = match narrow_multiplies {
+            NarrowMultiplies::Off => false,
+            NarrowMultiplies::Speed => !for_size,
+            NarrowMultiplies::Always => true,
+        };
+        if let (true, Some(limit)) = (wanted, tti.range_narrowing_width()) {
             llrm_transforms::narrowrange::multiplies_narrowed(context, &layout, function, &outer, limit);
         }
         // the ids the pass handed out for declarations name nothing until they

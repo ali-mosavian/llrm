@@ -1,7 +1,8 @@
 //! DEVIATE LG3 where bytes outrank clocks: at -Os the end-biased solution is
-//! refused when the target's byte table prices it larger than the pin's; at
-//! -O1, where clocks are the other axis, only when it also saves no loop
-//! instruction (x_radix -O1 lost 1578 clk to a veto that saved 37 B).
+//! refused when the target's byte table prices it larger than the pin's, at
+//! -Os and at -O1 alike: both axes are strict at -O1, and a form that saves a
+//! loop instruction for more bytes is a trade no bar counts (quicksort -O1
+//! m32: 27 B larger, over the bytes bar, for one instruction).
 
 use std::rc::Rc;
 
@@ -84,12 +85,14 @@ fn reduced(size: bool, bytes_strict: bool) -> String {
 }
 
 /// The swap loop's end-biased form saves a loop instruction (2 against 3) for
-/// one byte of setup (24 against 23). -O1 refused it on the byte alone: x_radix
-/// -O1 m32 went from 42660 to 44238 clk.
+/// one byte of setup (24 against 23). -O1 kept it on the instruction, as it kept
+/// quicksort's (27 B for one instruction, 286 B against a 268 B bar).
 #[test]
-fn o1_keeps_end_biased_that_saves_an_instruction_for_a_byte() {
+fn o1_refuses_end_biased_that_saves_an_instruction_for_a_byte() {
+    let speed = reduced(false, false);
+    assert!(speed.contains("llrm-end-biased"), "premise: at speed the swap loop is end-biased\n{speed}");
     let o1 = reduced(false, true);
-    assert!(o1.contains("llrm-end-biased"), "-O1 refused a form that saves an instruction\n{o1}");
+    assert!(!o1.contains("llrm-end-biased"), "-O1 kept a form the byte table prices larger\n{o1}");
 }
 
 /// -Os has no clock axis: the same form costs a byte and is refused.

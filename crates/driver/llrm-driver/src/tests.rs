@@ -1155,7 +1155,8 @@ fn a_zero_stored_for_a_conversion_is_made_outside_the_loop_at_m32_os() {
 
 /// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the
 /// bytes, and x_bubble -Os grew 3 B (273 against 270), quicksort 2, switch_sparse 1, jpeg_fixed 16, while the sparse switch
-/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS.
+/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS. The sparse switch keeps a join
+/// (`xor` of the result): since #9572 its leaves are `mov; ret` (no `push; pop`), so a bare `ret` leaves nothing to fold.
 #[test]
 fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
     let bubble = "target datalayout = \"@m32-datalayout@\"\n\
@@ -1245,7 +1246,8 @@ fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
                   br label %7\n\
                 7:\n\
                   %8 = phi i32 [ 0, %6 ], [ 61, %5 ], [ 52, %2 ], [ 93, %3 ], [ 17, %4 ], [ 31, %1 ]\n\
-                  ret i32 %8\n\
+                  %9 = xor i32 %8, %0\n\
+                  ret i32 %9\n\
                 }\n";
     let listing = |text: &str, name: &str, folded: bool| {
         let build = || compiled(&flags(&["-mabi=sysv", "-Os"]), text, name).unwrap();
@@ -3154,9 +3156,10 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
 /// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
 /// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
 /// operand (RAX) not set by a glued CopyToReg" refused the function. The -Os copy is `rep movsd` since
-/// REP-MOVS-OS (the dword block is a byte shorter than REX.W `movsq`).
+/// REP-MOVS-OS (the dword block is a byte shorter than REX.W `movsq`), and the
+/// zero fill is `rep stosd` for the same reason (REP-STOS-UNIT).
 #[test]
-fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
+fn a_zero_fill_and_copy_at_m64_are_rep_string_instructions() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @use(ptr, ptr)\n\
@@ -3168,7 +3171,7 @@ fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
                 \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("rep stosq") && listing.contains("rep movsd"), "{listing}");
+    assert!(listing.contains("rep stosd") && listing.contains("rep movsd"), "{listing}");
 }
 
 /// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
@@ -3541,7 +3544,7 @@ fn dense_switch_ir() -> String {
 #[test]
 fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
     for (mode, layout, int, jump, tail) in [
-        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr $J", "]"),
+        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr cs:$J", "]"),
         ("-m32", "@m32-datalayout@", "i32", "jmp dword ptr $J", "*4]"),
     ] {
         let mut text = format!("target datalayout = \"{layout}\"\n");
@@ -4457,12 +4460,12 @@ fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
     }
 }
 
-/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
-/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
-/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
-/// +12 B over the `rep stosq` the port had.
+/// Tuned for size, a 128-byte clear is `rep stosd` (9 B, a byte under `stosq`),
+/// not `xorps` and eight `movaps` (up to 72 B); a 32-byte clear stays two
+/// stores. The pin's store count made it eight `movaps`: pattern_fill -Os +50 B,
+/// huffman_decode +12 B over the `rep stos` the port had.
 #[test]
-fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+fn a_128_byte_clear_at_m64_os_is_rep_stosd_and_a_32_byte_one_is_stores() {
     let ir = |size: u32| {
         format!(
             "target datalayout = \"@m64-datalayout@\"\n\
@@ -4477,7 +4480,7 @@ fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let large = listing(128);
-    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    assert!(large.contains("rep stosd") && !large.contains("movaps"), "{large}");
     let small = listing(32);
     assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
 }
@@ -4567,11 +4570,12 @@ fn a_constant_fill_at_m64_is_a_pool_splat_and_16_byte_stores() {
     assert!(!listing.contains("qword ptr [rsp") && !listing.contains("movabs"), "{listing}");
 }
 
-/// Tuned for size, a 128-byte constant fill (not zero) is `rep stosq` too
-/// (idioms Os: eight RIP-relative `movaps` and the pool load were +41 B over
-/// it); a 32-byte one stays a pool splat and two `movaps`.
+/// Tuned for size, a 128-byte constant fill (not zero) is a `rep stosb` of
+/// `mov al, imm` (9 B; `stosq` needs a 7-10 B value) (idioms Os: eight
+/// RIP-relative `movaps` and the pool load were +41 B over it); a 32-byte one
+/// stays a pool splat and two `movaps`.
 #[test]
-fn a_128_byte_constant_fill_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+fn a_128_byte_constant_fill_at_m64_os_is_rep_stosb_and_a_32_byte_one_is_stores() {
     let ir = |size: u32| {
         format!(
             "target datalayout = \"@m64-datalayout@\"\n\
@@ -4586,7 +4590,7 @@ fn a_128_byte_constant_fill_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores()
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let (large, small) = (listing(128), listing(32));
-    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    assert!(large.contains("rep stosb") && !large.contains("movaps"), "{large}");
     assert!(small.contains("movaps") && !small.contains("rep stos"), "{small}");
 }
 
@@ -4793,7 +4797,8 @@ fn a_product_summed_into_an_add_keeps_the_lea_chain_at_m64() {
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
-/// byte is stores one step below the boundary and `rep stosq` at it.
+/// byte is stores one step below the boundary and `rep stos` at it, of the unit
+/// with the fewest bytes: `stosd` for zero, `stosb` (`mov al, imm`) otherwise.
 #[test]
 fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
     let listing = |byte: u32, size: u32| {
@@ -4808,11 +4813,11 @@ fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     // (byte, the longest fill that stays stores, the shortest that is `rep
-    // stosq`)
-    for (byte, stores, rep) in [(0, 32, 48), (255, 32, 48), (65, 48, 64)] {
+    // stos`, its unit)
+    for (byte, stores, rep, unit) in [(0, 32, 48, "stosd"), (255, 32, 48, "stosb"), (65, 48, 64, "stosb")] {
         let (inline, string) = (listing(byte, stores), listing(byte, rep));
         assert!(inline.contains("movaps") && !inline.contains("rep stos"), "byte {byte}, {stores} B: {inline}");
-        assert!(string.contains("rep stosq") && !string.contains("movaps"), "byte {byte}, {rep} B: {string}");
+        assert!(string.contains(&format!("rep {unit}")) && !string.contains("movaps"), "byte {byte}, {rep} B: {string}");
     }
 }
 

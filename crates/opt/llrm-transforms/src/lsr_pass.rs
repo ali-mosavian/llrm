@@ -277,6 +277,7 @@ fn plan_loop(
         native_widths: tti.lsr_native_integer_widths(),
         use_list_order: tti.lsr_users_in_use_list_order(),
         phi_operand_uses: tti.lsr_phi_operand_uses(),
+        phi_users_first: tti.lsr_phi_users_first(),
     };
     let mut users = match carried {
         Some(users) => {
@@ -431,14 +432,12 @@ fn plan_loop(
         };
         // DEVIATE LG3, where bytes outrank clocks (-Os, -O1): the end-biased
         // solution is refused when the target's byte table prices it larger
-        // than the pin's. At -O1 clocks are the other axis: it stays when it
-        // saves loop instructions (x_radix -O1: a compare saved, 1578 clk
-        // for 37 B), and is refused when it adds any.
-        let bytes_larger = cost.size_bytes > pin_cost.size_bytes;
-        let saves_insns = cost.c.insns < pin_cost.c.insns;
+        // than the pin's. Both axes are strict at -O1, so a form that saves an
+        // instruction for more bytes is a trade no bar counts (quicksort -O1
+        // m32: 27 B larger for one instruction, over the bar on bytes).
         let bytes_outweigh_saving = bytes_strict
             && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
-            && if size { bytes_larger } else { cost.c.insns > pin_cost.c.insns || (bytes_larger && !saves_insns) };
+            && cost.size_bytes > pin_cost.size_bytes;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving
