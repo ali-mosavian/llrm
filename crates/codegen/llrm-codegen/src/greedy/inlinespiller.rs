@@ -513,7 +513,7 @@ impl<'a> InlineSpiller<'a> {
             // (`canFoldAsLoad`, `foldMemoryOperand` with the load as LoadMI),
             // which asks for no register.
             if let ([key], [Loc::Mem(cell)]) = (members.as_slice(), what.sources.as_slice())
-                && self.tii.is_plain_move(&what)
+                && self.tii.can_fold_as_load(&what)
                 && let Some(mut folded) =
                     self.tii.fold_memory_operand_classed(&Arc::clone(lis.instr(*key)), reg, cell, &|value| {
                         self.is_xmm(value)
@@ -525,6 +525,7 @@ impl<'a> InlineSpiller<'a> {
                         reads.uses.push(*read);
                     }
                 }
+                reads.symbol = def.symbol;
                 lis.rewrite_instr(block, *key, folded);
                 self.folded += 1;
                 continue;

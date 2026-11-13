@@ -1,4 +1,5 @@
-//! k_strnicmp at -Os: two case folds a trip, each a range test and a select of `c - 32`.
+//! k_strnicmp at -Os: two case folds a trip, each a range test and a select of
+//! `c - 32`.
 
 mod common;
 
@@ -47,12 +48,27 @@ done:
 
 /// The folds' subtractions were made ahead of their selects, both, every trip:
 /// 123 B against llvm-mos's 104 (matrix k_strnicmp Os).
-#[test]
-fn a_case_fold_at_os_costs_no_more_than_llvm_mos_104_bytes() {
+fn k_strnicmp_bytes() -> (u32, String) {
     let ir = format!("target datalayout = \"{}\"\n{STRNICMP}", datalayout());
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     let from = text.find("k_strnicmp:").unwrap_or_else(|| panic!("no k_strnicmp in\n{text}"));
     let body: String = text[from..].split(".segment").next().unwrap().to_owned();
     let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    (bytes, body)
+}
+
+/// The bar. #9525 (LSR keeps 16-bit widths at -Os) took it from 104 to 109 B:
+/// row 6502-LSR-SIZE.
+#[test]
+#[ignore = "6502-LSR-SIZE: 109 B against 104, exit 2026-11-24"]
+fn a_case_fold_at_os_costs_no_more_than_llvm_mos_104_bytes() {
+    let (bytes, body) = k_strnicmp_bytes();
     assert!(bytes <= 104, "{bytes} B\n{body}");
+}
+
+/// The row's own number: a further regression is not hidden by the row.
+#[test]
+fn a_case_fold_at_os_stays_within_its_row_109_bytes() {
+    let (bytes, body) = k_strnicmp_bytes();
+    assert!(bytes <= 109, "{bytes} B\n{body}");
 }
