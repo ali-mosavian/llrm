@@ -470,6 +470,9 @@ impl llrm_target::Target for M64 {
                             // `mov m64, imm32`: sign-extended.
                             unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
+                            // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): see
+                            // `selectoptimize::SelectOptimizePass`.
+                            branch_constant_arm_selects: true,
                             // DEVIATE INL-O2 RATE at m64 (owner x86-m64, exit 2026-11-24), as x86-m32's:
                             // a speed caller's inline pays the callee's bytes at the m64 net rate
                             // (312 milliclocks a byte); gcc's `ipa-inline` takes a copy only where its

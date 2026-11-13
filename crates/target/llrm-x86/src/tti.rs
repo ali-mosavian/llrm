@@ -1109,6 +1109,10 @@ impl Tti for X86 {
         self.tuning.sink_select_arms
     }
 
+    fn branches_constant_arm_selects(&self) -> bool {
+        self.tuning.branch_constant_arm_selects
+    }
+
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
         self.tuning.prefixed_16_bit_counters
     }
