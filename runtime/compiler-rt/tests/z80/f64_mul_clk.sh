@@ -8,7 +8,7 @@ DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"; INC="-include $R/confi
 cc() { # src name defs
   $P --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -I$R/include $INC $3 -S -emit-llvm $1 -o $2.raw.ll
   sed -E "s|^target datalayout = .*|target datalayout = \"$DL\"|; /^target triple/d" $2.raw.ll > $2.ll; $LLC -S -Os -o $2.s $2.ll; sed -i 's/___/__/g' $2.s; sdasz80 -g -o $2.rel $2.s; }
-mkdir lib; for m in fp/f64/mul fp/f64/pack int/clzsi2; do cc $R/lib/$m.c lib/$(basename $m) ""; done
+mkdir lib; for m in fp/f64/mul fp/f64/pack fp/f64/unpack int/clzsi2; do cc $R/lib/$m.c lib/$(basename $m) ""; done
 cp $R/../../crates/target/llrm-z80/runtime/z80_rt.s . ; sdasz80 -g -o lib/zrt.rel z80_rt.s; sdasz80 -g -o lib/int32.rel $R/config/z80/int32.s; sdasz80 -g -o lib/umulhisi3.rel $R/config/z80/umulhisi3.s
 (INC=; cc $R/lib/fp/f32/pack.c lib/f32pack "") ; ls lib/*.rel | xargs -n1 basename | sed 's/\.rel$//' | sort -r > lib/sf.lib   # zrt first: its shifts, not the per-bit ones of lib/int
 cc $R/tests/z80/f64_drv.c drv '-DOP=__muldf3'
