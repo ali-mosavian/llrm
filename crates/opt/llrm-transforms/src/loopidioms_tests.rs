@@ -1572,9 +1572,22 @@ fn a_fill_in_a_loop_that_reads_its_object_is_kept() {
 #[test]
 fn a_constant_store_beside_a_computed_one_is_filled_when_the_trips_pay() {
     let sheet = llrm_mir::target::OperationCosts { store_immediate: 1, fill: 1, fill_cell: 1, ..Default::default() };
-    let priced = |trips| Some((&sheet, 3000, Some(trips), Some((trips + 3) / 4)));
-    assert!(super::fill_beside_computed_stores_pays(true, priced(1200), 1, 1));
-    assert!(!super::fill_beside_computed_stores_pays(true, priced(1), 1, 1));
-    assert!(!super::fill_beside_computed_stores_pays(false, priced(1200), 1, 1));
-    assert!(!super::fill_beside_computed_stores_pays(true, None, 1, 1));
+    let priced = |trips| Some((&sheet, 3000, Some(trips), Some((trips * 2 + 3) / 4)));
+    assert!(super::fill_beside_computed_stores_pays(true, priced(1200), 2, 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(true, priced(1), 2, 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(false, priced(1200), 2, 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(true, None, 2, 1, 1));
+}
+
+/// The cells were those of every store in the loop: with the T-state sheet (a store 38 T, a fill 47 T and 84 T a
+/// dword cell) a computed and a constant store over 1200 trips priced 600 cells for the 300 the fill stores, 50k T
+/// against the 45.6k the removed store runs: the fill was refused (`fill_beside_computed`, red on release/next).
+#[test]
+fn the_fill_beside_a_computed_store_is_priced_for_the_cells_it_stores() {
+    let sheet = llrm_mir::target::OperationCosts { store_immediate: 38, fill: 47, fill_cell: 84, ..Default::default() };
+    let cells = (1200 * 2 + 3) / 4;
+    assert!(super::fill_beside_computed_stores_pays(true, Some((&sheet, 3000, Some(1200), Some(cells))), 2, 1, 1));
+    // a fill of the same cells for a store that costs less than the fill's own does not pay
+    let cheap = llrm_mir::target::OperationCosts { store_immediate: 10, ..sheet };
+    assert!(!super::fill_beside_computed_stores_pays(true, Some((&cheap, 3000, Some(1200), Some(cells))), 2, 1, 1));
 }

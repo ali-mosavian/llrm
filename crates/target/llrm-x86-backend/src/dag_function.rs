@@ -1117,7 +1117,9 @@ fn selected_in(
     let builder_target = builder_target
         .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
-        .with_float_store(cpu.float_store)
+        // `-fexcess-precision=standard` rounds what the x87 keeps wider; scalar SSE has no excess precision
+        // (FLT_EVAL_METHOD 0), so the store gcc and clang never make is not made.
+        .with_float_store(cpu.float_store && !arch.scalar_sse())
         // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin:
         // minsize only). Measured 2026-11-06, m32 -Os, 71 programs, pin-exact
         // flip: 14 programs change, +203 B in all, matmul only -4 B, and four

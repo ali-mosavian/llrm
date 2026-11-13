@@ -741,6 +741,11 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
+    /// -O1 is strict on bytes where the -Os trial is (`unroll_trial_bytes_strict`): a peel copies the loop body.
+    fn peels_at_o1(&self) -> bool {
+        !self.tuning.unroll_trial_bytes_strict
+    }
+
     fn unroll_trial_bytes_strict(&self) -> bool {
         self.tuning.unroll_trial_bytes_strict
     }
@@ -956,10 +961,6 @@ impl Tti for X86 {
 
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
-    }
-
-    fn push_imm_at_size(&self) -> bool {
-        self.tuning.push_imm_at_size
     }
 
     fn merge_functions_at_size(&self) -> bool {
@@ -1775,6 +1776,10 @@ impl Tti for X86 {
     /// it.
     fn frame_address_is_free(&self) -> bool {
         true
+    }
+
+    fn ext_load_costs_extra(&self) -> bool {
+        self.tuning.ext_load_extra_clocks > 0
     }
 
     /// 64 in long mode, else 32 (also at m16, on a 386 or later).

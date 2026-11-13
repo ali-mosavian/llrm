@@ -30,6 +30,8 @@ pub struct FunctionLoweringInfo {
     /// The frame object of the SysV x86-64 register save area a variadic
     /// function has (`RegSaveFrameIndex`), made with the allocas' objects.
     pub variadic_save: Option<i32>,
+    /// `MFI.hasVarSizedObjects()`: a non-static alloca was lowered.
+    pub has_var_sized_objects: bool,
     /// The entry block's writes of zero the runtime's zero-filled frame
     /// already holds (`prezeroed`): not lowered.
     pub prezeroed: llrm_mir::dense::IdSet<InstId>,
@@ -171,6 +173,7 @@ impl FunctionLoweringInfo {
             value_regs: IdMap::new(),
             static_allocas: IdMap::new(),
             variadic_save: None,
+            has_var_sized_objects: false,
             prezeroed: Default::default(),
             elided_stores: Default::default(),
             elided_args: Default::default(),

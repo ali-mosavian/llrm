@@ -302,7 +302,7 @@ pub fn select_block(
     // memory) are frame objects numbered after the function's.
     dag.first_temporary = info.next_stack_object();
     let tables = &info.jump_tables;
-    let mut lowering = WasmLowering { tables };
+    let mut lowering = WasmLowering { tables, cpu };
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
