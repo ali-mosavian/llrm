@@ -475,3 +475,43 @@ b0:
     );
     assert!(changed && text.matches("load i16").count() == 1, "{text}");
 }
+
+/// A `switch` with two cases to the block that loads is two unavailable
+/// predecessors, as LLVM's `predecessors` counts edges, so PRE is refused. The
+/// port walked blocks: one unavailable predecessor, one edge split, and the
+/// other edge fed the loop-carried value, which is poison on the way in and
+/// stale after any call (two cases to one block in a loop under -O2: the
+/// second case skipped its load, x86_32-dos).
+#[test]
+fn test_a_load_behind_two_switch_cases_to_one_block_is_not_partly_redundant() {
+    let (text, changed) = loaded(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b4 ]
+  %n = add i16 %i, 1
+  switch i16 %y, label %b4 [
+    i16 1, label %b2
+    i16 2, label %b2
+  ]
+
+b2:
+  %d = load i16, ptr @g
+  %e = add i16 %d, -1
+  store i16 %e, ptr @g
+  br label %b4
+
+b4:
+  %c = icmp ult i16 %n, 3
+  br i1 %c, label %b1, label %b5
+
+b5:
+  ret i16 %n
+}
+",
+        XY,
+    );
+    assert!(!changed && !text.contains(".pre") && !text.contains("poison"), "{text}");
+}
