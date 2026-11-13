@@ -136,6 +136,17 @@ fn test_the_llrm_runtime_keeps_zero_variables_in_an_unstored_bss() {
     assert!(stored(&microsoft, "BC_DATA") >= 200);
 }
 
+/// A DATA line was stored re-rendered with ", " between its values: jpeg_fixed's ten rows of "362,502,473" grew 118 B of BC_DS over BC's, which
+/// keeps the text as written (checked on BC 4.5's object: spaced, quoted and commented lines are all verbatim).
+#[test]
+fn test_data_text_is_stored_as_written() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(&tmp, "text.bas", b"data 1,2 , \"a b\"  ,3\r\n");
+    let program = qb45(&source);
+    let data = image(&records(&program, "text.bas"), "BC_DS");
+    assert_eq!(&data[2..], b" 1,2 , \"a b\"  ,3\x00\xff\xff\x01");
+}
+
 /// Gorillas' synthetic DATA keys made B$RSTB fault before its first READ.
 #[test]
 fn test_restore_keys_select_the_labeled_serialized_data_row() {
