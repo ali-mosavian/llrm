@@ -112,3 +112,17 @@ fn a_constant_operand_is_left_to_the_pins_folds() {
     assert!(!out.contains("mulu\t") && !out.contains("muls\t"), "{out}");
     assert!(out.contains("#15"), "the fold's constant 3 * 5 is added after the product:\n{out}");
 }
+
+/// `(short n) * 1000` was `ext.l` and a chain or `__mulsi3` (68000 -O1 +60 B, -Os +70 B against gcc; -O2 +14 B; 68020+ +12 B in
+/// `register_args_truncate`) because the half multiply left every constant operand to the folds. gcc: `muls.w #1000,%d1`.
+#[test]
+fn a_halfword_times_a_constant_that_fits_it_is_one_muls_w() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 1000\n  ret i32 %m\n}";
+    for cpu in CPUS {
+        for level in [Level::O1, Level::Os] {
+            let out = asm(ir, cpu, level);
+            assert!(out.contains("muls\t") && out.contains("#1000") && !out.contains("__mulsi3") && !out.contains("muls.l"), "{cpu} {level:?}:\n{out}");
+        }
+    }
+}

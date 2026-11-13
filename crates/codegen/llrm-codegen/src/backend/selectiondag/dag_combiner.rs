@@ -79,6 +79,10 @@ pub struct HalfMul {
     /// without the copy: it is used only for operands that are already full
     /// width.
     pub has_full_multiply: bool,
+    /// A constant operand that fits the half is the half multiply's immediate
+    /// when [`CombineHooks::half_multiply_by_constant`] prices it under the
+    /// chain and the full multiply.
+    pub constant: bool,
 }
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
@@ -93,6 +97,20 @@ pub trait CombineHooks {
         _vt: EVT,
     ) -> Option<HalfMul> {
         None
+    }
+
+    /// Whether `x * c`, with `x` known to fit the half (signed or unsigned)
+    /// and `c` fitting it the same way, is the half multiply with `c` as its
+    /// immediate, by the target's price against the chain and the full
+    /// multiply. The pin has no such rule. DEVIATE: false by default; m68k
+    /// answers per CPU and level (M68K-HALF-MUL-CONST).
+    fn half_multiply_by_constant(
+        &self,
+        _vt: EVT,
+        _c: u128,
+        _signed: bool,
+    ) -> bool {
+        false
     }
 
     /// `TLI.shouldNormalizeToSelectSequence`: `select (or c0, c1), x, y` is
@@ -4343,6 +4361,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));
             }
         }
+        // x * c with x and c in the half: the half multiply, before a chain or the full multiply.
+        if let (Some(c), false) = (c1, opaque) {
+            if let Some(half) = self.hooks.mul_of_halves(vt).filter(|half| half.constant) {
+                if let Some(product) = self.half_multiply_by_constant(n0, c, vt, half) {
+                    return Some(product);
+                }
+            }
+        }
         // `(mul x, 2^n +- 1)` as `(add/sub (shl x, n), x)`, and with a trailing
         // power of two as a shift of both ([pin][pin]).
         //
@@ -4414,6 +4440,33 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.dag.get_negative(inner, vt)
             }
         }
+    }
+
+    /// `x * c` as the half multiply with `c` as the immediate, when `x` fits
+    /// the half unsigned and `c` does, or both fit it signed, and the target
+    /// prices it under the alternatives.
+    fn half_multiply_by_constant(
+        &mut self,
+        x: SDValue,
+        c: u128,
+        vt: EVT,
+        half: HalfMul,
+    ) -> Option<SDValue> {
+        let (width, narrow) = (vt.size_in_bits(), half.half.size_in_bits());
+        let high = super::fold::mask(width) & !super::fold::mask(narrow);
+        let signed = if super::known_bits::masked_value_is_zero(self.dag, x, high) && c & high == 0 {
+            false
+        } else if super::known_bits::num_sign_bits(self.dag, x) > width - narrow && matches!(c >> (narrow - 1), 0) | (c >> (narrow - 1) == super::fold::mask(width) >> (narrow - 1)) {
+            true
+        } else {
+            return None;
+        };
+        if !self.hooks.half_multiply_by_constant(vt, c, signed) {
+            return None;
+        }
+        let immediate = self.dag.get_constant(c & super::fold::mask(narrow), half.half);
+        let opcode = if signed { half.signed } else { half.unsigned };
+        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, immediate]))
     }
 
     /// The half-by-half multiply of `x * y`, where both are known to fit the
