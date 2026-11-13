@@ -436,7 +436,7 @@ fn plan_loop(
         // for 37 B of bases and negations; x_reverse's two base+index
         // accesses).
         let bytes_outweigh_saving = bytes_strict
-            && tti.lsr_size_model().is_some()
+            && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
             && (cost.size_bytes > pin_cost.size_bytes || (!size && cost.c.insns > pin_cost.c.insns));
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
