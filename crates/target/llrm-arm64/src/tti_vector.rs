@@ -139,6 +139,18 @@ pub(crate) fn cast_cost(
     if let Some(&(.., cost)) = CONVERSIONS.iter().find(|&&(one, to, from, _)| one == kind && to == dst && from == src) {
         return Some(Cost::of(cost));
     }
+    // "INT_TO_FP of i64->f32 will scalarize, which is required to avoid
+    // double-rounding issues": one scalar conversion (a legal operation: 1)
+    // per lane, the lanes taken out of the source and put into the result
+    // ([L4545](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L4545)).
+    if matches!(kind, CastKind::SIToFP | CastKind::UIToFP)
+        && dst.lane == Ty::Float
+        && matches!(src.lane, Ty::Int(bits) if bits > 32)
+    {
+        let taken = scalarization_overhead(src, false, true, cost_kind)?;
+        let put = scalarization_overhead(dst, true, false, cost_kind)?;
+        return Some(Cost::of(i64::from(dst.count) + taken.value + put.value));
+    }
     if kind == CastKind::BitCast {
         let (to, from) = (vector_pieces(dst)?, vector_pieces(src)?);
         let bits = |ty: VectorTy, (_, lane): (i64, u32)| u64::from(lane) * u64::from(ty.count);

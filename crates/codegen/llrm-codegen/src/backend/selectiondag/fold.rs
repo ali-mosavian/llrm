@@ -371,6 +371,38 @@ impl SelectionDAG {
                     return Folded::Done(n1);
                 }
             }
+            // `EXTRACT_VECTOR_ELT` of a vector (`getNode`,
+            // [SelectionDAG.cpp#L8733](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8733)):
+            // of undef, of a lane past the end, of a `BUILD_VECTOR` and of an
+            // `INSERT_VECTOR_ELT`, "often formed while vector operations are
+            // lowered to scalars". DEVIATE EV1:
+            // the `CONCAT_VECTORS`, `SPLAT_VECTOR` and
+            // one-lane `EXTRACT_SUBVECTOR` cases are not made.
+            ISD::ExtractElement if self.value_type(n1).is_vector() => {
+                if self.is_undef(n1) || self.is_undef(n2) {
+                    return Folded::Done(self.get_undef(vt));
+                }
+                if let Some(lane) = n2_const {
+                    if lane >= u128::from(self.value_type(n1).lanes()) {
+                        return Folded::Done(self.get_poison(vt));
+                    }
+                    if self.opcode(n1) == ISD::BuildVector {
+                        let element = self.operand(n1, lane as usize);
+                        return Folded::Done(self.get_any_ext_or_trunc(element, vt));
+                    }
+                    if self.opcode(n1) == ISD::InsertVectorElt
+                        && let Some(at) = self.constant(self.operand(n1, 2))
+                    {
+                        let value = self.operand(n1, 1);
+                        if at != lane {
+                            let vector = self.operand(n1, 0);
+                            return Folded::Done(self.get_node(ISD::ExtractElement, vt, &[vector, n2]));
+                        } else if self.value_type(value) == vt {
+                            return Folded::Done(value);
+                        }
+                    }
+                }
+            }
             ISD::ExtractElement => {
                 let index = n2_const.expect("EXTRACT_ELEMENT index");
                 if self.opcode(n1) == ISD::BuildPair {

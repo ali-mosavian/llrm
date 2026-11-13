@@ -169,6 +169,16 @@ fn lane_bits(ty: Ty) -> u32 {
     }
 }
 
+/// The lane types of a recipe's vectors: its result's, and a conversion's
+/// source.
+fn recipe_lanes(recipe: &Recipe) -> impl Iterator<Item = Ty> {
+    let source = match *recipe {
+        Recipe::Cast { src, .. } => Some(src),
+        _ => None,
+    };
+    recipe_lane(recipe).into_iter().chain(source)
+}
+
 fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
     match *recipe {
         Recipe::Load { lane, .. }
@@ -263,19 +273,19 @@ fn iteration_cost(
     let kind = CostKind::RecipThroughput;
     let scalarized = recipes.iter().any(|recipe| matches!(recipe, Recipe::Scalarized { .. }));
     let mut total = if vf == 1 { scalar_control_cost(tti) } else { vector_control_cost(tti, scalarized) };
-    // DEVIATE LV-SPLIT: the pin prices a vector wider than one register as the
-    // parts the type legalizer splits it into (`SplitVectorResult`) and one
-    // narrower as its widened register (`WidenVectorResult`, the D-register
-    // types); the backends here do neither yet, so a VF is taken only when
-    // every recipe's vector fills one register exactly. Owner llrm-arm64-vec,
-    // exit LV-X4.
+    // DEVIATE LV-SPLIT: the pin prices a vector narrower than one register as
+    // its widened register (`WidenVectorResult`, the D-register types), which
+    // the backends here do not do yet, so a VF is taken only when every
+    // recipe's vectors (a conversion's source too) are one register or two
+    // (`SplitVectorResult` of a 256-bit type; no wider MVT exists yet). Owner
+    // llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
     if backend_limits
         && vf > 1
         && recipes
             .iter()
-            .filter_map(recipe_lane)
-            .any(|lane| u64::from(lane_bits(lane)) * u64::from(vf) != register_bits)
+            .flat_map(recipe_lanes)
+            .any(|lane| ![register_bits, 2 * register_bits].contains(&(u64::from(lane_bits(lane)) * u64::from(vf))))
     {
         return Err(NotTaken);
     }

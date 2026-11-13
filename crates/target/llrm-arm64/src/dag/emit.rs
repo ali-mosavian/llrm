@@ -631,6 +631,36 @@ fn vector_inst(
         "2i64" => Some(Arrangement::D2),
         _ => None,
     };
+    // `INSvi64gpr`, `INSvi32lane`: a general register or a lane of another
+    // vector into one lane of `rd`, which starts as the first operand.
+    if let Some((lanes, form)) = name
+        .strip_prefix("INSv")
+        .and_then(|rest| {
+            rest.strip_suffix("gpr")
+                .map(|lane| (lane, true))
+                .or_else(|| rest.strip_suffix("lane").map(|lane| (lane, false)))
+        })
+        .and_then(|(lane, gpr)| {
+            let lanes = match lane {
+                "i8" => Arrangement::B16,
+                "i16" => Arrangement::H8,
+                "i32" => Arrangement::S4,
+                "i64" => Arrangement::D2,
+                _ => return None,
+            };
+            Some((lanes, gpr))
+        })
+    {
+        return Some(match (operands, form) {
+            ([Operand::Fpr(_), Operand::Imm(index), Operand::Reg(rn)], true) => {
+                Ok(Inst::VectorInsGpr { lanes, rd, rn: *rn, index: *index as u8 })
+            }
+            ([Operand::Fpr(_), Operand::Imm(index), Operand::Fpr(rn), Operand::Imm(src)], false) => {
+                Ok(Inst::VectorInsLane { lanes, rd, rn: *rn, index: *index as u8, src: *src as u8 })
+            }
+            _ => wrong(),
+        });
+    }
     // `DUPv4i32lane`, `DUPv2i64lane`: a lane of a vector register in every
     // lane (the float splat's `dup v.4s, v.s[0]`).
     if let Some(lanes) = name.strip_prefix("DUPv").and_then(|rest| rest.strip_suffix("lane")).and_then(lanes_of) {
@@ -659,6 +689,38 @@ fn vector_inst(
         };
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorFpBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    // `FMLAv4i32_indexed`: the multiplier is a lane of `rm`.
+    if let Some(lanes) =
+        name.strip_prefix("FMULv").and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
+            "4i32" => Some(Arrangement::S4),
+            "2i64" => Some(Arrangement::D2),
+            _ => None,
+        })
+    {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::VectorFmulLane { lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
+        let Some(lanes) =
+            name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
+                "v4i32" => Some(Arrangement::S4),
+                "v2i64" => Some(Arrangement::D2),
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::VectorFmaLane { op, lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
             _ => wrong(),
         });
     }
@@ -746,6 +808,30 @@ fn float_inst(
     let wrong = || Err(format!("{name}: operands are not those of its form"));
     if let Some(fill) = vector_fill(name, operands) {
         return Some(fill.map(|fill| Inst::VectorFill { rd, fill }));
+    }
+    // `UMOVvi32`: one lane of a vector into a general register; the pin's
+    // `_idx0` forms read lane 0 and take no index.
+    if let Some((lanes, idx0)) = name
+        .strip_prefix("UMOVv")
+        .map(|rest| rest.strip_suffix("_idx0").map_or((rest, false), |lane| (lane, true)))
+        .and_then(|(lane, idx0)| {
+            let lanes = match lane {
+                "i8" => Arrangement::B16,
+                "i16" => Arrangement::H8,
+                "i32" => Arrangement::S4,
+                "i64" => Arrangement::D2,
+                _ => return None,
+            };
+            Some((lanes, idx0))
+        })
+    {
+        return Some(match (operands, idx0) {
+            ([Operand::Fpr(rn), Operand::Imm(index)], false) => {
+                Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: *index as u8 })
+            }
+            ([Operand::Fpr(rn)], true) => Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: 0 }),
+            _ => wrong(),
+        });
     }
     if let Some(inst) = vector_inst(name, rd, operands) {
         return Some(inst);
@@ -1017,6 +1103,71 @@ impl Emitter<'_> {
             NodeData::PhysReg(id) => Ok((gpr_of(id)?, true)),
             NodeData::Register(number) => Ok((self.vreg(number), false)),
             other => Err(format!("a register operand that is {other:?}")),
+        }
+    }
+
+    /// `InstrEmitter::AddRegisterOperand`'s `constrainRegClass`: a value in the
+    /// other register file than the operand's class is copied across (`fmov`),
+    /// as when a lane of a vector, held in a `V` register, is read as an
+    /// integer.
+    fn constrain_register_classes(
+        &mut self,
+        code: u32,
+        node: &llrm_codegen::backend::selectiondag::SDNode,
+        operands: &mut [Operand],
+    ) {
+        use llrm_dagisel::generated::aarch64::ids::reg;
+        let Some(desc) = u16::try_from(code).ok().and_then(llrm_dagisel::generated::aarch64::instrinfo::desc) else {
+            return;
+        };
+        if desc.is_pseudo() {
+            return;
+        }
+        let values: Vec<SDValue> = node
+            .ops
+            .iter()
+            .copied()
+            .filter(|op| {
+                let vt = self.dag.value_type(*op);
+                (vt != EVT::OTHER || self.dag.opcode(*op) == ISD::BasicBlock) && vt != EVT::GLUE
+            })
+            .collect();
+        const GPR: [u16; 7] = [
+            reg::GPR32RegClassID,
+            reg::GPR32spRegClassID,
+            reg::GPR32commonRegClassID,
+            reg::GPR64RegClassID,
+            reg::GPR64spRegClassID,
+            reg::GPR64commonRegClassID,
+            reg::GPR64noipRegClassID,
+        ];
+        const FPR: [u16; 7] = [
+            reg::FPR8RegClassID,
+            reg::FPR16RegClassID,
+            reg::FPR32RegClassID,
+            reg::FPR64RegClassID,
+            reg::FPR128RegClassID,
+            reg::FPR128_loRegClassID,
+            reg::FPR128_0to7RegClassID,
+        ];
+        for (at, operand) in operands.iter_mut().enumerate() {
+            let Some(want) = desc.operands.get(usize::from(desc.num_defs) + at) else { break };
+            let Ok(class) = u16::try_from(want.reg_class) else { continue };
+            let bits = self.dag.value_type(values[at]).size_in_bits();
+            let (width, size) = if bits > 32 { (Width::X, FpSize::D) } else { (Width::W, FpSize::S) };
+            match *operand {
+                Operand::Fpr(fpr) if GPR.contains(&class) => {
+                    let gpr = self.mf.gpr();
+                    self.ops.push(Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: false }, width, size, gpr, fpr }));
+                    *operand = Operand::Reg(gpr);
+                }
+                Operand::Reg(gpr) if FPR.contains(&class) && !self.dag.value_type(values[at]).is_vector() => {
+                    let fpr = self.mf.fpr();
+                    self.ops.push(Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr, fpr }));
+                    *operand = Operand::Fpr(fpr);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -1892,6 +2043,7 @@ impl Emitter<'_> {
                     .map(|&op| self.operand(op))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|why| format!("{name}: {why}"))?;
+                self.constrain_register_classes(code, node, &mut operands);
                 if let Some(size) = name
                     .strip_prefix("FCMPE")
                     .or_else(|| name.strip_prefix("FCMP"))
@@ -1943,7 +2095,14 @@ impl Emitter<'_> {
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     // `FMLA` adds into the register it reads: `rd` is a copy of
                     // the accumulator that the instruction then changes.
-                    if let (Inst::VectorFma { .. }, Some(Operand::Fpr(acc))) = (&inst, operands.first()) {
+                    if let (
+                        Inst::VectorFma { .. }
+                        | Inst::VectorFmaLane { .. }
+                        | Inst::VectorInsGpr { .. }
+                        | Inst::VectorInsLane { .. },
+                        Some(Operand::Fpr(acc)),
+                    ) = (&inst, operands.first())
+                    {
                         self.ops.push(Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(*acc) });
                     }
                     self.ops.push(Op::I(inst));
@@ -1996,6 +2155,21 @@ impl Emitter<'_> {
                     if result {
                         self.values.insert((id, 0), if op == Atomic::Cas { rs } else { rt });
                     }
+                    return Ok(());
+                }
+                // `ST1i32`: a lane of a vector stored at the address in a
+                // register.
+                if let Some(lanes) = name.strip_prefix("ST1i").and_then(|bits| match bits {
+                    "8" => Some(Arrangement::B16),
+                    "16" => Some(Arrangement::H8),
+                    "32" => Some(Arrangement::S4),
+                    "64" => Some(Arrangement::D2),
+                    _ => None,
+                }) {
+                    let [Operand::Fpr(rt), Operand::Imm(index), Operand::Reg(base)] = operands.as_slice() else {
+                        return Err(format!("{name}: operands are not those of its form"));
+                    };
+                    self.ops.push(Op::I(Inst::VectorStoreLane { lanes, rt: *rt, index: *index as u8, base: *base }));
                     return Ok(());
                 }
                 if let Some(access) = memory_form(name) {

@@ -48,6 +48,7 @@ const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
 const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
 const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
+const FP_CONVERT_NARROW: &str = include_str!("../tests/lv/fp_convert_narrow.ll");
 const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
 const FP_SUB_DOUBLE: &str = include_str!("../tests/lv/fp_sub_double.ll");
 const FP_NEG_DOUBLE: &str = include_str!("../tests/lv/fp_neg_double.ll");
@@ -102,6 +103,20 @@ fn an_int_to_float_conversion_is_widened_with_its_operand() {
     assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
     assert_eq!(count(&text, "load <4 x i32>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `b[i] = (float)a[i] * 2.5f` over `i64`: "A cast that changes the lane width"
+/// kept the loop scalar; the pin takes VF 4, IC 1 (`opt
+/// -passes=loop-vectorize -mcpu=generic`: one `load <4 x i64>`, one `sitofp
+/// <4 x i64> to <4 x float>`, step 4).
+#[test]
+fn a_narrowing_int_to_float_conversion_is_widened() {
+    let text = run(FP_CONVERT_NARROW);
+    assert_eq!(count(&text, "load <4 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "sitofp <4 x i64> "), 1, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
 }
 
 /// The IDCT pass-1 shape (two stride-8 `i32` loads, `sitofp`, `fmuladd`,
