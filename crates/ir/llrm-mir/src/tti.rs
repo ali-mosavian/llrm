@@ -344,6 +344,11 @@ pub struct LsrSizeModel {
     /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
     /// order stands (LG3's byte test included).
     pub size_only: bool,
+    /// DEVIATE LSR-BYTES-FIRST (owner llrm-target-6502, exit 2026-11-24): at size, the model's
+    /// bytes order formulae before their instruction and register counts. The x86 order keeps
+    /// those first; a target whose every instruction is priced here (the 6502's zero-page cells
+    /// are no register pressure) orders by bytes alone.
+    pub bytes_first: bool,
     /// The `cmp` an exit test costs when the counter does not end at zero
     /// (a count down to zero takes its flags from the step): its bytes for a
     /// compare of `bits` against an immediate, or a register where `None`.
@@ -365,6 +370,7 @@ impl LsrSizeModel {
         setup_cap: 4,
         derived_setup_free: false,
         size_only: false,
+        bytes_first: false,
         exit_compare: |_, _| 0,
     };
 
@@ -3279,6 +3285,7 @@ mod size_model_tests {
         setup_cap: 2,
         derived_setup_free: false,
         size_only: false,
+        bytes_first: false,
         exit_compare: |bits, _| bits,
     };
 

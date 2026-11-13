@@ -378,6 +378,7 @@ pub fn lsr_size_model_64() -> llrm_mir::tti::LsrSizeModel {
         setup: bytes(lea(Width::B64, &Mem::new(Base::Reg, false, 8), false)),
         setup_cap: 4,
         size_only: true,
+        bytes_first: false,
         exit_compare,
     }
 }

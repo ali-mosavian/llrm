@@ -368,6 +368,7 @@ impl Tti for Mos6502 {
             setup_cap: 4,
             derived_setup_free: true,
             size_only: true,
+            bytes_first: true,
             exit_compare: lsr_exit_compare_bytes,
         })
     }

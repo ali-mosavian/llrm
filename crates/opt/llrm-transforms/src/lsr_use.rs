@@ -584,6 +584,23 @@ impl Cost {
         // before the rest in `isLess`, and an address register is the scarcer
         // one there (DEVIATE LU8).
         if (self.size || other.size) && tti.lsr_size_model().is_some() {
+            if tti.lsr_size_model().is_some_and(|m| m.bytes_first) {
+                let key = |x: &Cost| {
+                    let c = &x.c;
+                    (
+                        x.size_bytes,
+                        c.insns,
+                        c.num_regs,
+                        c.add_rec_cost,
+                        c.num_iv_muls,
+                        c.num_base_adds,
+                        c.scale_cost,
+                        c.imm_cost,
+                        c.setup_cost,
+                    )
+                };
+                return key(self) < key(other);
+            }
             let restricted = tti.address_registers() < tti.number_of_gpr_registers();
             let key = |x: &Cost| {
                 let c = &x.c;
