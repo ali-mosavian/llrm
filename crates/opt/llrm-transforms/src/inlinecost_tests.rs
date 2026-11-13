@@ -1509,7 +1509,10 @@ entry:
   %s = ashr i64 %m, 63
   %l = lshr i64 %s, 54
   %t = add i64 %m, %l
-  %r = ashr i64 %t, 10
+  %u = xor i64 %t, %a
+  %v = add i64 %u, %b
+  %z = lshr i64 %v, 3
+  %r = ashr i64 %z, 10
   ret i64 %r
 }
 define i64 @f(i64 %x, i64 %y) {
