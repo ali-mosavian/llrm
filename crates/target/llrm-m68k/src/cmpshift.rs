@@ -63,7 +63,7 @@ fn reusable(
             found = Some(index);
             break;
         }
-        if before.sets_flags || before.call {
+        if before.sets_flags() || before.call {
             return None;
         }
     }
@@ -71,13 +71,13 @@ fn reusable(
     // the readers of the codes after the compare: only `bhi` and `bls`
     let mut readers = Vec::new();
     for (index, after) in insts.iter().enumerate().skip(at + 1) {
-        if after.reads_flags && !after.call {
+        if after.reads_flags() && !after.call {
             match after.kind {
                 Kind::Op("Bhi8" | "Bls8") => readers.push(index),
                 _ => return None,
             }
         }
-        if after.sets_flags || after.call {
+        if after.sets_flags() || after.call {
             break;
         }
     }

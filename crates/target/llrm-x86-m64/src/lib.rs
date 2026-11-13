@@ -434,12 +434,17 @@ impl llrm_target::Target for M64 {
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
+                            lsr_size_order: true,
+                            lsr_size_x86_64: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
+                            // `Tuning::rep_stos_priced_unit`. gcc fills a frame object with `rep stosb`.
+                            rep_stos_priced_unit: true,
                             // DEVIATE UNROLL-OS-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
                             // m32 entry, see `Tuning::unroll_trial_at_size`. gcc completely peels a
                             // small loop at -Os when the code does not grow.
@@ -480,6 +485,9 @@ impl llrm_target::Target for M64 {
                             // function that stays). -O1 and -Os unchanged.
                             speed_inline_milliclocks_per_byte: 312,
                             inline_trial_keeps_shrinking_copy: true,
+                            // DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            inline_trials_at_o1: true,
+                            inline_chain_trial: true,
                             // DEVIATE SD103-M64 (owner x86-m64, exit 2026-11-24), as x86-m32's SD103-M32:
                             // the pin's cost rule, with the price of a merged `a && b` it omits taken
                             // from the table: two `setcc`, a logic op and a `test`, less the branch

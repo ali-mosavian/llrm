@@ -513,9 +513,11 @@ impl<'a> InlineSpiller<'a> {
             // (`canFoldAsLoad`, `foldMemoryOperand` with the load as LoadMI),
             // which asks for no register.
             if let ([key], [Loc::Mem(cell)]) = (members.as_slice(), what.sources.as_slice())
-                && self.tii.is_plain_move(&what)
+                && self.tii.can_fold_as_load(&what)
                 && let Some(mut folded) =
-                    self.tii.fold_memory_operand_classed(&Arc::clone(lis.instr(*key)), reg, cell, &|value| self.is_xmm(value))
+                    self.tii.fold_memory_operand_classed(&Arc::clone(lis.instr(*key)), reg, cell, &|value| {
+                        self.is_xmm(value)
+                    })
             {
                 let reads = Arc::make_mut(&mut folded);
                 for read in &def.uses {
@@ -523,6 +525,7 @@ impl<'a> InlineSpiller<'a> {
                         reads.uses.push(*read);
                     }
                 }
+                reads.symbol = def.symbol;
                 lis.rewrite_instr(block, *key, folded);
                 self.folded += 1;
                 continue;
@@ -2261,6 +2264,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let tables = Rc::new(Tables::default());
         for value in 1..=4 {
@@ -2298,6 +2302,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let copy = |name: &str| x87(0, Operation::Move, name, vec![held(2)], vec![held(1)], vec![2], vec![1]);
         assert_eq!(tii.copy_source(&copy("cp")), Some(1));
@@ -2334,6 +2339,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 1..=3 {
@@ -2396,6 +2402,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 1..=5 {
@@ -2443,6 +2450,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 2..=4 {
@@ -2526,6 +2534,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let order_of = |_: u32| Vec::new();
         let mut spiller = InlineSpiller::new(
@@ -2631,6 +2640,7 @@ mod tests {
                 classes: &classes,
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             };
             let tables = Rc::new(Tables::default());
             tables.widths.borrow_mut().insert(1, 2);
@@ -2708,6 +2718,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let tables = Rc::new(Tables::default());
         tables.widths.borrow_mut().insert(1, 2);
@@ -2783,6 +2794,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let tables = Rc::new(Tables::default());
         tables.widths.borrow_mut().insert(1, 2);
@@ -2846,6 +2858,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let order_of = |_: u32| Vec::new();
         let mut spiller = InlineSpiller::new(
@@ -2947,6 +2960,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 1..=2 {
@@ -2974,6 +2988,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         assert!(tii.write_zero_extends(4, 8) && !tii.write_zero_extends(2, 8) && !tii.write_zero_extends(4, 4));
         let wide = |value| Held { value, width: 8, offset: 0 };
@@ -3035,6 +3050,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for (value, width) in [(1, 4), (2, 1), (3, 4), (4, 4)] {

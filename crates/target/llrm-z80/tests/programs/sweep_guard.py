@@ -12,6 +12,7 @@ import subprocess
 LIBRARY_CHECKS = (
     "runtime/compiler-rt/tests/z80/f64_div_clk.sh",
     "runtime/compiler-rt/tests/z80/f64_mul_clk.sh",
+    "runtime/compiler-rt/tests/z80/mul64_check.sh",
     "runtime/compiler-rt/tests/z80_f64_split_test.sh",
 )
 
@@ -60,6 +61,30 @@ def summary(expected, results, reasons=None, required=lambda tag: tag == "ours",
     if failed:
         line += "; no row: " + " ".join(f"{n}({reasons.get(n, lost.get(n, 'FAILED'))})" for n in sorted(failed))
     return line, not failed
+
+
+def read_gcc_column(path):
+    """`{name: (bytes, clocks)}` of the gcc-z80 fork's run of the corpus (`run.py CC1 LEVEL OUT.tsv`, rows `name\tgcc\tbytes\tclocks`)."""
+    column = {}
+    for line in open(path):
+        name, tag, size, clocks = line.rstrip("\n").split("\t")[:4]
+        if tag == "gcc":
+            column[name] = (int(size), int(clocks))
+    return column
+
+
+def add_gcc_row(rows, gcc_cell, not_a_bar):
+    """`rows` with the fork's `gcc` row beside them: a bar of its own where SDCC gives none (13 of 36 cells, 2026-11-13) and one more
+    column where it does (the bar is the lowest column per metric). Not for a program that computes a different program under
+    the fork (its `double` is 32 bits, as SDCC's: `incomparable`)."""
+    if gcc_cell is None or not_a_bar or any(tag == "gcc" for tag, _, _ in rows):
+        return rows
+    return rows + [("gcc", *gcc_cell)]
+
+
+def has_bar(rows):
+    """Whether any column besides ours bars the program."""
+    return any(tag.startswith("sdcc") or tag == "gcc" for tag, _, _ in rows)
 
 
 def softfloat_library_missing(environ, sdcc_only, no_softfloat):

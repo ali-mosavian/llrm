@@ -918,6 +918,9 @@ fn allocate_once_with(
     if std::env::var("LLRM_NO_Z80_BUMP").is_err() {
         crate::bump::step_by_flags(&mut function);
     }
+    if std::env::var("LLRM_NO_Z80_SINK").is_err() {
+        crate::sink_group::sink_closed_groups(&mut function);
+    }
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
         crate::forward::read_pairs_from_their_registers(&mut function);
@@ -1031,10 +1034,18 @@ fn settle(
     if SLOT_BY_CONFLICTS.with(std::cell::Cell::get) {
         choices.push((true, true));
     }
-    for (peek, by_conflicts) in choices {
-        let mut candidate = function.clone();
+    // the nested reload order is one more variant, priced like the others: a slot read again later is a `pop` and
+    // a `push` where it is on top, and the reorder can take that away (frameless -O1 +4 B)
+    let mut nested = function.clone();
+    let nests = nest_reloads(&mut nested, &assignment);
+    let variants: Vec<(bool, bool, bool)> = choices
+        .iter()
+        .flat_map(|&(peek, by_conflicts)| [(peek, by_conflicts, false)].into_iter().chain(nests.then_some((peek, by_conflicts, true))))
+        .collect();
+    for (peek, by_conflicts, nest) in variants {
+        let mut candidate = if nest { nested.clone() } else { function.clone() };
         let report = stack_slot_report_by(&mut candidate, &assignment, peek, by_conflicts);
-        if peek && !by_conflicts {
+        if peek && !by_conflicts && !nest {
             if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
                 for (slot, (stores, loads)) in &report.accesses {
                     let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
@@ -1061,7 +1072,7 @@ fn settle(
         let now = priced_in_loops(&stacked, level);
         if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
             eprintln!(
-                "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} best {best_price:?} stacked {now:?}"
+                "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} nest {nest} best {best_price:?} stacked {now:?}"
             );
         }
         if keeps_stacked(level, best_price, now) {
@@ -1818,6 +1829,71 @@ pub fn stack_slot_report_by(
     }
     refused.sort_by_key(|(slot, _)| *slot);
     StackReport { pushed: chosen.into_iter().collect(), refused, accesses }
+}
+
+/// Reloads that sit side by side and read different slots come back in the reverse of the order the slots were
+/// stored, so each slot is on top when it is loaded and every one can be a `pop` (`switch_peeled_table` -O1: `bc`
+/// stored before `de` and reloaded first kept `bc` in the IX frame, 25 B with its frame). The reloads write
+/// different registers and read no register, so the order is free. A run is reordered only where that makes more
+/// slots pushes: a slot read again later can lose its `pop` and `push` peek to a reorder (frameless -O1 +4 B,
+/// rep_count -O2 +2 T a trip). Beyond the pin, which has only frame slots (DEVIATE Z80-SLOT-NEST, owner z80-c,
+/// exit 2026-11-24: spill placement that knows the stack). One report per run that would move. Whether any run moved.
+pub fn nest_reloads(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let reload = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
+        (Kind::Op("RELOAD8" | "RELOAD16"), [Operand::Def(reg), Operand::Frame(slot)]) => Some((register(*reg), *slot)),
+        _ => None,
+    };
+    let pushed = |function: &MFunction| stack_slot_report_by(&mut function.clone(), assignment, true, false).pushed.len();
+    let mut stored_at = std::collections::BTreeMap::new();
+    let mut have = None;
+    let mut moved = false;
+    let mut now = 0usize;
+    for b in 0..function.blocks.len() {
+        let mut at = 0;
+        while at < function.blocks[b].insts.len() {
+            now += 1;
+            let inst = &function.blocks[b].insts[at];
+            if let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), _]) = (inst.kind, &inst.operands[..]) {
+                stored_at.insert(*slot, now);
+            }
+            if reload(inst).is_none() {
+                at += 1;
+                continue;
+            }
+            let insts = &function.blocks[b].insts;
+            let end = (at..insts.len()).find(|&one| reload(&insts[one]).is_none()).unwrap_or(insts.len());
+            let run: Vec<(RegId, i32)> = insts[at..end].iter().filter_map(reload).collect();
+            let independent = run.iter().enumerate().all(|(i, (reg, slot))| {
+                run[i + 1..].iter().all(|(other, other_slot)| !Z80Registers::overlaps(*reg, *other) && slot != other_slot)
+            });
+            if independent && end - at > 1 {
+                let original = insts[at..end].to_vec();
+                let mut sorted = original.clone();
+                sorted.sort_by_key(|inst| std::cmp::Reverse(reload(inst).map_or(0, |(_, slot)| stored_at.get(&slot).copied().unwrap_or(0))));
+                if sorted != original {
+                    let was = *have.get_or_insert_with(|| pushed(function));
+                    function.blocks[b].insts.splice(at..end, sorted);
+                    let now_pushed = pushed(function);
+                    if now_pushed > was {
+                        have = Some(now_pushed);
+                        moved = true;
+                    } else {
+                        function.blocks[b].insts.splice(at..end, original);
+                    }
+                }
+            }
+            now += end - at;
+            at = end;
+        }
+    }
+    moved
 }
 
 /// Moves the entry block's spills of argument registers up to its start while

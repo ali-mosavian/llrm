@@ -397,6 +397,8 @@ impl Tti for Z80Tti {
 
     /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll is made at -O2/-O3 where the clocks it
     /// saves repay its bytes at the same rate, in place of the pin's threshold alone (0).
+    /// Audited 2026-11-13: rate 0 and this rate give identical bytes and T on all 124 `tests/run/c` programs at -O1/-O2/-O3/-Os/-Oz,
+    /// so the price refuses nothing there; it guards loops the corpus lacks. A rate of 10^9 unrolls none (the control).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         SPEED_MILLICLOCKS_PER_BYTE
     }
@@ -544,15 +546,16 @@ impl Tti for Z80Tti {
         false
     }
 
-    // The long routines `__udivremsi4` and `__divremsi4` and the word ones
-    // (`__udivhi3` leaves the remainder in `hl`, `__divremhi4`) give both: a
-    // pair is one call. The byte routines do not.
+    // The long routines `__udivremsi4` and `__divremsi4`, the long long ones
+    // (`__udivmddi4`, `__divmddi4`) and the word ones (`__udivhi3` leaves
+    // the remainder in `hl`, `__divremhi4`) give both: a pair is one call. The
+    // byte routines do not.
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        matches!(bits, 16 | 32)
+        matches!(bits, 16 | 32 | 64)
     }
 
     fn cast_cost(

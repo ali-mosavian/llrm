@@ -1,4 +1,6 @@
 """The external columns of the x86_64 size matrix are built with one flag set, none of it the distro's."""
+import subprocess
+
 import external_flags
 import vs_external
 
@@ -39,3 +41,21 @@ def test_a_flag_gcc_cannot_take_is_no_gcc_column_not_a_crash():
     lines = vs_external.external_commands("// flags: -ffixed-point\nint f;\n", "-O1")
     assert lines["gcc"] is None
     assert external_flags.COMMON[0] in lines["clang"]
+
+
+def test_the_helpers_an_object_calls_are_the_undefined_symbols_libgcc_defines():
+    nm_u = "                 U __popcountdi2\n                 U report\n                 U __stack_chk_fail\n"
+    libgcc = "libgcc.a:_popcountsi2.o:0000000000000000 T __popcountdi2\nlibgcc.a:_clzdi2.o:0000000000000000 T __clzdi2\n"
+    helpers = vs_external.libgcc_members(libgcc)
+    assert helpers == {"__popcountdi2": "_popcountsi2.o", "__clzdi2": "_clzdi2.o"}
+    assert vs_external.undefined_helpers(nm_u, helpers) == ["__popcountdi2"]
+
+
+def test_gcc_popcount_calls_libgcc_and_its_object_says_so(tmp_path):
+    """bitcount_u64 -Os: gcc 245 B against ours 308 B, the 8 B `ones` a call of `__popcountdi2` whose code is not in the object."""
+    source = tmp_path / "ones.c"
+    source.write_text("int ones(unsigned long long x) { return __builtin_popcountll(x); }\n")
+    obj = tmp_path / "ones.o"
+    subprocess.run(["gcc", "-Os", "-c", str(source), "-o", str(obj)], check=True)
+    calls = vs_external.library_calls(obj)
+    assert calls.startswith("__popcountdi2:") and int(calls.split(":")[1]) > 8, calls
