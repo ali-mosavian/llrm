@@ -56,6 +56,14 @@ pub struct CpuTable {
     /// writes `movl $8,%ecx` (crc -Os: 9 clk over the bar). +1 B a site, also
     /// where bytes are strict. Off: the pin's form.
     pub widen_word_immediate: bool,
+    /// A tied add or sub whose source dies is made a three-address `lea` when
+    /// the sum ends in a known register and the source's own register is not
+    /// known (DEVIATE TA-11, owner x86-m32-b, exit 2026-11-24): the pin's
+    /// `isProfitableToConv3Addr` needs both maps, and a source that is a
+    /// loop phi has none in the exit block, so the sum is added in the
+    /// source's register and copied (fib -Os: `add esi,edi; mov eax,esi`
+    /// where gcc writes `lea eax,[ebx+esi]`). Off: the pin's rule.
+    pub three_address_to_known_register: bool,
     /// PHIElimination lowers phis of different blocks through one register
     /// where they read the same value from every predecessor they share
     /// (DEVIATE PHI-SHARE, owner x87, exit 2026-11-29): the pin shares only
@@ -248,6 +256,7 @@ impl Timings {
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
                     ("scalars", "widen_word_immediate") => table.widen_word_immediate = number()? != 0,
+                    ("scalars", "three_address_to_known_register") => table.three_address_to_known_register = number()? != 0,
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,

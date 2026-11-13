@@ -346,6 +346,31 @@ fn a_callee_the_size_guard_keeps_out_of_line_is_not_inlined_by_the_trial_at_m64_
     assert_eq!(calls, 6, "{listing}");
 }
 
+/// Three prints of `(x op y) * K` with a call after each, K = 100.0 first and
+/// last: the one load of K is split around the calls, and the pin's
+/// `foldAsLoad` folds the load left with a single reader into the first
+/// `mulsd`. We kept `movsd xmm1, [K]; mulsd xmm0, xmm1`: soft_double_add_sub
+/// m64 -O1/-Os 4 B over clang.
+#[test]
+fn a_constant_load_left_with_one_reader_is_folded_into_it_at_m64() {
+    let text = include_str!("testdata/soft_double_calls.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let register_form = listing.lines().filter(|line| line.contains("mulsd") && !line.contains("ptr")).count();
+    assert_eq!(register_form, 0, "{listing}");
+}
+
+/// bench bintree's `Walk`: the descriptor's segment is an argument cell read at every access. `foldAsLoad` made its
+/// copy a load, the value stopped being one to remake, and each piece was spilled to a slot (`mov es, [bp+8]; mov
+/// [bp-6], es`) where it was loaded from the argument cell again: m16 -Os +6 B and +620 clk.
+#[test]
+fn an_argument_load_folded_into_its_copy_is_still_remade_at_m16() {
+    let text = include_str!("testdata/walk_far_descriptor.ll");
+    let (built, _) = compiled(&flags(&["-m16", "-Os", "-march=i386", "--isel=dag"]), text, "WALK&").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains(", es"), "a segment register is stored to a slot: {listing}");
+}
+
 /// `x + (c > 0 ? 640 : -640)` was `mov 640; mov -640; cmovg; add`: the pin's `pushAddIntoCmovOfConsts` pushes the
 /// add through the select, `lea x+640; lea x-640; cmovg`, with no constant in a register (frame_address_stack_args
 /// m64 -Os `line` 77 B against the pin's 74).
@@ -6158,4 +6183,18 @@ fn a_zeroext_i1_call_result_widened_needs_no_mask_at_m32() {
     let (built, _) = compiled(&flags(&["-mabi=sysv", "-O2", "--isel=dag"]), text, "z").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains(", 1\n"), "{listing}");
+}
+
+/// Same as the m32 case at m16: `merge_icmps_fields` grew three `and ax, 1`
+/// (O2 330 -> 342 B, Os 279 -> 291 B).
+#[test]
+fn a_zeroext_i1_call_result_widened_needs_no_mask_at_m16() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+                declare zeroext i1 @p()\n\
+                define i16 @z() {\n  %1 = call zeroext i1 @p()\n  %2 = zext i1 %1 to i16\n  ret i16 %2\n}\n";
+    for level in ["-O2", "-Os"] {
+        let (built, _) = compiled(&flags(&["-m16", level]), text, "z").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains(", 1\n"), "{level}: {listing}");
+    }
 }
