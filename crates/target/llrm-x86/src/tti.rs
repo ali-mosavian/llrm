@@ -782,6 +782,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn keeps_sahf_where_bytes_are_held(&self) -> bool {
+        self.tuning.keeps_sahf_where_bytes_are_held
+    }
+
     fn narrow_divide_live_limit(&self) -> u32 {
         self.tuning.narrow_divide_live_limit
     }

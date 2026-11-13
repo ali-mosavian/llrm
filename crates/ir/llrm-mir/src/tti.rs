@@ -1413,6 +1413,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::keeps_sahf_where_bytes_are_held`.
+    fn keeps_sahf_where_bytes_are_held(&self) -> bool {
+        false
+    }
+
     /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24):
     /// `Tuning::narrow_divide_live_limit`.
     fn narrow_divide_live_limit(&self) -> u32 {
