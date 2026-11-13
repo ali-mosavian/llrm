@@ -44,6 +44,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             if let Some(forwarded) = self.forward_store_value_to_direct_load(node) {
                 return Some(forwarded);
             }
+            self.refine_alignment(node);
             if let Some(split) = self.split_dword_load(node) {
                 return Some(split);
             }

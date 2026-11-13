@@ -82,7 +82,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 
 ## Review fixes (2026-11-11, w15-arm64)
 
-- LV-M1: a loop LAA can only separate at run time (`RuntimePointerChecking::need`) stays scalar; the pin builds `vector.memcheck` (L1637). `b[i] = a[i]` over plain pointers was widened with no overlap test. Exit 2026-11-24.
+- LV-M1 (closed by slice 6): a loop LAA can only separate at run time (`RuntimePointerChecking::need`) is guarded by `vector.memcheck` (L1637), as the pin. Open: LV-M2, `isOutsideLoopWorkProfitable` (L7185) is not translated: the planner exposes no per-iteration costs and no TTI price of the check block, so a short loop may be widened where the pin's minimum trip count refuses it. Owner llrm-arm64-vec (planner), exit 2026-11-24. The SCEV-predicate checks (`vector.scevcheck`) stay out (LV-D5).
 - LV-F1: no loop is widened at -O1 (`VectorizeOnlyWhenForced`); the earlier O1 scroll rows no longer apply. Exit 2026-11-24.
 - IC is 1 wherever no epilogue is allowed (tiny trip count too), as `selectInterleaveCount` L3705.
 - `LLRM_ARM64_VECTORS=0` is off.
@@ -114,7 +114,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 - **Pass:** LoopVectorize `VPWidenCastRecipe`; `LegalizeVectorTypes.cpp` (`SplitVectorResult` L1375, `SplitVectorOperand` L3779, `SplitVecRes_ExtendOp` L3050, `SplitVecOp_TruncateHelper` L4841, `WidenVectorResult` L5223); AArch64 `addDRType` (L2752) / `addQRType`.
 - **Why it is more than SplitVector:** `sext <8 x i16>` to `<8 x i64>` splits to four `<2 x i64>` results with `<2 x i16>` sources. In order: (1) 64-bit D-register vectors legal (v8i8, v4i16, v2i32, v1i64), (2) SplitVector, (3) WidenVector for what stays under 64 bits, (4) ext/trunc lowering (`sshll`, `ushll`, `xtn`). Skipping (1) means widening everything to 128 bits: output unlike the pin.
 - **Cells:** histo:21 (`<16 x i16>`, trunc to `<16 x i8>`), particle init (`<8 x i64>`, trunc), recsum (`sext <2 x i32>`), scroll:28, plus the widened induction (`vec.ind`) they use.
-- **Slices:** (1) D-register types and their selection; (2) SplitVector for load, store, binary, shift; (3) casts and `vec.ind` in the vectorizer. No date; after LV-X3a.
+- **Slices:** (1) D-register types and their selection; (2) SplitVector for load, store, binary, shift; (3) casts in the vectorizer; `vec.ind` (integer induction, plain or truncated) landed with WI 2026-11-13 (llrm-arm64-lv). No date; after LV-X3a.
 
 ## LV-W: widening plan for the counted cells (2026-11-12, tip b227f477a5, card; owner llrm-arm64-vec)
 

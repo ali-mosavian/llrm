@@ -141,7 +141,11 @@ def main() -> int:
     columns = {"both": ["ours", "gcc"], "all": ["ours", "gcc", "clang"]}.get(args.compiler, [args.compiler])
     print("| program | cpu | level | compiler | program B | library B | whole B | members |")
     print("|---|---|---|---|---|---|---|---|")
+    keep = os.environ.get("M68K_KEEP")  # a directory that keeps the linked .exe files for `cycles --exe`
+    if keep:
+        Path(keep).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
+        tmp = keep or tmp
         for name in args.names:
             for compiler in columns:
                 got = measure(ROOT / "tests/run/c" / f"{name}.c", args.cpu, args.level, compiler, cc, root, cache, Path(tmp))

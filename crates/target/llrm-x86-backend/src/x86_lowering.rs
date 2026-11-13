@@ -24,7 +24,7 @@
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
 //! intrinsics, and the 16-bit immediate widening in `EmitCmp`. Reason: each
 //! needs known-bits or use queries the DAG lacks. Exit: with the combiner
-//! (B2). Owner sdag-b. Review 2026-11-13.
+//! (B2). Owner llrm-target-x86-m64-c. Review 2026-11-24.
 //!
 //! # See also
 //! LLVM's `LowerSETCC`
@@ -971,6 +971,12 @@ fn emit_test(
         ISD::Xor => x86isd::XOR,
         x86isd::ADD | x86isd::SUB | x86isd::OR | x86isd::XOR | x86isd::AND => {
             return SDValue { node: op.node, res: 1 };
+        }
+        // `USUBO`/`SSUBO` will become an `X86ISD::SUB`, and its flags are the compare's.
+        ISD::USubO | ISD::SSubO => {
+            let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
+            let sub = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[lhs, rhs]);
+            return SDValue { node: sub.node, res: 1 };
         }
         _ => return test(dag),
     };
