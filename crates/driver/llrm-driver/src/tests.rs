@@ -3542,7 +3542,7 @@ fn dense_switch_ir() -> String {
 #[test]
 fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
     for (mode, layout, int, jump, tail) in [
-        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr $J", "]"),
+        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr cs:$J", "]"),
         ("-m32", "@m32-datalayout@", "i32", "jmp dword ptr $J", "*4]"),
     ] {
         let mut text = format!("target datalayout = \"{layout}\"\n");
