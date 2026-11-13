@@ -963,10 +963,6 @@ impl Tti for X86 {
         self.tuning.imul_at_size
     }
 
-    fn push_imm_at_size(&self) -> bool {
-        self.tuning.push_imm_at_size
-    }
-
     fn merge_functions_at_size(&self) -> bool {
         self.tuning.merge_functions_at_size
     }
