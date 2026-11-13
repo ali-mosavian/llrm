@@ -143,8 +143,8 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
+    simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -473,8 +473,8 @@ impl Options {
         self.for_size
     }
 
-    /// Whether this is -O1: optimizing, with the unroller's -O1 level (`unroll_level`) and size not
-    /// preferred.
+    /// Whether this is -O1: optimizing, with the unroller's -O1 level
+    /// (`unroll_level`) and size not preferred.
     pub fn at_o1(&self) -> bool {
         self.optimize && !self.for_size && unroll_level(self) == 1
     }
@@ -492,12 +492,7 @@ impl Options {
 
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
-        Self {
-            unroll: false,
-            has_min_size: true,
-            inline: inline::Threshold::default().for_min_size(),
-            ..Self::size()
-        }
+        Self { unroll: false, has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -518,7 +513,9 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => {
+                self.strength && self.lsr
+            }
             "indvars" | "window" | "gepoffset" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -781,7 +778,11 @@ impl FunctionPass for PerLoop {
             }
             let _scope = crate::loopfilter::only(&[header]);
             for part in std::iter::once(&mut self.head).chain(self.parts.iter_mut()) {
-                let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
+                // Each part is its own step: charged to the head's slot, the
+                // unroll's cost read as the indvars' (`LLRM_DEBUG=time`).
+                let name = part.name();
+                let preserved =
+                    llrm_mir::passes::spanned(name, || llrm_mir::passes::run_checked(part.as_mut(), unit, analyses));
                 if !preserved.are_all_preserved() {
                     changed = true;
                     analyses.invalidate(unit.function, &preserved);
@@ -837,7 +838,8 @@ impl FunctionPass for UnswitchRevisit {
             .rev()
             .map(|one| one.get_header())
             .collect();
-        // (loop, whether LPM1's preamble has run on it since it was made or revisited)
+        // (loop, whether LPM1's preamble has run on it since it was made or
+        // revisited)
         let mut work: std::collections::VecDeque<(llrm_mir::module::BlockId, bool)> =
             headers.into_iter().map(|header| (header, true)).collect();
         let mut changed = false;
@@ -1025,7 +1027,8 @@ pub(crate) fn llvm_order(
                         },
                     }),
                 ),
-                // DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): a one-pointer `va_list` is a slot SROA can promote.
+                // DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): a
+                // one-pointer `va_list` is a slot SROA can promote.
                 slot("vastart@1178", Box::new(crate::vastart::VaStart)),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
@@ -1080,12 +1083,17 @@ pub(crate) fn llvm_order(
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
-            // LoopVectorizePass (l.1354): a no-op where the target takes no vector values.
-            slot("loop-vectorize@1354", Box::new(crate::loopvectorize::LoopVectorize {
-                // clang vectorizes loops at -O2 and up (`PTO.LoopVectorization`).
-                only_when_forced: !applied.options.pre,
-                ..Default::default()
-            })),
+            // LoopVectorizePass (l.1354): a no-op where the target takes no
+            // vector values.
+            slot(
+                "loop-vectorize@1354",
+                Box::new(crate::loopvectorize::LoopVectorize {
+                    // clang vectorizes loops at -O2 and up
+                    // (`PTO.LoopVectorization`).
+                    only_when_forced: !applied.options.pre,
+                    ..Default::default()
+                }),
+            ),
             // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
             slot(
                 "drop-unnecessary-assumes@1360",
@@ -1194,7 +1202,8 @@ pub(crate) fn llvm_order(
             // loop it unswitched (`UnswitchRevisit`); the trivial one, at every
             // other level, never does.
             let unswitch_slot = || -> Box<dyn FunctionPass> {
-                let unswitch = Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch });
+                let unswitch =
+                    Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch });
                 if !applied.options.unswitch {
                     return unswitch;
                 }
@@ -1424,7 +1433,10 @@ pub fn timed() {
 /// -O1 rule `unroll_never_grows_at_o1` never ran.
 /// Whether ipa-cp copies without `-fipa-cp-clone`: at -O2 and -O3 where the
 /// target says so, never for size.
-fn cp_clones_by_default(options: &Options, target_clones_at_speed: bool) -> bool {
+fn cp_clones_by_default(
+    options: &Options,
+    target_clones_at_speed: bool,
+) -> bool {
     target_clones_at_speed && unroll_level(options) >= 2 && !options.prefers_size()
 }
 
@@ -1438,8 +1450,8 @@ fn unroll_level(options: &Options) -> u32 {
     }
 }
 
-/// The `-O<text>` words every driver takes. A driver maps each to its own mid-end `Options`;
-/// `Omax` is `Options::aggressive()` there.
+/// The `-O<text>` words every driver takes. A driver maps each to its own
+/// mid-end `Options`; `Omax` is `Options::aggressive()` there.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LevelName {
     O0,
@@ -1462,7 +1474,11 @@ impl LevelName {
             "max" => Self::Omax,
             "s" => Self::Os,
             "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os or -Oz")),
+            _ => {
+                return Err(format!(
+                    "unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os or -Oz"
+                ));
+            }
         })
     }
 }
@@ -1559,9 +1575,13 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                     let realigned = realigned_above.is_some_and(|above| wanted > above);
                     if let Some(kept) = kept.filter(|kept| wanted > *kept && !realigned) {
                         function.set_alloca_align(inst, kept);
-                        // An access that states more than its object keeps claims an alignment nothing has, and
-                        // `isSafeToSpeculateLoad` refuses it (`isDereferenceableAndAlignedPointer`): the second load of
-                        // `c >= '0' && c <= '9'` stayed behind its branch and the range check never formed.
+                        // An access that states more than its object keeps
+                        // claims an alignment nothing has, and
+                        // `isSafeToSpeculateLoad` refuses it
+                        // (`isDereferenceableAndAlignedPointer`): the second
+                        // load of `c >= '0' && c <=
+                        // '9'` stayed behind its branch and the range check
+                        // never formed.
                         let Some(result) = function.instruction(inst).result else { continue };
                         for user in function.users(result).into_iter().copied().collect::<Vec<_>>() {
                             let access = function.instruction(user.user);
@@ -1660,8 +1680,8 @@ pub fn recorded(
             manager.compute::<GlobalsAA>();
             manager.compute::<GlobalsModRefAnalysis>();
             let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
-            // `Tti::inline_trial_light_simplify`: the SZ2 trial's copy goes through the
-            // cleanup list, not the whole one.
+            // `Tti::inline_trial_light_simplify`: the SZ2 trial's copy goes
+            // through the cleanup list, not the whole one.
             let mut light = Fixed::linear(&walked("walk"), Phase::Cleanup);
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
@@ -1722,7 +1742,8 @@ pub fn recorded(
         pipeline: Box::new(move |module, analyses, id, stage| {
             // The pin runs nothing over a body `DeadArgumentEliminationPass`
             // changed: the late function pipeline, which every body goes
-            // through, finds what the lost argument leaves (PassBuilderPipelines.cpp,
+            // through, finds what the lost argument leaves
+            // (PassBuilderPipelines.cpp,
             // `buildModuleOptimizationPipeline` follows the module pass).
             if stage == "ipa-deadargs." {
                 return;
@@ -1834,8 +1855,9 @@ pub fn recorded(
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
-    // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a counted loop
-    // proven to run is entered at its body at -Oz (target opt-in). Owner z80, exit 2026-11-30.
+    // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a
+    // counted loop proven to run is entered at its body at -Oz (target
+    // opt-in). Owner z80, exit 2026-11-30.
     if applied.options.has_min_size {
         manager.add(looprotate::LoopRotate {
             duplicate_headers: false,
@@ -1906,7 +1928,8 @@ pub fn recorded(
     }
     // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
     // body is final.
-    // `MergeFunctions`: off in the pin's pipeline; a target that wants it at -Os says so (DEVIATE MERGEFUNC-OS).
+    // `MergeFunctions`: off in the pin's pipeline; a target that wants it at
+    // -Os says so (DEVIATE MERGEFUNC-OS).
     if applied.options.optimize
         && applied.options.prefers_size()
         && program.target.tti().is_some_and(|tti| tti.merge_functions_at_size())

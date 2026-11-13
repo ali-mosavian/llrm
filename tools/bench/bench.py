@@ -113,6 +113,7 @@ BORLAND = {
     "tcpp": (TURBO / "tcpp30", "tcc", {"O1": "-2 -O -Z -r", "O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
+IO_SKELETON = Path(__file__).with_name("io_skeleton")  # a Nib program of std.io's file calls and nothing else: what the I/O of a bench's Nib cell costs (io_cost)
 REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
 # BASIC references: the name in expected.toml -> the toolchain (run_tests.TOOLS) whose BC compiles and whose runtime links.
 BASIC_REFERENCES = {"bc": "qb45", "pds71": "pds71", "vbdos": "vbdos"}
@@ -379,6 +380,47 @@ def skip_lines(measured: dict) -> list[str]:
     return [f"SKIP {why} ({len({key[0] for key, value in measured.items() if value.get('skip') == why})} programs)" for why in sorted({value["skip"] for value in measured.values() if "skip" in value})]
 
 
+def io_variants() -> tuple[Variant, Variant]:
+    """The std.io skeleton and the empty Nib program (startup/) it is measured against."""
+    empty = next(one for one in variants(STARTUP, True) if one.language == "nib")
+    return Variant("io_skeleton", "nib", IO_SKELETON / "io_skeleton.nib", "bench_io_skeleton", None), empty
+
+
+def io_cost(opt: str, folder: Path) -> int | str:
+    """Code bytes of std.io's file calls at -`opt`, or why they could not be measured: the skeleton's object less the empty program's, both
+    built as the benches' Nib cells are. Informational (note_io_skeleton): a Nib bench that reads or writes a DOS file holds that code in its object."""
+    sizes_of = []
+    for at, variant in enumerate(io_variants()):
+        built = build(variant, opt, folder, f"IOS{at}")
+        if isinstance(built, str):
+            return f"{variant.name}: {built}"
+        sizes_of.append(sizes.code_size(folder / f"IOS{at}.obj").code)
+    return sizes_of[0] - sizes_of[1]
+
+
+def io_programs(selected: list[str]) -> set[str]:
+    """The benchmarks whose bench.toml says `io_skeleton = true`: their Nib cells do file I/O through std.io."""
+    return {directory_name(one) for one in benchmarks(selected) if tomllib.loads((one / "bench.toml").read_text()).get("io_skeleton")}
+
+
+def note_io_skeleton(rows: dict, programs: set[str], cost: int) -> None:
+    """On each Nib cell of `programs`, `io_skeleton_bytes`: what std.io's file calls cost in our object, in place. Informational: `code_bytes` stays the
+    object's gross, and the twin's object holds its own I/O functions (bench_io.h, BENCH_IO_FUNCTIONS), so both sides pay for the same calls and a
+    skeleton that grows shows on its own line instead of making every cell look better."""
+    for key, row in rows.items():
+        if key[1] == "nib" and key[0] in programs and "code_bytes" in row:
+            row["io_skeleton_bytes"] = cost
+
+
+def io_lines(measured: dict) -> list[str]:
+    """One `IO-SKELETON` line per level: the size of std.io's file calls in our Nib objects, and how many cells hold them."""
+    found: dict[str, tuple[int, int]] = {}
+    for (_, language, opt), row in measured.items():
+        if language == "nib" and "io_skeleton_bytes" in row:
+            found[opt] = (row["io_skeleton_bytes"], found.get(opt, (0, 0))[1] + 1)
+    return [f"IO-SKELETON {opt}: {size} B of std.io file calls in each of {cells} Nib cells (code_bytes is gross; the twin's object holds its own I/O)" for opt, (size, cells) in sorted(found.items())]
+
+
 def note_lines(measured: dict) -> list[str]:
     """One `NOTE reason (N cells)` line per distinct note on a kept row, so an annotated row is counted in the header, not only carried in the json."""
     notes = [value["note"] for value in measured.values() if "note" in value]
@@ -495,7 +537,7 @@ def stage_shared_headers(folder: Path, text: bytes) -> bytes:
     """`text`, a program's source, as it builds in `folder` (a DOS volume's root, which has no `..`): the benches' shared header
     beside it, and `#include "../bench_io.h"` naming it there."""
     shutil.copy(BENCH / "bench_io.h", folder / "bench_io.h")
-    return text.replace(b'"../bench_io.h"', b'"bench_io.h"')
+    return re.sub(rb'"(?:\.\./)+bench_io\.h"', b'"bench_io.h"', text)  # a twin sits one folder deeper: "../../bench_io.h"
 
 
 BORLAND_DEFINES = {"tcpp": ["-D__huge=huge"]}  # Turbo C++ 3.0 knows `huge`, not `__huge` (BCC 3.1 and Watcom know both); TC 2.01 has no huge arrays at all: its row stays an error
@@ -798,6 +840,14 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
     run_timed(out, exes, {key: needs[key] for key in exes if needs.get(key)}, folder / "time", timing, already=set(flat))
     stage(f"{opt}: DOSBox runs done")
+    if programs := io_programs(selected):
+        if any(key[1] == "nib" and key[0] in programs for key in out):
+            cost = io_cost(opt, folder)
+            if isinstance(cost, str):
+                print(f"WARNING {opt}: no std.io skeleton: {cost}", file=sys.stderr)
+            else:
+                note_io_skeleton(out, programs, cost)
+                stage(f"{opt}: std.io skeleton {cost} B")
     return out
 
 
@@ -1436,6 +1486,7 @@ def main() -> int:
     print("HARNESS", basecounts.harness_digest())
     print(*skip_lines(measured), sep="\n")
     print(*note_lines(measured), sep="\n")
+    print(*io_lines(measured), sep="\n")
     unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
     if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
         print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")

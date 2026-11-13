@@ -1806,10 +1806,15 @@ fn try_to_unroll_loop(
     // keep nothing across them (x_jpeg_single -O3: three 8-trip loops of 9
     // floats, held to 150 and 2.3M clocks slower than the pin's unroll).
     // Owner llrm-target-x86-m32, exit 2026-11-20.
-    if let Some(peak) = float_stack_overflow(run, lp) {
+    // The bar only matters where it is above the default: the liveness is not
+    // solved for a loop it cannot change.
+    if !opt_for_size
+        && up.threshold > UNROLL_THRESHOLD_DEFAULT
+        && let Some(peak) = float_stack_overflow(run, lp)
+    {
         let kept = if trip_count == 0 { usize::MAX } else { price::forwarded_floats(run, analyzed, lp, trip_count) };
         let depth = run.tti.x87_stack_slots().map_or(0, |slots| slots as usize);
-        if !opt_for_size && up.threshold > UNROLL_THRESHOLD_DEFAULT && peak.saturating_add(kept) > peak.max(depth) {
+        if peak.saturating_add(kept) > peak.max(depth) {
             why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
             up.threshold = UNROLL_THRESHOLD_DEFAULT;
         }
@@ -1910,6 +1915,7 @@ fn try_to_unroll_loop(
             });
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
+            let remainder_mark = run.function.mark();
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
             // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
             // was worked out in: an earlier loop's remainder guard, read while
@@ -1936,7 +1942,10 @@ fn try_to_unroll_loop(
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
-            run.scev = ScalarEvolution::new();
+            // `forgetTopmostLoop`: the one `ScalarEvolution` lives on, so the
+            // next loop does not work out every earlier loop's count again.
+            run.scev = session.into_scev();
+            forget_since(run, analyzed, remainder_mark);
             run.finished.insert(header);
             if let Some(epilog) = epilog {
                 run.finished.insert(epilog);
