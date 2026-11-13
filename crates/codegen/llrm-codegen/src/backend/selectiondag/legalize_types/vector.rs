@@ -15,7 +15,9 @@
 //! index), `SplitVecRes_LOAD`, `SplitVecRes_BinOp`, `SplitVecRes_UnaryOp`,
 //! `SplitVecRes_TernaryOp` (`fma`), `SplitVecOp_STORE`, `SplitVecOp_UnaryOp`,
 //! `SplitVecOp_EXTRACT_VECTOR_ELT` (a constant index), `SplitVecOp_VECREDUCE`,
-//! all of
+//! `SplitVecRes_CONCAT_VECTORS`, `SplitVecRes_EXTRACT_SUBVECTOR`,
+//! `SplitVecOp_EXTRACT_SUBVECTOR` (a piece inside one half, or the high half),
+//! `SplitVecRes_ExtendOp`, all of
 //! [LegalizeVectorTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeVectorTypes.cpp).
 //!
 //! DEVIATE SV1 (owner llrm-arm64-vec, exit 2026-11-27): an `insertelement` or
@@ -66,6 +68,11 @@ fn is_elementwise(op: ISD) -> bool {
     )
 }
 
+/// `SplitVecRes_ExtendOp`'s nodes.
+fn is_extend(op: ISD) -> bool {
+    matches!(op, ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend)
+}
+
 /// The conversions whose result type differs from the operand's
 /// (`SplitVecRes_UnaryOp`, `SplitVecOp_UnaryOp`).
 fn is_conversion(op: ISD) -> bool {
@@ -76,6 +83,64 @@ fn is_conversion(op: ISD) -> bool {
 }
 
 impl TypeLegalizer<'_> {
+    /// `SelectionDAG::SplitVector`: the low half at lane 0 and the high half
+    /// after it, both `EXTRACT_SUBVECTOR`.
+    fn split_vector_of(
+        &mut self,
+        value: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        let (lo_vt, hi_vt) = split_dest(self.dag.value_type(value))?;
+        let zero = self.dag.get_constant(0, EVT::I64);
+        let high = self.dag.get_constant(u128::from(lo_vt.lanes()), EVT::I64);
+        Some((
+            self.dag.get_node(ISD::ExtractSubvector, lo_vt, &[value, zero]),
+            self.dag.get_node(ISD::ExtractSubvector, hi_vt, &[value, high]),
+        ))
+    }
+
+    /// `SplitVecRes_ExtendOp`: an extension by more than a doubling of the
+    /// lane, of a legal source whose half is no type, is made in two steps
+    /// first, so that the halves are legal.
+    fn split_extend(
+        &mut self,
+        value: SDValue,
+        lo_vt: EVT,
+        hi_vt: EVT,
+    ) -> Option<(SDValue, SDValue)> {
+        let op = self.dag.opcode(value);
+        let source = self.dag.operand(value, 0);
+        let (src_vt, dest_vt) = (self.dag.value_type(source), self.dag.value_type(value));
+        let flags = self.dag.node(value).flags;
+        let (src_bits, dest_bits) = (src_vt.element().size_in_bits(), dest_vt.element().size_in_bits());
+        if src_vt.lanes() % 2 == 0 && src_bits * 2 < dest_bits {
+            let EVT::Simple(src_mvt) = src_vt else { return None };
+            let new_src = MVT::vector(MVT::integer(src_bits * 2)?, src_mvt.lanes()?).map(EVT::Simple)?;
+            // A half with no `MVT` (`v4i8`) is not a legal type.
+            let split_src = MVT::vector(src_mvt.element()?, src_mvt.lanes()? / 2).map(EVT::Simple);
+            let (split_lo, _) = split_dest(new_src)?;
+            let legal = |this: &Self, vt: EVT| this.action(vt) == TypeAction::Legal;
+            if legal(self, src_vt)
+                && !split_src.is_some_and(|half| legal(self, half))
+                && legal(self, new_src)
+                && legal(self, split_lo)
+            {
+                let widened = self.dag.get_node_flags(op, new_src, &[source], flags);
+                let (lo, hi) = self.split_vector_of(widened)?;
+                return Some((
+                    self.dag.get_node_flags(op, lo_vt, &[lo], flags),
+                    self.dag.get_node_flags(op, hi_vt, &[hi], flags),
+                ));
+            }
+        }
+        // The generic split (`SplitVecRes_UnaryOp`).
+        let (lo, hi) = if self.action(src_vt) == TypeAction::SplitVector {
+            self.split_vector(source)
+        } else {
+            self.split_vector_of(source)?
+        };
+        Some((self.dag.get_node_flags(op, lo_vt, &[lo], flags), self.dag.get_node_flags(op, hi_vt, &[hi], flags)))
+    }
+
     /// `GetSplitVector`.
     fn split_vector(
         &self,
@@ -83,44 +148,6 @@ impl TypeLegalizer<'_> {
     ) -> (SDValue, SDValue) {
         let value = self.remap(value);
         *self.split.get(&value).expect("operand split before its user")
-    }
-
-    /// The type `SplitVecRes_ExtendOp` extends the source to first, when it
-    /// can: the lanes doubled, the source legal and its halves not, the
-    /// doubled type and its halves legal.
-    fn incremental_extend_type(
-        &self,
-        operand: SDValue,
-        dest: EVT,
-    ) -> Option<EVT> {
-        let (EVT::Simple(src), EVT::Simple(dest)) = (self.dag.value_type(operand), dest) else { return None };
-        let bits = |lane: MVT| EVT::Simple(lane).size_in_bits();
-        let (element, lanes) = (src.element()?, src.lanes()?);
-        if lanes % 2 != 0 || bits(element) * 2 >= bits(dest.element()?) {
-            return None;
-        }
-        let legal = |vt: Option<MVT>| vt.is_some_and(|vt| self.tli.types.is_type_legal(EVT::Simple(vt)));
-        let doubled = MVT::integer(bits(element) * 2).and_then(|wide| MVT::vector(wide, lanes));
-        let doubled_half = doubled.and_then(|vt| MVT::vector(vt.element()?, lanes / 2));
-        let src_half = MVT::vector(element, lanes / 2);
-        (legal(Some(src)) && !legal(src_half) && legal(doubled) && legal(doubled_half))
-            .then(|| EVT::Simple(doubled.unwrap()))
-    }
-
-    /// `SelectionDAG::SplitVectorOperand` for a legal vector: its two halves as
-    /// `EXTRACT_SUBVECTOR`s.
-    fn split_operand_by_hand(
-        &mut self,
-        operand: SDValue,
-    ) -> Option<(SDValue, SDValue)> {
-        let vt = self.dag.value_type(operand);
-        let (half, _) = split_dest(vt)?;
-        let lanes = u128::from(half.lanes());
-        let (zero, mid) = (self.dag.get_constant(0, EVT::I64), self.dag.get_constant(lanes, EVT::I64));
-        Some((
-            self.dag.get_node(ISD::ExtractSubvector, half, &[operand, zero]),
-            self.dag.get_node(ISD::ExtractSubvector, half, &[operand, mid]),
-        ))
     }
 
     /// `SetSplitVector`.
@@ -188,50 +215,48 @@ impl TypeLegalizer<'_> {
             }
             // `SplitVecRes_UnaryOp`: the result type may differ from the
             // operand's, and the operand splits too.
-            // `SplitVecRes_ExtendOp`: an extension by more than one doubling of
-            // a legal source whose halves are no type is made in two steps,
-            // the first on the whole vector.
-            op @ (ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend) => {
-                let operand = self.dag.operand(value, 0);
-                if let Some(widened) = self.incremental_extend_type(operand, vt) {
-                    let step = self.dag.get_node_flags(op, widened, &[operand], flags);
-                    let (lo, hi) =
-                        self.split_operand_by_hand(step).ok_or_else(|| unsupported("split extend of a lone lane"))?;
-                    (self.dag.get_node_flags(op, lo_vt, &[lo], flags), self.dag.get_node_flags(op, hi_vt, &[hi], flags))
-                } else {
-                    let (lo, hi) = if self.action(self.dag.value_type(operand)) == TypeAction::SplitVector {
-                        self.split_vector(operand)
-                    } else {
-                        self.split_operand_by_hand(operand)
-                            .ok_or_else(|| unsupported("split extend of an operand with no half"))?
-                    };
-                    (self.dag.get_node_flags(op, lo_vt, &[lo], flags), self.dag.get_node_flags(op, hi_vt, &[hi], flags))
-                }
-            }
             op if is_conversion(op) => {
                 let ops = self.dag.node(value).ops.clone();
                 let (lo, hi) = if self.action(self.dag.value_type(ops[0])) == TypeAction::SplitVector {
                     self.split_vector(ops[0])
                 } else {
-                    self.split_operand_by_hand(ops[0]).ok_or_else(|| unsupported("split conversion of a lone lane"))?
+                    self.split_vector_of(ops[0]).ok_or_else(|| unsupported("split conversion of a lone lane"))?
                 };
                 let (mut los, mut his) = (vec![lo], vec![hi]);
                 los.extend_from_slice(&ops[1..]);
                 his.extend_from_slice(&ops[1..]);
                 (self.dag.get_node_flags(op, lo_vt, &los, flags), self.dag.get_node_flags(op, hi_vt, &his, flags))
             }
-            // `ConcatVectors` of two halves is its operands.
-            ISD::ConcatVectors => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
-            // `SplitVecRes_EXTRACT_SUBVECTOR`: each half is a subvector of the
-            // same vector, the second one half on.
+            // `SplitVecRes_CONCAT_VECTORS`: the first operands, then the rest.
+            ISD::ConcatVectors => {
+                let ops = self.dag.node(value).ops.clone();
+                if ops.len() % 2 != 0 {
+                    return Err(unsupported("split concatenation of an odd count of vectors"));
+                }
+                let half = ops.len() / 2;
+                if half == 1 {
+                    (ops[0], ops[1])
+                } else {
+                    (
+                        self.dag.get_node(ISD::ConcatVectors, lo_vt, &ops[..half]),
+                        self.dag.get_node(ISD::ConcatVectors, hi_vt, &ops[half..]),
+                    )
+                }
+            }
+            // `SplitVecRes_EXTRACT_SUBVECTOR`: each half of the piece, from the
+            // same vector.
             ISD::ExtractSubvector => {
-                let (vector, at) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
-                let Some(start) = self.dag.constant(at) else { return Err(unsupported("split result")) };
-                let mid = self.dag.get_constant(start + u128::from(lo_vt.lanes()), EVT::I64);
+                let (vector, index) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let at = self.dag.constant(index).ok_or_else(|| unsupported("split extract at a variable index"))?;
+                let high = self.dag.get_constant(at + u128::from(lo_vt.lanes()), self.dag.value_type(index));
                 (
-                    self.dag.get_node(ISD::ExtractSubvector, lo_vt, &[vector, at]),
-                    self.dag.get_node(ISD::ExtractSubvector, hi_vt, &[vector, mid]),
+                    self.dag.get_node(ISD::ExtractSubvector, lo_vt, &[vector, index]),
+                    self.dag.get_node(ISD::ExtractSubvector, hi_vt, &[vector, high]),
                 )
+            }
+            // `SplitVecRes_ExtendOp`.
+            op if is_extend(op) => {
+                self.split_extend(value, lo_vt, hi_vt).ok_or_else(|| unsupported("split extension"))?
             }
             // `SplitVecRes_VECTOR_SHUFFLE`: the four halves of the two inputs;
             // each result half is a shuffle of the (at most two) of them its
@@ -401,23 +426,6 @@ impl TypeLegalizer<'_> {
                 );
                 self.dag.get_node(ISD::ConcatVectors, result_vt, &[lo, hi])
             }
-            // `SplitVecOp_EXTRACT_SUBVECTOR`: the result is legal; it is in
-            // the half the index names.
-            ISD::ExtractSubvector if at == 0 => {
-                let index = self.dag.operand(node, 1);
-                let Some(start) = self.dag.constant(index) else {
-                    return Err(unsupported("split extract of a subvector at a variable index"));
-                };
-                let (lo, hi) = self.split_vector(operand);
-                let low_lanes = u128::from(self.dag.value_type(lo).lanes());
-                let vt = self.dag.value_type(node);
-                if start < low_lanes {
-                    self.dag.get_node(ISD::ExtractSubvector, vt, &[lo, index])
-                } else {
-                    let rest = self.dag.get_constant(start - low_lanes, EVT::I64);
-                    self.dag.get_node(ISD::ExtractSubvector, vt, &[hi, rest])
-                }
-            }
             // `SplitVecOp_VECREDUCE`: the halves combined by the scalar
             // operation, then reduced.
             op if op.vec_reduce_base_opcode().is_some() => {
@@ -442,6 +450,24 @@ impl TypeLegalizer<'_> {
                 } else {
                     let index = self.dag.get_constant(lane - lanes, self.dag.value_type(index));
                     self.dag.get_node(ISD::ExtractElement, vt, &[hi, index])
+                }
+            }
+            // `SplitVecOp_EXTRACT_SUBVECTOR`: the piece is in the low half, or
+            // it is a whole piece of the high half.
+            ISD::ExtractSubvector if at == 0 => {
+                let index = self.dag.operand(node, 1);
+                let at_lane =
+                    self.dag.constant(index).ok_or_else(|| unsupported("split extract at a variable index"))?;
+                let (lo, hi) = self.split_vector(operand);
+                let result_vt = self.dag.value_type(node);
+                let (lo_lanes, lanes) = (u128::from(self.dag.value_type(lo).lanes()), u128::from(result_vt.lanes()));
+                if at_lane + lanes <= lo_lanes {
+                    self.dag.get_node(ISD::ExtractSubvector, result_vt, &[lo, index])
+                } else if at_lane >= lo_lanes && (at_lane - lo_lanes) % lanes == 0 {
+                    let index = self.dag.get_constant(at_lane - lo_lanes, self.dag.value_type(index));
+                    self.dag.get_node(ISD::ExtractSubvector, result_vt, &[hi, index])
+                } else {
+                    return Err(unsupported("split extract across the halves"));
                 }
             }
             _ => return Err(unsupported("split operand")),

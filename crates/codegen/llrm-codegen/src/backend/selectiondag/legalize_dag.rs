@@ -1042,40 +1042,24 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(loaded)
     }
 
-    /// The vector operations `Expand` unrolls here: the pin's
-    /// `VectorLegalizer::Expand` unrolls any by default.
-    ///
-    /// DEVIATE VL1 (owner llrm-arm64-vec, exit 2026-11-27): there is no
-    /// `VectorLegalizer` phase, so only `MUL` (a `v2i64` product `LowerMUL`
-    /// declines) is unrolled; the other operations keep their own paths.
-    fn is_unrollable(op: ISD) -> bool {
-        op == ISD::Mul
-    }
-
-    /// `UnrollVectorOp`: the operation on each lane's scalars, put together
-    /// by a `BUILD_VECTOR`.
+    /// `SelectionDAG::UnrollVectorOp` for the lane-wise operations: each lane
+    /// of the operands extracted, the scalar operation on each, a
+    /// `BUILD_VECTOR` of the results.
     fn unroll_vector_op(
         &mut self,
         node: SDValue,
     ) -> SDValue {
         let vt = self.dag.value_type(node);
-        let op = self.dag.opcode(node);
-        let operands: Vec<SDValue> = self.dag.node(node).ops.to_vec();
+        let (op, flags) = (self.dag.opcode(node), self.dag.node(node).flags);
+        let operands = self.dag.node(node).ops.clone();
         let lanes: Vec<SDValue> = (0..vt.lanes())
             .map(|lane| {
-                let index = self.dag.get_constant(u128::from(lane), self.dag.config().pointer);
+                let index = self.dag.get_constant(u128::from(lane), EVT::I64);
                 let scalars: Vec<SDValue> = operands
                     .iter()
-                    .map(|&operand| {
-                        let ty = self.dag.value_type(operand);
-                        if ty.is_vector() {
-                            self.dag.get_node(ISD::ExtractElement, ty.element(), &[operand, index])
-                        } else {
-                            operand
-                        }
-                    })
+                    .map(|operand| self.dag.get_node(ISD::ExtractElement, vt.element(), &[*operand, index]))
                     .collect();
-                self.dag.get_node(op, vt.element(), &scalars)
+                self.dag.get_node_flags(op, vt.element(), &scalars, flags)
             })
             .collect();
         self.dag.get_build_vector(vt, &lanes)
@@ -1090,10 +1074,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let op = self.dag.opcode(node);
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
-        if vt.is_vector() && Self::is_unrollable(op) {
-            return Some(vec![self.unroll_vector_op(node)]);
-        }
         match op {
+            // `VectorLegalizer::Expand`: a lane-wise operation the target has
+            // not is done a lane at a time.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor if vt.is_vector() => {
+                Some(vec![self.unroll_vector_op(node)])
+            }
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::SignExtendInReg => {
                 // An in-register sign extension of a boolean is a negation of

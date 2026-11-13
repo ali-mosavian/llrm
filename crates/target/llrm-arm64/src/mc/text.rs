@@ -389,6 +389,37 @@ impl fmt::Display for Inst {
                 let suffix = lanes.suffix();
                 write!(out, "{name} v{}.{suffix}, v{}.{suffix}, #{amount}", rd.0, rn.0)
             }
+            Inst::VectorLongShift { op, lane, high, rd, rn, amount } => {
+                write!(
+                    out,
+                    "{}{} v{}.{}, v{}.{}, #{amount}",
+                    op.mnemonic(),
+                    if *high { "2" } else { "" },
+                    rd.0,
+                    lane.wide_suffix(),
+                    rn.0,
+                    lane.narrow_suffix(*high)
+                )
+            }
+            Inst::VectorLong { op, lane, high, rd, rn, rm } => {
+                // `uaddw` has a wide first operand; `umull` a narrow one.
+                let first = if op.adds_wide() {
+                    lane.wide_suffix()
+                } else {
+                    lane.narrow_suffix(*high)
+                };
+                write!(
+                    out,
+                    "{}{} v{}.{}, v{}.{first}, v{}.{}",
+                    op.mnemonic(),
+                    if *high { "2" } else { "" },
+                    rd.0,
+                    lane.wide_suffix(),
+                    rn.0,
+                    rm.0,
+                    lane.narrow_suffix(*high)
+                )
+            }
             Inst::VectorNot { rd, rn } => write!(out, "mvn v{}.16b, v{}.16b", rd.0, rn.0),
             Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
                 let suffix = lanes.suffix();
@@ -406,22 +437,6 @@ impl fmt::Display for Inst {
             Inst::VectorFmaLane { op, lanes, rd, rn, rm, index } => {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
-            }
-            Inst::VectorExtendLong { signed, high, wide, rd, rn, amount } => {
-                let name = if *signed { "sshll" } else { "ushll" };
-                let two = if *high { "2" } else { "" };
-                write!(out, "{name}{two} v{}.{}, v{}.{}, #{amount}", rd.0, wide.suffix(), rn.0, wide.narrowed(*high))
-            }
-            Inst::VectorMulLong { signed, high, accumulate, wide, rd, rn, rm } => {
-                let name = match (*signed, *accumulate) {
-                    (true, false) => "smull",
-                    (false, false) => "umull",
-                    (true, true) => "smlal",
-                    (false, true) => "umlal",
-                };
-                let two = if *high { "2" } else { "" };
-                let narrow = wide.narrowed(*high);
-                write!(out, "{name}{two} v{}.{}, v{}.{narrow}, v{}.{narrow}", rd.0, wide.suffix(), rn.0, rm.0)
             }
             Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
                 let name = if *second { "uzp2" } else { "uzp1" };

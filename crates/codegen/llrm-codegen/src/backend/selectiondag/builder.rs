@@ -102,6 +102,10 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The vector types with a register class (`isTypeLegal`); a wider one
+    /// is carried across blocks in several of them
+    /// (`getVectorTypeBreakdown`).
+    pub legal_vectors: Vec<MVT>,
     /// The narrowest integer an argument register carries: a narrower one is
     /// promoted to it (`CCPromoteToType`).
     pub min_argument_bits: u32,
@@ -375,6 +379,17 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with divides by constants of at most `bits` bits kept as
+    /// divides (`isIntDivCheap`, per width; see
+    /// `DagConfig::int_div_cheap_narrow`).
+    pub fn with_int_div_cheap_narrow(
+        mut self,
+        bits: u32,
+    ) -> BuilderTarget {
+        self.dag.int_div_cheap_narrow = bits;
+        self
+    }
+
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`.
     pub fn with_div_live_limit(
         mut self,
@@ -523,6 +538,7 @@ impl BuilderTarget {
             legal_ints: std::iter::successors(Some(8), |width| Some(width * 2))
                 .take_while(|width| *width <= bits.max(32))
                 .collect(),
+            legal_vectors: Vec::new(),
             min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
@@ -982,7 +998,10 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<EVT, Refused> {
-        if vt.is_floating_point() || vt == MVT::Far.into() || vt.is_vector() {
+        if vt.is_vector() {
+            return self.vector_breakdown(vt).map(|(register, _)| register);
+        }
+        if vt.is_floating_point() || vt == MVT::Far.into() {
             return Ok(vt);
         }
         let bits = vt.size_in_bits();
@@ -994,6 +1013,28 @@ impl Builder<'_> {
             .ok_or(Refused("integer wider than a register"))
     }
 
+    /// `getVectorTypeBreakdown`: the vector is halved until a half has a
+    /// register class; that type, and how many of it make the vector. The pin's
+    /// intermediate and register types are one here (every legal vector is a
+    /// register type).
+    fn vector_breakdown(
+        &self,
+        vt: EVT,
+    ) -> Result<(EVT, usize), Refused> {
+        let (EVT::Simple(mvt), true) = (vt, vt.is_vector()) else {
+            return Err(Refused("vector with no register class"));
+        };
+        let element = mvt.element().ok_or(Refused("vector with no register class"))?;
+        let (mut lanes, mut count) = (mvt.lanes().ok_or(Refused("vector with no register class"))?, 1usize);
+        loop {
+            match MVT::vector(element, lanes) {
+                Some(half) if self.target.legal_vectors.contains(&half) => return Ok((EVT::Simple(half), count)),
+                _ if lanes > 1 => (lanes, count) = (lanes / 2, count * 2),
+                _ => return Err(Refused("vector with no register class")),
+            }
+        }
+    }
+
     /// How a value of `vt` is carried across blocks and calls: the type of
     /// each register and how many (an integer of twice the widest register
     /// is two of them).
@@ -1001,20 +1042,12 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<(EVT, usize), Refused> {
-        // `getVectorTypeBreakdown`: a vector of more bits than a register is
-        // that many registers of the half it halves into.
-        if vt.is_vector() && self.target.dag.vector_register_bits != 0 {
-            let (mut part, mut count) = (vt, 1usize);
-            while part.size_in_bits() > self.target.dag.vector_register_bits && part.lanes() % 2 == 0 {
-                let lanes = part.lanes() / 2;
-                let lane = match part.element() {
-                    EVT::Simple(lane) => lane,
-                    EVT::Int(_) => return Err(Refused("vector of an odd lane")),
-                };
-                part = MVT::vector(lane, lanes).map(EVT::Simple).ok_or(Refused("vector with no register class"))?;
-                count *= 2;
-            }
-            return Ok((part, count));
+        if vt.is_vector() {
+            // Arguments, results and calls carry one register.
+            return match self.vector_breakdown(vt)? {
+                (register, 1) => Ok((register, 1)),
+                _ => Err(Refused("vector wider than a register")),
+            };
         }
         match self.register_type(vt) {
             Ok(reg_vt) => Ok((reg_vt, 1)),
@@ -1048,6 +1081,9 @@ impl Builder<'_> {
         }
         if let Some(int) = self.soft_float_integer(vt) {
             return self.parts(int);
+        }
+        if vt.is_vector() {
+            return self.vector_breakdown(vt);
         }
         self.parts(vt)
     }
@@ -1100,39 +1136,25 @@ impl Builder<'_> {
         part: EVT,
         count: usize,
     ) -> Vec<SDValue> {
+        // `getCopyToPartsVector`, as many parts as intermediates: the vector is
+        // cut into its register-sized pieces.
+        if part.is_vector() {
+            let lanes = part.lanes();
+            return (0..count)
+                .map(|at| {
+                    let index = self.dag.get_constant(u128::from(at as u32 * lanes), EVT::I64);
+                    self.dag.get_node(ISD::ExtractSubvector, part, &[value, index])
+                })
+                .collect();
+        }
         // `getCopyToParts`: a value narrower than its parts together (`i63` in
         // eight bytes) is extended to their width first.
         let total = part.size_in_bits() * count as u32;
-        let value = if !self.dag.value_type(value).is_vector() && self.dag.value_type(value).size_in_bits() < total {
+        let value = if self.dag.value_type(value).size_in_bits() < total {
             self.dag.get_node(ISD::AnyExtend, EVT::integer(total), &[value])
         } else {
             value
         };
-        if self.dag.value_type(value).is_vector() {
-            // `getCopyToParts` of a vector: the halves, as many times as the
-            // parts need.
-            let half = self.dag.value_type(value);
-            let lanes = u128::from(half.lanes() / 2);
-            let half = EVT::Simple(
-                MVT::vector(
-                    match half.element() {
-                        EVT::Simple(lane) => lane,
-                        EVT::Int(_) => unreachable!("a vector's lane is a simple type"),
-                    },
-                    half.lanes() / 2,
-                )
-                .expect("a half of a part count"),
-            );
-            let (zero, mid) = (self.dag.get_constant(0, EVT::I64), self.dag.get_constant(lanes, EVT::I64));
-            let low = self.dag.get_node(ISD::ExtractSubvector, half, &[value, zero]);
-            let high = self.dag.get_node(ISD::ExtractSubvector, half, &[value, mid]);
-            if count == 2 {
-                return vec![low, high];
-            }
-            let mut all = self.split_parts(low, part, count / 2);
-            all.extend(self.split_parts(high, part, count / 2));
-            return all;
-        }
         if count == 2 {
             return self.split_value(value, part).to_vec();
         }
@@ -1151,22 +1173,9 @@ impl Builder<'_> {
         pieces: &[SDValue],
         pointer: bool,
     ) -> SDValue {
+        // `getCopyFromPartsVector`: the registers' vectors, concatenated.
         if vt.is_vector() {
-            // `getCopyFromParts` of a vector: the parts concatenated.
-            if let [one] = pieces {
-                return *one;
-            }
-            let (low, high) = pieces.split_at(pieces.len() / 2);
-            let half = self.dag.value_type(low[0]);
-            let lane = match half.element() {
-                EVT::Simple(lane) => lane,
-                EVT::Int(_) => unreachable!("a vector's lane is a simple type"),
-            };
-            let half = EVT::Simple(
-                MVT::vector(lane, half.lanes() * (pieces.len() as u32 / 2)).expect("a vector of half the parts"),
-            );
-            let pair = [self.join_parts(half, low, false), self.join_parts(half, high, false)];
-            return self.dag.get_node(ISD::ConcatVectors, vt, &pair);
+            return self.dag.get_node(ISD::ConcatVectors, vt, pieces);
         }
         // `getCopyFromParts`: parts wider together than the value (eight bytes
         // for an `i63`) are joined at their width and truncated.
@@ -3055,6 +3064,22 @@ impl Builder<'_> {
         self.dag.set_root(chain);
         let result = if parts == 2 {
             self.dag.get_node_flags(ISD::BuildPair, vt, &pieces, pair_kind(vt, self.is_pointer_type(result_type)))
+        } else if part_vt != vt && part_vt.is_integer() && vt.is_integer() {
+            // `getCopyFromParts`: a value narrower than its register (an `i1`
+            // in `al`) is the register's truncate; left at
+            // the register's type, `xor i1 %call, true` was an i8 xor with an
+            // i1 constant that legalization refused.
+            // The `zeroext`/`signext` of the return is
+            // `AssertZext`/`AssertSext` on the register, so the
+            // narrow value is known extended.
+            let one = match std::mem::take(&mut self.call_result_assert) {
+                Some(code) => {
+                    let narrow = self.dag.get_value_type_node(vt);
+                    self.dag.get_node(code, part_vt, &[pieces[0], narrow])
+                }
+                None => pieces[0],
+            };
+            self.dag.get_node(ISD::Truncate, vt, &[one])
         } else {
             pieces[0]
         };

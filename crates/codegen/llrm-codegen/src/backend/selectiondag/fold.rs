@@ -405,6 +405,21 @@ impl SelectionDAG {
                     }
                 }
             }
+            // `EXTRACT_SUBVECTOR` (`getNode`, SelectionDAG.cpp#L8840): the
+            // whole vector, a piece of undef, a piece of a `CONCAT_VECTORS` of
+            // pieces that size.
+            ISD::ExtractSubvector => {
+                if vt == self.value_type(n1) {
+                    return Folded::Done(n1);
+                }
+                if self.is_undef(n1) {
+                    return Folded::Done(self.get_undef(vt));
+                }
+                if self.opcode(n1) == ISD::ConcatVectors && self.value_type(self.operand(n1, 0)) == vt {
+                    let at = n2_const.expect("EXTRACT_SUBVECTOR index") / u128::from(vt.lanes());
+                    return Folded::Done(self.operand(n1, at as usize));
+                }
+            }
             ISD::ExtractElement => {
                 let index = n2_const.expect("EXTRACT_ELEMENT index");
                 if self.opcode(n1) == ISD::BuildPair {

@@ -1260,9 +1260,16 @@ pub trait Tti {
     /// it).
     /// Whether an -Os caller's SZ2 trial also inlines the sites its splice
     /// brings (`Tuning::inline_chain_trial`).
-    /// An -Os caller's SZ2 trial leaves a callee that stays, with two or more calls left, to the
-    /// by-size guard (`Tuning::inline_trial_defers_to_shared_growth`).
+    /// An -Os caller's SZ2 trial leaves a callee that stays, with two or more
+    /// calls left, to the by-size guard
+    /// (`Tuning::inline_trial_defers_to_shared_growth`).
     fn inline_trial_defers_to_shared_growth(&self) -> bool {
+        false
+    }
+
+    /// `visitADD`'s or-disjoint for adds of operands that share no bits
+    /// (`Tuning::add_to_or_disjoint`).
+    fn add_to_or_disjoint(&self) -> bool {
         false
     }
 
@@ -1461,6 +1468,17 @@ pub trait Tti {
 
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE UNROLL-NEST-TRIAL: at -O2 and -O3 the loops with a subloop that
+    /// the target's own `unroll_threshold_overrides` refused but the pin's
+    /// threshold admits are noted, and the driver compiles the module again
+    /// with them unrolled and keeps that where the finished code prices
+    /// better at the CPU's byte rate. The pin never judges such a loop by its
+    /// savings (`analyzeLoopUnrollCost` skips a loop with a subloop), only
+    /// by size.
+    fn unroll_trial_nests_at_speed(&self) -> bool {
         false
     }
 
@@ -2487,6 +2505,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine leaves `icmp eq/ne (select c, a, b), (select c, b, a)` alone. The pin
+    /// compares the arms, `icmp eq/ne a, b` (`matchSymmetricPair`), on every target. DEVIATE
+    /// SYMPAIR-1 (owner llrm-target-wasm, exit 2026-11-24): at m16 a 64-bit arm compare is a
+    /// longer sequence than the two selects it replaces (+4 B in 24 sfm16_float objects).
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)
+    fn keeps_icmp_of_swapped_selects(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
@@ -2714,11 +2741,12 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
-    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
-    /// `fmul` and `fadd`, the product then leaving the loop; true where the
-    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
-    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM
+    /// splits an `llvm.fmuladd` of a loop whose factors the loop does not
+    /// write into `fmul` and `fadd`, the product then leaving the loop;
+    /// true where the target has no fused multiply-add to make of it.
+    /// x_ld_to_ulong m32 -O1: `r * 67108864` made on every trip of the
+    /// inner loop, gcc holds it.
     fn splits_invariant_fmuladd(&self) -> bool {
         false
     }
@@ -2785,9 +2813,9 @@ pub trait Tti {
         None
     }
 
-    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
-    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
-    /// none: the pass does not run.
+    /// The width of the narrow divide instruction, where an unsigned divide or
+    /// remainder whose operands ScalarEvolution proves that narrow is done
+    /// in the narrow type (`narrowrange`); none: the pass does not run.
     fn range_narrowing_width(&self) -> Option<u32> {
         None
     }
@@ -3062,9 +3090,10 @@ pub trait Tti {
         if is_free_intrinsic(name) { Cost::FREE } else { base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 
-    /// `intrinsic_cost` of a `ctlz` or `cttz` whose `is_zero_poison` argument is the constant true: some targets
-    /// price it apart (`X86TTIImpl::getIntrinsicInstrCost`, `CTLZ_ZERO_POISON`). The same price as `intrinsic_cost`
-    /// where a target has no such rows.
+    /// `intrinsic_cost` of a `ctlz` or `cttz` whose `is_zero_poison` argument
+    /// is the constant true: some targets price it apart
+    /// (`X86TTIImpl::getIntrinsicInstrCost`, `CTLZ_ZERO_POISON`). The same
+    /// price as `intrinsic_cost` where a target has no such rows.
     fn zero_poison_intrinsic_cost(
         &self,
         name: &str,

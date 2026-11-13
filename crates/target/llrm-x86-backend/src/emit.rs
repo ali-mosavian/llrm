@@ -3742,8 +3742,9 @@ impl Emitter<'_, '_> {
         // A near pointer into the stack segment: `ss:[base+index*scale+disp]`.
         let stack_segment = self.ctx.registers.stack_segment_register();
         let through_ss = self.dag.node(group[4]).data == NodeData::PhysReg(stack_segment);
+        let shares = self.ctx.stack_shares_data;
         let overridden = |mut addr: Addr| {
-            if through_ss {
+            if through_ss && !shares {
                 addr.segment = stack_segment.iced();
             }
             addr

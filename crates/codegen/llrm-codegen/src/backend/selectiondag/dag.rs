@@ -281,10 +281,6 @@ pub struct DagConfig {
     /// the builder lowers a vector IR type only then; elsewhere it is
     /// refused as before.
     pub vectors: bool,
-    /// The bits of the widest vector register; a vector of more is carried
-    /// across blocks in as many registers as it halves into
-    /// (`getVectorTypeBreakdown`). 0 where `vectors` is off.
-    pub vector_register_bits: u32,
     /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
     /// index in its address at 64 bits, as an absolute `disp32`, where
     /// position-independent code reaches it from `%rip` alone.
@@ -293,6 +289,11 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// `isIntDivCheap` for a type of at most this many bits where
+    /// `int_div_cheap` is off: a target with a narrow divide instruction and a
+    /// libcall for the wide one (the 68000's `divs.w` against `__divsi3`).
+    /// DEVIATE: the pin's hooks answer for every width at once. Owner m68k.
+    pub int_div_cheap_narrow: u32,
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
     pub div_live_limit: u32,
     /// The widest divide `div_live_limit` governs.
@@ -376,10 +377,10 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             defined_dso_local: false,
             vectors: false,
-            vector_register_bits: 0,
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            int_div_cheap_narrow: 0,
             div_live_limit: 0,
             div_live_max_bits: 31,
             div_live: 0,

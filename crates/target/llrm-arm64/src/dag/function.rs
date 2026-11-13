@@ -38,11 +38,11 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
             vectors: crate::machine::vectors_enabled(),
-            vector_register_bits: if crate::machine::vectors_enabled() { 128 } else { 0 },
             ..DagConfig::default()
         },
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
+        legal_vectors: llrm_sdag::lowering::TargetLoweringInfo::aarch64().legal_vectors().to_vec(),
         soft_float: false,
         stack_align: Some(16),
         max_alloca_align: Some(16),

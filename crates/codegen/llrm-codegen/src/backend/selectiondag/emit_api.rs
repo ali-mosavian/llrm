@@ -206,6 +206,10 @@ pub struct EmitContext<'a> {
     pub address_mode: AddrMode,
     /// Code size is wanted over speed (`-Os`, `-Oz`).
     pub opt_size: bool,
+    /// A near pointer into the stack segment needs no `ss:` override: SS holds
+    /// the data segment's value for the whole run
+    /// (`Segments::stack_shares_data`).
+    pub stack_shares_data: bool,
     /// The multiple a call's argument area is rounded to, so a call finds the
     /// stack aligned (`aligned_calls`); 1 where calls need none.
     pub call_alignment: i64,

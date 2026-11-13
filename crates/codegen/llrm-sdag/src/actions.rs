@@ -200,6 +200,29 @@ pub struct TargetLowering {
     min_stack_argument_alignment: u32,
 }
 
+/// Every vector type (`MVT::fixedlen_vector_valuetypes`).
+const VECTORS: [MVT; 19] = [
+    MVT::V16I8,
+    MVT::V8I16,
+    MVT::V4I32,
+    MVT::V2I64,
+    MVT::V4F32,
+    MVT::V2F64,
+    MVT::V2F32,
+    MVT::V8I8,
+    MVT::V4I16,
+    MVT::V2I32,
+    MVT::V32I8,
+    MVT::V16I16,
+    MVT::V8I32,
+    MVT::V4I64,
+    MVT::V8F32,
+    MVT::V4F64,
+    MVT::V16I32,
+    MVT::V8I64,
+    MVT::V16I64,
+];
+
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
@@ -976,48 +999,25 @@ impl TargetLowering {
         // type the target does not take never exists.
         let vectors = [MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64];
         let float_vectors = [MVT::V4F32, MVT::V2F64, MVT::V2F32];
-        // The constructor's loop over the vector types: an extending load or
-        // a truncating store of a vector is expanded. DEVIATE LV-X6 (owner
-        // llrm-arm64-vec, exit 2026-11-24): the `Custom` `v2i32`<-`v2i8`
-        // family (`LowerLOAD`) is expanded too.
-        let every_vector = [
-            MVT::V8I8,
-            MVT::V4I16,
-            MVT::V2I32,
-            MVT::V2F32,
-            MVT::V16I8,
-            MVT::V8I16,
-            MVT::V4I32,
-            MVT::V2I64,
-            MVT::V4F32,
-            MVT::V2F64,
-            MVT::V32I8,
-            MVT::V16I16,
-            MVT::V8I32,
-            MVT::V4I64,
-            MVT::V8F32,
-            MVT::V4F64,
-            MVT::V64I8,
-            MVT::V32I16,
-            MVT::V16I32,
-            MVT::V8I64,
-        ];
-        for vt in every_vector {
-            for inner in every_vector {
-                t.set_trunc_store_action(vt, inner, Expand);
-                for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
-                    t.set_load_ext_action(ext, vt, inner, Expand);
-                }
-            }
-        }
         t.set_ops(&[BuildVector, VectorShuffle, InsertVectorElt], &vectors, Custom);
         t.set_ops(&[BuildVector, VectorShuffle, InsertVectorElt], &float_vectors, Custom);
         // `addTypeForNEON`: the shifts are lowered to `VSHL`/`VLSHR`/`VASHR`
         // (`LowerVectorSRA_SRL_SHL`).
         t.set_ops(&[Shl, Srl, Sra], &vectors, Custom);
-        // `LowerMUL`, so that `SMULL`/`UMULL` are found.
+        // `LowerMUL`: the widening multiplies (`SMULL`, `UMULL`); `v2i64` has
+        // no multiply of its own.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
+        // `AArch64TargetLowering` (L1637): no vector has an extending load or a
+        // truncating store of another vector's memory type.
+        for vt in VECTORS {
+            for mem in VECTORS {
+                for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
+                    t.set_load_ext_action(ext, vt, mem, Expand);
+                }
+                t.set_trunc_store_action(vt, mem, Expand);
+            }
+        }
         // `initActions`: "Vector reduction default to expand". The float
         // kinds have no node here.
         let reductions = [

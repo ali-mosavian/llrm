@@ -3037,14 +3037,16 @@ fn test_m32_copies_no_recursion_at_os() {
     assert!(calls <= 3, "a recursion was copied into itself at -Os, {calls} calls of it");
 }
 
-/// gcc rejects the recursive edge of quicksort and bintree at -O2
-/// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
-/// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
+/// A tree recursion whose edge grows past 12 `gcc_insns` was copied at -O3
+/// only (the -O2 bar, gcc's 15 against its 30), so recchop -O2 stayed 7183
+/// clocks against 5818 for gcc, which copies it; with the bar at 22 at both
+/// levels it is 5397 (m32, 121 programs: 5 -O2 programs change, all faster,
+/// -O3 none).
 #[test]
-fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
+fn test_m32_copies_a_recursion_whose_edge_grows_past_12_at_o2_too() {
     let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
     let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
-    assert!(o2 <= 3, "copied at -O2, {o2} calls");
+    assert!(o2 >= 8, "not copied at -O2, {o2} calls");
     assert!(o3 >= 8, "not copied at -O3, {o3} calls");
 }
 
@@ -3135,25 +3137,27 @@ fn test_the_default_build_links_no_gcc_derived_crate() {
     }
 }
 
-/// The bar of the recursive edge (DEVIATE REC-2) as the 12 self-recursive
-/// functions of the corpus meet it: gcc 15 copies fib, hanoi, recpow and
-/// rectwo into themselves at -O2 (edge growth <= 15) and at -O3 (<= 30) also
-/// bintree `walk`, recchop `chop`, x_hanoi2 `mv`, quicksort `sort` and queens
-/// `place`, never x_mergesort `msort` (growth 67). Fitted on these, `gcc_insns`
-/// of queens 22 sits on the m32 O3 edge.
+/// The bar of the recursive edge (DEVIATE REC-2) as the 10 self-recursive
+/// functions of the corpus meet it. gcc copies fib, hanoi, recpow and rectwo
+/// at -O2 (edge growth <= 15) and recchop `chop` (its dump: size 21), and at
+/// -O3 (<= 30) also bintree `walk`, x_hanoi2 `mv`, quicksort `sort` and queens
+/// `place`; never x_mergesort `msort` (growth 67). m32 deviates at -O2: the
+/// five copy there too, because each is faster (A/B, 121 programs; recchop
+/// 14 and bintree `walk` 14 cannot be told apart by size). `gcc_insns` of
+/// queens 22 sits on the edge at both levels.
 #[test]
-fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
+fn test_the_m32_edge_bar_decides_every_corpus_recursion_as_the_ab_measured() {
     // (module, function, copied at -O2, copied at -O3)
     let table: [(&str, &str, &str, bool, bool); 10] = [
         ("fib", include_str!("testdata/rec2/fib.ll"), "fib_", true, true),
         ("hanoi", include_str!("testdata/rec2/hanoi.ll"), "hanoi_", true, true),
         ("recpow", include_str!("testdata/rec2/recpow.ll"), "power_", true, true),
         ("rectwo", include_str!("testdata/rec2/rectwo.ll"), "paths_", true, true),
-        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", false, true),
-        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", false, true),
-        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", false, true),
-        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", false, true),
-        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", false, true),
+        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", true, true),
+        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", true, true),
+        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", true, true),
+        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", true, true),
+        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", true, true),
         ("x_mergesort", include_str!("testdata/rec2/x_mergesort.ll"), "msort_", false, false),
     ];
     let m32 = crate::indvars::tests::m32();

@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorReduce,
-    VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp,
+    VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -559,16 +559,16 @@ fn gpr_width(letter: &str) -> Option<Width> {
 }
 
 /// The values the float register file holds across blocks: floats and the
-/// 128-bit integer vectors.
+/// vectors.
 fn in_float_file(ty: EVT) -> bool {
-    ty.is_floating_point() || is_quad(ty)
+    ty.is_floating_point() || ty.is_vector() || is_quad(ty)
 }
 
 /// A value of 128 bits in a float register (`q`): `F128` and the vectors.
 fn is_quad(ty: EVT) -> bool {
     matches!(
         ty,
-        EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64)
+        EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 | MVT::V4F32 | MVT::V2F64)
     )
 }
 
@@ -723,6 +723,48 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: a narrow
+    // operand (a half of a vector, with `2`) into wide lanes.
+    for op in [
+        VectorLongOp::Ushll,
+        VectorLongOp::Sshll,
+        VectorLongOp::Uaddw,
+        VectorLongOp::Saddw,
+        VectorLongOp::Umull,
+        VectorLongOp::Smull,
+        VectorLongOp::Umlal,
+        VectorLongOp::Smlal,
+    ] {
+        let Some(rest) = name.strip_prefix(&op.mnemonic().to_uppercase()).and_then(|rest| rest.strip_prefix('v'))
+        else {
+            continue;
+        };
+        let narrow = rest.split('_').next().unwrap_or(rest);
+        let Some((lane, high)) = [
+            ("8i8", NarrowLane::B, false),
+            ("16i8", NarrowLane::B, true),
+            ("4i16", NarrowLane::H, false),
+            ("8i16", NarrowLane::H, true),
+            ("2i32", NarrowLane::S, false),
+            ("4i32", NarrowLane::S, true),
+        ]
+        .into_iter()
+        .find(|(text, ..)| *text == narrow)
+        .map(|(_, lane, high)| (lane, high)) else {
+            continue;
+        };
+        return Some(match (op.is_shift(), operands) {
+            (true, [Operand::Fpr(rn), Operand::Imm(amount)]) => {
+                Ok(Inst::VectorLongShift { op, lane, high, rd, rn: *rn, amount: *amount as u8 })
+            }
+            // The accumulating forms list the tied register first.
+            (false, [Operand::Fpr(rn), Operand::Fpr(rm)])
+            | (false, [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorLong { op, lane, high, rd, rn: *rn, rm: *rm })
+            }
+            _ => wrong(),
+        });
+    }
     if name == "NOTv16i8" {
         return Some(match operands {
             [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
@@ -746,8 +788,8 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    // `SSHLLv4i16_shift`, `XTNv8i16`: the long shifts and the narrowing move
-    // (the name is the arrangement of the narrow side).
+    // `XTNv8i16`: the narrowing move (the name is the arrangement of the narrow
+    // side).
     for (wide, high) in [
         (Arrangement::H8, false),
         (Arrangement::H8, true),
@@ -764,16 +806,6 @@ fn vector_inst(
             (Arrangement::D2, false) => "v2i32",
             _ => "v4i32",
         };
-        for (stem, signed) in [("SSHLL", true), ("USHLL", false)] {
-            if name == format!("{stem}{narrow}_shift") {
-                return Some(match operands {
-                    [Operand::Fpr(rn), Operand::Imm(amount)] => {
-                        Ok(Inst::VectorExtendLong { signed, high, wide, rd, rn: *rn, amount: *amount as u8 })
-                    }
-                    _ => wrong(),
-                });
-            }
-        }
         if name == format!("XTN{narrow}") {
             return Some(match operands {
                 [Operand::Fpr(rn)] | [Operand::Fpr(_), Operand::Fpr(rn)] => {
@@ -781,25 +813,6 @@ fn vector_inst(
                 }
                 _ => wrong(),
             });
-        }
-        // `SMULLv2i32_v2i64`, `UMLALv4i32_v2i64`: the accumulator is the
-        // first operand of the accumulating forms.
-        let wide_name = match wide {
-            Arrangement::H8 => "v8i16",
-            Arrangement::S4 => "v4i32",
-            _ => "v2i64",
-        };
-        for (stem, signed, accumulate) in
-            [("SMULL", true, false), ("UMULL", false, false), ("SMLAL", true, true), ("UMLAL", false, true)]
-        {
-            if name == format!("{stem}{narrow}_{wide_name}") {
-                return Some(match operands {
-                    [Operand::Fpr(rn), Operand::Fpr(rm)] | [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm)] => {
-                        Ok(Inst::VectorMulLong { signed, high, accumulate, wide, rd, rn: *rn, rm: *rm })
-                    }
-                    _ => wrong(),
-                });
-            }
         }
     }
     // `UZP1v8i16`: two sources, no tied register.
@@ -2262,7 +2275,7 @@ impl Emitter<'_> {
                     if let (
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
-                        | Inst::VectorMulLong { accumulate: true, .. }
+                        | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
                         | Inst::VectorNarrow { high: true, .. }
                         | Inst::VectorInsGpr { .. }
                         | Inst::VectorInsLane { .. },

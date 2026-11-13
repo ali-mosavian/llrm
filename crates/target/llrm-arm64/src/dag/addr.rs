@@ -8,7 +8,7 @@
 //! signature (`SelectAddrModeIndexed`: base, scaled offset).
 //!
 //! DEVIATE SD522: not translated, and answering false (the pattern after it, or
-//! a refusal, follows): `SelectDupZero`;
+//! a refusal, follows): `SelectExtractHigh`, `SelectDupZero`;
 //! `SelectCVTFixedPos*` reads only a `ConstantFP`, not one loaded from the
 //! constant pool. Exit: vectors; the constant pool.
 //!
@@ -82,49 +82,6 @@ pub fn cvt_fixed_pos<D: AddrDag>(
     Some([dag.target_constant(i64::from(fbits), mvt::i32)])
 }
 
-/// The width in bits and the lane count of a vector type the extract-high
-/// patterns name: the 64-bit and 128-bit integer and float vectors.
-fn vector_shape(vt: Vt) -> Option<(u32, u32)> {
-    [
-        (mvt::v8i8, 64, 8),
-        (mvt::v4i16, 64, 4),
-        (mvt::v2i32, 64, 2),
-        (mvt::v2f32, 64, 2),
-        (mvt::v16i8, 128, 16),
-        (mvt::v8i16, 128, 8),
-        (mvt::v4i32, 128, 4),
-        (mvt::v2i64, 128, 2),
-        (mvt::v4f32, 128, 4),
-        (mvt::v2f64, 128, 2),
-    ]
-    .iter()
-    .find(|&&(known, ..)| known == vt)
-    .map(|&(_, width, lanes)| (width, lanes))
-}
-
-/// `SelectExtractHigh`: the 128-bit vector whose top half a 64-bit
-/// `extract_subvector` takes (through one `bitcast`).
-pub fn extract_high<D: AddrDag>(
-    dag: &mut D,
-    n: SDValue,
-) -> Option<[SDValue; 1]> {
-    let mut n = n;
-    if dag.opcode(n.node) == isd::BITCAST {
-        let inner = dag.operand(n.node, 0);
-        if dag.opcode(inner.node) == isd::EXTRACT_SUBVECTOR || dag.opcode(inner.node) == isd::BITCAST {
-            n = inner;
-        }
-    }
-    if dag.opcode(n.node) != isd::EXTRACT_SUBVECTOR {
-        return None;
-    }
-    let source = dag.operand(n.node, 0);
-    let (width, lanes) = vector_shape(dag.value_type(n))?;
-    let (source_width, _) = vector_shape(dag.value_type(source))?;
-    let index = zext(dag, dag.operand(n.node, 1))?;
-    (width == 64 && source_width == 128 && index == u64::from(lanes)).then_some([source])
-}
-
 /// `SelectArithImmed`: the immediate and its shifter operand.
 pub fn arith_immed<D: AddrDag>(
     dag: &mut D,
@@ -140,6 +97,30 @@ pub fn arith_immed<D: AddrDag>(
     let value = dag.target_constant((immed >> shift) as i64, mvt::i32);
     let shifter = dag.target_constant(shift as i64, mvt::i32);
     Some([value, shifter])
+}
+
+/// `SelectExtractHigh`
+/// ([AArch64ISelDAGToDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp)):
+/// the high half of a 128-bit vector, seen through a bitcast; the vector is
+/// the result.
+pub fn extract_high<D: AddrDag>(
+    dag: &mut D,
+    n: SDValue,
+) -> Option<[SDValue; 1]> {
+    let n = if dag.opcode(n.node) == isd::BITCAST { dag.operand(n.node, 0) } else { n };
+    if dag.opcode(n.node) != isd::EXTRACT_SUBVECTOR {
+        return None;
+    }
+    let index = dag.constant(dag.operand(n.node, 1))?;
+    let (half, whole) = (dag.value_type(n), dag.value_type(dag.operand(n.node, 0)));
+    // `is64BitVector`, `is128BitVector`, `Index == getVectorNumElements`.
+    let lanes = match (half, whole) {
+        (h, w) if h == Vt::V8I8 && w == mvt::v16i8 => 8,
+        (h, w) if h == Vt::V4I16 && w == mvt::v8i16 => 4,
+        (h, w) if h == Vt::V2I32 && w == mvt::v4i32 => 2,
+        _ => return None,
+    };
+    (index == lanes).then(|| [dag.operand(n.node, 0)])
 }
 
 /// `SelectNegArithImmed`: `-immediate` as an arithmetic immediate.

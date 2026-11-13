@@ -302,6 +302,18 @@ fn branches() {
             }
         }
     }
+    for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+        for high in [false, true] {
+            for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
+                for amount in [0, 1, lane.bits() as u8 - 1] {
+                    all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(4), rn: Vreg(27), amount });
+                }
+            }
+            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+                all.push(Inst::VectorLong { op, lane, high, rd: Vreg(4), rn: Vreg(27), rm: Vreg(19) });
+            }
+        }
+    }
     all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
     for op in [VectorReduce::Addv, VectorReduce::Smaxv, VectorReduce::Sminv, VectorReduce::Umaxv, VectorReduce::Uminv] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4] {
@@ -330,12 +342,17 @@ fn branches() {
         (false, Arrangement::D2),
         (true, Arrangement::D2),
     ] {
-        for (signed, amount) in [(true, 0), (false, 0), (true, 3)] {
-            all.push(Inst::VectorExtendLong { signed, high, wide, rd: Vreg(5), rn: Vreg(17), amount });
+        let lane = match wide {
+            Arrangement::H8 => NarrowLane::B,
+            Arrangement::S4 => NarrowLane::H,
+            _ => NarrowLane::S,
+        };
+        for (op, amount) in [(VectorLongOp::Sshll, 0), (VectorLongOp::Ushll, 0), (VectorLongOp::Sshll, 3)] {
+            all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(5), rn: Vreg(17), amount });
         }
         all.push(Inst::VectorNarrow { high, wide, rd: Vreg(6), rn: Vreg(30) });
-        for (signed, accumulate) in [(true, false), (false, false), (true, true), (false, true)] {
-            all.push(Inst::VectorMulLong { signed, high, accumulate, wide, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        for op in [VectorLongOp::Smull, VectorLongOp::Umull, VectorLongOp::Smlal, VectorLongOp::Umlal] {
+            all.push(Inst::VectorLong { op, lane, high, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
         }
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {

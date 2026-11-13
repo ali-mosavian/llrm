@@ -441,6 +441,22 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             };
             0x4F00_0400 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorLongShift { op, lane, high, rd, rn, amount } => {
+            let (u, base) = op.fields();
+            // `immh:immb` is `esize + shift`; the lane size is its highest set
+            // bit.
+            let immhb = lane.bits() + u32::from(*amount);
+            base | u32::from(*high) << 30 | u << 29 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorLong { op, lane, high, rd, rn, rm } => {
+            let (u, base) = op.fields();
+            base | u32::from(*high) << 30
+                | u << 29
+                | lane.size() << 22
+                | vreg(*rm)? << 16
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
         Inst::VectorNot { rd, rn } => 0x6E20_5800 | vreg(*rn)? << 5 | vreg(*rd)?,
         Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
             let (u, a, opcode) = op.fields();
@@ -463,25 +479,6 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let (size, h, l) =
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
-        }
-        Inst::VectorExtendLong { signed, high, wide, rd, rn, amount } => {
-            let immhb = wide.lane_bits() / 2 + u32::from(*amount);
-            let base = if *signed { 0x0F00_A400 } else { 0x2F00_A400 };
-            base | u32::from(*high) << 30 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
-        }
-        Inst::VectorMulLong { signed, high, accumulate, wide, rd, rn, rm } => {
-            let size = match wide {
-                Arrangement::H8 => 0,
-                Arrangement::S4 => 1,
-                _ => 2,
-            };
-            let base = match (*signed, *accumulate) {
-                (true, false) => 0x0E20_C000,
-                (false, false) => 0x2E20_C000,
-                (true, true) => 0x0E20_8000,
-                (false, true) => 0x2E20_8000,
-            };
-            base | u32::from(*high) << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
             let size = match lanes {
