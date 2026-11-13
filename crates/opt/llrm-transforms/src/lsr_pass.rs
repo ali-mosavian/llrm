@@ -422,11 +422,26 @@ fn plan_loop(
         let symbols_outweigh_saving = symbol_setup != 0 && {
             let new_bases = symbol_bases(se, &lsr, &solution);
             let pin_bases = symbol_bases(se, &pin, &pin_solution);
-            let added = new_bases.iter().filter(|base| !pin_bases.contains(base)).count() as u32;
+            // What each base added costs beyond the one `setup_cost` counts:
+            // the target's price for that global (a GOT-loaded one is shared,
+            // so its constant is one `add`).
+            let extra: u32 = new_bases
+                .iter()
+                .filter(|base| !pin_bases.contains(base))
+                .map(|&base| {
+                    let setup = symbol_of(se, &lsr, base, 4).map_or(symbol_setup, |global| {
+                        tti.lsr_symbol_offset_setup_insns(
+                            &outer.globals[global.0 as usize],
+                            outer.program().position_independent,
+                        )
+                    });
+                    setup.saturating_sub(1)
+                })
+                .sum();
             let trips = if bytes_strict { 1 } else { u64::from(se.get_small_constant_max_trip_count(&cx, header)) };
             let total = |insns: u32, setup: u32| trips * u64::from(insns) + u64::from(setup);
             trips != 0
-                && total(cost.c.insns, cost.c.setup_cost) + u64::from(added * (symbol_setup - 1))
+                && total(cost.c.insns, cost.c.setup_cost) + u64::from(extra)
                     > total(pin_cost.c.insns, pin_cost.c.setup_cost)
         };
         // DEVIATE LG3, where bytes outrank clocks (-Os, -O1): the end-biased
@@ -487,14 +502,7 @@ fn symbol_bases(
         s: Scev,
         depth: u32,
     ) -> bool {
-        match se.scev_type(s) {
-            Type::Unknown => lsr.global_of(se, s).is_some(),
-            _ if depth == 0 => false,
-            Type::Add | Type::Mul | Type::AddRec => {
-                se.operands(s).iter().any(|operand| names_global(se, lsr, operand.scev, depth - 1))
-            }
-            _ => false,
-        }
+        symbol_of(se, lsr, s, depth).is_some()
     }
     let mut bases = Vec::new();
     for (lu, &chosen) in lsr.uses.iter().zip(solution) {
@@ -505,6 +513,23 @@ fn symbol_bases(
         }
     }
     bases
+}
+
+/// The global whose address `s` names within `depth` operands.
+fn symbol_of(
+    se: &ScalarEvolution,
+    lsr: &Collection,
+    s: Scev,
+    depth: u32,
+) -> Option<llrm_mir::context::GlobalId> {
+    match se.scev_type(s) {
+        Type::Unknown => lsr.global_of(se, s),
+        _ if depth == 0 => None,
+        Type::Add | Type::Mul | Type::AddRec => {
+            se.operands(s).iter().find_map(|operand| symbol_of(se, lsr, operand.scev, depth - 1))
+        }
+        _ => None,
+    }
 }
 
 /// `ReduceLoopStrength` over every loop of `function`, innermost first;

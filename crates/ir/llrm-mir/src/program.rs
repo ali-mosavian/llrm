@@ -433,6 +433,7 @@ impl ProgramAnalyses {
             exports: program.exports.clone(),
             runtime: Rc::clone(&program.runtime),
             module,
+            position_independent: program.modules[module].position_independent(),
             results: self.cache.clone(),
         })
     }
@@ -463,6 +464,9 @@ pub struct ProgramProxy {
     pub runtime: Rc<Module>,
     /// The module reading it, by its index in the program.
     pub module: usize,
+    /// Whether that module's code is position independent (clang's "PIC
+    /// Level").
+    pub position_independent: bool,
     results: HashMap<TypeId, Rc<dyn Any>>,
 }
 
@@ -486,6 +490,7 @@ impl ProgramProxy {
             exports: Exports::default(),
             runtime: Rc::default(),
             module: 0,
+            position_independent: module.position_independent(),
             results: HashMap::default(),
         })
     }

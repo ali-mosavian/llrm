@@ -11,7 +11,10 @@ fn compile(fixture: &str) -> (String, String) {
     compile_at(fixture, "-O2")
 }
 
-fn compile_at(fixture: &str, level: &str) -> (String, String) {
+fn compile_at(
+    fixture: &str,
+    level: &str,
+) -> (String, String) {
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
@@ -53,4 +56,16 @@ fn a_loop_of_many_trips_keeps_the_end_biased_solution() {
 fn particle_o1_keeps_the_plain_symbol_bases() {
     let (text, _) = compile_at("particle_o1", "-O1");
     assert_eq!(pages(&text), 6, "{text}");
+}
+
+/// textfill -O1: the second loop's end-biased base `@host_text_screen+4000` was
+/// priced as a new `adrp` + `add` pair, so LSR kept the pin's index and count
+/// (5 instructions a trip, 36,008 executed against gcc's 32,018). A global the
+/// GOT supplies is one register the loop shares: the constant is one `add`,
+/// bytes equal to the pin's form, and the loop counts up to zero.
+#[test]
+fn a_got_symbol_plus_a_constant_is_one_add_not_a_new_pair() {
+    let (text, trace) = compile_at("textfill_got_o1", "-O1");
+    assert!(trace.contains("pin's space solved: kept false"), "{trace}");
+    assert!(text.contains("adds"), "{text}");
 }

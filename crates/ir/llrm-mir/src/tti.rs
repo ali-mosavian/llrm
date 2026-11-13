@@ -2425,6 +2425,20 @@ pub trait Tti {
         0
     }
 
+    /// [`Self::lsr_symbol_base_setup_insns`] for a base that names `global`
+    /// plus a constant: where the global's address is a register the code
+    /// loads once (arm64 PIC: from the GOT), the constant is one `add` on it,
+    /// not a new pair. gcc prices the same: ivopts `force_expr_to_var_cost`
+    /// makes a symbol plus a constant the symbol's cost plus an add, and the
+    /// symbol's address is shared.
+    fn lsr_symbol_offset_setup_insns(
+        &self,
+        _global: &crate::module::GlobalValue,
+        _position_independent: bool,
+    ) -> u32 {
+        self.lsr_symbol_base_setup_insns()
+    }
+
     /// Whether a one-register formula of the first use makes its register a
     /// loser for the later uses (`VisitedRegs`, `SolveRecurse` L5600): the
     /// pin's rule. DEVIATE LS1 turns it off where the target has too few
