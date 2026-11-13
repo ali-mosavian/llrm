@@ -18,17 +18,18 @@ import llrmbin  # noqa: E402
 
 SMALL, LARGE = 20, 80
 # What 4x the loops may cost (4 is linear). Steps not named are held to DEFAULT. The named ones are mid-end passes measured over
-# it on 2026-11-13 (20 -> 80 loops, release/next a12d6adfdb) and are owed a fix (owner: compile-time-bench / w8): each limit is
+# it on 2026-11-13 (20 -> 80 loops, release/next 1d2992e224, after the per-loop parts got their own spans) and are owed a fix (owner: compile-time-bench / w8): each limit is
 # the measured growth plus 15%, lowered when its step is fixed. `unroll` re-solves float liveness of the whole function for
 # every loop (liveness::pressure_in, DEVIATE U3); the others are not yet diagnosed.
 DEFAULT = 6.0
 OWED = {
-    "mir indvars": 17.0,
+    "mir loopfullunroll": 22.0,
     "mir unroll": 17.5,
-    "mir rotate": 11.3,
-    "mir constraint-elimination": 9.6,
-    "mir loopidioms": 9.3,
-    "mir jumpthreading": 7.7,
+    "mir rotate": 11.2,
+    "mir constraint-elimination": 9.5,
+    "mir loopidioms": 9.2,
+    "mir jumpthreading": 7.4,
+    "mir indvars": 7.1,
 }
 FLOOR_MINSTR = 12.0  # a step under this many M at LARGE is noise
 
