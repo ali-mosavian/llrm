@@ -1945,6 +1945,22 @@ fn declare_outside(
             let reference = module.reference(global);
             tables.callees.insert(REAL_ADDRESS.to_owned(), reference);
         }
+        if instruction.op == Op::TruncateChecked
+            && let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first())
+        {
+            let types = &mut module.context.types;
+            let from = value_type(types, &tables.spaces, tables.types[&operand_type(operand, &values, &places)]);
+            let to = value_type(types, &tables.spaces, tables.types[&values[result]]);
+            let signed = tables.types[&values[result]].signed != Some(false);
+            if let (Ok(from), Ok(to)) = (from, to)
+                && let Some((name, returns)) = checked_conversion(types, from, to, signed)
+                && let Entry::Vacant(slot) = tables.callees.entry(name)
+            {
+                let ty = function_type(types, returns, vec![from]);
+                let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                slot.insert(module.reference(global));
+            }
+        }
         if instruction.op == Op::Assume {
             let types = &mut module.context.types;
             let (void, i1) = (types.void(), types.int(1));
@@ -2266,6 +2282,26 @@ fn asm_name(asm: &model::Asm) -> String {
 }
 
 /// What a block answers: nothing, its one register's value, or each as a field.
+/// `llvm.experimental.fp{to}{s,u}i.checked`'s name and signature for a float `from` taken
+/// to the integer `to`: `{ to, i1 }`.
+fn checked_conversion(
+    types: &mut Types,
+    from: TypeId,
+    to: TypeId,
+    signed: bool,
+) -> Option<(String, TypeId)> {
+    let float = match types.get(from) {
+        Type::Float(FloatKind::Float) => "f32",
+        Type::Float(FloatKind::Double) => "f64",
+        Type::Float(FloatKind::X86Fp80) => "f80",
+        _ => return None,
+    };
+    let bits = types.int_bits(to)?;
+    let flag = types.int(1);
+    let returns = types.intern(Type::Struct { fields: vec![to, flag], packed: false });
+    Some((format!("llvm.experimental.fpto{}i.checked.i{bits}.{float}", if signed { 's' } else { 'u' }), returns))
+}
+
 fn asm_returns(
     types: &mut Types,
     mut fields: Vec<TypeId>,
@@ -3579,6 +3615,22 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     self.addresses.insert(result, place.extent.unwrap_or(self.tables.types[&place.r#type].width));
                 }
                 self.define(instruction, pointer);
+            }
+            Op::TruncateChecked => {
+                let value = self.value(&instruction.operands[0])?;
+                let from = self.b.type_of(value);
+                let to = self.result_type(instruction.results[0])?;
+                let signed = self.hir_type(self.value_types[&instruction.results[0]]).signed != Some(false);
+                let (name, returns) = checked_conversion(&mut self.b.context.types, from, to, signed)
+                    .ok_or("a truncate_checked of something that is not a float to an integer")?;
+                let callee =
+                    Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+                let ty = function_type(&mut self.b.context.types, returns, vec![from]);
+                let pair = self.b.call(ty, callee, &[value], "").ok_or("a checked conversion with no result")?;
+                let converted = self.b.extract_value(pair, 0, "");
+                let fits = self.b.extract_value(pair, 1, "");
+                self.values.insert(instruction.results[0], converted);
+                self.values.insert(instruction.results[1], fits);
             }
             Op::Truncate | Op::SignExtend | Op::ZeroExtend | Op::Convert => {
                 let value = self.value(&instruction.operands[0])?;
