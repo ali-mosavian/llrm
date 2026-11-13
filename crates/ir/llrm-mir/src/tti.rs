@@ -2586,6 +2586,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE EXT-LOAD-COST: whether a load that widens costs clocks over
+    /// the plain load, so CGP's `optimizeExt` leaves an extension in the
+    /// block that reads it. The pin has no such cost: it moves it.
+    fn ext_load_costs_extra(&self) -> bool {
+        false
+    }
+
     /// The bits one general-purpose register holds: an `i32` takes one at 32,
     /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
     fn gpr_bits(&self) -> u32 {
