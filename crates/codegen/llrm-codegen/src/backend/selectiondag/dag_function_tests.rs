@@ -683,6 +683,18 @@ fn a_select_of_a_value_or_zero_on_the_sign_is_a_shift_and_an_and_not_a_branch() 
     }
 }
 
+/// m16 opts out of the gzip trick: nbody_fixed -Os grew 9 B with the shift
+/// and the and-not on a dword. `x < 0 ? A : 0` keeps its branch there.
+#[test]
+fn m16_keeps_the_branch_of_a_select_of_a_value_or_zero_on_the_sign() {
+    let module = crate::testing::module(GZIP_SELECTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.iter().any(|n| n.starts_with('j')) && !seen.contains(&"sar"), "{seen:?}");
+}
+
 /// `if (c & 1) g(); else h();` written as a compare of the masked value, in
 /// both polarities and both arm orders, was `mov eax, [esp+4]; and al, 1; je`:
 /// only the truncate form narrowed. The pin's `X86ISD::CMP` case makes every

@@ -119,6 +119,14 @@ pub trait CombineHooks {
         true
     }
 
+    /// `foldSelectCCToShiftAnd` (the "gzip trick"): `x < 0 ? A : 0` is `and
+    /// (sra x, bits-1), A`. The pin runs it everywhere. DEVIATE: m16 opts out,
+    /// its nbody_fixed -Os grows 9 B (a real-mode dword shift is two ops).
+    /// Exit: none while the m16 cell is above its bar.
+    fn select_cc_to_shift_and(&self) -> bool {
+        true
+    }
+
     /// `visitBRCOND`'s `rebuildSetCC` and `SimplifySetCC`'s `assertzext i1`
     /// case: a branch on `xor x, y` is a branch on `setcc x, y, ne` (`xor
     /// (xor x, y), -1` on `eq`), before the types are legal. DEVIATE: off
@@ -1583,8 +1591,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // folds `sext (setlt x, 0)` to `sra`. Neither is translated, so the
         // sign folds run first, with the same result. Whatever the width of
         // the condition (wasm's compare is an `i32`).
-        if let Some(mask) = self.select_cc_to_shift_and(n0, n1, n2) {
-            return Some(mask);
+        if self.hooks.select_cc_to_shift_and() {
+            if let Some(mask) = self.select_cc_to_shift_and(n0, n1, n2) {
+                return Some(mask);
+            }
         }
         if let Some(mask) = self.select_sign_folds(n0, n1, n2) {
             return Some(mask);
