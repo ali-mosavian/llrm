@@ -114,7 +114,7 @@ fn arith_of(op: BinaryOp) -> Option<ArithOp> {
     })
 }
 
-fn cast_kind(op: CastOp) -> Option<CastKind> {
+pub(crate) fn cast_kind(op: CastOp) -> Option<CastKind> {
     Some(match op {
         CastOp::Trunc => CastKind::Trunc,
         CastOp::ZExt => CastKind::ZExt,
