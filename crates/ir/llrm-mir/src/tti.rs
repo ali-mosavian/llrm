@@ -1260,6 +1260,12 @@ pub trait Tti {
     /// it).
     /// Whether an -Os caller's SZ2 trial also inlines the sites its splice
     /// brings (`Tuning::inline_chain_trial`).
+    /// An -Os caller's SZ2 trial leaves a callee that stays, with two or more calls left, to the
+    /// by-size guard (`Tuning::inline_trial_defers_to_shared_growth`).
+    fn inline_trial_defers_to_shared_growth(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         false
     }
@@ -1630,6 +1636,16 @@ pub trait Tti {
     /// `Tuning::rep_movs_at_size`.
     fn rep_movs_at_size(&self) -> bool {
         false
+    }
+
+    /// `Tuning::rep_movs_at_size_max`.
+    fn rep_movs_at_size_max(&self) -> u64 {
+        128
+    }
+
+    /// `Tuning::rep_stos_at_size_max`.
+    fn rep_stos_at_size_max(&self) -> u64 {
+        128
     }
 
     /// `Tuning::rep_stos_at_size`.

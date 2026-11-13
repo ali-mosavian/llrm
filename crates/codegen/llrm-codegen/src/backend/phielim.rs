@@ -8,12 +8,6 @@
 //! orders them as a single simultaneous assignment. A phi with an incoming edge
 //! from outside the body is left alone.
 //!
-//! A copy on a branch's edge instead of in its predecessor is made only when
-//! it costs the target at least a tenth less (`EdgePrices::cheaper_on_edge`:
-//! the edge's chance times its copies and the `jmp`, against the copies every
-//! time), and never in a build for size: the odds are a guess, and an edge
-//! that wins by less costs a block and a jump the clocks do not show.
-//!
 //! Before copying, three shortcuts avoid a copy altogether. A one-input phi
 //! renames its result to its input. A loop-exit one-input phi is the exception:
 //! it becomes a copy opening the exit, so a call after the loop does not pin
@@ -28,11 +22,9 @@
 //! copy there may run in the predecessor only if no other path reads either end
 //! of it (`_observed`: whether a block that reads it is reachable from the
 //! predecessor's other successors without entering the successor, searched
-//! from both ends so that the smaller region is walked) and, where block odds
-//! are known, the edge is not cheaper
-//! (`EdgePrices::cheaper_on_edge`: the edge's chance times copies plus a `jmp`
-//! against the copies run every time). Otherwise the copy goes in a new block
-//! on the edge, which holds its copies and a jump to the successor:
+//! from both ends so that the smaller region is walked). Otherwise the copy
+//! goes in a new block on the edge, which holds its copies and a jump to the
+//! successor:
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -130,8 +122,7 @@
 //!
 //! # Runs
 //! A machine phase after `ssaspill` (spiller route only) and before
-//! `machinesched`, in every machine (`flow::machine_with`); `EdgePrices` come
-//! from the CPU profile, and with none a copy stays in its predecessor. Also
+//! `machinesched`, in every machine (`flow::machine_with`). Also
 //! `placed_on_edges`, which [`crate::backend::floatalloc`] uses to put its
 //! selected transfers on exact edges.
 //!
@@ -151,43 +142,6 @@ use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
-
-/// What the target charges for a copy and for the `jmp` ending an edge's block,
-/// in clocks.
-#[derive(Clone, Copy, Debug)]
-pub struct EdgePrices {
-    pub copy: f64,
-    pub jump: f64,
-}
-
-impl EdgePrices {
-    /// None for a build for size: a copy on its edge is a block of its own and
-    /// a jump, and the copy twice where the edge's other end is reached
-    /// another way, so the copies stay in their predecessor.
-    pub fn of(cpu: &crate::backend::cpu::Profile) -> Option<Self> {
-        if cpu.size {
-            return None;
-        }
-        Some(Self { copy: cpu.cost("mov_rr").ok()? as f64, jump: cpu.cost("jmp_short").ok()? as f64 })
-    }
-
-    /// Whether `copies` copies cost less in a block of their own on an edge
-    /// taken `chance` of the times its predecessor runs (the copies and the
-    /// jump that ends it) than in the predecessor (the copies, every time),
-    /// by a tenth at least: the odds are a guess, and an edge that wins by
-    /// less costs a block and a jump for nothing the clocks show.
-    pub fn cheaper_on_edge(
-        &self,
-        chance: f64,
-        copies: usize,
-    ) -> bool {
-        let copies = copies as f64 * self.copy;
-        chance * (copies + self.jump) < copies * EDGE_MARGIN
-    }
-}
-
-/// What an edge copy must cost, of the predecessor's, to be made there.
-const EDGE_MARGIN: f64 = 0.9;
 
 /// The PHI elimination pass (`phielimination::lowered`).
 #[derive(Default)]
@@ -521,24 +475,6 @@ fn _observed_walk(
     false
 }
 
-/// How many times each value is read, phi edges included.
-fn _read_once(body: &LirBody) -> IndexMap<u32, i64> {
-    let mut out: IndexMap<u32, i64> = IndexMap::default();
-    for block in &body.blocks {
-        for one in &block.insns {
-            for &value in &one.uses {
-                *out.entry(value).or_insert(0) += 1;
-            }
-        }
-        for phi in &block.phis {
-            for &(_where, value) in &phi.incoming {
-                *out.entry(value).or_insert(0) += 1;
-            }
-        }
-    }
-    out
-}
-
 /// The move of an immediate into `value` where it is `block`'s one definition
 /// of it and nothing reads it there: a constant a phi takes from its
 /// predecessor.
@@ -747,7 +683,7 @@ pub fn placed_on_edges(
         return out;
     }
     let kept: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect();
-    _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true, &|_, _| false)
+    _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true)
         .expect("an empty rename cannot cycle")
 }
 
@@ -764,14 +700,9 @@ pub fn _split_edges(
     kept: &IndexMap<i64, Vec<Phi>>,
     widths: &IndexMap<u32, u32>,
     selected: bool,
-    cheaper_on_edge: &dyn Fn(i64, i64) -> bool,
 ) -> Result<LirBody, String> {
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut made: IndexMap<(i64, i64), LirBlock> = IndexMap::default();
-    // The constants moved to their edges: the block they were made in and the
-    // register they were made into.
-    let mut moved: BTreeSet<(i64, u32)> = BTreeSet::new();
-    let read_by_phis = _read_once(body);
     let mut landing: IndexMap<(i64, i64), i64> = IndexMap::default();
     let mut edges: Vec<(&(i64, i64), &Split)> = split.iter().collect();
     edges.sort_by_key(|(key, _)| **key);
@@ -793,30 +724,17 @@ pub fn _split_edges(
             (false, Split::Pairs(pairs)) => pairs
                 .iter()
                 .map(|&(a, b)| {
-                    // A constant the predecessor made for this phi alone is
-                    // made on the edge instead: once, not
-                    // every trip.
-                    let constant = (read_by_phis.get(&b).copied() == Some(1) && cheaper_on_edge(where_, into))
-                        .then(|| _constant_made_in(at_of[&where_], b))
-                        .flatten();
-                    let mut copy = match constant {
-                        Some(what) => {
-                            moved.insert((where_, b));
-                            let into = Loc::Held(Held { value: a, width: widths[&a], offset: 0 });
-                            (*_made(beside, at, Semantics { dests: vec![into], ..what }, vec![a], vec![])).clone()
-                        }
-                        None => (*_made(
-                            beside,
-                            at,
-                            move_of(
-                                Held { value: a, width: widths[&a], offset: 0 },
-                                Held { value: b, width: widths[&a], offset: 0 },
-                            ),
-                            vec![a],
-                            vec![b],
-                        ))
-                        .clone(),
-                    };
+                    let mut copy = (*_made(
+                        beside,
+                        at,
+                        move_of(
+                            Held { value: a, width: widths[&a], offset: 0 },
+                            Held { value: b, width: widths[&a], offset: 0 },
+                        ),
+                        vec![a],
+                        vec![b],
+                    ))
+                    .clone();
                     copy.group = Some(number);
                     Arc::new(copy)
                 })
@@ -859,7 +777,6 @@ pub fn _split_edges(
         let mut insns: Vec<Arc<Insn>> =
             _before_the_terminator(block, copies.get(&block.at).map_or(&[][..], Vec::as_slice))
                 .iter()
-                .filter(|one| !one.defines.iter().any(|value| moved.contains(&(block.at, *value))))
                 .map(|one| _retargeted(one, &landing, block.at))
                 .collect();
         // The split blocks go between this one and its layout successor, so
@@ -1169,7 +1086,6 @@ mod tests {
             &IndexMap::from_iter([(0, vec![]), (10, vec![]), (20, vec![])]),
             &IndexMap::from_iter([(2, 2)]),
             false,
-            &|_, _| false,
         )
         .unwrap()
     }
@@ -1239,7 +1155,6 @@ mod tests {
             &IndexMap::from_iter([(0, vec![]), (10, vec![]), (20, vec![])]),
             &IndexMap::from_iter([(2, 2)]),
             false,
-            &|_, _| false,
         )
         .unwrap();
         let into_of = |index: usize| done.blocks[index].succ[0];
@@ -1285,7 +1200,6 @@ mod tests {
             &IndexMap::from_iter([(0, vec![]), (10, vec![]), (20, vec![]), (40, vec![])]),
             &IndexMap::from_iter([(2, 2)]),
             false,
-            &|_, _| false,
         )
         .unwrap();
         let same = |at: i64| {

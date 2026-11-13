@@ -205,6 +205,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         lsr_users_in_use_list_order: true,
         // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
         lsr_phi_operand_uses: true,
+        // DEVIATE LU14 (owner x86-m32, exit 2026-11-30): see `Tuning::lsr_both_use_orders`.
+        lsr_both_use_orders: true,
         // DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): see
         // `Tti::splits_invariant_fmuladd`.
         splits_invariant_fmuladd: true,

@@ -1202,6 +1202,19 @@ fn test_a_compare_of_a_shared_quotient_by_a_power_of_two_is_a_range_test_even_wh
     assert!(printed(&module).contains("%v, 39"), "{}", printed(&module));
 }
 
+/// `matchSymmetricPair` in `visitICmpInst`: two selects that swap their arms
+/// compare as the arms. The pin's `icmp ne %1, %0` kept `sf_cmp_bits`'s
+/// three-way compare a select chain (cost 50, not inlined into seven wrappers);
+/// ours, comparing the selects, made `scmp` (cost 35) and inlined it: wasm
+/// sfm16_float_* -Os +418 B over the pin with the size guard off.
+#[test]
+fn a_swapped_select_pair_compares_as_its_two_arms() {
+    let params = "i1 %c, i16 %a, i16 %b";
+    let body = "  %s = select i1 %c, i16 %a, i16 %b\n  %t = select i1 %c, i16 %b, i16 %a\n  %r = icmp ne i16 %s, %t\n  ret i1 %r\n";
+    let after = "  %r = icmp ne i16 %a, %b\n  ret i1 %r\n";
+    check(params, body, after);
+}
+
 fn zero_quotient_compare_on(
     keep: bool,
 ) -> String {

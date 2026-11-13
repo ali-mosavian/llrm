@@ -1019,8 +1019,16 @@ impl Tti for X86 {
         self.tuning.rep_movs_at_size
     }
 
+    fn rep_movs_at_size_max(&self) -> u64 {
+        self.tuning.rep_movs_at_size_max
+    }
+
     fn rep_stos_at_size(&self) -> bool {
         self.tuning.rep_stos_at_size
+    }
+
+    fn rep_stos_at_size_max(&self) -> u64 {
+        self.tuning.rep_stos_at_size_max
     }
 
     fn rep_stos_priced_unit(&self) -> bool {
@@ -1198,6 +1206,10 @@ impl Tti for X86 {
     /// where the stack is not 64 KiB shared with the data.
     fn inline_frames_into_recursive_callers(&self) -> bool {
         self.real_mode.is_none()
+    }
+
+    fn inline_trial_defers_to_shared_growth(&self) -> bool {
+        self.tuning.inline_trial_defers_to_shared_growth
     }
 
     fn opt_size_inline_chain_trial(&self) -> bool {
@@ -1742,18 +1754,11 @@ impl Tti for X86 {
             return false;
         }
         // Long mode, position independent (the PIE a default clang makes): a
-        // symbol is `[rip + symbol]`, which takes no displacement, index or
-        // base register beside it.
-        // DEVIATE PIE64: the pin refuses only an offset or a scale above 1
-        // (`isPositionIndependent() && is64Bit()`), so `@sym + reg` is one
-        // address to it; the backend forms the symbol with a `lea` at every
-        // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
-        // -832 B, objects of m32 and non-PIE unchanged). 2026-11-08, same-tree
-        // A/B over 171 m64 cells with it off: 6 better (-162 B), 42 worse (+2712 B:
-        // particle O2 +396, scroll +121, stft_single +112, jpeg_single O2 +256).
-        // Exit: the backend shares one `lea sym` per loop (MachineLICM/CSE of
-        // the symbol), then the pin's legality; owner w12, exit 2026-12-15.
-        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
+        // symbol is `[rip + symbol]`, which takes no displacement and no scaled
+        // index beside it; a base register is fine (`@sym + reg`, the symbol
+        // formed by a `lea`). The pin refuses only an offset or a scale above 1
+        // (`isPositionIndependent() && is64Bit()`).
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
             return false;
         }
         match scale {
@@ -1880,7 +1885,7 @@ impl Tti for X86 {
     /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
     /// order-free.
     fn lsr_solves_both_use_orders(&self) -> bool {
-        self.real_mode.is_some()
+        self.real_mode.is_some() || self.tuning.lsr_both_use_orders
     }
 
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {

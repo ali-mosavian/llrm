@@ -483,7 +483,7 @@ pub(crate) fn extract(
     }
 
     let (users, invariants) = register_usage(function, header, &body, &reductions, primary);
-    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty };
+    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse: false, tests_phi: false };
     Ok(Extracted {
         interleaving: Interleaving { shape, step, step_operand, step_in_body, body, reductions },
         cost,

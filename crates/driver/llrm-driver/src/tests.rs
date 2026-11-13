@@ -294,9 +294,8 @@ fn a_saturating_add_of_two_loads_reads_each_cell_once_at_m64() {
 /// into `rdi` at the end). It was made three times: CSE4 refused the share.
 /// Since #6878 (cpu-model unroll preferences) the pin runtime-unrolls this
 /// loop by 8: the address is made for the first call, the unrolled loop, the
-/// remainder loop and the last call. Since #7955 (DEVIATE PIE64, exit
-/// 2026-12-15) `@sym + reg` is not one address here, as it is to the pin, so
-/// the unroll is by 4: 4 + 1 loads. Back to 9 when PIE64 goes.
+/// remainder loop and the last call. `@sym + reg` is one address to the pin
+/// (PIE64 is gone), so the unroll is by 8: 8 + 1 loads.
 #[test]
 fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -313,7 +312,21 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     // The first call's argument and the loop's address, then the last call's.
     let made = listing.lines().filter(|line| line.contains("offset g")).count();
     assert_eq!(made, 4, "{listing}");
-    assert_eq!(listing.matches("movzx").count(), 5, "unrolled by 4 (DEVIATE PIE64) plus the remainder loop: {listing}");
+    assert_eq!(listing.matches("movzx").count(), 9, "unrolled by 8 plus the remainder loop: {listing}");
+}
+
+/// A private callee called six times (`unpack`, three callers with two calls each) stayed out of line for the
+/// by-size guard, but the -Os trial of the first callers' sites measured -22 B a copy (the objects grew +5), accepted,
+/// and the guard of the last caller then saw two calls left and let its own through: all six inlined. gcc refuses at
+/// -Os where the growth over every call left is above zero (`estimate_growth`). m64 -Os sfm16_float_mul +39 B over
+/// the guard's verdict. DEVIATE OS-INLINE-GROWTH (gcc-bar only): the copies are 523 B against 553 B out of line here.
+#[test]
+fn a_callee_the_size_guard_keeps_out_of_line_is_not_inlined_by_the_trial_at_m64_os() {
+    let text = include_str!("testdata/shared_unpack.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f1").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let calls = listing.lines().filter(|line| line.trim().starts_with("call unpack")).count();
+    assert_eq!(calls, 6, "{listing}");
 }
 
 /// A symbol's address passed to four calls in one block was made four times
@@ -1089,20 +1102,28 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
-/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; the pin's llc
-/// writes `rep movsb` at `minsize`, gcc -Os inlines it too (memory_expansion
-/// 23405 B against 22295 and 22749): +1110 B, half of the 88 cells worse than
-/// the pin at the same rules. DEVIATE REP-MOVS-OS.
+/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; REP-MOVS-OS made it `rep movsb` (memory_expansion
+/// 23405 B against 22295 and 22749). A block under a dword stops at the pin's 128 bytes since the REP cap (scroll -Os:
+/// `rep movsw` of 4000 B ran twice as slow as the call): over it the copy is the call, up to it `rep movsb`.
 #[test]
-fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
-    let text = "target datalayout = \"@m32-datalayout@\"\n\
-                target triple = \"i486-unknown-linux-gnu\"\n\
-                declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
-                define void @f(ptr align 1 %d, ptr align 1 %s) optsize {\n\
-                \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 700, i1 false)\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
+fn a_constant_copy_of_bytes_at_m32_os_is_rep_movsb_up_to_128_and_a_call_past_it() {
+    let text = |bytes: u32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+             define void @f(ptr align 1 %d, ptr align 1 %s) optsize {{\n\
+             \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 {bytes}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |bytes| {
+        let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), &text(bytes), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let short = listing(128);
+    assert!(short.contains("rep movsb") && !short.contains("call"), "{short}");
+    let long = listing(700);
+    assert!(long.contains("call") && long.contains("memcpy") && !long.contains("rep movs"), "{long}");
 }
 
 /// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1, and the pin writes it at `minsize` only: at m32 -Os it
@@ -5957,8 +5978,9 @@ fn a_copy_loop_of_run_time_length_is_a_memcpy_call_at_m32_os() {
 }
 
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
-/// the same bytes, a third to a quarter of the clocks. scroll -Os copied 4000 bytes of two-byte-aligned shorts a byte at a
-/// time: 958,326 clk against clang's 536,067.
+/// the same bytes, a third to a quarter of the clocks. A block under a dword stops at 128 bytes (scroll -Os: 4000 bytes of
+/// two-byte-aligned shorts as `rep movsw` took 682,269 clk, the call 533,965); a dword-aligned copy stays `rep movsd`
+/// whatever its size, the library copies by dwords too.
 #[test]
 fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     let text = |align: u32, bytes: u32| {
@@ -5975,9 +5997,11 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
         let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), &text(align, bytes), "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    assert!(listing(2, 4000).contains("movsw"), "two-byte aligned:\n{}", listing(2, 4000));
+    assert!(listing(2, 120).contains("movsw"), "two-byte aligned, within 128:\n{}", listing(2, 120));
+    let call = listing(2, 4000);
+    assert!(call.contains("memcpy") && !call.contains("rep movs"), "two-byte aligned past 128 is the call:\n{call}");
     assert!(listing(4, 4000).contains("movsd"), "four-byte aligned:\n{}", listing(4, 4000));
-    assert!(listing(1, 4000).contains("movsb") && !listing(1, 4000).contains("movsw"), "unaligned stays bytes");
+    assert!(listing(1, 120).contains("movsb") && !listing(1, 120).contains("movsw"), "unaligned stays bytes");
     assert!(!listing(2, 30).contains("movsw"), "a short copy would pay the operand-size prefix for nothing:\n{}", listing(2, 30));
     assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
 }

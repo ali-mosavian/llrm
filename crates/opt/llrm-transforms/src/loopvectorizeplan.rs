@@ -97,6 +97,10 @@ pub enum Recipe {
     /// `truncated_from`: the scalar loop's `trunc` of the integer induction
     /// (the recipe replaces it).
     Induction { lane: Ty, truncated_from: Option<Ty> },
+    /// `VPDerivedIVRecipe`: the address induction `start + index * step` of a
+    /// loop whose induction does not start at zero or counts down; one `add`
+    /// of `lane` (the scalar loop has none: its phi is free).
+    DerivedIv { lane: Ty },
     /// An instruction the pin prices as a vector and this port does not (a
     /// uniform, reversed or grouped access, a cast without a table row): its
     /// scalar price is known, a vector factor cannot be weighed.
@@ -193,7 +197,7 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
         | Recipe::Select { lane, .. }
         | Recipe::Induction { lane, .. } => Some(lane),
         Recipe::Cast { dst, .. } => Some(dst),
-        Recipe::Unpriced { .. } => None,
+        Recipe::DerivedIv { .. } | Recipe::Unpriced { .. } => None,
     }
 }
 
@@ -379,6 +383,13 @@ fn iteration_cost(
                     truncated_from.map_or(Cost::FREE, |src| tti.cast_cost(CastKind::Trunc, lane, src, kind))
                 } else {
                     tti.vector_arithmetic_cost(ArithOp::Add, vector(lane), kind).ok_or(NotTaken)?
+                }
+            }
+            Recipe::DerivedIv { lane } => {
+                if vf == 1 {
+                    Cost::FREE
+                } else {
+                    tti.arithmetic_cost(ArithOp::Add, lane, kind, Default::default(), Default::default())
                 }
             }
             Recipe::Unpriced { scalar_cost } => {
