@@ -232,7 +232,9 @@ pub fn assembled_by(
     // gives them their own mergeable `.rodata.str1.1` section, so an odd-sized one never pads what
     // follows it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single +2).
     let mut unaligned_tail: Vec<codetables::Table> = Vec::new();
-    let reads_in_code = cpu.target().tuning().read_only_in_code;
+    // Off when tuned for size: each load site costs the `cs:` byte, which the moved table's
+    // data bytes do not repay (QCport -Os grew).
+    let reads_in_code = cpu.target().tuning().read_only_in_code && !cpu.size;
     let mut aligned_tables: Vec<codetables::Table> = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();

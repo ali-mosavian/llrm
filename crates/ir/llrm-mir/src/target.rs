@@ -382,7 +382,8 @@ pub struct Tuning {
     /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
     /// puts it in the text section on a target whose data segment is scarce
     /// (real mode: DS is DGROUP, code segments are not). false: the pin's
-    /// data section.
+    /// data section. Not when tuned for size: the `cs:` byte at every load
+    /// site outweighs the table's data bytes.
     pub read_only_in_code: bool,
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).

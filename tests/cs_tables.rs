@@ -6,11 +6,15 @@
 mod common;
 
 fn listing(source: &str) -> String {
+    listing_at("-O2", source)
+}
+
+fn listing_at(level: &str, source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("t.c"), source).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["-m16", "-O2", "-S", "-o", "t.s", "t.c"])
+        .args(["-m16", level, "-S", "-o", "t.s", "t.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -39,6 +43,17 @@ fn test_a_switch_lookup_table_is_not_in_data() {
     let text = listing(LOOKUP);
     assert!(data(&text).trim().is_empty(), "the lookup table is in _DATA ({} B of data): {text}", data(&text).len());
     assert!(text.contains("byte ptr cs:G$"), "the table is not read through cs: {text}");
+}
+
+/// At -Os the move cost +1 B per load site (QCport -Os grew, user rule: no growth), so the
+/// table stays in `_DATA`; -O1 and up still move it.
+#[test]
+fn test_a_switch_lookup_table_stays_in_data_at_os_and_moves_at_o1() {
+    let os = listing_at("-Os", LOOKUP);
+    assert!(data(&os).contains("db "), "-Os moved the table into code: {os}");
+    assert!(!os.contains("cs:G$"), "-Os reads a table through cs: {os}");
+    let o1 = listing_at("-O1", LOOKUP);
+    assert!(data(&o1).trim().is_empty(), "-O1 left the table in _DATA: {o1}");
 }
 
 #[test]
