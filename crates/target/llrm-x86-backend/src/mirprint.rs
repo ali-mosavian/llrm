@@ -10,9 +10,11 @@
 //! the data segment is a global array `@seg<n>`; the first incoming stack
 //! argument is `%fixed-stack.0`. Anything else is refused with its name.
 //!
-//! A body with quadword values or a 64-bit register is 64-bit code: `gr64` values, `$rdi`..`$r15`, `ADJCALLSTACKDOWN64`,
-//! `CALL64pcrel32`, `ri32` immediates, `CMOV64rr`, eight-byte stack slots. Not yet: a 32-bit write into a quadword value
-//! (`AND32ri` on `%1.sub_32bit`) and `movzx r64, r32`.
+//! A body with quadword values or a 64-bit register is 64-bit code: `gr64`
+//! values, `$rdi`..`$r15`, `ADJCALLSTACKDOWN64`, `CALL64pcrel32`, `ri32`
+//! immediates, `CMOV64rr`, eight-byte stack slots. A dword read of a quadword
+//! value is a `COPY` of its `sub_32bit` into a `gr32`, a dword write (or `movzx
+//! r64, r32`) a `SUBREG_TO_REG` of one.
 //!
 //! # Example
 //! `v1 := mov [bp+8]; cmp v1, 0; jg` becomes
@@ -33,6 +35,10 @@ use llrm_lir::registers::RegId;
 use llrm_lir::{Held, Imm, Loc, Mem, Space};
 
 thread_local! {
+    /// The next id for a 32-bit value made to carry the low half of a quadword
+    /// one, and the ones made for the body being printed.
+    static NEXT_TEMP: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static TEMPS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Whether the body being printed is 64-bit code: quadword values, `rsp`,
     /// REX registers, `gr64`.
     static LONG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -283,6 +289,71 @@ fn flags_are_read(text: &mut String) {
         }
         end = start.saturating_sub(1);
     }
+}
+
+/// `one` where its 32-bit operands name the low half of a quadword value. The
+/// pin's classes keep a dword instruction off `%v.sub_32bit` of a `gr64`: a
+/// read is a `COPY` of the half into a `gr32` first, and a write, which x86-64
+/// zero-extends, is a `SUBREG_TO_REG` of a `gr32` result (as its own selection
+/// spells both).
+fn instruction_in_quadwords(
+    one: &Insn,
+    at: &[i64],
+    targets: &[usize],
+    jumps: &mut usize,
+    symbols: &mut BTreeSet<i64>,
+    callees: &mut BTreeSet<i64>,
+    in_register: &BTreeSet<u32>,
+    out: &mut String,
+) -> Result<(), String> {
+    let low_half = |held: &Held| {
+        held.width == 4 && WIDEST.with(|w| w.borrow().get(&held.value).copied()).is_some_and(|wide| wide == 8)
+    };
+    if one.what.as_ref().is_none_or(|what| {
+        !LONG.with(std::cell::Cell::get)
+            || !what.dests.iter().chain(&what.sources).any(|loc| matches!(loc, Loc::Held(held) if low_half(held)))
+    }) {
+        return instruction(one, at, targets, jumps, symbols, callees, in_register, out);
+    }
+    let mut halves: std::collections::BTreeMap<u32, u32> = Default::default();
+    // The value's low-half stand-in, and whether this call made it.
+    let mut half = |value: u32| -> (u32, bool) {
+        if let Some(id) = halves.get(&value) {
+            return (*id, false);
+        }
+        let id = NEXT_TEMP.with(|n| n.replace(n.get() + 1));
+        TEMPS.with(|t| t.borrow_mut().push(id));
+        WIDEST.with(|w| w.borrow_mut().insert(id, 4));
+        halves.insert(value, id);
+        (id, true)
+    };
+    let (mut before, mut after) = (String::new(), String::new());
+    let mut changed = one.clone();
+    let semantics = changed.what.as_mut().expect("a semantics");
+    for loc in &mut semantics.sources {
+        if let Loc::Held(held) = loc.clone()
+            && low_half(&held)
+        {
+            let (id, fresh) = half(held.value);
+            if fresh {
+                writeln!(before, "    %{id} = COPY %{}.sub_32bit", held.value).unwrap();
+            }
+            *loc = Loc::Held(Held { value: id, ..held });
+        }
+    }
+    for loc in &mut semantics.dests {
+        if let Loc::Held(held) = loc.clone()
+            && low_half(&held)
+        {
+            let (id, _) = half(held.value);
+            writeln!(after, "    %{} = SUBREG_TO_REG %{id}, %subreg.sub_32bit", held.value).unwrap();
+            *loc = Loc::Held(Held { value: id, ..held });
+        }
+    }
+    out.push_str(&before);
+    instruction(&changed, at, targets, jumps, symbols, callees, in_register, out)?;
+    out.push_str(&after);
+    Ok(())
 }
 
 /// One instruction as MIR lines.
@@ -551,6 +622,11 @@ fn instruction(
         (op @ ("neg" | "inc" | "dec" | "not"), Some(Loc::Held(d)), [Loc::Held(s)]) => {
             let flags = if op == "not" { "" } else { ", implicit-def dead $eflags" };
             writeln!(out, "    {} = {}{}r {}{flags}", vreg(d)?, op.to_uppercase(), bits(d.width)?, vreg(s)?).unwrap()
+        }
+        // A dword zero-extended: x86-64 clears the upper half of any dword
+        // write, which the pin spells `SUBREG_TO_REG`.
+        ("movzx", Some(Loc::Held(d)), [Loc::Held(s)]) if d.width == 8 && s.width == 4 => {
+            writeln!(out, "    {} = SUBREG_TO_REG {}, %subreg.sub_32bit", vreg(d)?, vreg(s)?).unwrap()
         }
         (op @ ("movsx" | "movzx"), Some(Loc::Held(d)), [source]) => {
             let (from, operand) = match source {
@@ -850,6 +926,8 @@ pub fn mir(
             .iter()
             .any(|one| one.requires.iter().chain(&one.delivers).any(|(_, register)| wide_register(register)));
     LONG.with(|l| l.set(long));
+    NEXT_TEMP.with(|n| n.set(value_widths.keys().max().map_or(0, |last| last + 1)));
+    TEMPS.with(|t| t.borrow_mut().clear());
     let first_argument = body
         .insns()
         .iter()
@@ -986,8 +1064,17 @@ pub fn mir(
             }) {
                 flags_are_read(&mut text);
             }
-            instruction(one, &at, &targets, &mut jumps, &mut symbols, &mut callees, &register_only, &mut text)
-                .map_err(|why| format!("block {n}: {why}"))?;
+            instruction_in_quadwords(
+                one,
+                &at,
+                &targets,
+                &mut jumps,
+                &mut symbols,
+                &mut callees,
+                &register_only,
+                &mut text,
+            )
+            .map_err(|why| format!("block {n}: {why}"))?;
             // A value pinned to a register is that register from its
             // definition on: the `$cl = COPY` an instruction's implicit use
             // reads.
@@ -1034,6 +1121,7 @@ pub fn mir(
     writeln!(out, "  define i32 @{}(i32 %a) {{\n    ret i32 0\n  }}\n...", body.name).unwrap();
     let adjusts = if callees.is_empty() { "" } else { "frameInfo:\n  adjustsStack: true\n" };
     writeln!(out, "---\nname: {}\ntracksRegLiveness: true\n{adjusts}registers:", body.name).unwrap();
+    widths.extend(TEMPS.with(|t| t.borrow().clone()));
     for v in widths.iter().filter(|v| !register_only.contains(*v)) {
         let class = match (value_widths.get(v), indexed.contains(v), byte_read.contains(v)) {
             (Some(1), ..) => "gr8",
@@ -1751,5 +1839,35 @@ mod tests {
             assert!(text.contains(form), "`{form}` is missing from\n{text}");
         }
         assert!(!text.contains("gr32") && !text.contains("$esp"), "{text}");
+    }
+
+    /// A 32-bit write of a quadword value (`s += a[i] * 3`'s `AND32ri` on the
+    /// low half of the index) printed as `%1.sub_32bit` in a dword
+    /// instruction, which the pin's verifier refused ("GR64.sub_32bit cannot be
+    /// used for GR32 operands"): the half is copied to a `gr32`,
+    /// and the write, x86-64 clearing the upper half, is a `SUBREG_TO_REG` of
+    /// it. A dword zero-extended to a quadword is the same.
+    #[test]
+    fn test_a_dword_write_of_a_quadword_value_and_a_zero_extend_go_through_gr32() {
+        let quad = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let low = |value| Loc::Held(Held { value, width: 4, offset: 0 });
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let arrive = Arc::new(Insn { defines: vec![1], ..Insn::clone(&insn("", Operation::Return, vec![], vec![])) });
+        let mask = insn("and", Operation::Binary, vec![low(1)], vec![low(1), imm(3)]);
+        let wide = insn("add", Operation::Binary, vec![quad(2)], vec![quad(1), quad(1)]);
+        let extend = insn("movzx", Operation::Move, vec![quad(4)], vec![low(3)]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![arrive, mask, wide, extend]))];
+        let body = LirBody::new("halves", 0, blocks, IndexMap::default(), IndexMap::default());
+        let pins: IndexMap<u32, RegId> = [(1, RegId::RDI)].into_iter().collect();
+        let text = mir(&body, &pins).expect("a quadword body with dword halves prints");
+        for form in [
+            "%5 = COPY %1.sub_32bit\n    %5 = AND32ri %5, 3, implicit-def dead $eflags\n    %1 = SUBREG_TO_REG %5, %subreg.sub_32bit",
+            "%4 = SUBREG_TO_REG %3, %subreg.sub_32bit",
+            "{ id: 5, class: gr32 }",
+            "{ id: 1, class: gr64 }",
+        ] {
+            assert!(text.contains(form), "`{form}` is missing from\n{text}");
+        }
+        assert!(!text.contains("%1.sub_32bit = ") && !text.contains("AND32ri %1"), "{text}");
     }
 }

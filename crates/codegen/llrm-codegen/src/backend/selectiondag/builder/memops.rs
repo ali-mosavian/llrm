@@ -2230,6 +2230,27 @@ impl Builder<'_> {
         u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
+    /// DEVIATE REP-STOS-UNIT: the unit of a constant `rep stos` at `-Os` that takes the fewest bytes,
+    /// the pin's (`block`) on a tie. Encodings at x86-64: the value in `eax` (`xor` 2, `mov al` 2,
+    /// `mov ax` 4, `mov eax` 5, `mov rax, -1` 7, `movabs` 10), `mov ecx, count` 5, the string op
+    /// (2, 3 with a prefix or REX), and each tail store at its shortest (`mov [m], imm`: dword 6, word 7,
+    /// byte 3).
+    fn cheapest_fill_unit(block: u64, size: u64, byte: u64) -> u64 {
+        let bytes = |unit: u64| {
+            let value = match (byte, unit) {
+                (0, _) | (_, 1) => 2,
+                (_, 2) => 4,
+                (_, 4) => 5,
+                (0xff, _) => 7,
+                _ => 10,
+            };
+            let op = if unit == 1 || unit == 4 { 2 } else { 3 };
+            let left = size % unit;
+            value + 5 + op + left / 4 * 6 + (left % 4 / 2) * 7 + left % 2 * 3
+        };
+        if bytes(1) < bytes(block) { 1 } else { block }
+    }
+
     /// `emitConstantSizeRepstos`.
     fn rep_stos(
         &mut self,
@@ -2255,6 +2276,11 @@ impl Builder<'_> {
             // registers, whatever its pointers; for size the pointer's width
             // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
             let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
+            let block = if self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_priced_unit()) {
+                Self::cheapest_fill_unit(block, size, byte as u64 & 255)
+            } else {
+                block
+            };
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;
