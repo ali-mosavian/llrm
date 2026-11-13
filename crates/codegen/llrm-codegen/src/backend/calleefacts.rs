@@ -338,7 +338,10 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
     let regs = body.regs();
     let root = |register: RegId| regs.root(register);
     let mut found = BTreeSet::new();
-    for one in body.insns() {
+    for (at, one) in body.insns().into_iter().enumerate() {
+        // The entry's `delivers` is where the arguments arrive, not a write of them: the pin's
+        // `RegUsageInfoCollector` takes the registers the body modifies (IPRA-ARGHINT).
+        let arrival = at == 0 && one.call.is_none() && one.requires.is_empty();
         if let Some(what) = &one.what {
             for place in &what.dests {
                 if let Loc::Reg(ir::Reg { register, .. }) = place {
@@ -354,7 +357,8 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
             Some(call) => found.extend(call.disturbs.iter().copied().map(root)),
             None => found.extend(one.clobbers.iter().copied().map(root)),
         }
-        found.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| root(*register)));
+        let delivered: &[_] = if arrival { &[] } else { &one.delivers };
+        found.extend(one.requires.iter().chain(delivered).map(|(_, register)| root(*register)));
     }
     found
 }
