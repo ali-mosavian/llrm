@@ -577,6 +577,23 @@ impl<'m> Machine<'m> {
                 }
                 _ => Val::Poison,
             },
+            Intrinsic::FpToIntChecked { signed } => {
+                let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
+                let x = match kind {
+                    FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
+                    FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+                    FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
+                }
+                .trunc();
+                let Some(width) = self.types().fields(returns).and_then(|fields| self.types().int_bits(fields[0])) else {
+                    return Ok(Val::Poison);
+                };
+                let (low, high) =
+                    if signed { (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1)) } else { (0.0, 2f64.powi(width as i32)) };
+                let fits = x.is_finite() && x >= low && x < high;
+                let value = if fits { Val::Int { bits: (x as i128 as u128) & mask(width), width } } else { Val::Poison };
+                Val::Aggregate(vec![value, Val::Int { bits: u128::from(fits), width: 1 }])
+            }
             Intrinsic::LRint | Intrinsic::LLRint => {
                 let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
                 let x = match kind {
