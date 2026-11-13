@@ -985,12 +985,14 @@ impl Cost {
             && let Some(m) = r.tti.lsr_size_model()
         {
             // A `mov` or `lea` of the register's start in the preheader.
-            // DEVIATE LSR-DERIVED: not for an integer recurrence the loop as
+            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew without
+            // it checked): not for an integer recurrence the loop as
             // written derives from its counter by one instruction each trip
             // (`i << 4`, `i - 192`): it is no register stepped from a start,
             // so there is nothing to set up. The pin counts it a recurrence
             // like any other; a byte model prices the two apart.
-            if !(r.as_written
+            if !(m.derived_setup_free
+                && r.as_written
                 && r.se.addrec_header(reg) == Some(r.l)
                 && !r.se.type_of(reg).is_pointer()
                 && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_some())

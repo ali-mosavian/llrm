@@ -1175,7 +1175,10 @@ impl Tti for X86 {
     }
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
-        self.tuning.lsr_size_order.then_some(llrm_mir::tti::LsrSizeModel::X86)
+        self.tuning.lsr_size_order.then_some(llrm_mir::tti::LsrSizeModel {
+            derived_setup_free: self.tuning.lsr_derived_setup_free,
+            ..llrm_mir::tti::LsrSizeModel::X86
+        })
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {

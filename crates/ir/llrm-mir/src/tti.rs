@@ -333,6 +333,9 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its counter in one
+    /// instruction a trip has no setup to count ([`Tuning::lsr_derived_setup_free`]).
+    pub derived_setup_free: bool,
 }
 
 impl LsrSizeModel {
@@ -347,6 +350,7 @@ impl LsrSizeModel {
         iv_step: OpCost::bytes(3),
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        derived_setup_free: false,
     };
 
     /// The bytes of one address displacement.
@@ -3226,6 +3230,7 @@ mod size_model_tests {
         iv_step: OpCost::bytes(6),
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        derived_setup_free: false,
     };
 
     /// Each displacement form is read from its own field; zero is free.
