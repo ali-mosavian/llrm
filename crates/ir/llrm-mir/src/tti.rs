@@ -691,6 +691,20 @@ pub trait Tti {
         None
     }
 
+    /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
+    /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
+    /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
+    /// not priced.
+    fn vector_reduction_cost(
+        &self,
+        _kind: crate::intrinsics::ReduceKind,
+        _ty: VectorTy,
+        _ordered: bool,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
     /// `getCastInstrCost` between fixed vectors of one lane count. `None`: not
     /// priced, which is not scalarized: the pin's cost is one this port does
     /// not know.

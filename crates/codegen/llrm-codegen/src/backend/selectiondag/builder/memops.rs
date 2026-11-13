@@ -2260,7 +2260,17 @@ impl Builder<'_> {
             let left = size % unit;
             value + 5 + op + left / 4 * 6 + (left % 4 / 2) * 7 + left % 2 * 3
         };
-        if bytes(1) < bytes(block) { 1 } else { block }
+        // Every unit up to the pin's, the widest on a tie: a `rep stosb` of the
+        // same bytes runs the count of a `stosd` four times over.
+        let mut best = block;
+        let mut unit = block;
+        while unit > 1 {
+            unit /= 2;
+            if bytes(unit) < bytes(best) {
+                best = unit;
+            }
+        }
+        best
     }
 
     /// `emitConstantSizeRepstos`.

@@ -74,6 +74,7 @@ fn module(procedures: Vec<Procedure>) -> Module {
         far_bss: Default::default(),
         weak: Default::default(),
         code_segments: Default::default(),
+        code_data: Default::default(),
         comdats: Default::default(),
         padding: Default::default(),
         requests: Default::default(),

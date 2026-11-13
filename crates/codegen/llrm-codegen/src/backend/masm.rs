@@ -469,6 +469,9 @@ pub struct Module {
     /// The code segment of a procedure that is not in `code` (`#pragma
     /// code_seg`), by its name.
     pub code_segments: std::collections::BTreeMap<String, String>,
+    /// Read-only data that follows a procedure in its code segment (read
+    /// through `cs:`), by the procedure's name.
+    pub code_data: std::collections::BTreeMap<String, Vec<Datum>>,
     /// The COMDAT each function or global of the module is in (`$f = comdat
     /// any`, `comdat($f)`), by the symbol's name. COFF writes each as a
     /// section of its own; the other formats ignore them.
@@ -562,6 +565,7 @@ fn text_listed(
     out.push(format!(".code {}", module.code));
     for (number, procedure) in module.procedures.iter().enumerate() {
         out.extend(_procedure_of(procedure, listed(procedure, number)?, &module.names, number)?);
+        out.extend(module.code_data.get(&procedure.name).into_iter().flatten().flat_map(datum));
     }
     out.push("end".into());
     Ok(out.join("\n") + "\n")
@@ -4951,6 +4955,7 @@ mod tests {
             far_bss: BTreeSet::new(),
             weak: BTreeSet::new(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             requests: BTreeSet::new(),
