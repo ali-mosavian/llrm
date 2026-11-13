@@ -59,3 +59,13 @@ def test_gcc_popcount_calls_libgcc_and_its_object_says_so(tmp_path):
     subprocess.run(["gcc", "-Os", "-c", str(source), "-o", str(obj)], check=True)
     calls = vs_external.library_calls(obj)
     assert calls.startswith("__popcountdi2:") and int(calls.split(":")[1]) > 8, calls
+
+
+def test_a_helper_the_external_object_calls_is_charged_to_its_column():
+    """gcc -Os popcount of `bitcount_u64`: an 8 B call to `__popcountdi2` against 90 B inline was a 82 B gap; the routine (94 B
+    with its table) is part of the program, so the gcc column is 8 + 94 and ours is not above it."""
+    assert vs_external.charged(8, "__popcountdi2:94") == 102
+    assert vs_external.charged(8, "-") == 8
+    assert vs_external.charged(10, "__udivti3:300,__popcountdi2:94") == 404
+    inline, call = 90, vs_external.charged(8, "__popcountdi2:94")
+    assert inline <= call
