@@ -2099,14 +2099,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let x = self.dag.operand(self.dag.operand(n0, 0), 0);
             let narrow = self.dag.value_type(n0);
             // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
-            // isZExtFree(narrow, wide)`) both casts are free, and `ShrinkDemandedOp`
-            // makes the narrow form this fold would undo.
+            // isZExtFree(narrow, wide)`) `ShrinkDemandedOp` makes the narrow form
+            // this fold would undo, and the two would run in turn forever.
             let narrows_free = self.hooks.free_narrowing(vt, narrow);
-            let x_type = self.dag.value_type(x);
-            let truncate_free = self.hooks.is_truncate_free(x_type, narrow) || (x_type == vt && narrows_free);
-            let zext_free = self.hooks.is_zext_free(narrow, vt) || narrows_free;
+            let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
+            let zext_free = self.hooks.is_zext_free(narrow, vt);
             let sext_cheaper = self.tli.is_some_and(|tli| tli.is_sext_cheaper_than_zext(narrow, vt));
-            let fires = !truncate_free || if op == ISD::ZeroExtend { !zext_free } else { !zext_free && !sext_cheaper };
+            let fires = !narrows_free
+                && (!truncate_free || if op == ISD::ZeroExtend { !zext_free } else { !zext_free && !sext_cheaper });
             if fires {
                 let wide = self.any_ext_or_trunc(x, vt);
                 let mask = self.dag.get_constant(constant & super::fold::mask(narrow.size_in_bits()), vt);
