@@ -131,6 +131,7 @@ pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
+pub mod interleavedaccess;
 pub mod initializes;
 pub mod interprocedural;
 pub mod ivdescriptors;
