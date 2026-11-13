@@ -294,9 +294,8 @@ fn a_saturating_add_of_two_loads_reads_each_cell_once_at_m64() {
 /// into `rdi` at the end). It was made three times: CSE4 refused the share.
 /// Since #6878 (cpu-model unroll preferences) the pin runtime-unrolls this
 /// loop by 8: the address is made for the first call, the unrolled loop, the
-/// remainder loop and the last call. Since #7955 (DEVIATE PIE64, exit
-/// 2026-12-15) `@sym + reg` is not one address here, as it is to the pin, so
-/// the unroll is by 4: 4 + 1 loads. Back to 9 when PIE64 goes.
+/// remainder loop and the last call. `@sym + reg` is one address to the pin
+/// (PIE64 is gone), so the unroll is by 8: 8 + 1 loads.
 #[test]
 fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -313,7 +312,7 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     // The first call's argument and the loop's address, then the last call's.
     let made = listing.lines().filter(|line| line.contains("offset g")).count();
     assert_eq!(made, 4, "{listing}");
-    assert_eq!(listing.matches("movzx").count(), 5, "unrolled by 4 (DEVIATE PIE64) plus the remainder loop: {listing}");
+    assert_eq!(listing.matches("movzx").count(), 9, "unrolled by 8 plus the remainder loop: {listing}");
 }
 
 /// A private callee called six times (`unpack`, three callers with two calls each) stayed out of line for the
