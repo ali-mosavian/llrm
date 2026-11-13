@@ -254,6 +254,7 @@ pub mod floativ;
 pub mod floatloop;
 pub mod fmuladdsplit;
 pub mod fold;
+pub mod gepbyteindex;
 pub mod gepoffset;
 pub mod globalbool;
 pub mod globaldce;
