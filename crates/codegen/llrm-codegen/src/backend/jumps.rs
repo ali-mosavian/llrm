@@ -534,12 +534,28 @@ fn _placed_ext(
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
+    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, epilogue, ext_tsp))
+}
+
+/// `_placed_ext` for blocks whose fall-throughs are already jumps: a target
+/// whose own pass made them explicit (arm64's `layout::fold`) calls this, and
+/// `explicit` stands in for `body.blocks`.
+pub fn placed_explicit(
+    body: &LirBody,
+    explicit: Vec<Block>,
+    size: bool,
+    aggressive: bool,
+    tail_dup: Option<usize>,
+    hot: Option<placement::HotTailDup>,
+    epilogue: usize,
+    ext_tsp: bool,
+) -> LirBody {
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
     let (blocks, odds) = placement::order(
         &explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, epilogue, ext_tsp,
     );
-    Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
+    _reachable(&LirBody { odds, ..body.clone() }, blocks)
 }
 
 pub fn threaded(body: &LirBody) -> LirBody {

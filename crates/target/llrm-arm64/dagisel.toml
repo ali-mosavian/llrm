@@ -28,7 +28,6 @@ extra_symbols = [
   "AArch64::LDRSBXpre",
   "AArch64::LDRSBWpre",
   "AArch64::LDRBBpre",
-  "AArch64::LDRBpre",
   "AArch64::LDRHpre",
   "AArch64::LDRSpre",
   "AArch64::LDRDpre",
@@ -42,7 +41,6 @@ extra_symbols = [
   "AArch64::LDRSBXpost",
   "AArch64::LDRSBWpost",
   "AArch64::LDRBBpost",
-  "AArch64::LDRBpost",
   "AArch64::LDRHpost",
   "AArch64::LDRSpost",
   "AArch64::LDRDpost",
@@ -81,7 +79,6 @@ extra_symbols = [
   "AArch64::MOVIv16b_ns",
   "AArch64::MOVIv2d_ns",
   "AArch64::MOVKWi",
-  "AArch64::MVNIv2i32",
   "AArch64::MOVNWi",
   "AArch64::MOVNXi",
   "AArch64::MOVZWi",
@@ -164,7 +161,7 @@ features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", 
 [types]
 dead_prefixes = ["v", "nxv", "aarch64"]
 # The 128-bit integer vectors the DAG builds (ARM64-VEC POC): their loads and stores, nothing NEON-gated.
-live = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64"]
+live = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64", "v2f32"]
 
 [node_predicate]
 # One name per predicate number is enough (the pin groups equal bodies). Names with no Dag query answer false by name (see aarch64_predicates.rs).

@@ -175,3 +175,4 @@ pub mod ssaupdaterbulk;
 pub mod testing;
 pub mod scopednoaliasaa;
 pub mod typebasedaa;
+pub mod vectorutils;
