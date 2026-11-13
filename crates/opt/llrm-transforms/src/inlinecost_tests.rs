@@ -1326,3 +1326,34 @@ fn the_size_rule_prices_a_callee_with_the_constants_of_the_site() {
     assert!(inlined(0), "a constant amount: three instructions against a call");
     assert!(!inlined(1), "a variable amount keeps the call");
 }
+
+/// A float taken to an integer through `llvm.experimental.fptosi.checked` was charged as a call (the `llrm.`-named
+/// first version: 25 and its arguments), so `clamp` in bench/jpeg_single.nib stayed a call in the hot loop: m16 -O2
+/// +7.5% clocks. The intrinsic is lowered where it is called, as `llvm.lrint` is: it costs what the plain `fptosi`
+/// it replaces cost, within an instruction or two, not a `CALL_PENALTY` more.
+#[test]
+fn test_a_checked_float_to_integer_is_not_charged_as_a_call() {
+    let price = |body: &str, declaration: &str| {
+        let text = format!(
+            "{GLOBAL}{declaration}
+define internal i32 @callee(double %x) {{
+b0:
+{body}
+}}
+
+define i32 @f(double %y) {{
+b0:
+  %r = call i32 @callee(double %y)
+  ret i32 %r
+}}
+"
+        );
+        priced(&text, 0, false, CallerSize::Speed).0
+    };
+    let plain = price("  %v = fptosi double %x to i32\n  ret i32 %v", "");
+    let checked = price(
+        "  %p = call { i32, i1 } @llvm.experimental.fptosi.checked.i32.f64(double %x)\n  %v = extractvalue { i32, i1 } %p, 0\n  ret i32 %v",
+        "declare { i32, i1 } @llvm.experimental.fptosi.checked.i32.f64(double)\n",
+    );
+    assert!(checked - plain < crate::inlinecost::CALL_PENALTY, "checked {checked} against plain {plain}");
+}

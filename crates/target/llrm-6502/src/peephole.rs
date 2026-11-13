@@ -1440,6 +1440,8 @@ fn load_straight_once(asm: &mut Asm) -> bool {
         };
         let (transfer, register) = if *load == Op::Ldx { (Op::Txa, Registers::X) } else { (Op::Tya, Registers::Y) };
         let mut to = None;
+        // N and Z are still the load's: a branch on them would test the deleted load
+        let mut load_flags = true;
         for (next, line) in lines.iter().enumerate().skip(at + 1) {
             let Line::Inst(Inst { op, operand, .. }) = line else { break };
             if *op == transfer {
@@ -1466,8 +1468,12 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                     | Op::Eor => true,
                     Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
                     Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
-                        Operand::Direct(target) => label_at(target)
-                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), exits)),
+                        Operand::Direct(target) => {
+                            let reads_load = load_flags && !matches!(op, Op::Bcc | Op::Bcs);
+                            !reads_load
+                                && label_at(target)
+                                    .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), exits))
+                        }
                         _ => false,
                     },
                     // the other index register: a load or store of another byte
@@ -1481,6 +1487,9 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                 };
             if !quiet {
                 break;
+            }
+            if !matches!(op.flags(operand), Flags::Keeps) {
+                load_flags = false;
             }
         }
         if let Some(to) = to
@@ -1982,7 +1991,7 @@ pub(crate) fn dead_from(
             // steps and compares
             (Op::Cpx | Op::Inx | Op::Dex, Registers::Y | Registers::A)
             | (Op::Cpy | Op::Iny | Op::Dey, Registers::X | Registers::A) => (false, false),
-            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => (true, false),
+            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Bit | Op::Pha, Registers::A) => (true, false),
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
                 (matches!(inst.operand, Operand::Acc | Operand::None), false)
             }

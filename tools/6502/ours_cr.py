@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 HERE = Path(__file__).resolve().parent
 # OURS_CPU=65c02: the 65C02 target and cc65 target
 CPU = os.environ.get("OURS_CPU", "6502")
+# the flag verifier (`flagcheck`): a compile where a flag is cleared before its reader fails, not runs wrong
+os.environ.setdefault("LLRM_6502_CHECK_FLAGS", "1")
 SIM = "sim" + CPU
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
 OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)

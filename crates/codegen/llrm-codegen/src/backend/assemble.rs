@@ -241,7 +241,10 @@ pub fn assembled_by(
     let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
-    let (facts, order) = calleefacts::CalleeFacts::of(module);
+    let (facts, order) = calleefacts::CalleeFacts::of_binding(
+        module,
+        cpu.target().tti().is_some_and(|tti| tti.ipra_binds_local()),
+    );
     let target = Target {
         facts: &facts,
         cpu,

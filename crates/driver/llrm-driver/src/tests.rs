@@ -5934,6 +5934,21 @@ fn a_calls_arguments_come_off_the_stack_by_add_at_m32_os() {
     }
 }
 
+/// LoopIdiomRecognize forms the `memcpy` of a copy loop whose length is known at run time and the target calls it (m32 has a
+/// libc; `Tuning::libc_memcpy`), as the pin does. It stayed a loop at -Os where the inline `rep movs` was more bytes:
+/// x_transpose -Os ran 17,984 loop trips for 9,792 and 8,192 `movsd`.
+#[test]
+fn a_copy_loop_of_run_time_length_is_a_memcpy_call_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+                @d = external global [64 x i32]\n@s = external global [64 x i32]\n                define void @f(i32 %n) {\nentry:\n  %e = icmp eq i32 %n, 0\n  br i1 %e, label %done, label %body\n\
+                body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr @s, i32 %i\n  %v = load i32, ptr %a\n  \
+                %b = getelementptr i32, ptr @d, i32 %i\n  store i32 %v, ptr %b\n  %j = add i32 %i, 1\n  %c = icmp ne i32 %j, %n\n  \
+                br i1 %c, label %body, label %done\ndone:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("memcpy"), "the loop is a call of memcpy:\n{listing}");
+}
+
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
 /// the same bytes, a third to a quarter of the clocks. scroll -Os copied 4000 bytes of two-byte-aligned shorts a byte at a
 /// time: 958,326 clk against clang's 536,067.
