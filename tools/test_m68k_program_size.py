@@ -87,3 +87,4 @@ def test_gcc_gets_the_programs_no_inline_in_its_own_spelling():
     flags = o0_sweep.flags_of(source.read_text(), "m68k-68000")
     command = size.gcc_command("m68k-linux-gnu-", "68000", "Os", Path("x.s"), source, flags)
     assert "-fno-inline" in command and "-fno-inline-functions" not in command, command
+    assert "-std=gnu17" in command, "gcc 15 reads C23: old_style_extra_args had no gcc cell"
