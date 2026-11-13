@@ -767,9 +767,10 @@ pub fn read_from_cell(
 /// nothing else reads: `fild [i]; fmul dword [K]` becomes `fld dword [K];
 /// fimul [i]` where the target prices the integer memory form further below
 /// its pair than the float one (486: 13 + 16 - 23 = 6 against 3 + 16 - 14 = 5).
-/// The cells are the same two, so the bytes tie; the pin keeps the float form
-/// (the DAG folds the cell before the integer load is seen), gcc takes the
-/// integer one. DEVIATE (owner x87, exit 2026-11-28); not made for size.
+/// The cells are the same two, so the bytes tie (also for size, where the
+/// clocks it saves are free); the pin keeps the float form (the DAG folds the
+/// cell before the integer load is seen), gcc takes the integer one. DEVIATE
+/// (owner x87, exit 2026-11-28).
 ///
 /// Returns the load's place, the `fld` that replaces it and the instruction
 /// that reads the integer cell.
@@ -780,9 +781,6 @@ fn _repaired(
     floating: &HashSet<u32>,
     cpu: &crate::backend::cpu::Profile,
 ) -> Option<(usize, Arc<Insn>, Arc<Insn>)> {
-    if cpu.size || cpu.min_size {
-        return None;
-    }
     let arith = &insns[at];
     let what = arith.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)?;
     let [Loc::Held(held), Loc::Mem(float_cell)] = what.sources.as_slice() else { return None };
@@ -1291,6 +1289,24 @@ mod tests {
     #[test]
     fn test_an_integer_load_and_a_float_cell_read_the_integer_one_from_memory_at_speed() {
         let cpu = speed_profile("486").expect("a profile");
+        let body = one_block(vec![
+            insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
+            insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
+            fstp(2, 3, global(0, 0)),
+        ]);
+        let done = names(&folded(&body, cpu, REGISTERS));
+        assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
+    }
+
+    /// x_matmul_f -Os m32: `fild [i]; fmul dword [K]` was kept for size, where
+    /// gcc has `fld [K]; fimul [i]`: the same two cells, so the same bytes, and
+    /// 6 clocks fewer for 288 sites (69,492 against 69,449 clk, the best's).
+    #[test]
+    fn test_an_integer_load_and_a_float_cell_read_the_integer_one_from_memory_for_size() {
+        let mut size = crate::backend::cpu::named("486").expect("a profile").clone();
+        size.pool_data_strict = false;
+        size.size = true;
+        let cpu: &'static crate::backend::cpu::Profile = Box::leak(Box::new(size));
         let body = one_block(vec![
             insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
             insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
