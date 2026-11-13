@@ -338,6 +338,9 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its counter in one
+    /// instruction a trip has no setup to count ([`Tuning::lsr_derived_setup_free`]).
+    pub derived_setup_free: bool,
     /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
     /// order stands (LG3's byte test included).
     pub size_only: bool,
@@ -360,6 +363,7 @@ impl LsrSizeModel {
         constant_start: None,
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        derived_setup_free: false,
         size_only: false,
         exit_compare: |_, _| 0,
     };
@@ -3256,6 +3260,7 @@ mod size_model_tests {
         constant_start: None,
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        derived_setup_free: false,
         size_only: false,
         exit_compare: |bits, _| bits,
     };

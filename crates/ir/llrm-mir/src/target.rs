@@ -434,6 +434,10 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as written derives from its
+    /// counter in one instruction a trip (`i << 4`) pays no setup bytes. Only a target whose byte
+    /// model was checked sets it: m16 grew 28 QCport modules and `huge` +27% B without (#9587).
+    pub lsr_derived_setup_free: bool,
     /// With `lsr_size_order`: price the code in x86-64's encodings (REX.W,
     /// `llrm_x86::encoding`) and the exit test's compare.
     pub lsr_size_x86_64: bool,
@@ -681,6 +685,7 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
