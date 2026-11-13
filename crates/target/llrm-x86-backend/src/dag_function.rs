@@ -1409,6 +1409,7 @@ fn selected_in(
         frame: &frame,
         address_mode,
         opt_size: cpu.size || cpu.min_size,
+        stack_shares_data: contracts.is_some_and(|contracts| contracts.segments.stack_shares_data),
         reserved_calls: module
             .named(name)
             .and_then(|id| module.global(id).function())
