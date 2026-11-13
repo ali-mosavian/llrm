@@ -826,7 +826,7 @@ fn lowering_for(
     features: Features,
     build: impl FnOnce() -> TargetLowering,
 ) -> TargetLowering {
-    type Key = (u32, [bool; 8]);
+    type Key = (u32, [bool; 9]);
     thread_local! {
         static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -840,6 +840,7 @@ fn lowering_for(
             features.movbe,
             features.shld_slow,
             features.sse2,
+            features.vector128,
             features.soft_float,
         ],
     );
@@ -1068,8 +1069,19 @@ fn selected_in(
         let features = Features { soft_float, ..Features::default() };
         lowering_for(16, features, || TargetLowering::x86_16(features, MVT::I16))
     } else if m64 {
-        let features = Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() };
-        lowering_for(64, features, || TargetLowering::x86_64(features, MVT::I64))
+        let features = Features {
+            sse2: arch.scalar_sse(),
+            vector128: tables(arch).map.vector128(),
+            cmov: true,
+            ..Features::default()
+        };
+        lowering_for(64, features, || {
+            if features.vector128 {
+                TargetLowering::x86_64_vectors(features, MVT::I64)
+            } else {
+                TargetLowering::x86_64(features, MVT::I64)
+            }
+        })
     } else {
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
@@ -1115,6 +1127,10 @@ fn selected_in(
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
     builder_target.dag.absolute_symbols = !module.position_independent();
+    // The vector types are legal exactly where the table gave them a register
+    // class.
+    builder_target.legal_vectors = tli.types.legal_vectors().to_vec();
+    builder_target.dag.vectors = !builder_target.legal_vectors.is_empty();
     builder_target.dag.add_to_or_disjoint = machine.tti().is_some_and(|tti| tti.add_to_or_disjoint());
     let builder_target = builder_target
         .with_tuning(machine.tuning())

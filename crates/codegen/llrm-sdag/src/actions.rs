@@ -65,6 +65,9 @@ pub struct Features {
     pub shld_slow: bool,
     /// `hasSSE2()`: f32 and f64 live in xmm registers (m64; D64-4).
     pub sse2: bool,
+    /// `hasSSE2()` with the target's `movdqu` forms: `v16i8`, `v8i16`, `v4i32`
+    /// and `v2i64` have the `VR128` register class (m64).
+    pub vector128: bool,
     /// `useSoftFloat()`: `f32` and `f64` have no register class; their
     /// arithmetic is a call (m16).
     pub soft_float: bool,
@@ -913,6 +916,16 @@ impl TargetLowering {
         ptr: MVT,
     ) -> TargetLowering {
         Self::x86(TargetLoweringInfo::x86_64(), features, ptr, true)
+    }
+
+    /// m64 with `hasSSE2()` and the vector forms: the same constructor over the
+    /// register file that adds `addRegisterClass(MVT::v16i8,
+    /// &X86::VR128RegClass)` and the other three.
+    pub fn x86_64_vectors(
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
+        Self::x86(TargetLoweringInfo::x86_64_sse2(), features, ptr, true)
     }
 
     /// m16: the same constructor calls over the 386 register file, with `i16`
