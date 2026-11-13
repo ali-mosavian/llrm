@@ -247,6 +247,17 @@ class LibraryChecks(unittest.TestCase):
         self.assertEqual([Path(s).name for s in guard.LIBRARY_CHECKS], ["f64_div_clk.sh", "f64_mul_clk.sh", "mul64_check.sh", "z80_f64_split_test.sh"])
 
 
+class Selection(unittest.TestCase):
+    def test_no_selected_program_includes_a_header_the_z80_has_not_got(self):
+        """bench_io, os_console and os_exit include `llrm_os.h` / `bench_io.h` (x86 OS layer): selected for the z80, each failed
+        'file not found' in every sweep and read as a cell with no bar."""
+        src = Path(__file__).resolve().parents[5] / "tests" / "run" / "c"
+        for program in run.selected(src):
+            text = program.read_text()
+            self.assertNotIn("llrm_os.h", text, program.name)
+            self.assertNotIn("bench_io.h", text, program.name)
+
+
 class GccColumn(unittest.TestCase):
     def test_a_program_without_an_sdcc_bar_gets_the_forks_cell_as_its_bar(self):
         """36 programs had no SDCC row (error 101, wrong value, 32-bit double): 15 of them build and pass under the gcc-z80 fork and
