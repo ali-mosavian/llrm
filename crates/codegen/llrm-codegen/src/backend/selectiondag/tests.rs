@@ -19,6 +19,8 @@ mod setcc_carry_fold;
 mod and_fold;
 mod and_simplify;
 mod assert_ext;
+mod known_bits_depth;
+mod sign_bits_depth;
 mod bit_counts;
 mod bit_reverse;
 mod bit_test;

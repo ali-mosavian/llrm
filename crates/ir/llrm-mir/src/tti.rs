@@ -907,6 +907,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ2-TRIPS: whether the priced SZ2 trial counts clocks at each
+    /// block's frequency over the entry's (a loop's trips), and lets the byte
+    /// rate alone decide a copy whose callee stays. False: each instruction
+    /// once, and the callee must go with the copy or the site be hot.
+    fn inline_trial_by_trips(&self) -> bool {
+        false
+    }
+
     /// The largest caller, in instructions, whose refused sites SZ2 tries
     /// inline: a trial runs the simplifier over the whole caller once per
     /// callee tried.
@@ -1024,6 +1032,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPRA-DSO-LOCAL: see `Tuning::ipra_binds_local`.
+    fn ipra_binds_local(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
@@ -1110,6 +1123,12 @@ pub trait Tti {
     /// bytes a loop. False: RS1 alone.
     fn rotation_hot_at_size(&self) -> bool {
         false
+    }
+
+    /// Bytes a loop ROTATION-HOT rotates may add where the finished code executes less. 0: the object
+    /// may not grow (-Os strict on bytes).
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        4
     }
 
     /// DEVIATE GVN-PRE-OPTSIZE: GVN's load PRE inserts no load into a
@@ -1335,6 +1354,11 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::unroll_trial_bytes_strict`.
+    fn unroll_trial_bytes_strict(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
         false
@@ -1377,6 +1401,11 @@ pub trait Tti {
     /// `Tuning::pops_arguments_at_size`.
     fn pops_arguments_at_size(&self) -> bool {
         true
+    }
+
+    /// `Tuning::libc_memcpy`.
+    fn libc_memcpy(&self) -> bool {
+        false
     }
 
     /// `Tuning::multiply_by_clocks`.
@@ -2570,6 +2599,13 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
+    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
+    /// none: the pass does not run.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        None
     }
 
     /// Whether the loop as written keeps the bound of its exit test live next
