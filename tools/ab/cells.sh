@@ -9,8 +9,15 @@ set -u
 D=$1; L=$2; repo=$(cd "$(dirname "$0")/../.." && pwd)
 for b in llrm-cc llrm-llc; do
   [ -f "$D/base/$b" ] && [ -f "$D/new/$b" ] || { echo "cells: missing $b in base or new" >&2; exit 2; }
-  [ "$(md5sum < "$D/base/$b")" != "$(md5sum < "$D/new/$b")" ] || { echo "cells: base and new $b are the same binary" >&2; exit 2; }
 done
+# A target's backend is its own binary (`llrm-m68k-llc`: a change there leaves llrm-cc and llrm-llc byte for byte the same), so the sweep is of one
+# build against itself only where every llrm-* binary agrees.
+differs=0
+for f in "$D"/base/llrm-*; do
+  [ -f "$D/new/${f##*/}" ] || continue
+  [ "$(md5sum < "$f")" = "$(md5sum < "$D/new/${f##*/}")" ] || differs=1
+done
+[ $differs = 1 ] || { echo "cells: base and new are the same binaries" >&2; exit 2; }
 [ "$(readlink -f "$D/base")" != "$(readlink -f "$D/new")" ] || { echo "cells: base and new are one directory" >&2; exit 2; }
 . "$(dirname "$0")/../fresh_compile.sh"
 # An include dir that is not there is a broken sweep, not a program that fails (2026-11-10: four jpeg/stft programs came out EMPTY at -m32 for lack of

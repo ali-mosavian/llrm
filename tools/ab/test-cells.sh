@@ -7,6 +7,12 @@ mkdir -p "$d/base" "$d/new"
 for b in llrm-cc llrm-llc; do printf '#!/bin/sh\necho same\n' > "$d/base/$b"; cp "$d/base/$b" "$d/new/$b"; chmod +x "$d/base/$b" "$d/new/$b"; done
 echo "x t -O2 f.c" > "$d/list"
 "$cells" "$d" "$d/list" >/dev/null 2>&1 && { echo "FAIL: identical binaries accepted"; exit 1; }
+# Regression (2026-11-13): a change in a target's own backend (`llrm-m68k-llc`) leaves llrm-cc and llrm-llc identical, and cells.sh refused the
+# m68k A/B of a real change ("base and new llrm-cc are the same binary"). One differing llrm-* binary makes it a sweep.
+printf '#!/bin/sh\necho one\n' > "$d/base/llrm-m68k-llc"; printf '#!/bin/sh\necho two\n' > "$d/new/llrm-m68k-llc"; chmod +x "$d/base/llrm-m68k-llc" "$d/new/llrm-m68k-llc"
+out=$("$cells" "$d" "$d/list" 2>&1)
+case $out in EMPTY*) ;; *) echo "FAIL: a differing target backend refused: $out"; exit 1;; esac
+rm -f "$d/base/llrm-m68k-llc" "$d/new/llrm-m68k-llc"
 # distinct binaries, compiler produces nothing: the cell is EMPTY, never a number
 printf '#!/bin/sh\necho other\n' > "$d/new/llrm-cc"; printf '#!/bin/sh\necho other\n' > "$d/new/llrm-llc"
 out=$("$cells" "$d" "$d/list" 2>&1)
