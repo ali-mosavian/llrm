@@ -215,6 +215,16 @@ impl Tti for Wasm {
         true
     }
 
+    /// The bound holds a callee with two or more sites; a callee with one is the pin's inline
+    /// (cost < `OptSizeThreshold` 50). DEVIATE SZ1 narrowed (2026-11-13, owner wasm, exit
+    /// 2026-11-24): held at one site too, the once-called `bench_X` of 12 -Os cells stayed a
+    /// call from `main` (cost 45 < 50): +1 to +9 executed instructions over the pin with the
+    /// bytes 34-100 B below it. Tip df60ddb920, 195 corpus cells: -Os 24 cells at or below the
+    /// pin on both axes (0 lost), -O1 38 (0 lost); each lands on the pin's bytes.
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        2
+    }
+
     /// The bound stands down where the pin's own cost is below zero: the pin
     /// counts the inline as shrinking the caller (uint64_to_float -O1: six
     /// `classify` calls kept at cost -15..-5, 241 B against the pin's 96).
