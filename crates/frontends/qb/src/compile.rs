@@ -153,8 +153,12 @@ fn _data_names(module: &model::Module) -> Names {
 }
 
 /// The BASIC segment a data object goes in: far ones FSL_CONST, read-only
-/// ones BC_CN, the rest BC_DATA.
-fn _segment(object_: &model::DataObject) -> &'static str {
+/// ones BC_CN, the rest BC_DATA, or `_BSS` where `bss` and nothing in it is
+/// stated (the runtime's start-up zeroes `_BSS`; the linker stores none of it).
+fn _segment(
+    object_: &model::DataObject,
+    bss: bool,
+) -> &'static str {
     if matches!(
         object_.address,
         model::AddressKind::Far | model::AddressKind::Huge
@@ -164,9 +168,22 @@ fn _segment(object_: &model::DataObject) -> &'static str {
         "BC_CN"
     } else if object_.segment.as_deref() == Some("COMMON") {
         "COMMON"
+    } else if bss && object_.relocations.is_empty() && object_.bytes.iter().all(|byte| *byte == 0) {
+        "_BSS"
     } else {
         "BC_DATA"
     }
+}
+
+/// Whether the module's zero variables go in `_BSS`: where the runtime is
+/// llrm's and a near pointer is a word, whose start-up (runtime/qb/dos/m16)
+/// zeroes the BSS class. The Microsoft runtimes' CLEAR zeroes BC_DATA whole and
+/// their start-up no BSS, so their modules keep every variable in BC_DATA.
+fn _zeroed_by_start_up(
+    program: &model::Program,
+    near_bytes: u32,
+) -> bool {
+    program.runtime == model::RuntimeProfile::Llrm && near_bytes == 2
 }
 
 /// Decode the frontend-owned DATA statement stream.
@@ -324,7 +341,7 @@ fn _header(
     // copies (16-bit objects).
     if words.width == 2 {
         let at = words.segments[3] + 2;
-        let size: usize = _placed(module).filter(|one| _segment(one) == "COMMON").map(|one| one.bytes.len()).sum();
+        let size: usize = _placed(module).filter(|one| _segment(one, false) == "COMMON").map(|one| one.bytes.len()).sum();
         out[at..at + 2].copy_from_slice(&(size as u16).to_le_bytes());
     }
     // The addends live in the image. The remaining words are zero.
@@ -457,10 +474,18 @@ fn rich_assembled(
         .filter(|((space, _), _)| matches!(space, Space::Segment | Space::External))
         .map(|((_, id), name)| (id, name))
         .collect();
+    // The object's pointer cells are the target's: a far pointer's width and a
+    // near one's.
+    let (near_bytes, far_bytes) = {
+        let layout = codegen.arch.layout();
+        let datalayout = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).map_err(CompileError::from)?;
+        (datalayout.pointer(layout.spaces.near).bits / 8, datalayout.pointer(layout.spaces.far).bits / 8)
+    };
+    let bss = _zeroed_by_start_up(program, near_bytes);
     let mut placed: IndexMap<&str, Vec<basic::Item>> =
-        ["BC_DATA", "BC_CN", "FSL_CONST", "COMMON"].into_iter().map(|name| (name, Vec::new())).collect();
+        ["BC_DATA", "BC_CN", "FSL_CONST", "COMMON", "_BSS"].into_iter().map(|name| (name, Vec::new())).collect();
     for object_ in _placed(module) {
-        placed[_segment(object_)].push(basic::Item::Object(object_.id));
+        placed[_segment(object_, bss)].push(basic::Item::Object(object_.id));
     }
     // A host has no B$ENRA: every procedure frames itself (the zero fill above
     // covers what the runtime's frame would have cleared).
@@ -492,13 +517,6 @@ fn rich_assembled(
         if program.run_time_module { ["$AC", "$DAC", "b$seg"].map(str::to_owned).to_vec() } else { Vec::new() };
     let datum = basic::Item::Datum;
     let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
-    // The object's pointer cells are the target's: a far pointer's width and a
-    // near one's.
-    let (near_bytes, far_bytes) = {
-        let layout = codegen.arch.layout();
-        let datalayout = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).map_err(CompileError::from)?;
-        (datalayout.pointer(layout.spaces.near).bits / 8, datalayout.pointer(layout.spaces.far).bits / 8)
-    };
     let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
         ("BR_DATA", vec![]),
         ("BR_SKYS", vec![]),
@@ -532,6 +550,12 @@ fn rich_assembled(
             ],
         ),
     ];
+    // Each object with near uninitialised data opens it with an empty BSSB: the first the linker meets
+    // fixes it before every `_BSS`, and the start-up zeroes from it (runtime/qb/dos/m16/start.asm).
+    if bss {
+        segments.push(("BSSB", vec![]));
+        segments.push(("_BSS", placed.swap_remove("_BSS").unwrap_or_default()));
+    }
     let mut private: BTreeSet<String> = BTreeSet::new();
     if vbdos {
         segments.push(("FDATA", vec![]));

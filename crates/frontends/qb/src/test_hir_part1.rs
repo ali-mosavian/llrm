@@ -111,6 +111,42 @@ fn test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() {
     assert!(listing.contains("call far ptr B$RDR4"));
 }
 
+/// Every BASIC variable starts at zero, and each was stored in BC_DATA: jpeg_fixed's 28 KB of arrays were data bytes of the image, 29135 B
+/// against BC's 4483. llrm's runtime zeroes the BSS class at start-up, so its zero variables go in `_BSS` (group DGROUP, no stored byte);
+/// the Microsoft runtimes' CLEAR zeroes BC_DATA whole and keep them there.
+const ZERO_ARRAY: &[u8] = b"DEFINT A-Z\r\nDIM SHARED a(0 TO 99)\r\nDIM SHARED k AS INTEGER\r\nREAD k\r\na(k) = k\r\nPRINT a(k + 1)\r\nDATA 7\r\n";
+
+fn stored(records: &[std::rc::Rc<omf::Record>], wanted: &str) -> usize {
+    let (index, _) = segment(records, wanted);
+    omf::ledata(records).iter().filter(|(_, at, _, _)| *at == index).map(|(_, _, _, bytes)| bytes.len()).sum()
+}
+
+#[test]
+fn test_the_llrm_runtime_keeps_zero_variables_in_an_unstored_bss() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(&tmp, "bss.bas", ZERO_ARRAY);
+    let llrm = records(&parsed_as(&source, "qb45", "llrm"), "bss.bas");
+    let (_, bss) = segment(&llrm, "_BSS");
+    assert!(bss >= 200, "the 100-element array is in _BSS: {bss} B");
+    assert_eq!(stored(&llrm, "_BSS"), 0, "no byte of _BSS is stored");
+    assert!(segment(&llrm, "BSSB").1 == 0, "the empty BSSB opens the class");
+    assert!(omf::groups(&llrm)["DGROUP"].len() >= 2, "DGROUP holds the BSS segments");
+    let microsoft = records(&parsed_as(&source, "qb45", "qb45"), "bss.bas");
+    assert!(!omf::segments(&microsoft).iter().flatten().any(|(name, _)| name == "_BSS"), "the Microsoft runtimes' CLEAR needs BC_DATA whole");
+    assert!(stored(&microsoft, "BC_DATA") >= 200);
+}
+
+/// A DATA line was stored re-rendered with ", " between its values: jpeg_fixed's ten rows of "362,502,473" grew 118 B of BC_DS over BC's, which
+/// keeps the text as written (checked on BC 4.5's object: spaced, quoted and commented lines are all verbatim).
+#[test]
+fn test_data_text_is_stored_as_written() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(&tmp, "text.bas", b"data 1,2 , \"a b\"  ,3\r\n");
+    let program = qb45(&source);
+    let data = image(&records(&program, "text.bas"), "BC_DS");
+    assert_eq!(&data[2..], b" 1,2 , \"a b\"  ,3\x00\xff\xff\x01");
+}
+
 /// Gorillas' synthetic DATA keys made B$RSTB fault before its first READ.
 #[test]
 fn test_restore_keys_select_the_labeled_serialized_data_row() {
