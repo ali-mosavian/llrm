@@ -209,6 +209,8 @@ impl Tti for Wasm {
     /// larger, +45 189 B; 2 smaller, -36 B; above the pin 5 -> 8 (div8_os,
     /// pattern_fill, shrink_wrapped_frame, shrink_wrapped_saves at -O1;
     /// memcpy_libcall -Os). Closes byvalue_struct_address (49 -> 31 B).
+    /// Next step, not "off": a trial-priced inline (`walk.rs` sized()) that counts
+    /// the dead store after main folds. Acceptance: those 8 cells at or below the pin.
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
     }
