@@ -923,8 +923,16 @@ fn phi_register(
     emitter: &mut Emitter,
     number: u32,
     float: bool,
+    quad: bool,
 ) -> Reg {
-    if float { Reg::Fpr(emitter.fvreg(number)) } else { Reg::Gpr(emitter.vreg(number)) }
+    if !float {
+        return Reg::Gpr(emitter.vreg(number));
+    }
+    let register = Reg::Fpr(emitter.fvreg(number));
+    if quad {
+        emitter.mf.wide.push(register);
+    }
+    register
 }
 
 struct Emitter<'a> {
@@ -2277,13 +2285,13 @@ pub fn emit(
                 continue;
             }
             headed.push(phi.dst);
-            let (dst, mut incoming) = (phi_register(&mut emitter, phi.dst, phi.float), Vec::new());
+            let (dst, mut incoming) = (phi_register(&mut emitter, phi.dst, phi.float, phi.quad), Vec::new());
             for (from, pred) in blocks.iter().enumerate() {
                 if !pred.successors.contains(&phi.to) {
                     continue;
                 }
                 for one in pred.phis.iter().filter(|one| one.to == phi.to && one.dst == phi.dst) {
-                    let value = phi_register(&mut emitter, one.src, one.float);
+                    let value = phi_register(&mut emitter, one.src, one.float, one.quad);
                     if !incoming.iter().any(|(_, label): &(Reg, String)| *label == block_label(name, from)) {
                         incoming.push((value, block_label(name, from)));
                     }

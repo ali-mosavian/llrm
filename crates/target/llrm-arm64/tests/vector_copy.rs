@@ -302,3 +302,27 @@ fn a_loop_storing_two_element_widths_compiles() {
     );
     assert!(text.contains("report"), "{text}");
 }
+
+/// A loop carrying a `<8 x i16>` phi (the widened induction `vec.ind`) panicked
+/// in live-range calculation ("a unique value"): a vector phi was given general
+/// registers, so its copies read a register nothing defined. It now lives in
+/// one `q` register and steps with `add v.8h`.
+#[test]
+fn a_loop_carried_vector_phi_lives_in_a_q_register() {
+    let text = assembly(
+        "define void @f(ptr noalias %a) {\n\
+         entry:\n  br label %body\n\
+         body:\n\
+         \x20 %index = phi i64 [ 0, %entry ], [ %next, %body ]\n\
+         \x20 %v = phi <8 x i16> [ splat (i16 3), %entry ], [ %vn, %body ]\n\
+         \x20 %p = getelementptr inbounds i16, ptr %a, i64 %index\n\
+         \x20 store <8 x i16> %v, ptr %p, align 2\n\
+         \x20 %next = add nuw i64 %index, 8\n\
+         \x20 %vn = add <8 x i16> %v, splat (i16 8)\n\
+         \x20 %done = icmp eq i64 %next, 2000\n\
+         \x20 br i1 %done, label %exit, label %body\n\
+         exit:\n  ret void\n}\n",
+    );
+    assert!(text.contains("add v") && text.contains(".8h"), "{text}");
+    assert!(text.contains("str q"), "{text}");
+}
