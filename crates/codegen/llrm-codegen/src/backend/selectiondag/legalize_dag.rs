@@ -492,8 +492,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Int(_) => Action::Expand,
         };
         // `EXTRACT_ELEMENT` lies about being legal: when it claims to be, it is
-        // expanded.
-        if self.dag.opcode(node) == ISD::ExtractElement && action == Action::Legal {
+        // expanded. The same node taking a vector is `EXTRACT_VECTOR_ELT`.
+        if self.dag.opcode(node) == ISD::ExtractElement
+            && action == Action::Legal
+            && !self.dag.value_type(self.dag.operand(node, 0)).is_vector()
+        {
             action = Action::Expand;
         }
         if self.dag.opcode(node) == ISD::SetCC
