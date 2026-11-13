@@ -816,6 +816,12 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    /// DEVIATE SYMPAIR-1: real mode keeps the two selects (see
+    /// `Tti::keeps_icmp_of_swapped_selects`).
+    fn keeps_icmp_of_swapped_selects(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn keeps_sahf_where_bytes_are_held(&self) -> bool {
         self.tuning.keeps_sahf_where_bytes_are_held
     }

@@ -1215,6 +1215,44 @@ fn a_swapped_select_pair_compares_as_its_two_arms() {
     check(params, body, after);
 }
 
+/// m16 sfm16_float: the fold turned two 16-bit selects into a 64-bit arm compare,
+/// +4 B in 24 objects. A target that keeps the selects leaves the compare as written.
+#[test]
+fn test_a_swapped_select_pair_compare_stays_where_the_target_keeps_it() {
+    let text = "define i1 @f(i1 %c, i16 %a, i16 %b) {
+  %s = select i1 %c, i16 %a, i16 %b
+  %t = select i1 %c, i16 %b, i16 %a
+  %r = icmp ne i16 %s, %t
+  ret i1 %r
+}";
+    let run = |keep: bool| {
+        let mut module = parsed(text);
+        let globals = module.globals.clone();
+        let metadata = module.metadata.clone();
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let hooks = crate::combine::TargetHooks { keeps_swapped_select_compare: keep, ..Default::default() };
+        crate::combine::combine_for(
+            context,
+            &globals,
+            &Default::default(),
+            &metadata,
+            &DataLayout::default(),
+            function,
+            visit,
+            false,
+            &mut declared,
+            hooks,
+        );
+        declared.place(&mut module).unwrap();
+        printed(&module)
+    };
+    let kept = run(true);
+    assert!(kept.contains("icmp ne i16 %s, %t"), "{kept}");
+    let pin = run(false);
+    assert!(pin.contains("icmp ne i16 %a, %b"), "{pin}");
+}
+
 fn zero_quotient_compare_on(
     keep: bool,
 ) -> String {
