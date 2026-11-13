@@ -487,6 +487,13 @@ pub(crate) fn gather_unrolling_preferences_of_target(
         up.partial_threshold = up.partial_opt_size_threshold;
         up.max_percent_threshold_boost = 100;
     }
+    // DEVIATE UNROLL-O1: where -O1 never grows the code (`unroll_never_grows_at_o1`), a partial or run-time
+    // unroll, which always copies the body, is left to the trial compile that keeps it only if the object
+    // is no larger.
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
+        up.partial = false;
+        up.runtime = false;
+    }
     up
 }
 
