@@ -82,6 +82,7 @@ use llrm_support::debug::timed;
 use crate::abi::runtime::Contract;
 use crate::backend::calleefacts;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::codetables;
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected, Unselected};
@@ -230,7 +231,7 @@ pub fn assembled_by(
     // Private constants of no alignment (string literals) go after every aligned datum: the pin
     // gives them their own mergeable `.rodata.str1.1` section, so an odd-sized one never pads what
     // follows it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single +2).
-    let mut unaligned_tail = Vec::new();
+    let mut unaligned_tail: Vec<codetables::Table> = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
@@ -326,7 +327,7 @@ pub fn assembled_by(
                     && segment_bytes != i64::MAX
                     && !datums.iter().any(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Pointer(_)))
                 {
-                    unaligned_tail.extend(datums);
+                    unaligned_tail.push(codetables::Table { key: (globals::space(module, id), at as i64), datums });
                 } else {
                     let start = data.len();
                     let zero_may_move = !variable.constant
@@ -585,8 +586,17 @@ pub fn assembled_by(
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
-    data.extend(tables);
-    data.extend(unaligned_tail);
+    let mut code_data = std::collections::BTreeMap::new();
+    if cpu.target().tuning().read_only_in_code {
+        let mut tables = codetables::jump_tables(tables, &names);
+        tables.extend(unaligned_tail);
+        let (placed, kept) = codetables::placed(&mut procedures, tables, &names);
+        code_data = placed;
+        data.extend(kept.into_iter().flat_map(|table| table.datums));
+    } else {
+        data.extend(tables);
+        data.extend(unaligned_tail.into_iter().flat_map(|table| table.datums));
+    }
     if !read_only.is_empty() {
         sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
     }
@@ -700,6 +710,7 @@ pub fn assembled_by(
         far_bss: BTreeSet::new(),
         weak,
         code_segments,
+        code_data,
         comdats,
         stack: 0,
         object: arch.object(),

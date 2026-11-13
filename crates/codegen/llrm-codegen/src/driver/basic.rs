@@ -1135,6 +1135,7 @@ pub fn assembled(
         far_bss: BTreeSet::new(),
         weak: BTreeSet::new(),
         code_segments: Default::default(),
+        code_data: Default::default(),
         comdats: Default::default(),
         debug,
         stack: 0,
