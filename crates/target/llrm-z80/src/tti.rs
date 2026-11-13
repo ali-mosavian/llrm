@@ -395,6 +395,12 @@ impl Tti for Z80Tti {
         SPEED_MILLICLOCKS_PER_BYTE
     }
 
+    /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll is made at -O2/-O3 where the clocks it
+    /// saves repay its bytes at the same rate, in place of the pin's threshold alone (0).
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        SPEED_MILLICLOCKS_PER_BYTE
+    }
+
     /// The same rate for every speed decision that trades bytes for clocks (peeling, the combiner, the inliner's
     /// walk, loop idioms, the backend's byte-for-clock choices): one place, not an inliner-only 3000.
     fn speed_milliclocks_per_byte(&self) -> i64 {
