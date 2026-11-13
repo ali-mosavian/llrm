@@ -8,12 +8,12 @@
 //! it, when
 //!
 //! - every reference to it is a load (an operand read, a table jump's cell): no
-//!   store, no `lea`, no `offset`, nothing inline names it, so no pointer to it
-//!   exists and a pointer into DS could never reach code;
+//!   store, no `lea`, no `offset`, nothing inline or in any data names it, so
+//!   no pointer to it exists and a pointer into DS could never reach code;
 //! - one procedure holds all the references, so the table is in the same
 //!   segment as each reader whether the object has one code segment or one per
 //!   procedure;
-//! - its datums are bytes, labels and near pointers.
+//! - its datums are bytes, labels, alignment and near pointers.
 //!
 //! Each reference then reads through `cs:`.
 //!
@@ -41,16 +41,30 @@ pub struct Table {
 
 /// The tables of `tables` that move into code: for each procedure by name, the
 /// data that follows it. The rest come back as they were, in their order.
+/// `data` is the module's other data, whose pointers name what is not a load,
+/// and `pinned` the tables something else names (an alias).
 pub fn placed(
     procedures: &mut [Procedure],
     tables: Vec<Table>,
     names: &IndexMap<(Space, i64), String>,
+    data: &[&[Datum]],
+    pinned: &BTreeSet<Key>,
 ) -> (BTreeMap<String, Vec<Datum>>, Vec<Table>) {
     let by_key: HashMap<Key, usize> = tables.iter().enumerate().map(|(at, one)| (one.key, at)).collect();
     let by_name: HashMap<&str, usize> =
         tables.iter().enumerate().filter_map(|(at, one)| Some((names.get(&one.key)?.as_str(), at))).collect();
     let mut readers: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); tables.len()];
-    let mut escapes = vec![false; tables.len()];
+    let mut escapes: Vec<bool> = tables.iter().map(|one| pinned.contains(&one.key)).collect();
+    let others = data.iter().copied().chain(tables.iter().map(|one| one.datums.as_slice()));
+    for datum in others.flatten() {
+        if let Datum::Pointer(masm::Pointer { name, .. })
+        | Datum::SegmentWord(name)
+        | Datum::Difference(masm::Difference { name, .. }) = datum
+            && let Some(&table) = by_name.get(name.as_str())
+        {
+            escapes[table] = true;
+        }
+    }
     for (number, procedure) in procedures.iter().enumerate() {
         for table in procedure_tables(procedure, &by_key, &by_name, &mut escapes) {
             readers[table].insert(number);
@@ -75,11 +89,11 @@ pub fn placed(
     (code, kept)
 }
 
-/// The data a code segment can hold in place: what no fixup of a frame needs.
-fn movable(datums: &[Datum]) -> bool {
+/// The data a code segment can hold in place.
+pub fn movable(datums: &[Datum]) -> bool {
     !datums.is_empty()
         && datums.iter().all(|one| match one {
-            Datum::Label(_) | Datum::Object(_) | Datum::Bytes(_) => true,
+            Datum::Label(_) | Datum::Object(_) | Datum::Bytes(_) | Datum::Align(_) => true,
             Datum::Pointer(pointer) => !pointer.far,
             _ => false,
         })

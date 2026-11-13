@@ -1198,6 +1198,9 @@ fn _table(
         .map(|item| match item {
             masm::Datum::Label(label) | masm::Datum::Object(label) => Ok(Encoded::Label(label.clone())),
             masm::Datum::Bytes(bytes) => Ok(Encoded::Piece(Piece::new(bytes.clone()))),
+            masm::Datum::Align(masm::Align { to }) => {
+                Ok(Encoded::Align(masm::CodeAlign { log2: to.max(&1).ilog2() as u8, max_skip: 0 }))
+            }
             masm::Datum::Pointer(masm::Pointer { name, offset, far: false, bytes }) => {
                 let mut code = vec![0; *bytes as usize];
                 pack_field(&mut code, 0, near, *offset).map_err(|error| Unencodable(error.0))?;

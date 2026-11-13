@@ -63,3 +63,46 @@ fn test_a_table_two_procedures_read_stays_in_data() {
     assert!(data(&text).contains("db "), "a table shared by two procedures is in _DATA: {text}");
     assert!(!text.contains("cs:G$"), "a table shared by two segments is read through one's cs: {text}");
 }
+
+/// A string a pointer in `_DATA` names was moved after its one reading
+/// procedure: the pointer, followed through DS, read garbage
+/// (run/c/table_named_by_data).
+#[test]
+fn test_a_table_a_data_pointer_names_stays_in_data() {
+    let text = listing(
+        "const char *names[2] = {\"abc\", \"def\"};\n\
+         __attribute__((noinline)) long first(int i) { return \"abc\"[i]; }\n\
+         __attribute__((noinline)) long second(int i) { return names[0][i]; }\n",
+    );
+    assert!(!text.contains("cs:G$"), "a table a pointer in data names is read through cs: {text}");
+}
+
+/// A Nib program is laid out apart from assembly (`lay_out`), which wrote the
+/// table again in `_DATA`: 12 B of data beside the 12 in code, and the label
+/// defined twice.
+#[test]
+fn test_a_nib_table_is_defined_once_and_not_in_data() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = format!("{}/bench/switch/switch.nib", env!("CARGO_MANIFEST_DIR"));
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+        .current_dir(scratch.path())
+        .args([&source, "-m16", "-O2", "--procedure-segments", "-S", "-o", "t.s"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("t.s")).unwrap();
+    assert!(!data(&text).contains(" label "), "the Nib table is in _DATA: {text}");
+    assert_eq!(text.matches("switch$table$0 label byte").count(), 1, "{text}");
+}
+
+/// A table of 16-bit entries (aligned, so not a lookup of bytes) moves too.
+#[test]
+fn test_a_word_lookup_table_is_not_in_data() {
+    let text = listing(
+        "int w(int k){ switch(k){case 0:return 300;case 1:return 1400;case 2:return 2500;case 3:return 920;\n\
+         case 4:return 650;case 5:return 3500;case 6:return 890;case 7:return 790;case 8:return 320;\n\
+         case 9:return 380;default:return 1;}}\n",
+    );
+    assert!(data(&text).trim().is_empty(), "the word table is in _DATA: {text}");
+    assert!(text.contains("word ptr cs:G$"), "{text}");
+}
