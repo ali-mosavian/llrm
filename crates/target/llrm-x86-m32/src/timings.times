@@ -53,6 +53,8 @@ pairing                 =    =
 # DEVIATE TA-LC (owner anyisa, exit 2026-11-27): measured on the 486 (m32 A/B, 1984 cells); P5 off until measured.
 commute_loop_carried    1    0
 # DEVIATE PHI-SHARE (owner x87, exit 2026-11-29): see CpuTable::share_congruent_phis.
+# DEVIATE UNORDERED-ODDS (owner x87, exit 2026-11-24): see CpuTable::unordered_branch_odds.
+unordered_branch_odds 1 1
 share_congruent_phis   1    1
 # DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): equal literal stores share a register at -O2/-O3 outside loops; pin: `MOV32mi`s. 2026-11-08 A/B: nbody -64 B, jpeg -78 B at -O2, 0 clk.
 share_literal_stores    1    1
