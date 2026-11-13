@@ -166,17 +166,19 @@ pub fn take_left() -> (Vec<String>, usize) {
     LEFT.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare and a jump).
+/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare and a jump), where the
+/// target (`Tti::rotation_hot_bytes_per_loop`) does not say.
 pub const ROTATION_HOT_BYTES_PER_LOOP: i64 = 4;
 
-/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the code by no more than a
-/// few bytes for each loop it rotated.
+/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the code by no more than
+/// `bytes` for each loop it rotated.
 pub fn keeps_rotation_hot(
     saved: i64,
     added: i64,
     loops: usize,
+    bytes: i64,
 ) -> bool {
-    saved > 0 && added <= ROTATION_HOT_BYTES_PER_LOOP * loops as i64
+    saved > 0 && added <= bytes * loops as i64
 }
 
 /// A function of more instructions than this is not priced twice: the second compile of a big function

@@ -120,32 +120,6 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
-    /// Panics unless the float `value` truncates into the integer `target`:
-    /// strictly between its minimum less one and its maximum plus one.
-    pub(super) fn check_truncation(
-        &mut self,
-        value: &hir::Operand,
-        source: TypeName,
-        target: TypeName,
-        span: Span,
-    ) -> Result<(), Diagnostic> {
-        let bits = 8 * width(self.types.sizes, target);
-        let signed = matches!(target, TypeName::I8 | TypeName::I16 | TypeName::I32);
-        let (minimum, maximum) =
-            if signed { (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1) } else { (0, (1i64 << bits) - 1) };
-        // An f32 holds no value strictly between -2^31 - 1 and -2^31.
-        let (lower, strict) =
-            if source == TypeName::F32 && bits == 32 && signed { (minimum, false) } else { (minimum - 1, true) };
-        let lower = self.float(&lower.to_string(), Some(source), span)?;
-        let upper = self.float(&(maximum + 1).to_string(), Some(source), span)?;
-        let [above, below, inside] = [(); 3].map(|_| self.value(TypeName::Bool));
-        self.emit(if strict { "gt" } else { "ge" }, vec![above], vec![value.clone(), required(lower, span)?], None);
-        self.emit("lt", vec![below], vec![value.clone(), required(upper, span)?], None);
-        self.emit("and", vec![inside], vec![hir::Operand::Value(above), hir::Operand::Value(below)], None);
-        self.panic_unless(hir::Operand::Value(inside), rt::ERROR_CONVERT);
-        Ok(())
-    }
-
     /// Continues where `condition` holds; elsewhere calls `panic`, which never
     /// returns.
     pub(super) fn panic_unless(

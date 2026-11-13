@@ -519,7 +519,7 @@ impl Options {
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
             "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
-            "indvars" | "window" | "gepoffset" => self.strength,
+            "indvars" | "window" | "gepoffset" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
@@ -1855,6 +1855,11 @@ pub fn recorded(
     }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
+    // The pin's `addIRPasses` slot for SelectOptimize, before CodeGenPrepare;
+    // DEVIATE SELOPT-C at the speed rate.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::SelectOptimizePass);
+    }
     // The pin's `addCodeGenPrepare` runs TypePromotion, then CodeGenPrepare.
     if applied.options.wanted("typepromotion") {
         manager.add(typepromotion_pass::TypePromotion);
@@ -1984,6 +1989,12 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
+        // A divide whose operands ScalarEvolution proves narrow, in the narrow
+        // type, where the target has one (DEVIATE NRW-1); at speed
+        // only: the call it replaces is the smaller code.
+        if applied.options.wanted("narrowrange") && !applied.options.prefers_size() && !applied.options.at_o1() {
+            passes.push(Box::new(crate::narrowrange::NarrowByRange));
+        }
         // The pin's llc runs it in the pre-ISel passes, after LSR; it does
         // nothing for a target that counts no loop in hardware.
         if applied.options.wanted("hardwareloops") {

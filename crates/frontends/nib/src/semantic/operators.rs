@@ -318,11 +318,15 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let operand = required(value, span)?;
-        if op == "truncate" && self.unsafe_depth == 0 {
-            self.check_truncation(&operand, source, target, span)?;
-        }
         let result = self.value(target);
-        self.emit(op, vec![result], vec![operand], None);
+        if op == "truncate" && self.unsafe_depth == 0 {
+            // The conversion says whether it fit; the target decides how it finds out.
+            let fits = self.value(TypeName::Bool);
+            self.emit("truncate_checked", vec![result, fits], vec![operand], None);
+            self.panic_unless(hir::Operand::Value(fits), rt::ERROR_CONVERT);
+        } else {
+            self.emit(op, vec![result], vec![operand], None);
+        }
         if source != TypeName::Bool {
             return Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target });
         }

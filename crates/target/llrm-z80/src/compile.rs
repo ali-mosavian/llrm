@@ -519,7 +519,7 @@ fn cheaper(
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
+    let priced = |(bytes, clocks): (u32, u64)| clocks + u64::from(bytes) * crate::tti::SPEED_MILLICLOCKS_PER_BYTE as u64 / 1000;
     if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
 }
 
@@ -631,6 +631,41 @@ mod tests {
             function.blocks.push(Block { id: 0, insts: vec![compare, side, cmov(2, 1), cmov(3, 8)], phis: Vec::new() });
             assert!(sunk_operand(&function, 0, 2, Reg::Virt(1)).is_none(), "flag operand named: {named}");
         }
+    }
+
+    /// `or a; ...; add hl, de; ...; cp a, 0; jr nz` lost its `or`: the test was dropped across the `add hl`, whose Z
+    /// the CPU keeps, but the flag liveness that followed read the `add` as a full flag def and deleted the `or`
+    /// chain; the `jr nz` then read the `add`'s flags and `(long)(3.0 / 1.0)` was 4 (f64 divide of a mantissa
+    /// at least 1 with fraction bits). The test stays whenever a flag setter lies between.
+    #[test]
+    fn a_zero_test_is_kept_where_another_flag_setter_lies_between() {
+        let (a, flags) = (Reg::Phys(crate::reg::A), Reg::Phys(crate::reg::FLAGS));
+        let mut or = Inst::new(Kind::Op("OR8r"), vec![Operand::Def(a), Operand::Use(a), Operand::Use(Reg::Virt(2))]);
+        or.sets_flags = true;
+        let mut add = Inst::new(Kind::Op("ADD16"), vec![Operand::Def(Reg::Virt(5)), Operand::Use(Reg::Virt(6))]);
+        add.sets_flags = true;
+        let mut test = Inst::new(Kind::Op("CP8i"), vec![Operand::Def(flags), Operand::Use(a), Operand::Imm(0)]);
+        test.sets_flags = true;
+        let mut jump = Inst::new(Kind::Op("JPNZ"), vec![Operand::Block(1), Operand::Use(flags)]);
+        jump.reads_flags = true;
+        jump.terminator = true;
+        let insts = vec![
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(1))]),
+            or,
+            Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(3)), Operand::Use(a)]),
+            add,
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(3))]),
+            test,
+            jump,
+        ];
+        let mut function = MFunction::new("f");
+        function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+        eliminate_tests(&mut function);
+        eliminate_dead(&mut function);
+        let insts = &function.blocks[0].insts;
+        let reader = insts.iter().position(|inst| inst.reads_flags).expect("the jump stays");
+        let setter = insts[..reader].iter().rposition(|inst| inst.sets_flags).expect("something sets the flags it reads");
+        assert_ne!(insts[setter].kind, Kind::Op("ADD16"), "the jump reads the add's flags: {insts:?}");
     }
 }
 
@@ -3478,8 +3513,7 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
 /// `optimizeCompareInstr`: the test of a byte against zero (`cp 0`) after the
 /// instruction that made the byte and set the flags by it is dropped when only
 /// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`.
-/// Every `ld` between leaves the flags alone, and so does `add hl, rr` (but
-/// for C, H and N).
+/// Every `ld` between leaves the flags alone.
 fn eliminate_tests(function: &mut MFunction) {
     for block in &mut function.blocks {
         let mut at = 1;
@@ -3517,14 +3551,11 @@ fn eliminate_tests(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // `add hl, rr` (Z80 CPU User Manual UM0080, ADD HL,ss): C is the
-            // carry out of bit 15, H out of bit 11, N is reset; S,
-            // Z and P/V are not affected, so the zero of the byte
-            // survives it. (`adc hl, rr` and `sbc hl, rr` set all
-            // of them.)
-            let flags_kept = block.insts[setter + 1..at - 1]
-                .iter()
-                .all(|inst| !inst.call && (!inst.sets_flags || inst.kind == Kind::Op("ADD16")));
+            // `optimizeCompareInstr` stops at an instruction between that sets the
+            // flags. `add hl, rr` keeps Z, but every flag scan after this
+            // (`eliminate_dead`, the expander's `flags_dead`) reads it as a full
+            // def, so a zero kept across it was deleted with its setter.
+            let flags_kept = block.insts[setter + 1..at - 1].iter().all(|inst| !inst.call && !inst.sets_flags);
             let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags);
             let only_zero = readers
                 .filter(|inst| inst.reads_flags)

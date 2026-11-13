@@ -445,6 +445,13 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the CPU has no 32-bit divide
+    /// instruction (68000, 68010) the divide is a libcall, and `divu.w` (16 bits) is one instruction.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        let has_long_divide = self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020);
+        (!has_long_divide).then_some(16)
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL (owner m68k, exit 2026-11-24): the unrolled size
     /// up to which a loop the -Os threshold refused is unrolled on trial; the
     /// driver keeps it where the finished functions are smaller (as x86-m32's

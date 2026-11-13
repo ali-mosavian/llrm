@@ -688,12 +688,14 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                     break;
                 }
                 let theirs = Effects::of::<T>(inst, assignment);
+                // a copy that becomes a `move` sets them too
+                let sets_flags = theirs.defs.contains(&Place::Flags);
                 let apart = !inst.terminator
                     && !inst.call
                     && !inst.barrier
                     && !inst.side_effects
                     && !inst.reads_flags
-                    && !(inst.sets_flags && head.reads_flags)
+                    && !(sets_flags && head.reads_flags)
                     && theirs.defs.iter().all(|place| {
                         *place == Place::Flags || !touches::<T>(&own.uses, *place) && !touches::<T>(&own.defs, *place)
                     })
@@ -701,7 +703,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                 if !apart {
                     break;
                 }
-                crossed_flags |= inst.sets_flags;
+                crossed_flags |= sets_flags;
             }
             if let Some(at) = twin.filter(|&at| at > run) {
                 let inst = self.function.blocks[move_in].insts.remove(at);
