@@ -25,7 +25,9 @@ use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::module::{Function, GlobalValue, InstId, Linkage, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Opcode};
-use crate::tti::{AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty};
+use crate::tti::{
+    AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty, VectorTy,
+};
 use crate::types::{Type, TypeId};
 
 /// `TTI::getOperandInfo`: what is known of an operand's value.
@@ -351,6 +353,17 @@ fn stores_through_index(
         && !gep.operands[1..].iter().all(|operand| matches!(operand, Operand::Constant(_)))
 }
 
+/// The fixed vector the cost hooks see: `count` lanes of a scalar type.
+fn vector_of(
+    context: &Context,
+    ty: TypeId,
+) -> Option<VectorTy> {
+    match context.types.get(ty) {
+        Type::Vector { element, count } => Some(VectorTy { lane: Ty::of(&context.types, *element)?, count: *count }),
+        _ => None,
+    }
+}
+
 /// `getInstructionCost(inst, kind)`.
 #[allow(clippy::too_many_arguments)]
 pub fn instruction_cost(
@@ -491,7 +504,9 @@ pub fn instruction_cost_known(
         }
         Opcode::Binary(op) => match result {
             Some(ty) => tti.arithmetic_cost(arith_of(*op), ty, kind, info(0), info(1)),
-            None => Cost::INVALID,
+            None => vector_of(context, operation.ty)
+                .and_then(|vector| tti.vector_arithmetic_cost(arith_of(*op), vector, kind))
+                .unwrap_or(Cost::INVALID),
         },
         Opcode::FNeg => match result {
             Some(ty) => tti.arithmetic_cost(ArithOp::FNeg, ty, kind, info(0), OperandInfo::ANY),
@@ -511,6 +526,13 @@ pub fn instruction_cost_known(
                 tti.cast_cost(op, dst, src, kind)
             }
             (None, ..) => Cost::BASIC,
+            (Some(op), None, None) => match (
+                vector_of(context, operation.ty),
+                operand_type(context, function, operands[0]).and_then(|ty| vector_of(context, ty)),
+            ) {
+                (Some(dst), Some(src)) => tti.vector_cast_cost(op, dst, src, kind).unwrap_or(Cost::INVALID),
+                _ => Cost::INVALID,
+            },
             _ => Cost::INVALID,
         },
         Opcode::Store { .. }
@@ -520,14 +542,21 @@ pub fn instruction_cost_known(
         }
         // BasicTTIImpl prices the other instructions at one unit.
         Opcode::Atomic(_) => Cost::BASIC,
-        Opcode::Store { .. } => match modelled(operands[0]) {
+        Opcode::Store { align, .. } => match modelled(operands[0]) {
             Some(ty) => {
                 tti.memory_op_cost(MemoryOp::Store, ty, kind, info(0).constant)
                     + address_cost(operands[1])
             }
-            None => Cost::INVALID,
+            // A vector store: the target's price, or none.
+            None => operand_type(context, function, operands[0])
+                .and_then(|stored| {
+                    let vector = vector_of(context, stored)?;
+                    let align = align.unwrap_or_else(|| layout.align(&context.types, stored));
+                    tti.vector_memory_op_cost(MemoryOp::Store, vector, align, kind)
+                })
+                .map_or(Cost::INVALID, |cost| cost + address_cost(operands[1])),
         },
-        Opcode::Load { .. } => {
+        Opcode::Load { align, .. } => {
             let mut loaded = operation.ty;
             // A load whose only use is a trunc is priced as the narrower load,
             // for code size.
@@ -543,7 +572,13 @@ pub fn instruction_cost_known(
                     tti.memory_op_cost(MemoryOp::Load, ty, kind, false)
                         + address_cost(operands[0])
                 }
-                None => Cost::INVALID,
+                // A vector load: the target's price, or none.
+                None => {
+                    let align = align.unwrap_or_else(|| layout.align(&context.types, loaded));
+                    vector_of(context, loaded)
+                        .and_then(|vector| tti.vector_memory_op_cost(MemoryOp::Load, vector, align, kind))
+                        .map_or(Cost::INVALID, |cost| cost + address_cost(operands[0]))
+                }
             }
         }
         Opcode::Select => select_cost(context, tti, operation.ty, operands[0], operands[1], operands[2], kind),
