@@ -18,19 +18,20 @@ import llrmbin  # noqa: E402
 
 SMALL, LARGE = 20, 80
 # What 4x the loops may cost (4 is linear). Steps not named are held to DEFAULT. The named ones are measured over it
-# (20 -> 80 loops, release/next 1d2992e224, 2026-11-13): each limit is the measured growth plus 15%, lowered when its step is fixed.
-# `unroll`/`loopfullunroll` re-solve float liveness of the whole function per loop (liveness::pressure_in, DEVIATE U3, owner w8): the pin's
-# LoopFullUnroll grows 4.5x on the same IR, ours 19x. rotate, constraint-elimination, indvars, loopidioms and jumpthreading grow in the pin's own
-# `opt -passes='default<O2>' -time-passes` too (LoopRotate 9.1x here, ours 9.7x): the ceilings keep them from growing further, they are not defects.
+# (20 -> 80 loops, 2026-11-13): each limit is the measured growth plus 15%, lowered when its step is fixed. `unroll` and `indvars` are
+# fixed (the float liveness of DEVIATE U3 is followed from the reads, w8's #9562); `loopfullunroll` is the per-loop part of that
+# unroll, named since the group's spans were split (#9528). rotate, constraint-elimination, indvars, loopidioms and jumpthreading
+# grow in the pin's own `opt -passes='default<O2>' -time-passes` too (LoopRotate 9.1x here, ours 9.7x): the ceilings keep them from
+# growing further, they are not defects.
 DEFAULT = 6.0
 OWED = {
     "mir loopfullunroll": 22.0,
-    "mir unroll": 17.5,
-    "mir rotate": 11.2,
-    "mir constraint-elimination": 9.5,
-    "mir loopidioms": 9.2,
-    "mir jumpthreading": 7.4,
-    "mir indvars": 7.1,
+    "mir indvars": 6.9,
+    "mir unroll": 4.8,
+    "mir rotate": 11.3,
+    "mir constraint-elimination": 9.6,
+    "mir loopidioms": 9.3,
+    "mir jumpthreading": 7.7,
 }
 FLOOR_MINSTR = 12.0  # a step under this many M at LARGE is noise
 
