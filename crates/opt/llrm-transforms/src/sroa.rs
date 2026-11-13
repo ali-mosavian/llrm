@@ -7,22 +7,22 @@
 //! lifetime intrinsics, phis and selects of pointers, pre-splitting).
 //!
 //! DEVIATE, each with its reason (line numbers are SROA.cpp's):
-//! - Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>` (`PreserveCFG`,
-//!   L174: the late slot), where a select whose load is not speculatable, a
-//!   store through a select and a store through a phi on a critical edge are
-//!   not rewritten and the alloca is left; `SroaModifyCfg` is the early slots'
-//!   `ModifyCFG`, which makes the blocks (`SplitBlockAndInsertIfThen(Else)`,
-//!   `SplitBlockPredecessors`). No `DomTreeUpdater` either way: the analyses are
-//!   dropped.
+//! - Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>`
+//!   (`PreserveCFG`, L174: the late slot), where a select whose load is not
+//!   speculatable, a store through a select and a store through a phi on a
+//!   critical edge are not rewritten and the alloca is left; `SroaModifyCfg` is
+//!   the early slots' `ModifyCFG`, which makes the blocks
+//!   (`SplitBlockAndInsertIfThen(Else)`, `SplitBlockPredecessors`). No
+//!   `DomTreeUpdater` either way: the analyses are dropped.
 //! - Vectors (`isVectorPromotionViable` L2374, `rewriteVectorized*`
 //!   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
 //!   registers, and `AggregateToVector` is off at -O2.
 //! - Calls and invokes escape a pointer whatever their attributes
 //!   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
-//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none with a
-//!   call-site nocapture, and `strlen(b)+b[0]` forwards the same as the pin at
-//!   -Os; exit when a cell shows a missed forward, review 2026-12-10.
+//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none
+//!   with a call-site nocapture, and `strlen(b)+b[0]` forwards the same as the
+//!   pin at -Os; exit when a cell shows a missed forward, review 2026-12-10.
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
@@ -33,7 +33,6 @@
 //!   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
 //!   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
 //!   `Declare` that carries a fragment; owner anyisa; review 2026-11-14.
-//! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
 //!   already dominates" proof. `mayWriteToMemory` (L1613) counts any call as a
@@ -2091,8 +2090,15 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if let Some(common) = common {
             let common_size = layout.alloc_size(&self.context().types, common);
             if common_size >= p.size() {
-                let widen =
-                    is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, common, self.odd_sizes);
+                let widen = is_integer_widening_viable(
+                    layout,
+                    self.unit.context,
+                    self.unit.function,
+                    slices,
+                    p,
+                    common,
+                    self.odd_sizes,
+                );
                 return (common, widen);
             }
         }
@@ -2104,12 +2110,28 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     partition_ty = self.unit.context.types.int((p.size() * 8) as u32);
                 }
             }
-            if is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, partition_ty, self.odd_sizes) {
+            if is_integer_widening_viable(
+                layout,
+                self.unit.context,
+                self.unit.function,
+                slices,
+                p,
+                partition_ty,
+                self.odd_sizes,
+            ) {
                 return (partition_ty, true);
             }
             if let Some(largest) = largest_int {
                 if layout.alloc_size(&self.context().types, largest) >= p.size()
-                    && is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, largest, self.odd_sizes)
+                    && is_integer_widening_viable(
+                        layout,
+                        self.unit.context,
+                        self.unit.function,
+                        slices,
+                        p,
+                        largest,
+                        self.odd_sizes,
+                    )
                 {
                     return (largest, true);
                 }
@@ -2239,9 +2261,24 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             } else {
                 // The phis and selects to rewrite are queued and the new
                 // alloca is looked at again to promote it next time.
-                self.speculatable_phis.extend(new_speculatable_phis);
-                self.phis_with_store_to_rewrite.extend(new_phis_with_store);
-                self.selects_to_rewrite.extend(new_selects);
+                // `SmallSetVector` and `SmallMapVector` insert: a phi or
+                // select two partitions use is queued once (the second
+                // speculation read an erased phi).
+                for phi in new_speculatable_phis {
+                    if !self.speculatable_phis.contains(&phi) {
+                        self.speculatable_phis.push(phi);
+                    }
+                }
+                for phi in new_phis_with_store {
+                    if !self.phis_with_store_to_rewrite.contains(&phi) {
+                        self.phis_with_store_to_rewrite.push(phi);
+                    }
+                }
+                for (select, ops) in new_selects {
+                    if !self.selects_to_rewrite.iter().any(|(queued, _)| *queued == select) {
+                        self.selects_to_rewrite.push((select, ops));
+                    }
+                }
                 self.worklist.push(new_ai);
             }
         } else {
@@ -3372,8 +3409,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             // A predecessor with other successors gets a block of its own on
             // the edge (`SplitBlockPredecessors(BB, {Pred}, ".sroa.store")`).
-            let store_block =
-                if self.successor_edges(pred) != 1 { crate::edges::split_block_predecessors(self.unit.function, block, &[pred]) } else { pred };
+            let store_block = if self.successor_edges(pred) != 1 {
+                crate::edges::split_block_predecessors(self.unit.function, block, &[pred])
+            } else {
+                pred
+            };
             let terminator = self.function().terminator(store_block).expect("a terminated block");
             let mut operands = self.function().instruction(store).operands.clone();
             operands[1] = pair[0];
@@ -3385,10 +3425,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         self.unit.function.erase(phi).expect("its store is gone");
     }
 
-    /// `isSafeSelectToSpeculate`: the loads and stores through `select` and, per
-    /// hand, whether the pointer may be loaded before the condition is known.
-    /// With `preserve_cfg` only loads with both hands speculatable are safe.
-    /// SROA.cpp#L1854
+    /// `isSafeSelectToSpeculate`: the loads and stores through `select` and,
+    /// per hand, whether the pointer may be loaded before the condition is
+    /// known. With `preserve_cfg` only loads with both hands speculatable
+    /// are safe. SROA.cpp#L1854
     fn is_safe_select_to_speculate(
         &self,
         select: InstId,
@@ -3496,8 +3536,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let new_block = |this: &mut Self, after: BlockId| -> BlockId {
             let block = this.unit.function.create_block(None);
             this.unit.function.insert_block(block, Some(after)).expect("a new block");
-            let jump =
-                this.unit.function.create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
+            let jump = this
+                .unit
+                .function
+                .create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
             this.unit.function.insert(jump, Position::End(block)).expect("a placed block");
             block
         };
@@ -3513,13 +3555,16 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             // the tail.
             (first, second) = if op.true_speculatable { (tail, then_block) } else { (then_block, tail) };
         }
-        let jump = self.unit.function.create_instruction(
-            Opcode::Br,
-            void,
-            vec![select[0], Operand::Block(first), Operand::Block(second)],
-            Flags::default(),
-            None,
-        );
+        let jump = self
+            .unit
+            .function
+            .create_instruction(
+                Opcode::Br,
+                void,
+                vec![select[0], Operand::Block(first), Operand::Block(second)],
+                Flags::default(),
+                None,
+            );
         self.unit.function.insert(jump, Position::End(head)).expect("a placed block");
         let is_load = matches!(self.function().instruction(inst).opcode, Opcode::Load { .. });
         let mut incoming: Vec<Operand> = Vec::new();
@@ -3620,10 +3665,25 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                         changed = true;
                     }
                 }
-                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
-                | Opcode::GetElementPtr { .. }
-                | Opcode::Phi
-                | Opcode::Select => {
+                Opcode::GetElementPtr { .. } => {
+                    // `visitGetElementPtrInst`: the unfolded select or phi
+                    // takes the gep's place and its users are walked.
+                    let plain = instruction.result;
+                    let unfolded = match self.unfold_gep_select(used.user) {
+                        Some(new) => Some(new),
+                        None => self.unfold_gep_phi(used.user),
+                    };
+                    if let Some(new) = unfolded {
+                        visited.remove(&used.user);
+                        visited.insert(new);
+                        changed = true;
+                        let result = self.function().instruction(new).result.expect("a select or phi");
+                        enqueue(self.unit.function, &mut queue, &mut visited, result);
+                    } else if let Some(result) = plain {
+                        enqueue(self.unit.function, &mut queue, &mut visited, result);
+                    }
+                }
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::Phi | Opcode::Select => {
                     if let Some(result) = instruction.result {
                         enqueue(self.unit.function, &mut queue, &mut visited, result);
                     }
@@ -3632,6 +3692,208 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
         }
         changed
+    }
+
+    /// The instruction that defines `operand`, if one does.
+    fn defining(
+        &self,
+        operand: Operand,
+    ) -> Option<InstId> {
+        let Operand::Value(value) = operand else { return None };
+        match self.function().value(value).def {
+            llrm_mir::module::ValueDef::Instruction(def) => Some(def),
+            _ => None,
+        }
+    }
+
+    /// `gep` with the operand `old` replaced by `new` as a fresh gep before
+    /// `at`: `GetNewOps` and the `CreateGEP` after it.
+    fn gep_with(
+        &mut self,
+        gep: InstId,
+        at: InstId,
+        old: Operand,
+        new: Operand,
+        name: String,
+    ) -> Operand {
+        let instruction = self.function().instruction(gep);
+        let (opcode, ty, flags) = (instruction.opcode.clone(), instruction.ty, instruction.flags);
+        let operands: Vec<Operand> =
+            instruction.operands.iter().map(|&one| if one == old { new } else { one }).collect();
+        let created = self.unit.function.create_instruction(opcode, ty, operands, flags, Some(&name));
+        self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
+        Operand::Value(self.function().instruction(created).result.expect("a pointer"))
+    }
+
+    /// `AggLoadStoreRewriter::unfoldGEPSelect`: `gep (select c, p1, p2), idx`
+    /// becomes `select c, gep p1 idx, gep p2 idx`, and the same for one select
+    /// or `zext i1` index with constant arms, so every index is constant.
+    /// SROA.cpp#L4578
+    fn unfold_gep_select(
+        &mut self,
+        gep: InstId,
+    ) -> Option<InstId> {
+        let operands = self.function().instruction(gep).operands.clone();
+        let mut chosen =
+            self.defining(operands[0]).filter(|&one| self.function().instruction(one).opcode == Opcode::Select);
+        let mut constant_arms = true;
+        for &index in &operands[1..] {
+            let def = self.defining(index).map(|one| (one, self.function().instruction(one)));
+            match def {
+                Some((one, inst)) if inst.opcode == Opcode::Select => {
+                    if chosen.is_some() {
+                        return None;
+                    }
+                    chosen = Some(one);
+                    constant_arms &= matches!(inst.operands[1], Operand::Constant(_))
+                        && matches!(inst.operands[2], Operand::Constant(_));
+                    if !constant_arms {
+                        return None;
+                    }
+                }
+                Some((one, inst)) if inst.opcode == Opcode::Cast(CastOp::ZExt) => {
+                    if chosen.is_some() {
+                        return None;
+                    }
+                    chosen = Some(one);
+                    if self.type_of(inst.operands[0]) != self.unit.context.types.int(1) {
+                        return None;
+                    }
+                }
+                _ => {
+                    if !matches!(index, Operand::Constant(_)) {
+                        return None;
+                    }
+                }
+            }
+        }
+        let selected = chosen?;
+        let old = Operand::Value(self.function().instruction(selected).result.expect("a select"));
+        let (condition, if_true, if_false) = if self.function().instruction(selected).opcode == Opcode::Select {
+            let inner = &self.function().instruction(selected).operands;
+            (inner[0], inner[1], inner[2])
+        } else {
+            let ty = self.function().instruction(selected).ty;
+            let condition = self.function().instruction(selected).operands[0];
+            (condition, self.int_constant(ty, 1), self.int_constant(ty, 0))
+        };
+        let result = self.function().instruction(gep).result.expect("a gep");
+        let name = |arm: Operand, this: &Self| {
+            let named = match arm {
+                Operand::Value(value) => this.function().value(value).name.clone(),
+                _ => None,
+            };
+            named.unwrap_or_default()
+        };
+        let (true_name, false_name) = (name(if_true, self), name(if_false, self));
+        let selected_name = self
+            .function()
+            .value(match old {
+                Operand::Value(value) => value,
+                _ => unreachable!("a value"),
+            })
+            .name
+            .clone();
+        let new_true = self.gep_with(gep, gep, old, if_true, format!("{true_name}.sroa.gep"));
+        let new_false = self.gep_with(gep, gep, old, if_false, format!("{false_name}.sroa.gep"));
+        let ty = self.function().instruction(gep).ty;
+        let select = self.build_inst(
+            gep,
+            Opcode::Select,
+            ty,
+            vec![condition, new_true, new_false],
+            Some(&format!("{}.sroa.sel", selected_name.unwrap_or_default())),
+        );
+        let value = Operand::Value(self.function().instruction(select).result.expect("a select"));
+        self.unit.function.replace_value(result, value);
+        self.unit.function.erase(gep).expect("its uses were replaced");
+        Some(select)
+    }
+
+    /// `AggLoadStoreRewriter::unfoldGEPPhi`: `gep (phi p1, p2), idx` becomes
+    /// `phi (gep p1 idx), (gep p2 idx)`, and the same for one phi index with
+    /// constant incoming values. The pointer operand must be a constant, an
+    /// argument or a static alloca, so the geps go at the end of the entry
+    /// block and a recursive phi does not grow forever. SROA.cpp#L4673
+    fn unfold_gep_phi(
+        &mut self,
+        gep: InstId,
+    ) -> Option<InstId> {
+        let operands = self.function().instruction(gep).operands.clone();
+        let invalid = |this: &Self, operand: Operand| match this.defining(operand) {
+            None => false,
+            Some(def) => {
+                !(matches!(this.function().instruction(def).opcode, Opcode::Alloca { .. })
+                    && llrm_mir::instructioncost::is_static_alloca(this.function(), def))
+            }
+        };
+        let is_phi = |this: &Self, operand: Operand| {
+            this.defining(operand).filter(|&one| this.function().instruction(one).opcode == Opcode::Phi)
+        };
+        let mut chosen = is_phi(self, operands[0]);
+        match chosen {
+            Some(phi) => {
+                if self.function().instruction(phi).operands.chunks(2).any(|pair| invalid(self, pair[0])) {
+                    return None;
+                }
+            }
+            None => {
+                if invalid(self, operands[0]) {
+                    return None;
+                }
+            }
+        }
+        for &index in &operands[1..] {
+            if let Some(phi) = is_phi(self, index) {
+                if chosen.is_some() {
+                    return None;
+                }
+                chosen = Some(phi);
+                let constants = self
+                    .function()
+                    .instruction(phi)
+                    .operands
+                    .chunks(2)
+                    .all(|pair| matches!(pair[0], Operand::Constant(_)));
+                if !constants {
+                    return None;
+                }
+            } else if !matches!(index, Operand::Constant(_)) {
+                return None;
+            }
+        }
+        let phi = chosen?;
+        let old = Operand::Value(self.function().instruction(phi).result.expect("a phi"));
+        let phi_name = match old {
+            Operand::Value(value) => self.function().value(value).name.clone().unwrap_or_default(),
+            _ => unreachable!("a value"),
+        };
+        let ty = self.function().instruction(gep).ty;
+        let new_phi = self.build_inst(phi, Opcode::Phi, ty, Vec::new(), Some(&format!("{phi_name}.sroa.phi")));
+        let entry_end = {
+            let entry = self.function().entry().expect("a function with a body");
+            self.function().terminator(entry).expect("a terminated entry block")
+        };
+        let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
+        let mut incoming: Vec<Operand> = Vec::new();
+        let mut made: Vec<(Operand, Operand)> = Vec::new();
+        for pair in pairs.chunks(2) {
+            let block = pair[1];
+            // One gep for each predecessor, as `getBasicBlockIndex` finds.
+            if let Some(&(_, new_gep)) = made.iter().find(|(seen, _)| *seen == block) {
+                incoming.extend([new_gep, block]);
+                continue;
+            }
+            let new_gep = self.gep_with(gep, entry_end, old, pair[0], format!("{phi_name}.sroa.gep"));
+            incoming.extend([new_gep, block]);
+            made.push((block, new_gep));
+        }
+        self.unit.function.set_operands(new_phi, incoming);
+        let result = self.function().instruction(gep).result.expect("a gep");
+        let value = Operand::Value(self.function().instruction(new_phi).result.expect("a phi"));
+        self.unit.function.replace_value(result, value);
+        self.unit.function.erase(gep).expect("its uses were replaced");
+        Some(new_phi)
     }
 
     /// The leaves of `ty` as (indices, type) in order.
