@@ -8,8 +8,9 @@
 //!
 //! DEVIATE VEC1: a `BUILD_VECTOR` that is a splat of a constant, the all-zeros
 //! and all-ones vectors, a splat of one value, or a value in lane 0 alone is
-//! lowered; any other (the pin loads it from a constant pool, or builds it
-//! with `INSERT_VECTOR_ELT`) is declined and the block refused. A constant
+//! lowered; a constant that is no splat is declined to the legalizer's pool
+//! load; any other (the pin builds it with `INSERT_VECTOR_ELT`) is declined
+//! and the block refused. A constant
 //! with undefined lanes is tried only as the splat of its defined lanes
 //! (`UndefBits` of `ConstantBuildVector` is not tried), and `FMOV`, the
 //! `FNEG` forms and SVE are not made. A shuffle is lowered where it is a
@@ -147,6 +148,15 @@ fn constant_build_vector(
     attempt(dag, bits, false).or_else(|| attempt(dag, !bits, true))
 }
 
+/// Whether every defined lane of the `BUILD_VECTOR` is a constant.
+pub fn is_constant_build_vector(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    let lane_bits = dag.value_type(op).element().size_in_bits();
+    dag.node(op).ops.iter().all(|&lane| dag.is_undef(lane) || lane_constant(dag, lane, lane_bits).is_some())
+}
+
 /// `LowerBUILD_VECTOR`.
 pub fn lower_build_vector(
     dag: &mut SelectionDAG,
@@ -177,7 +187,7 @@ pub fn lower_build_vector(
             return constant_build_vector(dag, vt, unit)
                 .or_else(|| Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first])));
         }
-        // DEVIATE VEC1: a constant that is not a splat is loaded in the pin.
+        // Not a splat: the pin's `SDValue()`, the pool load of the legalizer.
         return None;
     }
     let low_only = lanes.iter().skip(1).all(Option::is_none);
