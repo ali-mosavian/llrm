@@ -2179,9 +2179,7 @@ impl<'a> Analyzer<'a> {
 
     /// Per parameter: nothing reads it and `deadargelim` will drop it (an internal or private callee).
     fn unread_parameters(&self) -> Vec<bool> {
-        let linkage = self.site.module.global(self.site.callee_id).linkage;
-        let droppable = matches!(linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private);
-        self.callee.parameters().iter().map(|&value| droppable && self.callee.users(value).is_empty()).collect()
+        unread_parameters_of(self.site.module, self.site.callee_id)
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
@@ -2525,6 +2523,15 @@ impl<'a> Analyzer<'a> {
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
+}
+
+/// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it (an internal or private callee). The one
+/// rule the inline guard and the size trial price a call by.
+pub(crate) fn unread_parameters_of(module: &Module, callee: GlobalId) -> Vec<bool> {
+    let global = module.global(callee);
+    let GlobalKind::Function(body) = &global.kind else { return Vec::new() };
+    let droppable = matches!(global.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private);
+    body.parameters().iter().map(|&value| droppable && body.users(value).is_empty()).collect()
 }
 
 /// The stores of `function` through `value` (a pointer), directly or through

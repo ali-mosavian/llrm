@@ -1892,7 +1892,7 @@ fn unread_argument_units(
     let global = module.global(callee);
     let (GlobalKind::Function(body), true) = (&global.kind, matches!(global.linkage, Linkage::Internal | Linkage::Private)) else { return 0 };
     let all = body.parameters().len() as i64;
-    let unread = body.parameters().iter().filter(|&&value| body.users(value).is_empty()).count() as i64;
+    let unread = crate::inlinecost::unread_parameters_of(module, callee).iter().filter(|&&one| one).count() as i64;
     if unread == 0 {
         return 0;
     }
