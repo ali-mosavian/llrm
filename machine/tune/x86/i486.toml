@@ -4,8 +4,8 @@
 issue = 1
 in_order = 1
 prefix = 1
-# No row for a segment-override prefix (`cs:`): it is one byte and adds no clock [U: Intel486 DX data sheet, not in the repo].
-# The backend places it after every price is read (`backend/codetables.rs`), so no decision sees the byte.
+# No row for a segment-override prefix (`cs:`): one byte, no clock [U: Intel486 DX data sheet, not in the repo]. The m16 bench's
+# clocks count 66h and 67h only (vsgcc/clocks.py `prefixes`). The backend places `cs:` after every price is read (backend/codetables.rs).
 partial_stall = 0
 lcp_stall = 0
 set_ratio = 3
