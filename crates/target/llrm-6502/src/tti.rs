@@ -285,6 +285,10 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    fn address_index_max(&self) -> Option<u64> {
+        Some(u64::from(u8::MAX))
+    }
+
     /// `narrowiv`: a counter of a width the datalayout does not hold (`n8`
     /// only) whose range fits a byte is a byte counter.
     fn narrows_counters(&self) -> bool {
