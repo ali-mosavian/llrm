@@ -659,7 +659,7 @@ pub fn select_block(
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
     super::combine::shift_amounts_mod(dag);
     let selector = Selector::new(table::TABLE);
-    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
+    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size, linux);
     do_instruction_selection_with(dag, &*super::ids::IDS, |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
