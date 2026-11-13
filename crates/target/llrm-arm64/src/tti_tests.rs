@@ -454,8 +454,9 @@ fn lftr_counts_any_constant_stride() {
     assert!(AArch64::of_cpu("generic").unwrap().lftr_any_stride());
 }
 
-/// AArch64 has no `isSExtCheaperThanZExt` override at the pin (the base class says no,
-/// TargetLowering.h#L3329); the hook said yes for 32 -> 64 and cited a pin line that does not exist.
+/// AArch64 has no `isSExtCheaperThanZExt` override at the pin (the base class
+/// says no, TargetLowering.h#L3329); the hook said yes for 32 -> 64 and cited a
+/// pin line that does not exist.
 #[test]
 fn sign_extension_is_not_cheaper_than_zero_extension() {
     for (from, to) in [(8, 32), (16, 32), (32, 64), (8, 64)] {
@@ -463,8 +464,9 @@ fn sign_extension_is_not_cheaper_than_zero_extension() {
     }
 }
 
-/// The pin expands a sign-extending load from i1 on AArch64 (AArch64ISelLowering.cpp#L1141); the hook said
-/// legal, as the base class does.
+/// The pin expands a sign-extending load from i1 on AArch64
+/// (AArch64ISelLowering.cpp#L1141); the hook said legal, as the base class
+/// does.
 #[test]
 fn a_sign_extending_load_of_a_bit_is_not_legal() {
     use llrm_mir::lowering::LoadExt;
@@ -475,14 +477,17 @@ fn a_sign_extending_load_of_a_bit_is_not_legal() {
     assert!(!arm64.is_load_ext_legal(LoadExt::Zero, 32, 24));
 }
 
-/// The IR-level ext promotion asks `isOperationLegalOrCustom` of the promoted operation; the hook said
-/// no to everything (the base class has no registers), so no promotion could pass its legality check.
+/// The IR-level ext promotion asks `isOperationLegalOrCustom` of the promoted
+/// operation; the hook said no to everything (the base class has no registers),
+/// so no promotion could pass its legality check.
 #[test]
 fn arithmetic_is_legal_on_the_registers_and_the_remainders_are_expanded() {
     use llrm_mir::lowering::Isd::*;
     let arm64 = AArch64Lowering;
     for bits in [32, 64] {
-        for op in [Add, Sub, Mul, UDiv, SDiv, Shl, Srl, Sra, And, Or, Xor, Select, SetCc, Truncate, ZeroExtend, SignExtend] {
+        for op in
+            [Add, Sub, Mul, UDiv, SDiv, Shl, Srl, Sra, And, Or, Xor, Select, SetCc, Truncate, ZeroExtend, SignExtend]
+        {
             assert!(arm64.is_operation_legal_or_custom(op, bits), "{op:?} i{bits}");
         }
         assert!(!arm64.is_operation_legal_or_custom(URem, bits) && !arm64.is_operation_legal_or_custom(SRem, bits));
@@ -490,9 +495,10 @@ fn arithmetic_is_legal_on_the_registers_and_the_remainders_are_expanded() {
     assert!(!arm64.is_operation_legal_or_custom(Add, 8) && !arm64.is_operation_legal_or_custom(Add, 16));
 }
 
-/// The vector costs of `opt -passes='print<cost-model>' -cost-kind=throughput` on aarch64 (the pin,
-/// both cpus): before the vector hooks existed `Tti` priced no vector at all, so no loop could be
-/// weighed against its scalar form.
+/// The vector costs of `opt -passes='print<cost-model>' -cost-kind=throughput`
+/// on aarch64 (the pin, both cpus): before the vector hooks existed `Tti`
+/// priced no vector at all, so no loop could be weighed against its scalar
+/// form.
 #[test]
 fn vector_memory_and_arithmetic_costs_are_the_pins() {
     use llrm_mir::tti::{ArithOp::*, MemoryOp::*};
@@ -501,7 +507,8 @@ fn vector_memory_and_arithmetic_costs_are_the_pins() {
         let v = |lane, count| VectorTy { lane: Ty::Int(lane), count };
         let mem = |op, ty, align| tti.vector_memory_op_cost(op, ty, align, CostKind::RecipThroughput).map(|c| c.value);
         let alu = |op, ty| tti.vector_arithmetic_cost(op, ty, CostKind::RecipThroughput).map(|c| c.value);
-        // load <8 x i16> align 2 / <16 x i16> / <4 x i16> align 1 / <16 x i8> align 1 / align 16
+        // load <8 x i16> align 2 / <16 x i16> / <4 x i16> align 1 / <16 x i8>
+        // align 1 / align 16
         assert_eq!(mem(Load, v(16, 8), 2), Some(1), "{cpu}");
         assert_eq!(mem(Load, v(16, 16), 2), Some(2), "{cpu}");
         assert_eq!(mem(Load, v(16, 4), 1), Some(1), "{cpu}");
@@ -515,17 +522,172 @@ fn vector_memory_and_arithmetic_costs_are_the_pins() {
         assert_eq!(alu(And, v(8, 16)), Some(1), "{cpu}");
         assert_eq!(alu(Shl, v(32, 4)), Some(1), "{cpu}");
         assert_eq!(alu(Sub, v(64, 2)), Some(1), "{cpu}");
-        // The pin prices `mul <2 x i64>` 14; this port does not price it (DEVIATE VT3).
+        // The pin prices `mul <2 x i64>` 14; this port does not price it
+        // (DEVIATE VT3).
         assert_eq!(alu(Mul, v(64, 2)), None, "{cpu}");
+    }
+}
+
+/// `opt -passes='print<cost-model>' -cost-kind=throughput` on aarch64 (the pin,
+/// both cpus, the same numbers). `sfm16_float_add` was left
+/// scalar-interleaved-never because `Tti` priced no vector `fadd`, `fcmp`,
+/// `select` or cast: the loop's VF 4 could not be weighed against its VF 1 (11,
+/// the pin's 48 for VF 4: two scattered loads 14 each, an expanded select 12,
+/// an `fcmp uno` 3).
+#[test]
+fn vector_float_compare_select_cast_and_scalarization_costs_are_the_pins() {
+    use llrm_mir::opcode::{FloatPredicate as F, IntPredicate as I};
+    use llrm_mir::tti::{
+        ArithOp::*,
+        CastKind::*,
+        CmpSel::*,
+        Predicate::{Float, Int},
+    };
+    let f = |count| VectorTy { lane: Ty::Float, count };
+    let d = |count| VectorTy { lane: Ty::Double, count };
+    let i = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+    for cpu in ["generic", "apple-m1"] {
+        let tti = AArch64::of_cpu(cpu).unwrap();
+        let k = CostKind::RecipThroughput;
+        let alu = |op, ty| tti.vector_arithmetic_cost(op, ty, k).map(|c| c.value);
+        let cmp = |op, ty, predicate| tti.vector_cmp_sel_cost(op, ty, predicate, k).map(|c| c.value);
+        let cast = |kind, to, from| tti.vector_cast_cost(kind, to, from, k).map(|c| c.value);
+        let overhead = |ty, insert, extract| tti.scalarization_overhead(ty, insert, extract, k).map(|c| c.value);
+        for ty in [f(2), f(4), d(2)] {
+            assert_eq!((alu(FAdd, ty), alu(FSub, ty), alu(FNeg, ty)), (Some(1), Some(1), Some(1)), "{cpu} {ty:?}");
+            assert_eq!((alu(FMul, ty), alu(FDiv, ty)), (Some(2), Some(2)), "{cpu} {ty:?}");
+            // `frem` of a vector is libcalls in the pin (24 to 52): not priced
+            // here.
+            assert_eq!(alu(FRem, ty), None, "{cpu} {ty:?}");
+            for (predicate, cost) in
+                [(F::Oeq, 1), (F::Olt, 1), (F::Une, 1), (F::Ugt, 1), (F::One, 3), (F::Ord, 3), (F::Ueq, 3), (F::Uno, 3)]
+            {
+                assert_eq!(cmp(FCmp, ty, Some(Float(predicate))), Some(cost), "{cpu} fcmp {predicate:?} {ty:?}");
+            }
+        }
+        // select by a vector of conditions: a compare NEON does feeds a CMxx
+        // and BFI pair (1); else the `VectorSelectTbl` row (floats 2);
+        // else expanded: lanes plus the inserts that rebuild the vector.
+        assert_eq!(cmp(Select, i(32, 4), Some(Int(I::Slt))), Some(1), "{cpu}");
+        assert_eq!(cmp(Select, i(8, 16), Some(Int(I::Eq))), Some(1), "{cpu}");
+        assert_eq!(cmp(Select, f(4), Some(Float(F::Olt))), Some(1), "{cpu}");
+        assert_eq!(cmp(Select, f(4), Some(Float(F::Uno))), Some(2), "{cpu}");
+        assert_eq!(cmp(Select, d(2), None), Some(2), "{cpu}");
+        assert_eq!(
+            (cmp(Select, i(32, 4), None), cmp(Select, i(32, 2), None), cmp(Select, i(64, 2), None)),
+            (Some(12), Some(6), Some(6)),
+            "{cpu}"
+        );
+        assert_eq!((cmp(Select, i(16, 8), None), cmp(Select, i(8, 16), None)), (Some(24), Some(48)), "{cpu}");
+        assert_eq!(cmp(ICmp, i(32, 4), Some(Int(I::Eq))), Some(1), "{cpu}");
+        // casts: the conversion table, and a bitcast between one register's
+        // types is free.
+        assert_eq!(
+            (cast(BitCast, f(4), i(32, 4)), cast(BitCast, d(2), i(64, 2)), cast(BitCast, f(2), i(32, 2))),
+            (Some(0), Some(0), Some(0)),
+            "{cpu}"
+        );
+        // `sitofp <N x i64> to <N x float>` scalarizes (double rounding): a
+        // conversion per lane, the lanes taken out and put in (`opt
+        // -passes=print<cost-model>`: 8, 18, 36, and the same for `uitofp`).
+        assert_eq!(
+            (
+                cast(SIToFP, f(2), i(64, 2)),
+                cast(SIToFP, f(4), i(64, 4)),
+                cast(SIToFP, f(8), i(64, 8)),
+                cast(UIToFP, f(2), i(64, 2))
+            ),
+            (Some(8), Some(18), Some(36), Some(8)),
+            "{cpu}"
+        );
+        assert_eq!(
+            (cast(FPExt, d(2), f(2)), cast(FPExt, d(4), f(4)), cast(FPTrunc, f(2), d(2)), cast(FPTrunc, f(4), d(4))),
+            (Some(1), Some(2), Some(1), Some(2)),
+            "{cpu}"
+        );
+        assert_eq!(
+            (
+                cast(SIToFP, f(4), i(32, 4)),
+                cast(UIToFP, d(2), i(64, 2)),
+                cast(FPToSI, i(32, 4), f(4)),
+                cast(FPToUI, i(64, 2), d(2))
+            ),
+            (Some(1), Some(1), Some(1), Some(1)),
+            "{cpu}"
+        );
+        assert_eq!((cast(SIToFP, d(2), i(32, 2)), cast(FPToSI, i(32, 2), d(2))), (Some(2), Some(2)), "{cpu}");
+        assert_eq!(
+            (cast(Trunc, i(16, 4), i(32, 4)), cast(Trunc, i(32, 2), i(64, 2)), cast(Trunc, i(16, 8), i(32, 8))),
+            (Some(1), Some(1), Some(1)),
+            "{cpu}"
+        );
+        assert_eq!(
+            (cast(SExt, i(64, 4), i(16, 4)), cast(ZExt, i(16, 16), i(8, 16)), cast(SExt, i(64, 4), i(32, 4))),
+            (Some(3), Some(2), Some(2)),
+            "{cpu}"
+        );
+        // A cast the table has no row for is not priced, not guessed.
+        assert_eq!(cast(SExt, i(32, 4), i(16, 4)), None, "{cpu}");
+        // The overhead of building a vector from scalars: 2 per integer lane; a
+        // float lane too, but lane 0 of a register is already in it.
+        assert_eq!(
+            (overhead(i(32, 4), true, false), overhead(i(64, 2), true, false), overhead(i(32, 4), true, true)),
+            (Some(8), Some(4), Some(16)),
+            "{cpu}"
+        );
+        assert_eq!(
+            (
+                overhead(f(4), true, false),
+                overhead(f(2), true, false),
+                overhead(d(2), true, false),
+                overhead(f(8), true, false)
+            ),
+            (Some(6), Some(2), Some(2), Some(12)),
+            "{cpu}"
+        );
     }
 }
 
 #[test]
 fn the_interleave_factor_and_register_counts_follow_the_cpu() {
     let (generic, m1) = (AArch64::of_cpu("generic").unwrap(), AArch64::of_cpu("apple-m1").unwrap());
-    // getMaxInterleaveFactor: 4 for a scalar loop, else the subtarget's (2, 4 on the A14 tuning).
+    // getMaxInterleaveFactor: 4 for a scalar loop, else the subtarget's (2, 4
+    // on the A14 tuning).
     assert_eq!((generic.max_interleave_factor(1, false), generic.max_interleave_factor(8, false)), (4, 2));
     assert_eq!((m1.max_interleave_factor(1, false), m1.max_interleave_factor(8, false)), (4, 4));
     assert_eq!(generic.max_interleave_factor(4, true), 4);
-    assert_eq!((generic.number_of_registers(RegisterClass::Vector), generic.number_of_registers(RegisterClass::Scalar)), (32, 31));
+    assert_eq!(
+        (generic.number_of_registers(RegisterClass::Vector), generic.number_of_registers(RegisterClass::Scalar)),
+        (32, 31)
+    );
+}
+
+/// The horizontal step of a vector reduction, priced as the pin's AArch64 table
+/// (`CostTblNoPairwise`, `faddp` per halving, 2 for a min or max). The expected
+/// costs are `opt -mtriple=aarch64 -passes='print<cost-model>'` on the same
+/// `llvm.vector.reduce.*` calls.
+#[test]
+fn a_vector_reduction_is_priced_by_the_pins_table() {
+    use llrm_mir::intrinsics::ReduceKind;
+    use llrm_mir::tti::{CostKind, Ty, VectorTy};
+    let tti = AArch64::of_cpu("generic").expect("a cpu");
+    let cost = |kind, lane, count, ordered| {
+        tti.vector_reduction_cost(kind, VectorTy { lane, count }, ordered, CostKind::RecipThroughput).map(|c| c.value)
+    };
+    // `addv`: 2 a register, plus 1 for each split.
+    assert_eq!(cost(ReduceKind::Add, Ty::Int(16), 8, false), Some(2));
+    assert_eq!(cost(ReduceKind::Add, Ty::Int(32), 8, false), Some(3));
+    // The or/xor/and sequences of the table, and the split's extra `orr`.
+    assert_eq!(cost(ReduceKind::Or, Ty::Int(32), 4, false), Some(5));
+    assert_eq!(cost(ReduceKind::Xor, Ty::Int(8), 16, false), Some(7));
+    assert_eq!(cost(ReduceKind::And, Ty::Int(32), 8, false), Some(6));
+    // `faddp` once per halving of the register.
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Float, 4, false), Some(2));
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Double, 2, false), Some(1));
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(16), 8, false), Some(2));
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(32), 8, false), Some(3));
+    // Not the pin's table: in lane order, a multiply, a 64-bit min.
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Float, 4, true), None);
+    assert_eq!(cost(ReduceKind::Mul, Ty::Int(32), 4, false), None);
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(64), 2, false), None);
 }

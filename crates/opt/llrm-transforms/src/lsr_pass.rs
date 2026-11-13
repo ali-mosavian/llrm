@@ -274,10 +274,9 @@ fn plan_loop(
     let env_users = Env {
         safe_to_speculate: &safe_to_speculate,
         ephemeral: &is_ephemeral,
-        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
-        // wide loop grew tail_calls by 354 bytes.
-        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+        native_widths: tti.lsr_native_integer_widths(),
         use_list_order: tti.lsr_users_in_use_list_order(),
+        phi_operand_uses: tti.lsr_phi_operand_uses(),
     };
     let mut users = match carried {
         Some(users) => {
@@ -355,6 +354,7 @@ fn plan_loop(
             }
         };
         lsr.size = size;
+        lsr.bytes_counted = size || bytes_strict;
         lsr.across_call = across_call;
         llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
         lsr.chain_uses = chains.inc_set.clone();
@@ -429,9 +429,18 @@ fn plan_loop(
                 && total(cost.c.insns, cost.c.setup_cost) + u64::from(added * (symbol_setup - 1))
                     > total(pin_cost.c.insns, pin_cost.c.setup_cost)
         };
+        // DEVIATE LG3, where bytes outrank clocks (-Os, -O1): the end-biased
+        // solution is refused when the target's byte table prices it larger
+        // than the pin's. Both axes are strict at -O1, so a form that saves an
+        // instruction for more bytes is a trade no bar counts (quicksort -O1
+        // m32: 27 B larger for one instruction, over the bar on bytes).
+        let bytes_outweigh_saving = bytes_strict
+            && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
+            && cost.size_bytes > pin_cost.size_bytes;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving
+                || bytes_outweigh_saving
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
@@ -439,9 +448,13 @@ fn plan_loop(
                         || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
         llrm_support::debug!(
             "lsr",
-            "  pin's space solved: kept {kept} (bytes {} against the pin's {})",
+            "  pin's space solved: kept {kept} (bytes {} against the pin's {}; size_bytes {} against {}; insns {} against {})",
             cost.bytes,
-            pin_cost.bytes
+            pin_cost.bytes,
+            cost.size_bytes,
+            pin_cost.size_bytes,
+            cost.c.insns,
+            pin_cost.c.insns
         );
         if kept {
             lsr = pin;
@@ -712,7 +725,10 @@ pub fn reduced_held(
             }
             if split {
                 stable = false;
+                let scev = session.into_scev();
                 session = new_session(context, function);
+                session.adopt(scev);
+                session.forget_since_through_edges(context, layout, &outer.globals, &outer.metadata, function, mark);
                 mark = function.mark();
                 mark_opaque(&mut session, context, function);
             }

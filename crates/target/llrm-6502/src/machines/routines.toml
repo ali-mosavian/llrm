@@ -23,24 +23,7 @@ __umodhi3 = "__umodhi3c"
 __divhi3 = "__divhi3c"
 __modhi3 = "__modhi3c"
 
-[aligned]
-# The compact word divides again over the loop that runs for the quotient's bits (`udivmod16a`): 16 B more
-# than the bit loop. Called at size where the module's divides pay for them (`mulimage::pays_by_share`).
-__udivhi3c = "__udivhi3a"
-__umodhi3c = "__umodhi3a"
-__divhi3c = "__divhi3a"
-__modhi3c = "__modhi3a"
-
-[divide]
-# A divide call in clocks, `jsr` to `rts`, by sim65: the compact loop whatever the quotient (`__umodhi3c`,
-# 1000 % 600), and the aligned loop for a quotient of one or two bits (`__umodhi3a`: 144 and 220), the
-# quotients of Euclid's gcd and the digit loops that the aligned loop is for.
-compact_clocks = 735
-aligned_clocks = 200
-
 [share]
-# Policy, for a speed routine linked at size (the aligned divide, the speed multiply): the share of its
-# estimated clocks a module must save for each percent of its bytes the routine adds. By the estimate
-# idiv_loop_os saves 100%+ for +5.4%, compound_assignment_types 86% for +2.4% (36x), idioms 0.3% for +0.7%
-# (0.4x); any value from 1 to 30 gives the same choices.
+# Policy, for a speed routine linked at size (the speed multiply): the share of its estimated clocks a
+# module must save for each percent of its bytes the routine adds.
 percent_per_percent = 4

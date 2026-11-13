@@ -29,6 +29,7 @@ def load(name, path):
 run = load("run", HERE / "run.py")
 measure = load("measure", HERE.parent / "kernels" / "measure.py")
 guard = load("sweep_guard", HERE / "sweep_guard.py")
+same_width = load("same_width", HERE / "same_width.py")
 
 SDCC = [
     ("sdcc-size", ["--fsigned-char", "--opt-code-size"]),
@@ -172,6 +173,8 @@ def ours_cell(path, w, ctx, want):
         raise Void(f"SLOW llc over {ctx.compile_timeout} s of cpu")
     if p.returncode:
         raise Void("COMPILE " + (p.stderr.strip()[-100:] or "llc failed"))
+    if path.read_text().startswith("#define double float\n") and (calls := same_width.f64_helpers((w / "p.s").read_text())):
+        raise Void("WIDTH f64 helper called in a same-width source: " + " ".join(calls)[:80])
     (w / "rt.s").write_text(run.RUNTIME.read_text())
     assemble(w, run.REPORT, run.CRT0)
     for stem in ("rt", "p"):
@@ -189,7 +192,7 @@ def sdcc_cell(path, w, tag, flags, ctx, want):
     assemble(d, REPORT_SDCC, CRT0_SDCC)
     try:
         branch = branch_header(path.read_text(errors="replace"), ctx.predefined, d / "branch.h")
-        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", *ctx.defines, *branch, str(path), "-o", "p.rel"], d, timeout=300)
+        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", *ctx.defines, *branch, str(path), "-o", "p.rel"], d, timeout=ctx.sdcc_timeout)
     except subprocess.TimeoutExpired:
         raise Void("SDCC timeout")
     if s.returncode or not (d / "p.rel").exists():
@@ -218,6 +221,8 @@ def one(job):
             reasons[column] = str(why)
         except Exception as error:  # a cell that raises is a cell without a row, not a missing program
             reasons[column] = f"EXC {type(error).__name__}: {str(error)[:80]}"
+    if ctx.gcc_column and not ctx.sdcc_only:
+        rows = guard.add_gcc_row(rows, ctx.gcc_column.get(path.stem), not_a_bar)
     shutil.rmtree(w, True)
     return path.stem, rows, reasons
 
@@ -237,10 +242,25 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--timeout", type=int, default=60, help="seconds a program may run on ucsim")
     ap.add_argument("--compile-timeout", type=int, default=120)
+    ap.add_argument("--sdcc-timeout", type=int, default=300, help="seconds SDCC may compile one cell (the -ma variants of div_constants_long need more)")
     ap.add_argument("--program-flags-to-llc", action="store_true")
     ap.add_argument("--ours-only", action="store_true")
     ap.add_argument("--sdcc-only", action="store_true")
+    ap.add_argument("--runtime", default=str(run.RUNTIME), help="the z80_rt.s to link (the compiler's own build of it)")
+    ap.add_argument("--allow-runtime-mismatch", action="store_true")
+    ap.add_argument("--gcc-column", help="the gcc-z80 fork's run at this level (run.py of the spike): its cells are a bar beside SDCC's")
+    ap.add_argument("--no-library-checks", action="store_true", help="skip the soft-float library's own run checks (a full sweep runs them first)")
+    ap.add_argument("--no-softfloat", action="store_true", help="run without Z80_LIBC_EXTRA: the float programs will not link")
     ctx = ap.parse_args()
+    ctx.gcc_column = guard.read_gcc_column(ctx.gcc_column) if ctx.gcc_column else {}
+    run.RUNTIME = Path(ctx.runtime)
+    if why := guard.softfloat_library_missing(os.environ, ctx.sdcc_only, ctx.no_softfloat):
+        sys.exit(f"sweep.py: {why}")
+    if not ctx.sdcc_only and not ctx.allow_runtime_mismatch and (why := run.runtime_mismatch(ctx.llc, run.RUNTIME)):
+        sys.exit(f"sweep.py: {why}")
+    if not (ctx.sdcc_only or ctx.no_softfloat or ctx.no_library_checks or ctx.names):
+        if failed := guard.failed_library_checks(str(run.ROOT), ctx.llc):
+            sys.exit("sweep.py: library check failed: " + "; ".join(f"{script}: {line}" for script, line in failed.items()))
     corpus = [p.stem for p in run.selected(Path(ctx.src))]
     expected = ctx.names or corpus
     # a requested name the corpus does not select (a typo, or tagged for other targets) is a dropped program, not a skipped one
@@ -275,7 +295,7 @@ def main():
         f.writelines(f"{n}\t{why(n)}\n" for n in sorted(lost))
     with open(ctx.out + ".nobar", "w") as f:
         for name, rows in results:
-            if not any(c.startswith("sdcc") for c, _, _ in rows):
+            if not guard.has_bar(rows):
                 f.write(f"{name}\t" + "; ".join(f"{c}: {r}" for c, r in sorted(reasons[name].items())) + "\n")
     line, ok = guard.summary(expected, results, {n: why(n) for n in lost}, required, excused)
     print(line)

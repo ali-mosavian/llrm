@@ -9,6 +9,7 @@ __ashrsi3,15,
 __call_iy,2,
 __divdi3,4,__moddi3
 __divhi3,11,__modhi3;__udivhi3
+__divmddi4,4,__moddi3
 __divqi3,16,__modqi3;__udivqi3
 __divremhi4,27,__divhi3;__modhi3;__udivhi3
 __divremsi4,187,__dvr_core;__dvr_ep
@@ -22,7 +23,7 @@ __lshrsi3,15,
 __memcpy,10,
 __memmove,27,
 __memseta,22,
-__moddi3,368,__s_slow
+__moddi3,395,__s_slow
 __modhi3,13,__divhi3;__umodhi3
 __modqi3,13,__umodqi3
 __modsi3,2,__udivmodsi4
@@ -33,14 +34,16 @@ __rt_end,0,
 __s_ashldi3,3,__s_ashrdi3
 __s_ashrdi3,94,
 __s_divdi3,4,__s_moddi3
+__s_divmddi4,4,__s_moddi3
 __s_divremsi4,160,__s_dvcore
 __s_divsi3,3,__s_modsi3
 __s_dvcore,68,
 __s_lshrdi3,4,__s_ashrdi3
 __s_moddi3,131,__s_slow
 __s_modsi3,136,__s_dvcore
-__s_slow,156,
+__s_slow,188,
 __s_udivdi3,3,__s_moddi3
+__s_udivmddi4,4,__s_moddi3
 __s_udivremsi4,33,__s_dvcore
 __s_udivsi3,9,__s_dvcore
 __s_umoddi3,4,__s_moddi3
@@ -48,6 +51,7 @@ __s_umodsi3,8,__s_dvcore
 __strlen,12,
 __udivdi3,3,__moddi3
 __udivhi3,47,
+__udivmddi4,4,__moddi3
 __udivmodsi4,388,
 __udivqi3,5,__umodqi3
 __udivremsi4,21,__dvr_core;__dvr_ep

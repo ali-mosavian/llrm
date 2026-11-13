@@ -487,6 +487,13 @@ pub(crate) fn gather_unrolling_preferences_of_target(
         up.partial_threshold = up.partial_opt_size_threshold;
         up.max_percent_threshold_boost = 100;
     }
+    // DEVIATE UNROLL-O1: where -O1 never grows the code (`unroll_never_grows_at_o1`), a partial or run-time
+    // unroll, which always copies the body, is left to the trial compile that keeps it only if the object
+    // is no larger.
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
+        up.partial = false;
+        up.runtime = false;
+    }
     up
 }
 
@@ -1078,7 +1085,7 @@ fn should_full_unroll(
                 rolled.min(u64::from(u32::MAX)) as u32,
                 run.tti.unroll_o1_analyzed_trips().map_or(up.max_iterations_count_to_analyze, |trips| trips.max(up.max_iterations_count_to_analyze)),
                 None,
-                false,
+                run.tti.unroll_o1_prices_calls(),
             )
             .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
         let unroll = fits && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up);
@@ -1183,6 +1190,41 @@ fn note_for_trial(
         && let Some(name) = run.globals[this.0 as usize].name.as_deref()
     {
         trial::note(name, unrolled_size);
+    }
+}
+
+/// DEVIATE PEEL-OS-TRIAL (owner m68k, exit 2026-11-24): `computePeelCount`
+/// reads `UP.Threshold`, which is 0 at optsize, so the pin never peels at -Os.
+/// A target that states `Tti::peels_on_trial_at_size` has the peels the
+/// `unroll_trial_at_size` bar would admit noted at -Os, and taken in the trial
+/// compile; the driver keeps them where the finished functions are smaller
+/// (what a peel frees lands in later passes, so only the code decides).
+#[allow(clippy::too_many_arguments)]
+fn peel_on_trial(
+    run: &Run,
+    cx: &llrm_analysis::scev::Cx,
+    se: &mut ScalarEvolution,
+    lp: Loop,
+    loop_size: u32,
+    already: u32,
+    before: crate::looppeel::PeelingPreferences,
+    pp: &mut crate::looppeel::PeelingPreferences,
+) {
+    if !run.options.opt_size || pp.peel_count != 0 || !run.tti.peels_on_trial_at_size() {
+        return;
+    }
+    let Some(limit) = trial::active().or(run.tti.unroll_trial_at_size()) else { return };
+    let mut wide = before;
+    crate::looppeel::compute_peel_count(se, cx, run.callees, lp, loop_size, &mut wide, limit, already);
+    if wide.peel_count == 0 {
+        return;
+    }
+    if trial::active().is_some() {
+        *pp = wide;
+    } else if let Some(this) = run.this
+        && let Some(name) = run.globals[this.0 as usize].name.as_deref()
+    {
+        trial::note(name, u64::from(loop_size) * u64::from(wide.peel_count + 1));
     }
 }
 
@@ -1435,7 +1477,9 @@ pub(crate) fn compute_unroll_count(
             assumptions: &analyzed.assumptions,
         };
         let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
+        let before = *pp;
         crate::looppeel::compute_peel_count(se, &cx, run.callees, lp, loop_size, pp, up.threshold, already);
+        peel_on_trial(run, &cx, se, lp, loop_size, already, before, pp);
         // DEVIATE UNROLL-O1: a target that cannot pay for the copy does not peel at -O1.
         if run.options.opt_level == 1 && !run.options.opt_size && !run.tti.peels_at_o1() {
             pp.peel_count = 0;
@@ -1762,10 +1806,15 @@ fn try_to_unroll_loop(
     // keep nothing across them (x_jpeg_single -O3: three 8-trip loops of 9
     // floats, held to 150 and 2.3M clocks slower than the pin's unroll).
     // Owner llrm-target-x86-m32, exit 2026-11-20.
-    if let Some(peak) = float_stack_overflow(run, lp) {
+    // The bar only matters where it is above the default: the liveness is not
+    // solved for a loop it cannot change.
+    if !opt_for_size
+        && up.threshold > UNROLL_THRESHOLD_DEFAULT
+        && let Some(peak) = float_stack_overflow(run, lp)
+    {
         let kept = if trip_count == 0 { usize::MAX } else { price::forwarded_floats(run, analyzed, lp, trip_count) };
         let depth = run.tti.x87_stack_slots().map_or(0, |slots| slots as usize);
-        if !opt_for_size && up.threshold > UNROLL_THRESHOLD_DEFAULT && peak.saturating_add(kept) > peak.max(depth) {
+        if peak.saturating_add(kept) > peak.max(depth) {
             why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
             up.threshold = UNROLL_THRESHOLD_DEFAULT;
         }
@@ -1866,6 +1915,7 @@ fn try_to_unroll_loop(
             });
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
+            let remainder_mark = run.function.mark();
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
             // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
             // was worked out in: an earlier loop's remainder guard, read while
@@ -1892,7 +1942,10 @@ fn try_to_unroll_loop(
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
-            run.scev = ScalarEvolution::new();
+            // `forgetTopmostLoop`: the one `ScalarEvolution` lives on, so the
+            // next loop does not work out every earlier loop's count again.
+            run.scev = session.into_scev();
+            forget_since(run, analyzed, remainder_mark);
             run.finished.insert(header);
             if let Some(epilog) = epilog {
                 run.finished.insert(epilog);

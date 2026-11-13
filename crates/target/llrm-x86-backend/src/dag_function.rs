@@ -1117,7 +1117,9 @@ fn selected_in(
     let builder_target = builder_target
         .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
-        .with_float_store(cpu.float_store)
+        // `-fexcess-precision=standard` rounds what the x87 keeps wider; scalar SSE has no excess precision
+        // (FLT_EVAL_METHOD 0), so the store gcc and clang never make is not made.
+        .with_float_store(cpu.float_store && !arch.scalar_sse())
         // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin:
         // minsize only). Measured 2026-11-06, m32 -Os, 71 programs, pin-exact
         // flip: 14 programs change, +203 B in all, matmul only -4 B, and four
@@ -1454,6 +1456,13 @@ fn selected_in(
     let fast_divide = tli.small_divide() && tli.fast_divide_in_loops();
     // DEVIATE MUL-HOT: see `X86Lowering::hot_chains`.
     let hot_mul = cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.mul_chains_hot_at_size());
+    // How often the function runs per run of the program, from its direct callers: a block of a function called
+    // from a loop runs more than once per call of the function. One where there is none to count.
+    let entry_weight = if hot_mul {
+        llrm_analysis::entryweight::entry_weight(module, &layout, id, &llrm_mir::callgraph::addressed(module))
+    } else {
+        1.0
+    };
     let frequencies =
         (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0 || fast_divide || hot_mul).then(|| {
             let bpi = info
@@ -1536,7 +1545,9 @@ fn selected_in(
                         || (cpu.size && machine.tti().is_some_and(|tti| tti.imul_at_size())),
                     imul_if_smaller: cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.imul_at_size()),
                     hot_chains: hot_mul
-                        && frequencies.as_ref().is_some_and(|frequencies| frequencies.relative_to_entry(parent) > 1.0),
+                        && frequencies
+                            .as_ref()
+                            .is_some_and(|frequencies| frequencies.relative_to_entry(parent) * entry_weight > 1.0),
                     three_address_adds: !(cpu.size || cpu.min_size)
                         && !matches!(
                             cpu.three_address(),

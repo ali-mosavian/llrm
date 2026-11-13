@@ -971,6 +971,31 @@ define cc1000 void @MAIN() addrspace(1) {
     );
 }
 
+/// m16 stft_single -O2: two string literals of 15 B came first, so `align 2` padded the next datum
+/// (+1 B of data against bcc, jpeg_single +2). A private constant of no alignment goes last.
+/// Two procedures read it: one reader alone moves it into its code segment (cs_tables).
+#[test]
+fn test_a_string_literal_follows_the_aligned_data_and_the_pool() {
+    let text = "@.str = private unnamed_addr constant [3 x i8] c\"ab\\00\"
+@count = internal global i16 5
+define cc1000 void @MAIN() addrspace(1) {
+  %c = load i16, ptr @count
+  %s = getelementptr i8, ptr @.str, i16 %c
+  %v = load i8, ptr %s
+  store i8 %v, ptr @count
+  ret void
+}
+define cc1000 void @OTHER() addrspace(1) {
+  %v = load i8, ptr @.str
+  store i8 %v, ptr @count
+  ret void
+}
+";
+    let got = assembled(text);
+    let data: Vec<&str> = got.lines().map(str::trim).skip_while(|line| *line != ".data").take_while(|line| !line.starts_with("extern") && !line.starts_with(".code")).collect();
+    assert_eq!(data, [".data", "align 2", "count label byte", "db 005h,000h", "G$0$str label byte", "db 061h,062h,000h"], "{got}");
+}
+
 /// An intrinsic is no symbol: declaring one refused the module as "no
 /// assembler symbol".
 #[test]
@@ -1853,9 +1878,11 @@ define i1 @uge(double %a, double %b) addrspace(1) {
             .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':') && !compares(line))
             .collect::<Vec<_>>()
     };
-    // DEVIATE X87-FCMP-AH: at a 486 the status word's carry bit is `test ah, 1`; "below or equal" is the mask 65 (C0 | C3).
-    assert_eq!(answered("ult"), ["test ah, 1", "setne al"]);
-    assert_eq!(answered("uge"), ["test ah, 65", "setne al"]);
+    // DEVIATE X87-FCMP-AH: the status word's carry bit is `test ah, 1` only where the clock it saves pays for its two
+    // bytes at the speed rate; m16's 500 milliclocks a byte make it a tie, which keeps `sahf` (#9259).
+    let (ult, uge) = (answered("ult"), answered("uge"));
+    assert_eq!(ult, ["setb al"]);
+    assert_eq!(uge, ["setbe al"]);
 }
 
 /// A port below 256 is an immediate, any other is in dx; the byte is in al.
@@ -4202,7 +4229,8 @@ body:
   %vb = load i8, ptr %pb, !tbaa !5
   %xw = sext i16 %vw to i32
   %xb = sext i8 %vb to i32
-  %u = add i32 %vl, %xw
+  %a = add i32 %s, %vl
+  %u = add i32 %a, %xw
   %t = add i32 %u, %xb
   %j = add nuw nsw i32 %i, 1
   %more = icmp ult i32 %j, 16

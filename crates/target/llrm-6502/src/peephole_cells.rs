@@ -437,6 +437,11 @@ fn stable(operand: &Operand) -> bool {
     )
 }
 
+/// Whether `operand` indexes by `x` while `x` holds the saved byte (`saved_in` is no cell).
+fn reads_x(operand: &Operand, saved_in: &Option<String>) -> bool {
+    saved_in.is_none() && matches!(operand, Operand::Indexed(_, crate::asm::Index::X) | Operand::IndirectX(_))
+}
+
 pub fn carry_stays_in_the_flag(asm: &mut Asm) {
     let mut at = 0;
     while at + 2 < asm.lines.len() {
@@ -474,12 +479,17 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
                 Op::Lda if restore => false,
                 Op::Lda => {
                     a_loaded = true;
-                    true
+                    !reads_x(&inst.operand, &saved_in)
                 }
-                Op::Ldy | Op::Sty | Op::Stx | Op::Tay => !writes_m,
+                // a copy of `a` before a load is a copy of the byte
+                Op::Tay => a_loaded && !writes_m,
+                Op::Ldy | Op::Sty => !writes_m && !reads_x(&inst.operand, &saved_in),
+                // `x` holds the byte when no cell does: storing it reads it
+                Op::Stx => !writes_m && saved_in.is_some(),
                 // `x` is free to change when the byte waits in a cell
-                Op::Ldx | Op::Tax => saved_in.is_some() && !writes_m,
-                Op::Sta => a_loaded && !writes_m,
+                Op::Ldx => saved_in.is_some() && !writes_m,
+                Op::Tax => saved_in.is_some() && a_loaded && !writes_m,
+                Op::Sta => a_loaded && !writes_m && !reads_x(&inst.operand, &saved_in),
                 _ => false,
             };
             if !quiet {
@@ -514,7 +524,8 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
             ),
             Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut BTreeSet::new()),
         };
-        if !a_dead || !byte_dead {
+        // the `lsr` leaves zero and not-negative; the work's flags are what stay
+        if !a_dead || !byte_dead || !crate::peephole::flags_unread_after(&asm.lines, end + 2) {
             at += 1;
             continue;
         }
@@ -659,6 +670,12 @@ pub fn arithmetic_chain_in_a(asm: &mut Asm) {
         }
         candidate.lines.push(inst(Op::Sta, Operand::Direct(h.clone())));
         let rewritten = candidate.lines.len();
+        // the original leaves the old high byte in `a`, the rewrite the shifted one
+        let exits = crate::peephole::Exits::of(asm);
+        if !crate::peephole::dead_from(&asm.lines, end, crate::asm::Registers::A, &mut Default::default(), exits) {
+            s = end;
+            continue;
+        }
         candidate.lines.extend_from_slice(&asm.lines[end..]);
         drop_dead_stores(&mut candidate);
         store_then_index_load(&mut candidate);
@@ -1028,10 +1045,12 @@ fn coalesce_once(
     if !caller_saved(sn) || !caller_saved(tn) {
         return false;
     }
-    let mut lines = asm.lines.clone();
-    let mut renamed = false;
+    let (s, t) = (s.clone(), t.clone());
+    // The reads of `t` to turn into reads of `s`; nothing changes until the
+    // copy is known to go.
+    let mut renames = Vec::new();
     let mut end = at + 2;
-    while let Some(Line::Inst(inst)) = lines.get_mut(end) {
+    while let Some(Line::Inst(inst)) = asm.lines.get(end) {
         if !straight(inst.op) {
             break;
         }
@@ -1041,20 +1060,21 @@ fn coalesce_once(
             Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) if pair(c, sn) || pair(c, tn) => {
                 return false;
             }
-            Operand::Direct(c) if c == s => return false,
-            Operand::Direct(c) if c == t => {
-                inst.operand = Operand::Direct(s.clone());
-                renamed = true;
-            }
+            Operand::Direct(c) if *c == s => return false,
+            Operand::Direct(c) if *c == t => renames.push(end),
             _ => {}
         }
         end += 1;
     }
     let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.result_cells, &mut BTreeSet::new());
-    if !renamed || !dead(s) || !dead(t) {
+    if renames.is_empty() || !dead(&s) || !dead(&t) {
         return false;
     }
-    lines.remove(at + 1);
-    asm.lines = lines;
+    for index in renames {
+        if let Line::Inst(inst) = &mut asm.lines[index] {
+            inst.operand = Operand::Direct(s.clone());
+        }
+    }
+    asm.lines.remove(at + 1);
     true
 }

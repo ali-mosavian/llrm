@@ -31,7 +31,7 @@
 //! layout indices when the sweep began, as `RenumberBlocks` leaves them.
 
 use llrm_lir::registers::RegId;
-use llrm_support::hash::HashMap;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, Target};
@@ -56,7 +56,8 @@ fn target(inst: &Inst) -> Option<u32> {
         )
 }
 
-/// A jump through a table names every block of it: `analyzeBranch` knows no such terminator.
+/// A jump through a table names every block of it: `analyzeBranch` knows no
+/// such terminator.
 pub(crate) fn names_many(inst: &Inst) -> bool {
     inst.operands.iter().filter(|operand| matches!(operand, Operand::Block(_))).count() > 1
 }
@@ -92,8 +93,10 @@ pub(crate) fn analyze<C>(
 ) -> Option<Branches> {
     let insts = &function.blocks[at].insts;
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
-    // The pin's MachineVerifier: "Non-terminator instruction after the first terminator". `analyzeBranch` reads only the run at the end, so
-    // a branch followed by an instruction is invisible and the block after it would be merged while the branch still names it.
+    // The pin's MachineVerifier: "Non-terminator instruction after the first
+    // terminator". `analyzeBranch` reads only the run at the end, so
+    // a branch followed by an instruction is invisible and the block after it
+    // would be merged while the branch still names it.
     assert!(
         !insts[..first].iter().any(|inst| inst.terminator),
         "block {} of {}: non-terminator after a terminator (an instruction placed after the block's branch): {:?}",
@@ -262,8 +265,10 @@ struct Folder<'a, C, J> {
     assignment: Option<&'a Assignment>,
     /// `getNumber` of each block, by id, as the sweep began.
     number: HashMap<u32, usize>,
-    /// Tail merging may join blocks of different loops.
-    across_loops: bool,
+    /// The loops tail merging may join with others.
+    crossing: crate::tailmerge::Crossing<'a>,
+    /// Block frequencies by id that tail merging keeps current.
+    frequencies: Option<&'a mut HashMap<u32, f64>>,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -559,10 +564,10 @@ impl Effects {
             }
             _ => false,
         };
-        if inst.sets_flags || copy_sets_flags {
+        if inst.sets_flags() || copy_sets_flags {
             effects.defs.push(Place::Flags);
         }
-        if inst.reads_flags {
+        if inst.reads_flags() {
             effects.uses.push(Place::Flags);
         }
         effects
@@ -598,8 +603,8 @@ pub(crate) fn identical(
     assignment: &Assignment,
 ) -> bool {
     one.kind == other.kind
-        && one.sets_flags == other.sets_flags
-        && one.reads_flags == other.reads_flags
+        && one.sets_flags() == other.sets_flags()
+        && one.reads_flags() == other.reads_flags()
         && one.operands.len() == other.operands.len()
         && one.operands.iter().zip(&other.operands).all(|pair| match pair {
             (Operand::Def(a), Operand::Def(b)) | (Operand::Use(a), Operand::Use(b)) => {
@@ -683,12 +688,14 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                     break;
                 }
                 let theirs = Effects::of::<T>(inst, assignment);
+                // a copy that becomes a `move` sets them too
+                let sets_flags = theirs.defs.contains(&Place::Flags);
                 let apart = !inst.terminator
                     && !inst.call
                     && !inst.barrier
                     && !inst.side_effects
-                    && !inst.reads_flags
-                    && !(inst.sets_flags && head.reads_flags)
+                    && !inst.reads_flags()
+                    && !(sets_flags && head.reads_flags())
                     && theirs.defs.iter().all(|place| {
                         *place == Place::Flags || !touches::<T>(&own.uses, *place) && !touches::<T>(&own.defs, *place)
                     })
@@ -696,7 +703,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                 if !apart {
                     break;
                 }
-                crossed_flags |= inst.sets_flags;
+                crossed_flags |= sets_flags;
             }
             if let Some(at) = twin.filter(|&at| at > run) {
                 let inst = self.function.blocks[move_in].insts.remove(at);
@@ -784,7 +791,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
 /// `BranchFolder::OptimizeFunction` without tail merging or hoisting: true
 /// when anything changed.
 pub fn branch_fold<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
-    fold::<T>(function, None, false)
+    fold::<T>(function, None, crate::tailmerge::Crossing::Never, None)
 }
 
 /// [`branch_fold`] with `HoistCommonCodeInSuccs`, which needs to know which
@@ -793,7 +800,7 @@ pub fn branch_fold_hoisting<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
 ) -> bool {
-    fold::<T>(function, Some(assignment), false)
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Never, None)
 }
 
 /// [`branch_fold_hoisting`] whose tail merging also joins blocks of different
@@ -802,25 +809,42 @@ pub fn branch_fold_hoisting_across_loops<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
 ) -> bool {
-    fold::<T>(function, Some(assignment), true)
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Always, None)
+}
+
+/// [`branch_fold_hoisting`] whose tail merging joins the blocks of the named
+/// loops with others ([`crate::tailmerge::Crossing::Loops`]).
+pub fn branch_fold_hoisting_across_hot_loops<T: Target + Jump>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+    hot: &HashSet<u32>,
+    frequencies: &mut HashMap<u32, f64>,
+) -> bool {
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Loops(hot), Some(frequencies))
 }
 
 fn fold<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: Option<&Assignment>,
-    across_loops: bool,
+    crossing: crate::tailmerge::Crossing<'_>,
+    frequencies: Option<&mut HashMap<u32, f64>>,
 ) -> bool {
     let mut folder = Folder::<T::Class, T> {
         function,
         assignment,
         number: HashMap::default(),
-        across_loops,
+        crossing,
+        frequencies,
         jump: std::marker::PhantomData,
     };
     let mut ever = false;
     loop {
-        let mut changed =
-            crate::tailmerge::merge_tails_across_loops::<T, _>(folder.function, folder.assignment, folder.across_loops);
+        let mut changed = crate::tailmerge::merge_tails_crossing::<T, _>(
+            folder.function,
+            folder.assignment,
+            folder.crossing,
+            folder.frequencies.as_deref_mut(),
+        );
         changed |= folder.optimize_branches();
         changed |= folder.hoist_common_code();
         if !changed {

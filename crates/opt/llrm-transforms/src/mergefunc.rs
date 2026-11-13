@@ -32,6 +32,7 @@ use std::hash::{Hash, Hasher};
 
 use llrm_analysis::globalsaa::embedded;
 use llrm_mir::context::{ConstantKind, GlobalId};
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::module::{GlobalKind, Linkage, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, Opcode, Tail};
@@ -60,7 +61,7 @@ pub fn equivalent(
     right_id: GlobalId,
     right: &Function,
 ) -> bool {
-    Comparator { module, left_id, right_id, left, right, values_left: HashMap::new(), values_right: HashMap::new(), blocks_left: HashMap::new(), blocks_right: HashMap::new(), ahead_left: HashMap::new(), ahead_right: HashMap::new() }
+    Comparator { module, left_id, right_id, left, right, values_left: IdMap::new(), values_right: IdMap::new(), blocks_left: IdMap::new(), blocks_right: IdMap::new(), ahead_left: IdMap::new(), ahead_right: IdMap::new() }
         .compare()
 }
 
@@ -71,13 +72,13 @@ struct Comparator<'a> {
     left: &'a Function,
     right: &'a Function,
     /// A value's serial number on each side (`sn_mapL`, `sn_mapR`).
-    values_left: HashMap<ValueId, u32>,
-    values_right: HashMap<ValueId, u32>,
-    blocks_left: HashMap<BlockId, u32>,
-    blocks_right: HashMap<BlockId, u32>,
+    values_left: IdMap<ValueId, u32>,
+    values_right: IdMap<ValueId, u32>,
+    blocks_left: IdMap<BlockId, u32>,
+    blocks_right: IdMap<BlockId, u32>,
     /// Values read before the walk defines them (a loop's phi input), paired as they were first met.
-    ahead_left: HashMap<ValueId, ValueId>,
-    ahead_right: HashMap<ValueId, ValueId>,
+    ahead_left: IdMap<ValueId, ValueId>,
+    ahead_right: IdMap<ValueId, ValueId>,
 }
 
 impl Comparator<'_> {
@@ -262,7 +263,31 @@ impl ProgramPass for MergeFunctions {
     fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let mut changed = false;
         for module in &mut program.modules {
-            while merge_functions(module) {
+            while merge_functions(module, true) {
+                changed = true;
+            }
+        }
+        if changed {
+            analyses.invalidate();
+        }
+        Ok(())
+    }
+}
+
+/// `MergeFunctions` at a level that allows no trade (-O1): the local functions nothing takes the address of are
+/// dropped, the rest stay. A thunk saves bytes and costs a `jmp` a call, so only a drop is a win on both axes.
+/// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): the pin runs no `MergeFunctions` at all.
+pub struct MergeLocalFunctions;
+
+impl ProgramPass for MergeLocalFunctions {
+    fn name(&self) -> &'static str {
+        "mergefunc-local"
+    }
+
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+        let mut changed = false;
+        for module in &mut program.modules {
+            while merge_functions(module, false) {
                 changed = true;
             }
         }
@@ -322,7 +347,7 @@ fn address_taken(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// One round: whether any function was dropped or turned into a thunk.
-fn merge_functions(module: &mut Module) -> bool {
+fn merge_functions(module: &mut Module, thunks_allowed: bool) -> bool {
     let mut buckets: HashMap<u64, Vec<GlobalId>> = HashMap::new();
     for index in 0..module.globals.len() as u32 {
         let id = GlobalId(index);
@@ -357,7 +382,11 @@ fn merge_functions(module: &mut Module) -> bool {
             let global = module.global(id);
             if local(global.linkage) && (!taken.contains(&id) || global.unnamed_addr == UnnamedAddr::Global) {
                 gone.insert(id, keep);
-            } else if !is_variadic(module, id) && !is_thunk_to(module, id, keep) && outweighs_thunk(module, id) {
+            } else if thunks_allowed
+                && !is_variadic(module, id)
+                && !is_thunk_to(module, id, keep)
+                && outweighs_thunk(module, id)
+            {
                 thunks.push((id, keep));
             }
         }

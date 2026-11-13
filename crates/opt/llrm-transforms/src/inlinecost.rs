@@ -2078,10 +2078,12 @@ impl<'a> Analyzer<'a> {
 
     /// The target's byte view of the callee's code, for a speed caller only: a
     /// size caller keeps the units its -Os bound was fitted in (DEVIATE
-    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14).
+    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14). The view's lowering
+    /// is the -O2/-O3 one: -O1 keeps the pricing its bound was fitted in.
     fn size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
         let tti = self.site.tti?;
-        tti.inline_size_view().filter(|_| !tti.inline_size_view_is_measured() || self.site.caller_size == CallerSize::Speed)
+        let speed = self.site.caller_size == CallerSize::Speed;
+        tti.inline_size_view_at(speed && !self.params.o1_bound).filter(|_| !tti.inline_size_view_is_measured() || speed)
     }
 
     /// Whether the size view is the measured one (`inline_size_view_is_measured`)
@@ -2147,8 +2149,37 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
+        let size = size - self.unread_arguments_cost(llrm_mir::tti::CostKind::CodeSize);
         let percent = if self.measured() { view.as_deref().unwrap_or(tti).call_code_size_percent() } else { tti.call_code_size_percent() };
         (size * percent + 50) / 100 + self.byval_copy_size()
+    }
+
+    /// What the arguments of parameters the callee never reads add to the
+    /// call's price: `deadargelim` removes them after the walk (the pin's
+    /// order), so the code the inline replaces has no setup for them. The
+    /// pin's own cost keeps them; the guards below price the call the code
+    /// will contain, so an inline's verdict does not turn on a parameter that
+    /// is about to go (x_jpeg_fixed -O2: `emit`'s constant `out`).
+    fn unread_arguments_cost(&self, kind: llrm_mir::tti::CostKind) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let linkage = self.site.module.global(self.site.callee_id).linkage;
+        if !matches!(linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private) {
+            return 0;
+        }
+        let parameters = self.callee.parameters();
+        let unread = self.unread_parameters().iter().filter(|&&one| one).count() as i64;
+        if unread == 0 {
+            return 0;
+        }
+        let all = parameters.len() as i64;
+        let with = tti.direct_call_cost(all, kind);
+        let without = tti.direct_call_cost(all - unread, kind);
+        if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
+    }
+
+    /// Per parameter: nothing reads it and `deadargelim` will drop it (an internal or private callee).
+    fn unread_parameters(&self) -> Vec<bool> {
+        unread_parameters_of(self.site.module, self.site.callee_id)
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
@@ -2165,7 +2196,10 @@ impl<'a> Analyzer<'a> {
         let call = self.site.caller.instruction(self.site.call);
         let info = call_info(self.site.caller, self.site.call)?;
         let arguments = call.operands.len().saturating_sub(1);
+        // an argument for a parameter nothing reads is gone once `deadargelim` runs after the walk
+        let unread = self.unread_parameters();
         let arguments = (0..arguments)
+            .filter(|&index| !unread.get(index).copied().unwrap_or(false))
             .map(|index| {
                 let byval = info
                     .argument_attrs
@@ -2373,6 +2407,15 @@ impl<'a> Analyzer<'a> {
         Some(bytes)
     }
 
+    /// `Tti::inline_o1_hot_growth_percent`: a locally hot site (the pin's
+    /// `HotCallSiteRelFreq`, the test of its `LocallyHotCallSiteThreshold`)
+    /// whose growth is within that share of the call sequence it removes.
+    fn hot_site_within_growth_budget(&self) -> bool {
+        let Some(percent) = self.site.tti.and_then(|tti| tti.inline_o1_hot_growth_percent()) else { return false };
+        self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ)
+            && self.growth_per_site() * 100 <= self.call_size() * percent
+    }
+
     /// Bytes one inlined site adds to the module: the callee's unfolded size
     /// less the call, spread over the sites when the callee dies with them.
     fn growth_per_site(&self) -> i64 {
@@ -2480,6 +2523,7 @@ impl<'a> Analyzer<'a> {
                     })
                 })
                 && self.grows_the_code()
+                && !(at_o1 && self.hot_site_within_growth_budget())
         };
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
@@ -2489,6 +2533,15 @@ impl<'a> Analyzer<'a> {
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
+}
+
+/// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it (an internal or private callee). The one
+/// rule the inline guard and the size trial price a call by.
+pub(crate) fn unread_parameters_of(module: &Module, callee: GlobalId) -> Vec<bool> {
+    let global = module.global(callee);
+    let GlobalKind::Function(body) = &global.kind else { return Vec::new() };
+    let droppable = matches!(global.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private);
+    body.parameters().iter().map(|&value| droppable && body.users(value).is_empty()).collect()
 }
 
 /// The stores of `function` through `value` (a pointer), directly or through
@@ -2889,16 +2942,7 @@ pub fn caller_frequencies(
     layout: &DataLayout,
     caller: &Function,
 ) -> llrm_analysis::blockfreq::BlockFrequencies {
-    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
-        llrm_analysis::bpi::Module {
-            context: &module.context,
-            declarations: &module.globals,
-            metadata: &module.metadata,
-            layout,
-        },
-        caller,
-    );
-    llrm_analysis::blockfreq::BlockFrequencies::of_bpi(caller, &bpi)
+    llrm_analysis::entryweight::caller_frequencies(module, layout, caller)
 }
 
 /// The frequency of each instruction of `function` over its entry's; none
@@ -2933,63 +2977,17 @@ fn relative_to_entry(
     frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
     block: BlockId,
 ) -> Option<f64> {
-    (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.relative_to_entry(block))
+    llrm_analysis::entryweight::relative_to_entry(frequencies, block)
 }
 
-/// How many times `function` runs per run of the program, estimated from the
-/// calls to it: the sum over its direct call sites of the site's frequency
-/// over its function's entry, times that function's own count, up to
-/// `ENTRY_DEPTH` calls. A function with an outside caller (not local, or its
-/// address taken) or none runs at least once. Capped at `ENTRY_CAP`.
+/// [`llrm_analysis::entryweight::entry_weight`].
 fn caller_entry_weight(
     module: &Module,
     layout: &DataLayout,
     function: GlobalId,
     addressed: &BTreeSet<GlobalId>,
 ) -> f64 {
-    const ENTRY_DEPTH: usize = 8;
-    const ENTRY_CAP: f64 = 256.0;
-    let mut frequencies: HashMap<GlobalId, llrm_analysis::blockfreq::BlockFrequencies> = HashMap::default();
-    fn weight(
-        module: &Module,
-        layout: &DataLayout,
-        function: GlobalId,
-        addressed: &BTreeSet<GlobalId>,
-        depth: usize,
-        visiting: &mut Vec<GlobalId>,
-        frequencies: &mut HashMap<GlobalId, llrm_analysis::blockfreq::BlockFrequencies>,
-    ) -> f64 {
-        let outside = !local_linkage(module.global(function).linkage) || addressed.contains(&function);
-        if depth == 0 {
-            return 1.0;
-        }
-        visiting.push(function);
-        let mut total = 0.0;
-        for (at, global) in module.globals.iter().enumerate() {
-            let caller_id = GlobalId(at as u32);
-            let GlobalKind::Function(caller) = &global.kind else { continue };
-            if visiting.contains(&caller_id) || caller.layout().is_empty() {
-                continue;
-            }
-            let sites: Vec<InstId> = caller
-                .walk()
-                .map(|(_, inst)| inst)
-                .filter(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(function))
-                .collect();
-            if sites.is_empty() {
-                continue;
-            }
-            let inner = weight(module, layout, caller_id, addressed, depth - 1, visiting, frequencies);
-            let table = frequencies.entry(caller_id).or_insert_with(|| caller_frequencies(module, layout, caller));
-            for call in sites {
-                let local = caller.parent(call).and_then(|block| relative_to_entry(table, block)).unwrap_or(1.0);
-                total += local * inner;
-            }
-        }
-        visiting.pop();
-        if outside || total == 0.0 { total.max(1.0) } else { total }
-    }
-    weight(module, layout, function, addressed, ENTRY_DEPTH, &mut Vec::new(), &mut frequencies).min(ENTRY_CAP)
+    llrm_analysis::entryweight::entry_weight(module, layout, function, addressed)
 }
 
 fn caller_global_name(

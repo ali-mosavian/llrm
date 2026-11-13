@@ -36,7 +36,8 @@
 //! keeps a loop's exit counter beside the scaled one it is a multiple of
 //! (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
 //! as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
-//! the line.
+//! the line. A target turns LG1 and LG2 off with
+//! `Tti::lsr_scales_zero_compare_past_overflow` (wasm: the pin's formulae).
 //!
 //! DEVIATE LG2: for an even factor `getExactSDiv` fails where the compared
 //! value cannot reach 2^(bits - ctz(factor)) under the loop's guards, although
@@ -613,8 +614,9 @@ impl Collection<'_, '_> {
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
             let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
-            let odd = (factor & 1 == 1 && counter_alone)
-                || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits));
+            let odd = self.tti.lsr_scales_zero_compare_past_overflow()
+                && ((factor & 1 == 1 && counter_alone)
+                    || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits)));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -1257,6 +1259,7 @@ impl Collection<'_, '_> {
             as_written: false,
             other_register_units: self.pressure_units(),
             size: self.size,
+            bytes_counted: self.bytes_counted,
             across_call: self.across_call,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);

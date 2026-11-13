@@ -359,6 +359,8 @@ fn foldable(
         return None;
     }
     let address = reads(inst, assignment);
+    // until another instruction sets them, the codes are the load's
+    let mut load_codes = true;
     for i in load + 1..=point {
         if i == store {
             continue;
@@ -388,8 +390,14 @@ fn foldable(
             );
         // a call or write before the push point may change what it reads
         let writes = !own_store && (other.may_store || other.side_effects || other.call);
-        if names_root || defines_address || writes {
+        // the load's codes go with it: a reader of them (`sne`) would see older
+        // ones
+        let reads_codes = load_codes && other.reads_flags() && !other.call;
+        if names_root || defines_address || writes || reads_codes {
             return None;
+        }
+        if other.sets_flags() || other.call {
+            load_codes = false;
         }
     }
     // the load goes with its push: a later store of the same register still
@@ -500,7 +508,7 @@ fn address_of(
                 Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
                 _ => false,
             });
-            if names_root || (other.reads_flags && !other.call) {
+            if names_root || (other.reads_flags() && !other.call) {
                 return None;
             }
         }
@@ -508,11 +516,15 @@ fn address_of(
     // the codes after the store: the first instruction that touches them
     // must set them
     for other in &insts[store + 1..] {
-        if other.call || other.sets_flags {
+        if other.call {
             break;
         }
-        if other.reads_flags || other.terminator {
+        // read first: `addx` reads the codes it sets
+        if other.reads_flags() || other.terminator {
             return None;
+        }
+        if other.sets_flags() {
+            break;
         }
     }
     unread_after(insts, assignment, store, root, src).then_some((producers, base, value))
@@ -767,13 +779,13 @@ fn codes_live_across(
     let set_before = (0..at)
         .rev()
         .take_while(|&i| blocks[i] == blocks[at])
-        .find(|&i| insts[i].sets_flags || insts[i].call)
-        .is_some_and(|i| insts[i].sets_flags && !insts[i].call);
+        .find(|&i| insts[i].sets_flags() || insts[i].call)
+        .is_some_and(|i| insts[i].sets_flags() && !insts[i].call);
     set_before
         && (at..insts.len())
             .take_while(|&i| blocks[i] == blocks[at])
-            .find(|&i| insts[i].reads_flags || insts[i].sets_flags || insts[i].call)
-            .is_some_and(|i| insts[i].reads_flags && !insts[i].call)
+            .find(|&i| insts[i].reads_flags() || insts[i].sets_flags() || insts[i].call)
+            .is_some_and(|i| insts[i].reads_flags() && !insts[i].call)
 }
 
 /// The pushes to make in `insts`. `frame_price(n)` is the price of the

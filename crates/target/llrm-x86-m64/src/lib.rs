@@ -416,10 +416,15 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            ipra_binds_local: true,
                             // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
+                            // DEVIATE SD-DIVMAG (owner llrm-target-x86-m64, exit 2026-11-24): the m32
+                            // entry at m64; see `Tuning::sdiv_by_magnitude`.
+                            sdiv_by_magnitude: true,
                             // DEVIATE GVN-PRE-OPTSIZE, MERGEFUNC-OS, REP-MOVS-OS (owner llrm-target-x86-m64,
                             // exit 2026-11-24): m32's -Os entries, see their `Tuning` fields. 20 -Os cells
                             // of the corpus shrink, none grows.
@@ -429,12 +434,26 @@ impl llrm_target::Target for M64 {
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
+                            lsr_size_order: true,
+                            lsr_size_x86_64: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
+                            // `Tuning::rep_stos_priced_unit`. gcc fills a frame object with `rep stosb`.
+                            rep_stos_priced_unit: true,
+                            // DEVIATE UNROLL-OS-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
+                            // m32 entry, see `Tuning::unroll_trial_at_size`. gcc completely peels a
+                            // small loop at -Os when the code does not grow.
+                            unroll_trial_at_size: Some(30),
+                            unroll_trial_bytes_strict: true,
+                            // DEVIATE UNROLL-O1, UNROLL-O1-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
+                            // m32 entries, see `Tuning::unroll_never_grows_at_o1`, `unroll_trial_at_o1`.
+                            unroll_never_grows_at_o1: true,
+                            unroll_trial_at_o1: Some(150),
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
                             // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
@@ -456,6 +475,19 @@ impl llrm_target::Target for M64 {
                             // `mov m64, imm32`: sign-extended.
                             unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
+                            // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): see
+                            // `selectoptimize::SelectOptimizePass`.
+                            branch_constant_arm_selects: true,
+                            // DEVIATE INL-O2 RATE at m64 (owner x86-m64, exit 2026-11-24), as x86-m32's:
+                            // a speed caller's inline pays the callee's bytes at the m64 net rate
+                            // (312 milliclocks a byte); gcc's `ipa-inline` takes a copy only where its
+                            // growth is small (shellsort -O2: main took a second 255 B copy of a
+                            // function that stays). -O1 and -Os unchanged.
+                            speed_inline_milliclocks_per_byte: 312,
+                            inline_trial_keeps_shrinking_copy: true,
+                            // DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            inline_trials_at_o1: true,
+                            inline_chain_trial: true,
                             // DEVIATE SD103-M64 (owner x86-m64, exit 2026-11-24), as x86-m32's SD103-M32:
                             // the pin's cost rule, with the price of a merged `a && b` it omits taken
                             // from the table: two `setcc`, a logic op and a `test`, less the branch
@@ -467,6 +499,12 @@ impl llrm_target::Target for M64 {
                             // compiles the module again with those loops unrotated (gcc's `-Os` shape)
                             // and keeps the smaller object.
                             rotation_trial_at_size: true,
+                            // DEVIATE ROTATION-HOT at m64 (owner x86-m64, exit 2026-12-05), as m32's: an
+                            // uncounted loop RS1 leaves is also tried rotated, as the pin rotates it, and
+                            // kept where the finished code executes less. -Os is strict on bytes: only
+                            // where the object does not grow.
+                            rotation_hot_at_size: true,
+                            rotation_hot_bytes_per_loop: 0,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than
@@ -517,6 +555,8 @@ impl llrm_target::Target for M64 {
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
+                            // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
+                            ipa_cp_clones_at_speed: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

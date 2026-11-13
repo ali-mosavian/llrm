@@ -43,11 +43,24 @@ fn size_of_name(name: &str) -> u32 {
     digits.parse::<u32>().expect("a width in the name") / 8
 }
 
-/// What `SelectionDAGISel` asks the subtarget at selection time: nothing for
-/// the apple-m1 table.
-struct NoContext;
+/// What `SelectionDAGISel` asks the subtarget at selection time: the vectors
+/// flag and the features the two CPUs differ in (the table is apple-m1's).
+struct Context {
+    /// `-mcpu=generic` (Linux); else apple-m1.
+    generic: bool,
+}
 
-impl PatternContext for NoContext {
+impl PatternContext for Context {
+    /// `Subtarget->hasX()` for a feature of apple-m1 that generic lacks.
+    fn has_feature(
+        &self,
+        name: &str,
+    ) -> bool {
+        match name {
+            "SHA3" => !self.generic,
+            other => unreachable!("the table leaves {other} to the CPU, which this does not know"),
+        }
+    }
     fn should_opt_for_size(&self) -> bool {
         false
     }
@@ -73,6 +86,8 @@ pub struct Aarch64Hooks {
     /// `CurDAG->shouldOptForSize()`: every operand fold is worth its extra
     /// uses.
     opt_for_size: bool,
+    /// `-mcpu=generic`: Linux; Darwin is apple-m1.
+    generic: bool,
 }
 
 /// What each complex pattern of the table is, decoded once: it was decoded for
@@ -94,6 +109,11 @@ static COMPLEX: std::sync::LazyLock<Vec<Complex>> = std::sync::LazyLock::new(|| 
             "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
             "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
             "SelectExtractHigh" | "SelectDupZero" | "SelectRoundingVLShr" => Complex::Never,
+            // DEVIATE VEC5: the vector `fcvtzs v, v, #fbits` of a multiply by a
+            // power of two is not matched; the multiply and the convert stay
+            // two instructions. Exit: the float-vector conversion slice
+            // (LV-W3).
+            f if f.starts_with("SelectCVTFixedPointVec") => Complex::Never,
             f if f.starts_with("SelectCVTFixedPos") => {
                 Complex::CvtFixedPos { reg_width: size_of_name(f) * 8, reciprocal: f.contains("Recip") }
             }
@@ -107,8 +127,9 @@ impl Aarch64Hooks {
     pub fn new(
         globals: Globals,
         opt_for_size: bool,
+        generic: bool,
     ) -> Aarch64Hooks {
-        Aarch64Hooks { complex: COMPLEX.as_slice(), globals, opt_for_size }
+        Aarch64Hooks { complex: COMPLEX.as_slice(), globals, opt_for_size, generic }
     }
 }
 
@@ -121,7 +142,7 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
         &self,
         predicate: u16,
     ) -> bool {
-        table::pattern_predicate(&NoContext, predicate)
+        table::pattern_predicate(&Context { generic: self.generic }, predicate)
     }
 
     fn check_node_predicate(

@@ -97,16 +97,16 @@ type Selections = std::rc::Rc<
 >;
 
 thread_local! {
-    /// The two modules most recently run through the mid-end and selection (two: -Oz compiles a module as -Oz and as
-    /// -Os, then reads the one it keeps), most recent first, with what each was run for.
+    /// The three modules most recently run through the mid-end and selection (three: -Oz compiles a module three ways, as -Oz and as
+    /// -Os twice, then reads the one it keeps), most recent first, with what each was run for.
     static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
     /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
     static KEPT_LINES: std::cell::RefCell<std::collections::HashMap<(usize, String, usize), Vec<Line>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    /// The level `effective` chose for the module most recently asked about.
-    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Level)>> = const { std::cell::RefCell::new(None) };
+    /// The request `effective` chose for the module most recently asked about.
+    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Request)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
@@ -115,7 +115,7 @@ fn selection_key(request: &Request) -> SelectionKey {
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of)),
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only)),
         environment,
     )
 }
@@ -130,24 +130,40 @@ pub fn effective(
         return Ok(request.clone());
     }
     let key = selection_key(request);
-    let held = CHOSEN.with(|held| held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., level)| *level));
-    let level = match held {
-        Some(level) => level,
+    let held = CHOSEN.with(|held| {
+        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., chosen)| chosen.clone())
+    });
+    let chosen = match held {
+        Some(chosen) => chosen,
         None => {
-            let os = Request { level: Level::Os, ..request.clone() };
-            // an -Os compile that is refused, or whose lines are, leaves -Oz
-            let level = match (module_bytes(ir, request), module_bytes(ir, &os)) {
-                (Ok(oz), Ok(os)) if os < oz => Level::Os,
-                _ => Level::Oz,
-            };
+            // -Oz, then -Os as the functions say (`minsize` kept), then -Os as clang makes it (`minsize` dropped): a
+            // compile that is refused, or whose lines are, is not a candidate; a tie keeps the earlier
+            let candidates = [
+                request.clone(),
+                Request { level: Level::Os, ..request.clone() },
+                Request { level: Level::Os, optsize_only: true, ..request.clone() },
+            ];
+            let sizes: Vec<Result<u32, String>> = candidates.iter().map(|one| module_bytes(ir, one)).collect();
+            if std::env::var_os("LLRM_DEBUG_BESTOF").is_some() {
+                eprintln!("best-of oz, os, os without minsize: {sizes:?}");
+            }
+            let mut best = 0;
+            for (at, size) in sizes.iter().enumerate() {
+                if let (Ok(size), Ok(held)) = (size, &sizes[best])
+                    && size < held
+                {
+                    best = at;
+                }
+            }
+            let chosen = candidates[best].clone();
             // keep only the lines of the module that stays
-            let kept = cached_both(ir, &Request { level, ..request.clone() }).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+            let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
             KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
-            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, level)));
-            level
+            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+            chosen
         }
     };
-    Ok(Request { level, ..request.clone() })
+    Ok(chosen)
 }
 
 /// The module's code bytes at `request.level`: its functions as emitted and the runtime routines they reach, each
@@ -202,7 +218,7 @@ fn cached_both(
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
         held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
-        held.truncate(2);
+        held.truncate(3);
     });
     Ok((one, other))
 }
@@ -235,9 +251,20 @@ fn machine_function_with(
 }
 
 /// Drops the instructions whose results nothing reads (`ZEXT8` of a byte whose
-/// widening an `EXTRACT_SUBREG` bypassed). Only an instruction that defines
-/// virtual registers alone, touches no memory and has no other effect goes.
+/// widening an `EXTRACT_SUBREG` bypassed, the sign fill of a word added in
+/// 16 bits). Only an instruction that touches no memory and has no other
+/// effect goes, and every register it writes is a virtual one nothing reads,
+/// or `a` or the flags with no reader before the next write.
+///
+/// Translation: `DeadMachineInstrElim` (DeadMachineInstructionElim.cpp,
+/// `isDead`: a physical register def is dead where it is not live after).
+/// DEVIATE: only `a` and the flags are judged, the two registers an
+/// accumulator op clobbers without naming a result; every other physical
+/// def keeps its instruction. Exit: the pass on the shared flow.
 fn eliminate_dead(function: &mut MFunction) {
+    // the flags as a register of their own, apart from `a`'s id
+    const FLAGS: RegId = reg::FLAGS;
+    let judged = |r: RegId| r == reg::A || r == FLAGS;
     loop {
         let mut read = llrm_support::hash::HashSet::default();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
@@ -256,22 +283,101 @@ fn eliminate_dead(function: &mut MFunction) {
                 }
             }
         }
+        // what `a` and the flags hold for a reader at the start of each block
+        let successors = llrm_spike_mf::regalloc::successors(function);
+        let mut live_in: Vec<[bool; 2]> = vec![[false; 2]; function.blocks.len()];
+        let slot = |r: RegId| usize::from(r == FLAGS);
+        let reads_of = |inst: &Inst, r: RegId| {
+            inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(p)) if *p == r))
+                || (r == FLAGS && inst.reads_flags())
+        };
+        let writes_of = |inst: &Inst, r: RegId| {
+            inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Phys(p)) if *p == r))
+                || (r == FLAGS && inst.sets_flags())
+        };
+        // a block nothing follows may leave `a` and the flags to its caller
+        let exits: Vec<bool> = (0..function.blocks.len())
+            .map(|block| function.blocks[block].insts.last().is_none_or(|i| i.terminator) && successors[block].is_empty())
+            .collect();
+        let live_after = |block: usize, live_in: &[[bool; 2]]| {
+            let mut live = [exits[block]; 2];
+            for &next in &successors[block] {
+                for k in 0..2 {
+                    live[k] |= live_in[next][k];
+                }
+            }
+            live
+        };
+        let mut moved = true;
+        while moved {
+            moved = false;
+            for block in (0..function.blocks.len()).rev() {
+                let mut live = live_after(block, &live_in);
+                for inst in function.blocks[block].insts.iter().rev() {
+                    for r in [reg::A, FLAGS] {
+                        if writes_of(inst, r) && !inst.call {
+                            live[slot(r)] = false;
+                        }
+                        if inst.call {
+                            live[slot(r)] = true;
+                        }
+                    }
+                    for r in [reg::A, FLAGS] {
+                        if reads_of(inst, r) {
+                            live[slot(r)] = true;
+                        }
+                    }
+                }
+                if live != live_in[block] {
+                    live_in[block] = live;
+                    moved = true;
+                }
+            }
+        }
         let mut removed = false;
-        for block in &mut function.blocks {
-            let before = block.insts.len();
-            block.insts.retain(|inst| {
-                let defs: Vec<&Operand> = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).collect();
-                let dead = !defs.is_empty()
-                    && defs.iter().all(|o| matches!(o, Operand::Def(Reg::Virt(v)) if !read.contains(v)))
+        for block in 0..function.blocks.len() {
+            let mut live = live_after(block, &live_in);
+            let mut dead = vec![false; function.blocks[block].insts.len()];
+            for (k, inst) in function.blocks[block].insts.iter().enumerate().rev() {
+                let defs = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).count();
+                let removable = defs > 0
+                    && inst.operands.iter().all(|o| match o {
+                        Operand::Def(Reg::Virt(v)) => !read.contains(v),
+                        Operand::Def(Reg::Phys(p)) => judged(*p) && !live[slot(*p)],
+                        Operand::Def(_) => false,
+                        _ => true,
+                    })
+                    && !(inst.sets_flags() && live[slot(FLAGS)])
                     && !(inst.call
                         || inst.terminator
                         || inst.barrier
                         || inst.side_effects
                         || inst.may_store
                         || inst.may_load);
-                !dead
+                dead[k] = removable;
+                if removable {
+                    continue;
+                }
+                for r in [reg::A, FLAGS] {
+                    if writes_of(inst, r) && !inst.call {
+                        live[slot(r)] = false;
+                    }
+                    if inst.call {
+                        live[slot(r)] = true;
+                    }
+                }
+                for r in [reg::A, FLAGS] {
+                    if reads_of(inst, r) {
+                        live[slot(r)] = true;
+                    }
+                }
+            }
+            let mut k = 0;
+            function.blocks[block].insts.retain(|_| {
+                k += 1;
+                !dead[k - 1]
             });
-            removed |= block.insts.len() != before;
+            removed |= dead.iter().any(|d| *d);
         }
         if !removed {
             return;
@@ -288,12 +394,37 @@ pub fn allocated(
     request: &Request,
 ) -> Result<(MFunction, Assignment, Vec<(i32, usize)>), String> {
     allocated_with(&cached_selections(ir, request)?, name, request, true)
-        .map(|(function, assignment, slots, _)| (function, assignment, slots))
+        .map(|(function, assignment, slots, _, _)| (function, assignment, slots))
 }
 
-type Allocated = (MFunction, Assignment, Vec<(i32, usize)>, llrm_support::hash::HashMap<u32, usize>);
+/// What an allocation leaves: the function, the registers, the slots, the slots
+/// read again, and the block frequencies where tail merging moved them
+/// (`BranchFolder`'s `MBBFreqInfo`).
+type Allocated = (
+    MFunction,
+    Assignment,
+    Vec<(i32, usize)>,
+    llrm_support::hash::HashMap<u32, usize>,
+    Option<llrm_support::hash::HashMap<u32, f64>>,
+);
 
 fn allocated_with(
+    selected: &Selections,
+    name: &str,
+    request: &Request,
+    duplicate: bool,
+) -> Result<Allocated, String> {
+    let done = allocated_choosing(selected, name, request, duplicate);
+    HOT_LOOP_FOLD.with(|one| one.set(true));
+    // what the later prices of this function weigh by: the blocks as the kept
+    // allocation has them
+    if let Ok((.., Some(own))) = &done {
+        expand::replace_frequencies(own.clone());
+    }
+    done
+}
+
+fn allocated_choosing(
     selected: &Selections,
     name: &str,
     request: &Request,
@@ -311,6 +442,8 @@ fn allocated_with(
     }
     eliminate_phis_with(&mut function, false);
     merge_lone_constant_stores(&mut function);
+    let (joins, plain_first) = repeating_loop_fold_wins(&function, name, request.level);
+    HOT_LOOP_FOLD.with(|one| one.set(joins));
     let mut hoisted = function.clone();
     // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
     let mut split = function.clone();
@@ -322,7 +455,10 @@ fn allocated_with(
         // weighted cost. The other choices are explored on both: lz4c -O2 wants
         // the plain one's (exploring only the better first allocation made it 442
         // B against 427).
-        match (allocate(function.clone(), name, request.level), allocate(hoisted, name, request.level)) {
+        match (
+            allocate_from(function.clone(), name, request.level, plain_first),
+            allocate(hoisted, name, request.level),
+        ) {
             (Ok(plain), Ok(with)) => {
                 match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
                     (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
@@ -333,7 +469,7 @@ fn allocated_with(
             (plain, Err(_)) => plain,
         }
     } else {
-        allocate(function, name, request.level)
+        allocate_from(function, name, request.level, plain_first)
     };
     if !splits {
         return base;
@@ -354,11 +490,16 @@ fn priced_in_loops(
     one: &Allocated,
     level: Level,
 ) -> Option<(u32, u64)> {
-    let (function, assignment, slots, reads) = one;
+    let (function, assignment, slots, reads, frequencies) = one;
     expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
     let lines = finish(function, assignment, 0, slots, reads.clone());
     expand::PRICING.with(|one| one.set(false));
-    lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)))
+    let kept = frequencies.as_ref().map(|own| expand::replace_frequencies(own.clone()));
+    let price = lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)));
+    if let Some(kept) = kept {
+        expand::replace_frequencies(kept);
+    }
+    price
 }
 
 /// Whether a variant is priced before the printer's peepholes. Only at -O2 and up, where the price is weighted
@@ -378,7 +519,7 @@ fn cheaper(
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
+    let priced = |(bytes, clocks): (u32, u64)| clocks + u64::from(bytes) * crate::tti::SPEED_MILLICLOCKS_PER_BYTE as u64 / 1000;
     if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
 }
 
@@ -491,6 +632,41 @@ mod tests {
             assert!(sunk_operand(&function, 0, 2, Reg::Virt(1)).is_none(), "flag operand named: {named}");
         }
     }
+
+    /// `or a; ...; add hl, de; ...; cp a, 0; jr nz` lost its `or`: the test was dropped across the `add hl`, whose Z
+    /// the CPU keeps, but the flag liveness that followed read the `add` as a full flag def and deleted the `or`
+    /// chain; the `jr nz` then read the `add`'s flags and `(long)(3.0 / 1.0)` was 4 (f64 divide of a mantissa
+    /// at least 1 with fraction bits). The test stays whenever a flag setter lies between.
+    #[test]
+    fn a_zero_test_is_kept_where_another_flag_setter_lies_between() {
+        let (a, flags) = (Reg::Phys(crate::reg::A), Reg::Phys(crate::reg::FLAGS));
+        let mut or = Inst::new(Kind::Op("OR8r"), vec![Operand::Def(a), Operand::Use(a), Operand::Use(Reg::Virt(2))]);
+        or.sets_flags = true;
+        let mut add = Inst::new(Kind::Op("ADD16"), vec![Operand::Def(Reg::Virt(5)), Operand::Use(Reg::Virt(6))]);
+        add.sets_flags = true;
+        let mut test = Inst::new(Kind::Op("CP8i"), vec![Operand::Def(flags), Operand::Use(a), Operand::Imm(0)]);
+        test.sets_flags = true;
+        let mut jump = Inst::new(Kind::Op("JPNZ"), vec![Operand::Block(1), Operand::Use(flags)]);
+        jump.reads_flags = true;
+        jump.terminator = true;
+        let insts = vec![
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(1))]),
+            or,
+            Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(3)), Operand::Use(a)]),
+            add,
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(3))]),
+            test,
+            jump,
+        ];
+        let mut function = MFunction::new("f");
+        function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+        eliminate_tests(&mut function);
+        eliminate_dead(&mut function);
+        let insts = &function.blocks[0].insts;
+        let reader = insts.iter().position(|inst| inst.reads_flags()).expect("the jump stays");
+        let setter = insts[..reader].iter().rposition(|inst| inst.sets_flags()).expect("something sets the flags it reads");
+        assert_ne!(insts[setter].kind, Kind::Op("ADD16"), "the jump reads the add's flags: {insts:?}");
+    }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -517,8 +693,68 @@ fn allocate(
     name: &str,
     level: Level,
 ) -> Result<Allocated, String> {
-    let first = allocate_first(function.clone(), name, level)?;
-    Ok(improved(first, function, name, level))
+    allocate_from(function, name, level, None)
+}
+
+/// [`allocate`], from the first allocation of `function` where one is at hand.
+fn allocate_from(
+    function: MFunction,
+    name: &str,
+    level: Level,
+    first: Option<First>,
+) -> Result<Allocated, String> {
+    let first = match first {
+        Some(first) => first,
+        None => allocate_first(function.clone(), name, level)?,
+    };
+    let best = improved(first, function.clone(), name, level);
+    // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
+    // slots are all frame cells, so it folds every spilled read. Here a slot
+    // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
+    // after allocation: a spilled read is taken from its cell where the
+    // function is cheaper for it, every other choice explored on both. Exit:
+    // the stack slots chosen before the fold.
+    if !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
+        return Ok(best);
+    }
+    crate::regalloc::NO_FOLD.with(|one| one.set(true));
+    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level));
+    crate::regalloc::NO_FOLD.with(|one| one.set(false));
+    Ok(match other {
+        Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
+            (Some(now), Some(then)) if cheaper(level, then, now) => other,
+            _ => best,
+        },
+        Err(_) => best,
+    })
+}
+
+/// Whether joining the guard and latch of the repeating loops stays for this
+/// function: decided once, on the first allocation of each, so the variants
+/// below all run in the one mode. Joined, the allocator can spill and place
+/// slots worse; the function as it was wins where it prices cheaper (DEVIATE
+/// Z80T1).
+fn repeating_loop_fold_wins(
+    function: &MFunction,
+    name: &str,
+    level: Level,
+) -> (bool, Option<First>) {
+    if matches!(level, Level::Os | Level::Oz) {
+        return (true, None);
+    }
+    LOOPS_FOLDED.with(|one| one.set(false));
+    let Ok((joined, apart)) = allocate_first_apart(function.clone(), name, level, true) else { return (true, None) };
+    // one allocation, finished with and without the merge; the one kept is the
+    // first of the function in the chosen mode
+    let Some(apart) = apart.filter(|_| LOOPS_FOLDED.with(|one| one.get())) else { return (true, Some(joined)) };
+    if matches!(
+        (priced_in_loops(&joined.0, level), priced_in_loops(&apart, level)),
+        (Some(now), Some(then)) if cheaper(level, then, now)
+    ) {
+        (false, Some((apart, joined.1, joined.2)))
+    } else {
+        (true, Some(joined))
+    }
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
@@ -533,10 +769,21 @@ fn allocate_first(
     name: &str,
     level: Level,
 ) -> Result<First, String> {
-    match allocate_with(None, true, function.clone(), name, level) {
-        Ok((best, held)) => Ok((best, held, true)),
+    allocate_first_apart(function, name, level, false).map(|(first, _)| first)
+}
+
+/// [`allocate_first`], and with `want_apart` the same allocation finished
+/// without the hot loops' tail merge (`allocate_once_with`).
+fn allocate_first_apart(
+    function: MFunction,
+    name: &str,
+    level: Level,
+    want_apart: bool,
+) -> Result<(First, Option<Allocated>), String> {
+    match allocate_with_apart(None, true, function.clone(), name, level, want_apart) {
+        Ok((best, held, apart)) => Ok(((best, held, true), apart)),
         Err(first) => allocate_with(Some(true), true, function, name, level)
-            .map(|(done, _)| (done, false, false))
+            .map(|(done, _)| ((done, false, false), None))
             .map_err(|_| first),
     }
 }
@@ -548,8 +795,19 @@ fn allocate_with(
     name: &str,
     level: Level,
 ) -> Result<(Allocated, bool), String> {
+    allocate_with_apart(unjoined, strict, function, name, level, false).map(|(best, held, _)| (best, held))
+}
+
+fn allocate_with_apart(
+    unjoined: Option<bool>,
+    strict: bool,
+    function: MFunction,
+    name: &str,
+    level: Level,
+    want_apart: bool,
+) -> Result<(Allocated, bool, Option<Allocated>), String> {
     crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
-    let done = allocate_once(function, name, strict, level);
+    let done = allocate_once_with(function, name, strict, level, want_apart);
     crate::regalloc::UNJOINED.with(|one| one.set(None));
     done
 }
@@ -586,6 +844,23 @@ fn improved(
     best
 }
 
+/// An ALU op or compare whose second source is a frame cell (`Target::fold_spill`).
+fn reads_its_cell(inst: &Inst) -> bool {
+    matches!(
+        inst.kind,
+        Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
+    ) && matches!(inst.operands.get(2), Some(Operand::Frame(_)))
+        || matches!(inst.kind, Kind::Op("RELOAD8L"))
+}
+
+thread_local! {
+    /// Whether `allocate_once` joins the guard and latch of the loops that
+    /// repeat ([`repeating_loops`]).
+    static HOT_LOOP_FOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// Whether the last allocations folded a repeating loop's guard and latch.
+    static LOOPS_FOLDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 thread_local! {
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -610,11 +885,24 @@ pub fn take_allocations() -> usize {
 
 /// One allocation, and whether `strict` held a byte back from `a`.
 fn allocate_once(
-    mut function: MFunction,
+    function: MFunction,
     name: &str,
     strict: bool,
     level: Level,
 ) -> Result<(Allocated, bool), String> {
+    allocate_once_with(function, name, strict, level, false).map(|(best, held, _)| (best, held))
+}
+
+/// [`allocate_once`], and with `want_apart` also the function finished without
+/// the hot loops' tail merge where that merge changed it: one allocation
+/// serves both finishes, as the fold decision needs them (`repeating_loop_fold_wins`).
+fn allocate_once_with(
+    mut function: MFunction,
+    name: &str,
+    strict: bool,
+    level: Level,
+    want_apart: bool,
+) -> Result<(Allocated, bool, Option<Allocated>), String> {
     if std::env::var("LLRM_NO_Z80_NARROW").is_err() {
         crate::narrow::narrow_low_only_pairs(&mut function);
     }
@@ -629,6 +917,9 @@ fn allocate_once(
     }
     if std::env::var("LLRM_NO_Z80_BUMP").is_err() {
         crate::bump::step_by_flags(&mut function);
+    }
+    if std::env::var("LLRM_NO_Z80_SINK").is_err() {
+        crate::sink_group::sink_closed_groups(&mut function);
     }
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
@@ -649,21 +940,63 @@ fn allocate_once(
     if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
         dump(&function);
     }
+    let colored = want_apart.then(|| function.clone());
+    let best = settle(function, &assignment, slots.clone(), &reads, name, level);
+    let apart = match colored {
+        Some(colored) if LOOPS_FOLDED.with(|one| one.get()) => {
+            HOT_LOOP_FOLD.with(|one| one.set(false));
+            let apart = settle(colored, &assignment, slots, &reads, name, level);
+            HOT_LOOP_FOLD.with(|one| one.set(true));
+            Some(apart)
+        }
+        _ => None,
+    };
+    Ok((best, held, apart))
+}
+
+/// What follows a coloring: the copies it leaves, the tail merge, the slots
+/// as a frame or a stack, the conditional return.
+fn settle(
+    mut function: MFunction,
+    assignment: &Assignment,
+    slots: Vec<(i32, <Z80Registers as Target>::Class)>,
+    reads: &llrm_support::hash::HashMap<u32, usize>,
+    name: &str,
+    level: Level,
+) -> Allocated {
+    let assignment = assignment.clone();
+    let reads = reads.clone();
+    let mut frequencies: Option<llrm_support::hash::HashMap<u32, f64>> = None;
     remove_identity_copies(&mut function, &assignment);
     tidy_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
-    // DEVIATE Z80T1: tail merging crosses loops only at Os/Oz. The pin merges
+    // DEVIATE Z80T1: tail merging crosses loops at Os/Oz, and elsewhere only
+    // the loops `repeating_loops` names, kept where the function without it
+    // is not cheaper (`improved`). The pin merges
     // across loops before block placement (BranchFolding.cpp L1173-1203 limit
     // it to after placement), and rotateLoop does not move the merged test
     // back (FallThrough2Top ties ExitFreq). The merged guard and latch of a
     // loop cost one entry jump: -3 B for +12 T per call (xs8 -O2 28/507/105
     // -> 25/524/106), a trade the z80 has no rate for. Exit: a rate for the
-    // z80, or a form of the merge that costs no clocks.
+    // z80, or a form of the merge that costs no clocks. Pass:
+    // `BranchFolder::OptimizeFunction` with `TailMergeBlocks`, its
+    // `MBBFreqInfo` kept as blocks split and merge.
     let bytes_first = matches!(level, Level::Os | Level::Oz);
     if bytes_first {
         llrm_spike_mf::branch_fold_hoisting_across_loops::<Z80Registers>(&mut function, &assignment);
     } else {
-        llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
+        let hot = if HOT_LOOP_FOLD.with(|one| one.get()) { repeating_loops(&function) } else { Default::default() };
+        let mut moved = expand::frequencies();
+        let changed = llrm_spike_mf::branch_fold_hoisting_across_hot_loops::<Z80Registers>(
+            &mut function,
+            &assignment,
+            &hot,
+            &mut moved,
+        );
+        if changed && !hot.is_empty() {
+            LOOPS_FOLDED.with(|one| one.set(true));
+            frequencies = Some(moved);
+        }
     }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
@@ -678,7 +1011,7 @@ fn allocate_once(
     spills_first(&mut framed, &assignment);
     narrow_reload_for_byte_shift(&mut framed, &assignment);
     drop_repeated_slot_accesses(&mut framed, &assignment, &slots);
-    let framed = (framed, assignment.clone(), slots.clone(), reads.clone());
+    let framed = (framed, assignment.clone(), slots.clone(), reads.clone(), frequencies.clone());
     // Pushes and pops are 1 B and 10-11 T where a slot through IX is 3 B and
     // 19 T a byte, but they change what the printer and the later choices
     // keep in a pair (fill_nest -Os: the constant 4660 left bc, +65% T): the
@@ -692,7 +1025,7 @@ fn allocate_once(
     // no frame) is the start to beat
     let mut frameless = function.clone();
     if frameless_slots_are_a_stack(&mut frameless, &assignment) {
-        best = (frameless, assignment.clone(), Vec::new(), reads.clone());
+        best = (frameless, assignment.clone(), Vec::new(), reads.clone(), frequencies.clone());
         best_price = priced_in_loops(&best, level);
     }
     // Z80-SLOT-CONFLICT is one more candidate, kept only where it prices
@@ -701,10 +1034,18 @@ fn allocate_once(
     if SLOT_BY_CONFLICTS.with(std::cell::Cell::get) {
         choices.push((true, true));
     }
-    for (peek, by_conflicts) in choices {
-        let mut candidate = function.clone();
+    // the nested reload order is one more variant, priced like the others: a slot read again later is a `pop` and
+    // a `push` where it is on top, and the reorder can take that away (frameless -O1 +4 B)
+    let mut nested = function.clone();
+    let nests = nest_reloads(&mut nested, &assignment);
+    let variants: Vec<(bool, bool, bool)> = choices
+        .iter()
+        .flat_map(|&(peek, by_conflicts)| [(peek, by_conflicts, false)].into_iter().chain(nests.then_some((peek, by_conflicts, true))))
+        .collect();
+    for (peek, by_conflicts, nest) in variants {
+        let mut candidate = if nest { nested.clone() } else { function.clone() };
         let report = stack_slot_report_by(&mut candidate, &assignment, peek, by_conflicts);
-        if peek && !by_conflicts {
+        if peek && !by_conflicts && !nest {
             if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
                 for (slot, (stores, loads)) in &report.accesses {
                     let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
@@ -727,11 +1068,11 @@ fn allocate_once(
             narrow_reload_for_byte_shift(&mut candidate, &assignment);
             drop_repeated_slot_accesses(&mut candidate, &assignment, &slots);
         }
-        let stacked = (candidate, assignment.clone(), slots, reads.clone());
+        let stacked = (candidate, assignment.clone(), slots, reads.clone(), frequencies.clone());
         let now = priced_in_loops(&stacked, level);
         if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
             eprintln!(
-                "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} best {best_price:?} stacked {now:?}"
+                "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} nest {nest} best {best_price:?} stacked {now:?}"
             );
         }
         if keeps_stacked(level, best_price, now) {
@@ -743,7 +1084,31 @@ fn allocate_once(
     if !expand::needs_frame(&best.0, &best.2) {
         return_conditionally(&mut best.0);
     }
-    Ok((best, held))
+    best
+}
+
+/// The headers of the loops that run more than once a time they are entered, by
+/// the block frequencies of the selection (the header's against the busiest
+/// block that enters it from outside). Tail merging joins their guard and
+/// latch: the entry jump it leaves costs a loop's entry 12 T once and saves
+/// each trip a `jp` (DEVIATE Z80T1: the pin merges across loops and leaves the
+/// test's place to `rotateLoop`, which ties and does not rotate one entry and
+/// one exit).
+fn repeating_loops(function: &MFunction) -> llrm_support::hash::HashSet<u32> {
+    let cfg = Cfg::new(function);
+    cfg.loops()
+        .iter()
+        .filter_map(|(header, body)| {
+            let id = function.blocks[*header].id;
+            let entering = cfg.preds[*header]
+                .iter()
+                .filter(|&&pred| !body[pred])
+                .filter_map(|&pred| expand::frequency_of(function.blocks[pred].id))
+                .fold(0.0, f64::max);
+            let inside = expand::frequency_of(id)?;
+            (entering > 0.0 && inside / entering >= 2.0).then_some(id)
+        })
+        .collect()
 }
 
 /// The slots left in the frame lose the stores and reloads that repeat what a
@@ -838,15 +1203,15 @@ pub fn use_the_shift_carry(function: &mut MFunction) {
                         test = Some(k);
                         break;
                     }
-                    if inst.sets_flags || inst.call || writes(inst, old) {
+                    if inst.sets_flags() || inst.call || writes(inst, old) {
                         return None;
                     }
                 }
                 let test = test?;
                 // every reader is a branch of this block
                 let readers: Vec<usize> =
-                    (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags).collect();
-                let flags_set_later = block.insts[test + 1..].iter().any(|inst| inst.sets_flags);
+                    (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags()).collect();
+                let flags_set_later = block.insts[test + 1..].iter().any(|inst| inst.sets_flags());
                 let ends_here = block.insts.last().is_some_and(|inst| inst.terminator);
                 let branches = readers.iter().all(|&k| matches!(block.insts[k].kind, Kind::Op("JPZ" | "JPNZ")));
                 (!readers.is_empty() && branches && !flags_set_later && ends_here).then_some((test, readers))
@@ -1162,6 +1527,8 @@ pub enum StackRefusal {
     PathsDisagree,
     /// A byte slot whose pair's other half is live after the `pop`.
     ByteMateLive,
+    /// A slot an instruction reads in place (`and a, d(ix)`): a pop cannot.
+    ReadInPlace,
 }
 
 /// What [`stack_slots`] decided, slot by slot.
@@ -1217,6 +1584,16 @@ pub fn stack_slot_report_by(
     for (b, block) in function.blocks.iter().enumerate() {
         for (at, inst) in block.insts.iter().enumerate() {
             let area = areas[b][at];
+            if spill(inst).is_none() {
+                for operand in &inst.operands {
+                    if let Operand::Frame(slot) = operand
+                        && inst.may_load
+                    {
+                        chosen.insert(*slot);
+                        barred.entry(*slot).or_insert(StackRefusal::ReadInPlace);
+                    }
+                }
+            }
             if let Some((store, slot, register)) = spill(inst) {
                 chosen.insert(slot);
                 let counts = accesses.entry(slot).or_default();
@@ -1452,6 +1829,71 @@ pub fn stack_slot_report_by(
     }
     refused.sort_by_key(|(slot, _)| *slot);
     StackReport { pushed: chosen.into_iter().collect(), refused, accesses }
+}
+
+/// Reloads that sit side by side and read different slots come back in the reverse of the order the slots were
+/// stored, so each slot is on top when it is loaded and every one can be a `pop` (`switch_peeled_table` -O1: `bc`
+/// stored before `de` and reloaded first kept `bc` in the IX frame, 25 B with its frame). The reloads write
+/// different registers and read no register, so the order is free. A run is reordered only where that makes more
+/// slots pushes: a slot read again later can lose its `pop` and `push` peek to a reorder (frameless -O1 +4 B,
+/// rep_count -O2 +2 T a trip). Beyond the pin, which has only frame slots (DEVIATE Z80-SLOT-NEST, owner z80-c,
+/// exit 2026-11-24: spill placement that knows the stack). One report per run that would move. Whether any run moved.
+pub fn nest_reloads(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let reload = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
+        (Kind::Op("RELOAD8" | "RELOAD16"), [Operand::Def(reg), Operand::Frame(slot)]) => Some((register(*reg), *slot)),
+        _ => None,
+    };
+    let pushed = |function: &MFunction| stack_slot_report_by(&mut function.clone(), assignment, true, false).pushed.len();
+    let mut stored_at = std::collections::BTreeMap::new();
+    let mut have = None;
+    let mut moved = false;
+    let mut now = 0usize;
+    for b in 0..function.blocks.len() {
+        let mut at = 0;
+        while at < function.blocks[b].insts.len() {
+            now += 1;
+            let inst = &function.blocks[b].insts[at];
+            if let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), _]) = (inst.kind, &inst.operands[..]) {
+                stored_at.insert(*slot, now);
+            }
+            if reload(inst).is_none() {
+                at += 1;
+                continue;
+            }
+            let insts = &function.blocks[b].insts;
+            let end = (at..insts.len()).find(|&one| reload(&insts[one]).is_none()).unwrap_or(insts.len());
+            let run: Vec<(RegId, i32)> = insts[at..end].iter().filter_map(reload).collect();
+            let independent = run.iter().enumerate().all(|(i, (reg, slot))| {
+                run[i + 1..].iter().all(|(other, other_slot)| !Z80Registers::overlaps(*reg, *other) && slot != other_slot)
+            });
+            if independent && end - at > 1 {
+                let original = insts[at..end].to_vec();
+                let mut sorted = original.clone();
+                sorted.sort_by_key(|inst| std::cmp::Reverse(reload(inst).map_or(0, |(_, slot)| stored_at.get(&slot).copied().unwrap_or(0))));
+                if sorted != original {
+                    let was = *have.get_or_insert_with(|| pushed(function));
+                    function.blocks[b].insts.splice(at..end, sorted);
+                    let now_pushed = pushed(function);
+                    if now_pushed > was {
+                        have = Some(now_pushed);
+                        moved = true;
+                    } else {
+                        function.blocks[b].insts.splice(at..end, original);
+                    }
+                }
+            }
+            now += end - at;
+            at = end;
+        }
+    }
+    moved
 }
 
 /// Moves the entry block's spills of argument registers up to its start while
@@ -2265,8 +2707,8 @@ fn dump(function: &MFunction) {
                 "  {:?} {:?}{}{}",
                 inst.kind,
                 inst.operands,
-                if inst.sets_flags { " SF" } else { "" },
-                if inst.reads_flags { " RF" } else { "" }
+                if inst.sets_flags() { " SF" } else { "" },
+                if inst.reads_flags() { " RF" } else { "" }
             );
         }
     }
@@ -2638,7 +3080,7 @@ fn lines_of_form(
     request: &Request,
 ) -> Result<Vec<Line>, String> {
     let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
-        let (function, assignment, slots, reads) = allocated_with(selected, name, request, duplicate)?;
+        let (function, assignment, slots, reads, _) = allocated_with(selected, name, request, duplicate)?;
         finish(&function, &assignment, number, &slots, reads)
     };
     // Copying a return block into its predecessors saves a `jp` and often a
@@ -2817,7 +3259,7 @@ fn sunk_operand(
         !(inst.call
             || inst.terminator
             || inst.barrier
-            || inst.reads_flags
+            || inst.reads_flags()
             || inst.side_effects
             || inst.may_load
             || inst.may_store)
@@ -2914,15 +3356,15 @@ fn sunk_operand(
     // none
     let flags = Reg::Phys(crate::reg::FLAGS);
     // an instruction that sets the flags may not name them (`XOR16i`)
-    let sets = |inst: &Inst| inst.sets_flags || touches(inst, flags);
+    let sets = |inst: &Inst| inst.sets_flags() || touches(inst, flags);
     let makes_flags = slice.iter().any(|&at| sets(&insts[at]));
     if makes_flags {
         if insts.iter().rposition(sets).is_some_and(|last| slice.contains(&last)) {
             return None;
         }
         let tail = &function.blocks[block].insts[p + 1..];
-        let wanted = tail.iter().find(|inst| inst.reads_flags || sets(inst));
-        if wanted.is_some_and(|inst| inst.reads_flags) {
+        let wanted = tail.iter().find(|inst| inst.reads_flags() || sets(inst));
+        if wanted.is_some_and(|inst| inst.reads_flags()) {
             return None;
         }
     }
@@ -3203,8 +3645,7 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
 /// `optimizeCompareInstr`: the test of a byte against zero (`cp 0`) after the
 /// instruction that made the byte and set the flags by it is dropped when only
 /// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`.
-/// Every `ld` between leaves the flags alone, and so does `add hl, rr` (but
-/// for C, H and N).
+/// Every `ld` between leaves the flags alone.
 fn eliminate_tests(function: &mut MFunction) {
     for block in &mut function.blocks {
         let mut at = 1;
@@ -3242,17 +3683,14 @@ fn eliminate_tests(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // `add hl, rr` (Z80 CPU User Manual UM0080, ADD HL,ss): C is the
-            // carry out of bit 15, H out of bit 11, N is reset; S,
-            // Z and P/V are not affected, so the zero of the byte
-            // survives it. (`adc hl, rr` and `sbc hl, rr` set all
-            // of them.)
-            let flags_kept = block.insts[setter + 1..at - 1]
-                .iter()
-                .all(|inst| !inst.call && (!inst.sets_flags || inst.kind == Kind::Op("ADD16")));
-            let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags);
+            // `optimizeCompareInstr` stops at an instruction between that sets the
+            // flags. `add hl, rr` keeps Z, but every flag scan after this
+            // (`eliminate_dead`, the expander's `flags_dead`) reads it as a full
+            // def, so a zero kept across it was deleted with its setter.
+            let flags_kept = block.insts[setter + 1..at - 1].iter().all(|inst| !inst.call && !inst.sets_flags());
+            let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags());
             let only_zero = readers
-                .filter(|inst| inst.reads_flags)
+                .filter(|inst| inst.reads_flags())
                 .all(|inst| matches!(inst.kind, Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ")));
             if flags_kept && only_zero {
                 block.insts.drain(at - 1..=at);

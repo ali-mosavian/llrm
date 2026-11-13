@@ -10,6 +10,12 @@
 //! the data segment is a global array `@seg<n>`; the first incoming stack
 //! argument is `%fixed-stack.0`. Anything else is refused with its name.
 //!
+//! A body with quadword values or a 64-bit register is 64-bit code: `gr64`
+//! values, `$rdi`..`$r15`, `ADJCALLSTACKDOWN64`, `CALL64pcrel32`, `ri32`
+//! immediates, `CMOV64rr`, eight-byte stack slots. A dword read of a quadword
+//! value is a `COPY` of its `sub_32bit` into a `gr32`, a dword write (or `movzx
+//! r64, r32`) a `SUBREG_TO_REG` of one.
+//!
 //! # Example
 //! `v1 := mov [bp+8]; cmp v1, 0; jg` becomes
 //! `%1 = MOV32rm %fixed-stack.0, 1, $noreg, 0, $noreg`,
@@ -23,13 +29,19 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
+use llrm_codegen::model::lir::{Insn, LirBody};
+use llrm_codegen::support::hash::IndexMap;
 use llrm_lir::registers::RegId;
 use llrm_lir::{Held, Imm, Loc, Mem, Space};
 
-use llrm_codegen::model::lir::{Insn, LirBody};
-use llrm_codegen::support::hash::IndexMap;
-
 thread_local! {
+    /// The next id for a 32-bit value made to carry the low half of a quadword
+    /// one, and the ones made for the body being printed.
+    static NEXT_TEMP: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static TEMPS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Whether the body being printed is 64-bit code: quadword values, `rsp`,
+    /// REX registers, `gr64`.
+    static LONG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The widest each value is named at, for the body being printed.
     static WIDEST: std::cell::RefCell<std::collections::BTreeMap<u32, u32>> = Default::default();
     /// The displacement of the first incoming argument from BP: the saved
@@ -48,8 +60,9 @@ fn vreg(held: &Held) -> Result<String, String> {
     let widest = WIDEST.with(|w| w.borrow().get(&held.value).copied()).unwrap_or(held.width);
     Ok(match (widest, held.width) {
         (wide, narrow) if wide == narrow => format!("%{}", held.value),
-        (4, 2) => format!("%{}.sub_16bit", held.value),
-        (4 | 2, 1) => format!("%{}.sub_8bit", held.value),
+        (8, 4) => format!("%{}.sub_32bit", held.value),
+        (8 | 4, 2) => format!("%{}.sub_16bit", held.value),
+        (8 | 4 | 2, 1) => format!("%{}.sub_8bit", held.value),
         (wide, narrow) => return Err(format!("value {} read at {narrow} bytes of {wide}", held.value)),
     })
 }
@@ -60,6 +73,20 @@ fn physical(
     width: u32,
 ) -> Result<String, String> {
     let whole = format!("{register:?}").to_lowercase();
+    // A register named by its 64-bit name, or any family's name asked as eight
+    // bytes (the dword root `eax` is `rax` as a quadword).
+    if let Some(family) =
+        quadword_family(&whole).filter(|family| family[0] == whole || width == 8 || LONG.with(std::cell::Cell::get))
+    {
+        return Ok(family[match width {
+            8 => 0,
+            4 => 1,
+            2 => 2,
+            1 => 3,
+            _ => return Err(format!("{width} bytes of {whole}")),
+        }]
+        .to_owned());
+    }
     match (width, whole.strip_prefix('e')) {
         (4, _) => Ok(whole),
         // `es` is a segment register, not the low half of an `e` one.
@@ -76,12 +103,77 @@ fn physical(
     }
 }
 
+/// The names of a 64-bit register as 8, 4, 2 and 1 bytes: `rdi`, `edi`, `di`,
+/// `dil`; None for any other register.
+fn quadword_family(name: &str) -> Option<[&'static str; 4]> {
+    const FAMILIES: [[&str; 4]; 16] = [
+        ["rax", "eax", "ax", "al"],
+        ["rcx", "ecx", "cx", "cl"],
+        ["rdx", "edx", "dx", "dl"],
+        ["rbx", "ebx", "bx", "bl"],
+        ["rsp", "esp", "sp", "spl"],
+        ["rbp", "ebp", "bp", "bpl"],
+        ["rsi", "esi", "si", "sil"],
+        ["rdi", "edi", "di", "dil"],
+        ["r8", "r8d", "r8w", "r8b"],
+        ["r9", "r9d", "r9w", "r9b"],
+        ["r10", "r10d", "r10w", "r10b"],
+        ["r11", "r11d", "r11w", "r11b"],
+        ["r12", "r12d", "r12w", "r12b"],
+        ["r13", "r13d", "r13w", "r13b"],
+        ["r14", "r14d", "r14w", "r14b"],
+        ["r15", "r15d", "r15w", "r15b"],
+    ];
+    FAMILIES.iter().find(|family| family.contains(&name)).copied()
+}
+
+/// `register` as `width` bytes of it, in the names of the pin's MIR (`$rdi`).
+fn named(
+    register: RegId,
+    width: u32,
+) -> String {
+    physical(register, width).unwrap_or_else(|_| format!("{register:?}").to_lowercase())
+}
+
+/// A physical register as an instruction's operand or implicit use: the name
+/// `width` bytes of it have in 64-bit code, the whole register as the 32-bit
+/// forms always printed it.
+fn copy_register(
+    register: RegId,
+    width: u32,
+) -> String {
+    if LONG.with(std::cell::Cell::get) { named(register, width) } else { format!("{register:?}").to_lowercase() }
+}
+
+/// The stack pointer, the register `rsp` or `esp` the frame instructions name.
+fn stack_pointer() -> &'static str {
+    if LONG.with(std::cell::Cell::get) { "rsp" } else { "esp" }
+}
+
+/// An immediate form of a quadword instruction takes a sign-extended 32 bits:
+/// `ADD64ri32`, `CMP64mi32`, `IMUL64rri32`.
+fn imm(
+    form: &str,
+    width: u32,
+) -> &'static str {
+    match (form, width == 8) {
+        ("ri", true) => "ri32",
+        ("ri", false) => "ri",
+        ("mi", true) => "mi32",
+        ("mi", false) => "mi",
+        ("rri", true) => "rri32",
+        ("rri", false) => "rri",
+        _ => unreachable!("an immediate form"),
+    }
+}
+
 /// The opcode suffix of an operand of `width` bytes.
 fn bits(width: u32) -> Result<&'static str, String> {
     match width {
         1 => Ok("8"),
         2 => Ok("16"),
         4 => Ok("32"),
+        8 => Ok("64"),
         other => Err(format!("a {other}-byte operand")),
     }
 }
@@ -123,7 +215,8 @@ fn cell(
                 return Ok(format!("%stack.{object}, {}, {}, {}, $noreg", index.0, index.1, disp - start));
             }
             let at = disp - ARGUMENTS_AT.with(|a| a.get());
-            Ok(format!("%fixed-stack.{}, {}, {}, {}, $noreg", at / 4, index.0, index.1, at % 4))
+            let slot = if LONG.with(std::cell::Cell::get) { 8 } else { 4 };
+            Ok(format!("%fixed-stack.{}, {}, {}, {}, $noreg", at / slot, index.0, index.1, at % slot))
         }
         Some(Space::Segment) => {
             let a = addr.expect("an address");
@@ -202,6 +295,83 @@ fn flags_are_read(text: &mut String) {
     }
 }
 
+/// `one` where its 32-bit operands name the low half of a quadword value. The
+/// pin's classes keep a dword instruction off `%v.sub_32bit` of a `gr64`: a
+/// read is a `COPY` of the half into a `gr32` first, and a write, which x86-64
+/// zero-extends, is a `SUBREG_TO_REG` of a `gr32` result (as its own selection
+/// spells both).
+fn instruction_in_quadwords(
+    one: &Insn,
+    at: &[i64],
+    targets: &[usize],
+    jumps: &mut usize,
+    symbols: &mut BTreeSet<i64>,
+    callees: &mut BTreeSet<i64>,
+    in_register: &BTreeSet<u32>,
+    out: &mut String,
+) -> Result<(), String> {
+    let low_half = |held: &Held| {
+        matches!(held.width, 1 | 2 | 4)
+            && WIDEST.with(|w| w.borrow().get(&held.value).copied()).is_some_and(|wide| wide == 8)
+    };
+    if one.what.as_ref().is_none_or(|what| {
+        !LONG.with(std::cell::Cell::get)
+            || !what.dests.iter().chain(&what.sources).any(|loc| matches!(loc, Loc::Held(held) if low_half(held)))
+    }) {
+        return instruction(one, at, targets, jumps, symbols, callees, in_register, out);
+    }
+    let mut halves: std::collections::BTreeMap<(u32, u32), u32> = Default::default();
+    // The stand-in for the low `width` bytes of a value, and whether this call
+    // made it.
+    let mut half = |value: u32, width: u32| -> (u32, bool) {
+        if let Some(id) = halves.get(&(value, width)) {
+            return (*id, false);
+        }
+        let id = NEXT_TEMP.with(|n| n.replace(n.get() + 1));
+        TEMPS.with(|t| t.borrow_mut().push(id));
+        WIDEST.with(|w| w.borrow_mut().insert(id, width));
+        halves.insert((value, width), id);
+        (id, true)
+    };
+    let part = |width: u32| match width {
+        4 => "sub_32bit",
+        2 => "sub_16bit",
+        _ => "sub_8bit",
+    };
+    let (mut before, mut after) = (String::new(), String::new());
+    let mut changed = one.clone();
+    let semantics = changed.what.as_mut().expect("a semantics");
+    for loc in &mut semantics.sources {
+        if let Loc::Held(held) = loc.clone()
+            && low_half(&held)
+        {
+            let (id, fresh) = half(held.value, held.width);
+            if fresh {
+                writeln!(before, "    %{id} = COPY %{}.{}", held.value, part(held.width)).unwrap();
+            }
+            *loc = Loc::Held(Held { value: id, ..held });
+        }
+    }
+    for loc in &mut semantics.dests {
+        if let Loc::Held(held) = loc.clone()
+            && low_half(&held)
+        {
+            let (id, _) = half(held.value, held.width);
+            if held.width == 4 {
+                writeln!(after, "    %{} = SUBREG_TO_REG %{id}, %subreg.sub_32bit", held.value).unwrap();
+            } else {
+                // A byte or word write keeps the rest of the register.
+                writeln!(after, "    %{}.{} = COPY %{id}", held.value, part(held.width)).unwrap();
+            }
+            *loc = Loc::Held(Held { value: id, ..held });
+        }
+    }
+    out.push_str(&before);
+    instruction(&changed, at, targets, jumps, symbols, callees, in_register, out)?;
+    out.push_str(&after);
+    Ok(())
+}
+
 /// One instruction as MIR lines.
 fn instruction(
     one: &Insn,
@@ -214,18 +384,21 @@ fn instruction(
     out: &mut String,
 ) -> Result<(), String> {
     for (held, register) in one.requires.iter().filter(|(held, _)| !in_register.contains(&held.value)) {
-        writeln!(out, "    ${} = COPY {}", format!("{register:?}").to_lowercase(), vreg(held)?).unwrap();
+        writeln!(out, "    ${} = COPY {}", copy_register(*register, held.width), vreg(held)?).unwrap();
     }
     let Some(what) = &one.what else {
         for (held, register) in &one.delivers {
-            writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+            writeln!(out, "    {} = COPY ${}", vreg(held)?, copy_register(*register, held.width)).unwrap();
         }
         return Ok(());
     };
     let name = what.name.as_deref().unwrap_or("");
     let eflags = "implicit-def dead $eflags";
+    let sp = stack_pointer();
     let dest = what.dests.first();
     match (name, dest, what.sources.as_slice()) {
+        // A value no definition reaches: the pin's own undefined value.
+        ("implicit_def", Some(Loc::Held(d)), []) => writeln!(out, "    {} = IMPLICIT_DEF", vreg(d)?).unwrap(),
         // An anchor that names no value is nothing to print.
         ("", None, []) if what.op == llrm_lir::Operation::Nothing => match (one.defines.as_slice(), one.uses.as_slice()) {
             ([], []) => {}
@@ -247,12 +420,13 @@ fn instruction(
         },
         ("", None, []) if what.op == llrm_lir::Operation::Return => {
             let used: Vec<String> =
-                one.requires.iter().map(|(_, r)| format!("implicit ${}", format!("{r:?}").to_lowercase())).collect();
+                one.requires.iter().map(|(held, r)| format!("implicit ${}", copy_register(*r, held.width))).collect();
             writeln!(out, "    RET 0{}", used.iter().map(|u| format!(", {u}")).collect::<String>()).unwrap();
         }
         ("call_frame_setup", None, [Loc::Imm(size), Loc::Imm(adjust), Loc::Imm(more)]) => writeln!(
             out,
-            "    ADJCALLSTACKDOWN32 {}, {}, {}, implicit-def dead $esp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $esp, implicit $ssp",
+            "    ADJCALLSTACKDOWN{} {}, {}, {}, implicit-def dead ${sp}, implicit-def dead $eflags, implicit-def dead $ssp, implicit ${sp}, implicit $ssp",
+            if sp == "rsp" { 64 } else { 32 },
             immediate(size, symbols)?,
             immediate(adjust, symbols)?,
             immediate(more, symbols)?
@@ -260,16 +434,18 @@ fn instruction(
         .unwrap(),
         ("call_frame_destroy", None, [Loc::Imm(size), Loc::Imm(adjust)]) => writeln!(
             out,
-            "    ADJCALLSTACKUP32 {}, {}, implicit-def dead $esp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $esp, implicit $ssp",
+            "    ADJCALLSTACKUP{} {}, {}, implicit-def dead ${sp}, implicit-def dead $eflags, implicit-def dead $ssp, implicit ${sp}, implicit $ssp",
+            if sp == "rsp" { 64 } else { 32 },
             immediate(size, symbols)?,
             immediate(adjust, symbols)?
         )
         .unwrap(),
-        ("push", None, [Loc::Held(s)]) if matches!(s.width, 2 | 4) => {
-            writeln!(out, "    PUSH{}r {}, implicit-def $esp, implicit $esp", bits(s.width)?, vreg(s)?).unwrap()
+        ("push", None, [Loc::Held(s)]) if matches!(s.width, 2 | 4 | 8) => {
+            writeln!(out, "    PUSH{}r {}, implicit-def ${sp}, implicit ${sp}", bits(s.width)?, vreg(s)?).unwrap()
         }
         ("push", None, [Loc::Imm(i)]) if i.address.is_none() => {
-            writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", immediate(i, symbols)?).unwrap()
+            let form = if sp == "rsp" { "PUSH64i32" } else { "PUSH32i" };
+            writeln!(out, "    {form} {}, implicit-def ${sp}, implicit ${sp}", immediate(i, symbols)?).unwrap()
         }
         ("push", None, [Loc::Imm(i)]) => {
             writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", symbolic(i, symbols)?).unwrap()
@@ -278,19 +454,20 @@ fn instruction(
             let callee = what.target.unwrap_or_default();
             callees.insert(callee);
             let used: String =
-                one.requires.iter().map(|(_, r)| format!(", implicit ${}", format!("{r:?}").to_lowercase())).collect();
+                one.requires.iter().map(|(held, r)| format!(", implicit ${}", copy_register(*r, held.width))).collect();
             let made: String = one
                 .delivers
                 .iter()
-                .map(|(_, r)| format!(", implicit-def ${}", format!("{r:?}").to_lowercase()))
+                .map(|(held, r)| format!(", implicit-def ${}", copy_register(*r, held.width)))
                 .collect();
+            let (form, saved) = if sp == "rsp" { ("CALL64pcrel32", "csr_64") } else { ("CALLpcrel32", "csr_32") };
             writeln!(
                 out,
-                "    CALLpcrel32 @callee{callee}, csr_32, implicit $esp, implicit $ssp, implicit-def $esp, implicit-def $ssp{used}{made}"
+                "    {form} @callee{callee}, {saved}, implicit ${sp}, implicit $ssp, implicit-def ${sp}, implicit-def $ssp{used}{made}"
             )
             .unwrap();
             for (held, register) in &one.delivers {
-                writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+                writeln!(out, "    {} = COPY ${}", vreg(held)?, copy_register(*register, held.width)).unwrap();
             }
         }
         // The one-operand divide: the dividend arrives in (dx, ax), the
@@ -304,7 +481,11 @@ fn instruction(
                 _ => return Err("a divide by that source".to_owned()),
             };
             let Some(Loc::Held(remainder)) = what.dests.get(1) else { return Err("a divide without a remainder".to_owned()) };
-            let (ax, dx) = if width == 2 { ("ax", "dx") } else { ("eax", "edx") };
+            let (ax, dx) = match width {
+                2 => ("ax", "dx"),
+                8 => ("rax", "rdx"),
+                _ => ("eax", "edx"),
+            };
             if one.requires.is_empty() {
                 for (register, held) in [(dx, high), (ax, low)] {
                     if !in_register.contains(&held.value) {
@@ -325,7 +506,7 @@ fn instruction(
         (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Mem(m)), [Loc::Mem(read), rhs]) if read == m => {
             let (form, right) = match rhs {
                 Loc::Held(b) => ("mr", vreg(b)?),
-                Loc::Imm(i) => ("mi", immediate(i, symbols)?),
+                Loc::Imm(i) => (imm("mi", m.width), immediate(i, symbols)?),
                 _ => return Err(format!("{op} to a cell from that source")),
             };
             writeln!(out, "    {}{}{form} {}, {right}, {eflags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?)
@@ -334,20 +515,21 @@ fn instruction(
         // A call through a register.
         ("call", None, [Loc::Held(target)]) if what.indirect => {
             let used: String =
-                one.requires.iter().map(|(_, r)| format!(", implicit ${}", format!("{r:?}").to_lowercase())).collect();
+                one.requires.iter().map(|(held, r)| format!(", implicit ${}", copy_register(*r, held.width))).collect();
             let made: String = one
                 .delivers
                 .iter()
-                .map(|(_, r)| format!(", implicit-def ${}", format!("{r:?}").to_lowercase()))
+                .map(|(held, r)| format!(", implicit-def ${}", copy_register(*r, held.width)))
                 .collect();
+            let (form, saved) = if sp == "rsp" { ("CALL64r", "csr_64") } else { ("CALL32r", "csr_32") };
             writeln!(
                 out,
-                "    CALL32r {}, csr_32, implicit $esp, implicit $ssp, implicit-def $esp, implicit-def $ssp{used}{made}",
+                "    {form} {}, {saved}, implicit ${sp}, implicit $ssp, implicit-def ${sp}, implicit-def $ssp{used}{made}",
                 vreg(target)?
             )
             .unwrap();
             for (held, register) in &one.delivers {
-                writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+                writeln!(out, "    {} = COPY ${}", vreg(held)?, copy_register(*register, held.width)).unwrap();
             }
         }
         // Sign-extends ax into dx.
@@ -357,8 +539,9 @@ fn instruction(
             }
             writeln!(out, "    CWD implicit-def $ax, implicit-def $dx, implicit $ax\n    {} = COPY $dx", vreg(d)?).unwrap();
         }
-        // `rep stosb`/`rep stosd`: the count, the destination and the value arrive
-        // in cx, di and al (ecx, edi and eax), and the count and destination leave.
+        // `rep stosb`/`rep stosd`: the count, the destination and the value
+        // arrive in cx, di and al (ecx, edi and eax), and the count and
+        // destination leave.
         ("stosb" | "stosd", Some(Loc::Mem(_)), _) => {
             let (op, value, count, destination) =
                 if name == "stosb" { ("STOSB", "al", "cx", "di") } else { ("STOSD", "eax", "ecx", "edi") };
@@ -384,6 +567,13 @@ fn instruction(
             }
             writeln!(out, "    CDQ implicit-def $eax, implicit-def $edx, implicit $eax\n    {} = COPY $edx", vreg(d)?).unwrap();
         }
+        // Sign-extends rax into rdx.
+        ("cqo", Some(Loc::Held(d)), [Loc::Held(s)]) => {
+            if one.requires.is_empty() && !in_register.contains(&s.value) {
+                writeln!(out, "    $rax = COPY {}", vreg(s)?).unwrap();
+            }
+            writeln!(out, "    CQO implicit-def $rax, implicit-def $rdx, implicit $rax\n    {} = COPY $rdx", vreg(d)?).unwrap();
+        }
         // A switch: the table's entries are the block's successors.
         ("jmp", None, [Loc::Mem(m)]) if m.base.is_none() && m.addr.is_some_and(|a| a.space == Space::Segment) => {
             let index = m.index.as_ref().ok_or("a jump through a table without an index")?;
@@ -393,12 +583,25 @@ fn instruction(
             });
             writeln!(out, "    JMP32m $noreg, {}, {}, %jump-table.{table}, $noreg", m.scale, vreg(index)?).unwrap();
         }
+        ("jmp", None, [Loc::Held(target)]) if target.width == 8 => writeln!(out, "    JMP64r {}", vreg(target)?).unwrap(),
+        // A jump out of the function (a sibling call: the epilogue is the frame
+        // pass's): a terminator that reads its arguments. The callee is kept
+        // beside the body, not in the instruction, and only its being a
+        // function matters to the allocator: it is named by the instruction's
+        // address.
+        ("jmp", None, []) if what.op == llrm_lir::Operation::Return => {
+            callees.insert(one.at);
+            let used: String =
+                one.requires.iter().map(|(held, r)| format!(", implicit ${}", copy_register(*r, held.width))).collect();
+            let (form, saved) = if sp == "rsp" { ("TCRETURNdi64", "csr_64") } else { ("TCRETURNdi", "csr_32") };
+            writeln!(out, "    {form} @callee{}, 0, {saved}, implicit ${sp}, implicit $ssp{used}", one.at).unwrap()
+        }
         ("jmp", None, []) => {
             let to = what
                 .target
                 .and_then(|to| at.iter().position(|a| *a == to))
                 .or_else(|| targets.get(*jumps).or(targets.last()).copied())
-                .ok_or("a jump without a successor")?;
+                .ok_or_else(|| format!("a jump without a successor: {what:?}"))?;
             writeln!(out, "    JMP_1 %bb.{to}").unwrap();
         }
         (jump, None, []) if condition(jump).is_some() => {
@@ -412,7 +615,16 @@ fn instruction(
         }
         ("mov", Some(Loc::Held(d)), [Loc::Held(s)]) => writeln!(out, "    {} = COPY {}", vreg(d)?, vreg(s)?).unwrap(),
         ("mov", Some(Loc::Held(d)), [Loc::Imm(i)]) if i.address.is_some() => {
-            writeln!(out, "    {} = MOV32ri {}", vreg(d)?, symbolic(i, symbols)?).unwrap()
+            // A quadword takes the address as a sign-extended 32 bits (the
+            // small code model).
+            let form = if d.width == 8 { "MOV64ri32" } else { "MOV32ri" };
+            writeln!(out, "    {} = {form} {}", vreg(d)?, symbolic(i, symbols)?).unwrap()
+        }
+        // A quadword constant that is not a sign-extended 32 bits is the full
+        // 64-bit immediate form.
+        ("mov", Some(Loc::Held(d)), [Loc::Imm(i)]) if d.width == 8 => {
+            let form = if i32::try_from(i.value).is_ok() { "MOV64ri32" } else { "MOV64ri" };
+            writeln!(out, "    {} = {form} {}", vreg(d)?, immediate(i, symbols)?).unwrap()
         }
         ("mov", Some(Loc::Held(d)), [Loc::Imm(i)]) => {
             writeln!(out, "    {} = MOV{}ri {}", vreg(d)?, bits(d.width)?, immediate(i, symbols)?).unwrap()
@@ -431,19 +643,31 @@ fn instruction(
             writeln!(out, "    MOV{}mr {}, {}", bits(s.width)?, cell(m, symbols)?, vreg(s)?).unwrap()
         }
         ("mov", Some(Loc::Mem(m)), [Loc::Imm(i)]) => {
-            writeln!(out, "    MOV{}mi {}, {}", bits(m.width)?, cell(m, symbols)?, immediate(i, symbols)?).unwrap()
+            writeln!(out, "    MOV{}{} {}, {}", bits(m.width)?, imm("mi", m.width), cell(m, symbols)?, immediate(i, symbols)?).unwrap()
         }
         ("lea", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
-            writeln!(out, "    {} = LEA{}r {}", vreg(d)?, bits(d.width)?, cell(m, symbols)?).unwrap()
+            // A dword result over quadword address registers is `LEA64_32r`.
+            let form = if d.width == 4 && sp == "rsp" { "LEA64_32r".to_owned() } else { format!("LEA{}r", bits(d.width)?) };
+            writeln!(out, "    {} = {form} {}", vreg(d)?, cell(m, symbols)?).unwrap()
         }
         ("lea", Some(Loc::Held(d)), [Loc::Address(a)]) => {
             let mut place = Mem::new(a.addr, 1);
             place.offset = a.offset;
             writeln!(out, "    {} = LEA{}r {}", vreg(d)?, bits(d.width)?, cell(&place, symbols)?).unwrap()
         }
+        // The same on a cell, read and written back.
+        (op @ ("neg" | "inc" | "dec" | "not"), Some(Loc::Mem(m)), [Loc::Mem(read)]) if read == m => {
+            let flags = if op == "not" { "" } else { ", implicit-def dead $eflags" };
+            writeln!(out, "    {}{}m {}{flags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?).unwrap()
+        }
         (op @ ("neg" | "inc" | "dec" | "not"), Some(Loc::Held(d)), [Loc::Held(s)]) => {
             let flags = if op == "not" { "" } else { ", implicit-def dead $eflags" };
             writeln!(out, "    {} = {}{}r {}{flags}", vreg(d)?, op.to_uppercase(), bits(d.width)?, vreg(s)?).unwrap()
+        }
+        // A dword zero-extended: x86-64 clears the upper half of any dword
+        // write, which the pin spells `SUBREG_TO_REG`.
+        ("movzx", Some(Loc::Held(d)), [Loc::Held(s)]) if d.width == 8 && s.width == 4 => {
+            writeln!(out, "    {} = SUBREG_TO_REG {}, %subreg.sub_32bit", vreg(d)?, vreg(s)?).unwrap()
         }
         (op @ ("movsx" | "movzx"), Some(Loc::Held(d)), [source]) => {
             let (from, operand) = match source {
@@ -452,6 +676,20 @@ fn instruction(
                 _ => return Err(format!("{op} of that source")),
             };
             writeln!(out, "    {} = {}{}{}{from} {}", vreg(d)?, op.to_uppercase(), bits(d.width)?, operand.0, operand.1)
+                .unwrap()
+        }
+        // A select on the flags: the destination is tied to the first source,
+        // the value kept where the condition fails.
+        (cmov, Some(Loc::Held(d)), [Loc::Held(kept), taken])
+            if cmov.starts_with("cmov") && kept.value == d.value && condition(&format!("j{}", &cmov[4..])).is_some() =>
+        {
+            let code = condition(&format!("j{}", &cmov[4..])).unwrap_or(0);
+            let (form, from) = match taken {
+                Loc::Held(b) => ("rr", vreg(b)?),
+                Loc::Mem(m) => ("rm", cell(m, symbols)?),
+                _ => return Err(format!("{cmov} from that source")),
+            };
+            writeln!(out, "    {} = CMOV{}{form} {}, {from}, {code}, implicit $eflags", vreg(d)?, bits(d.width)?, vreg(kept)?)
                 .unwrap()
         }
         (set, Some(Loc::Held(d)), []) if set.starts_with("set") && condition(&format!("j{}", &set[3..])).is_some() => {
@@ -463,7 +701,7 @@ fn instruction(
             writeln!(out, "    SETCCm {}, {code}, implicit $eflags", cell(m, symbols)?).unwrap()
         }
         ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
-            writeln!(out, "    CMP{}mi {}, {}, implicit-def $eflags", bits(m.width)?, cell(m, symbols)?, immediate(i, symbols)?).unwrap()
+            writeln!(out, "    CMP{}{} {}, {}, implicit-def $eflags", bits(m.width)?, imm("mi", m.width), cell(m, symbols)?, immediate(i, symbols)?).unwrap()
         }
         ("cmp", None, [Loc::Mem(m), Loc::Held(a)]) => {
             writeln!(out, "    CMP{}mr {}, {}, implicit-def $eflags", bits(a.width)?, cell(m, symbols)?, vreg(a)?).unwrap()
@@ -478,10 +716,11 @@ fn instruction(
         // The carry comes from the compare before: `bt` then `adc`.
         (op @ ("adc" | "sbb"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) if a.value == d.value => writeln!(
             out,
-            "    {} = {}{}ri {}, {}, implicit-def dead $eflags, implicit $eflags",
+            "    {} = {}{}{} {}, {}, implicit-def dead $eflags, implicit $eflags",
             vreg(d)?,
             op.to_uppercase(),
             bits(d.width)?,
+            imm("ri", d.width),
             vreg(a)?,
             immediate(i, symbols)?
         )
@@ -496,15 +735,19 @@ fn instruction(
             vreg(b)?
         )
         .unwrap(),
+        ("bt", None, [Loc::Held(a), Loc::Held(b)]) => {
+            writeln!(out, "    BT{}rr {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, vreg(b)?).unwrap()
+        }
         ("bt", None, [Loc::Held(a), Loc::Imm(i)]) => {
             writeln!(out, "    BT{}ri8 {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, immediate(i, symbols)?).unwrap()
         }
         (op @ ("cmp" | "test"), None, [Loc::Held(a), Loc::Imm(i)]) => {
             writeln!(
                 out,
-                "    {}{}ri {}, {}, implicit-def $eflags",
+                "    {}{}{} {}, {}, implicit-def $eflags",
                 op.to_uppercase(),
                 bits(a.width)?,
+                imm("ri", a.width),
                 vreg(a)?,
                 immediate(i, symbols)?
             )
@@ -514,13 +757,13 @@ fn instruction(
             let upper = op.to_uppercase();
             let (form, right) = match rhs {
                 Loc::Held(b) => ("rr", vreg(b)?),
-                Loc::Imm(i) => ("ri", immediate(i, symbols)?),
+                Loc::Imm(i) => (imm("ri", d.width), immediate(i, symbols)?),
                 Loc::Mem(m) => ("rm", cell(m, symbols)?),
                 _ => return Err(format!("{op} with that source")),
             };
             writeln!(out, "    {} = {upper}{}{form} {}, {right}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?).unwrap()
         }
-        (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) => writeln!(
+        (op @ ("sar" | "shl" | "shr" | "rol" | "ror"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) => writeln!(
             out,
             "    {} = {}{}ri {}, {}, {eflags}",
             vreg(d)?,
@@ -531,17 +774,20 @@ fn instruction(
         )
         .unwrap(),
         // The widening multiply: the low operand arrives in eax (a `requires`
-        // copy above), the product leaves in eax and edx (the `delivers` copies).
+        // copy above), the product leaves in eax and edx (the `delivers`
+        // copies).
         (op @ ("mul" | "imul"), Some(Loc::Held(_)), [Loc::Held(_), operand]) if what.dests.len() == 2 => {
-            let (form, right) = match operand {
-                Loc::Held(b) if b.width == 4 => ("r", vreg(b)?),
-                Loc::Mem(m) if m.width == 4 => ("m", cell(m, symbols)?),
+            let (form, right, width) = match operand {
+                Loc::Held(b) if matches!(b.width, 4 | 8) => ("r", vreg(b)?, b.width),
+                Loc::Mem(m) if matches!(m.width, 4 | 8) => ("m", cell(m, symbols)?, m.width),
                 _ => return Err(format!("a widening {op} by that operand")),
             };
+            let (low, high) = if width == 8 { ("rax", "rdx") } else { ("eax", "edx") };
             writeln!(
                 out,
-                "    {}32{form} {right}, implicit-def $eax, implicit-def $edx, {eflags}, implicit $eax",
-                op.to_uppercase()
+                "    {}{}{form} {right}, implicit-def ${low}, implicit-def ${high}, {eflags}, implicit ${low}",
+                op.to_uppercase(),
+                bits(width)?
             )
             .unwrap();
             for (held, register) in &one.delivers {
@@ -549,7 +795,7 @@ fn instruction(
             }
         }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) if what.dests.len() == 1 => {
-            writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i, symbols)?)
+            writeln!(out, "    {} = IMUL{}{} {}, {}, {eflags}", vreg(d)?, bits(d.width)?, imm("rri", d.width), vreg(a)?, immediate(i, symbols)?)
                 .unwrap()
         }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Mem(m)]) if what.dests.len() == 1 => {
@@ -557,7 +803,7 @@ fn instruction(
                 .unwrap()
         }
         ("imul", Some(Loc::Held(d)), [Loc::Mem(m), Loc::Imm(i)]) if what.dests.len() == 1 => {
-            writeln!(out, "    {} = IMUL{}rmi {}, {}, {eflags}", vreg(d)?, bits(d.width)?, cell(m, symbols)?, immediate(i, symbols)?)
+            writeln!(out, "    {} = IMUL{}{} {}, {}, {eflags}", vreg(d)?, bits(d.width)?, if d.width == 8 { "rmi32" } else { "rmi" }, cell(m, symbols)?, immediate(i, symbols)?)
                 .unwrap()
         }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if what.dests.len() == 1 => {
@@ -582,7 +828,7 @@ fn instruction(
             writeln!(out, "    {} = {}{}rr {}, {}, {eflags}", vreg(d)?, op.to_uppercase(), bits(d.width)?, vreg(old)?, vreg(s)?)
                 .unwrap()
         }
-        (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(_)]) => writeln!(
+        (op @ ("sar" | "shl" | "shr" | "rol" | "ror"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(_)]) => writeln!(
             out,
             "    {} = {}{}rCL {}, {eflags}, implicit $cl",
             vreg(d)?,
@@ -714,6 +960,21 @@ pub fn mir(
     let mut indexed = BTreeSet::new();
     let value_widths = widths_of(body)?;
     WIDEST.with(|w| *w.borrow_mut() = value_widths.clone());
+    // Quadword values or a 64-bit register anywhere make it 64-bit code: `rsp`,
+    // REX registers, `gr64`, eight-byte stack slots.
+    let wide_register = |register: &RegId| {
+        let name = format!("{register:?}").to_lowercase();
+        quadword_family(&name).is_some_and(|family| family[0] == name)
+    };
+    let long = value_widths.values().any(|width| *width == 8)
+        || pins.values().any(wide_register)
+        || body
+            .insns()
+            .iter()
+            .any(|one| one.requires.iter().chain(&one.delivers).any(|(_, register)| wide_register(register)));
+    LONG.with(|l| l.set(long));
+    NEXT_TEMP.with(|n| n.set(value_widths.keys().max().map_or(0, |last| last + 1)));
+    TEMPS.with(|t| t.borrow_mut().clear());
     let first_argument = body
         .insns()
         .iter()
@@ -727,7 +988,7 @@ pub fn mir(
         })
         .filter(|at| *at >= 0)
         .min()
-        .unwrap_or(8);
+        .unwrap_or(if long { 16 } else { 8 });
     ARGUMENTS_AT.with(|a| a.set(first_argument));
     let mut locals: Vec<(i64, i64, i64)> = Vec::new();
     for loc in body.iter_insns().filter_map(|one| one.what.as_ref()).flat_map(|w| w.dests.iter().chain(&w.sources)) {
@@ -796,6 +1057,54 @@ pub fn mir(
                 .collect();
             writeln!(text, "    successors: {}", list.join(", ")).unwrap();
         }
+        // A branch, set or add-with-carry that reads the flags no instruction
+        // of the block set reads those of a block it follows.
+        let reads_flags = |name: &str| {
+            condition(name).is_some()
+                || ["set", "cmov"].iter().any(|prefix| {
+                    name.strip_prefix(prefix).is_some_and(|rest| condition(&format!("j{rest}")).is_some())
+                })
+                || matches!(name, "adc" | "sbb")
+        };
+        let sets_flags = |name: &str| {
+            matches!(
+                name,
+                "cmp"
+                    | "test"
+                    | "add"
+                    | "sub"
+                    | "and"
+                    | "or"
+                    | "xor"
+                    | "neg"
+                    | "inc"
+                    | "dec"
+                    | "sar"
+                    | "shl"
+                    | "shr"
+                    | "rol"
+                    | "ror"
+                    | "bt"
+                    | "adc"
+                    | "sbb"
+                    | "imul"
+                    | "mul"
+                    | "idiv"
+                    | "div"
+                    | "bsr"
+                    | "bsf"
+                    | "shld"
+                    | "shrd"
+            )
+        };
+        let names = block.insns.iter().filter_map(|one| one.what.as_ref()).filter_map(|w| w.name.as_deref());
+        let flags_come_in = names
+            .into_iter()
+            .find(|name| reads_flags(name) || sets_flags(name))
+            .is_some_and(|first| reads_flags(first) && !sets_flags(first));
+        if flags_come_in && n != 0 {
+            writeln!(text, "    liveins: $eflags").unwrap();
+        }
         // The entry's own nameless instruction that defines only values pinned
         // to registers, with others after it, is the arguments arriving in
         // them: live-ins copied out, not a return.
@@ -846,11 +1155,21 @@ pub fn mir(
             if one.what.as_ref().and_then(|w| w.name.as_deref()).is_some_and(|name| {
                 condition(name).is_some()
                     || name.strip_prefix("set").is_some_and(|rest| condition(&format!("j{rest}")).is_some())
+                    || name.strip_prefix("cmov").is_some_and(|rest| condition(&format!("j{rest}")).is_some())
             }) {
                 flags_are_read(&mut text);
             }
-            instruction(one, &at, &targets, &mut jumps, &mut symbols, &mut callees, &register_only, &mut text)
-                .map_err(|why| format!("block {n}: {why}"))?;
+            instruction_in_quadwords(
+                one,
+                &at,
+                &targets,
+                &mut jumps,
+                &mut symbols,
+                &mut callees,
+                &register_only,
+                &mut text,
+            )
+            .map_err(|why| format!("block {n}: {why}"))?;
             // A value pinned to a register is that register from its
             // definition on: the `$cl = COPY` an instruction's implicit use
             // reads.
@@ -897,9 +1216,18 @@ pub fn mir(
     writeln!(out, "  define i32 @{}(i32 %a) {{\n    ret i32 0\n  }}\n...", body.name).unwrap();
     let adjusts = if callees.is_empty() { "" } else { "frameInfo:\n  adjustsStack: true\n" };
     writeln!(out, "---\nname: {}\ntracksRegLiveness: true\n{adjusts}registers:", body.name).unwrap();
+    widths.extend(TEMPS.with(|t| t.borrow().clone()));
     for v in widths.iter().filter(|v| !register_only.contains(*v)) {
-        let class = match (value_widths.get(v), indexed.contains(v), byte_read.contains(v)) {
+        // the stand-ins made while printing are in it, not in `value_widths`
+        let width = WIDEST.with(|w| w.borrow().get(v).copied());
+        let class = match (width.as_ref(), indexed.contains(v), byte_read.contains(v)) {
             (Some(1), ..) => "gr8",
+            // Read as a byte, the class the pin's own selection gives it: the
+            // one whose registers have a low byte.
+            (Some(8), _, true) | (Some(8), true, _) => "gr64_nosp",
+            (Some(8), ..) => "gr64",
+            (Some(2), ..) if long => "gr16",
+            (_, ..) if long => "gr32",
             (Some(2), _, true) => "gr16_abcd",
             (Some(2), ..) => "gr16",
             (_, _, true) => "gr32_abcd",
@@ -917,7 +1245,9 @@ pub fn mir(
         );
     writeln!(out, "fixedStack:").unwrap();
     for id in 0..=objects.max().unwrap_or(0) {
-        writeln!(out, "  - {{ id: {id}, offset: {}, size: 4, alignment: 4, isImmutable: true }}", id * 4).unwrap();
+        let slot = if long { 8 } else { 4 };
+        writeln!(out, "  - {{ id: {id}, offset: {}, size: {slot}, alignment: {slot}, isImmutable: true }}", id * slot)
+            .unwrap();
     }
     let locals = LOCALS.with(|l| l.borrow().clone());
     if !locals.is_empty() {
@@ -944,12 +1274,12 @@ pub fn mir(
 mod tests {
     use std::sync::Arc;
 
+    use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody};
+    use llrm_codegen::support::hash::IndexMap;
     use llrm_lir::registers::RegId;
     use llrm_lir::{Held, Imm, Loc, Operation, Semantics};
 
     use super::mir;
-    use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody};
-    use llrm_codegen::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
         Loc::Held(Held { value, width: 4, offset: 0 })
@@ -1336,8 +1666,8 @@ mod tests {
     }
 
     /// `rep stosd` (a dword fill, the memset of a local array) was refused
-    /// ("`stosd` (Fill) with 3 destinations"), so `_bench_jpeg_fixed` at m32 -Os
-    /// never reached the pin's greedy.
+    /// ("`stosd` (Fill) with 3 destinations"), so `_bench_jpeg_fixed` at m32
+    /// -Os never reached the pin's greedy.
     #[test]
     fn test_a_dword_fill_prints_as_rep_stosd() {
         use llrm_lir::Mem;
@@ -1351,7 +1681,10 @@ mod tests {
         let blocks = vec![Block::from(LirBlock::new(0, vec![fill, ret]))];
         let body = LirBody::new("fill", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
-        assert!(text.contains("REP_STOSD_32 implicit-def $ecx, implicit-def $edi, implicit $ecx, implicit $eax"), "{text}");
+        assert!(
+            text.contains("REP_STOSD_32 implicit-def $ecx, implicit-def $edi, implicit $ecx, implicit $eax"),
+            "{text}"
+        );
         assert!(text.contains("%3 = COPY $ecx\n    %4 = COPY $edi"), "{text}");
     }
 
@@ -1375,7 +1708,8 @@ mod tests {
     #[test]
     fn test_an_add_of_a_segment_address_prints_as_a_global_operand() {
         use llrm_lir::{Addr, Space};
-        let address = Loc::Imm(Imm { value: 4, width: 4, address: Some(Addr { index: 3, ..Addr::new(Space::Segment, 0) }) });
+        let address =
+            Loc::Imm(Imm { value: 4, width: 4, address: Some(Addr { index: 3, ..Addr::new(Space::Segment, 0) }) });
         let add = insn("add", Operation::Binary, vec![held(2)], vec![held(1), address]);
         let ret = insn("", Operation::Return, vec![], vec![]);
         let blocks = vec![Block::from(LirBlock::new(0, vec![add, ret]))];
@@ -1542,5 +1876,193 @@ mod tests {
         let text = mir(&body, &pins).expect("prints");
         assert!(text.contains("$ecx = COPY %1"), "{text}");
         assert!(!text.contains("%2"), "the pinned value stands between: {text}");
+    }
+
+    /// A quadword body (`long recpow(long x, long n)`: arguments in rdi and
+    /// rsi, a self call, a quadword multiply, the result in rax)
+    /// was refused at its first register ("8 bytes of rdi"), so no m64 function
+    /// could be allocated by the pin and every m64 cause card
+    /// bisected blind. It prints as the pin's 64-bit forms: `gr64` values,
+    /// `CALL64pcrel32`, `IMUL64rr`, `ADJCALLSTACKDOWN64`.
+    #[test]
+    fn test_a_quadword_recursive_function_prints_its_64_bit_forms() {
+        let word = |value| Held { value, width: 8, offset: 0 };
+        let quad = |value| Loc::Held(word(value));
+        let imm = |value| Loc::Imm(Imm { value, width: 8, address: None });
+        let arrive =
+            Arc::new(Insn { defines: vec![1, 2], ..Insn::clone(&insn("", Operation::Return, vec![], vec![])) });
+        let test = insn("test", Operation::Compare, vec![], vec![quad(2), quad(2)]);
+        let jne = insn("jne", Operation::Branch, vec![], vec![]);
+        let one = insn("mov", Operation::Move, vec![quad(9)], vec![imm(1)]);
+        let half = insn("sar", Operation::Binary, vec![quad(3)], vec![quad(2), imm(1)]);
+        let setup = insn("call_frame_setup", Operation::Move, vec![], vec![imm(0), imm(0), imm(0)]);
+        let call = Arc::new(Insn {
+            requires: vec![(word(1), RegId::RDI), (word(3), RegId::RSI)],
+            delivers: vec![(word(4), RegId::RAX)],
+            ..Insn::clone(&insn("call", Operation::Call, vec![], vec![]))
+        });
+        let destroy = insn("call_frame_destroy", Operation::Move, vec![], vec![imm(0), imm(0)]);
+        let square = insn("imul", Operation::Multiply, vec![quad(5)], vec![quad(4), quad(4)]);
+        let times = insn("imul", Operation::Multiply, vec![quad(6)], vec![quad(5), quad(1)]);
+        let big = insn("add", Operation::Binary, vec![quad(7)], vec![quad(6), imm(5)]);
+        let ret = Arc::new(Insn {
+            requires: vec![(word(7), RegId::RAX)],
+            ..Insn::clone(&insn("", Operation::Return, vec![], vec![]))
+        });
+        let blocks = vec![
+            Block::from(LirBlock { succ: vec![0, 1].into(), ..LirBlock::new(0, vec![arrive, test, jne]) }),
+            Block::from(LirBlock::new(1, vec![half, setup, call, destroy, square, times, big, ret.clone()])),
+            Block::from(LirBlock::new(2, vec![one, ret])),
+        ];
+        let body = LirBody::new("recpow", 0, blocks, IndexMap::default(), IndexMap::default());
+        let pins: IndexMap<u32, RegId> = [(1, RegId::RDI), (2, RegId::RSI)].into_iter().collect();
+        let text = mir(&body, &pins).expect("a quadword body prints");
+        for form in [
+            "liveins: $rdi, $rsi\n",
+            "%1 = COPY $rdi",
+            "TEST64rr %2, %2, implicit-def $eflags",
+            "%3 = SAR64ri %2, 1,",
+            "ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp,",
+            "CALL64pcrel32 @callee0, csr_64, implicit $rsp, implicit $ssp, implicit-def $rsp, implicit-def $ssp, implicit $rdi, implicit $rsi, implicit-def $rax",
+            "%4 = COPY $rax",
+            "ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp,",
+            "%5 = IMUL64rr %4, %4,",
+            "%7 = ADD64ri32 %6, 5,",
+            "%9 = MOV64ri32 1",
+            "RET 0, implicit $rax",
+            "class: gr64 }",
+        ] {
+            assert!(text.contains(form), "`{form}` is missing from\n{text}");
+        }
+        assert!(!text.contains("gr32") && !text.contains("$esp"), "{text}");
+    }
+
+    /// A 32-bit write of a quadword value (`s += a[i] * 3`'s `AND32ri` on the
+    /// low half of the index) printed as `%1.sub_32bit` in a dword
+    /// instruction, which the pin's verifier refused ("GR64.sub_32bit cannot be
+    /// used for GR32 operands"): the half is copied to a `gr32`,
+    /// and the write, x86-64 clearing the upper half, is a `SUBREG_TO_REG` of
+    /// it. A dword zero-extended to a quadword is the same.
+    #[test]
+    fn test_a_dword_write_of_a_quadword_value_and_a_zero_extend_go_through_gr32() {
+        let quad = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let low = |value| Loc::Held(Held { value, width: 4, offset: 0 });
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let arrive = Arc::new(Insn { defines: vec![1], ..Insn::clone(&insn("", Operation::Return, vec![], vec![])) });
+        let mask = insn("and", Operation::Binary, vec![low(1)], vec![low(1), imm(3)]);
+        let wide = insn("add", Operation::Binary, vec![quad(2)], vec![quad(1), quad(1)]);
+        let extend = insn("movzx", Operation::Move, vec![quad(4)], vec![low(3)]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![arrive, mask, wide, extend]))];
+        let body = LirBody::new("halves", 0, blocks, IndexMap::default(), IndexMap::default());
+        let pins: IndexMap<u32, RegId> = [(1, RegId::RDI)].into_iter().collect();
+        let text = mir(&body, &pins).expect("a quadword body with dword halves prints");
+        for form in [
+            "%5 = COPY %1.sub_32bit\n    %5 = AND32ri %5, 3, implicit-def dead $eflags\n    %1 = SUBREG_TO_REG %5, %subreg.sub_32bit",
+            "%4 = SUBREG_TO_REG %3, %subreg.sub_32bit",
+            "{ id: 5, class: gr32 }",
+            "{ id: 1, class: gr64 }",
+        ] {
+            assert!(text.contains(form), "`{form}` is missing from\n{text}");
+        }
+        assert!(!text.contains("%1.sub_32bit = ") && !text.contains("AND32ri %1"), "{text}");
+    }
+
+    /// The m64 sweep of bench/ (2026-11-13) refused these integer forms: a
+    /// quadword pinned to the dword root `eax` ("8 bytes of eax"),
+    /// `bt` of two registers, a jump through a register (a switch), a byte
+    /// rotate and an increment of a cell.
+    #[test]
+    fn test_the_integer_forms_the_m64_sweep_refused_print() {
+        use llrm_lir::{Addr, Mem, Space};
+        let quad = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let dword = |value| Loc::Held(Held { value, width: 4, offset: 0 });
+        let byte = |value| Loc::Held(Held { value, width: 1, offset: 0 });
+        let imm = |value| Loc::Imm(Imm { value, width: 1, address: None });
+        let mut cell = Mem::new(Some(Addr::new(Space::Literal, 0)), 2);
+        cell.base = None;
+        let arrive = Arc::new(Insn { defines: vec![1], ..Insn::clone(&insn("", Operation::Return, vec![], vec![])) });
+        let test = insn("bt", Operation::Compare, vec![], vec![dword(2), dword(3)]);
+        let rotate = insn("rol", Operation::Binary, vec![byte(4)], vec![byte(4), imm(4)]);
+        let bump = insn("inc", Operation::Unary, vec![Loc::Mem(cell.clone())], vec![Loc::Mem(cell)]);
+        let jump = insn("jmp", Operation::Jump, vec![], vec![quad(1)]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![arrive, test, rotate, bump, jump]))];
+        let body = LirBody::new("forms", 0, blocks, IndexMap::default(), IndexMap::default());
+        let pins: IndexMap<u32, RegId> = [(1, RegId::EAX)].into_iter().collect();
+        let text = mir(&body, &pins).expect("the forms print");
+        for form in [
+            "liveins: $rax\n",
+            "BT32rr %2, %3, implicit-def $eflags",
+            "%4 = ROL8ri %4, 4, implicit-def dead $eflags",
+            "INC16m $noreg, 1, $noreg, 0, $noreg, implicit-def dead $eflags",
+            "JMP64r %1",
+        ] {
+            assert!(text.contains(form), "`{form}` is missing from\n{text}");
+        }
+    }
+
+    /// The bench sweep at m64 (2026-11-13) had the pin's verifier refuse a word
+    /// read of a quadword value (`MOVZX32rr16 %58.sub_16bit:gr64`:
+    /// `GR64` has no `sub_16bit` operand form), a dword `lea` over quadword
+    /// registers (`LEA64_32r`), a sibling call (`jmp` with no callee in the
+    /// instruction), a value with no definition (`IMPLICIT_DEF`) and a branch
+    /// that reads the flags the block before it set. Each prints
+    /// as the pin's own selection spells it.
+    #[test]
+    fn test_what_the_m64_sweep_had_the_pins_verifier_refuse_prints_as_the_pin_spells_it() {
+        use llrm_lir::{Addr, Mem, Space};
+        let quad = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let word = |value| Loc::Held(Held { value, width: 2, offset: 0 });
+        let dword = |value| Loc::Held(Held { value, width: 4, offset: 0 });
+        let imm = |value| Loc::Imm(Imm { value, width: 8, address: None });
+        let arrive = Arc::new(Insn { defines: vec![1], ..Insn::clone(&insn("", Operation::Return, vec![], vec![])) });
+        // `v2 = movzx v1.word`, `v3 = lea [v1 + v1*2]`, a word result into the
+        // quadword value, an undefined value
+        let widen = insn("movzx", Operation::Move, vec![dword(2)], vec![word(1)]);
+        let mut cell = Mem::new(None::<Addr>, 4);
+        cell.base = Some(Held { value: 1, width: 8, offset: 0 });
+        cell.index = Some(Held { value: 1, width: 8, offset: 0 });
+        cell.scale = 2;
+        let lea = insn("lea", Operation::Address, vec![dword(3)], vec![Loc::Mem(cell)]);
+        let narrow = insn(
+            "add",
+            Operation::Binary,
+            vec![word(1)],
+            vec![word(1), Loc::Imm(Imm { value: 1, width: 2, address: None })],
+        );
+        let undefined = insn("implicit_def", Operation::Nothing, vec![dword(4)], vec![]);
+        let wide = insn("add", Operation::Binary, vec![quad(5)], vec![quad(1), imm(1)]);
+        let cmp = insn("cmp", Operation::Compare, vec![], vec![quad(5), imm(0)]);
+        let jne = insn("jne", Operation::Branch, vec![], vec![]);
+        let again = insn("jne", Operation::Branch, vec![], vec![]);
+        let tail = Arc::new(Insn {
+            at: 7,
+            requires: vec![(Held { value: 5, width: 4, offset: 0 }, RegId::EDI)],
+            ..Insn::clone(&insn("jmp", Operation::Return, vec![], vec![]))
+        });
+        let blocks = vec![
+            Block::from(LirBlock {
+                succ: vec![1, 2].into(),
+                ..LirBlock::new(0, vec![arrive, widen, lea, narrow, undefined, wide, cmp, jne])
+            }),
+            Block::from(LirBlock { succ: vec![2, 3].into(), ..LirBlock::new(1, vec![again]) }),
+            Block::from(LirBlock::new(2, vec![tail.clone()])),
+            Block::from(LirBlock::new(3, vec![tail])),
+        ];
+        let body = LirBody::new("sweep", 0, blocks, IndexMap::default(), IndexMap::default());
+        let pins: IndexMap<u32, RegId> = [(1, RegId::RDI)].into_iter().collect();
+        let text = mir(&body, &pins).expect("the forms print");
+        for form in [
+            "%6 = COPY %1.sub_16bit\n    %2 = MOVZX32rr16 %6",
+            "%3 = LEA64_32r %1, 2, %1, 0, $noreg",
+            "%7 = COPY %1.sub_16bit\n    %7 = ADD16ri %7, 1,",
+            "%1.sub_16bit = COPY %7",
+            "%4 = IMPLICIT_DEF",
+            "bb.1:\n    successors: %bb.2(0x40000000), %bb.3(0x40000000)\n    liveins: $eflags\n    JCC_1",
+            "TCRETURNdi64 @callee7, 0, csr_64, implicit $rsp, implicit $ssp, implicit $edi",
+            "{ id: 1, class: gr64_nosp }",
+            "{ id: 6, class: gr16 }",
+        ] {
+            assert!(text.contains(form), "`{form}` is missing from\n{text}");
+        }
     }
 }

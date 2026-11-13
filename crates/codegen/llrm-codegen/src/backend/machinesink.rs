@@ -658,7 +658,6 @@ impl Sinker {
                     cells.clone().next().is_some()
                         && cells.all(|mem| {
                             mem.base.is_none()
-                                && mem.index.is_none()
                                 && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
                         })
                 },
@@ -2474,5 +2473,63 @@ mod tests {
         let sunk = sunk(&body, false);
         let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
         assert!(loads(1) && !loads(0), "the load moved into the arm that reads it");
+    }
+
+    /// QCport host/bench.c, every level +6 B: a load of a local array element
+    /// through a virtual index (`[bp+di-94]`) stayed above the branch whose
+    /// one arm pushed it, and was spilled (`mov ax,[bp+di-94]; mov [bp-118],ax`).
+    /// The pin's local is a frame index and its index register is virtual:
+    /// nothing physical is read, so it sinks.
+    #[test]
+    fn test_a_load_of_an_indexed_local_cell_sinks_into_the_arm_that_reads_it() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem {
+            through: llrm_lir::registers::RegId::BP,
+            index: Some(Held { value: 4, width: 2, offset: 0 }),
+            ..Mem::new(Some(Addr::new(Space::Frame, -94)), 2)
+        };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "indexed_local",
+            0,
+            vec![
+                block(
+                    0,
+                    vec![1, 2],
+                    vec![
+                        insn(
+                            9,
+                            Operation::Move,
+                            "mov",
+                            vec![held(4)],
+                            vec![Loc::Imm(crate::model::ir::Imm { value: 2, width: 2, address: None })],
+                            vec![4],
+                            vec![],
+                        ),
+                        insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![4]),
+                        jump(11),
+                    ],
+                )
+                .into(),
+                block(
+                    1,
+                    vec![],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
+                        insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+                .into(),
+                block(2, vec![], vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let sunk = sunk(&body, false);
+        let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
+        assert!(loads(1) && !loads(0), "the indexed load moved into the arm that reads it");
     }
 }

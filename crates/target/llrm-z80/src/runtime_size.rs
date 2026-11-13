@@ -66,18 +66,22 @@ pub const TYPICAL_WIDE_SHIFT: u32 = 12;
 /// whole programs in ucsim (a volatile 64-bit dividend of 3, 24, 40 and 63 bits
 /// over divisors of 2 to 31 bits; the run less the run that copies the operand,
 /// less the argument set-up): the speed family does a step per dividend bit,
-/// 186 T a bit; the size family does 64 steps whatever the operands, 98k to
+/// 193 T a bit; the size family does 64 steps whatever the operands, 98k to
 /// 106k T. The divisor is on the stack and never in sight: the typical dividend
 /// (`TYPICAL_WIDE_DIVIDEND`) is priced.
-const WIDE_DIVIDES: [(&str, u32, u32); 8] = [
-    ("__udivdi3", 10900, 186),
-    ("__umoddi3", 10900, 186),
-    ("__divdi3", 10900, 186),
-    ("__moddi3", 10900, 186),
+const WIDE_DIVIDES: [(&str, u32, u32); 12] = [
+    ("__udivdi3", 10900, 193),
+    ("__umoddi3", 10900, 193),
+    ("__divdi3", 10900, 193),
+    ("__moddi3", 10900, 193),
+    ("__udivmddi4", 10900, 193),
+    ("__divmddi4", 10900, 193),
     ("__s_udivdi3", 99000, 0),
     ("__s_umoddi3", 99000, 0),
     ("__s_divdi3", 99000, 0),
     ("__s_moddi3", 99000, 0),
+    ("__s_udivmddi4", 99000, 0),
+    ("__s_divmddi4", 99000, 0),
 ];
 
 /// The dividend bits assumed for a 64-bit divide.
@@ -311,9 +315,9 @@ mod tests {
         // a 64-bit shift's count is on the stack: the typical one is priced,
         // the speed routine by bytes and bits
         assert_eq!(routine_clocks("call __ashldi3", &[]), 660 + 331 + 360 * 4 - 17);
-        // a 64-bit divide: 186 T a dividend bit for the speed family, 64 steps
+        // a 64-bit divide: 193 T a dividend bit for the speed family, 64 steps
         // for the size one (ucsim)
-        assert_eq!(routine_clocks("call __udivdi3", &[]), 10900 + 186 * 32 - 17);
+        assert_eq!(routine_clocks("call __udivdi3", &[]), 10900 + 193 * 32 - 17);
         assert_eq!(routine_clocks("call __s_moddi3", &["ld bc, #5"]), 99000 - 17);
         assert_eq!(routine_clocks("call __s_lshrdi3", &["ld a, #5"]), 650 + 388 * TYPICAL_WIDE_SHIFT - 17);
         assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5"]), 55 + 40 * 5 - 17);

@@ -40,3 +40,17 @@ fn the_speed_levels_keep_both() {
     let twice: Vec<_> = calls.iter().filter(|name| name.contains("twice")).collect();
     assert!(twice.len() < 2 || twice[0] != twice[1], "{calls:?}");
 }
+
+/// shl_long_by_one -O1 kept `twice` and `twice_signed` (151 B against SDCC's 147): a local function of the same body
+/// as another is dropped at -O1 too, where no thunk is written (a thunk saves bytes and costs a `jmp`).
+#[test]
+fn at_o1_a_local_duplicate_is_dropped_and_an_external_one_is_not_thunked() {
+    let calls = callees(Level::O1);
+    let twice: Vec<_> = calls.iter().filter(|name| name.contains("twice")).collect();
+    assert_eq!(twice.len(), 2, "{calls:?}");
+    assert_eq!(twice[0], twice[1], "{calls:?}");
+    let external = IR.replace("define internal i32 @twice_signed", "define i32 @twice_signed");
+    let out = text(&external, "f", 0, &Request::new(Level::O1)).expect("compiles");
+    let calls: Vec<&str> = out.lines().filter_map(|line| line.trim().strip_prefix("call ")).collect();
+    assert!(calls.iter().filter(|name| name.contains("twice")).any(|name| name.contains("twice_signed")), "{calls:?}");
+}

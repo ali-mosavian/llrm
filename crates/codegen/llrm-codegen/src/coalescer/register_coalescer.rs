@@ -455,11 +455,11 @@ fn join_virt_regs(
     state: &mut State,
     cp: &CoalescerPair,
 ) -> JoinResult {
-    let mut rhs = (*lis.interval_rc(cp.src_reg())).clone();
-    let mut lhs = (*lis.interval_rc(cp.dst_reg())).clone();
-    if state.is_high_cost(cp.dst_reg(), lhs.valnos.len()) || state.is_high_cost(cp.src_reg(), rhs.valnos.len()) {
+    let (rhs_rc, lhs_rc) = (lis.interval_rc(cp.src_reg()), lis.interval_rc(cp.dst_reg()));
+    if state.is_high_cost(cp.dst_reg(), lhs_rc.valnos.len()) || state.is_high_cost(cp.src_reg(), rhs_rc.valnos.len()) {
         return JoinResult::Rejected;
     }
+    let (mut lhs, mut rhs) = ((*lhs_rc).clone(), (*rhs_rc).clone());
     let mut vals = JoinVals::new(lis, cp, std::mem::take(&mut lhs.range), std::mem::take(&mut rhs.range));
     // First compute NewVNInfo and the simple value mappings. Conflicts found
     // here only reject this attempt; subsequent coalescing may still make the
@@ -680,7 +680,8 @@ fn adjust_copies_back_from(
     let (a_reg, b_reg) = if cp.is_flipped() { (cp.dst_reg(), cp.src_reg()) } else { (cp.src_reg(), cp.dst_reg()) };
     let copy_idx = lis.indexes.get_instruction_index(copy).get_reg_slot(false);
     let int_a = lis.interval_rc(a_reg);
-    let mut int_b = (*lis.interval_rc(b_reg)).clone();
+    let int_b_rc = lis.interval_rc(b_reg);
+    let int_b = &*int_b_rc;
     // BValNo is a value number in B that is defined by a copy from A: `B1`.
     let bs = int_b.find_segment_containing(&copy_idx);
     let Some(b_val) = int_b.segments.get(bs).and_then(|segment| segment.valno.clone()) else { return false };
@@ -719,6 +720,8 @@ fn adjust_copies_back_from(
     }
     let (filler_start, filler_end) = (val_segment.end.clone(), int_b.segments[bs].start.clone());
     let val_s_val = val_segment.valno.clone().expect("a segment has a value");
+    // Every refusal is behind us: only now copy the interval to change it.
+    let mut int_b = int_b.clone();
     // The copy is about to go, so the value is defined where B0 ended.
     b_val.set_def(filler_start.clone());
     // A new live range [ValS.end, BS.begin) of either value number, then the

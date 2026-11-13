@@ -27,6 +27,10 @@ fn run() -> i32 {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => {}
+            "--runtime-stamp" => {
+                println!("{}", llrm_z80::runtime_stamp());
+                return 0;
+            }
             "-g" => debug = true,
             // `-f[no-]PASS`, as the program's own `// flags:` line gives it
             other if other.starts_with("-f") => passes.push(other.to_owned()),

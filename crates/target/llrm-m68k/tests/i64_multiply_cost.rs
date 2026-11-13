@@ -6,7 +6,11 @@
 //! unroll under the m68k's threshold of 32: 142 instructions stayed at -O3
 //! (572 B at the 68000, gcc's 30). A multiply the lowering does call keeps the
 //! price of a call (DEVIATE, `arithmetic_cost`); the price follows the
-//! lowering, constant by constant.
+//! lowering, constant by constant, in a loop body: where the unroller asks, and
+//! where a chain's clocks count (outside a loop the byte trial keeps the call
+//! for -38 and -26). Since #9197 the lowering takes a chain for every word
+//! multiply the search prices, and the 68000 price still called for ~100 such
+//! constants (mul i64 by 100: price 4, lowering shifts and adds).
 
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly};
@@ -28,7 +32,12 @@ fn lowers_to_a_call(
     constant: Option<i64>,
 ) -> bool {
     let right = constant.map_or("%b".to_string(), |value| value.to_string());
-    let ir = format!("{HEAD}define i64 @f(i64 %a, i64 %b) {{\n  %r = mul i64 %a, {right}\n  ret i64 %r\n}}\n");
+    let ir = format!(
+        "{HEAD}define i64 @f(i64 %a, i64 %b, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  \
+         %i = phi i32 [0, %entry], [%i1, %loop]\n  %acc = phi i64 [%a, %entry], [%r, %loop]\n  \
+         %r = mul i64 %acc, {right}\n  %i1 = add i32 %i, 1\n  %c = icmp ult i32 %i1, %n\n  \
+         br i1 %c, label %loop, label %exit\nexit:\n  ret i64 %r\n}}\n"
+    );
     let text = assembly(&ir, cpu, Level::O2).expect("compiles");
     text.contains("__muldi3") || text.contains("__mulsi3")
 }
@@ -36,8 +45,10 @@ fn lowers_to_a_call(
 #[test]
 fn the_price_of_an_i64_multiply_follows_the_lowering() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
-        let constants =
-            (-40..=130_i64).filter(|&value| value != 0).map(Some).chain([Some(1431655765), Some(1 << 40), None]);
+        let constants = [-38, -34, -26, -3, 2, 3, 13, 38, 100, 125, 130, 1431655765, 100_000, -100_000, 1 << 40]
+            .into_iter()
+            .map(Some)
+            .chain([None]);
         for constant in constants {
             let expected = if lowers_to_a_call(cpu, constant) { Cost::EXPENSIVE } else { Cost::of(1) };
             assert_eq!(mul64(cpu, constant.map(i128::from)), expected, "{cpu:?} mul i64 by {constant:?}");
@@ -53,11 +64,11 @@ fn a_68020_multiply_by_any_constant_costs_one() {
 }
 
 #[test]
-fn a_68000_multiply_costs_one_only_as_shifts_and_an_add() {
-    for constant in [Some(2), Some(3), Some(5), Some(9), Some(15), Some(-8), Some(1 << 40)] {
+fn a_68000_multiply_costs_one_only_as_chains() {
+    for constant in [Some(2), Some(3), Some(5), Some(9), Some(15), Some(-8), Some(-3), Some(100), Some(1 << 40)] {
         assert_eq!(mul64(Cpu::M68000, constant), Cost::of(1), "mul i64 by {constant:?}");
     }
-    for constant in [Some(-3), Some(100), Some(1431655765), None] {
+    for constant in [Some(100_000), Some(1431655765), None] {
         assert_eq!(mul64(Cpu::M68000, constant), Cost::EXPENSIVE, "mul i64 by {constant:?}");
     }
 }

@@ -142,6 +142,31 @@ pub fn run_with(
     run_passes(asm, known_loads);
 }
 
+/// `(run_with(asm, false), run_with(asm, true))` on one copy of `asm`: the
+/// passes before the first that reads `known_loads` run once for both.
+pub fn run_pair(asm: &Asm) -> (Asm, Asm) {
+    let mut copied = asm.clone();
+    let tail_copied = duplicate_return_tail_into_fall_through(&mut copied);
+    let mut base = asm.clone();
+    run_prefix(&mut base);
+    if tail_copied {
+        run_prefix(&mut copied);
+    }
+    let finish = |known_loads: bool| {
+        let mut plain = base.clone();
+        run_suffix(&mut plain, known_loads);
+        if tail_copied {
+            let mut with_copy = copied.clone();
+            run_suffix(&mut with_copy, known_loads);
+            if code_bytes(&with_copy) < code_bytes(&plain) {
+                return with_copy;
+            }
+        }
+        plain
+    };
+    (finish(false), finish(true))
+}
+
 fn code_bytes(asm: &Asm) -> usize {
     asm.lines.iter().filter_map(Line::inst).map(Inst::bytes).sum()
 }
@@ -185,6 +210,24 @@ fn run_passes(
     asm: &mut Asm,
     known_loads: bool,
 ) {
+    run_prefix(asm);
+    run_suffix(asm, known_loads);
+}
+
+thread_local! {
+    static PREFIX_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread ran the passes ahead of the first that reads
+/// `known_loads` (what a test counts to see they ran once for a pair).
+pub fn prefix_runs() -> usize {
+    PREFIX_RUNS.with(std::cell::Cell::get)
+}
+
+/// The passes ahead of the first that reads `known_loads`: the same for the
+/// priced text and the text kept, so a pair runs them once.
+fn run_prefix(asm: &mut Asm) {
+    PREFIX_RUNS.with(|runs| runs.set(runs.get() + 1));
     fold_known_cells(asm);
     hoist_common_successor_code(asm);
     branch_over_jump(asm);
@@ -194,6 +237,12 @@ fn run_passes(
     drop_dead_repeat_load(asm);
     zero_cells_with_stz(asm);
     merge_saves_of_a(asm);
+}
+
+fn run_suffix(
+    asm: &mut Asm,
+    known_loads: bool,
+) {
     if known_loads {
         drop_known_loads(asm);
     }
@@ -1391,6 +1440,8 @@ fn load_straight_once(asm: &mut Asm) -> bool {
         };
         let (transfer, register) = if *load == Op::Ldx { (Op::Txa, Registers::X) } else { (Op::Tya, Registers::Y) };
         let mut to = None;
+        // N and Z are still the load's: a branch on them would test the deleted load
+        let mut load_flags = true;
         for (next, line) in lines.iter().enumerate().skip(at + 1) {
             let Line::Inst(Inst { op, operand, .. }) = line else { break };
             if *op == transfer {
@@ -1417,8 +1468,12 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                     | Op::Eor => true,
                     Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
                     Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
-                        Operand::Direct(target) => label_at(target)
-                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), exits)),
+                        Operand::Direct(target) => {
+                            let reads_load = load_flags && !matches!(op, Op::Bcc | Op::Bcs);
+                            !reads_load
+                                && label_at(target)
+                                    .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), exits))
+                        }
                         _ => false,
                     },
                     // the other index register: a load or store of another byte
@@ -1432,6 +1487,9 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                 };
             if !quiet {
                 break;
+            }
+            if !matches!(op.flags(operand), Flags::Keeps) {
+                load_flags = false;
             }
         }
         if let Some(to) = to
@@ -1933,7 +1991,7 @@ pub(crate) fn dead_from(
             // steps and compares
             (Op::Cpx | Op::Inx | Op::Dex, Registers::Y | Registers::A)
             | (Op::Cpy | Op::Iny | Op::Dey, Registers::X | Registers::A) => (false, false),
-            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => (true, false),
+            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Bit | Op::Pha, Registers::A) => (true, false),
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
                 (matches!(inst.operand, Operand::Acc | Operand::None), false)
             }

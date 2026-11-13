@@ -18,6 +18,10 @@
 //! - U1 `fcmp` is not simplified: no `simplifyFCmpInst` exists in
 //!   `llrm_mir::simplify`; it is asked of ScalarEvolution alone.
 //! - U2 No `FPMathOperator` fast-math flags beyond those on the instruction.
+//! - U3 An `fcmp` or a `select` whose operands the map holds is simplified
+//!   (`simplifyInstructionWithOperands`); the pin's visitor has no
+//!   `visitSelectInst` and asks ScalarEvolution alone for an `fcmp`. gcc's
+//!   `constant_after_peeling` folds every statement the peeling makes constant.
 //!
 //! # Example
 //! At iteration 2 of a loop with `%i = phi i16 [ 0, %pre ], [ %n, %latch ]`,
@@ -35,7 +39,7 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Linkage, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, IntPredicate, Opcode};
-use llrm_mir::simplify::{simplify_binop_operands, simplify_cast_operand, simplify_icmp_operands};
+use llrm_mir::simplify::{simplify_binop_operands, simplify_instruction_operands_at, simplify_cast_operand, simplify_icmp_operands};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::AssumptionCache;
 
@@ -175,6 +179,7 @@ impl UnrolledInstAnalyzer {
             Opcode::Load { .. } => self.visit_load(env, simplified, inst),
             Opcode::Cast(_) => self.visit_cast_inst(env, simplified, inst),
             Opcode::ICmp(_) => self.visit_cmp_inst(env, simplified, inst),
+            Opcode::FCmp(_) | Opcode::Select => self.visit_folded(env, simplified, inst),
             Opcode::Phi => self.visit_phi_node(env, simplified, inst),
             _ => self.visit_instruction(env, simplified, inst),
         }
@@ -360,6 +365,39 @@ impl UnrolledInstAnalyzer {
         if let Some(value) = simplify_icmp_operands(env.context, env.layout, env.function, pred, lhs, rhs) {
             if let Some(result) = result {
                 simplified.insert(result, value);
+            }
+            return true;
+        }
+        self.visit_instruction(env, simplified, inst)
+    }
+
+    /// DEVIATE U3 (owner m68k): an `fcmp` or a `select` whose operands the map holds is simplified
+    /// (`simplifyInstructionWithOperands`) where the pin's visitor asks ScalarEvolution alone
+    /// (no `simplifyFCmpInst` call, no `visitSelectInst`). gcc's `constant_after_peeling` folds
+    /// every statement whose operands the peeling makes constant: a two-trip float loop
+    /// (float_in_place_update) was priced 15 over its rolled 14 for want of one `fcmp` and one
+    /// `select`.
+    fn visit_folded(
+        &mut self,
+        env: &mut Env,
+        simplified: &mut IdMap<ValueId, Operand>,
+        inst: InstId,
+    ) -> bool {
+        let operation = env.function.instruction(inst);
+        let operands: Vec<Operand> = operation.operands.iter().map(|&op| Self::lookup(simplified, op)).collect();
+        let result = operation.result;
+        if let Some(simple) = simplify_instruction_operands_at(
+            env.context,
+            env.globals,
+            env.layout,
+            None,
+            env.function,
+            None,
+            inst,
+            &operands,
+        ) {
+            if let Some(result) = result {
+                simplified.insert(result, simple);
             }
             return true;
         }

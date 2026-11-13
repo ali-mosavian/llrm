@@ -91,6 +91,8 @@ pub struct RegisterClasses {
     pub cse_keeps_compare_with_live_minuend: bool,
     /// `Target::cheap_move_immediate`.
     pub cheap_move_immediate: fn(u8, i64) -> bool,
+    /// `Target::uncheap_move_immediate_at_size`.
+    pub uncheap_move_immediate_at_size: fn(u8, i64) -> bool,
     /// `Target::hoist_by_pressure`.
     pub hoist_by_pressure: bool,
 }
@@ -189,6 +191,7 @@ impl RegisterClasses {
             leaf_fold_at_size: arch.leaf_fold_at_size(),
             cse_keeps_compare_with_live_minuend: arch.cse_keeps_compare_with_live_minuend(),
             cheap_move_immediate: arch.cheap_move_immediate(),
+            uncheap_move_immediate_at_size: arch.uncheap_move_immediate_at_size(),
             hoist_by_pressure: arch.hoist_by_pressure(),
         };
         classes.status_word = classes.found_status_word();

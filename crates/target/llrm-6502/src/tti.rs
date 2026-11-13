@@ -255,6 +255,13 @@ impl Tti for Mos6502 {
         &[16, 32]
     }
 
+    /// A divide is a call here: `v / 10 >= 10` stays a compare of the quotient
+    /// the loop carries, not `v >= 100` with `v` kept across the call
+    /// (DEVIATE ICMPDIV-1, `tti.rs` of llrm-mir).
+    fn keeps_icmp_of_shared_division(&self) -> bool {
+        true
+    }
+
     /// `isLSRCostLess` with the target's own instruction counts, the shape of
     /// the pin's x86 override ("instruction number 1st priority",
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)
@@ -276,6 +283,10 @@ impl Tti for Mos6502 {
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    fn address_index_max(&self) -> Option<u64> {
+        Some(u64::from(u8::MAX))
     }
 
     /// `narrowiv`: a counter of a width the datalayout does not hold (`n8`
@@ -313,6 +324,16 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// DEVIATE LU24: a pointer that steps is weighed against `p + n`.
+    fn lsr_address_left_to_cost_model(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LU23: an address `p + n` is an add of two cells each trip.
+    fn lsr_written_pointer_add_is_base_add(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU22: the inner loop's byte counter, extended, is the counter.

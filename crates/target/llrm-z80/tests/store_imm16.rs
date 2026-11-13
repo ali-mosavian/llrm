@@ -78,9 +78,10 @@ define void @set(ptr %p, ptr %q) nounwind {
 
 /// local_initializers -O1: a constant word stored to a local went through the
 /// frame address (`ld hl, #5; add hl, sp; ld (hl), #9; inc hl; ld (hl), #0`),
-/// +7 B and +30 T against `ld bc, #9; ld -8(ix), c; ld -7(ix), b`.
+/// +7 B and +30 T. With no frame standing the word is pushed (`ld hl, #9; push
+/// hl`, 4 B), since #9403; the test read the old ix stores and went red.
 #[test]
-fn a_constant_word_stored_to_a_local_once_is_two_ix_stores() {
+fn a_constant_word_stored_to_a_local_once_is_pushed_or_two_ix_stores() {
     let ir = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 declare void @use(ptr)
 define void @f() nounwind {
@@ -91,8 +92,28 @@ define void @f() nounwind {
 }
 "#;
     let asm = text(ir, "f", 0, &Request::new(Level::Os)).expect("compiles");
-    let through_frame = |value: &str| asm.contains(&format!("(ix), #{value}")) || asm.contains(&format!("(iy), #{value}"));
-    assert!(through_frame("9") && through_frame("0"), "not stored through ix or iy:\n{asm}");
+    assert!(!asm.contains("ld (hl), #9"), "stored through a built address:\n{asm}");
+    assert!(asm.contains("push hl") || asm.contains("(ix), #9"), "neither pushed nor stored through ix:\n{asm}");
+}
+
+/// A frame that stands anyway (a local array indexed by `ix`) keeps the word's
+/// two ix stores: a push would not reach it.
+#[test]
+fn a_constant_word_stored_to_a_local_in_a_standing_frame_is_two_ix_stores() {
+    let ir = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
+declare void @use(ptr, ptr)
+define void @f() nounwind {
+  %a = alloca i16
+  %buf = alloca [40 x i8]
+  store i16 9, ptr %a
+  call void @use(ptr %a, ptr %buf)
+  ret void
+}
+"#;
+    let asm = text(ir, "f", 0, &Request::new(Level::Os)).expect("compiles");
+    let through_frame =
+        |value: &str| asm.contains(&format!("(ix), #{value}")) || asm.contains(&format!("(iy), #{value}"));
+    assert!(through_frame("9") && through_frame("0"), "not stored through ix:\n{asm}");
     assert!(!asm.contains("ld (hl), #9"), "stored through a built address:\n{asm}");
 }
 

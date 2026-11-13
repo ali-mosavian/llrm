@@ -85,6 +85,7 @@ thread_local! {
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
     static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static EMITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Whether a long division by a divisor not known to be a byte calls the
     /// speed routine with the pin-structure wide path, and not the one with
     /// the small wide path (see [`with_fast_division`]).
@@ -92,12 +93,14 @@ thread_local! {
     /// Whether a long multiply calls `__mulsi3_fast` (see
     /// [`with_fast_multiply`]).
     static FAST_MULTIPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Whether a long division calls the speed routine at size too (see [`with_size_fast_division`]).
+    /// Whether a long division calls the speed routine at size too (see
+    /// [`with_size_fast_division`]).
     static SIZE_FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// `f` with the long divisions calling the speed routines at size: a module asks for them where the
-/// clocks they save are worth the bytes (`select::module_text`).
+/// `f` with the long divisions calling the speed routines at size: a module
+/// asks for them where the clocks they save are worth the bytes
+/// (`select::module_text`).
 pub fn with_size_fast_division<R>(
     allowed: bool,
     f: impl FnOnce() -> R,
@@ -417,7 +420,7 @@ impl<const STACK: bool> Target for Mos<STACK> {
 
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
     fn reads_flags_set_just_before(inst: &Inst) -> bool {
-        inst.reads_flags && inst.terminator
+        inst.reads_flags() && inst.terminator
     }
 
     fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
@@ -612,6 +615,9 @@ struct Compare {
     /// (`cmp g; sbc g+1`); `b` names nothing. Kept only when no store, call
     /// or saved flags lie between the compare and the end of its block.
     memory: Option<String>,
+    /// `memory` is indexed by this byte (`cmp g,x`), which must hold what it
+    /// held at the compare.
+    index: Option<(String, u32)>,
     /// Over two words: the high pair, subtracted with the borrow of the first.
     wide: Option<((String, u32), (String, u32))>,
 }
@@ -949,10 +955,20 @@ impl Builder {
         &mut self,
         at: usize,
     ) -> Result<(), Unsupported> {
-        let Some(Compare { a, word, memory: Some(symbol), .. }) = self.pending.clone() else { return Ok(()) };
+        let Some(Compare { a, word, memory: Some(symbol), index, .. }) = self.pending.clone() else { return Ok(()) };
         let cell = format!("{}___cmpm{at}", if word { "w" } else { "v" });
         let acc = Reg::Phys(reg::A);
-        if word {
+        if let Some((index, _)) = index {
+            let (x, i) = (Reg::Phys(reg::X), self.byte(&index)?);
+            self.copy(x, i);
+            self.define(&cell);
+            let d = self.byte(&cell)?;
+            self.push(Inst::new(
+                Kind::Op("LDAX"),
+                vec![Operand::Def(acc), Operand::Symbol(symbol, 0), Operand::Use(x)],
+            ));
+            self.copy(d, acc);
+        } else if word {
             let (low, high) = self.write_word(&cell)?;
             for (d, half) in [low, high].into_iter().zip([symbol.clone(), format!("{symbol}+1")]) {
                 self.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
@@ -965,7 +981,8 @@ impl Builder {
             self.copy(d, acc);
         }
         let version = self.version(&cell);
-        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, wide: None });
+        self.pending =
+            Some(Compare { a, b: (cell, version), word, zero: false, memory: None, index: None, wide: None });
         Ok(())
     }
 
@@ -980,9 +997,12 @@ impl Builder {
         code: i64,
         branch: bool,
     ) -> Result<(), Unsupported> {
-        let Compare { a, b, word, zero, memory, wide } =
+        let Compare { a, b, word, zero, memory, index, wide } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
-        if self.version(&a.0) != a.1 || memory.is_none() && self.version(&b.0) != b.1 {
+        if self.version(&a.0) != a.1
+            || memory.is_none() && self.version(&b.0) != b.1
+            || index.as_ref().is_some_and(|(cell, version)| self.version(cell) != *version)
+        {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
         }
         let acc = Reg::Phys(reg::A);
@@ -1051,6 +1071,7 @@ impl Builder {
         } else {
             let lhs = self.byte(&a.0)?;
             let rhs = match (&memory, self.constants.get(&b.0)) {
+                (Some(symbol), _) if index.is_some() => Operand::Symbol(format!("{symbol},x"), 0),
                 (Some(symbol), _) => Operand::Symbol(symbol.clone(), 0),
                 (None, Some(value)) => Operand::Imm(*value & 0xFF),
                 (None, None) => {
@@ -1065,7 +1086,8 @@ impl Builder {
         // `x`, `y` compares. A select or a set reads `a` as the compare left
         // it, and a word's high byte is subtracted in `a`, so those compare
         // there.
-        let tested = if branch && !word {
+        // `cmp g,x` exists for `a` alone
+        let tested = if branch && !word && index.is_none() {
             self.copy_to_class(lhs[0], Class::COMPARED)
         } else {
             self.copy(acc, lhs[0]);
@@ -1073,6 +1095,11 @@ impl Builder {
         };
         let mut cmp =
             Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(tested), rhs[0].clone()]);
+        if let Some((cell, _)) = &index {
+            let (x, i) = (Reg::Phys(reg::X), self.byte(cell)?);
+            self.copy(x, i);
+            cmp.operands.push(Operand::Use(x));
+        }
         cmp.sets_flags = true;
         self.push(cmp);
         if word {
@@ -1169,7 +1196,9 @@ impl Builder {
         inst.rematerializable |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
         // and a load sets N and Z, so it is not run again where a compare's
         // flags are live
-        inst.sets_flags |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
+        if matches!(inst.kind, Kind::Op("LDI" | "LDS")) {
+            inst.sets_flags = true;
+        }
         if inst.origin == 0 {
             inst.origin = self.origin;
         }
@@ -2242,6 +2271,7 @@ pub fn build_with_places(
                     word: false,
                     zero: false,
                     memory: None,
+                    index: None,
                     wide: None,
                 });
             }
@@ -2256,6 +2286,25 @@ pub fn build_with_places(
                     word: inst.opcode == op::CMP16M,
                     zero: false,
                     memory: Some(symbol),
+                    index: None,
+                    wide: None,
+                });
+                if !memory_holds_until_flags_are_read(items, at) {
+                    b.load_compared_global(at)?;
+                }
+            }
+            // a global indexed by a byte on the right: the same, with the index
+            // kept in `x`
+            op::CMP8MX => {
+                let (a, symbol) = (name(&o[1])?, indexed_address(&o[2], &o[3]).map_err(Unsupported)?);
+                let index = name(&o[4])?;
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (String::new(), 0),
+                    word: false,
+                    zero: false,
+                    memory: Some(symbol),
+                    index: Some((index.to_owned(), b.version(index))),
                     wide: None,
                 });
                 if !memory_holds_until_flags_are_read(items, at) {
@@ -2270,6 +2319,7 @@ pub fn build_with_places(
                     word: true,
                     zero: true,
                     memory: None,
+                    index: None,
                     wide: None,
                 });
             }
@@ -2333,8 +2383,8 @@ pub fn build_with_places(
                         shift(&mut b, ah, dl, "LSR", rest);
                         b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(dh), Operand::Imm(0)]));
                     }
-                    // the high byte is the sign of `ah`; by 15 the low byte is too,
-                    // and one splat is stored twice
+                    // the high byte is the sign of `ah`; by 15 the low byte is
+                    // too, and one splat is stored twice
                     _ => {
                         if rest != 7 {
                             shift(&mut b, ah, dl, "ASR", rest);
@@ -2481,7 +2531,8 @@ pub fn build_with_places(
             // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
             // words in `__sa` and `__sb`, the product in `__sa`
             code @ (op::UMULW16 | op::SMULW16) => {
-                // a multiplier whose high byte is known zero is a byte: the entry that walks to its last set
+                // a multiplier whose high byte is known zero is a byte: the
+                // entry that walks to its last set
                 // bit links only the byte loop
                 let byte = b.constants.get(&format!("{}+1", name(&o[3])?)) == Some(&0);
                 let routine = match (code == op::UMULW16, byte) {
@@ -2517,6 +2568,7 @@ pub fn build_with_places(
                     word: true,
                     zero: false,
                     memory: None,
+                    index: None,
                     wide: Some(((a1.to_owned(), b.version(a1)), (c1.to_owned(), b.version(c1)))),
                 });
             }
@@ -2528,6 +2580,7 @@ pub fn build_with_places(
                     word: true,
                     zero: false,
                     memory: None,
+                    index: None,
                     wide: None,
                 });
             }
@@ -2894,11 +2947,6 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
             && let Some(compact) = crate::routines::compact_variant(name)
         {
             *name = compact.to_owned();
-            if crate::routines::aligned_divides()
-                && let Some(aligned) = crate::routines::aligned_variant(compact)
-            {
-                *name = aligned.to_owned();
-            }
         }
     }
 }
@@ -2992,10 +3040,13 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
 /// - what it writes (the accumulator and the flags) is dead after it, and the
 ///   flags were not live into `S`;
 /// - an earlier copy of what `S` writes is what it reads (otherwise there is
-///   nothing to save).
+///   nothing to save);
+/// - `S` leaves the carry alone: not `clc; adc #1` in `a` (the 65C02's `inc a`
+///   does).
 pub fn compare_before_step(
     function: &mut MFunction<Class>,
     at: &dyn Fn(Reg) -> RegId,
+    cmos: bool,
 ) {
     let flags = reg::FLAGS;
     let regs = |inst: &Inst, def: bool| -> Vec<RegId> {
@@ -3020,6 +3071,11 @@ pub fn compare_before_step(
                     continue;
                 }
                 let (step_writes, step_reads) = (regs(&block.insts[s], true), regs(&block.insts[s], false));
+                // `clc; adc #1` (`sec; sbc #1`) clears the carry the compare
+                // sets
+                if !cmos && step_writes.contains(&reg::A) && matches!(block.insts[s].kind, Kind::Op("INC" | "DEC")) {
+                    continue;
+                }
                 // the run: copies, loads, compares; `last` is its last flag
                 // setter
                 let mut last = None;
@@ -3028,7 +3084,7 @@ pub fn compare_before_step(
                     if !matches!(inst.kind, Kind::Copy | Kind::Op("LDI" | "CMP" | "SBC")) {
                         break;
                     }
-                    if inst.sets_flags {
+                    if inst.sets_flags() {
                         last = Some(end);
                     }
                     end += 1;
@@ -3222,7 +3278,7 @@ fn form_text(
         Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")) if operands.len() >= 3 => {
             format!("  {} {}\n", mnemonic.to_lowercase(), second(2))
         }
-        Kind::Op("CMP") if operands.len() == 3 => {
+        Kind::Op("CMP") if operands.len() >= 3 => {
             let compare = match regs[1] {
                 r if r == reg::X => "cpx",
                 r if r == reg::Y => "cpy",
@@ -3483,11 +3539,11 @@ fn emit_on(
     cmos: bool,
     source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool, place: bool| {
+    let run = |function: MFunction<Class>, sink: bool, share: bool, place: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink, share, split, place, source)
+            emit_with::<true>(function, labels, cmos, sink, share, place, source)
         } else {
-            emit_with::<false>(function, labels, cmos, sink, share, split, place, source)
+            emit_with::<false>(function, labels, cmos, sink, share, place, source)
         }
     };
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
@@ -3504,50 +3560,33 @@ fn emit_on(
         let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
         better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
     };
-    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
+    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
     let mut place = true;
     if moved
-        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false, false)
+        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false)
         && wins((&code, &priced, &slots), (&other, &other_priced, &other_slots))
     {
         (code, priced, slots, place) = (other, other_priced, other_slots, false);
     }
-    // a function with calls that spilled may do better with a register kept in
-    // a slot across them only
-    let splittable = !slots.is_empty() && function.blocks.iter().any(|b| b.insts.iter().any(|i| i.call));
-    if !sunk && !shared && !splittable {
+    if !sunk && !shared {
         return Ok((code, slots));
     }
     // each change is kept only where it is no larger and no slower than the
     // function without it
     let mut best = (code, priced, slots);
-    let mut settings = (true, true);
     let mut variants = vec![(false, false)];
     if sunk && shared {
         variants.extend([(true, false), (false, true)]);
     }
-    if !sunk && !shared {
-        variants.clear();
-    }
     for (sink, share) in variants {
-        let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), sink, share, false, place) else {
+        let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), sink, share, place) else {
             continue;
         };
         if wins((&best.0, &best.1, &best.2), (&other, &other_priced, &other_slots)) {
             best = (other, other_priced, other_slots);
-            settings = (sink, share);
         }
-    }
-    if splittable
-        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
-        && let (Ok(kept), Ok(candidate)) = (price(&best.1, &best.2), price(&other_priced, &other_slots))
-        && candidate.0 <= kept.0
-        && candidate.1 <= kept.1
-        && candidate != kept
-    {
-        best = (other, other_priced, other_slots);
     }
     Ok((best.0, best.2))
 }
@@ -3722,16 +3761,22 @@ pub fn labels_with_new_blocks(
     all
 }
 
+/// How many times this thread ran `emit_with`, a whole function's selection
+/// to text (what a test counts to see how many variants a function paid for).
+pub fn emit_runs() -> usize {
+    EMITS.with(std::cell::Cell::get)
+}
+
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
     cmos: bool,
     sink: bool,
     share: bool,
-    _split: bool,
     place: bool,
     source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool), String> {
+    EMITS.with(|runs| runs.set(runs.get() + 1));
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
@@ -3770,7 +3815,7 @@ fn emit_with<const STACK: bool>(
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(p) => p,
     };
-    compare_before_step(&mut function, &at);
+    compare_before_step(&mut function, &at, cmos);
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     // a reload of a slot whose register nothing has written is that register; x
@@ -3826,10 +3871,12 @@ fn emit_with<const STACK: bool>(
         Operand::Block(id) => labels[*id as usize][0].clone(),
         other => unreachable!("{other:?} is not a block"),
     };
+    let mut starts: Vec<Vec<usize>> = Vec::new();
     for (b, block) in function.blocks.iter().enumerate() {
         for label in &labels[block.id as usize] {
             writeln!(out, "{label}:").unwrap();
         }
+        starts.push(Vec::new());
         if b == 0 && spilled > 0 && !has_frame {
             // an argument in `a` that the entry block reads before it writes
             let first = block.insts.first();
@@ -3850,6 +3897,7 @@ fn emit_with<const STACK: bool>(
         }
         let mut repeated = 0;
         for (i, inst) in block.insts.iter().enumerate() {
+            starts[b].push(out.lines.len());
             out.place = inst.origin;
             // the rest of a run of one-bit shifts a loop has emitted
             if repeated > 0 {
@@ -4281,7 +4329,7 @@ fn emit_with<const STACK: bool>(
                     }
                 }
                 // the register the left side is in decides the opcode
-                (Kind::Op("CMP"), [_, _, _]) => {
+                (Kind::Op("CMP"), [_, _, _, ..]) => {
                     out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {
@@ -4417,6 +4465,10 @@ fn emit_with<const STACK: bool>(
                 (other, _) => return Err(format!("{other:?} has no expansion")),
             }
         }
+        starts[b].push(out.lines.len());
+    }
+    if std::env::var_os("LLRM_6502_CHECK_FLAGS").is_some() {
+        crate::flagcheck::verify(&function, &starts, &out.lines)?;
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
@@ -4492,18 +4544,8 @@ fn emit_with<const STACK: bool>(
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
     out.cmos = cmos;
     let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells);
-    let priced = own_labels(
-        &finish(out.clone(), false, None, tails.0.clone(), tails.1.clone(), tails.2.clone(), tails.3.clone()),
-        &function.name,
-    );
-    Ok((
-        own_labels(&finish(out, true, lines_of, tails.0, tails.1, tails.2, tails.3), &function.name),
-        priced,
-        slots,
-        sunk,
-        shared,
-        moved,
-    ))
+    let (priced, text) = finish_pair(out, lines_of, tails);
+    Ok((own_labels(&text, &function.name), own_labels(&priced, &function.name), slots, sunk, shared, moved))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -4541,17 +4583,19 @@ fn own_labels(
     out
 }
 
-/// The function's text: the peepholes, then the branches out of reach made
-/// long.
-fn finish(
+/// The function's text twice: priced (the transfer of a known constant left
+/// out, no line rows) and kept. The peepholes before the first that tells them
+/// apart run once.
+fn finish_pair(
     mut code: Asm,
-    known_loads: bool,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
-    (no_a_result, a_callees): (bool, std::collections::BTreeSet<String>),
-    (no_x_result, x_callees): (bool, std::collections::BTreeSet<String>),
-    (no_y_result, y_callees): (bool, std::collections::BTreeSet<String>),
-    result_cells: std::collections::BTreeSet<String>,
-) -> String {
+    ((no_a_result, a_callees), (no_x_result, x_callees), (no_y_result, y_callees), result_cells): (
+        (bool, std::collections::BTreeSet<String>),
+        (bool, std::collections::BTreeSet<String>),
+        (bool, std::collections::BTreeSet<String>),
+        std::collections::BTreeSet<String>,
+    ),
+) -> (String, String) {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
     code.no_x_result = no_x_result;
@@ -4559,12 +4603,13 @@ fn finish(
     code.no_y_result = no_y_result;
     code.y_callees = y_callees;
     code.result_cells = result_cells;
-    crate::peephole::run_with(&mut code, known_loads);
-    crate::relax::relax(&mut code);
+    let (mut priced, mut kept) = crate::peephole::run_pair(&code);
+    crate::relax::relax(&mut priced);
+    crate::relax::relax(&mut kept);
     if let Some((file, scope, places)) = lines_of {
-        code.lines = with_lines(code.lines, file, scope, places);
+        kept.lines = with_lines(kept.lines, file, scope, places);
     }
-    code.text()
+    (priced.text(), kept.text())
 }
 
 /// `.dbg line` ahead of each instruction whose line is not the one before it
@@ -4645,8 +4690,8 @@ fn allocate<const STACK: bool>(
                     "in bb{at}.{i}: {:?} {:?}{}{}",
                     inst.kind,
                     inst.operands,
-                    if inst.sets_flags { " SF" } else { "" },
-                    if inst.reads_flags { " RF" } else { "" }
+                    if inst.sets_flags() { " SF" } else { "" },
+                    if inst.reads_flags() { " RF" } else { "" }
                 );
             }
         }
@@ -4671,8 +4716,8 @@ fn allocate_greedy<T: Target<Class = Class>>(
                     "bb{at}.{i}: {:?} {:?}{}{}",
                     inst.kind,
                     inst.operands,
-                    if inst.sets_flags { " SF" } else { "" },
-                    if inst.reads_flags { " RF" } else { "" }
+                    if inst.sets_flags() { " SF" } else { "" },
+                    if inst.reads_flags() { " RF" } else { "" }
                 );
             }
         }

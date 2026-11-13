@@ -17,12 +17,11 @@
 //! of `_text_eq`, 325 instructions against 55).
 //!
 //! # Deviations
-//! - W1: `deadargelim` runs before the Simplify list, LLVM's after the CGSCC
-//!   walk (`PassBuilderPipelines.cpp` l.1335). Fact: nothing here cleans a body
-//!   after the walk (LLVM's later module optimization pipeline does), and the
-//!   argument a dropped parameter leaves behind is dead code only the list
-//!   removes. Issue: it sees bodies simplified by Early only. Exit: a post-walk
-//!   cleanup stage, then `deadargelim` after the walk.
+//! - W1: `deadargelim` runs after the walk (`ipa-deadargs.`), as LLVM's
+//!   (`PassBuilderPipelines.cpp` l.1335), except for a function that calls
+//!   itself, which loses its unread parameters before the walk: the recursion
+//!   copier works on the body gcc's IPA-SRA leaves. Exit: the copier prices a
+//!   body with its unread parameters dropped.
 //! - W2a: the walk is per function in callee-first order, not per SCC with the
 //!   inliner's own updates; the clocks inliner still runs afterwards;
 //!   `inlinecost::sites` stands for `decide` until it lands. Exit: W2.
@@ -140,6 +139,10 @@ impl ProgramPass for ModuleIpo {
                         &private[at],
                         &costs,
                         self.inline.cp_clone.unwrap_or(false),
+                        crate::ipacp::Tuning {
+                            hint_clones: self.inline.cp_hint_clones,
+                            peel_limited: self.inline.cp_peel_limited,
+                        },
                         &mut cloning,
                     )
                 });
@@ -165,9 +168,16 @@ impl ProgramPass for ModuleIpo {
                 modules[at].changed(id);
             }
         }
+        // DEVIATE W1 (narrowed, owner w10, exit 2026-11-24): the pin's
+        // `deadargelim` follows the CGSCC walk, so the inliner prices a call
+        // with the arguments nothing reads (x_idioms -Os `sumlong`, cost -10).
+        // A function that calls itself loses them first: the recursion copier
+        // (gcc's `-finline-recursive`) works on the body gcc's IPA-SRA leaves,
+        // and with them in place the copies merge no calls (hanoi: a switch of
+        // nine copies and a closed form, against 23..2358 B more without).
         for at in 0..count {
             let ((removed, unsound), before) =
-                reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_with);
+                reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_from_recursions);
             vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
             changed |= !removed.is_empty();
         }
@@ -601,7 +611,8 @@ impl ProgramPass for Walk {
                                     continue;
                                 }
                                 let kept = function_mut(module, id).1.clone();
-                                let kept_clocks = function_clocks(module, &program.layout, tti, &kept);
+                                let by_trips = tti.inline_trial_by_trips();
+                                let kept_clocks = trial_clocks(by_trips, module, &program.layout, tti, &kept);
                                 let mut chosen = accepted.clone();
                                 chosen.extend(calls.iter().copied());
                                 let available: llrm_support::hash::SparseIdMap<_, _> =
@@ -705,7 +716,7 @@ impl ProgramPass for Walk {
                                         .collect();
                                     let run: i64 = callees
                                         .iter()
-                                        .map(|body| function_clocks(module, &program.layout, tti, body))
+                                        .map(|body| trial_clocks(by_trips, module, &program.layout, tti, body))
                                         .sum();
                                     let gone: i64 = if credit > 0 {
                                         let sites: Vec<GlobalId> =
@@ -728,9 +739,18 @@ impl ProgramPass for Walk {
                                         .iter()
                                         .map(|body| tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None)))
                                         .sum();
-                                    let once = kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
+                                    let now_clocks = trial_clocks(by_trips, module, &program.layout, tti, now);
+                                    // By trips the caller's loops weigh the
+                                    // copy among them: the callee's
+                                    // run and saves are what the site's
+                                    // frequency repeats.
+                                    let saved = if by_trips {
+                                        (kept_clocks as f64 + (run + saves) as f64 * trips - now_clocks as f64) as i64
+                                    } else {
+                                        ((kept_clocks + run + saves - now_clocks) as f64 * trips) as i64
+                                    };
                                     (
-                                        (once as f64 * trips) as i64,
+                                        saved,
                                         function_bytes(module, &program.layout, &costs, now)
                                             - function_bytes(module, &program.layout, &costs, &kept)
                                             - gone,
@@ -786,6 +806,27 @@ impl ProgramPass for Walk {
                                     };
                                     (saved, growth)
                                 };
+                                // DEVIATE INL-SPEED-OS (`Tti::inline_trial_speed_at_size`): the clocks the copies
+                                // save at a hot site, weighed by its frequency, against a few bytes a site.
+                                let speed_at_size = match tti.inline_trial_speed_at_size() {
+                                    Some(least) if size != crate::inlinecost::CallerSize::Speed => {
+                                        let trips = calls
+                                            .iter()
+                                            .map(|one| site_frequencies.get(one).copied().unwrap_or(1.0).max(1.0))
+                                            .sum::<f64>()
+                                            / calls.len() as f64;
+                                        let now = module.global(id).function().expect("a body");
+                                        let run: i64 = calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_clocks(module, &program.layout, tti, body))
+                                            .sum();
+                                        let once = kept_clocks + run - function_clocks(module, &program.layout, tti, now);
+                                        speed_keeps_at_size(least, trips, once, calls.len(), growth)
+                                    }
+                                    _ => false,
+                                };
                                 if remarks {
                                     eprintln!(
                                         "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved, {} bytes{})",
@@ -833,7 +874,7 @@ impl ProgramPass for Walk {
                                         .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
                                         .collect(),
                                 });
-                                let ruled = trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes);
+                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes);
                                 let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
@@ -1682,6 +1723,27 @@ const HOT_TRIALS: usize = 4;
 /// goes with its last calls, accepted only by the credit for the callee (the copies alone count more), must also leave the bytes no larger: the count priced a float compare as an add, and
 /// `canon` (a libcall per site on m68k) was inlined five times for +28 B at -Os.
 #[allow(clippy::too_many_arguments)]
+/// Bytes a site may add where INL-SPEED-OS keeps a trial for the clocks it saves.
+const INLINE_SPEED_BYTES_PER_SITE: i64 = 4;
+
+/// Instructions a call site runs that its copy does not: the call and the callee's return.
+const INLINE_CALL_AND_RETURN: i64 = 2;
+
+/// DEVIATE INL-SPEED-OS: whether an -Os trial is kept for its clocks: its sites run at least `least` times per
+/// call of the caller, `once` is the clocks one run of the sites saves (the latency model prices a call as its
+/// callee's body, so a copy that merely replaces it reads 0: it also drops the call and the return), and the copy
+/// adds at most `INLINE_SPEED_BYTES_PER_SITE` bytes a site.
+fn speed_keeps_at_size(
+    least: i64,
+    trips: f64,
+    once: i64,
+    sites: usize,
+    growth: i64,
+) -> bool {
+    let once = once + INLINE_CALL_AND_RETURN * sites as i64;
+    trips >= least as f64 && (once as f64 * trips) as i64 > 0 && growth <= INLINE_SPEED_BYTES_PER_SITE * sites as i64
+}
+
 fn trial_accepted(
     byte_gate: bool,
     by_bytes: bool,
@@ -1747,11 +1809,97 @@ fn function_clocks(
         .sum()
 }
 
+/// Trips a loop is priced at where ScalarEvolution proves no fewer than
+/// this: the conventional ten.
+const TRIAL_TRIPS: f64 = 10.0;
+
+/// SZ2 with `Tti::inline_trial_by_trips`: the clocks of `function` per entry,
+/// each instruction repeated by the trips of the loops around it (ten, or the
+/// fewer ScalarEvolution proves). The same weight on both sides of a trial: a
+/// branch estimate weighs a loop of the callee and its copy differently (20
+/// and 32 for the one loop of `recsum`), more than the clocks a copy saves a
+/// trip. Else [`function_clocks`].
+fn trial_clocks(
+    by_trips: bool,
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    tti: &dyn llrm_mir::tti::Tti,
+    function: &llrm_mir::module::Function,
+) -> i64 {
+    if !by_trips {
+        return function_clocks(module, layout, tti, function);
+    }
+    let mut session = llrm_analysis::scev::analysis::ScevSession::within(
+        &module.context,
+        &module.globals,
+        &module.metadata,
+        function,
+    );
+    let weights: llrm_mir::dense::IdMap<llrm_mir::module::BlockId, f64> =
+        session.ask_within(&module.context, layout, &module.globals, &module.metadata, function, |scev, cx| {
+            function
+                .layout()
+                .iter()
+                .map(|&block| {
+                    let mut weight = 1.0;
+                    let mut around = cx.loops.get_loop_for(block);
+                    while let Some(found) = around {
+                        let proven = f64::from(scev.get_small_constant_max_trip_count(cx, found.get_header()));
+                        weight *= if proven > 0.0 { proven.min(TRIAL_TRIPS) } else { TRIAL_TRIPS };
+                        around = found.get_parent_loop();
+                    }
+                    (block, weight)
+                })
+                .collect()
+        });
+    function
+        .walk()
+        .map(|(_, inst)| {
+            let clocks = llrm_mir::instructioncost::instruction_cost(
+                tti,
+                &module.context,
+                layout,
+                &module.globals,
+                function,
+                inst,
+                llrm_mir::tti::CostKind::Latency,
+            )
+            .value;
+            clocks as f64 * function.parent(inst).and_then(|block| weights.get(&block).copied()).unwrap_or(1.0)
+        })
+        .sum::<f64>() as i64
+}
+
 /// Units a rerun of the Simplify list over a settled body must save to stay:
 /// one is the wobble of the operand-sensitive estimate (recmany_o1 "saved" 1 by
 /// an add's operand and kept a Reassociate reorder, +16 B). Of the 75 reruns
 /// kept on the corpus, 14 save one unit and the rest more.
 const GUARD: i64 = 1;
+
+/// What the arguments of parameters nothing reads add to the units of the call `inst`: `deadargelim` removes them after
+/// the walk (the pin's order), so the size trial counts the call it ships. Nothing for a callee that stays visible.
+fn unread_argument_units(
+    module: &Module,
+    tti: &dyn llrm_mir::tti::Tti,
+    function: &llrm_mir::module::Function,
+    inst: llrm_mir::module::InstId,
+) -> i64 {
+    use llrm_mir::module::{GlobalKind, Linkage};
+    if !matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_) | llrm_mir::opcode::Opcode::Invoke(_)) {
+        return 0;
+    }
+    let Some(callee) = llrm_mir::memory::callee(&module.context, function, inst) else { return 0 };
+    let global = module.global(callee);
+    let (GlobalKind::Function(body), true) = (&global.kind, matches!(global.linkage, Linkage::Internal | Linkage::Private)) else { return 0 };
+    let all = body.parameters().len() as i64;
+    let unread = crate::inlinecost::unread_parameters_of(module, callee).iter().filter(|&&one| one).count() as i64;
+    if unread == 0 {
+        return 0;
+    }
+    let with = tti.direct_call_cost(all, llrm_mir::tti::CostKind::CodeSize);
+    let without = tti.direct_call_cost(all - unread, llrm_mir::tti::CostKind::CodeSize);
+    if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
+}
 
 /// SZ2: the code size of body `id`, by the target's cost model for bytes (its
 /// size view, in encoded bytes, where it has one).
@@ -1796,7 +1944,8 @@ fn sized(
                 inst,
                 llrm_mir::tti::CostKind::CodeSize,
             )
-            .value;
+            .value
+                - unread_argument_units(module, tti, function, inst);
             let moves = matches!(
                 operation.opcode,
                 llrm_mir::opcode::Opcode::Load { .. }

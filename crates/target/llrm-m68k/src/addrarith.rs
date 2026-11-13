@@ -271,11 +271,15 @@ fn codes_unread(
     at: usize,
 ) -> bool {
     for after in &insts[at + 1..] {
-        if after.sets_flags || after.call {
+        if after.call {
             break;
         }
-        if after.reads_flags {
+        // read first: `addx` reads the codes it sets
+        if after.reads_flags() {
             return false;
+        }
+        if after.sets_flags() {
+            break;
         }
     }
     true
@@ -458,11 +462,15 @@ pub fn refine_lea_round_trips(
                     return None;
                 }
                 for after in &block.insts[at + 3..] {
-                    if after.sets_flags || after.call {
+                    if after.call {
                         break;
                     }
-                    if after.reads_flags {
+                    // read first: `addx` reads the codes it sets
+                    if after.reads_flags() {
                         return None;
+                    }
+                    if after.sets_flags() {
+                        break;
                     }
                 }
                 let (opcode, immediate) = match *value {

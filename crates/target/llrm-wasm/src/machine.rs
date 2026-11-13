@@ -58,6 +58,10 @@ pub struct WasmMachine;
 const REGISTERS: i64 = 8;
 
 impl Machine for WasmMachine {
+    fn may_be_emitted_as_tail_call(&self) -> bool {
+        false
+    }
+
     fn foreign_span(
         &self,
         _selectors: (i64, i64),
@@ -194,15 +198,31 @@ impl Tti for Wasm {
     /// SZ1: a size build keeps a callee that inlining would copy into
     /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
     /// The pin's `OptSizeThreshold` 50 allows the growth.
-    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-24): the pin inlines it.
     /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
     /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245). On the whole
     /// corpus (198 rows, 2026-11-10) 20 -O1 rows were above it, +1 256 B: nine
     /// of them held inlines the pin prices below zero (next hook).
     /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
     /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
+    /// Off at tip 2f41481d12 (2026-11-13, 604 tests/run/c cells): 52 cells
+    /// larger, +45 189 B; 2 smaller, -36 B; above the pin 5 -> 8 (div8_os,
+    /// pattern_fill, shrink_wrapped_frame, shrink_wrapped_saves at -O1;
+    /// memcpy_libcall -Os). Closes byvalue_struct_address (49 -> 31 B).
+    /// Next step, not "off": a trial-priced inline (`walk.rs` sized()) that counts
+    /// the dead store after main folds. Acceptance: those 8 cells at or below the pin.
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
+    }
+
+    /// The bound holds a callee with two or more sites; a callee with one is the pin's inline
+    /// (cost < `OptSizeThreshold` 50). DEVIATE SZ1 narrowed (2026-11-13, owner wasm, exit
+    /// 2026-11-24): held at one site too, the once-called `bench_X` of 12 -Os cells stayed a
+    /// call from `main` (cost 45 < 50): +1 to +9 executed instructions over the pin with the
+    /// bytes 34-100 B below it. Tip df60ddb920, 195 corpus cells: -Os 24 cells at or below the
+    /// pin on both axes (0 lost), -O1 38 (0 lost); each lands on the pin's bytes.
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        2
     }
 
     /// The bound stands down where the pin's own cost is below zero: the pin
@@ -264,6 +284,14 @@ impl Tti for Wasm {
     /// `i32.const; i32.ne` (quicksort -O2 +10 B, tile -O1 -3 B).
     fn lsr_bytes(&self) -> Option<llrm_mir::tti::LsrBytes> {
         Some(llrm_mir::tti::LsrBytes { constant: 1, local_get: 2, local_set: 2, op: 1 })
+    }
+
+    /// The pin's `GenerateICmpZeroScales`: an exit compare is scaled only where
+    /// `getExactSDiv` proves the product does not wrap. With LG1 and LG2 the
+    /// exit test of an unrolled `countdown` moved to a 39-scaled counter and
+    /// cost `i32.const; i32.ne` (tail_calls -O2 +9 B).
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        false
     }
 
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as

@@ -340,6 +340,17 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TLI.isZExtFree(from, to)` (the `EVT` form): widening an integer
+    /// without a sign needs no instruction. The pin's default is false; x86-64
+    /// and AArch64 say yes for `i32` to `i64`.
+    fn is_zext_free(
+        &self,
+        _from: EVT,
+        _to: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `TargetLowering::shouldTransformSignedTruncationCheck`: `(add x,
     /// 1<<(k-1)) u< 1<<k` is `sext_inreg x, k == x`. The pin's default is
     /// false. Default false until x86 is judged.
@@ -1053,6 +1064,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::InsertVectorElt => self.visit_insert_vector_elt(node),
+            ISD::ExtractElement => self.visit_extract_vector_elt(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
@@ -1111,7 +1123,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
                 .fold_extend_of_cast(node)
                 .or_else(|| self.visit_extend(node))
-                .or_else(|| self.sext_of_non_negative(node)),
+                .or_else(|| self.sext_of_non_negative(node))
+                .or_else(|| self.zext_nneg_of_existing_sext(node)),
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
@@ -2074,6 +2087,34 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let folded = self.dag.get_node(op, vt, &[n0]);
             return (folded != node).then_some(folded);
         }
+        // `zext (and (trunc x), cst)` and `aext (and (trunc x), cst)` are
+        // `and x, cst` when a cast is not free
+        // ([L16515](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16515),
+        // [L16798](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16798)):
+        // the constant is zero-extended, not sign-extended, so a mask a
+        // later fold would widen stays the width it was.
+        if matches!(op, ISD::AnyExtend | ISD::ZeroExtend)
+            && self.dag.opcode(n0) == ISD::And
+            && let Some(constant) = self.dag.constant(self.dag.operand(n0, 1))
+            && self.dag.opcode(self.dag.operand(n0, 0)) == ISD::Truncate
+        {
+            let x = self.dag.operand(self.dag.operand(n0, 0), 0);
+            let narrow = self.dag.value_type(n0);
+            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
+            // isZExtFree(narrow, wide)`) `ShrinkDemandedOp` makes the narrow form
+            // this fold would undo, and the two would run in turn forever.
+            let narrows_free = self.hooks.free_narrowing(vt, narrow);
+            let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
+            let zext_free = self.hooks.is_zext_free(narrow, vt);
+            let sext_cheaper = self.tli.is_some_and(|tli| tli.is_sext_cheaper_than_zext(narrow, vt));
+            let fires = !narrows_free
+                && (!truncate_free || if op == ISD::ZeroExtend { !zext_free } else { !zext_free && !sext_cheaper });
+            if fires {
+                let wide = self.any_ext_or_trunc(x, vt);
+                let mask = self.dag.get_constant(constant & super::fold::mask(narrow.size_in_bits()), vt);
+                return Some(self.dag.get_node(ISD::And, vt, &[wide, mask]));
+            }
+        }
         let inner = self.dag.opcode(n0);
         if !matches!(
             inner,
@@ -2130,6 +2171,114 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 Some(self.dag.get_node(ISD::SignExtendInReg, vt, &[wide, narrow]))
             }
             _ => None,
+        }
+    }
+
+    /// The closing arm of `visitZERO_EXTEND` ([L16730][pin]): `(zext nneg x)`
+    /// is the `(sext x)` that already exists, if the zext is not free: one
+    /// extension serves both, where two left a mask beside a `load16_s`.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16730
+    fn zext_nneg_of_existing_sext(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::ZeroExtend
+            || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+        {
+            return None;
+        }
+        let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
+        if self.hooks.is_zext_free(self.dag.value_type(n0), vt) {
+            return None;
+        }
+        let existing = self.dag.get_node_if_exists(ISD::SignExtend, &[vt], &[n0])?;
+        Some(SDValue { node: existing, res: 0 })
+    }
+
+    /// `SelectionDAG::InferPtrAlign` ([L14438][pin]): what the address alone
+    /// says of its alignment: a global plus a constant, or a frame object
+    /// plus a constant.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L14438
+    pub(super) fn infer_ptr_align(
+        &self,
+        ptr: SDValue,
+    ) -> Option<u64> {
+        let common = |align: u64, offset: u64| if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) };
+        if let Some((symbol, offset)) = self.global_plus_offset(ptr) {
+            if let Some(&align) = self.dag.global_alignments.get(&symbol) {
+                if align > 1 {
+                    return Some(common(align, offset as u64));
+                }
+            }
+        }
+        let (index, offset) = match (self.dag.opcode(ptr), self.dag.node(ptr).data) {
+            (ISD::FrameIndex, NodeData::FrameIndex(index)) => (index, 0),
+            (ISD::Add | ISD::Or, _) => {
+                let (base, offset) = (self.dag.operand(ptr, 0), self.dag.operand(ptr, 1));
+                let constant = self.dag.constant(offset)?;
+                let disjoint = self.dag.opcode(ptr) == ISD::Add
+                    || super::known_bits::masked_value_is_zero(self.dag, base, constant);
+                match (disjoint, self.dag.opcode(base), self.dag.node(base).data) {
+                    (true, ISD::FrameIndex, NodeData::FrameIndex(index)) => (index, constant as u64),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let align = *self.dag.frame_alignments.get(usize::try_from(index).ok()?)?;
+        Some(common(align, offset))
+    }
+
+    /// `TLI.isGAPlusOffset`: a `GlobalAddress`, or one added to a constant.
+    fn global_plus_offset(
+        &self,
+        ptr: SDValue,
+    ) -> Option<(u32, i64)> {
+        match (self.dag.opcode(ptr), self.dag.node(ptr).data) {
+            (ISD::GlobalAddress | ISD::TargetGlobalAddress, NodeData::Global { symbol, offset }) => Some((symbol, offset)),
+            (ISD::Add, _) => {
+                let (a, b) = (self.dag.operand(ptr, 0), self.dag.operand(ptr, 1));
+                let signed = |c: SDValue| {
+                    let bits = self.dag.constant(c)?;
+                    let width = self.dag.value_type(c).size_in_bits();
+                    Some(((bits << (128 - width)) as i128 >> (128 - width)) as i64)
+                };
+                match (self.global_plus_offset(a), signed(b), self.global_plus_offset(b), signed(a)) {
+                    (Some((symbol, offset)), Some(add), _, _) => Some((symbol, offset.wrapping_add(add))),
+                    (None, _, Some((symbol, offset)), Some(add)) => Some((symbol, offset.wrapping_add(add))),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// `visitLOAD` and `visitSTORE`'s "try to infer better alignment
+    /// information than the access already has" (`OptLevel != None`,
+    /// unindexed, not atomic): the node's alignment is refined in place.
+    pub(super) fn refine_alignment(
+        &mut self,
+        node: SDValue,
+    ) {
+        let NodeData::Mem(info) = self.dag.node(node).data else { return };
+        let ptr = self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 2 } else { 1 });
+        if self.opt_none || info.ordering.is_some() {
+            return;
+        }
+        // DEVIATE: `isAligned(*Alignment, getSrcValueOffset())` needs the
+        // access's offset in its IR pointer, which `MemInfo` does not hold:
+        // an access still described by its IR location has offset 0, any
+        // other (an inline memcpy's chunk at +3) is left alone.
+        let super::dag::MemBase::Value(location) = info.base else { return };
+        if self.dag.mem_locations[location.get() as usize - 1].bytes != info.mem_vt.size_in_bits().div_ceil(8) {
+            return;
+        }
+        if let Some(align) = self.infer_ptr_align(ptr).filter(|&align| align > u64::from(info.align)) {
+            self.dag.refine_mem_alignment(node.node, align.min(u64::from(u32::MAX)) as u32);
         }
     }
 
@@ -4049,6 +4198,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(direct) = self.hooks.store_of_converted_slot(&mut self.dag, node) {
             return Some(direct);
         }
+        self.refine_alignment(node);
         // `mergeTruncStores`, before `findBetterNeighborChains` as the pin
         // has it: the chain it walks is the program's order.
         // `mergeTruncStores`: several stores of the parts of one value become
@@ -4195,8 +4345,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let source = self.dag.operand(value, 0);
         let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
-        let action = tli.trunc_store_action(wide, narrow);
-        let takes = action == Action::Legal || (!self.legal_operations() && action == Action::Custom);
+        // `canCombineTruncStore`: `isTruncStoreLegal` after operation legalization, `isTruncStoreLegalOrCustom`
+        // before; both need the value type to be legal (a soft-float target has no `f64` to store narrowed).
+        let takes = if self.legal_operations() {
+            tli.is_trunc_store_legal(wide, narrow)
+        } else {
+            tli.is_trunc_store_legal_or_custom(wide, narrow)
+        };
         takes.then(|| self.dag.get_store(chain, source, ptr, info))
     }
 

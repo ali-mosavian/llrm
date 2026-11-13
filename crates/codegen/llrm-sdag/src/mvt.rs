@@ -1,9 +1,9 @@
 //! Value types of the DAG: [`MVT`] (the simple ones) and [`EVT`] (also an
 //! integer of any width, as `i24` before promotion).
 
-/// A simple value type, the pin's `MVT` with the 128-bit integer vectors only
-/// (DEVIATE SD13: no wider or floating-point vectors yet; vector POC, owner
-/// m64).
+/// A simple value type, the pin's `MVT` with the 128-bit vectors of integers
+/// and of `f32`/`f64` only (DEVIATE SD13: no wider vectors yet; vector POC,
+/// owner m64).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MVT {
     I1,
@@ -21,6 +21,19 @@ pub enum MVT {
     V8I16,
     V4I32,
     V2I64,
+    /// `v4f32`, `v2f64`: the 128-bit float vectors (arm64, `addQRTypeForNEON`).
+    V4F32,
+    V2F64,
+    /// `v2f32`: the 64-bit float vector `FPR64` holds (`addDRTypeForNEON`).
+    V2F32,
+    /// The 256-bit vectors no register holds: the type legalizer splits each
+    /// in two (`TypeSplitVector`).
+    V32I8,
+    V16I16,
+    V8I32,
+    V4I64,
+    V8F32,
+    V4F64,
     /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin
     /// keeps it with the other floats).
     F128,
@@ -58,21 +71,47 @@ impl MVT {
             (MVT::I16, 8) => MVT::V8I16,
             (MVT::I32, 4) => MVT::V4I32,
             (MVT::I64, 2) => MVT::V2I64,
+            (MVT::F32, 4) => MVT::V4F32,
+            (MVT::F64, 2) => MVT::V2F64,
+            (MVT::F32, 2) => MVT::V2F32,
+            (MVT::I8, 32) => MVT::V32I8,
+            (MVT::I16, 16) => MVT::V16I16,
+            (MVT::I32, 8) => MVT::V8I32,
+            (MVT::I64, 4) => MVT::V4I64,
+            (MVT::F32, 8) => MVT::V8F32,
+            (MVT::F64, 4) => MVT::V4F64,
             _ => return None,
         })
     }
 
     pub fn is_vector(self) -> bool {
-        matches!(self, MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64)
+        matches!(
+            self,
+            MVT::V16I8
+                | MVT::V8I16
+                | MVT::V4I32
+                | MVT::V2I64
+                | MVT::V4F32
+                | MVT::V2F64
+                | MVT::V2F32
+                | MVT::V32I8
+                | MVT::V16I16
+                | MVT::V8I32
+                | MVT::V4I64
+                | MVT::V8F32
+                | MVT::V4F64
+        )
     }
 
     /// `getVectorElementType`.
     pub fn element(self) -> Option<MVT> {
         Some(match self {
-            MVT::V16I8 => MVT::I8,
-            MVT::V8I16 => MVT::I16,
-            MVT::V4I32 => MVT::I32,
-            MVT::V2I64 => MVT::I64,
+            MVT::V16I8 | MVT::V32I8 => MVT::I8,
+            MVT::V8I16 | MVT::V16I16 => MVT::I16,
+            MVT::V4I32 | MVT::V8I32 => MVT::I32,
+            MVT::V2I64 | MVT::V4I64 => MVT::I64,
+            MVT::V4F32 | MVT::V8F32 | MVT::V2F32 => MVT::F32,
+            MVT::V2F64 | MVT::V4F64 => MVT::F64,
             _ => return None,
         })
     }
@@ -80,10 +119,11 @@ impl MVT {
     /// `getVectorNumElements`.
     pub fn lanes(self) -> Option<u32> {
         Some(match self {
-            MVT::V16I8 => 16,
-            MVT::V8I16 => 8,
-            MVT::V4I32 => 4,
-            MVT::V2I64 => 2,
+            MVT::V32I8 => 32,
+            MVT::V16I8 | MVT::V16I16 => 16,
+            MVT::V8I16 | MVT::V8I32 | MVT::V8F32 => 8,
+            MVT::V4I32 | MVT::V4F32 | MVT::V4I64 | MVT::V4F64 => 4,
+            MVT::V2I64 | MVT::V2F64 | MVT::V2F32 => 2,
             _ => return None,
         })
     }
@@ -162,9 +202,12 @@ impl EVT {
                 MVT::I8 => 8,
                 MVT::I16 => 16,
                 MVT::I32 | MVT::F32 | MVT::Far => 32,
-                MVT::I64 | MVT::F64 => 64,
+                MVT::I64 | MVT::F64 | MVT::V2F32 => 64,
                 MVT::F80 => 80,
-                MVT::I128 | MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 => 128,
+                MVT::I128 | MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 | MVT::V4F32 | MVT::V2F64 => {
+                    128
+                }
+                MVT::V32I8 | MVT::V16I16 | MVT::V8I32 | MVT::V4I64 | MVT::V8F32 | MVT::V4F64 => 256,
                 MVT::Other | MVT::Glue => panic!("{vt:?} has no size"),
             },
         }

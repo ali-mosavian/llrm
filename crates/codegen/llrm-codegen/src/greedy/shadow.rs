@@ -198,6 +198,28 @@ impl SpillWeightEnv for BodyEnv<'_> {
 }
 
 impl GreedyEnv for BodyEnv<'_> {
+    fn spill_fold_prices(&self) -> Option<llrm_mir::target::SpillFoldClocks> {
+        self.tii.spill_fold_clocks()
+    }
+
+    fn spill_fold_copy_clocks(
+        &self,
+        insn: &crate::model::lir::Insn,
+        virt: u32,
+    ) -> Option<i64> {
+        self.tii.spill_fold_copy_clocks(insn, virt)
+    }
+
+    fn folds_to_cell(
+        &self,
+        insn: &crate::model::lir::Insn,
+        virt: u32,
+    ) -> bool {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -8)), super::tii::_width(insn, virt));
+        self.tii.fold_memory_operand(&std::sync::Arc::new(insn.clone()), virt, &cell).is_some()
+    }
+
     fn has_class(
         &self,
         virt: u32,
@@ -1827,6 +1849,15 @@ mod tests {
         ) -> Option<Arc<Insn>> {
             self.inner.fold_memory_operand(one, reg, cell)
         }
+        fn fold_memory_operand_classed(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &crate::model::ir::Mem,
+            xmm: &dyn Fn(u32) -> bool,
+        ) -> Option<Arc<Insn>> {
+            self.inner.fold_memory_operand_classed(one, reg, cell, xmm)
+        }
         fn fold_copy_member(
             &self,
             one: &Insn,
@@ -1881,6 +1912,7 @@ mod tests {
             classes: &RegisterClasses::m16(),
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let plain = |at: i64, defines: &[u32], uses: &[u32]| {
             Arc::new(Insn::new(at, None, None, defines.to_vec(), uses.to_vec()))
@@ -1942,6 +1974,7 @@ mod tests {
             classes: &RegisterClasses::m16(),
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let held = |value, width| Loc::Held(Held { value, width, offset: 0 });
         let mov = |to: Loc, from: Loc| Semantics {
@@ -2069,6 +2102,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2184,6 +2218,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2370,6 +2405,7 @@ mod tests {
                     classes: &RegisterClasses::m16(),
                     basic_semantics: false,
                     address_reference_milliweight: 3000,
+                    fold_spill: None,
                 },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
                 size: false,
@@ -2439,6 +2475,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2596,6 +2633,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2672,6 +2710,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2724,6 +2763,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2769,6 +2809,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let env = BodySplitEnv::new(
             &body,
@@ -2813,6 +2854,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let env = BodySplitEnv::new(
             &body,
@@ -2868,6 +2910,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let env = BodySplitEnv::new(
             &body,
@@ -2953,6 +2996,7 @@ mod tests {
                 classes: &classes,
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             classes.registers,
             &lis,

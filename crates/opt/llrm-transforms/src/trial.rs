@@ -166,17 +166,19 @@ pub fn take_left() -> (Vec<String>, usize) {
     LEFT.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare and a jump).
+/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare and a jump), where the
+/// target (`Tti::rotation_hot_bytes_per_loop`) does not say.
 pub const ROTATION_HOT_BYTES_PER_LOOP: i64 = 4;
 
-/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the code by no more than a
-/// few bytes for each loop it rotated.
+/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the code by no more than
+/// `bytes` for each loop it rotated.
 pub fn keeps_rotation_hot(
     saved: i64,
     added: i64,
     loops: usize,
+    bytes: i64,
 ) -> bool {
-    saved > 0 && added <= ROTATION_HOT_BYTES_PER_LOOP * loops as i64
+    saved > 0 && added <= bytes * loops as i64
 }
 
 /// A function of more instructions than this is not priced twice: the second compile of a big function
@@ -193,12 +195,15 @@ pub fn keeps_at_size(added: i64) -> bool {
 
 /// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is smaller, or it grows by
 /// at most `ROTATION_HOT_BYTES_PER_LOOP` for each function the trial took and the code runs less.
+/// `bytes_strict` (`Tuning::unroll_trial_bytes_strict`): bytes are the one axis at -Os, so only the
+/// smaller object is kept.
 pub fn keeps_unroll_at_size(
     saved: i64,
     added: i64,
     functions: usize,
+    bytes_strict: bool,
 ) -> bool {
-    added < 0 || (saved > 0 && added <= ROTATION_HOT_BYTES_PER_LOOP * functions as i64)
+    added < 0 || (!bytes_strict && saved > 0 && added <= ROTATION_HOT_BYTES_PER_LOOP * functions as i64)
 }
 
 /// The names of the functions whose finished bodies differ between two modules
@@ -449,5 +454,20 @@ mod moved_tests {
         };
         assert!(defined("f") && !defined("g"));
         assert!(differing(&one, &module("1")).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod unroll_keep_tests {
+    use super::*;
+
+    /// x86_64 -Os kept an unroll that grew long_double_union_pun by 13 B (53 -> 66; clang 53) because the code ran
+    /// less: the one strict axis at -Os is bytes. A target that says so keeps only the smaller object.
+    #[test]
+    fn a_bytes_strict_unroll_trial_keeps_only_a_smaller_object() {
+        assert!(keeps_unroll_at_size(10, 3, 1, false), "m32 keeps a few bytes for less work");
+        assert!(!keeps_unroll_at_size(10, 3, 1, true), "strict: a grown object is put back");
+        assert!(keeps_unroll_at_size(0, -1, 1, true), "strict: a smaller one stays");
+        assert!(!keeps_unroll_at_size(10, 0, 1, true), "strict: a tie keeps the pass's own result");
     }
 }

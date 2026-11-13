@@ -122,6 +122,25 @@ pub fn known_bits(
     walk(dag, value, 0)
 }
 
+/// `computeKnownBits(Op, Depth)`: the walk starts `depth` operands down, so it
+/// stops at `MaxRecursionDepth` sooner (the pin's callers pass their own depth).
+pub fn known_bits_at(
+    dag: &SelectionDAG,
+    value: SDValue,
+    depth: u32,
+) -> KnownBits {
+    walk(dag, value, depth)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many values `known_bits` looked at.
+    pub(super) static KNOWN_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many values `num_sign_bits` looked at (what a test counts to see the
+    /// search is bounded by `MAX_DEPTH`).
+    pub(super) static SIGN_BITS_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Applies a `KnownBits` operation to two walked operands.
 fn binary(
     lhs: KnownBits,
@@ -136,6 +155,8 @@ fn walk(
     value: SDValue,
     depth: u32,
 ) -> KnownBits {
+    #[cfg(test)]
+    KNOWN_VISITS.with(|visits| visits.set(visits.get() + 1));
     let vt = dag.value_type(value);
     if !vt.is_integer() {
         return KnownBits::unknown(1);
@@ -314,10 +335,32 @@ pub fn num_sign_bits(
     dag: &SelectionDAG,
     value: SDValue,
 ) -> u32 {
+    num_sign_bits_at(dag, value, 0)
+}
+
+/// `ComputeNumSignBits(Op, Depth)`: a value `MAX_DEPTH` operands down is not
+/// looked at (the pin's `Depth >= MaxRecursionDepth`), and the known bits of
+/// an operand are asked for at the depth below.
+fn num_sign_bits_at(
+    dag: &SelectionDAG,
+    value: SDValue,
+    depth: u32,
+) -> u32 {
+    #[cfg(test)]
+    SIGN_BITS_VISITS.with(|visits| visits.set(visits.get() + 1));
     let width = dag.value_type(value).size_in_bits();
+    if let Some(constant) = dag.constant(value) {
+        // `Val.getNumSignBits()`, before the depth is looked at.
+        let sign = 1u128 << (width - 1);
+        let run = |bits: u128| (0..width).take_while(|i| bits & (sign >> i) != 0).count() as u32;
+        return if constant & sign != 0 { run(constant) } else { run(!constant & mask(width)) }.max(1);
+    }
+    if depth >= MAX_DEPTH {
+        return 1;
+    }
     if dag.opcode(value) == ISD::SignExtend {
         let inner = dag.operand(value, 0);
-        return num_sign_bits(dag, inner) + width - dag.value_type(inner).size_in_bits();
+        return num_sign_bits_at(dag, inner, depth + 1) + width - dag.value_type(inner).size_in_bits();
     }
     // `ComputeNumSignBits` of `AssertSext` (`VTBits - Bits + 1`) and
     // `AssertZext` (`VTBits - Bits`).
@@ -340,7 +383,7 @@ pub fn num_sign_bits(
         && let Some(amount) = dag.constant(dag.operand(value, 1))
         && (0..u128::from(width)).contains(&amount)
     {
-        return (num_sign_bits(dag, dag.operand(value, 0)) + amount as u32).min(width);
+        return (num_sign_bits_at(dag, dag.operand(value, 0), depth + 1) + amount as u32).min(width);
     }
     if dag.opcode(value) == ISD::SignExtendInReg
         && let super::dag::NodeData::ValueType(inner) = dag.node(dag.operand(value, 1)).data
@@ -348,7 +391,7 @@ pub fn num_sign_bits(
         // `ComputeNumSignBits` of `SIGN_EXTEND_INREG`: the larger of what the
         // extension makes and what the operand has.
         let made = width - inner.size_in_bits() + 1;
-        return made.max(num_sign_bits(dag, dag.operand(value, 0)));
+        return made.max(num_sign_bits_at(dag, dag.operand(value, 0), depth + 1));
     }
     // `ComputeNumSignBits` of a `SEXTLOAD` (`VTBits - MemBits + 1`) and a
     // `ZEXTLOAD` (`VTBits - MemBits`).
@@ -362,7 +405,7 @@ pub fn num_sign_bits(
             _ => {}
         }
     }
-    let signs = |index| num_sign_bits(dag, dag.operand(value, index));
+    let signs = |index| num_sign_bits_at(dag, dag.operand(value, index), depth + 1);
     let mut first = 1;
     match dag.opcode(value) {
         // Logical operations keep the operands' sign bits at the worst; the
@@ -394,7 +437,7 @@ pub fn num_sign_bits(
             }
             // Decrementing: a 0/1 input gives 0/-1, a positive one no borrow.
             if dag.constant(dag.operand(value, 1)) == Some(mask(width)) {
-                let known = known_bits(dag, dag.operand(value, 0));
+                let known = walk(dag, dag.operand(value, 0), depth + 1);
                 if (known.zero | 1) == mask(width) {
                     return width;
                 }
@@ -415,7 +458,7 @@ pub fn num_sign_bits(
                 return 1;
             }
             if dag.constant(dag.operand(value, 0)) == Some(0) {
-                let known = known_bits(dag, dag.operand(value, 1));
+                let known = walk(dag, dag.operand(value, 1), depth + 1);
                 if (known.zero | 1) == mask(width) {
                     return width;
                 }
@@ -448,7 +491,7 @@ pub fn num_sign_bits(
         _ => {}
     }
     // Finally what the known bits prove about the top bits.
-    let known = known_bits(dag, value);
+    let known = walk(dag, value, depth);
     let sign = 1u128 << (width - 1);
     let run = |bits: u128| (0..width).take_while(|i| bits & (sign >> i) != 0).count() as u32;
     let proven = if known.zero & sign != 0 {

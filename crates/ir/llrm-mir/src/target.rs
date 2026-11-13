@@ -6,6 +6,25 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// What a reference to a spilled value adds in clocks when it folds into a
+/// memory operand, against the register form, and what one split copy costs
+/// (`Tuning::spill_fold`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpillFoldClocks {
+    /// A read folded (`add r, [slot]` for `add r, r2`).
+    pub read: i64,
+    /// A read and write of the same value folded (`inc [slot]` for `inc r`).
+    pub update: i64,
+    /// A write folded (`mov [slot], r`).
+    pub store: i64,
+    /// One split copy: the reload or store a region split inserts.
+    pub copy: i64,
+    /// What a copy of a value wider than the target's word adds (the
+    /// operand-size prefix of real-mode code); a folded form carries the same
+    /// prefix as the register form and adds nothing.
+    pub wide_copy: i64,
+}
+
 /// The tuning limits of a target: one default (the pin's value, which every
 /// target without an entry takes) and the overrides a target description
 /// states. The names are the pin's `TargetLoweringBase` fields.
@@ -40,6 +59,20 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE PO1 (owner x86-m32-b, exit 2026-11-24 for the targets that keep it):
+    /// at -Os the arguments of a call are popped into a dead register in place
+    /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
+    /// the pin's, which pops only at `minsize` (X86FrameLowering.cpp:4116).
+    pub pops_arguments_at_size: bool,
+    /// An x87 compare keeps `sahf` where bytes are held (-O1, size): `test ah,
+    /// mask` is 2 bytes longer. DEVIATE X87-FCMP-AH names the target's own
+    /// choice; the pin keeps `sahf` everywhere, so it is false there.
+    pub keeps_sahf_where_bytes_are_held: bool,
+    /// The target has a libc `memcpy` to call, so LoopIdiomRecognize forms a
+    /// copy of run-time length whatever its size, as the pin does. false:
+    /// DEVIATE (loopidioms.rs `variable_copy_pays`): the copy stays a loop
+    /// where the inline `rep movs` that replaces it is more bytes.
+    pub libc_memcpy: bool,
     /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
     /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
     /// (`hardware_divide_wins`); false: the clocks and margin alone.
@@ -92,11 +125,29 @@ pub struct Tuning {
     /// finished object is smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
+    /// DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): a function that binds
+    /// locally (external linkage, hidden or protected, or default visibility in code that is not
+    /// shared-library code) takes part in the callee-written-registers facts, as GCC's `-fipa-ra`
+    /// uses every definition no other definition can replace; the pin's `RegUsageInfoCollector`
+    /// takes local linkage only (`isSafeForNoCSROpt`) and is off by default.
+    pub ipra_binds_local: bool,
+    /// DEVIATE UNROLL-OS-TRIAL-STRICT (owner llrm-target-x86-m64, exit 2026-11-24): the -Os unroll trial is kept
+    /// only where the object is smaller, never for a few bytes a function that the code runs less
+    /// (`trial::keeps_unroll_at_size`): bytes are the one strict axis at -Os. False: m32's rule.
+    pub unroll_trial_bytes_strict: bool,
     /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
     /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
     /// carries more bytes than its units where an argument is several words (x86-m16:
     /// QCport `pl_box_axis`, 21 units, ~70 B a copy, three copies +181 B).
     pub inline_dying_credit_at_os: bool,
+    /// `Tti::inline_trial_keeps_shrinking_copy`: a priced inline trial keeps a copy that
+    /// leaves the module no larger and saves clocks, though no callee goes with it.
+    pub inline_trial_keeps_shrinking_copy: bool,
+    /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): `inline_size_bytes` at -O1
+    /// alone (the byte-measured size view, the second round, and the trial of a callee the bound
+    /// refused, kept where the caller comes out smaller); the -O2 and -O3 callers keep the units.
+    /// False: the bound's verdict stands.
+    pub inline_trials_at_o1: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -191,6 +242,14 @@ pub struct Tuning {
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
+    /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes (value setup, count,
+    /// string op and the inline tail), where the pin's unit is the destination's alignment: a
+    /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
+    /// `movabs`, a 3-byte op and a tail store. DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,
+    /// exit 2026-11-30): `X86SelectionDAGInfo::emitConstantSizeRepstos` takes the alignment's
+    /// unit. Assumes ERMS/FSRM: `rep stosb` is no slower than `rep stosq` plus a tail (measured
+    /// 24..4000 B, Zen 5); a target whose CPUs lack it must not set this. false: the pin's.
+    pub rep_stos_priced_unit: bool,
     /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
     /// not the library call: the setup is a few bytes against the call's push
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
@@ -203,19 +262,14 @@ pub struct Tuning {
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
-    /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
-    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`), in blocks
-    /// that run at most once per call. DEVIATE PUSH-IMM-OS (owner x86-m32,
-    /// exit 2026-11-30): 5 clocks on the 486 against the `mov`'s 1, so never in
-    /// a loop.
-    pub push_imm_at_size: bool,
     /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
     /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
     /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
     pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
     /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): at `-Os` a multiply by a constant in a block that runs
-    /// more than once per call is decomposed as the pin does at `-Os` (`Tti::mul_chains_hot_at_size`); the
+    /// more than once per run of the program (its frequency over its function's entry times how often the
+    /// function's direct callers run it) is decomposed as the pin does at `-Os` (`Tti::mul_chains_hot_at_size`); the
     /// `imul` stays in the blocks that run once.
     pub mul_chains_hot_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
@@ -301,6 +355,14 @@ pub struct Tuning {
     /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
     /// the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
+    /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
+    /// spilled value costs where its references fold into memory operands,
+    /// which `tryRegionSplit` weighs against the split's copies. The pin
+    /// splits any range with a compact region and never prices the spill,
+    /// which charges a reload and a store per reference (`calcSpillCost`)
+    /// even where `foldMemoryOperand` makes them memory operands. none: the
+    /// pin's.
+    pub spill_fold: Option<SpillFoldClocks>,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -315,6 +377,14 @@ pub struct Tuning {
     /// the mass and make the code after them cold (threshold 45, no bonuses).
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// Read-only data (a private constant, a jump table) that one procedure
+    /// only loads from follows that procedure in its code segment and is read
+    /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
+    /// puts it in the text section on a target whose data segment is scarce
+    /// (real mode: DS is DGROUP, code segments are not). false: the pin's
+    /// data section. Not when tuned for size: the `cs:` byte at every load
+    /// site outweighs the table's data bytes.
+    pub read_only_in_code: bool,
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
@@ -336,6 +406,15 @@ pub struct Tuning {
     /// Clocks a value held across an inner loop costs each outer trip: a store
     /// and a load.
     pub loop_carried_clocks: i64,
+    /// DEVIATE EXT-LOAD-COST (owner llrm-target-x86-m16, exit 2026-11-27):
+    /// the clocks a load that widens (`movzx`) costs over the plain load. CGP's
+    /// `optimizeExt` moves an extension next to its load, as the pin does where
+    /// the extending load is legal; above 0 an extension in another block
+    /// stays there, the load narrow: the extension is made only where it is
+    /// read, not on every path through the load's block (grep m16 -O2: the
+    /// i486 `movzx` is 3 clocks against 1, and the hit test runs every
+    /// trip). 0: the pin.
+    pub ext_load_extra_clocks: i64,
     /// DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): at size an
     /// `add`/`sub`/`and`/`or`/`xor` whose immediate has several users keeps
     /// the table's immediate form, where the pin's `X86DAGToDAGISel::Select`
@@ -366,11 +445,23 @@ pub struct Tuning {
     /// are instruction bytes, not live values (`Tti::unroll_store_immediate_bits`).
     pub unroll_store_immediate_bits: u32,
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
-    /// `Tti::lsr_size_order`.
+    /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as written derives from its
+    /// counter in one instruction a trip (`i << 4`) pays no setup bytes. Only a target whose byte
+    /// model was checked sets it: m16 grew 28 QCport modules and `huge` +27% B without (#9587).
+    pub lsr_derived_setup_free: bool,
+    /// With `lsr_size_order`: price the code in x86-64's encodings (REX.W,
+    /// `llrm_x86::encoding`) and the exit test's compare.
+    pub lsr_size_x86_64: bool,
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.
     pub lsr_users_in_use_list_order: bool,
+    /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
+    /// `Tti::lsr_phi_operand_uses`.
+    pub lsr_phi_operand_uses: bool,
+    /// `Tti::splits_invariant_fmuladd`.
+    pub splits_invariant_fmuladd: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -385,6 +476,8 @@ pub struct Tuning {
     pub rotation_trial_at_size: bool,
     /// DEVIATE ROTATION-HOT: see `Tti::rotation_hot_at_size`.
     pub rotation_hot_at_size: bool,
+    /// `Tti::rotation_hot_bytes_per_loop`.
+    pub rotation_hot_bytes_per_loop: i64,
     /// DEVIATE GVN-PRE-OPTSIZE: see `Tti::load_pre_off_at_size`.
     pub load_pre_off_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
@@ -434,7 +527,9 @@ pub struct Tuning {
     pub recursive_tre_first: (bool, bool),
     /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
     /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
-    /// (`Tti::ipa_cp_clones_at_speed`).
+    /// (`Tti::ipa_cp_clones_at_speed`). DEVIATE IPACP-O2 (owner w10, exit
+    /// 2026-11-24): and at -O2, where gcc has none: queens m32 151807 ->
+    /// 139804 clk for +293 B, m64 -9.4% instructions for +830 B.
     pub ipa_cp_clones_at_speed: bool,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
@@ -454,6 +549,10 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE SELOPT-C (`selectoptimize::SelectOptimizePass`): SelectOptimize runs
+    /// at -O2/-O3 with constant-arm selects included. false: the pin's, which
+    /// runs it nowhere.
+    pub branch_constant_arm_selects: bool,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -524,6 +623,9 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        libc_memcpy: false,
+        pops_arguments_at_size: true,
+        keeps_sahf_where_bytes_are_held: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         narrow_divide_live_max_bits: 31,
@@ -535,7 +637,11 @@ impl Tuning {
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
+        ipra_binds_local: false,
+        unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
+        inline_trial_keeps_shrinking_copy: false,
+        inline_trials_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -558,9 +664,9 @@ impl Tuning {
         imul_at_size: false,
         mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
+        rep_stos_priced_unit: false,
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
-        push_imm_at_size: false,
         merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
@@ -576,14 +682,17 @@ impl Tuning {
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
+        spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
+        read_only_in_code: false,
         min_jump_table_density: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,
         multiply_clocks: 0,
         loop_carried_clocks: 0,
+        ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
@@ -591,11 +700,16 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_derived_setup_free: false,
+        lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
+        lsr_phi_operand_uses: false,
+        splits_invariant_fmuladd: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
         rotation_hot_at_size: false,
+        rotation_hot_bytes_per_loop: 4,
         load_pre_off_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
@@ -614,6 +728,7 @@ impl Tuning {
         unroll_prices_nest: false,
         phi_constant_chains: false,
         sink_select_arms: false,
+        branch_constant_arm_selects: false,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
@@ -825,6 +940,13 @@ pub trait Machine {
     /// copied before the result is made.
     fn two_address(&self) -> bool {
         false
+    }
+
+    /// Whether a call followed by a return can be emitted as a tail call
+    /// (LLVM's `TargetLowering::mayBeEmittedAsTailCall`), which is what makes
+    /// `CodeGenPrepare` copy the return into the call's block. Not wasm.
+    fn may_be_emitted_as_tail_call(&self) -> bool {
+        true
     }
 
     /// Whether the target has several registers a comparison's result can

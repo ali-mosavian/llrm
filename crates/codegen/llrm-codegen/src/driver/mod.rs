@@ -431,7 +431,13 @@ pub fn assembled_module(
     })?;
     let mut assembled = assembled;
     options.describe_debug(&mut assembled);
-    data::zero_to_bss(&mut assembled, module, program.segments.data_space, options.machine.bss_begin);
+    data::zero_to_bss(
+        &mut assembled,
+        module,
+        program.segments.data_space,
+        options.machine.bss_begin,
+        options.arch.layout().segment_bytes().is_some(),
+    );
     if options.machine.far_bss {
         data::zero_far_to_bss(&mut assembled, module);
     }
@@ -656,6 +662,13 @@ pub fn optimized(
                     |bits| crate::backend::funnel::kept_for_isel(options.isel, &format!("i{bits}")),
                 ),
             )
+    })?;
+    timed("mir checked conversions", || {
+        let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(|module| crate::backend::checkedconv::expanded(module, |bits| tti.wide_float_to_int(bits)))
     })?;
     timed("mir absolute values", || {
         program

@@ -611,7 +611,18 @@ impl Run<'_> {
         let here = self.x.insert_point.expect("an insert point");
         let mut at = here;
         let mut l = self.function.parent(here).and_then(|b| self.env.loops.get_loop_for(b)).map(|l| l.get_header());
-        loop {
+        // The insert point moves only where no division may be by zero: the
+        // loops guard its execution (PR35406).
+        let safe_to_hoist = !self
+            .se
+            .expr_contains(
+                s,
+                &|e| match &self.se.node(e).kind {
+                    Kind::UDiv(_, divisor) => self.se.as_constant(divisor.scev).is_none_or(|c| c.is_zero()),
+                    _ => false,
+                },
+            );
+        while safe_to_hoist {
             let invariant = {
                 let cx = cx!(self);
                 self.se.is_loop_invariant(&cx, s, l)
@@ -620,13 +631,13 @@ impl Run<'_> {
                 let Some(header) = l else { break };
                 let cx = cx!(self);
                 let l_ref = self.env.loops.get_loop_for(header).expect("a loop");
-                if let Some(preheader) = l_ref.get_loop_preheader(cx.function) {
-                    at = self.function.terminator(preheader).expect("a terminator");
-                    break;
-                }
-                // LSR puts the insert point of an addrec's start and step at
-                // the start of the block; correct it to a valid position.
-                at = self.first_insertion_pt(header);
+                at = match l_ref.get_loop_preheader(cx.function) {
+                    Some(preheader) => self.function.terminator(preheader).expect("a terminator"),
+                    // LSR puts the insert point of an addrec's start and step
+                    // at the start of the block; correct it to a valid
+                    // position.
+                    None => self.first_insertion_pt(header),
+                };
             } else {
                 // Not in a loop it is expanded post-incremented for: its
                 // increment is below the header's start, and
@@ -823,6 +834,19 @@ impl Run<'_> {
         s: Scev,
         ops: &[Use],
     ) -> Operand {
+        // `mul(PowerOf2C, (udiv X, PowerOf2C))` is `(X >> C) << C`, the mask
+        // `X & (-1 << C)`.
+        if let [c1, other] = ops
+            && let Some(multiple) = self.se.as_constant(c1.scev)
+            && multiple.bits.count_ones() == 1
+            && let Kind::UDiv(x, divisor) = self.se.node(other.scev).kind.clone()
+            && divisor.scev == c1.scev
+        {
+            let lhs = self.expand(x.scev);
+            let ty = self.ty_of_operand(lhs);
+            let mask = self.constant(ty, -1i128 << multiple.bits.trailing_zeros());
+            return self.insert_binop(BinaryOp::And, lhs, mask, flags::NONE, true);
+        }
         let mut wrap = self.se.get_no_wrap_flags(s, flags::NUW | flags::NSW);
         let all = self.ops_and_loops(ops);
         let mut prod: Option<Operand> = None;

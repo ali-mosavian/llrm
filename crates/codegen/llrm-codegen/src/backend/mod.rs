@@ -124,6 +124,7 @@
 //! The phase map: [`crate::backend`].
 
 pub mod absolute;
+pub mod checkedconv;
 pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
@@ -144,6 +145,7 @@ pub mod callregs;
 pub mod cfi;
 pub mod classes;
 pub mod cmovconversion;
+pub mod codetables;
 pub mod combiner;
 pub mod comparefold;
 pub mod compares;

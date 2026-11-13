@@ -5,7 +5,7 @@ use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::passes::{Declared, Outer};
 
 use super::{LoopIdioms, Merge, filled};
-use crate::testing::{managed, parsed, printed, results};
+use crate::testing::{Tuned, managed, managed_on, parsed, printed, results};
 
 const MEMSET: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\n";
 
@@ -42,9 +42,19 @@ fn managed_fill_on(
     text: &str,
     inputs: &[&[i128]],
 ) -> String {
+    managed_fill_by(target, text, inputs, Tuned::default())
+}
+
+/// `managed_fill_on` for `machine`.
+fn managed_fill_by(
+    target: &str,
+    text: &str,
+    inputs: &[&[i128]],
+    machine: Tuned,
+) -> String {
     let before = parsed(&format!("{target}{text}"));
     let mut module = before.clone();
-    let after = managed(&mut module, LoopIdioms { size: false });
+    let after = managed_on(&mut module, LoopIdioms { size: false }, machine);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -160,6 +170,26 @@ fn a_loop_with_a_volatile_store_is_kept() {
     kept(&looped("i8", "%n", body, "%e"), TRIPS);
 }
 
+/// `managed_fill` on a target whose library has `memset_pattern16`.
+fn patterned(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
+    managed_fill_by(DOS, text, inputs, Tuned { memset_pattern: true, ..Tuned::default() })
+}
+
+/// A target whose library lacks `memset_pattern16` (every one but Darwin, the
+/// pin's `TLI->has`) kept a word fill a store loop for the vectorizer: the
+/// pass turned it into `llvm.experimental.memset.pattern`, which arm64-linux
+/// expands back to a scalar `strh` loop.
+#[test]
+fn a_word_fill_stays_a_store_loop_without_memset_pattern16() {
+    let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
+    let text = looped("i16", "10", body, "0");
+    let after = managed_fill(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
+    assert!(!after.contains("memset.pattern") && after.contains("store i16 4660"), "{after}");
+}
+
 /// A word whose bytes differ stayed a loop, `rep stosw` being isel's alone:
 /// each of its trips cost a store. It is one pattern fill of the cells.
 #[test]
@@ -167,7 +197,7 @@ fn a_word_of_two_bytes_is_one_pattern_fill() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
     let text = looped("i16", "10", body, "0");
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    let after = managed_fill(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
+    let after = patterned(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
     assert!(
         after.contains(
             "call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr align 2 %p, i16 4660, i16 10, i1 false)"
@@ -181,7 +211,7 @@ fn a_word_of_two_bytes_is_one_pattern_fill() {
 #[test]
 fn an_invariant_word_is_one_pattern_fill() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 %q, ptr %p\n";
-    let after = managed_fill(&looped("i16", "%n", body, "%e"), &[&[0, 7], &[1, 7], &[40, 4660], &[-5, 3]]);
+    let after = patterned(&looped("i16", "%n", body, "%e"), &[&[0, 7], &[1, 7], &[40, 4660], &[-5, 3]]);
     assert!(
         after.contains(
             "call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr align 2 %p, i16 %q, i16 %1, i1 false)"
@@ -393,7 +423,7 @@ b3:
 }
 ";
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    let after = managed_fill(text, &[&[0], &[1], &[300]]);
+    let after = patterned(text, &[&[0], &[1], &[300]]);
     assert!(!after.contains("memset.pattern"), "{after}");
     assert!(after.contains("store i16 4660"), "{after}");
     let bytes =
@@ -1564,4 +1594,66 @@ fn a_fill_of_a_target_that_unrolls_its_trips_is_a_memset_ahead_of_the_loop() {
 fn a_fill_in_a_loop_that_reads_its_object_is_kept() {
     let (after, changed) = fill_priced(16, &reading_loop(), &[&[0], &[3], &[5]]);
     assert!(!changed, "{after}");
+}
+
+/// A loop that keeps a computed store beside a constant one was never filled
+/// under a rate: the fill's own clocks were not weighed against the removed
+/// stores', so a 1200-trip `dst[i] = 0xEE` stayed in the loop beside
+/// `src[i] = ...` (memory_expansion `reset`, 13M T over the program).
+#[test]
+fn a_constant_store_beside_a_computed_one_is_filled_when_the_trips_pay() {
+    let sheet = llrm_mir::target::OperationCosts { store_immediate: 1, fill: 1, fill_cell: 1, ..Default::default() };
+    let priced = |trips| Some((&sheet, 3000, Some(trips), Some((trips * 2 + 3) / 4)));
+    assert!(super::fill_beside_computed_stores_pays(true, priced(1200), 2, 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(true, priced(1), 2, 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(false, priced(1200), 2, 1, 1));
+    assert!(!super::fill_beside_computed_stores_pays(true, None, 2, 1, 1));
+}
+
+/// The cells were those of every store in the loop: with the T-state sheet (a
+/// store 38 T, a fill 47 T and 84 T a dword cell) a computed and a constant
+/// store over 1200 trips priced 600 cells for the 300 the fill stores, 50k T
+/// against the 45.6k the removed store runs: the fill was refused
+/// (`fill_beside_computed`, red on release/next).
+#[test]
+fn the_fill_beside_a_computed_store_is_priced_for_the_cells_it_stores() {
+    let sheet = llrm_mir::target::OperationCosts { store_immediate: 38, fill: 47, fill_cell: 84, ..Default::default() };
+    let cells = (1200 * 2 + 3) / 4;
+    assert!(super::fill_beside_computed_stores_pays(true, Some((&sheet, 3000, Some(1200), Some(cells))), 2, 1, 1));
+    // a fill of the same cells for a store that costs less than the fill's own
+    // does not pay
+    let cheap = llrm_mir::target::OperationCosts { store_immediate: 10, ..sheet };
+    assert!(!super::fill_beside_computed_stores_pays(true, Some((&cheap, 3000, Some(1200), Some(cells))), 2, 1, 1));
+}
+
+/// A function of `loops` sequential guarded loops that each store the same byte
+/// to a masked cell, so `loopidioms` proves the trips of each and rewrites none
+/// (the mask is no stride): the body keeps one state through all of them.
+fn counter_loops(loops: usize) -> String {
+    let mut text = format!(
+        "@buf = global [64 x i8] zeroinitializer\n\n{MEMSET}define i16 @f(i16 %n) {{\nb0:\n  %b = trunc i16 %n to i8\n  br label %g0\n\n"
+    );
+    for k in 0..loops {
+        let next = if k + 1 == loops { "done".to_owned() } else { format!("g{}", k + 1) };
+        text += &format!(
+            "g{k}:\n  %go{k} = icmp slt i16 0, %n\n  br i1 %go{k}, label %pre{k}, label %x{k}\n\n\
+             pre{k}:\n  br label %l{k}\n\n\
+             l{k}:\n  %i{k} = phi i16 [ 0, %pre{k} ], [ %n{k}, %l{k} ]\n  %m{k} = and i16 %i{k}, 63\n  %p{k} = getelementptr [64 x i8], ptr @buf, i16 0, i16 %m{k}\n  store i8 %b, ptr %p{k}\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %n{k}, %n\n  br i1 %c{k}, label %l{k}, label %x{k}\n\n\
+             x{k}:\n  br label %{next}\n\n",
+        );
+    }
+    text + "done:\n  ret i16 %n\n}\n"
+}
+
+/// `loopidioms` asked for the body's `llvm.assume`s once for each loop and each
+/// idiom it tried: 80 sequential loops cost 160 whole-body searches, 60% of the
+/// pass at 80 loops (callgrind, 2026-11-13). It is one search for a body whose
+/// state does not change.
+#[test]
+fn test_a_bodys_assumptions_are_searched_once_for_all_its_loops() {
+    let before = llrm_analysis::assumptions::built();
+    let (after, changed) = fill(&counter_loops(6), &[&[0], &[3], &[40]]);
+    let searched = llrm_analysis::assumptions::built() - before;
+    assert!(!changed, "{after}");
+    assert!(searched <= 1, "{searched} searches for the assumptions of one body of 6 loops");
 }

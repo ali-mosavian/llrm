@@ -149,6 +149,10 @@ pub struct M68k {
     /// ([`Tti::inline_size_view`]); the other passes' thresholds are in the
     /// pin's units, where it is false.
     pub code_size_bytes: bool,
+    /// With `code_size_bytes`: the bytes are a speed caller's, where a
+    /// quotient by a constant is the magic multiply, not the divide
+    /// (`sizes::constant_division`).
+    pub speed_lowering: bool,
 }
 
 impl M68k {
@@ -241,6 +245,17 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    /// A pair of `i64` divide and remainder is one call (`__divmoddi4`) where the multiply back is not the
+    /// 68020's `muls.l`: the pin's `DivRemPairs` would divide and then multiply the quotient by the divisor
+    /// with two `__mulsi3` calls (DEVIATE M68K-DIVMOD64: the pin's M68k has no such routine; exit: none).
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        bits == 64 && !self.cpu.has_wide_multiply()
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
     /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
     fn promote_va_list(&self) -> bool {
@@ -350,6 +365,22 @@ impl Tti for M68k {
         llrm_mir::tti::Saving { clocks: zero + copy, bytes: 4 }
     }
 
+    /// DEVIATE UNROLL-O1 (owner m68k, exit 2026-12-04, with `unroll_at_o1` in
+    /// `targets.toml`): clang marks every loop `unroll.disable` at -O1, so a
+    /// two-trip float loop stayed rolled at 170 B where gcc's complete unroll
+    /// folds it to 16 (float_in_place_update). At -O1 a loop is unrolled where
+    /// the copies cost no more than the rolled loop after the folding the
+    /// analysis simulates (gcc's size-neutral complete unroll); a call the
+    /// copies keep is priced as one instruction, where the pin's analysis gives
+    /// up on it.
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        true
+    }
+
+    fn unroll_o1_prices_calls(&self) -> bool {
+        true
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the
@@ -417,9 +448,51 @@ impl Tti for M68k {
         if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
     }
 
+    /// DEVIATE SZ2-TRIPS (owner m68k, exit 2026-11-24): the callee's loop runs
+    /// its trips in the clocks the priced trial weighs against the copy's
+    /// bytes (recsum -O2: the constant trip count makes the `%` unsigned,
+    /// 24,009 clk the once-through count never saw).
+    fn inline_trial_by_trips(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the CPU has no 32-bit divide
+    /// instruction (68000, 68010) the divide is a libcall, and `divu.w` (16 bits) is one instruction.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        let has_long_divide = self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020);
+        (!has_long_divide).then_some(16)
+    }
+
+    /// DEVIATE UNROLL-OS-TRIAL (owner m68k, exit 2026-11-24): the unrolled size
+    /// up to which a loop the -Os threshold refused is unrolled on trial; the
+    /// driver keeps it where the finished functions are smaller (as x86-m32's
+    /// 30). The pin never unrolls at -Os past its threshold.
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        Some(100)
+    }
+
+    /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at
+    /// -O1, where the pin does not unroll past its threshold and gcc does:
+    /// the driver keeps the unrolled module where its finished functions are
+    /// no larger and no slower (float_in_memory_loop: 16 `fadd`s on a constant
+    /// fold to one, 100 B and 1264 B of soft-float routines against gcc's 70
+    /// B).
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        Some(100)
+    }
+
+    /// DEVIATE PEEL-OS-TRIAL: the same trial peels (`loopunrollpass`).
+    fn peels_on_trial_at_size(&self) -> bool {
+        true
+    }
+
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
+    }
+
+    fn inline_size_view_at(&self, speed: bool) -> Option<Rc<dyn Tti>> {
+        Some(Rc::new(M68k { code_size_bytes: true, speed_lowering: speed, ..*self }))
     }
 
     /// `TargetLoweringBase::isLegalAddressingMode`.
@@ -674,7 +747,21 @@ impl Tti for M68k {
         right: OperandInfo,
     ) -> Cost {
         if kind == CostKind::CodeSize && self.code_size_bytes {
-            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020));
+            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020), self.speed_lowering);
+        }
+        // A quotient by a constant is the magic multiply the DAG makes of it:
+        // its clocks, not one operation's (SZ2-TRIPS: the unsigned and the
+        // signed differ by the sign's three instructions a trip).
+        if kind == CostKind::Latency
+            && let Some(clocks) = crate::sizes::constant_division_clocks(
+                self.cpu,
+                op,
+                ty,
+                right,
+                self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020),
+            )
+        {
+            return Cost::of(clocks);
         }
         // DEVIATE: the pin's base class prices a multiply or divide it expands
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
@@ -701,8 +788,8 @@ impl M68k {
     /// Whether the lowering writes a wide multiply of `left` by `right` with no
     /// library call: from 32-bit `UMUL_LOHI`s when the target has them
     /// (`ExpandIntRes_MUL`), else only a power of two, its negation, or a
-    /// positive constant of shifts and an add
-    /// ([`crate::dagisel::mulprice::chain`]; any other negative one is a call).
+    /// constant whose word multiplies are all chains
+    /// ([`Self::constant_product_is_chains`]).
     fn multiply_makes_no_call(
         &self,
         left: OperandInfo,
@@ -720,10 +807,30 @@ impl M68k {
         [left, right].into_iter().any(|operand| {
             operand.power_of_two
                 || operand.negated_power_of_two
-                || operand
-                    .value
-                    .and_then(|value| i32::try_from(value).ok())
-                    .is_some_and(|value| value > 0 && crate::dagisel::mulprice::chain(self.cpu, value as u32).is_some())
+                || operand.value.and_then(|value| i64::try_from(value).ok()).is_some_and(|value| {
+                    self.constant_product_is_chains(value)
+                })
+        })
+    }
+}
+
+impl M68k {
+    /// Whether `x * value` in 64 bits is shifts and adds only. The expansion
+    /// (`forceExpandMultiply`) multiplies each 32-bit word of `x` by the
+    /// constant's low word, its two 16-bit halves and its high word; a
+    /// multiplier with no priced chain (DEVIATE G2, `dagisel::synth`) is a
+    /// `__mulsi3` call. Priced at speed: a chain's clocks count in the loops
+    /// the unroller prices, so the call is taken only where none exists.
+    fn constant_product_is_chains(
+        &self,
+        value: i64,
+    ) -> bool {
+        let (low, high) = (value as u32, (value >> 32) as u32);
+        [low, low & 0xFFFF, low >> 16, high].into_iter().all(|word| {
+            word < 2
+                || word.is_power_of_two()
+                || word == u32::MAX
+                || crate::dagisel::synth::plan(self.cpu, crate::timing::Price::Rate, 32, u128::from(word)).is_some()
         })
     }
 }

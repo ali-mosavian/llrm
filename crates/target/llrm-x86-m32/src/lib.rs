@@ -103,6 +103,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        libc_memcpy: true,
+        pops_arguments_at_size: false,
+        // DEVIATE X87-FCMP-AH at -O1 (owner x87-c, exit 2026-11-24): `sahf`,
+        // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16 O1
+        // keeps the test until its counted cells are judged.
+        keeps_sahf_where_bytes_are_held: true,
         // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop
         // header of at most 4 instructions, not the pin's 16 (the copy is a
         // compare and a branch, more than the jump rotation removes). m32 -Os
@@ -187,7 +193,6 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
-        push_imm_at_size: true,
         // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30):
         // see `Tuning::merge_functions_at_size`.
         merge_functions_at_size: true,
@@ -195,6 +200,14 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
         lsr_size_order: true,
+        // DEVIATE IU1-M32 (owner w12, exit 2026-11-24): the m64 entry at m32; see
+        // `Tti::lsr_users_in_use_list_order`. x_transpose -O1 139,335 -> 122,886 clk, 237 -> 217 B.
+        lsr_users_in_use_list_order: true,
+        // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
+        lsr_phi_operand_uses: true,
+        // DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): see
+        // `Tti::splits_invariant_fmuladd`.
+        splits_invariant_fmuladd: true,
         narrow_divide_live_limit: 4,
         sink_spares_ranges: true,
         promote_va_list: true,
@@ -383,6 +396,13 @@ impl llrm_target::Target for M32 {
     // branching block and the branch goes to the join.
     fn leaf_fold_at_size(&self) -> bool {
         true
+    }
+
+    // DEVIATE UNCHEAP-IMM-M16 (owner x86-m32, exit 2026-11-24): m16 is also
+    // `Not64BitMode` and the pin makes +1/-1 there the same way; it keeps the
+    // default until the m16 owner prices it.
+    fn uncheap_move_immediate_at_size(&self) -> fn(u8, i64) -> bool {
+        llrm_target::x86_uncheap_move_immediate_at_size
     }
 
     // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's

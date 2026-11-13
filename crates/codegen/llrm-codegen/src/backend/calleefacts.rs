@@ -105,6 +105,26 @@ pub struct CalleeFacts {
     uncalled: BTreeSet<String>,
 }
 
+/// The functions of `module` no other definition can replace and that are not otherwise
+/// opaque: defined with external linkage, hidden or protected (or default visibility where
+/// the module is not shared-library code: `shouldAssumeDSOLocal`), and not named but as a callee.
+fn local_definitions(module: &Module) -> BTreeSet<GlobalId> {
+    use llrm_mir::module::{Linkage, Visibility};
+    let named = llrm_mir::callgraph::addressed(module);
+    module
+        .functions()
+        .filter(|(id, global, function)| {
+            !function.is_declaration()
+                && global.linkage == Linkage::External
+                && (global.visibility != Visibility::Default || !module.preempts_default_visibility())
+                && function.calling_convention != llrm_mir::opcode::X86_INTR
+                && !llrm_mir::facts::opaque(function)
+                && !named.contains(id)
+        })
+        .map(|(id, _, _)| id)
+        .collect()
+}
+
 /// Whether some function of `module` has a value of type double or x87
 /// extended.
 fn holds_doubles(
@@ -133,8 +153,21 @@ impl CalleeFacts {
     /// The functions of `module` that may take part, and the order to machine
     /// them in: callees before their callers.
     pub fn of(module: &Module) -> (Self, Vec<GlobalId>) {
+        Self::of_binding(module, false)
+    }
+
+    /// [`CalleeFacts::of`], where `binds_local` lets a function that binds locally
+    /// (`binds_local`) take part too: its callers in the module may rely on what it
+    /// writes though others call it by its convention, which it keeps.
+    pub fn of_binding(
+        module: &Module,
+        binds_local: bool,
+    ) -> (Self, Vec<GlobalId>) {
         let graph = CallGraph::new(module);
-        let private = direct_only(module);
+        let mut private = direct_only(module);
+        if binds_local {
+            private.extend(local_definitions(module));
+        }
         let mut aligned: BTreeSet<GlobalId> = BTreeSet::new();
         for id in graph.bottom_up() {
             let llrm_mir::GlobalKind::Function(function) = &module.global(id).kind else { continue };
@@ -305,7 +338,10 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
     let regs = body.regs();
     let root = |register: RegId| regs.root(register);
     let mut found = BTreeSet::new();
-    for one in body.insns() {
+    for (at, one) in body.insns().into_iter().enumerate() {
+        // The entry's `delivers` is where the arguments arrive, not a write of them: the pin's
+        // `RegUsageInfoCollector` takes the registers the body modifies (IPRA-ARGHINT).
+        let arrival = at == 0 && one.call.is_none() && one.requires.is_empty();
         if let Some(what) = &one.what {
             for place in &what.dests {
                 if let Loc::Reg(ir::Reg { register, .. }) = place {
@@ -321,7 +357,11 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
             Some(call) => found.extend(call.disturbs.iter().copied().map(root)),
             None => found.extend(one.clobbers.iter().copied().map(root)),
         }
-        found.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| root(*register)));
+        let delivered: &[_] = if arrival { &[] } else { &one.delivers };
+        // A sibling call is a `jmp` that reads the registers it passes; what its callee writes is added by `record`.
+        let sibling = one.what.as_ref().is_some_and(|what| what.is_sibling_call());
+        let required: &[_] = if sibling { &[] } else { &one.requires };
+        found.extend(required.iter().chain(delivered).map(|(_, register)| root(*register)));
     }
     found
 }

@@ -19,6 +19,7 @@ pub mod regalloc;
 pub mod reloads;
 pub mod reschedule;
 pub mod sink;
+pub mod slotreg;
 pub mod spill;
 pub mod taildup;
 pub mod tailmerge;
@@ -26,12 +27,14 @@ pub mod tolir;
 
 pub use commute::{commute_accumulator, commute_tied};
 pub use fold::{
-    branch_fold, branch_fold_hoisting, branch_fold_hoisting_across_loops, remove_identity_copies,
-    remove_redundant_copies, remove_redundant_copies_between,
+    branch_fold, branch_fold_hoisting, branch_fold_hoisting_across_hot_loops, branch_fold_hoisting_across_loops,
+    remove_identity_copies, remove_redundant_copies, remove_redundant_copies_between,
 };
 pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, Variable, VariablePlace};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Join, Side, Target};
 pub use reloads::forward_reloads;
 pub use reschedule::reschedule_kills;
 pub use sink::{Jump, machine_sink, machine_sink_in_place, split_critical_edge};
-pub use tailmerge::{TailMergeFunction, merge_tails, merge_tails_across_loops, tail_merge_blocks};
+pub use tailmerge::{
+    Crossing, TailMergeFunction, merge_tails, merge_tails_across_loops, merge_tails_crossing, tail_merge_blocks,
+};

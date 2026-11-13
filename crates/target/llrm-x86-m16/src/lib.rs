@@ -677,6 +677,18 @@ mod tuning_tests {
         assert_eq!(table.address_reference_milliweight, 3000, "DEVIATE RA-CLK: an address component weighs three references");
         assert_eq!(table.unswitch_threshold, Some(0));
         assert_eq!(table.min_jump_table_density, Some(40), "DEVIATE M16-JT-DENSITY: a table pays from 40% at every level");
+        // The later overrides, each with its source: a new one must be named here.
+        assert_eq!((table.narrow_divide_live_limit, table.narrow_divide_live_max_bits), (3, 32), "#9067: -O1 divide yields to register pressure");
+        assert!(!table.narrow_divide_live_at_size, "#9067: -Os keeps every divide");
+        assert!(!table.inline_dying_credit_at_os, "#9253, D13: the units undercount a 16-bit copy");
+        assert!(table.cold_site_ignores_sinks, "#9102, DEVIATE BFS-1");
+        assert!(table.frame_slot_is_free_base && table.lsr_address_fewest_registers, "#9312, DEVIATE LU31: [bp+si+disp] and the narrow filter");
+        assert!(table.lsr_size_order, "#9352, DEVIATE LSR-SIZE: -Os LSR orders by x86 bytes");
+        assert!(!table.libc_memcpy, "m16 has no libc: a run-time copy stays a loop where `rep movs` is more bytes");
+        assert!(table.pops_arguments_at_size, "DEVIATE PO1: -Os pops a call's arguments; only x86-m32 is the pin's");
+        assert_eq!(table.ext_load_extra_clocks, 2, "DEVIATE EXT-LOAD-COST: a widening load costs the extend's clocks over a load");
+        assert!(table.spill_fold.is_some(), "DEVIATE SPILL-FOLD: a folded spill is priced in clocks");
+        assert!(table.read_only_in_code, "#9694: a table one procedure reads follows it into its code segment (not at -Os, #9695)");
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,
@@ -708,9 +720,20 @@ mod tuning_tests {
                 split_merged_conditions: false,
                 inline_size_guard_at_size: false,
                 keep_constant_displacements: false,
+                narrow_divide_live_limit: 0,
+                narrow_divide_live_max_bits: 31,
+                narrow_divide_live_at_size: true,
+                inline_dying_credit_at_os: true,
+                cold_site_ignores_sinks: false,
+                frame_slot_is_free_base: false,
+                lsr_address_fewest_registers: false,
+                lsr_size_order: false,
                 x87_share_negated_products: false,
                 x87_zero_fill_at_size: false,
                 unroll_promotion_fits_x87_stack: false,
+                read_only_in_code: false,
+                ext_load_extra_clocks: 0,
+                spill_fold: None,
                 ..table
             },
             Tuning::PIN

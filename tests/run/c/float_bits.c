@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O0 -march=i486 | -O2 -march=i486 -m32
+// bar: not comparable (SDCC double is 32 bits: it computes a different program)
 /* A float read as an integer's bits and the other way round, whole and by halves: the bits go through memory because
    the x87 stack cannot hand them out. */
 #include <stdint.h>

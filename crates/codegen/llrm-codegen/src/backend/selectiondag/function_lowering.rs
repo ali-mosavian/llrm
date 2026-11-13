@@ -30,6 +30,8 @@ pub struct FunctionLoweringInfo {
     /// The frame object of the SysV x86-64 register save area a variadic
     /// function has (`RegSaveFrameIndex`), made with the allocas' objects.
     pub variadic_save: Option<i32>,
+    /// `MFI.hasVarSizedObjects()`: a non-static alloca was lowered.
+    pub has_var_sized_objects: bool,
     /// The entry block's writes of zero the runtime's zero-filled frame
     /// already holds (`prezeroed`): not lowered.
     pub prezeroed: llrm_mir::dense::IdSet<InstId>,
@@ -105,12 +107,16 @@ pub fn module_tables(
                 .iter()
                 .enumerate()
                 .map(|(at, global)| {
-                    // clang -fPIE marks what it defines `dso_local`, not what
-                    // it declares.
+                    // `GlobalValue::isImplicitDSOLocal`: local linkage, or a
+                    // visibility other than default on a symbol that is not
+                    // `extern_weak`. clang -fPIE marks what it defines
+                    // `dso_local`, not what it declares.
                     matches!(
                         global.linkage,
                         llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
                     )
+                        || (global.visibility != llrm_mir::module::Visibility::Default
+                            && global.linkage != llrm_mir::module::Linkage::ExternWeak)
                         || (defined_dso_local
                             && crate::backend::globals::space(module, llrm_mir::GlobalId(at as u32))
                                 == crate::model::ir::Space::Segment)
@@ -171,6 +177,7 @@ impl FunctionLoweringInfo {
             value_regs: IdMap::new(),
             static_allocas: IdMap::new(),
             variadic_save: None,
+            has_var_sized_objects: false,
             prezeroed: Default::default(),
             elided_stores: Default::default(),
             elided_args: Default::default(),
@@ -325,7 +332,7 @@ pub fn argument_copy_candidates(
     let Some(entry) = function.entry() else { return Vec::new() };
     let types = &module.context.types;
     let parameters = function.parameters();
-    let mut states: std::collections::HashMap<ValueId, State> = Default::default();
+    let mut states: IdMap<ValueId, State> = IdMap::new();
     let mut found: Vec<ArgumentCopy> = Vec::new();
     let static_alloca = |operand: &Operand| match operand {
         Operand::Value(value) if is_static_alloca(*value) => Some(*value),
@@ -349,7 +356,7 @@ pub fn argument_copy_candidates(
             states.insert(alloca, State::Clobbered);
         }
         let Some(alloca) = static_alloca(&destination) else { continue };
-        if *states.entry(alloca).or_insert(State::Unknown) != State::Unknown {
+        if *states.get_or_insert_with(alloca, || State::Unknown) != State::Unknown {
             continue;
         }
         let ValueDef::Instruction(def) = function.value(alloca).def else { continue };

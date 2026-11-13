@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv | -O1 -march=i486 -m32 | -O2 -march=i486
+// bar: not comparable (SDCC double is 32 bits: it computes a different program)
 /* Float and double arguments to a call, mixed with integers: each goes into the space made for it on the stack, the order the callee reads. */
 extern void report(long value);
 

@@ -3,7 +3,10 @@
 mod common;
 
 use common::{Two, branch, op};
-use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, branch_fold};
+use llrm_lir::registers::RegId;
+use llrm_spike_mf::regalloc::Assignment;
+use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, branch_fold, branch_fold_hoisting_across_hot_loops};
+use llrm_support::hash::{HashMap, HashSet};
 
 fn jump(to: u32) -> Inst {
     let mut inst = op("jump", vec![Operand::Block(to)]);
@@ -218,6 +221,69 @@ fn a_loop_latch_is_not_merged_with_a_block_outside_the_loop() {
         .expect("the latch");
     let last = latch.insts.last().expect("a terminator");
     assert!(matches!(last.kind, Kind::Op("branch_not")), "the latch ends in {:?}", last.kind);
+}
+
+fn latch_shape() -> MFunction<()> {
+    layout(vec![
+        vec![work("load_a"), work("load_b"), compare(), cond("branch", 5, true)],
+        vec![work("top"), cond("branch_not", 3, true)],
+        vec![work("take_b"), jump(4)],
+        vec![work("take_a"), work("shift")],
+        vec![work("sub_x"), work("sub_y"), compare(), cond("branch_not", 1, true)],
+        vec![work("restore"), ret()],
+    ])
+}
+
+fn latch_ends_in(function: &MFunction<()>) -> Kind {
+    let latch = function
+        .blocks
+        .iter()
+        .find(|block| block.insts.iter().any(|inst| matches!(inst.kind, Kind::Op("sub_y"))))
+        .expect("the latch");
+    latch.insts.last().expect("a terminator").kind
+}
+
+/// pattern_fill -O1 kept a 64-trip loop's guard and latch apart (`dec b; jr z;
+/// push bc; jp top`, +5 B and 3072 T over the merged form). A loop named as
+/// repeating joins its latch with the guard around it; one not named does not.
+#[test]
+fn a_loop_that_repeats_merges_its_latch_with_its_guard() {
+    let assignment = Assignment(vec![RegId::from_raw(0); 8]);
+    let run = |hot: &[u32]| {
+        let mut function = latch_shape();
+        let mut frequencies = HashMap::default();
+        branch_fold_hoisting_across_hot_loops::<Two>(
+            &mut function,
+            &assignment,
+            &hot.iter().copied().collect::<HashSet<u32>>(),
+            &mut frequencies,
+        );
+        latch_ends_in(&function)
+    };
+    assert_eq!(run(&[]), Kind::Op("branch_not"), "a loop not named keeps its latch");
+    assert_ne!(run(&[1]), Kind::Op("branch_not"), "a named loop's latch joins the guard's tail");
+}
+
+/// A common tail runs as often as the blocks merged into it together: priced at
+/// its old block's frequency the folded function looked cheaper than it ran
+/// (switch_table_holes -O1: 373 B / 29931 T priced, 395 B / 270215 T measured).
+#[test]
+fn a_merged_tail_takes_the_frequencies_of_the_tails_merged_into_it() {
+    let assignment = Assignment(vec![RegId::from_raw(0); 8]);
+    let mut function = latch_shape();
+    let mut frequencies: HashMap<u32, f64> = [(0, 1.0), (1, 10.0), (4, 10.0), (5, 1.0)].into_iter().collect();
+    branch_fold_hoisting_across_hot_loops::<Two>(
+        &mut function,
+        &assignment,
+        &[1].into_iter().collect(),
+        &mut frequencies,
+    );
+    let tail = function
+        .blocks
+        .iter()
+        .find(|block| block.insts.first().is_some_and(|inst| matches!(inst.kind, Kind::Op("compare"))))
+        .expect("the shared compare");
+    assert_eq!(frequencies.get(&tail.id), Some(&11.0), "{frequencies:?}");
 }
 
 /// Every question about a block's neighbours rescanned the function, so the

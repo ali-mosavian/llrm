@@ -72,23 +72,27 @@ pub struct Request {
     /// The pin's block frequencies as they are, a loop of 10 trips weighing as
     /// a loop of 41 (DEVIATE Z80-BFI-TRIPS, `frequency.rs`, is the default).
     pub flat_loop_trips: bool,
-    /// DEVIATE z80-oz-best-of (owner z80, exit 2026-12-15): at -Oz the module is compiled as -Oz and as -Os and the
-    /// smaller one is kept (module bytes, the runtime it reaches included; a tie keeps -Oz). The pin's -Oz is not
+    /// DEVIATE z80-oz-best-of (owner z80, exit 2026-12-15): at -Oz the module is compiled as -Oz, as -Os and as -Os
+    /// without `minsize` (`optsize_only`) and the smallest is kept (module bytes, the runtime it reaches included; a tie keeps -Oz). The pin's -Oz is not
     /// smaller than its -Os here: 41 of 109 corpus rows grow (+4681 B), because header duplication is off at -Oz
     /// (LoopRotation.cpp#L80) and the inline threshold is 5 (inlinecost.rs `OPT_MIN_SIZE_THRESHOLD`), and the
     /// pin has no Z80 byte cost to say where either pays. The rotation that wins depends on what LSR and the unroll
     /// do after it, which no local price sees (three single-compile rules measured, none without regressions).
-    /// Cost: -Oz compiles twice (median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The real fix is the
+    /// Cost: -Oz compiles three times (the second compile measured median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The real fix is the
     /// rotation/LSR interplay; the exit date is the revisit.
     pub oz_best_of: bool,
     /// DEVIATE Z80-SP-FRAME (owner z80, exit 2026-11-24): a function whose frame is addressed from SP is no larger and no
     /// slower than with IX (`sp_frame.rs`). Off, every framed function keeps IX.
     pub sp_frame: bool,
+    /// The functions' `minsize` is dropped before the mid-end: the -Os compile `oz_best_of` weighs -Oz against. The
+    /// attribute names a per-function level of its own (no peeled switch case, no balanced tree), so an -Os compile
+    /// of a module clang built at -Oz was not -Os, and the best of the two never saw what -Os makes.
+    pub optsize_only: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false }
     }
 }
 
@@ -115,6 +119,13 @@ pub fn program(
         Some(stated) if stated == layout => {}
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not the Z80's `{layout}`")),
         None => return Err(format!("the module states no datalayout; the Z80's is `{layout}`")),
+    }
+    if request.optsize_only {
+        for global in &mut module.globals {
+            if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
+                function.attrs.retain(|attr| !matches!(attr, llrm_mir::opcode::Attribute::Flag(one) if one == "minsize"));
+            }
+        }
     }
     if request.debug {
         llrm_mir::dbgimport::types_and_globals(&mut module);
@@ -330,6 +341,12 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 
     fn costs(&self) -> llrm_mir::target::OperationCosts {
+        crate::clocks::sheet()
+    }
+
+    /// One unit an operation, as `costs()` was before it stated T-states: the pin's thresholds read instruction
+    /// units, and the size decisions defaulted to `costs()` (-Os grew copy_runs +362 B reading T-states as bytes).
+    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         llrm_mir::target::OperationCosts { jump_table: 4, ..llrm_mir::target::Neutral.costs() }
     }
 

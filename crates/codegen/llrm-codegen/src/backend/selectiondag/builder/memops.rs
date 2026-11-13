@@ -7,6 +7,13 @@
 /// A `rep movsw` in 32-bit code is a byte longer than `rep movsb`: copies of at least this many bytes win 48 clocks for it.
 const REP_WORD_MIN_BYTES: u64 = 32;
 
+/// Encoded sizes of the fill value in the accumulator, for `cheapest_fill_unit`.
+const XOR_OR_MOV_AL: u64 = 2;
+const MOV_AX: u64 = 4;
+const MOV_EAX: u64 = 5;
+const MOV_RAX_MINUS_ONE: u64 = 7;
+const MOVABS_RAX: u64 = 10;
+
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Instruction, Operand, ValueDef};
@@ -1408,6 +1415,7 @@ impl Builder<'_> {
                     }
                     _ => self.mem_libcall(
                         info,
+                        operands[0],
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
                         &[dst, other],
@@ -1482,7 +1490,7 @@ impl Builder<'_> {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
-                    _ => self.mem_libcall(info, "memset", root, &[dst, other], size)?,
+                    _ => self.mem_libcall(info, operands[0], "memset", root, &[dst, other], size)?,
                 }
             }
         };
@@ -1988,10 +1996,13 @@ impl Builder<'_> {
     }
 
     /// `getMemcpy`'s libcall: `name(dst, src, size)` for a copy, `name(dst,
-    /// value, size)` for a set; the result is read and dropped.
+    /// value, size)` for a set; the result is read, and dropped unless the
+    /// target's routines return the destination (`mem_libcalls_return_dest`),
+    /// where later uses of `destination` read it.
     fn mem_libcall(
         &mut self,
         info: &CallInfo,
+        destination: Operand,
         name: &str,
         chain_in: SDValue,
         first_two: &[SDValue],
@@ -2051,7 +2062,14 @@ impl Builder<'_> {
             let _ = self.lower_call(target_symbol, values, &extends, &[], &tail_plan, first, void, false)?;
         } else {
             let plan = plan_of(self, pointer_type)?;
-            let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+            let result = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+            // DEVIATE MEMLIB-RETURNED (owner llrm-target-6502, exit 2026-12-05):
+            // the pin keeps `dst` across the call.
+            if let (true, Some(result), Operand::Value(destination)) =
+                (self.target.mem_libcalls_return_dest, result, destination)
+            {
+                self.node_map.insert(destination, result);
+            }
         }
         Ok(self.dag.get_root())
     }
@@ -2230,6 +2248,38 @@ impl Builder<'_> {
         u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
+    /// DEVIATE REP-STOS-UNIT (ERMS/FSRM assumed, see `Tuning::rep_stos_priced_unit`): the unit of a
+    /// constant `rep stos` at `-Os` that takes the fewest bytes,
+    /// the pin's (`block`) on a tie. Encodings at x86-64: the value in `eax` (`xor` 2, `mov al` 2,
+    /// `mov ax` 4, `mov eax` 5, `mov rax, -1` 7, `movabs` 10), `mov ecx, count` 5, the string op
+    /// (2, 3 with a prefix or REX), and each tail store at its shortest (`mov [m], imm`: dword 6, word 7,
+    /// byte 3).
+    fn cheapest_fill_unit(block: u64, size: u64, byte: u64) -> u64 {
+        let bytes = |unit: u64| {
+            let value = match (byte, unit) {
+                (0, _) | (_, 1) => XOR_OR_MOV_AL,
+                (_, 2) => MOV_AX,
+                (_, 4) => MOV_EAX,
+                (0xff, _) => MOV_RAX_MINUS_ONE,
+                _ => MOVABS_RAX,
+            };
+            let op = if unit == 1 || unit == 4 { 2 } else { 3 };
+            let left = size % unit;
+            value + 5 + op + left / 4 * 6 + (left % 4 / 2) * 7 + left % 2 * 3
+        };
+        // Every unit up to the pin's, the widest on a tie: a `rep stosb` of the
+        // same bytes runs the count of a `stosd` four times over.
+        let mut best = block;
+        let mut unit = block;
+        while unit > 1 {
+            unit /= 2;
+            if bytes(unit) < bytes(best) {
+                best = unit;
+            }
+        }
+        best
+    }
+
     /// `emitConstantSizeRepstos`.
     fn rep_stos(
         &mut self,
@@ -2255,6 +2305,11 @@ impl Builder<'_> {
             // registers, whatever its pointers; for size the pointer's width
             // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
             let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
+            let block = if self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_priced_unit()) {
+                Self::cheapest_fill_unit(block, size, byte as u64 & 255)
+            } else {
+                block
+            };
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;

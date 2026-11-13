@@ -1105,11 +1105,11 @@ fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
     assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
 }
 
-/// `mov $40, %eax` (5 B) where the pin's llc at `minsize` writes `push $40; pop %eax` (3 B):
-/// `ExpandMOVImmSExti8` was never expanded. At m32 -Os, and for a function marked `minsize`.
-/// Zero and -1 stay `xor` and `or`. DEVIATE PUSH-IMM-OS.
+/// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1, and the pin writes it at `minsize` only: at m32 -Os it
+/// was also written in once-per-call blocks (`push 0x4d; pop edx` in x_histo2), +3..+9 clk in nine -Os cells and 244k pops
+/// in jpeg_fixed, each of them over by that much with bytes under the bar. -Os and -O2 keep the `mov`; `minsize` pushes.
 #[test]
-fn a_small_immediate_at_m32_os_is_push_pop() {
+fn a_small_immediate_at_m32_os_is_a_mov_and_at_minsize_a_push_pop() {
     let text = |attrs: &str, value: i32| {
         format!(
             "target datalayout = \"@m32-datalayout@\"\n\
@@ -1122,38 +1122,41 @@ fn a_small_immediate_at_m32_os_is_push_pop() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let at_os = listing(&["-mabi=sysv", "-Os"], "optsize", 40);
-    assert!(at_os.contains("pushd 40") && at_os.contains("pop eax"), "{at_os}");
+    assert!(at_os.contains("mov eax, 40") && !at_os.contains("push"), "{at_os}");
     let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize", 40);
     assert!(marked.contains("pushd 40") && marked.contains("pop eax"), "{marked}");
     let at_speed = listing(&["-mabi=sysv", "-O2"], "", 40);
     assert!(at_speed.contains("mov eax, 40") && !at_speed.contains("push"), "{at_speed}");
-    let wide = listing(&["-mabi=sysv", "-Os"], "optsize", 4000);
-    assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
 }
 
-/// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1: at m32 -Os it was used in loops as well, and jpeg_fixed -Os ran
-/// 244k more `pop`s than main (+1.3% clk, 46 B). A constant in a loop is a `mov`; one that runs once per call stays a push and pop.
-/// DEVIATE PUSH-IMM-OS.
+/// An unsigned int converted to long double stores a zero high dword (`fild qword`). The zero was made again on every trip
+/// (`xor esi,esi` in the loop, and a saved register for it) where the pin holds it from the preheader: x_ld_mix -Os +52 clk.
 #[test]
-fn a_small_immediate_at_m32_os_is_a_mov_in_a_loop() {
+fn a_zero_stored_for_a_conversion_is_made_outside_the_loop_at_m32_os() {
     let text = "target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
-                define i32 @f(i32 %n, ptr %p) optsize {\n\
-                entry:\n  %first = load volatile i32, ptr %p\n  %z = icmp slt i32 %first, 0\n  br i1 %z, label %early, label %loop\n\
-                early:\n  ret i32 41\n\
-                loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %s = phi i32 [ %first, %entry ], [ %s2, %loop ]\n\
-                \x20 %v = load volatile i32, ptr %p\n  %c = icmp slt i32 %v, 0\n  %k = select i1 %c, i32 40, i32 50\n\
-                \x20 %s2 = add i32 %s, %k\n  %i2 = add i32 %i, 1\n  %d = icmp eq i32 %i2, %n\n  br i1 %d, label %out, label %loop\n\
-                out:\n  ret i32 %s2\n}\n";
+                define i32 @f(i32 %n) optsize {\n\
+                entry:\n  %c = icmp sgt i32 %n, 0\n  br i1 %c, label %loop, label %out\n\
+                loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %j = phi i32 [ 0, %entry ], [ %j2, %loop ]\n\
+                \x20 %s = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %s2, %loop ]\n\
+                \x20 %u = uitofp i32 %i to x86_fp80\n  %v = add i32 %j, -294967296\n  %w = uitofp i32 %v to x86_fp80\n\
+                \x20 %t = fadd x86_fp80 %u, %w\n  %s2 = fadd x86_fp80 %s, %t\n  %i2 = add i32 %i, 4\n  %j2 = add i32 %j, 1\n\
+                \x20 %d = icmp eq i32 %j2, %n\n  br i1 %d, label %out, label %loop\n\
+                out:\n  %r = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %s2, %loop ]\n\
+                \x20 %k = fptosi x86_fp80 %r to i32\n  ret i32 %k\n}\n";
     let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("pushd 40") && !listing.contains("pushd 50"), "{listing}");
-    assert!(listing.contains("pushd 41"), "the once-per-call constant stays push/pop: {listing}");
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let first = lines.iter().position(|line| line.starts_with("fild qword")).expect("a qword fild");
+    let top = lines[..first].iter().rposition(|line| line.ends_with(':')).expect("the loop label");
+    let back = top + lines[top..].iter().position(|line| line.starts_with("jne")).expect("the loop's branch");
+    assert!(!lines[top..back].iter().any(|line| line.starts_with("xor")), "{listing}");
 }
 
 /// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the
 /// bytes, and x_bubble -Os grew 3 B (273 against 270), quicksort 2, switch_sparse 1, jpeg_fixed 16, while the sparse switch
-/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS.
+/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS. The sparse switch keeps a join
+/// (`xor` of the result): since #9572 its leaves are `mov; ret` (no `push; pop`), so a bare `ret` leaves nothing to fold.
 #[test]
 fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
     let bubble = "target datalayout = \"@m32-datalayout@\"\n\
@@ -1243,7 +1246,8 @@ fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
                   br label %7\n\
                 7:\n\
                   %8 = phi i32 [ 0, %6 ], [ 61, %5 ], [ 52, %2 ], [ 93, %3 ], [ 17, %4 ], [ 31, %1 ]\n\
-                  ret i32 %8\n\
+                  %9 = xor i32 %8, %0\n\
+                  ret i32 %9\n\
                 }\n";
     let listing = |text: &str, name: &str, folded: bool| {
         let build = || compiled(&flags(&["-mabi=sysv", "-Os"]), text, name).unwrap();
@@ -1440,6 +1444,22 @@ fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_minsize_only() {
     assert!(marked.contains("idiv"), "minsize function: {marked}");
     let at_speed = listing(&["-mabi=sysv", "-O2"], "");
     assert!(!at_speed.contains("idiv") && at_speed.contains("sar"), "-O2: {at_speed}");
+}
+
+/// An unsigned 64-bit integer to `f32` or `f64` at m64 was `mov [rsp-16], rdi; fild; fadd [fudge + 4*sign]; fstp; movsd`: through the
+/// x87 and the stack, 38 B and a store-forward stall for `f64`, where the pin has an SSE convert of the halved value. DEVIATE
+/// UITOFP-F64: `cvtsi2sd` of the value, or of the halved one doubled.
+#[test]
+fn an_unsigned_64_bit_integer_to_float_is_an_sse_convert_at_m64() {
+    for (ty, convert) in [("double", "cvtsi2sd"), ("float", "cvtsi2ss")] {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+             define {ty} @f(i64 %x) {{\n  %r = uitofp i64 %x to {ty}\n  ret {ty} %r\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O1"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains("fild") && listing.contains(convert), "{ty}: {listing}");
+    }
 }
 
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
@@ -3136,9 +3156,10 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
 /// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
 /// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
 /// operand (RAX) not set by a glued CopyToReg" refused the function. The -Os copy is `rep movsd` since
-/// REP-MOVS-OS (the dword block is a byte shorter than REX.W `movsq`).
+/// REP-MOVS-OS (the dword block is a byte shorter than REX.W `movsq`), and the
+/// zero fill is `rep stosd` for the same reason (REP-STOS-UNIT).
 #[test]
-fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
+fn a_zero_fill_and_copy_at_m64_are_rep_string_instructions() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @use(ptr, ptr)\n\
@@ -3150,7 +3171,7 @@ fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
                 \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("rep stosq") && listing.contains("rep movsd"), "{listing}");
+    assert!(listing.contains("rep stosd") && listing.contains("rep movsd"), "{listing}");
 }
 
 /// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
@@ -3523,7 +3544,7 @@ fn dense_switch_ir() -> String {
 #[test]
 fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
     for (mode, layout, int, jump, tail) in [
-        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr $J", "]"),
+        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr cs:$J", "]"),
         ("-m32", "@m32-datalayout@", "i32", "jmp dword ptr $J", "*4]"),
     ] {
         let mut text = format!("target datalayout = \"{layout}\"\n");
@@ -3701,14 +3722,11 @@ fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m6
     assert!(!listing.lines().any(|l| l.trim().starts_with("or ")), "the and became an or:\n{listing}");
 }
 
-/// `icmp ult` before `icmp ne` joined by `and` and branched on: the pin keeps
-/// each compare's IR order through De Morgan (`SDLoc(N00)`, `SDLoc(N01)`), so
-/// the source-order scheduler emits `cmp ecx, 7` before `cmp eax, 204`. Ours
-/// gave both flipped compares the branch's order and emitted them the other
-/// way round (jpeg -O2, +59 B of spill in `bench_jpeg_fixed_`). `swapped`
-/// is the same with the compares in the other order.
+/// `and` of an `icmp ne` and an `icmp ult`, branched on, at m32 -O2: since #8912 the condition is two branches
+/// (`cmp; je; add; cmp; ja`), taken in the `and`'s operand order whichever compare the IR defines first. The
+/// merged form this test pinned (De Morgan with each compare's IR order, jpeg -O2 +59 B of spill) no longer exists.
 #[test]
-fn the_compares_of_a_negated_and_keep_their_ir_order_at_m32() {
+fn the_compares_of_an_and_are_two_branches_in_operand_order_at_m32() {
     let ir = |first: &str, second: &str| {
         format!(
             "target datalayout = \"@m32-datalayout@\"\n\
@@ -3721,15 +3739,17 @@ fn the_compares_of_a_negated_and_keep_their_ir_order_at_m32() {
     };
     let ult = "%u = icmp ult i32 %s, 7";
     let ne = "%n = icmp ne i32 %x, 204";
-    let order = |text: String| -> Vec<&'static str> {
+    let listing = |text: String| {
         let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), &text, "f").unwrap();
-        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-        let first = listing.lines().position(|l| l.trim().starts_with("cmp ecx, 7")).unwrap();
-        let second = listing.lines().position(|l| l.trim().starts_with("cmp eax, 204")).unwrap();
-        vec![if first < second { "ult first" } else { "ne first" }]
+        llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    assert_eq!(order(ir(ult, ne)), ["ult first"]);
-    assert_eq!(order(ir(ne, ult)), ["ne first"]);
+    for text in [ir(ult, ne), ir(ne, ult)] {
+        let listing = listing(text);
+        let at = |needle: &str| listing.lines().position(|l| l.trim().starts_with(needle));
+        assert!(!listing.contains("setb") && !listing.contains("seta"), "the compares were joined:\n{listing}");
+        let (ne, ult) = (at("cmp eax, 204"), at("cmp eax, 6"));
+        assert!(ne.is_some() && ne < ult, "the compares are not in operand order:\n{listing}");
+    }
 }
 
 /// The copy that puts a call's argument in its register is of the call's line
@@ -4331,11 +4351,10 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     assert_eq!(doubled, 0, "{listing}");
 }
 
-/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass
-/// allowed (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B);
-/// -O3 keeps 150 (m32's rectwo and bintree are worse with 450 there).
+/// fib at m64 was copied into itself to a growth cap (-O2: 150 `gcc_insns`, 25941 clocks, 556 B; gcc's 450: 10793
+/// clocks, 1028 B). Since REC-7 (#9043) a recursion is copied two deep at -O2 and -O3 alike: 4 calls at both.
 #[test]
-fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
+fn fib_is_copied_two_deep_into_itself_at_o2_and_o3_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i32 @fib(i32 %n) {\n\
@@ -4351,7 +4370,7 @@ fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
         llrm_codegen::backend::masm::text(&built).unwrap().matches("call fib").count()
     };
     let (o2, o3) = (calls("-O2"), calls("-O3"));
-    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+    assert!(o2 == 4 && o3 == 4, "-O2 made {o2} calls of fib, -O3 {o3}");
 }
 
 /// An `i32` divided by a constant at m64 was `mov ecx, 0xcccccccd; mul ecx;
@@ -4441,12 +4460,12 @@ fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
     }
 }
 
-/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
-/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
-/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
-/// +12 B over the `rep stosq` the port had.
+/// Tuned for size, a 128-byte clear is `rep stosd` (9 B, a byte under `stosq`),
+/// not `xorps` and eight `movaps` (up to 72 B); a 32-byte clear stays two
+/// stores. The pin's store count made it eight `movaps`: pattern_fill -Os +50 B,
+/// huffman_decode +12 B over the `rep stos` the port had.
 #[test]
-fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+fn a_128_byte_clear_at_m64_os_is_rep_stosd_and_a_32_byte_one_is_stores() {
     let ir = |size: u32| {
         format!(
             "target datalayout = \"@m64-datalayout@\"\n\
@@ -4461,7 +4480,7 @@ fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let large = listing(128);
-    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    assert!(large.contains("rep stosd") && !large.contains("movaps"), "{large}");
     let small = listing(32);
     assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
 }
@@ -4551,11 +4570,12 @@ fn a_constant_fill_at_m64_is_a_pool_splat_and_16_byte_stores() {
     assert!(!listing.contains("qword ptr [rsp") && !listing.contains("movabs"), "{listing}");
 }
 
-/// Tuned for size, a 128-byte constant fill (not zero) is `rep stosq` too
-/// (idioms Os: eight RIP-relative `movaps` and the pool load were +41 B over
-/// it); a 32-byte one stays a pool splat and two `movaps`.
+/// Tuned for size, a 128-byte constant fill (not zero) is a `rep stosb` of
+/// `mov al, imm` (9 B; `stosq` needs a 7-10 B value) (idioms Os: eight
+/// RIP-relative `movaps` and the pool load were +41 B over it); a 32-byte one
+/// stays a pool splat and two `movaps`.
 #[test]
-fn a_128_byte_constant_fill_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+fn a_128_byte_constant_fill_at_m64_os_is_rep_stosb_and_a_32_byte_one_is_stores() {
     let ir = |size: u32| {
         format!(
             "target datalayout = \"@m64-datalayout@\"\n\
@@ -4570,7 +4590,7 @@ fn a_128_byte_constant_fill_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores()
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let (large, small) = (listing(128), listing(32));
-    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    assert!(large.contains("rep stosb") && !large.contains("movaps"), "{large}");
     assert!(small.contains("movaps") && !small.contains("rep stos"), "{small}");
 }
 
@@ -4777,7 +4797,8 @@ fn a_product_summed_into_an_add_keeps_the_lea_chain_at_m64() {
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
-/// byte is stores one step below the boundary and `rep stosq` at it.
+/// byte is stores one step below the boundary and `rep stos` at it, of the unit
+/// with the fewest bytes: `stosd` for zero, `stosb` (`mov al, imm`) otherwise.
 #[test]
 fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
     let listing = |byte: u32, size: u32| {
@@ -4792,11 +4813,11 @@ fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     // (byte, the longest fill that stays stores, the shortest that is `rep
-    // stosq`)
-    for (byte, stores, rep) in [(0, 32, 48), (255, 32, 48), (65, 48, 64)] {
+    // stos`, its unit)
+    for (byte, stores, rep, unit) in [(0, 32, 48, "stosd"), (255, 32, 48, "stosb"), (65, 48, 64, "stosb")] {
         let (inline, string) = (listing(byte, stores), listing(byte, rep));
         assert!(inline.contains("movaps") && !inline.contains("rep stos"), "byte {byte}, {stores} B: {inline}");
-        assert!(string.contains("rep stosq") && !string.contains("movaps"), "byte {byte}, {rep} B: {string}");
+        assert!(string.contains(&format!("rep {unit}")) && !string.contains("movaps"), "byte {byte}, {rep} B: {string}");
     }
 }
 
@@ -5846,6 +5867,95 @@ fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
     assert!(!listing(&looped).contains("imul"), "a multiply in a loop is the chain:\n{}", listing(&looped));
 }
 
+/// MUL-HOT (m32 -Os): a block runs often when its function does, not only when its loop does. x_dct -Os called `dct8`
+/// (`x * 7`, `x * 5`, `x * 3` in straight-line code) from two nested loops and kept every `imul`: 314,722 clk against
+/// clang's 211,103. A function called from a loop is hot in all its blocks; one called once keeps its `imul`.
+#[test]
+fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
+    let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
+    let callee = "define internal i32 @g(i32 %x) noinline {\n  %m = mul i32 %x, 45\n  ret i32 %m\n}\n";
+    let once = format!("{head}{callee}define i32 @f(i32 %x) {{\n  %r = call i32 @g(i32 %x)\n  ret i32 %r\n}}\n");
+    let looped = format!(
+        "{head}{callee}define i32 @f(i32 %n) {{\nentry:\n  br label %body\n\
+         body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %s = phi i32 [ 0, %entry ], [ %t, %body ]\n  \
+         %r = call i32 @g(i32 %i)\n  %t = add i32 %s, %r\n  %j = add i32 %i, 1\n  \
+         %c = icmp slt i32 %j, %n\n  br i1 %c, label %body, label %done\n\
+         done:\n  ret i32 %s\n}}\n"
+    );
+    let callee_listing = |text: &str| {
+        let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let start = listing.find("g proc").unwrap_or_else(|| panic!("no g:\n{listing}"));
+        listing[start..].split("g endp").next().unwrap().to_owned()
+    };
+    assert!(callee_listing(&once).contains("imul"), "a function called once keeps its imul:\n{}", callee_listing(&once));
+    assert!(!callee_listing(&looped).contains("imul"), "a function called from a loop is the chain:\n{}", callee_listing(&looped));
+}
+
+/// `RegisterCoalescer::reMaterializeDef` refuses a constant that is not
+/// `isAsCheapAsAMove`: at -Os outside 64-bit mode +1 and -1 are
+/// `MOV32r1`/`MOV32r_1` (xor and inc), so the pin makes one once before a loop
+/// and copies it into the argument register each trip (`mov edx, edi`); every
+/// other constant is made again in the loop. We made +1 again each trip (`xor
+/// edx, edx; inc edx`): x_dct -Os 211,298 clk against clang's 211,103.
+#[test]
+fn a_hoisted_one_passed_to_a_call_in_a_loop_stays_in_a_register_at_m32_os() {
+    let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
+    let loop_of = |level: &str, constant: i32| {
+        let text = format!(
+            "{head}declare void @g(ptr, i32)\ndefine void @f(i32 %n, ptr %p) {{\nentry:\n  br label %body\n\
+             body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  \
+             call void @g(ptr %a, i32 {constant})\n  %j = add i32 %i, 1\n  \
+             %c = icmp ne i32 %j, 8\n  br i1 %c, label %body, label %done\n\
+             done:\n  ret void\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m32", level]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let call = listing.find("call g_").unwrap_or_else(|| panic!("no call:\n{listing}"));
+        let from = listing[..call].rfind("\nL0_").unwrap_or_else(|| panic!("no loop:\n{listing}"));
+        let body = listing[from..call].to_owned();
+        (body, listing)
+    };
+    let (body, listing) = loop_of("-Os", 1);
+    assert!(!body.contains("inc ") && !body.contains("xor "), "+1 is made once, outside the loop:\n{listing}");
+    assert!(body.contains("mov edx, e"), "the loop copies it into the argument register:\n{listing}");
+    // What the pin makes again in the loop, and still does.
+    assert!(loop_of("-Os", 7).0.contains("mov edx, 7"), "{}", loop_of("-Os", 7).1);
+    assert!(loop_of("-Os", 0).0.contains("xor edx, edx"), "{}", loop_of("-Os", 0).1);
+    assert!(loop_of("-O1", 1).0.contains("mov edx, 1"), "{}", loop_of("-O1", 1).1);
+}
+
+/// PO1 (m32 -Os): a call's two argument words come off the stack with `add esp, 8`, as the pin does below `minsize`, not
+/// `pop ecx` twice (one byte shorter, eight clocks against one a call). x_hanoi2 -Os spent 245,837 clk against clang's
+/// 221,263 for 4,096 calls.
+#[test]
+fn a_calls_arguments_come_off_the_stack_by_add_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+                declare i32 @g(i32, i32)\ndefine i32 @f(i32 %a, i32 %b) {\n  %x = call i32 @g(i32 %a, i32 %b)\n  \
+                %y = call i32 @g(i32 %x, i32 %b)\n  ret i32 %y\n}\n";
+    for level in ["-Os", "-O1"] {
+        let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", level]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains("add esp, 8"), "{level}: arguments are added off:\n{listing}");
+        assert!(!listing.contains("pop ecx"), "{level}: no pop cleans them:\n{listing}");
+    }
+}
+
+/// LoopIdiomRecognize forms the `memcpy` of a copy loop whose length is known at run time and the target calls it (m32 has a
+/// libc; `Tuning::libc_memcpy`), as the pin does. It stayed a loop at -Os where the inline `rep movs` was more bytes:
+/// x_transpose -Os ran 17,984 loop trips for 9,792 and 8,192 `movsd`.
+#[test]
+fn a_copy_loop_of_run_time_length_is_a_memcpy_call_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+                @d = external global [64 x i32]\n@s = external global [64 x i32]\n                define void @f(i32 %n) {\nentry:\n  %e = icmp eq i32 %n, 0\n  br i1 %e, label %done, label %body\n\
+                body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr @s, i32 %i\n  %v = load i32, ptr %a\n  \
+                %b = getelementptr i32, ptr @d, i32 %i\n  store i32 %v, ptr %b\n  %j = add i32 %i, 1\n  %c = icmp ne i32 %j, %n\n  \
+                br i1 %c, label %body, label %done\ndone:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("memcpy"), "the loop is a call of memcpy:\n{listing}");
+}
+
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
 /// the same bytes, a third to a quarter of the clocks. scroll -Os copied 4000 bytes of two-byte-aligned shorts a byte at a
 /// time: 958,326 clk against clang's 536,067.
@@ -5870,4 +5980,44 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     assert!(listing(1, 4000).contains("movsb") && !listing(1, 4000).contains("movsw"), "unaligned stays bytes");
     assert!(!listing(2, 30).contains("movsw"), "a short copy would pay the operand-size prefix for nothing:\n{}", listing(2, 30));
     assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
+}
+
+/// x86-m64 shellsort -O2: `bench_main_` took a second 255 B copy of `bench_shellsort`, a public function that stays,
+/// for one constant argument: 499 B of code against gcc's 235. INL-O2 RATE prices the copy's bytes at the m64 rate
+/// as m32's does, and the caller keeps the call (271 B).
+#[test]
+fn a_speed_inline_pays_its_bytes_at_o2_on_m64() {
+    let text = include_str!("tests_data/shellsort_o2.ll");
+    let (built, format) = compiled(&flags(&["-m64", "-O2"]), text, "bench_shellsort").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
+        &built,
+        "shellsort_o2.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap();
+    assert!(bytes <= 350, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
+}
+
+/// x86-m64 crc -O2: the rate kept `bench_main_`'s call of `bench_crc(0)`, whose copy folds to one constant: 21 executed
+/// instructions became 561 and the object grew 5 B. A priced trial measures the folded copy (no growth, fewer clocks)
+/// and keeps it, as the pin's inliner does.
+#[test]
+fn a_call_whose_copy_folds_to_a_constant_is_inlined_at_o2_on_m64() {
+    let text = include_str!("tests_data/crc_o2.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), text, "bench_main_").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("call bench_crc"), "main still calls bench_crc:\n{listing}");
+}
+
+/// x86-m64 shellsort -Os: the uncounted `while (at >= gap && ...)` loop stayed unrotated, so each trip tested
+/// `at >= gap` through `add; jb` ahead of the body (9276 instructions against clang's 7708 for the same 179 B). The
+/// ROTATION-HOT trial rotates it where the object does not grow: `sub di, ax; jae` closes the loop.
+#[test]
+fn an_uncounted_loop_is_rotated_at_os_on_m64_where_the_object_does_not_grow() {
+    let text = include_str!("tests_data/shellsort_os.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-Os"]), text, "bench_shellsort").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sub di, ax"), "the loop is not rotated:\n{listing}");
 }

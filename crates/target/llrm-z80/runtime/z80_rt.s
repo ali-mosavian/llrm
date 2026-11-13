@@ -1115,10 +1115,19 @@ sds:	push	ix
 ; returned in de); the first operand's words are de, bc, 4(ix), 6(ix) and the second's the next four words on the
 ; stack (8(ix) up) or, for a shift, a count byte at 8(ix). The caller pops its arguments.
 
-; The mode is in a: 0 quotient of unsigned, 1 remainder of unsigned, 2 quotient of signed, 3 remainder of signed.
+; The mode is in a: 0 quotient of unsigned, 1 remainder of unsigned, 2 quotient of signed, 3 remainder of signed;
+; bit 4 both (`finpair64`).
 ; The size family (`__s_`, chosen for a function tuned for size) is the restoring division over a frame: the dividend shifts left through the remainder, 64 steps, the quotient bit
 ; entering at the bottom. Frame: -16..-9 quotient/dividend, -8..-1 remainder, -17 mode (bit 2 quotient negative,
 ; bit 3 remainder negative), -18 steps left, -19 carry out of the remainder, -21,-20 result pointer.
+	.globl __s_udivmddi4
+__s_udivmddi4:
+	ld	a,#0x10
+	jr	udivmoddi_s
+	.globl __s_divmddi4
+__s_divmddi4:
+	ld	a,#0x12
+	jr	udivmoddi_s
 	.globl __s_udivdi3
 __s_udivdi3:
 	xor	a
@@ -1258,15 +1267,31 @@ fin64:	push	ix
 	call	neg64
 	ld	bc,#-8
 	add	hl,bc
-11$:	ld	e,-21(ix)
-	ld	d,-20(ix)
+11$:	bit	4,-17(ix)
+	jr	nz,finpair64
 	ld	bc,#8
+fincopy64:
+	ld	e,-21(ix)
+	ld	d,-20(ix)
 	ldir
 	ld	e,-21(ix)
 	ld	d,-20(ix)
 	ld	sp,ix
 	pop	ix
 	ret
+; the pair, the quotient made signed and hl at it: the remainder made signed, the 16 bytes copied to the cell
+finpair64:
+	ld	de,#8
+	add	hl,de
+	bit	3,-17(ix)
+	jr	z,1$
+	call	neg64
+	ld	bc,#-8
+	add	hl,bc
+1$:	ld	bc,#-8
+	add	hl,bc
+	ld	bc,#16
+	jr	fincopy64
 
 ; Negates the eight bytes at hl in place; hl is left at their end.
 neg64:
@@ -1281,6 +1306,17 @@ neg64:
 
 ; The speed family keeps the same frame and result; a divisor of 32 bits or less runs in registers, so the
 ; dividend's leading zeros cost a shift each and not a quotient step. The size family does not reach this code.
+; The names differ from `__udivmodsi4` and `__divremsi4` within 9 characters: the link map cuts a symbol there.
+; The pair (`__udivmddi4`, `__divmddi4`, mode bit 4): hl points at a cell of 16 bytes, the quotient in the first
+; eight and the remainder in the last eight.
+	.globl __udivmddi4
+__udivmddi4:
+	ld	a,#0x10
+	jr	udivmoddi
+	.globl __divmddi4
+__divmddi4:
+	ld	a,#0x12
+	jr	udivmoddi
 	.globl __udivdi3
 __udivdi3:
 	xor	a
@@ -1403,6 +1439,7 @@ d64_st:	add	hl,hl
 	exx
 	rl	c
 	rl	b
+	jr	c,d64_ov
 	push	bc
 	exx
 	push	bc
@@ -1444,6 +1481,23 @@ d64_fn:	ld	-16(ix),l
 	ld	-8(ix),c
 	ld	-7(ix),b
 	jp	fin64
+; the remainder passed 32 bits (a divisor over 2^31): it is the larger, so the divisor comes off whatever the borrow
+d64_ov:	exx
+	ld	a,c
+	sub	a,8(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,9(ix)
+	ld	b,a
+	exx
+	ld	a,c
+	sbc	a,10(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,11(ix)
+	ld	b,a
+	inc	l
+	jr	d64_nx
 ; a divisor of more than 32 bits: over a dividend of 32 bits or less the quotient is zero and the remainder the
 ; dividend; otherwise the restoring loop, one step per dividend bit
 d64_big:

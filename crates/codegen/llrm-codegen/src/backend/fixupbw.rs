@@ -63,7 +63,7 @@ use crate::backend::peep::guards::{free_fields, short_in_real_mode_at};
 use crate::backend::peep::{field, make};
 use crate::backend::peephole::{_lanes, id};
 use crate::backend::regthrash::_dead_after;
-use crate::model::ir::{Loc, Operation, Reg};
+use crate::model::ir::{Loc, Operation, Reg, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -122,7 +122,7 @@ impl FixupBw {
         if self.strict_bytes {
             return crate::backend::peep::guards::no_longer_when_strict(bits, one, new);
         }
-        short_in_real_mode_at(bits, one, new)
+        short_in_real_mode_at(bits, one, new) || (bits != 16 && reads_frame_cell(new))
     }
 
     /// `runOnMachineFunction`: every block.
@@ -273,6 +273,14 @@ impl FixupBw {
         let fields = if src.is_some() { WIDENING } else { WIDENING_LOAD };
         (free_fields(one, fields) && self.short_enough(bits, one, &new)).then_some(new)
     }
+}
+
+/// `one` reads a frame cell. Before the frame layout it has no encoding to size, and the pin widens a spill
+/// reload (`MOV8rm` of a slot) as it does any load: above real mode the dword form is not refused for it.
+fn reads_frame_cell(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.sources.iter().any(|place| matches!(place, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)))
+    })
 }
 
 /// `one` with the opcode `name`, the destination `wide` and, if given, the
@@ -428,6 +436,53 @@ mod tests {
         let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false }.fixed(&body);
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "movzx");
+    }
+    /// `mov cl, [frame-54]` at 64 bits: a spill slot has no encoding until the frame layout either, so the probe
+    /// refused `movzx ecx, ...` and the partial write waited on the last write of RCX, a whole clamp chain of
+    /// the loop before (jpeg_fixed -O2/-O3 m64: +8% clocks against clang at 3% fewer instructions).
+    #[test]
+    fn a_byte_reload_of_a_frame_slot_is_widened_at_64_bits() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -54)), 1);
+        let what = copy(reg(RegId::CL, 1), Loc::Mem(cell));
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 64;
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false }.fixed(&body);
+        let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
+        assert_eq!(&*name, "movzx");
+    }
+    /// Real mode sizes exactly (`0F B6` is a byte longer there, and the 66h prefix more): the same reload at 16
+    /// bits keeps the byte load, as before the frame-cell exception.
+    #[test]
+    fn a_byte_reload_of_a_frame_slot_stays_at_16_bits() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -54)), 1);
+        let what = copy(reg(RegId::CL, 1), Loc::Mem(cell));
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 16;
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false }.fixed(&body);
+        let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
+        assert_eq!(&*name, "mov");
     }
     /// `mov cl, [esi]` then nothing: the extending load is a byte longer
     /// (`8A /r`, `0F B6 /r`). Where bytes are strict (-O1) it stays; at speed

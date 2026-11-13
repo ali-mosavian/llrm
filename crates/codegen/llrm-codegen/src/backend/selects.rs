@@ -914,6 +914,8 @@ done:
             assert!(super::kept_for_isel(Selector::Dag, ty), "{ty}: the DAG makes minss/maxss of it");
             assert!(!super::kept_for_isel(Selector::Old, ty), "{ty}");
         }
-        assert!(!super::kept_for_isel(Selector::Dag, "i64"));
+        for ty in ["i128", "ptr", "x86_fp80"] {
+            assert!(!super::kept_for_isel(Selector::Dag, ty), "{ty}: the rest are still branched here");
+        }
     }
 }

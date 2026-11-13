@@ -1980,6 +1980,75 @@ fn an_outer_loops_multiply_is_a_counter_where_the_target_prices_multiplies() {
     assert!(in_loop(&pin), "{pin}");
 }
 
+/// An outer loop whose two arms compute `i * 300 + 21472` and `i * 300 - 81472`
+/// for one phi that feeds the inner loop.
+const OUTER_PHI_OF_AFFINES: &str = "define i32 @f(i32 %n) {
+entry:
+  br label %outer
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i1, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc1, %latch ]
+  %m = mul nuw nsw i32 %i, 300
+  %c = icmp ult i32 %i, 100
+  br i1 %c, label %a, label %b
+a:
+  %pa = add nuw nsw i32 %m, 21472
+  br label %join
+b:
+  %pb = add nsw i32 %m, -81472
+  br label %join
+join:
+  %z0 = phi i32 [ %pa, %a ], [ %pb, %b ]
+  br label %inner
+inner:
+  %k = phi i32 [ 0, %join ], [ %k1, %inner ]
+  %z = phi i32 [ %z0, %join ], [ %z1, %inner ]
+  %t = xor i32 %z, %k
+  %z1 = add i32 %t, 7
+  %k1 = add nuw nsw i32 %k, 1
+  %e4 = icmp eq i32 %k1, 4
+  br i1 %e4, label %latch, label %inner
+latch:
+  %acc1 = add i32 %acc, %z1
+  %i1 = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %i1, %n
+  br i1 %e, label %exit, label %outer
+exit:
+  ret i32 %acc1
+}
+";
+
+/// DEVIATE LSR-PHI. x_cordic m32 -O3: the pin made a counter for one operand
+/// of the phi that merges two affine values and left the other a 5-instruction
+/// multiply chain, 100 trips. Where the target asks, both are counters.
+#[test]
+fn both_affine_operands_of_a_phi_are_counters_where_the_target_asks() {
+    let run = |phi_operand_uses: bool| {
+        let mut module = parsed(&format!("{FLAT}{OUTER_PHI_OF_AFFINES}"));
+        let before = module.clone();
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let mut tti = X86::of_cpu("i486").unwrap();
+        tti.tuning = llrm_mir::target::Tuning {
+            multiply_clocks: 19,
+            loop_carried_clocks: 2,
+            lsr_phi_operand_uses: phi_operand_uses,
+            ..llrm_mir::target::Tuning::PIN
+        };
+        crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+        let after = printed(&module);
+        let inputs: &[&[i128]] = &[&[1], &[2], &[150]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+        after
+    };
+    let muls = |text: &str| text.matches(" mul ").count();
+    let asked = run(true);
+    assert_eq!(muls(&asked), 0, "{asked}");
+    let pin = run(false);
+    assert!(muls(&pin) > 0, "{pin}");
+}
+
 /// A remainder by a constant that feeds addresses, at -Os on a target that
 /// keeps the divide.
 const REMAINDER_INDEX: &str = "@V = global [400 x [16 x i32]] zeroinitializer
@@ -2078,4 +2147,54 @@ fn test_a_conversion_of_the_increment_is_the_double_counters_increment() {
 fn test_a_conversion_of_the_increment_stays_off_the_x87_stack() {
     let after = reduced_next_converted(false);
     assert!(after.contains("sitofp"), "{after}");
+}
+
+/// The trip counts the session works out for the headers `h0..h{loops}`.
+fn session_counts(
+    session: &mut llrm_analysis::scev::analysis::ScevSession,
+    module: &mut llrm_mir::module::Module,
+    loops: usize,
+) -> usize {
+    let (data, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let (context, function) = (&*context, &*function);
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    let (se, env) = session.split(&data, &outer.globals, &outer.metadata);
+    let cx = env.cx(context, function);
+    for k in 0..loops {
+        let header = llrm_analysis::testing::block(function, &format!("h{k}"));
+        se.get_backedge_taken_count(&cx, header, llrm_analysis::scev::backedge::ExitCountKind::Exact);
+    }
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// An edge LSR splits dropped every expression of the function (the session's
+/// `forget_since` drops all where the CFG changed), so each loop after it
+/// worked out the trip counts of the loops before it again: 27 G of a 400-loop
+/// function's LSR. The pin edits the edge and keeps its one `ScalarEvolution`:
+/// only the loop whose blocks were touched is counted again.
+#[test]
+fn an_edge_split_makes_lsr_count_only_the_loop_it_touched_again() {
+    let mut module = parsed(&format!("{FLAT}{}", walks(3)));
+    let outer = Outer::of(&module, None);
+    let mut session = {
+        let (context, function) = module.function_mut("f").expect("@f");
+        llrm_analysis::scev::analysis::ScevSession::within(&*context, &outer.globals, &outer.metadata, &*function)
+    };
+    assert_eq!(session_counts(&mut session, &mut module, 3), 3, "premise: three loops, three counts");
+    let mark = module.function_mut("f").unwrap().1.mark();
+    {
+        let function = module.function_mut("f").expect("@f").1;
+        let (from, to) = (llrm_analysis::testing::block(function, "h0"), llrm_analysis::testing::block(function, "e1"));
+        crate::edges::split_edge(function, from, to);
+    }
+    let (data, outer) = (layout(&module), Outer::of(&module, None));
+    let kept = session.into_scev();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let (context, function) = (&*context, &*function);
+    let mut session =
+        llrm_analysis::scev::analysis::ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    session.adopt(kept);
+    session.forget_since_through_edges(context, &data, &outer.globals, &outer.metadata, function, mark);
+    assert_eq!(session_counts(&mut session, &mut module, 3), 1, "only the loop whose edge was split is counted again");
 }

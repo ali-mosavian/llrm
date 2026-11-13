@@ -112,6 +112,11 @@ pub struct BuilderTarget {
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
     pub libcalls: Option<Vec<(String, u32, String)>>,
+    /// The runtime's `memcpy`, `memmove` and `memset` return their
+    /// destination (as the C library's do), so a later use of the
+    /// intrinsic's destination reads the call's result, not a copy kept
+    /// across the call (the pin drops the result, MEMLIB-RETURNED).
+    pub mem_libcalls_return_dest: bool,
     /// The stack alignment `alloca` rounds to, when not the target's own: the
     /// pin's i486-linux goldens say 16.
     pub stack_align: Option<u64>,
@@ -521,6 +526,7 @@ impl BuilderTarget {
             min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
+            mem_libcalls_return_dest: false,
             stack_align: None,
             max_alloca_align: None,
             va_arg_align_cap: None,
@@ -958,6 +964,11 @@ impl Builder<'_> {
                         .and_then(|lane| MVT::vector(lane, *count))
                         .map(EVT::Simple)
                         .ok_or(Refused("vector with no register class")),
+                    // `v4f32`, `v2f64`
+                    Type::Float(kind @ (llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)) => {
+                        let lane = if matches!(kind, llrm_mir::types::FloatKind::Float) { MVT::F32 } else { MVT::F64 };
+                        MVT::vector(lane, *count).map(EVT::Simple).ok_or(Refused("vector with no register class"))
+                    }
                     _ => Err(Refused("vector with no register class")),
                 }
             }
@@ -3311,7 +3322,11 @@ impl Builder<'_> {
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
             ConstantKind::Null | ConstantKind::Zero => {
-                let zero = self.dag.get_constant(0, lane_vt);
+                let zero = if lane_vt.is_floating_point() {
+                    self.dag.get_constant_fp(0, lane_vt)
+                } else {
+                    self.dag.get_constant(0, lane_vt)
+                };
                 Ok(self.dag.get_splat_build_vector(vt, zero))
             }
             ConstantKind::Aggregate(lanes) => {
@@ -3322,10 +3337,14 @@ impl Builder<'_> {
                     .iter()
                     .map(|lane| match self.module.context.get(*lane).kind {
                         ConstantKind::Int(bits) => Ok(self.dag.get_constant(bits, lane_vt)),
+                        ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(bits), lane_vt)),
+                        ConstantKind::Null | ConstantKind::Zero if lane_vt.is_floating_point() => {
+                            Ok(self.dag.get_constant_fp(0, lane_vt))
+                        }
                         ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, lane_vt)),
                         ConstantKind::Undef => Ok(self.dag.get_undef(lane_vt)),
                         ConstantKind::Poison => Ok(self.dag.get_poison(lane_vt)),
-                        _ => Err(Refused("a vector constant lane that is not an integer")),
+                        _ => Err(Refused("a vector constant lane that is not an integer or a float")),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.dag.get_build_vector(vt, &ops))
@@ -3377,11 +3396,15 @@ impl Builder<'_> {
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
             // a far global: its offset and the selector of its segment
             ConstantKind::Global(global) if vt == MVT::Far.into() => {
+                self.note_global_alignment(id, global.0);
                 let offset = self.dag.get_global_address(EVT::I16, global.0, 0);
                 let segment = self.segment_of(Some(global.0));
                 Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[offset, segment], super::dag::SDNodeFlags::PAIR_FAR))
             }
-            ConstantKind::Global(global) => Ok(self.dag.get_global_address(vt, global.0, 0)),
+            ConstantKind::Global(global) => {
+                self.note_global_alignment(id, global.0);
+                Ok(self.dag.get_global_address(vt, global.0, 0))
+            }
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr {
                 source,
                 inbounds,
@@ -3635,6 +3658,7 @@ impl Builder<'_> {
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::InsertElement => self.visit_insert_element(&instruction)?,
+            Opcode::ExtractElement => self.visit_extract_element(&instruction)?,
             Opcode::ShuffleVector(mask) => self.visit_shuffle_vector(&instruction, mask)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::VaArg => self.visit_va_arg(&instruction)?,
@@ -4124,6 +4148,8 @@ impl Builder<'_> {
         let high = self.dag.get_constant(u128::from(!mask) & self::mask(pointer.size_in_bits()), pointer);
         let size = self.dag.get_node(ISD::And, pointer, &[size, high]);
         let alignment = self.dag.get_constant(u128::from(alignment), pointer);
+        // `visitAlloca`: `CreateVariableSizedObject`.
+        self.info.has_var_sized_objects = true;
         let root = self.root();
         let node = self.dag.get_node_multi(ISD::DynamicStackAlloc, &[pointer, EVT::OTHER], &[root, size, alignment]);
         self.dag.set_root(SDValue { node: node.node, res: 1 });
@@ -4160,6 +4186,22 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `visitExtractElement`: `EXTRACT_VECTOR_ELT` of the vector and the index,
+    /// which is a constant here (a variable index is refused).
+    fn visit_extract_element(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let vector = self.get_value(instruction.operands[0])?;
+        let index = self.get_value(instruction.operands[1])?;
+        let Some(at) = self.dag.constant(index) else { return Err(Refused("an extractelement at a variable index")) };
+        let index = self.dag.get_constant(at, self.target.dag.pointer);
+        let element = self.dag.value_type(vector).element();
+        let node = self.dag.get_node(ISD::ExtractElement, element, &[vector, index]);
+        self.set_value(instruction.result.expect("an extractelement has a result"), node);
+        Ok(())
+    }
+
     /// `visitShuffleVector`: `getVectorShuffle` of the two inputs with the
     /// IR's mask (a lane of `-1` is undefined).
     fn visit_shuffle_vector(
@@ -4193,6 +4235,21 @@ impl Builder<'_> {
         let node = self.dag.get_node(ISD::Select, vt, &[cond, then, other]);
         self.set_value(instruction.result.expect("a select has a result"), node);
         Ok(())
+    }
+
+    /// `Value::getPointerAlignment` of a global the DAG is about to address,
+    /// for `InferPtrAlign`.
+    fn note_global_alignment(
+        &mut self,
+        id: llrm_mir::context::ConstantId,
+        symbol: u32,
+    ) {
+        let query = llrm_mir::valuetracking::Query {
+            globals: &self.module.globals,
+            ..llrm_mir::valuetracking::Query::bare(&self.module.context, self.function, self.layout)
+        };
+        let align = llrm_mir::valuetracking::known::pointer_alignment(&query, Operand::Constant(id));
+        self.dag.global_alignments.insert(symbol, align);
     }
 
     fn mem_info(

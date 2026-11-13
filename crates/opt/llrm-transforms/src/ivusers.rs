@@ -60,6 +60,8 @@ pub struct Env<'a> {
     /// use-list order, as the pin's `for (Use &U : I->uses())`, not in
     /// descending program order (DEVIATE IU1).
     pub use_list_order: bool,
+    /// DEVIATE LSR-PHI: `Tti::lsr_phi_operand_uses`.
+    pub phi_operand_uses: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/IVUsers.h#L33
@@ -80,6 +82,8 @@ pub struct IvUsers {
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
     processed: IdSet<InstId>,
+    /// The phis recorded as a use (DEVIATE LSR-PHI).
+    phi_uses: IdSet<InstId>,
     /// How many users had their place worked out.
     ordered: usize,
     use_list_order: bool,
@@ -206,7 +210,7 @@ impl IvUsers {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
         let mut users =
-            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0, use_list_order: env.use_list_order };
+            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), phi_uses: IdSet::with_capacity(0), ordered: 0, use_list_order: env.use_list_order };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -292,7 +296,15 @@ impl IvUsers {
         for user in users {
             // Do not recurse into a phi twice.
             let is_phi = cx.function.instruction(user).opcode == Opcode::Phi;
-            if is_phi && self.processed.contains(&user) {
+            // DEVIATE LSR-PHI: a phi that is a use takes another operand as a
+            // use of its own, where the pin drops it
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L180).
+            if is_phi
+                && self.processed.contains(&user)
+                && !(env.phi_operand_uses
+                    && self.phi_uses.contains(&user)
+                    && !self.uses.iter().any(|one| one.user == user && one.operand == value))
+            {
                 continue;
             }
             // Descend, but not into phis outside the loop: the whole expression
@@ -326,6 +338,9 @@ impl IvUsers {
             // the user is discarded.
             if original != ise && se.denormalize_for_post_inc_use(cx, ise, &post_inc_loops) != original {
                 return false;
+            }
+            if is_phi {
+                self.phi_uses.insert(user);
             }
             self.uses.push(IvStrideUse { user, operand: value, post_inc_loops });
         }

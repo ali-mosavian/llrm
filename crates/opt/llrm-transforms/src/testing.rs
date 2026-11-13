@@ -157,6 +157,8 @@ pub struct Tuned {
     pub folds_masks: bool,
     /// `Machine::two_address`.
     pub two_address: bool,
+    /// The target's library has `memset_pattern16`, as a Darwin one does.
+    pub memset_pattern: bool,
     /// A global is never a base, and a register and an index are the only
     /// forms.
     pub no_global_base: bool,
@@ -166,6 +168,8 @@ pub struct Tuned {
     pub narrows_counters: bool,
     /// `Tti::narrows_counters_at_speed` answers no.
     pub narrows_counters_for_size_only: bool,
+    /// `Tti::unswitch_threshold_override`.
+    pub unswitch_threshold: Option<i64>,
     /// `Tti::sinks_unused_invariants`.
     pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
@@ -193,6 +197,7 @@ pub struct Flagged {
     pub exit_ne: bool,
     pub narrows_counters: bool,
     pub narrows_counters_for_size_only: bool,
+    pub unswitch_threshold: Option<i64>,
     pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
@@ -238,6 +243,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn narrows_counters_at_speed(&self) -> bool {
         !self.narrows_counters_for_size_only
+    }
+
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.unswitch_threshold
     }
 
     fn sinks_unused_invariants(&self) -> bool {
@@ -349,6 +358,30 @@ impl llrm_mir::tti::Tti for Flagged {
     }
 }
 
+/// A library of the pin's defaults for an unknown OS, with `memset_pattern16`.
+struct WithMemsetPattern;
+
+impl llrm_mir::libfunc::Library for WithMemsetPattern {
+    fn int_bits(&self) -> u32 {
+        32
+    }
+
+    fn size_t_bits(&self) -> u32 {
+        32
+    }
+
+    fn availability(
+        &self,
+        func: llrm_mir::libfunc::LibFunc,
+    ) -> llrm_mir::libfunc::Availability {
+        if func == llrm_mir::libfunc::LibFunc::MemsetPattern16 {
+            llrm_mir::libfunc::Availability::Standard
+        } else {
+            llrm_mir::libfunc::Generic { int_bits: 32, size_t_bits: 32 }.availability(func)
+        }
+    }
+}
+
 struct FoldsMasks;
 
 impl llrm_mir::lowering::Lowering for FoldsMasks {
@@ -358,6 +391,10 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        self.memset_pattern.then(|| std::rc::Rc::new(WithMemsetPattern) as _)
+    }
+
     fn tuning(&self) -> llrm_mir::target::Tuning {
         let inline = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset };
         let inline_size = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size };
@@ -378,12 +415,14 @@ impl llrm_mir::target::Machine for Tuned {
             || self.fast_sqrt
             || self.second_ipsccp
             || self.ord_dear
+            || self.unswitch_threshold.is_some()
             || self.skip_partial_at_size)
             .then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
                 narrows_counters: self.narrows_counters,
                 narrows_counters_for_size_only: self.narrows_counters_for_size_only,
+                unswitch_threshold: self.unswitch_threshold,
                 sinks_invariants: self.sinks_invariants,
                 no_cmov: false,
                 no_global_base: self.no_global_base,

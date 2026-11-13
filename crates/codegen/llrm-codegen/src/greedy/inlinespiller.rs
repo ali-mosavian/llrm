@@ -513,8 +513,11 @@ impl<'a> InlineSpiller<'a> {
             // (`canFoldAsLoad`, `foldMemoryOperand` with the load as LoadMI),
             // which asks for no register.
             if let ([key], [Loc::Mem(cell)]) = (members.as_slice(), what.sources.as_slice())
-                && self.tii.is_plain_move(&what)
-                && let Some(mut folded) = self.tii.fold_memory_operand(&Arc::clone(lis.instr(*key)), reg, cell)
+                && self.tii.can_fold_as_load(&what)
+                && let Some(mut folded) =
+                    self.tii.fold_memory_operand_classed(&Arc::clone(lis.instr(*key)), reg, cell, &|value| {
+                        self.is_xmm(value)
+                    })
             {
                 let reads = Arc::make_mut(&mut folded);
                 for read in &def.uses {
@@ -522,6 +525,7 @@ impl<'a> InlineSpiller<'a> {
                         reads.uses.push(*read);
                     }
                 }
+                reads.symbol = def.symbol;
                 lis.rewrite_instr(block, *key, folded);
                 self.folded += 1;
                 continue;
@@ -710,9 +714,14 @@ impl<'a> InlineSpiller<'a> {
                         .ok()
                         .flatten()
                 } else if cell_width < width {
-                    self.tii.fold_memory_operand(&copy_at_width(self.tii, one, reg, cell_width), reg, &cell)
+                    self.tii.fold_memory_operand_classed(
+                        &copy_at_width(self.tii, one, reg, cell_width),
+                        reg,
+                        &cell,
+                        &|value| self.is_xmm(value),
+                    )
                 } else {
-                    self.tii.fold_memory_operand(one, reg, &cell)
+                    self.tii.fold_memory_operand_classed(one, reg, &cell, &|value| self.is_xmm(value))
                 }
             })
             .collect();
@@ -807,6 +816,36 @@ impl InlineSpiller<'_> {
         let written = (1..whole).rev().find(|written| self.tii.write_zero_extends(*written, whole)).unwrap_or(whole);
         let wanted = if written < whole && self.tables.zero_extended.borrow().contains(&reg) { written } else { whole };
         *self.cell_widths.entry(self.key).or_insert(wanted)
+    }
+
+    /// The home's cell holds every register of this spill: a byte piece and
+    /// its dword snippet share a slot, as LLVM's siblings do (its slot has the
+    /// class's size). The widest of them sets the cell, and a home a narrower
+    /// spill already fixed is left for one of its own: known_loads_walks -O3 on
+    /// m16 was refused with "could not place every range" when the byte piece
+    /// came first. A zero-extended value keeps its written width (SPILL-ZEXT).
+    fn fit_cell_to(
+        &mut self,
+        lis: &LiveIntervals,
+        regs: &[u32],
+        reg: u32,
+    ) {
+        if regs.iter().any(|one| self.tables.zero_extended.borrow().contains(one)) {
+            return;
+        }
+        let width_of = |one: u32| {
+            let known = self.tables.widths.borrow().get(&one).copied().filter(|width| *width > 0);
+            known.or_else(|| {
+                let insns: Vec<Arc<Insn>> =
+                    lis.operands(one).iter().map(|op| Arc::clone(lis.instr(op.instr))).collect();
+                widest_operand(&insns, one)
+            })
+        };
+        let Some(widest) = regs.iter().filter_map(|&one| width_of(one)).max() else { return };
+        if self.cell_widths.get(&self.key).is_some_and(|&fixed| fixed < widest) {
+            self.key = reg;
+        }
+        self.cell_widths.entry(self.key).or_insert(widest);
     }
 
     /// `spill_unit` for a def of one lane that keeps the rest of `reg`: the
@@ -1211,6 +1250,14 @@ impl InlineSpiller<'_> {
                 )
         };
         meets(a, b) || meets(b, a)
+    }
+
+    /// Whether `reg` lives in an xmm register, from its class.
+    fn is_xmm(
+        &self,
+        reg: u32,
+    ) -> bool {
+        self.tables.orders.borrow().get(&reg).and_then(|order| order.first()).is_some_and(|first| first.is_xmm())
     }
 
     /// Whether `reg` is an x87 value, from its class or, for a piece made by
@@ -1825,7 +1872,10 @@ impl Spiller for InlineSpiller<'_> {
             self.recomputed(lis, &new_vregs[first_new..]);
             return;
         }
+        // `collectRegsToSpill`: the register, then its snippets.
+        let (regs, mut snippet_copies) = self.collect_regs_to_spill(lis, matrix, reg);
         self.key = self.shared_key(lis, range.as_ref());
+        self.fit_cell_to(lis, &regs, reg);
         if let Some(range) = &range {
             self.homed.entry(self.key).or_default().push((reg, range.clone()));
         }
@@ -1845,8 +1895,6 @@ impl Spiller for InlineSpiller<'_> {
                 return;
             }
         }
-        // `collectRegsToSpill`: the register, then its snippets.
-        let (regs, mut snippet_copies) = self.collect_regs_to_spill(lis, matrix, reg);
         // A snippet the allocator placed leaves its register while its interval
         // is as the union holds it (`LRE_CanEraseVirtReg`).
         let placed: Vec<u32> = regs.iter().copied().skip(1).filter(|one| matrix.vrm.has_phys(*one)).collect();
@@ -2135,6 +2183,16 @@ mod tests {
             self.0.fold_memory_operand(one, reg, cell)
         }
 
+        fn fold_memory_operand_classed(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &Mem,
+            xmm: &dyn Fn(u32) -> bool,
+        ) -> Option<Arc<Insn>> {
+            self.0.fold_memory_operand_classed(one, reg, cell, xmm)
+        }
+
         fn fold_copy_member(
             &self,
             one: &Insn,
@@ -2206,6 +2264,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let tables = Rc::new(Tables::default());
         for value in 1..=4 {
@@ -2243,6 +2302,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let copy = |name: &str| x87(0, Operation::Move, name, vec![held(2)], vec![held(1)], vec![2], vec![1]);
         assert_eq!(tii.copy_source(&copy("cp")), Some(1));
@@ -2279,6 +2339,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 1..=3 {
@@ -2341,6 +2402,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 1..=5 {
@@ -2388,6 +2450,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 2..=4 {
@@ -2471,6 +2534,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let order_of = |_: u32| Vec::new();
         let mut spiller = InlineSpiller::new(
@@ -2576,6 +2640,7 @@ mod tests {
                 classes: &classes,
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             };
             let tables = Rc::new(Tables::default());
             tables.widths.borrow_mut().insert(1, 2);
@@ -2653,6 +2718,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let tables = Rc::new(Tables::default());
         tables.widths.borrow_mut().insert(1, 2);
@@ -2728,6 +2794,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         });
         let tables = Rc::new(Tables::default());
         tables.widths.borrow_mut().insert(1, 2);
@@ -2791,6 +2858,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let order_of = |_: u32| Vec::new();
         let mut spiller = InlineSpiller::new(
@@ -2892,6 +2960,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let tables = Rc::new(Tables::default());
         for value in 1..=2 {
@@ -2919,6 +2988,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         assert!(tii.write_zero_extends(4, 8) && !tii.write_zero_extends(2, 8) && !tii.write_zero_extends(4, 4));
         let wide = |value| Held { value, width: 8, offset: 0 };
@@ -2930,5 +3000,70 @@ mod tests {
         let other =
             x87(0, Operation::Move, "mov", vec![Loc::Held(wide(3))], vec![Loc::Held(wide(1))], vec![3], vec![1]);
         assert_eq!(copy_at_width(&tii, &other, 2, 4).id(), other.id(), "a copy of another value is left as it is");
+    }
+
+    /// known_loads_walks -O3 on m16 ("could not place every range"): a byte
+    /// piece of a dword original was spilled first and fixed the home's cell
+    /// at one byte; its dword snippet, spilled in the same call, then had no
+    /// cell it fits and the spill failed. The home's cell is the widest of the
+    /// registers spilled.
+    #[test]
+    fn test_a_byte_piece_and_its_dword_snippet_spill_to_one_cell() {
+        let sized = |value, width| Held { value, width, offset: 0 };
+        let global = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 1));
+        let insns = vec![
+            x87(0, Operation::Move, "mov", vec![Loc::Held(sized(2, 1))], vec![global.clone()], vec![2], vec![]),
+            x87(
+                1,
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(sized(3, 4))],
+                vec![Loc::Held(sized(2, 4))],
+                vec![3],
+                vec![2],
+            ),
+            x87(
+                2,
+                Operation::Binary,
+                "add",
+                vec![Loc::Held(sized(4, 4))],
+                vec![Loc::Held(sized(3, 4)), Loc::Held(sized(3, 4))],
+                vec![4],
+                vec![3],
+            ),
+            x87(3, Operation::Move, "mov", vec![global], vec![Loc::Held(sized(4, 4))], vec![], vec![4]),
+        ];
+        let body =
+            LirBody::new("piece", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        for value in 2..=4 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        matrix.vrm.set_is_split_from_reg(2, 1);
+        matrix.vrm.set_is_split_from_reg(3, 1);
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo {
+            bits: 32,
+            classes: &classes,
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+            fold_spill: None,
+        };
+        let tables = Rc::new(Tables::default());
+        for (value, width) in [(1, 4), (2, 1), (3, 4), (4, 4)] {
+            tables.orders.borrow_mut().insert(value, vec![RegId::AX]);
+            tables.widths.borrow_mut().insert(value, width);
+        }
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 2, &mut made);
+        assert!(!spiller.failed(), "the byte piece's dword snippet found no cell");
     }
 }

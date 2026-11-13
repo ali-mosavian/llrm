@@ -73,9 +73,13 @@ pub fn arithmetic(
     ty: Ty,
     right: OperandInfo,
     cpu_has_long_muldiv: bool,
+    speed: bool,
 ) -> Cost {
     let parts = pieces(ty);
     let wide = parts > 1;
+    if !wide && let Some(bytes) = constant_division(op, ty, right, cpu_has_long_muldiv, speed) {
+        return Cost::of(bytes);
+    }
     let bytes = match op {
         ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => {
             (2 + immediate(op, ty, right, parts)) * parts
@@ -105,6 +109,123 @@ pub fn arithmetic(
         ArithOp::FNeg => 6,
     };
     Cost::of(bytes)
+}
+
+/// Bytes of a division or remainder by a constant, as the DAG lowers it, or
+/// None where the plain divide stands. Measured on `a[1] = a[0] op K` at -O2
+/// (the framing load and store, 2 B beyond the base copy, taken off):
+///
+/// | divisor | width | udiv | urem | sdiv | srem |
+/// |---|---|---|---|---|---|
+/// | power of two | 8 | 2 | 4 | 10 | 14 |
+/// | power of two | 16, 32 | 2 | 4 | 18 | 24 |
+/// | other | 8, 16 | 10 | 22 | 22 | 36 |
+/// | other, `muls.l` | 32 | 12 | 28 | 24 | 38 |
+///
+/// A quotient by a non-power of two is the magic multiply (`muls.w #imm`, or
+/// `muls.l` on the 68020), a 32-bit one on the 68000 the library call with the
+/// constant pushed (4 B more than two registers). Only a speed caller (-O2,
+/// -O3) is priced so: the -O1 and -Os bounds were fitted to the plain
+/// divide's price, and -Os keeps `divs.l #imm`.
+fn constant_division(
+    op: ArithOp,
+    ty: Ty,
+    right: OperandInfo,
+    cpu_has_long_muldiv: bool,
+    speed: bool,
+) -> Option<i64> {
+    let (signed, rem) = match op {
+        ArithOp::UDiv => (false, false),
+        ArithOp::URem => (false, true),
+        ArithOp::SDiv => (true, false),
+        ArithOp::SRem => (true, true),
+        _ => return None,
+    };
+    let Ty::Int(bits) = ty else { return None };
+    if !speed || !right.constant || right.value.is_some_and(|value| value.unsigned_abs() <= 1) {
+        return None;
+    }
+    if right.power_of_two {
+        return Some(match (signed, rem, bits <= 8) {
+            (false, false, _) => 2,
+            (false, true, _) => 4,
+            (true, false, true) => 10,
+            (true, true, true) => 14,
+            (true, false, false) => 18,
+            (true, true, false) => 24,
+        });
+    }
+    if bits > 16 && !cpu_has_long_muldiv {
+        return Some(libcall(2) + 4);
+    }
+    let long = bits > 16;
+    Some(match (signed, rem) {
+        (false, false) => 10 + if long { 2 } else { 0 },
+        (false, true) => 22 + if long { 6 } else { 0 },
+        (true, false) => 22 + if long { 2 } else { 0 },
+        (true, true) => 36 + if long { 2 } else { 0 },
+    })
+}
+
+/// The clocks of a division or remainder by a constant that is not a power of
+/// two, as the DAG lowers it (the forms of `constant_division`'s table): the
+/// magic multiply and what folds its sign and rebuilds the remainder. None
+/// where the plain divide stands (a 32-bit divide without `muls.l`, an
+/// operand that is not constant) or the tables cannot price a form.
+pub fn constant_division_clocks(
+    cpu: Cpu,
+    op: ArithOp,
+    ty: Ty,
+    right: OperandInfo,
+    cpu_has_long_muldiv: bool,
+) -> Option<i64> {
+    let (signed, rem) = match op {
+        ArithOp::UDiv => (false, false),
+        ArithOp::URem => (false, true),
+        ArithOp::SDiv => (true, false),
+        ArithOp::SRem => (true, true),
+        _ => return None,
+    };
+    let Ty::Int(bits) = ty else { return None };
+    if !right.constant || right.power_of_two || right.value.is_some_and(|value| value.unsigned_abs() <= 1) {
+        return None;
+    }
+    let long = bits > 16;
+    if long && !cpu_has_long_muldiv {
+        return None;
+    }
+    let width = if long { "l" } else { "w" };
+    let multiply = if signed { "muls" } else { "mulu" };
+    // (form, bytes): the instructions of the lowering, a representative divisor's.
+    let mut forms: Vec<(String, u32)> = if long {
+        vec![
+            ("move.l #1717986919, %d0".into(), 6),
+            (format!("{multiply}.l %d0, %d1:%d2"), 4),
+        ]
+    } else {
+        vec![(format!("{multiply}.w #171, %d1"), 4), ("moveq #10, %d0".into(), 2)]
+    };
+    forms.push((format!("lsr.{width} %d0, %d1"), 2));
+    if signed {
+        // the quotient's sign shifted out and added back
+        forms.extend([
+            (format!("asr.{width} #1, %d1"), 2),
+            ("move.l %d1, %d2".into(), 2),
+            (format!("lsr.{width} #7, %d2"), 2),
+            (format!("add.{width} %d2, %d1"), 2),
+        ]);
+    }
+    if rem {
+        // the quotient times the divisor by shifts and adds, subtracted
+        forms.extend(
+            ["move.l %d1, %d2", "lsl.l #2, %d2", "add.l %d1, %d2", "add.l %d2, %d2", "add.l %d1, %d2", "sub.l %d2, %d3"]
+                .map(|text| (text.to_string(), 2)),
+        );
+    }
+    forms
+        .iter()
+        .map(|(text, bytes)| crate::timing::cost(cpu, text, *bytes, true).ok().map(|cost| i64::from(cost.clocks)))
+        .sum()
 }
 
 /// Bytes of a compare or select.
@@ -144,10 +265,18 @@ pub fn cast(
     Cost::of(match op {
         CastKind::Trunc | CastKind::BitCast | CastKind::PtrToInt | CastKind::IntToPtr => 0,
         CastKind::SExt => {
-            if to_parts > from_parts { 2 + 2 * (to_parts - from_parts) } else { 2 }
+            if to_parts > from_parts {
+                2 + 2 * (to_parts - from_parts)
+            } else {
+                2
+            }
         }
         CastKind::ZExt => {
-            if to_parts > from_parts { 2 * (to_parts - from_parts) + 2 } else { 4 }
+            if to_parts > from_parts {
+                2 * (to_parts - from_parts) + 2
+            } else {
+                4
+            }
         }
         _ => libcall(pieces(from)),
     })

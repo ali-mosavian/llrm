@@ -165,6 +165,7 @@ pub fn constrained(
     body: &LirBody,
     pinned: Option<&IndexMap<u32, RegId>>,
     classes: &RegisterClasses,
+    size: bool,
 ) -> (LirBody, IndexMap<u32, RegId>) {
     let regs = body.regs();
     // A pin the caller released is not merged back from `body.pins`.
@@ -173,6 +174,9 @@ pub fn constrained(
 
     // Worked out at the first copy that wants a source: most bodies make none.
     let constants = std::cell::OnceCell::new();
+    // The constants some instruction reads wider than they were written, worked
+    // out at the first such copy.
+    let zero_extended = std::cell::OnceCell::new();
     let source = |value: u32, width: u32| -> Loc {
         let constants = constants.get_or_init(|| {
             #[cfg(test)]
@@ -185,10 +189,40 @@ pub fn constrained(
             // Not a qword symbol address: the pin rematerialises a copy to a
             // fixed register only from a def as cheap as a move
             // (`RegisterCoalescer::reMaterializeDef`, L1323), and `LEA64r` is
-            // not.
-            Some(constant) if constant.width == width && !(constant.address.is_some() && width == 8) => {
+            // not. Nor a constant a build for size selects as a pseudo that is
+            // not `isAsCheapAsAMove` (+1 and -1 at m32): the copy of a hoisted
+            // one stays a copy.
+            Some(constant)
+                if constant.width == width
+                    && !(constant.address.is_some() && width == 8)
+                    && !(size
+                        && constant.address.is_none()
+                        && (classes.uncheap_move_immediate_at_size)(width as u8, constant.value)) =>
+            {
                 Loc::Imm(constant.clone())
             }
+            // A dword constant read as a qword: a write of a dword zeroes the
+            // upper half in 64-bit code, so the qword read sees the constant
+            // zero-extended and the copy is that move. The
+            // pin's `SUBREG_TO_REG` of `MOV32r0` into `$rdx` is remade the same
+            // way (`RegisterCoalescer::reMaterializeDef`).
+            _ if body.bits == 64 && width == 8 => match zero_extended
+                .get_or_init(|| {
+                    let defined: BTreeSet<u32> = body
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.insns)
+                        .flat_map(|one| one.defines.iter().copied())
+                        .collect();
+                    crate::backend::bodyfacts::_literals(body, &defined, true)
+                })
+                .get(&value)
+            {
+                Some(literal) if literal.width == 4 && literal.address.is_none() => {
+                    Loc::Imm(ir::Imm { value: i64::from(literal.value as u32), width: 8, address: None })
+                }
+                _ => Loc::Held(Held { value, width, offset: 0 }),
+            },
             _ => Loc::Held(Held { value, width, offset: 0 }),
         }
     };
@@ -788,8 +822,9 @@ fn _move(
     into: Held,
     out_of: Loc,
 ) -> Arc<Insn> {
-    // A copy of what `beside` reads as undefined is undefined: the pin's `COPY` of an `IMPLICIT_DEF`, which
-    // `ProcessImplicitDefs` flags undef at the reads. Left a read of a value nothing defines, the live range of
+    // A copy of what `beside` reads as undefined is undefined: the pin's `COPY`
+    // of an `IMPLICIT_DEF`, which `ProcessImplicitDefs` flags undef at the
+    // reads. Left a read of a value nothing defines, the live range of
     // an undef far pointer had no reaching def and the allocator panicked.
     if let Loc::Held(held) = &out_of
         && beside.undefs.contains(&held.value)
@@ -982,11 +1017,20 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{constrained, hoisted};
+    use super::hoisted;
     use crate::backend::{allocresult, select, target};
     use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// Built for speed: what these tests are about.
+    fn constrained(
+        body: &LirBody,
+        pinned: Option<&IndexMap<u32, RegId>>,
+        classes: &crate::backend::classes::RegisterClasses,
+    ) -> (LirBody, IndexMap<u32, RegId>) {
+        super::constrained(body, pinned, classes, false)
+    }
 
     fn semantics(
         op: Operation,
@@ -1166,6 +1210,66 @@ mod tests {
             .unwrap();
         assert_eq!(what(&prepared).sources, vec![imm(512, 2)]);
         assert!(prepared.uses.is_empty());
+    }
+
+    /// A dword zero read as a qword by a divide's `rdx` was copied from its
+    /// register (`mov rdx, rsi`) in every trip of a loop and held a scratch
+    /// register all the while (div_constants_ulong m64 -O1: 4362 B, a
+    /// callee-saved push around calls to a leaf the pin's IPRA keeps
+    /// scratch registers across). The qword read of a dword write sees it
+    /// zero-extended, so the copy is the constant, as the pin remakes
+    /// `SUBREG_TO_REG` of `MOV32r0`.
+    #[test]
+    fn test_a_dword_constant_read_as_a_qword_is_remade_zero_extended_in_the_fixed_register() {
+        for (written, wanted) in [(0, 0), (7, 7), (-1, 0xFFFF_FFFF)] {
+            let constant =
+                _insn(semantics(Operation::Move, "mov", vec![held(1, 4)], vec![imm(written, 4)]), &[1], &[], 0x100);
+            let mut divide = _insn(
+                semantics(
+                    Operation::Divide,
+                    "div",
+                    vec![held(2, 8), held(3, 8)],
+                    vec![held(1, 8), held(4, 8), held(5, 8)],
+                ),
+                &[2, 3],
+                &[1, 4, 5],
+                0x108,
+            );
+            divide.requires = vec![(Held { value: 1, width: 8, offset: 0 }, RegId::RDX)];
+            let mut body = _body(vec![constant, divide]);
+            body.bits = 64;
+            let (done, pins) = constrained(&body, None, &crate::backend::classes::RegisterClasses::m16());
+            let copy = done
+                .insns()
+                .into_iter()
+                .find(|one| !one.defines.is_empty() && pins.get(&one.defines[0]) == Some(&RegId::RDX))
+                .expect("a copy into rdx");
+            assert_eq!(what(&copy).sources, vec![imm(wanted, 8)], "mov {written}");
+            assert!(copy.uses.is_empty(), "the copy reads no register: {:?}", copy.uses);
+        }
+    }
+
+    /// Only 64-bit code zeroes the upper half of a dword write: at 32 bits a
+    /// qword read of one is a different value, and the copy stays a copy.
+    #[test]
+    fn test_a_dword_constant_read_wider_in_32_bit_code_stays_a_copy() {
+        let constant = _insn(semantics(Operation::Move, "mov", vec![held(1, 4)], vec![imm(0, 4)]), &[1], &[], 0x100);
+        let mut divide = _insn(
+            semantics(Operation::Divide, "div", vec![held(2, 8), held(3, 8)], vec![held(1, 8), held(4, 8), held(5, 8)]),
+            &[2, 3],
+            &[1, 4, 5],
+            0x108,
+        );
+        divide.requires = vec![(Held { value: 1, width: 8, offset: 0 }, RegId::RDX)];
+        let mut body = _body(vec![constant, divide]);
+        body.bits = 32;
+        let (done, pins) = constrained(&body, None, &crate::backend::classes::RegisterClasses::m16());
+        let copy = done
+            .insns()
+            .into_iter()
+            .find(|one| !one.defines.is_empty() && pins.get(&one.defines[0]) == Some(&RegId::RDX))
+            .expect("a copy into rdx");
+        assert_eq!(copy.uses, vec![1]);
     }
 
     fn _multiply(
@@ -1689,7 +1793,8 @@ mod laziness_tests {
     #[test]
     fn a_body_with_no_confining_reads_works_out_no_loop_depths() {
         let block = LirBlock::new(0, vec![]);
-        let body = LirBody::new("t", 0, crate::model::lir::shared(vec![block]), IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("t", 0, crate::model::lir::shared(vec![block]), IndexMap::default(), IndexMap::default());
         assert!(distinct_classes_given(&body, 0, &[]).is_none());
         assert_eq!(body.facts.0.runs::<crate::analysis::graph::LoopDepths>(), 0);
     }

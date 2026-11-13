@@ -37,6 +37,16 @@ pub trait TargetInstrInfo {
         what: &Semantics,
     ) -> bool;
 
+    /// `MachineInstr::canFoldAsLoad`: whether `what` is a load that
+    /// `foldMemoryOperand` may fold into its one reader (X86 `MOV`, `MOVSS`,
+    /// `MOVSD`, `MOVAPS`... `rm` forms have `canFoldAsLoad = 1`).
+    fn can_fold_as_load(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        self.is_plain_move(what)
+    }
+
     /// `BuildMI(COPY)`: a copy of `from` into `to`, `width` bytes.
     fn copy_semantics(
         &self,
@@ -77,8 +87,8 @@ pub trait TargetInstrInfo {
     /// Whether a live range split makes `def` again, not copies it: `entering`
     /// is the value starting a new piece, else it returns to the complement.
     /// The pin asks `isAsCheapAsAMove` at both (SplitKit.cpp#L658), so the
-    /// default says yes to a literal; the spiller's `isTriviallyReMaterializable`
-    /// is another question.
+    /// default says yes to a literal; the spiller's
+    /// `isTriviallyReMaterializable` is another question.
     fn remake_at_split(
         &self,
         _def: &Insn,
@@ -140,6 +150,21 @@ pub trait TargetInstrInfo {
         &self,
         _order: &[RegId],
     ) -> Option<Vec<RegId>> {
+        None
+    }
+
+    /// DEVIATE SPILL-FOLD: `Tuning::spill_fold`; none for the pin.
+    fn spill_fold_clocks(&self) -> Option<llrm_mir::target::SpillFoldClocks> {
+        None
+    }
+
+    /// DEVIATE SPILL-FOLD: the clocks of one split copy of `value` as `one`
+    /// names it; none for the pin.
+    fn spill_fold_copy_clocks(
+        &self,
+        _one: &Insn,
+        _value: u32,
+    ) -> Option<i64> {
         None
     }
 
@@ -222,6 +247,20 @@ pub trait TargetInstrInfo {
         cell: &Mem,
     ) -> Option<Arc<Insn>>;
 
+    /// `foldMemoryOperand` with the register class of every value known: `xmm`
+    /// says whether a value lives in an xmm register. The pin's opcodes carry
+    /// the class (`MOVPQIto64rr` against `MOV64toPQIrr`); LIR's `movq` does
+    /// not, so a target that folds a cross-class move needs it here.
+    fn fold_memory_operand_classed(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+        _xmm: &dyn Fn(u32) -> bool,
+    ) -> Option<Arc<Insn>> {
+        self.fold_memory_operand(one, reg, cell)
+    }
+
     /// `foldMemoryOperand` for one move of a parallel copy.
     fn fold_copy_member(
         &self,
@@ -270,6 +309,8 @@ pub struct X86InstrInfo<'a> {
     pub basic_semantics: bool,
     /// `Tuning::address_reference_milliweight`.
     pub address_reference_milliweight: u32,
+    /// `Tuning::spill_fold`.
+    pub fold_spill: Option<llrm_mir::target::SpillFoldClocks>,
 }
 
 impl TargetInstrInfo for X86InstrInfo<'_> {
@@ -278,6 +319,17 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         what: &Semantics,
     ) -> bool {
         what.op == Operation::Move && what.name.as_deref() == Some("mov")
+    }
+
+    fn can_fold_as_load(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        what.op == Operation::Move
+            && matches!(
+                what.name.as_deref(),
+                Some("mov" | "movss" | "movsd_x" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu")
+            )
     }
 
     fn copy_semantics(
@@ -308,28 +360,40 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
     /// memory_expansion -O1 held 450 rip-leas to the pin's 318; copied at
     /// both, as the pin does, stft_fixed grew 37-61 B at every level (the
     /// pin itself is 49 B above the code that remade). Remade at the start
-    /// only: stft_fixed, jpeg_fixed and memory_expansion are all at or under both.
-    /// Exit: a priced remake (the copy's register against the lea's bytes)
-    /// that reaches these without naming the entry and the exit apart.
+    /// only: stft_fixed, jpeg_fixed and memory_expansion are all at or under
+    /// both. Exit: a priced remake (the copy's register against the lea's
+    /// bytes) that reaches these without naming the entry and the exit
+    /// apart.
     fn remake_at_split(
         &self,
         def: &Insn,
         entering: bool,
     ) -> bool {
-        let address = def.what.as_ref().is_some_and(|what| {
-            what.sources.iter().any(|source| matches!(source, Loc::Imm(imm) if imm.address.is_some() && imm.width == 8))
-        });
+        let address = def
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| what.sources
+                    .iter()
+                    .any(
+                        |source| matches!(
+                            source,
+                            Loc::Imm(imm) if imm.address.is_some() && imm.width == 8
+                        ),
+                    ),
+            );
         entering || !address
     }
 
     /// DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29; the A/B is on
     /// `Tuning::address_reference_milliweight`): a value that is an address
     /// component (the base, index or selector of a memory operand) weighs that
-    /// many thousandths of a reference in the spill weight. Spilled, it must be reloaded into one of the few
-    /// registers 16-bit addressing allows (bx, bp, si, di) before the access,
-    /// where any other value is folded (`add r, [slot]`) or moves through
-    /// any register: eviction leaves the others in memory first. The pin
-    /// weighs every reference alike (`getSpillWeight`).
+    /// many thousandths of a reference in the spill weight. Spilled, it must be
+    /// reloaded into one of the few registers 16-bit addressing allows (bx,
+    /// bp, si, di) before the access, where any other value is folded (`add
+    /// r, [slot]`) or moves through any register: eviction leaves the
+    /// others in memory first. The pin weighs every reference alike
+    /// (`getSpillWeight`).
     fn reference_weight(
         &self,
         one: &Insn,
@@ -352,6 +416,20 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
                 ),
             );
         if component { self.address_reference_milliweight as f32 / 1000.0 } else { 1.0 }
+    }
+
+    fn spill_fold_clocks(&self) -> Option<llrm_mir::target::SpillFoldClocks> {
+        self.fold_spill
+    }
+
+    fn spill_fold_copy_clocks(
+        &self,
+        one: &Insn,
+        value: u32,
+    ) -> Option<i64> {
+        let prices = self.fold_spill?;
+        let wide = _width(one, value) * 8 > self.bits;
+        Some(prices.copy + if wide { prices.wide_copy } else { 0 })
     }
 
     fn encoding_bytes(
@@ -413,6 +491,16 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         fold_memory_operand(one, reg, cell, self.bits, self.classes)
     }
 
+    fn fold_memory_operand_classed(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+        xmm: &dyn Fn(u32) -> bool,
+    ) -> Option<Arc<Insn>> {
+        fold_with_classes(one, reg, cell, self.bits, self.classes, Some(xmm))
+    }
+
     fn fold_copy_member(
         &self,
         one: &Insn,
@@ -459,6 +547,22 @@ pub fn fold_memory_operand(
     cell: &Mem,
     bits: u32,
     classes: &RegisterClasses,
+) -> Option<Arc<Insn>> {
+    fold_with_classes(one, reg, cell, bits, classes, None)
+}
+
+/// [`fold_memory_operand`] with `xmm`, when the caller knows it, saying which
+/// values live in xmm registers: the folded form is then priced with every
+/// operand in its own class, not in all-general or all-xmm registers (a
+/// `movq r64, xmm` whose xmm source became memory was priced as the
+/// `movq xmm, [mem]` it is not).
+fn fold_with_classes(
+    one: &Arc<Insn>,
+    reg: u32,
+    cell: &Mem,
+    bits: u32,
+    classes: &RegisterClasses,
+    xmm: Option<&dyn Fn(u32) -> bool>,
 ) -> Option<Arc<Insn>> {
     let original = one.what.as_ref()?;
     // X86InstrInfo::foldMemoryOperandImpl, Ops = {0, 1}: `test r, r` becomes
@@ -562,7 +666,7 @@ pub fn fold_memory_operand(
     {
         return None;
     }
-    if !is_encodable(bits, &made, classes).ok()? {
+    if !is_encodable(bits, &made, classes, xmm).ok()? {
         return None;
     }
     let mut out = (**one).clone();
@@ -768,6 +872,7 @@ pub(crate) fn is_encodable(
     bits: u32,
     what: &Semantics,
     classes: &RegisterClasses,
+    xmm_of: Option<&dyn Fn(u32) -> bool>,
 ) -> Result<bool, Error> {
     let regs = classes.registers;
     // A scalar float operand (4 or 8 bytes) is an xmm register: the probe is
@@ -806,7 +911,7 @@ pub(crate) fn is_encodable(
                 return operand.clone();
             };
             if !taken.contains_key(&held.value) {
-                let row = pool(xmm, u32::from(held.width));
+                let row = pool(xmm_of.map_or(xmm, |class| class(held.value)), u32::from(held.width));
                 if taken.len() >= row.len() {
                     // refuses below, which is the safe answer
                     return operand.clone();
@@ -822,6 +927,11 @@ pub(crate) fn is_encodable(
         };
         crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some()
     };
+    // Every value in its own class when the caller knows them; else
+    // all-general, then all-xmm.
+    if xmm_of.is_some() {
+        return Ok(priced(false));
+    }
     Ok(priced(false) || (!classes.xmm.is_empty() && priced(true)))
 }
 
@@ -933,12 +1043,19 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
-        let m16 = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
+        let m16 = X86InstrInfo {
+            bits: 16,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+            fold_spill: None,
+        };
         let flat = X86InstrInfo {
             bits: 32,
             classes: &RegisterClasses::of(&llrm_x86_m32::M32),
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         assert!(m16.reference_weight(&insn, 7) > 1.0, "the base of the cell");
         assert_eq!(m16.reference_weight(&insn, 8), 1.0, "the loaded value");
@@ -948,6 +1065,7 @@ mod tests {
             classes: &RegisterClasses::of(&llrm_x86_m64::M64),
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         assert_eq!(long.reference_weight(&insn, 7), 1.0, "long mode weighs the pin's way");
     }
@@ -967,8 +1085,14 @@ mod tests {
         };
         let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
         let weight = |milli| {
-            X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: milli }
-                .reference_weight(&insn, 7)
+            X86InstrInfo {
+                bits: 16,
+                classes: &RegisterClasses::m16(),
+                basic_semantics: false,
+                address_reference_milliweight: milli,
+                fold_spill: None,
+            }
+            .reference_weight(&insn, 7)
         };
         assert_eq!((weight(1000), weight(3000), weight(4500)), (1.0, 3.0, 4.5));
     }
@@ -1028,7 +1152,13 @@ mod tests {
     /// lives is a load the allocator makes again.
     #[test]
     fn test_an_x87_load_of_a_global_nothing_writes_is_made_again() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
+        let tii = X86InstrInfo {
+            bits: 32,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+            fold_spill: None,
+        };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -1042,7 +1172,13 @@ mod tests {
     /// value: the load stays.
     #[test]
     fn test_an_x87_load_of_a_global_written_while_it_lives_is_kept() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
+        let tii = X86InstrInfo {
+            bits: 32,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+            fold_spill: None,
+        };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -1062,6 +1198,7 @@ mod tests {
             classes: &RegisterClasses::m16(),
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let basic = X86InstrInfo { basic_semantics: true, ..plain };
         assert_eq!(plain.argument_loads(&body), BTreeSet::from([1]));

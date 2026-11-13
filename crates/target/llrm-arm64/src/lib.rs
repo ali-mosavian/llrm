@@ -19,6 +19,7 @@ pub mod frame;
 pub mod ipra;
 pub mod jumptable;
 pub mod layout;
+pub mod lir_place;
 pub mod ldst_update;
 pub mod licm;
 pub mod lir_body;
@@ -36,9 +37,11 @@ pub mod shrinkwrap;
 pub mod sibcall;
 pub mod sinkfold;
 pub mod taildup;
+pub mod trial;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;
+mod tti_vector;
 
 use llrm_lir::registers::RegId;
 
