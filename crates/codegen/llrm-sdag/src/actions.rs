@@ -1018,6 +1018,26 @@ impl TargetLowering {
         // `LowerMUL`, so that `SMULL`/`UMULL` are found.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
+        // `initActions`: "Vector reduction default to expand". The float
+        // kinds have no node here.
+        let reductions = [
+            VecReduceAdd,
+            VecReduceMul,
+            VecReduceAnd,
+            VecReduceOr,
+            VecReduceXor,
+            VecReduceSMax,
+            VecReduceSMin,
+            VecReduceUMax,
+            VecReduceUMin,
+        ];
+        t.set_ops(&reductions, &MVT::vectors().collect::<Vec<_>>(), Expand);
+        // L1439: the NEON reductions are `LowerVECREDUCE`
+        // ([L18443](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18443)),
+        // for the 128-bit types (the 64-bit ones are not types here); `v2i64`
+        // has no min or max across lanes.
+        t.set_ops(&[VecReduceAdd, VecReduceAnd, VecReduceOr, VecReduceXor], &vectors, Custom);
+        t.set_ops(&[VecReduceSMax, VecReduceSMin, VecReduceUMax, VecReduceUMin], &vectors[..3], Custom);
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the
         // operand's type.

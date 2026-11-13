@@ -14,7 +14,8 @@
 //! `SplitVecRes_BUILD_VECTOR`, `SplitVecRes_INSERT_VECTOR_ELT` (a constant
 //! index), `SplitVecRes_LOAD`, `SplitVecRes_BinOp`, `SplitVecRes_UnaryOp`,
 //! `SplitVecRes_TernaryOp` (`fma`), `SplitVecOp_STORE`, `SplitVecOp_UnaryOp`,
-//! `SplitVecOp_EXTRACT_VECTOR_ELT` (a constant index), all of
+//! `SplitVecOp_EXTRACT_VECTOR_ELT` (a constant index), `SplitVecOp_VECREDUCE`,
+//! all of
 //! [LegalizeVectorTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeVectorTypes.cpp).
 //!
 //! DEVIATE SV1 (owner llrm-arm64-vec, exit 2026-11-27): an `insertelement` or
@@ -416,6 +417,16 @@ impl TypeLegalizer<'_> {
                     let rest = self.dag.get_constant(start - low_lanes, EVT::I64);
                     self.dag.get_node(ISD::ExtractSubvector, vt, &[hi, rest])
                 }
+            }
+            // `SplitVecOp_VECREDUCE`: the halves combined by the scalar
+            // operation, then reduced.
+            op if op.vec_reduce_base_opcode().is_some() => {
+                let base = op.vec_reduce_base_opcode().expect("a reduction");
+                let (lo, hi) = self.split_vector(operand);
+                let half = self.dag.value_type(lo);
+                let flags = self.dag.node(node).flags;
+                let partial = self.dag.get_node_flags(base, half, &[lo, hi], flags);
+                self.dag.get_node_flags(op, self.dag.value_type(node), &[partial], flags)
             }
             // `SplitVecOp_EXTRACT_VECTOR_ELT`, a constant index.
             ISD::ExtractElement if at == 0 => {

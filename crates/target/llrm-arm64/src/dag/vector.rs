@@ -716,3 +716,75 @@ pub fn lower_vector_shift(
     let flags = dag.node(op).flags;
     Some(dag.get_node_flags(ISD::Target(opcode), vt, &[value, count], flags))
 }
+
+/// `getReductionSDNode`
+/// ([L18320](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18320)):
+/// the across-lanes node on the vector, then its lane 0.
+fn reduction_node(
+    dag: &mut SelectionDAG,
+    opcode: u16,
+    node: SDValue,
+) -> SDValue {
+    let vector = dag.operand(node, 0);
+    let reduced = dag.get_node(ISD::Target(opcode), dag.value_type(vector), &[vector]);
+    let lane = dag.get_constant(0, EVT::I64);
+    dag.get_node(ISD::ExtractElement, dag.value_type(node), &[reduced, lane])
+}
+
+/// `getVectorBitwiseReduce`
+/// ([L18327](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18327)):
+/// the halves combined as one 64-bit value, whose own halves are then
+/// combined by shifts until one lane is left.
+///
+/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-11-27): the pin splits a
+/// 128-bit vector into two 64-bit vectors (`and v0.8b`); there are none here,
+/// so the two `i64` lanes are taken and combined as scalars. The same
+/// instructions, in another order and register file.
+fn bitwise_reduce(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let base = dag.opcode(node).vec_reduce_base_opcode()?;
+    let vector = dag.operand(node, 0);
+    let vector_vt = dag.value_type(vector);
+    let element = vector_vt.element();
+    let lanes = vector_vt.lanes();
+    let wide = EVT::Simple(MVT::V2I64);
+    let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
+    let lane = |dag: &mut SelectionDAG, at: u128| {
+        let index = dag.get_constant(at, EVT::I64);
+        dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+    };
+    let (low, high) = (lane(dag, 0), lane(dag, 1));
+    let mut scalar = dag.get_node(base, EVT::I64, &[low, high]);
+    // `NumElems / 2` of the 64-bit half.
+    let mut shift = lanes / 4;
+    while shift > 0 {
+        let amount = dag.get_constant(u128::from(shift * element.size_in_bits()), EVT::I64);
+        let shifted = dag.get_node(ISD::Srl, EVT::I64, &[scalar, amount]);
+        scalar = dag.get_node(base, EVT::I64, &[scalar, shifted]);
+        shift /= 2;
+    }
+    let result = dag.get_any_ext_or_trunc(scalar, element);
+    Some(dag.get_any_ext_or_trunc(result, dag.value_type(node)))
+}
+
+/// `AArch64TargetLowering::LowerVECREDUCE`
+/// ([L18443](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18443)),
+/// the NEON arm: `LowerReductionToSVE` answers none with SVE off, and there
+/// are no float reductions.
+pub fn lower_vec_reduce(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let across_lanes = match dag.opcode(node) {
+        ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => return bitwise_reduce(dag, node),
+        ISD::VecReduceAdd => aarch64_isd::UADDV,
+        ISD::VecReduceSMax => aarch64_isd::SMAXV,
+        ISD::VecReduceSMin => aarch64_isd::SMINV,
+        ISD::VecReduceUMax => aarch64_isd::UMAXV,
+        ISD::VecReduceUMin => aarch64_isd::UMINV,
+        _ => return None,
+    };
+    Some(reduction_node(dag, across_lanes, node))
+}

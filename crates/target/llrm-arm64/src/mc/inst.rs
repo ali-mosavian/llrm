@@ -552,6 +552,43 @@ impl VectorFpUnary {
     }
 }
 
+/// The across-lanes reductions of one vector register into a scalar:
+/// `addv`, `smaxv`, `sminv`, `umaxv`, `uminv`, and `addp` of the two `d` lanes.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorReduce {
+    Addv,
+    Smaxv,
+    Sminv,
+    Umaxv,
+    Uminv,
+    Addp,
+}
+
+impl VectorReduce {
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorReduce::Addv => "addv",
+            VectorReduce::Smaxv => "smaxv",
+            VectorReduce::Sminv => "sminv",
+            VectorReduce::Umaxv => "umaxv",
+            VectorReduce::Uminv => "uminv",
+            VectorReduce::Addp => "addp",
+        }
+    }
+
+    /// `(U, opcode)` of the "across lanes" class; `addp` is the "pairwise"
+    /// scalar class, which has the `addv` opcode.
+    pub(super) fn fields(self) -> (u32, u32) {
+        match self {
+            VectorReduce::Addv | VectorReduce::Addp => (0, 0b11011),
+            VectorReduce::Smaxv => (0, 0b01010),
+            VectorReduce::Sminv => (0, 0b11010),
+            VectorReduce::Umaxv => (1, 0b01010),
+            VectorReduce::Uminv => (1, 0b11010),
+        }
+    }
+}
+
 /// The shifts of a vector by an immediate.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VectorShift {
@@ -1019,6 +1056,15 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
         index: u8,
+    },
+    /// `addv s, v.4s`: every lane of `rn` reduced into the scalar register
+    /// `rd` of the lane's size (`ADDVv4i32v`); `addp d, v.2d` for `D2`
+    /// (`ADDPv2i64p`).
+    VectorReduce {
+        op: VectorReduce,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
     },
     /// `ins v.d[index], x`: a general register into one lane of `rd`, the
     /// others kept (`INSvi64gpr`; a `w` register for the narrower lanes).

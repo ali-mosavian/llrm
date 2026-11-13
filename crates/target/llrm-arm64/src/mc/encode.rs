@@ -534,6 +534,13 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let imm4 = u32::from(*src) << shift;
             0x6E00_0400 | imm5 << 16 | imm4 << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        // "Across lanes" (`addv`, `smaxv`, ...) and, for `addp`, the scalar
+        // pairwise class: `size` 3 and `Q` clear.
+        Inst::VectorReduce { op, lanes, rd, rn } => {
+            let (u, opcode) = op.fields();
+            let base = if *op == VectorReduce::Addp { 0x5E30_0800 } else { 0x4E30_0800 };
+            base | u << 29 | lanes.size() << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorDupLane { lanes, rd, rn, index } => {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
             0x4E00_0400 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?

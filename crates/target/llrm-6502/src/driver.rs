@@ -431,6 +431,11 @@ fn tail(
         .filter(|_| request.level != Level::O0)
         .map(|bits| {
             let mut paged = program.modules[0].clone();
+            // Selection's DAG CSE merges the equal `gep`s LSR leaves (the
+            // next pointer and an unfolded `p + 1`); the pass reads the IR.
+            let mut cse = llrm_mir::passes::PassManager::default();
+            cse.add(llrm_transforms::earlycse::EarlyCse { memory_ssa: false });
+            cse.run_module(&mut paged, machine())?;
             llrm_transforms::pageindex::indexed(&mut paged, bits).map(|names| {
                 crate::prepare::split_phi_edges(&mut paged);
                 (names, paged)

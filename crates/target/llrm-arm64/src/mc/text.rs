@@ -455,6 +455,9 @@ impl fmt::Display for Inst {
                 let lane = lane_letter(*lanes);
                 write!(out, "mov {lane}{}, v{}.{lane}[{index}]", rd.0, rn.0)
             }
+            Inst::VectorReduce { op, lanes, rd, rn } => {
+                write!(out, "{} {}{}, v{}.{}", op.mnemonic(), lane_letter(*lanes), rd.0, rn.0, lanes.suffix())
+            }
             Inst::VectorDupLane { lanes, rd, rn, index } => {
                 let lane = lane_letter(*lanes);
                 write!(out, "dup v{}.{}, v{}.{lane}[{index}]", rd.0, lanes.suffix(), rn.0)

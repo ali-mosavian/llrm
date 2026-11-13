@@ -6,7 +6,7 @@ use super::*;
 use crate::mc::inst::Cond;
 use crate::mc::inst::{
     Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding, VectorFma, VectorFpOp,
-    VectorFpUnary, VectorOp, VectorShift,
+    VectorFpUnary, VectorOp, VectorReduce, VectorShift,
 };
 
 const UNARY: [(FpUnary, &str); 11] = [
@@ -240,6 +240,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             format!("DUP{}", ins_lane(*lanes)),
             vec![vreg_loc(*rd, 64)],
             vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+            None,
+        ),
+        Inst::VectorReduce { op, lanes, rd, rn } => semantics(
+            Operation::Unary,
+            reduce_name(*op, *lanes),
+            vec![vreg_loc(*rd, lanes.lane_bits())],
+            vec![vreg_loc(*rn, 128)],
             None,
         ),
         Inst::VectorDupLane { lanes, rd, rn, index } => semantics(
@@ -480,6 +487,26 @@ fn ins_lane(lanes: Arrangement) -> &'static str {
     }
 }
 
+/// `ADDVv4i32v`, `SMAXVv16i8v`, `ADDPv2i64p`.
+fn reduce_name(
+    op: VectorReduce,
+    lanes: Arrangement,
+) -> String {
+    match op {
+        VectorReduce::Addp => format!("ADDPv{}p", lane_name(lanes)),
+        _ => format!("{}Vv{}v", op.mnemonic()[..op.mnemonic().len() - 1].to_uppercase(), lane_name(lanes)),
+    }
+}
+
+const VECTOR_REDUCES: [VectorReduce; 6] = [
+    VectorReduce::Addv,
+    VectorReduce::Smaxv,
+    VectorReduce::Sminv,
+    VectorReduce::Umaxv,
+    VectorReduce::Uminv,
+    VectorReduce::Addp,
+];
+
 const VECTOR_FP_OPS: [VectorFpOp; 4] = [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div];
 const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
     VectorFpUnary::Neg,
@@ -611,6 +638,11 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 rm: vreg_of(&s[1]),
                 index: value_of(&s[2]) as u8,
             });
+        }
+    }
+    for (op, lanes) in VECTOR_REDUCES.into_iter().flat_map(|op| ARRANGEMENTS.map(|lanes| (op, lanes))) {
+        if name == reduce_name(op, lanes) {
+            return Some(Inst::VectorReduce { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
         }
     }
     for lanes in ARRANGEMENTS {

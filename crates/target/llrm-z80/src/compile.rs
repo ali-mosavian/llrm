@@ -527,20 +527,30 @@ fn cheaper(
 mod tests {
     use super::*;
 
-    /// call_keeps -O1 was 1876 B for 57813 T (long multiplies and shifts inline) against 1473 B for 64413 T with the
-    /// routines: a clock rise of 11% for 21% of the bytes. The price counted each routine call as 17 T, so the form
-    /// with the routines looked far faster than it is and no rate was stated for the strict level.
+    /// call_keeps -O1: `churn` with the routines 920 B / 8709 T, inline 1136 B / 6922 T. The smaller relative regret
+    /// picked the inline form on a 2% margin (1.235 against 1.258) and crossed SDCC's bytes bar (1610 B, bar 1535);
+    /// O1 is strict on both axes and takes no growth in bytes for clocks.
     #[test]
-    fn at_o1_the_form_with_the_smaller_relative_regret_wins() {
-        let (inline, calls) = ((1916, 11124), (1473, 12449));
+    fn at_o1_a_form_that_grows_bytes_for_clocks_does_not_win() {
+        let (calls, inline) = ((920, 8709), (1136, 6922));
         assert!(prefers(Level::O1, calls, inline) && !prefers(Level::O1, inline, calls));
-        // a form 1% smaller for 30% more clocks does not
-        assert!(!prefers(Level::O1, (990, 14300), (1000, 11000)));
-        assert!(prefers(Level::O1, (1000, 11000), (990, 14300)));
+        // equal bytes: the clocks decide
+        assert!(prefers(Level::O1, (1000, 11000), (1000, 14300)));
     }
 
-    /// div_constants_long -O1 took `call __ashlsi3` for a xorshift step (-14 B, +10% clocks measured): against a
-    /// module whose static clocks are one hot loop elsewhere, the call's 500 T were 0.001% and the 14 B 0.08%.
+    /// The functions whose alternative is the speed routines or the shift loops keep the relative regret, at the
+    /// size levels too (loop_interchange, copy_runs, data_int64 -Os).
+    #[test]
+    fn the_wide_alternatives_keep_the_relative_regret() {
+        let (inline, calls) = ((1916, 11124), (1473, 12449));
+        assert!(prefers_by_regret(calls, inline) && !prefers_by_regret(inline, calls));
+        // a form 1% smaller for 30% more clocks does not
+        assert!(!prefers_by_regret((990, 14300), (1000, 11000)));
+        assert!(prefers_by_regret((1000, 11000), (990, 14300)));
+    }
+
+    /// div_constants_long -O1 took `call __ashlsi3` for a xorshift step (-14 B, +10% clocks measured): O1 takes the
+    /// bytes, per function, as the module price cannot see the call's clocks and the bytes either way.
     #[test]
     fn at_o1_a_call_is_priced_against_its_own_function_not_the_module() {
         let routines = std::collections::HashSet::from(["__ashlsi3".to_owned()]);
@@ -549,8 +559,8 @@ mod tests {
         let variants: Variants = (vec![hot_loop], vec![step]);
         let (calls, inline) = (std::collections::HashSet::new(), std::collections::HashSet::from([0]));
         let module = |form| module_price(&variants, form);
-        assert!(prefers(Level::O1, module(&calls), module(&inline)), "the module price cannot see the cost");
-        assert!(!prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
+        assert!(prefers(Level::O1, module(&calls), module(&inline)));
+        assert!(prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
     }
 
     /// Bytes first at the size levels, 1 B = 3 T from O2: a form that is 30% slower for 5% fewer bytes wins the
@@ -2971,7 +2981,7 @@ fn decomposed_functions(
                 }
                 let price = total(&other);
                 let better = if size_first[at] && regret[at] {
-                    prefers(Level::O1, price, best)
+                    prefers_by_regret(price, best)
                 } else if size_first[at] {
                     prefers(Level::Os, price, best)
                 } else if level == Level::O1 {
@@ -2991,19 +3001,15 @@ fn decomposed_functions(
     };
     // a tie keeps the faster form: the alternative at the size levels is the
     // inline form, at the others the all-calls form
-    let module_level = if all_sized {
-        Level::Os
-    } else if regretful {
-        Level::O1
-    } else {
-        level
-    };
+    let module_level = if all_sized { Level::Os } else { level };
     let (first, second) = if all_sized || regretful {
         (descend(every), descend(HashSet::new()))
     } else {
         (descend(HashSet::new()), descend(every))
     };
-    let chosen = if prefers(module_level, second.0, first.0) { second.1 } else { first.1 };
+    let second_wins =
+        if regretful { prefers_by_regret(second.0, first.0) } else { prefers(module_level, second.0, first.0) };
+    let chosen = if second_wins { second.1 } else { first.1 };
     either
         .iter()
         .enumerate()
@@ -3013,9 +3019,9 @@ fn decomposed_functions(
 }
 
 /// Whether the module price `new` (bytes, clocks) is strictly better than `old` at `level`: bytes first at the
-/// size levels; 1 B = 3 T at O2 and up; at O1, where no rate stands for the strict bar on both axes, the
-/// smaller relative regret (a form's worse axis against the best of the two on that axis), so a form that gives
-/// up a few percent of one axis for a large part of the other wins, and the reverse does not.
+/// size levels and at O1, which is strict on both axes and takes no growth in bytes for clocks (call_keeps -O1:
+/// `churn` 920 B / 8709 T with the routines against 1136 B / 6922 T inline, a 2% margin of relative regret that
+/// moved with a price 19 B lower: the bytes bar crossed); 1 B = 3 T at O2 and up.
 /// DEVIATE z80-callinline-price: the pin keys a call against inline on `optsize` alone (`ForCodeSize`) and
 /// prices neither the routine's clocks nor the bytes against each other. It prices the multiply calls and the long
 /// shift calls (`size_shift_call`) by the same model (`runtime_size::routine_clocks`). Owner z80, exit 2026-11-20.
@@ -3025,16 +3031,24 @@ fn prefers(
     old: (u32, u64),
 ) -> bool {
     match level {
-        Level::Os | Level::Oz => new < old,
-        Level::O1 => {
-            let regret = |one: (u32, u64), other: (u32, u64)| {
-                let (bytes, clocks) = (f64::from(one.0) / f64::from(one.0.min(other.0).max(1)), one.1 as f64 / other.1.min(one.1).max(1) as f64);
-                bytes.max(clocks)
-            };
-            regret(new, old) < regret(old, new)
-        }
+        Level::Os | Level::Oz | Level::O1 => new < old,
         _ => cheaper(level, new, old),
     }
+}
+
+/// The smaller relative regret (a form's worse axis against the best of the two on that axis), so a form that
+/// gives up a few percent of one axis for a large part of the other wins, and the reverse does not: for the
+/// functions whose alternative is the speed routines or the shift loops, at the size levels too.
+fn prefers_by_regret(
+    new: (u32, u64),
+    old: (u32, u64),
+) -> bool {
+    let regret = |one: (u32, u64), other: (u32, u64)| {
+        let (bytes, clocks) =
+            (f64::from(one.0) / f64::from(one.0.min(other.0).max(1)), one.1 as f64 / other.1.min(one.1).max(1) as f64);
+        bytes.max(clocks)
+    };
+    regret(new, old) < regret(old, new)
 }
 
 /// The function `name` allocated, in the cheaper of its two carry forms where it has both (`Selection::generic`,

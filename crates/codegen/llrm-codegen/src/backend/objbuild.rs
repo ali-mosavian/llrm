@@ -977,6 +977,9 @@ pub fn _data(
                 let at = segment.image.len() - width(loc);
                 if loc == OFFSET64 {
                     segment.image[at..at + 8].copy_from_slice(&offset.to_le_bytes());
+                } else if width(loc) == 4 && !*far {
+                    // A dword offset: both words, `pack_into` stores only the low one.
+                    segment.image[at..at + 4].copy_from_slice(&(*offset as u32).to_le_bytes());
                 } else {
                     pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
                 }

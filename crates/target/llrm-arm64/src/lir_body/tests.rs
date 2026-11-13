@@ -12,7 +12,9 @@ use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
-use crate::mc::inst::{Addr, Arrangement, Gpr, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorShift};
+use crate::mc::inst::{
+    Addr, Arrangement, Gpr, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorReduce, VectorShift,
+};
 use crate::mfunc::Callee;
 
 fn g(n: u32) -> Gpr {
@@ -268,6 +270,14 @@ pub(super) fn instructions() -> Vec<Inst> {
         out.push(Inst::VectorUmov { lanes, rd: Gpr(3), rn: v(1), index: 1 });
         out.push(Inst::VectorStoreLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
     }
+    for (op, lanes) in [
+        (VectorReduce::Addv, Arrangement::B16),
+        (VectorReduce::Smaxv, Arrangement::H8),
+        (VectorReduce::Uminv, Arrangement::S4),
+        (VectorReduce::Addp, Arrangement::D2),
+    ] {
+        out.push(Inst::VectorReduce { op, lanes, rd: v(0), rn: v(1) });
+    }
     out.push(Inst::VectorDupLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), index: 0 });
     out.push(Inst::VectorDupLane { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
     for lanes in [Arrangement::S4, Arrangement::D2] {
@@ -362,6 +372,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorNarrow { .. } => "VectorNarrow",
         Inst::VectorUnzip { .. } => "VectorUnzip",
         Inst::VectorDupScalar { .. } => "VectorDupScalar",
+        Inst::VectorReduce { .. } => "VectorReduce",
         Inst::VectorDupLane { .. } => "VectorDupLane",
         Inst::VectorFpBinary { .. } => "VectorFpBinary",
         Inst::VectorFpUnary { .. } => "VectorFpUnary",
@@ -377,7 +388,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 66] = [
+const ALL: [&str; 67] = [
     "Mark",
     "Label",
     "Cfi",
@@ -435,6 +446,7 @@ const ALL: [&str; 66] = [
     "VectorNarrow",
     "VectorUnzip",
     "VectorDupScalar",
+    "VectorReduce",
     "VectorDupLane",
     "VectorFpBinary",
     "VectorFpUnary",

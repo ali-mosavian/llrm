@@ -208,9 +208,18 @@ pub struct Flagged {
     pub no_cmov: bool,
     pub no_global_base: bool,
     pub second_ipsccp: bool,
+    /// No legal `FADD` on `float` or `double` (a soft-float target).
+    pub soft_float: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
+    fn fp_op_expensive(
+        &self,
+        ty: tti::Ty,
+    ) -> bool {
+        self.soft_float && matches!(ty, tti::Ty::Double | tti::Ty::Float)
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.second_ipsccp
     }
@@ -431,6 +440,7 @@ impl llrm_mir::target::Machine for Tuned {
                 second_ipsccp: self.second_ipsccp,
                 ord_dear: self.ord_dear,
                 skip_partial_at_size: self.skip_partial_at_size,
+                soft_float: false,
             }) as _
         })
     }
