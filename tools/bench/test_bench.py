@@ -575,6 +575,7 @@ def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
     """jpeg.c includes "../bench_io.h", which a DOS volume's root cannot name: the Borland builds' copy includes it beside the source, and BC and TC had no row."""
     text = bench.stage_shared_headers(tmp_path, b'#include "../bench_io.h"\nint x;\n')
     assert text == b'#include "bench_io.h"\nint x;\n'
+    assert bench.stage_shared_headers(tmp_path, b'#include "../../bench_io.h"\n') == b'#include "bench_io.h"\n', "a twin sits one folder deeper"
     assert (tmp_path / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
 
 
@@ -1644,3 +1645,77 @@ def test_a_m16_file_programs_counted_source_keeps_the_dos_file_api(tmp_path):
     text = Path(arguments[0]).read_text()
     assert '#include "../bench_io.h"' in text and "vs_open_read" not in text
     assert "vs_open_read" in bench.kept_a_call(variant, tmp_path, "stft")[0].read_text()
+
+
+def test_a_nib_cell_that_does_file_io_reports_the_std_io_skeleton_and_stays_gross():
+    """Subtracting the skeleton from the Nib cell would let our own setup bloat flatter our score (a skeleton that grows makes every cell look better): `code_bytes` stays
+    the object's gross, and the skeleton is on the cell and in an IO-SKELETON line, so a growing skeleton is seen."""
+    rows = {
+        ("stft_fixed", "nib", "O1"): {"code_bytes": 1675},
+        ("stft_fixed", "c", "O1"): {"code_bytes": 1182},
+        ("stft_single", "nib", "O1"): {"code_bytes": 1285},
+        ("fib", "nib", "O1"): {"code_bytes": 90},
+    }
+    bench.note_io_skeleton(rows, {"stft_fixed"}, 424)
+    assert rows[("stft_fixed", "nib", "O1")] == {"code_bytes": 1675, "io_skeleton_bytes": 424}
+    assert rows[("stft_fixed", "c", "O1")] == {"code_bytes": 1182}
+    assert rows[("stft_single", "nib", "O1")] == {"code_bytes": 1285}, "a program that did not ask for it"
+    assert rows[("fib", "nib", "O1")] == {"code_bytes": 90}
+    assert bench.io_lines(rows) == ["IO-SKELETON O1: 424 B of std.io file calls in each of 1 Nib cells (code_bytes is gross; the twin's object holds its own I/O)"]
+
+
+def test_the_io_programs_are_the_ones_whose_bench_toml_asks():
+    assert bench.io_programs([]) >= {"jpeg_fixed", "jpeg_single", "stft_fixed", "stft_single"}
+    assert "fib" not in bench.io_programs([])
+
+
+@pytest.mark.skipif(not (bench.BIN / "llrm-nib").exists(), reason="no llrm-nib in the binaries directory")
+def test_the_std_io_skeleton_prices_the_io_and_adds_nothing_else(tmp_path):
+    """The empty program nets to itself (its `main`), and one added statement nets to that statement's bytes: the skeleton's cost is std.io's, not an
+    arbitrary constant, and does not move with what else the program holds."""
+    import subprocess
+
+    skeleton, empty = bench.io_variants()
+    plus = tmp_path / "plus.nib"
+    plus.write_text(skeleton.source.read_text().replace("    print(bench_io_skeleton())\n", "    print(bench_io_skeleton())\n    print(7)\n"))
+    more = tmp_path / "more.nib"
+    more.write_text(empty.source.read_text().replace("    print(0)\n", "    print(0)\n    print(7)\n"))
+
+    def code(source: Path, region: str, name: str) -> int:
+        obj = tmp_path / f"{name}.obj"
+        done = subprocess.run([str(bench.BIN / "llrm-nib"), str(source), "-o", str(obj), "-O1", "--procedure-segments", f"-fno-inline={region}"], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return bench.sizes.code_size(obj).code
+
+    cost = code(skeleton.source, "bench_io_skeleton", "s") - code(empty.source, "main", "e")
+    assert code(skeleton.source, "bench_io_skeleton", "s") - cost == code(empty.source, "main", "e")
+    statement = code(more, "main", "m") - code(empty.source, "main", "e")
+    assert statement > 0
+    assert code(plus, "bench_io_skeleton", "p") - cost == code(empty.source, "main", "e") + statement
+
+
+def test_a_twin_that_asks_for_bench_io_functions_pays_for_the_five_calls_in_its_own_object(tmp_path):
+    """The C twin of a file-reading Nib program linked its I/O from bench_io.h's macros, outside its object, while the Nib object held std.io's calls: the byte cells compared
+    different work (stft_fixed read +42%). With BENCH_IO_FUNCTIONS the five calls are functions of the object, so each compiler's bytes include them."""
+    if not (bench.BIN / "llrm-cc").is_file():
+        pytest.skip("no llrm-cc in the dist")
+    variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
+    (_, arguments, _), *_ = bench.compiles(variant, "Os", tmp_path, "t")
+    source = tmp_path / "use.c"
+    source.write_text(
+        '#include "bench_io.h"\nint use(char *b)\n{\n    int h = bench_open_read("A");\n    bench_read(h, b, 4);\n    bench_write(bench_create("B"), b, 4);\n    bench_close(h);\n    return h;\n}\n'
+    )
+
+    flags = arguments[1 : arguments.index("-o")] if "-o" in arguments else arguments[1:]
+
+    def code(*define: str) -> tuple[int, int]:
+        obj = tmp_path / f"use{len(define)}.o"
+        done = subprocess.run([str(bench.BIN / "llrm-cc"), str(source), *flags, "-I", str(bench.BENCH), "-ffunction-sections", *define, "-o", str(obj)], env=bench.c_environment(variant), capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        parts = [one.size for one in bench.sizes.segments(obj) if one.klass == "CODE"]
+        return sum(parts), len(parts)
+
+    macros, macro_functions = code()
+    functions, function_count = code("-DBENCH_IO_FUNCTIONS")
+    assert function_count >= macro_functions + 5, (macro_functions, function_count)
+    assert functions > macros

@@ -57,6 +57,16 @@ impl CombineHooks for Aarch64Lowering {
             && from.size_in_bits() > to.size_in_bits()
     }
 
+    /// `AArch64TargetLowering::isZExtFree(EVT, EVT)`
+    /// (AArch64ISelLowering.cpp#L18991 at d1106deb71cc): `i32` to `i64`.
+    fn is_zext_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        !from.is_vector() && !to.is_vector() && from.size_in_bits() == 32 && to.size_in_bits() == 64
+    }
+
     fn has_and_not(
         &self,
         vt: EVT,

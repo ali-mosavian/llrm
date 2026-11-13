@@ -1,7 +1,7 @@
-//! DEVIATE LG3 at -O1 and -Os, where bytes outrank clocks: the end-biased
-//! solution is kept only if the target's byte table prices it no larger than
-//! the pin's, and its loop has no more instructions. x_reverse's swap loop (m32 -O1) took it and paid two base+index
-//! accesses and a longer setup for one compare saved; x_radix -O1 +37 B.
+//! DEVIATE LG3 where bytes outrank clocks: at -Os the end-biased solution is
+//! refused when the target's byte table prices it larger than the pin's; at
+//! -O1, where clocks are the other axis, only when it also saves no loop
+//! instruction (x_radix -O1 lost 1578 clk to a veto that saved 37 B).
 
 use std::rc::Rc;
 
@@ -75,20 +75,28 @@ exit:
 }
 ";
 
-fn reduced(bytes_strict: bool) -> String {
+fn reduced(size: bool, bytes_strict: bool) -> String {
     let mut module = llrm_mir::parse::module(SWAP).unwrap_or_else(|why| panic!("{why:?}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopStrengthReduce { size: false, bytes_strict });
+    manager.add(LoopStrengthReduce { size, bytes_strict });
     manager.run_module(&mut module, Rc::new(Flat)).expect("runs");
     llrm_mir::print::module(&module)
 }
 
-/// At -O1 the swap loop was made end-biased though it saved one compare for
-/// a longer setup and base+index addresses: it must keep the pin's form.
+/// The swap loop's end-biased form saves a loop instruction (2 against 3) for
+/// one byte of setup (24 against 23). -O1 refused it on the byte alone: x_radix
+/// -O1 m32 went from 42660 to 44238 clk.
 #[test]
-fn bytes_strict_keeps_the_pins_form_where_end_biased_adds_setup() {
-    let speed = reduced(false);
+fn o1_keeps_end_biased_that_saves_an_instruction_for_a_byte() {
+    let o1 = reduced(false, true);
+    assert!(o1.contains("llrm-end-biased"), "-O1 refused a form that saves an instruction\n{o1}");
+}
+
+/// -Os has no clock axis: the same form costs a byte and is refused.
+#[test]
+fn os_refuses_end_biased_that_costs_a_byte() {
+    let speed = reduced(false, false);
     assert!(speed.contains("llrm-end-biased"), "premise: at speed the swap loop is end-biased\n{speed}");
-    let bytes = reduced(true);
-    assert!(!bytes.contains("llrm-end-biased"), "{bytes}");
+    let os = reduced(true, true);
+    assert!(!os.contains("llrm-end-biased"), "{os}");
 }
