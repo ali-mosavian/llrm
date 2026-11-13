@@ -102,6 +102,10 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The vector types with a register class (`isTypeLegal`); a wider one
+    /// is carried across blocks in several of them
+    /// (`getVectorTypeBreakdown`).
+    pub legal_vectors: Vec<MVT>,
     /// The narrowest integer an argument register carries: a narrower one is
     /// promoted to it (`CCPromoteToType`).
     pub min_argument_bits: u32,
@@ -533,6 +537,7 @@ impl BuilderTarget {
             legal_ints: std::iter::successors(Some(8), |width| Some(width * 2))
                 .take_while(|width| *width <= bits.max(32))
                 .collect(),
+            legal_vectors: Vec::new(),
             min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
@@ -992,7 +997,10 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<EVT, Refused> {
-        if vt.is_floating_point() || vt == MVT::Far.into() || vt.is_vector() {
+        if vt.is_vector() {
+            return self.vector_breakdown(vt).map(|(register, _)| register);
+        }
+        if vt.is_floating_point() || vt == MVT::Far.into() {
             return Ok(vt);
         }
         let bits = vt.size_in_bits();
@@ -1004,6 +1012,28 @@ impl Builder<'_> {
             .ok_or(Refused("integer wider than a register"))
     }
 
+    /// `getVectorTypeBreakdown`: the vector is halved until a half has a
+    /// register class; that type, and how many of it make the vector. The pin's
+    /// intermediate and register types are one here (every legal vector is a
+    /// register type).
+    fn vector_breakdown(
+        &self,
+        vt: EVT,
+    ) -> Result<(EVT, usize), Refused> {
+        let (EVT::Simple(mvt), true) = (vt, vt.is_vector()) else {
+            return Err(Refused("vector with no register class"));
+        };
+        let element = mvt.element().ok_or(Refused("vector with no register class"))?;
+        let (mut lanes, mut count) = (mvt.lanes().ok_or(Refused("vector with no register class"))?, 1usize);
+        loop {
+            match MVT::vector(element, lanes) {
+                Some(half) if self.target.legal_vectors.contains(&half) => return Ok((EVT::Simple(half), count)),
+                _ if lanes > 1 => (lanes, count) = (lanes / 2, count * 2),
+                _ => return Err(Refused("vector with no register class")),
+            }
+        }
+    }
+
     /// How a value of `vt` is carried across blocks and calls: the type of
     /// each register and how many (an integer of twice the widest register
     /// is two of them).
@@ -1011,6 +1041,13 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<(EVT, usize), Refused> {
+        if vt.is_vector() {
+            // Arguments, results and calls carry one register.
+            return match self.vector_breakdown(vt)? {
+                (register, 1) => Ok((register, 1)),
+                _ => Err(Refused("vector wider than a register")),
+            };
+        }
         match self.register_type(vt) {
             Ok(reg_vt) => Ok((reg_vt, 1)),
             Err(_) => {
@@ -1043,6 +1080,9 @@ impl Builder<'_> {
         }
         if let Some(int) = self.soft_float_integer(vt) {
             return self.parts(int);
+        }
+        if vt.is_vector() {
+            return self.vector_breakdown(vt);
         }
         self.parts(vt)
     }
@@ -1095,6 +1135,17 @@ impl Builder<'_> {
         part: EVT,
         count: usize,
     ) -> Vec<SDValue> {
+        // `getCopyToPartsVector`, as many parts as intermediates: the vector is
+        // cut into its register-sized pieces.
+        if part.is_vector() {
+            let lanes = part.lanes();
+            return (0..count)
+                .map(|at| {
+                    let index = self.dag.get_constant(u128::from(at as u32 * lanes), EVT::I64);
+                    self.dag.get_node(ISD::ExtractSubvector, part, &[value, index])
+                })
+                .collect();
+        }
         // `getCopyToParts`: a value narrower than its parts together (`i63` in
         // eight bytes) is extended to their width first.
         let total = part.size_in_bits() * count as u32;
@@ -1121,6 +1172,10 @@ impl Builder<'_> {
         pieces: &[SDValue],
         pointer: bool,
     ) -> SDValue {
+        // `getCopyFromPartsVector`: the registers' vectors, concatenated.
+        if vt.is_vector() {
+            return self.dag.get_node(ISD::ConcatVectors, vt, pieces);
+        }
         // `getCopyFromParts`: parts wider together than the value (eight bytes
         // for an `i63`) are joined at their width and truncated.
         let total = pieces.iter().map(|piece| self.dag.value_type(*piece).size_in_bits()).sum::<u32>();
