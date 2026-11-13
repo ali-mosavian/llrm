@@ -9,7 +9,7 @@ use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, sig
 use crate::datalayout::{DataLayout, float_bits};
 use crate::facts::Facts;
 use crate::hash::HashMap;
-use crate::intrinsics::Intrinsic;
+use crate::intrinsics::{Intrinsic, ReduceKind};
 use crate::module::{BlockId, Function, GlobalKind, MetadataOperand, Module, Operand, ValueDef, ValueId};
 use crate::opcode::{AtomicKind, Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, RmwOp};
 use crate::types::{FloatKind, Type, TypeId};
@@ -435,6 +435,44 @@ impl<'m> Machine<'m> {
                     }
                     (exact, _, _) => exact,
                 }
+            }
+            // The lanes in order: any order is a valid choice where `reassoc`
+            // says so, and the in-order one is always valid.
+            Intrinsic::VectorReduce(kind) => {
+                let (start, vector) =
+                    if kind.is_float() { (Some(argument(0)), argument(1)) } else { (None, argument(0)) };
+                let Val::Aggregate(lanes) = vector else { return Ok(Val::Poison) };
+                let mut lanes = lanes.into_iter();
+                let first = match start {
+                    Some(start) => start,
+                    None => lanes.next().unwrap_or(Val::Poison),
+                };
+                let mut result = first;
+                for lane in lanes {
+                    result = match kind {
+                        ReduceKind::Add => binary(BinaryOp::Add, Flags::default(), result, lane)?,
+                        ReduceKind::Mul => binary(BinaryOp::Mul, Flags::default(), result, lane)?,
+                        ReduceKind::And => binary(BinaryOp::And, Flags::default(), result, lane)?,
+                        ReduceKind::Or => binary(BinaryOp::Or, Flags::default(), result, lane)?,
+                        ReduceKind::Xor => binary(BinaryOp::Xor, Flags::default(), result, lane)?,
+                        ReduceKind::FAdd => binary(BinaryOp::FAdd, Flags::default(), result, lane)?,
+                        ReduceKind::FMul => binary(BinaryOp::FMul, Flags::default(), result, lane)?,
+                        ReduceKind::SMax | ReduceKind::SMin | ReduceKind::UMax | ReduceKind::UMin => {
+                            let predicate = match kind {
+                                ReduceKind::SMax => IntPredicate::Sgt,
+                                ReduceKind::SMin => IntPredicate::Slt,
+                                ReduceKind::UMax => IntPredicate::Ugt,
+                                _ => IntPredicate::Ult,
+                            };
+                            match icmp(predicate, result.clone(), lane.clone()) {
+                                Val::Int { bits: 1, .. } => result,
+                                Val::Int { .. } => lane,
+                                _ => Val::Poison,
+                            }
+                        }
+                    };
+                }
+                result
             }
             Intrinsic::MinMax { signed, max } => {
                 let predicate = match (signed, max) {

@@ -48,6 +48,7 @@ const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
 const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
 const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
+const FP_CONVERT_NARROW: &str = include_str!("../tests/lv/fp_convert_narrow.ll");
 const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
 const FP_SUB_DOUBLE: &str = include_str!("../tests/lv/fp_sub_double.ll");
 const FP_NEG_DOUBLE: &str = include_str!("../tests/lv/fp_neg_double.ll");
@@ -102,6 +103,20 @@ fn an_int_to_float_conversion_is_widened_with_its_operand() {
     assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
     assert_eq!(count(&text, "load <4 x i32>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `b[i] = (float)a[i] * 2.5f` over `i64`: "A cast that changes the lane width"
+/// kept the loop scalar; the pin takes VF 4, IC 1 (`opt
+/// -passes=loop-vectorize -mcpu=generic`: one `load <4 x i64>`, one `sitofp
+/// <4 x i64> to <4 x float>`, step 4).
+#[test]
+fn a_narrowing_int_to_float_conversion_is_widened() {
+    let text = run(FP_CONVERT_NARROW);
+    assert_eq!(count(&text, "load <4 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "sitofp <4 x i64> "), 1, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
 }
 
 /// The IDCT pass-1 shape (two stride-8 `i32` loads, `sitofp`, `fmuladd`,
@@ -201,17 +216,6 @@ fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
         )
         .unwrap();
     assert_eq!(count(&crate::testing::printed(&module), "load <"), 0);
-}
-
-/// Two pointers that may overlap need the pin's `vector.memcheck`
-/// (LoopVectorize L1637), which is not built: `b[i] = a[i]` over plain pointers
-/// was widened with no overlap test, so `b = a + 1` read stale lanes. It stays
-/// scalar.
-#[test]
-fn a_copy_between_pointers_that_may_overlap_stays_scalar() {
-    let text = run(&COPY.replace("noalias ", ""));
-    assert_eq!(count(&text, "load <8 x i16>"), 0, "{text}");
-    assert_eq!(count(&text, "load i16"), 1, "{text}");
 }
 
 /// A trip count VF x IC does not divide (1921) was left scalar ("A scalar
@@ -514,4 +518,76 @@ fn a_float_loop_the_pin_vectorizes_is_widened_not_interleaved_alone() {
     assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
     assert_eq!(count(&text, "fmul float"), 0, "{text}");
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
+}
+
+const MEMCHECK_COPY: &str = include_str!("../tests/lv/memcheck_copy.ll");
+const MEMCHECK_COPY_CONST: &str = include_str!("../tests/lv/memcheck_copy_const.ll");
+
+/// `b[i] = a[i]` over plain pointers stayed scalar (`Runtime memory checks are
+/// needed`). The pin's block order (`opt -passes=loop-vectorize`): the
+/// iteration check, `vector.memcheck` (one `diff.check`), `vector.ph`; an
+/// overlap runs the scalar loop whole, from index 0.
+#[test]
+fn plain_pointers_are_widened_behind_a_memory_check() {
+    let text = run(MEMCHECK_COPY);
+    assert_eq!(count(&text, "vector.memcheck:"), 1, "{text}");
+    assert_eq!(count(&text, "diff.check = icmp ult"), 1, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    let check = text.split("vector.memcheck:").nth(1).expect("the block").split("vector.ph:").next().unwrap();
+    assert!(check.contains("br i1 %diff.check, label %scalar.ph, label %vector.ph"), "{text}");
+    assert!(text.contains("[ 0, %vector.memcheck ]"), "{text}");
+}
+
+/// A constant trip count the lanes divide needs no remainder, but a memory
+/// conflict runs the scalar loop: the check keeps its `scalar.ph`.
+#[test]
+fn a_memory_check_keeps_the_remainder_of_a_divisible_constant_trip() {
+    let text = run(MEMCHECK_COPY_CONST);
+    assert_eq!(count(&text, "vector.memcheck:"), 1, "{text}");
+    assert_eq!(count(&text, "scalar.ph:"), 1, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+}
+
+const INDUCTION_TRUNC: &str = include_str!("../tests/lv/induction_trunc.ll");
+const INDUCTION_VALUE: &str = include_str!("../tests/lv/induction_value.ll");
+const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");
+
+/// `a[i] = ((i * 7) & 255) | 0x700` over `i16` (scroll's init loop) stayed
+/// scalar ("A value the loop computes that is not widened": the `trunc` of the
+/// induction); the pin takes VF 8, IC 2 on a `<8 x i16>` `vec.ind` that
+/// replaces the `trunc`.
+#[test]
+fn a_truncated_induction_is_widened_to_a_vec_ind() {
+    let text = run(INDUCTION_TRUNC);
+    assert!(
+        text.contains("<i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>"),
+        "{text}"
+    );
+    assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "step.add = add <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "vec.ind.next = add <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "mul <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "trunc"), 0, "{text}");
+}
+
+/// `a[i] = i + 5` over `i64`: the induction read as a value is a `<2 x i64>`
+/// `vec.ind` (pin VF 2, IC 2).
+#[test]
+fn an_induction_read_as_a_value_is_widened() {
+    let text = run(INDUCTION_VALUE);
+    assert!(text.contains("<i64 0, i64 1>"), "{text}");
+    assert_eq!(count(&text, "phi <2 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "add <2 x i64>"), 4, "{text}");
+    assert_eq!(count(&text, "store <2 x i64>"), 2, "{text}");
+}
+
+/// A run-time start: the lanes begin at the truncated start plus the lane
+/// numbers, made in the vector preheader (`induction`).
+#[test]
+fn an_induction_that_starts_at_a_run_time_value_is_widened() {
+    let text = run(INDUCTION_START);
+    assert!(text.contains("induction = add <8 x i16>"), "{text}");
+    assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
 }

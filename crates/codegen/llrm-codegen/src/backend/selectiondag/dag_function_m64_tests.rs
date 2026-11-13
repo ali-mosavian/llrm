@@ -1484,6 +1484,56 @@ entry:
     assert!(names.iter().all(|n| n != "ucomiss" && !n.starts_with('j')), "{names:?}");
 }
 
+/// A signed saturating subtract compared `x - y` through a second `sub` that kept its difference (and a `test` of
+/// it), beside the `sub` whose overflow selects: `mov rax, rdi; sub rax, rsi; setns cl; ..; sub rdi, rsi; cmovno`
+/// where the pin has `cmp rdi, rsi; setns cl; ..; sub; cmovno` (sat_builtins m64 -O1 +28 B). `EmitTest` takes
+/// `SSUBO`'s flags as an `X86ISD::SUB`'s, whose unread difference the peephole makes a `cmp`.
+#[test]
+fn an_m64_signed_saturating_subtract_compares_with_a_cmp_beside_its_one_sub() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+declare i64 @llvm.ssub.sat.i64(i64, i64)
+define i64 @f(i64 %a, i64 %b) {
+  %r = call i64 @llvm.ssub.sat.i64(i64 %a, i64 %b)
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let body = crate::backend::peepholeopt::compared(&done.body);
+    let names: Vec<String> =
+        body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    let count = |name: &str| names.iter().filter(|n| *n == name).count();
+    assert_eq!((count("sub"), count("cmp"), count("test")), (1, 1, 0), "{names:?}");
+}
+
+/// The unsigned form: the borrow and the zero difference are read from one `cmp`, not a `sub` that keeps its difference.
+#[test]
+fn an_m64_unsigned_subtract_with_borrow_and_zero_test_is_one_cmp() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+declare { i64, i1 } @llvm.usub.with.overflow.i64(i64, i64)
+define i64 @f(i64 %a, i64 %b) {
+  %r = call { i64, i1 } @llvm.usub.with.overflow.i64(i64 %a, i64 %b)
+  %v = extractvalue { i64, i1 } %r, 0
+  %o = extractvalue { i64, i1 } %r, 1
+  %z = icmp eq i64 %v, 0
+  %oz = zext i1 %o to i64
+  %zz = zext i1 %z to i64
+  %s = shl i64 %oz, 1
+  %t = or i64 %s, %zz
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let body = crate::backend::peepholeopt::compared(&done.body);
+    let names: Vec<String> =
+        body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    let count = |name: &str| names.iter().filter(|n| *n == name).count();
+    assert_eq!((count("sub"), count("cmp"), count("test")), (0, 1, 0), "{names:?}");
+}
+
 /// `ctlz(x)` with a defined zero took `bsr; cmove; xor` at m64: `hasBitScanPassThrough` (is64Bit) lets the `bsr`
 /// keep its destination when `x` is zero, so a constant preloaded there is the answer (bitcount_u32 -O1, +7 B).
 #[test]

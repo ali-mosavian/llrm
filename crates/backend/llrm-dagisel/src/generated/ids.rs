@@ -1168,6 +1168,7 @@ pub mod mvt {
     pub const v16i32: Vt = Vt(84);
     pub const v16i8: Vt = Vt(48);
     pub const v1i1: Vt = Vt(19);
+    pub const v2f32: Vt = Vt(137);
     pub const v2f64: Vt = Vt(157);
     pub const v2i1: Vt = Vt(20);
     pub const v2i64: Vt = Vt(96);

@@ -206,6 +206,15 @@ pub fn target_lowering_with(
     for (op, name) in [(SDiv, "__divdi3"), (UDiv, "__udivdi3"), (SRem, "__moddi3"), (URem, "__umoddi3")] {
         tl.set_libcall_name(op, MVT::I64, name);
     }
+    // a divide and a remainder of the same operands are one call where the remainder is not a multiply back
+    // that is cheap: the 68020's `muls.l` makes it three instructions, the 68000's and 68060's is two
+    // `__mulsi3` calls and a subtract (`has_div_rem_op`, the pin's `useDivRem` over `SDIVREM_I64`)
+    if !cpu.has_wide_multiply() {
+        for (op, name) in [(SDivRem, "__divmoddi4"), (UDivRem, "__udivmoddi4")] {
+            tl.set_operation_action(op, MVT::I64, Action::Custom);
+            tl.set_libcall_name(op, MVT::I64, name);
+        }
+    }
     tl
 }
 
@@ -411,6 +420,7 @@ impl Hooks for M68kLowering {
             ISD::JumpTable => Some(super::call::lower_jump_table(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
+            ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I64 => lower_divrem_wide(dag, node),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             ISD::AddC | ISD::AddE | ISD::SubC | ISD::SubE => lower_carry_chain(dag, node),
             _ => None,
@@ -511,6 +521,64 @@ impl Hooks for M68kLowering {
     fn little_endian(&self) -> bool {
         false
     }
+}
+
+/// `ExpandDivRemLibCall` of an `i64`: one call of `__divmoddi4` (`__udivmoddi4`), the quotient back in
+/// `d0:d1` and the remainder stored through the address of a stack cell, the third argument; the remainder is
+/// loaded back after the call.
+fn lower_divrem_wide(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use super::call::{Ext, In, Out};
+    let signed = dag.opcode(node) == ISD::SDivRem;
+    let name = if signed { "__divmoddi4" } else { "__udivmoddi4" };
+    let ext = if signed { Ext::Sign } else { Ext::Zero };
+    let cell = dag.create_stack_temporary(8, 4);
+    let word = |value: SDValue| Out {
+        value,
+        ext,
+        pointer: false,
+        arg_vt: EVT::I32,
+        split: false,
+        variadic: false,
+        sret: false,
+        byval: None,
+    };
+    let mut outs = Vec::new();
+    for at in 0..2 {
+        // a 64-bit argument is two words, the high one first
+        let [low, high] = split_words(dag, dag.operand(node, at));
+        outs.extend([word(high), word(low)]);
+    }
+    outs.push(Out {
+        value: dag.get_frame_index(EVT::I32, cell),
+        ext: Ext::Any,
+        pointer: true,
+        arg_vt: EVT::I32,
+        split: false,
+        variadic: false,
+        sret: false,
+        byval: None,
+    });
+    let result = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
+    let callee = dag.get_target_external_symbol(EVT::I32, name);
+    let root = dag.entry_node();
+    let (chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[result, result]);
+    let [high, low] = values[..] else { return None };
+    let quotient = dag.get_node(ISD::BuildPair, EVT::I64, &[low, high]);
+    let address = dag.get_frame_index(EVT::I32, cell);
+    let info = MemInfo {
+        mem_vt: EVT::I64,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(cell),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let remainder = dag.get_load(EVT::I64, chain, address, info);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I64, EVT::I64], &[quotient, remainder]))
 }
 
 /// The low and the high word of a 64-bit value.

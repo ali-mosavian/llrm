@@ -3,6 +3,7 @@
 
 use super::integer::EXTENDS;
 use super::*;
+use crate::mc::inst::Arrangement;
 use crate::mc::inst::{Addr, Atomic, Barrier, Memory};
 
 const ATOMICS: [(Atomic, &str); 13] = [
@@ -232,6 +233,34 @@ pub(super) fn to(
             };
             semantics(operation, atomic_name(*op, *size, *acquire, *release), dests, sources, None)
         }
+        Inst::VectorStoreLane { lanes, rt, index, base } => {
+            let mut at = Mem::new(
+                None,
+                match lanes {
+                    Arrangement::B16 => 8,
+                    Arrangement::H8 => 16,
+                    Arrangement::S4 => 32,
+                    Arrangement::D2 => 64,
+                },
+            );
+            (at.through, at.base) = place(*base);
+            let name = format!(
+                "ST1{}",
+                match lanes {
+                    Arrangement::B16 => "i8",
+                    Arrangement::H8 => "i16",
+                    Arrangement::S4 => "i32",
+                    Arrangement::D2 => "i64",
+                }
+            );
+            semantics(
+                Operation::Move,
+                name,
+                vec![],
+                vec![vreg_loc(*rt, 128), imm(i64::from(*index)), Loc::Mem(at)],
+                None,
+            )
+        }
         Inst::Adr { page, rd, target, got } => semantics(
             Operation::Address,
             format!("{}{}", if *page { "ADRP" } else { "ADR" }, if *got { ".got" } else { "" }),
@@ -296,6 +325,23 @@ pub(super) fn back(
             rs,
             rt,
             rn: unplace(at.through, at.base),
+        }));
+    }
+    if let Some(lanes) = [
+        ("ST1i8", Arrangement::B16),
+        ("ST1i16", Arrangement::H8),
+        ("ST1i32", Arrangement::S4),
+        ("ST1i64", Arrangement::D2),
+    ]
+    .into_iter()
+    .find_map(|(each, lanes)| (each == head).then_some(lanes))
+    {
+        let Some(Loc::Mem(at)) = s.last() else { return None };
+        return Some(Op::I(Inst::VectorStoreLane {
+            lanes,
+            rt: vreg_of(&s[0]),
+            index: value_of(&s[1]) as u8,
+            base: unplace(at.through, at.base),
         }));
     }
     Some(Op::I(match head {
