@@ -1,6 +1,6 @@
-reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
-blessed = "2026-11-10"
-corpus = "df24ad30f3b192279152757a00831b84"
+reason = "parity/algebra reads its inputs from DATA: its kernel folded to a constant at -Os (0 instructions, UNMEASURED)"
+blessed = "2026-11-14"
+corpus = "c4659e776b279a767169310e260c604b"
 
 [ow.O1]
 instructions = 184
@@ -123,25 +123,31 @@ bss_bytes = 4
 kernel_ms = 0.0041
 
 [bc.O2]
-instructions = 344
-memory_operands = 147
-code_bytes = 323
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0179
+instructions = 336
+memory_operands = 139
+clocks = 1208
+layout_clocks = 1208
+pad_nops = 0
+code_bytes = 352
+data_bytes = 42
+bss_bytes = 0
 
 [pds71.O2]
-instructions = 356
-memory_operands = 150
-code_bytes = 323
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0156
+instructions = 348
+memory_operands = 142
+clocks = 1229
+layout_clocks = 1229
+pad_nops = 0
+code_bytes = 352
+data_bytes = 42
+bss_bytes = 0
 
 [vbdos.O2]
-instructions = 407
-memory_operands = 165
-code_bytes = 329
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0138
+instructions = 399
+memory_operands = 157
+clocks = 1307
+layout_clocks = 1307
+pad_nops = 0
+code_bytes = 358
+data_bytes = 42
+bss_bytes = 0
