@@ -657,6 +657,19 @@ pub fn finish_with(
         if pushes.is_down(index) {
             continue;
         }
+        if let Some(load) = pushes.fused_load(index) {
+            // a kept store that moves what the load read: the store's address,
+            // then the load's memory
+            let (Kind::Op(from), Kind::Op(to)) = (insts[load].kind, inst.kind) else {
+                return Err("a fused store and load are instructions".to_owned());
+            };
+            let opcode = crate::callpush::memory_store(from, to).ok_or("a fused load has a store")?;
+            let mut moved = operands;
+            moved.pop();
+            moved.extend(convert(insts[load], pushed)?.into_iter().skip(1));
+            out.push(mc::Inst { opcode, operands: moved });
+            continue;
+        }
         if let Some(bytes) = pushes.cleanup(index) {
             if function.returns_twice {
                 frame_op(&FrameOp::AddSp(bytes), &mut out, short);

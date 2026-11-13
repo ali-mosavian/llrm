@@ -309,6 +309,7 @@ pub fn machine_with<'a>(
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
             loop_carried_flow: target.commutes_loop_carried_flow(),
+            to_known_register: target.converts_three_address_to_known_register(),
             unoptimized: !target.optimized,
         }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
@@ -367,6 +368,7 @@ pub fn machine_with<'a>(
             widens_byte: target.widens_load(1).unwrap_or(false),
             widens_word: target.widens_load(2).unwrap_or(false),
             strict_bytes: target.size || target.min_size || !target.speed_rate,
+            widens_word_immediate: target.widens_word_immediate(),
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),

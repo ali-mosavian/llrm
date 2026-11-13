@@ -40,6 +40,7 @@ sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "t
 import cpulimit  # noqa: E402
 import benchlist  # noqa: E402
 import basecounts  # noqa: E402
+import basic_arrays  # noqa: E402
 import shards  # noqa: E402
 import maps  # noqa: E402
 import native  # noqa: E402
@@ -95,9 +96,17 @@ SIZES = ("code_bytes", "data_bytes", "bss_bytes")
 JUDGED_SIZES = ("code_bytes", "data_bytes", "static_bytes")  # bss is judged through the footprint (data + bss), not alone
 
 
-def with_footprint(row: dict) -> dict:
-    """The row with `static_bytes` = data + bss: a zero table moved from data to bss shrinks the image and leaves the footprint."""
-    return {**row, "static_bytes": row["data_bytes"] + row["bss_bytes"]} if "data_bytes" in row and "bss_bytes" in row else row
+def with_footprint(row: dict, run_time: int = 0) -> dict:
+    """The row with `static_bytes` = data + bss (+ `run_time`): a zero table moved from data to bss shrinks the image and leaves the footprint.
+    `run_time` is what the program allocates at run time beyond its image (run_time_arrays): the cross-compiler verdicts add it, the gate against a base does not."""
+    return {**row, "static_bytes": row["data_bytes"] + row["bss_bytes"] + run_time} if "data_bytes" in row and "bss_bytes" in row else row
+
+
+def run_time_arrays(program: str, name: str) -> int:
+    """The module-level array bytes `name` ('bas'/'bq16': llrm; a BASIC reference) allocates at run time for the BASIC program, else 0 (tools/bench/basic_arrays.py)."""
+    side = "llrm" if name in ("bas", "bq16") else "reference" if name in BASIC_REFERENCES else None
+    source = BENCH / program / f"{program.rsplit('/', 1)[-1]}.bas"
+    return basic_arrays.run_time_bytes(source, side) if side and source.exists() else 0
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
 TIMING_CONF = dosbatch.CONF.replace(dosbatch.CYCLES, "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000

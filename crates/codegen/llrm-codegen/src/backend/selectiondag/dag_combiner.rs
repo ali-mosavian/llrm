@@ -2021,6 +2021,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(merged) = self.unfold_masked_merge(node) {
             return Some(merged);
         }
+        // `(op (hand x...), (hand y...))` is `(hand (op x, y))`.
+        if self.dag.opcode(n0) == self.dag.opcode(n1) {
+            if let Some(hoisted) = self.hoist_logic_op_with_same_opcode_hands(node) {
+                return Some(hoisted);
+            }
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1, self.dag.node(node).flags);
         }
@@ -2678,6 +2684,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if let Some(folded) = self.fold_bitwise_op_with_neg(node) {
             return Some(folded);
+        }
+        // `(op (hand x...), (hand y...))` is `(hand (op x, y))`.
+        if self.dag.opcode(n0) == self.dag.opcode(n1) {
+            if let Some(hoisted) = self.hoist_logic_op_with_same_opcode_hands(node) {
+                return Some(hoisted);
+            }
         }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
             // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.

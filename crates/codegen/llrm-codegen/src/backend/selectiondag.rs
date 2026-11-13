@@ -115,6 +115,7 @@ pub mod bswap_combine;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
+pub mod combine_hoist_logic;
 mod combine_avg;
 pub mod combine_funnel;
 pub mod combine_lifetime_end;

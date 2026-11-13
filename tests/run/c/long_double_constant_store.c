@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// bar: not comparable (SDCC long double is 32 bits, the x87 type is 80)
 // A local `long double` initialized from a constant (gcc.c-torture 20020413-1 on the 16-bit target, where it is the x87's 10 bytes):
 // only its first dword was stored, the other six bytes were what the stack held, and the program looped on a compare of garbage.
 extern void report(long value);
