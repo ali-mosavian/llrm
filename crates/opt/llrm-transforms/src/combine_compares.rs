@@ -295,6 +295,7 @@ pub fn visit_icmp(
     // `if (I.isCommutative())`: `matchSymmetricPair`, the pair of selects that swap their arms
     // compares as the two arms (`icmp ne (select c, a, b), (select c, b, a)` is `icmp ne a, b`).
     if matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
+        && !c.env.hooks.keeps_swapped_select_compare
         && let Some((x, y)) = match_symmetric_pair(&query(c, Some(inst)), op0, op1)
     {
         replace_operand(c, inst, 0, x);
