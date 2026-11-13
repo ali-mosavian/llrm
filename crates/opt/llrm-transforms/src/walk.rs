@@ -1876,6 +1876,31 @@ fn trial_clocks(
 /// kept on the corpus, 14 save one unit and the rest more.
 const GUARD: i64 = 1;
 
+/// What the arguments of parameters nothing reads add to the units of the call `inst`: `deadargelim` removes them after
+/// the walk (the pin's order), so the size trial counts the call it ships. Nothing for a callee that stays visible.
+fn unread_argument_units(
+    module: &Module,
+    tti: &dyn llrm_mir::tti::Tti,
+    function: &llrm_mir::module::Function,
+    inst: llrm_mir::module::InstId,
+) -> i64 {
+    use llrm_mir::module::{GlobalKind, Linkage};
+    if !matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_) | llrm_mir::opcode::Opcode::Invoke(_)) {
+        return 0;
+    }
+    let Some(callee) = llrm_mir::memory::callee(&module.context, function, inst) else { return 0 };
+    let global = module.global(callee);
+    let (GlobalKind::Function(body), true) = (&global.kind, matches!(global.linkage, Linkage::Internal | Linkage::Private)) else { return 0 };
+    let all = body.parameters().len() as i64;
+    let unread = body.parameters().iter().filter(|&&value| body.users(value).is_empty()).count() as i64;
+    if unread == 0 {
+        return 0;
+    }
+    let with = tti.direct_call_cost(all, llrm_mir::tti::CostKind::CodeSize);
+    let without = tti.direct_call_cost(all - unread, llrm_mir::tti::CostKind::CodeSize);
+    if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
+}
+
 /// SZ2: the code size of body `id`, by the target's cost model for bytes (its
 /// size view, in encoded bytes, where it has one).
 fn body_size(
@@ -1919,7 +1944,8 @@ fn sized(
                 inst,
                 llrm_mir::tti::CostKind::CodeSize,
             )
-            .value;
+            .value
+                - unread_argument_units(module, tti, function, inst);
             let moves = matches!(
                 operation.opcode,
                 llrm_mir::opcode::Opcode::Load { .. }

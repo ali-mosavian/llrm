@@ -3590,12 +3590,12 @@ fn m32_costs() -> std::rc::Rc<dyn llrm_mir::target::Machine> {
 }
 
 /// x_idioms -Os (m32): `sumlong(L, 40)` called twice. IPSCCP leaves both
-/// parameters unread but the pin keeps them until `deadargelim` after the
-/// CGSCC walk, so the inliner prices the call with its arguments (cost -10,
-/// threshold 50: inlined). Dropped first, the call carried no credit, the
-/// cost read 0 and the -Os size guard kept two calls (+24 B against gcc).
+/// parameters unread and `deadargelim` drops them after the walk (the pin's
+/// order), so the -Os byte trial must price the calls as they ship: priced
+/// with the pushes it inlined both (+5 B at m32, +10 B at m68k 68000; gcc
+/// keeps two calls).
 #[test]
-fn test_parameters_ipsccp_leaves_unread_are_dropped_after_the_walk_not_before() {
+fn test_the_size_trial_prices_calls_without_the_parameters_nothing_reads() {
     let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 @L = global [40 x i32] zeroinitializer
 define internal i32 @sumlong(ptr %p, i16 %n) {
@@ -3639,7 +3639,7 @@ b0:
     .expect("the pipeline runs");
     let printed = llrm_mir::print::module(&module);
     let run = printed.split("define").find(|one| one.contains("@run(")).expect("run");
-    assert_eq!(run.matches("@sumlong(").count(), 0, "{printed}");
+    assert_eq!(run.matches("@sumlong(").count(), 2, "{printed}");
 }
 
 /// hanoi -O2: its three pegs are permuted and never read. The recursion
