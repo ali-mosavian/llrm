@@ -412,6 +412,17 @@ impl fmt::Display for Inst {
                 let two = if *high { "2" } else { "" };
                 write!(out, "{name}{two} v{}.{}, v{}.{}, #{amount}", rd.0, wide.suffix(), rn.0, wide.narrowed(*high))
             }
+            Inst::VectorMulLong { signed, high, accumulate, wide, rd, rn, rm } => {
+                let name = match (*signed, *accumulate) {
+                    (true, false) => "smull",
+                    (false, false) => "umull",
+                    (true, true) => "smlal",
+                    (false, true) => "umlal",
+                };
+                let two = if *high { "2" } else { "" };
+                let narrow = wide.narrowed(*high);
+                write!(out, "{name}{two} v{}.{}, v{}.{narrow}, v{}.{narrow}", rd.0, wide.suffix(), rn.0, rm.0)
+            }
             Inst::VectorNarrow { high, wide, rd, rn } => {
                 let two = if *high { "2" } else { "" };
                 write!(out, "xtn{two} v{}.{}, v{}.{}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())

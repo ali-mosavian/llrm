@@ -176,6 +176,20 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, if *high { 128 } else { 64 }), imm(i64::from(*amount))],
             None,
         ),
+        Inst::VectorMulLong { signed, high, accumulate, wide, rd, rn, rm } => {
+            let half = if *high { 128 } else { 64 };
+            let mut sources = vec![vreg_loc(*rn, half), vreg_loc(*rm, half)];
+            if *accumulate {
+                sources.insert(0, vreg_loc(*rd, 128));
+            }
+            semantics(
+                if *accumulate { Operation::FloatMultiplyAdd } else { Operation::Binary },
+                mul_long_name(*signed, *accumulate, *wide, *high),
+                vec![vreg_loc(*rd, 128)],
+                sources,
+                None,
+            )
+        }
         Inst::VectorNarrow { high, wide, rd, rn } => semantics(
             if *high { Operation::Binary } else { Operation::Unary },
             format!("XTN{}", narrow_name(*wide, *high)),
@@ -370,7 +384,8 @@ fn dup_name(arrangement: Arrangement) -> &'static str {
     }
 }
 
-/// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the lanes as the pin's opcode names spell them.
+/// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the lanes as the pin's opcode names
+/// spell them.
 fn lane_name(lanes: Arrangement) -> &'static str {
     match lanes {
         Arrangement::B16 => "16i8",
@@ -387,6 +402,27 @@ fn vector_fp_name(
 ) -> String {
     let lanes = if lanes == Arrangement::D2 { "2f64" } else { "4f32" };
     format!("{}v{lanes}", mnemonic.to_uppercase())
+}
+
+/// `SMULLv2i32_v2i64`, `UMLALv4i32_v2i64`: the pin's name of a long multiply.
+fn mul_long_name(
+    signed: bool,
+    accumulate: bool,
+    wide: Arrangement,
+    high: bool,
+) -> String {
+    let stem = match (signed, accumulate) {
+        (true, false) => "SMULL",
+        (false, false) => "UMULL",
+        (true, true) => "SMLAL",
+        (false, true) => "UMLAL",
+    };
+    let wide_name = match wide {
+        Arrangement::H8 => "v8i16",
+        Arrangement::S4 => "v4i32",
+        _ => "v2i64",
+    };
+    format!("{stem}{}_{wide_name}", narrow_name(wide, high))
 }
 
 /// `v8i8`, `v16i8`, `v4i16`, ...: the narrow arrangement of an `xtn` or
@@ -427,7 +463,10 @@ const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
 ];
 
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
-fn vector_op_name(op: VectorOp, lanes: Arrangement) -> String {
+fn vector_op_name(
+    op: VectorOp,
+    lanes: Arrangement,
+) -> String {
     let stem = op.mnemonic().to_uppercase();
     let lanes = if op.is_logical() { "16i8" } else { lane_name(lanes) };
     format!("{stem}v{lanes}")
@@ -499,6 +538,20 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
         }
         if name == format!("XTN{narrow}") {
             return Some(Inst::VectorNarrow { high, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+        }
+        for (signed, accumulate) in [(true, false), (false, false), (true, true), (false, true)] {
+            if name == mul_long_name(signed, accumulate, wide, high) {
+                let at = usize::from(accumulate);
+                return Some(Inst::VectorMulLong {
+                    signed,
+                    high,
+                    accumulate,
+                    wide,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[at]),
+                    rm: vreg_of(&s[at + 1]),
+                });
+            }
         }
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {
@@ -580,7 +633,13 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 && (!op.is_logical() || lanes == Arrangement::B16)
                 && !(op == VectorOp::Mul && lanes == Arrangement::D2)
             {
-                return Some(Inst::VectorBinary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]), rm: vreg_of(&s[1]) });
+                return Some(Inst::VectorBinary {
+                    op,
+                    lanes,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[0]),
+                    rm: vreg_of(&s[1]),
+                });
             }
         }
     }

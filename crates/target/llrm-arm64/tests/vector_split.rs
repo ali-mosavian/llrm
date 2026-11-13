@@ -252,3 +252,66 @@ fn a_vector_lane_converted_as_an_integer_is_moved_to_a_general_register() {
     assert_eq!(count(&text, "fmov", " x"), 1, "{text}");
     assert_eq!(count(&text, "scvtf", " s"), 1, "{text}");
 }
+
+/// `mul <2 x i64>` of two extensions was refused (`CannotSelect("Mul")`: NEON
+/// has no 64-bit lane multiply); the pin's `LowerMUL` finds `SMULL`/`UMULL`.
+#[test]
+fn a_multiply_of_two_extensions_is_one_long_multiply() {
+    let text = assembly(
+        "define void @f(ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %l1 = load <2 x i32>, ptr %a\n\
+         \x20 %l2 = load <2 x i32>, ptr %b\n\
+         \x20 %e1 = sext <2 x i32> %l1 to <2 x i64>\n\
+         \x20 %e2 = sext <2 x i32> %l2 to <2 x i64>\n\
+         \x20 %m = mul <2 x i64> %e1, %e2\n\
+         \x20 store <2 x i64> %m, ptr %c, align 8\n\
+         \x20 ret void\n}\n\
+         define void @g(ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %l1 = load <2 x i32>, ptr %a\n\
+         \x20 %l2 = load <2 x i32>, ptr %b\n\
+         \x20 %e1 = zext <2 x i32> %l1 to <2 x i64>\n\
+         \x20 %e2 = zext <2 x i32> %l2 to <2 x i64>\n\
+         \x20 %m = mul <2 x i64> %e1, %e2\n\
+         \x20 %d = load <2 x i64>, ptr %c, align 8\n\
+         \x20 %r = add <2 x i64> %d, %m\n\
+         \x20 store <2 x i64> %r, ptr %c, align 8\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "smull", ".2d"), 1, "{text}");
+    assert_eq!(count(&text, "umlal", ".2d"), 1, "{text}");
+    assert_eq!(count(&text, "umull", ""), 0, "the add folds into the accumulate: {text}");
+}
+
+/// The matmul inner loop of the pin: `sext <8 x i16>` times the splat of a
+/// scalar `sext`, summed. The splat was a `v2i64` `dup` and an `xtn` per
+/// use, the high halves a `mov d` each; the pin has one `dup v.4s` and
+/// `smull2`/`smlal2` of the high halves.
+#[test]
+fn a_multiply_of_an_extension_by_a_splat_uses_the_high_half_forms() {
+    let text = assembly(
+        "define void @f(ptr %a, ptr %c, i16 %x, i16 %y) {\n\
+         \x20 %xs = sext i16 %x to i64\n\
+         \x20 %ys = sext i16 %y to i64\n\
+         \x20 %i1 = insertelement <8 x i64> poison, i64 %xs, i64 0\n\
+         \x20 %s1 = shufflevector <8 x i64> %i1, <8 x i64> poison, <8 x i32> zeroinitializer\n\
+         \x20 %i2 = insertelement <8 x i64> poison, i64 %ys, i64 0\n\
+         \x20 %s2 = shufflevector <8 x i64> %i2, <8 x i64> poison, <8 x i32> zeroinitializer\n\
+         \x20 %l1 = load <8 x i16>, ptr %a, align 2\n\
+         \x20 %e1 = sext <8 x i16> %l1 to <8 x i64>\n\
+         \x20 %m1 = mul nsw <8 x i64> %e1, %s1\n\
+         \x20 %p2 = getelementptr inbounds nuw i8, ptr %a, i64 16\n\
+         \x20 %l2 = load <8 x i16>, ptr %p2, align 2\n\
+         \x20 %e2 = sext <8 x i16> %l2 to <8 x i64>\n\
+         \x20 %m2 = mul nsw <8 x i64> %e2, %s2\n\
+         \x20 %r = add nsw <8 x i64> %m2, %m1\n\
+         \x20 store <8 x i64> %r, ptr %c, align 8\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "smull2", ".2d"), 2, "{text}");
+    assert_eq!(count(&text, "smlal2", ".2d"), 2, "{text}");
+    assert_eq!(count(&text, "smull", ".2d"), 2, "{text}");
+    assert_eq!(count(&text, "smlal", ".2d"), 2, "{text}");
+    assert_eq!(text.matches("dup.4s").count(), 2, "{text}");
+    assert_eq!(count(&text, "xtn", ""), 0, "{text}");
+    assert_eq!(count(&text, "mov", " d"), 0, "{text}");
+}

@@ -314,6 +314,11 @@ impl Inst {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
+            Inst::VectorMulLong { accumulate, rd, rn, rm, .. } => {
+                f(Fpr(rd), if *accumulate { Role::UseDef } else { Role::Def });
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
             Inst::VectorNarrow { high: true, rd, rn, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);

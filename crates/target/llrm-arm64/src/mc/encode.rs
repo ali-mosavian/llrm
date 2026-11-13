@@ -469,6 +469,20 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let base = if *signed { 0x0F00_A400 } else { 0x2F00_A400 };
             base | u32::from(*high) << 30 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorMulLong { signed, high, accumulate, wide, rd, rn, rm } => {
+            let size = match wide {
+                Arrangement::H8 => 0,
+                Arrangement::S4 => 1,
+                _ => 2,
+            };
+            let base = match (*signed, *accumulate) {
+                (true, false) => 0x0E20_C000,
+                (false, false) => 0x2E20_C000,
+                (true, true) => 0x0E20_8000,
+                (false, true) => 0x2E20_8000,
+            };
+            base | u32::from(*high) << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorNarrow { high, wide, rd, rn } => {
             let size = match wide {
                 Arrangement::H8 => 0,

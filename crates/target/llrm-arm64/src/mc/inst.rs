@@ -460,7 +460,10 @@ impl VectorOp {
 
     /// Whether the operation is the bitwise `.16b` form whatever the lanes.
     pub fn is_logical(self) -> bool {
-        matches!(self, VectorOp::And | VectorOp::Bic | VectorOp::Orr | VectorOp::Orn | VectorOp::Eor)
+        matches!(
+            self,
+            VectorOp::And | VectorOp::Bic | VectorOp::Orr | VectorOp::Orn | VectorOp::Eor
+        )
     }
 }
 
@@ -607,7 +610,10 @@ impl ImmShape {
 impl Fill {
     /// Whether it writes all 128 bits; `movi d` and the `.2s` forms write 64.
     pub fn is_quad(&self) -> bool {
-        !matches!(self, Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. })
+        !matches!(
+            self,
+            Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
+        )
     }
 }
 
@@ -1050,6 +1056,19 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
         amount: u8,
+    },
+    /// `smull{2} v.2d, v.2s, v.2s` (`SMULLv2i32_v2i64`; `umull`, and with
+    /// `accumulate` `smlal`, `umlal`): the lanes of the low (or, `high`, the
+    /// top) half of `rn` and `rm` multiplied into `wide`'s lanes, added to
+    /// `rd` if `accumulate`; `wide` is `H8`, `S4` or `D2`.
+    VectorMulLong {
+        signed: bool,
+        high: bool,
+        accumulate: bool,
+        wide: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
     },
     /// `xtn{2} v.8b, v.8h`: each lane of `rn` (`wide`'s lanes) halved, into
     /// the low half of `rd` or, `high`, its top half (`rd` is then read too).
