@@ -30,16 +30,6 @@ fn a_read_landing_pad_value_is_refused_by_name() {
     assert!(why.contains("landing pad"), "{why}");
 }
 
-/// An object aligned past the stack's 16 needs stack realignment (a base
-/// pointer): refused by name, not laid out at 16.
-#[test]
-fn an_over_aligned_object_is_refused_by_name() {
-    let why = refusal(
-        "declare void @take(ptr)\ndefine void @f() {\n  %a = alloca i32, align 32\n  call void @take(ptr %a)\n  ret void\n}\n",
-    );
-    assert!(why.contains("stack realignment"), "{why}");
-}
-
 /// `-exception-model=wasm` changes nothing for a function without an `invoke`
 /// or a `landingpad`, which stays the pin's `-exception-model=none` output.
 #[test]

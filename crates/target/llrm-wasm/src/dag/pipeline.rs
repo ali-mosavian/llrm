@@ -302,7 +302,8 @@ pub fn select_block(
     // memory) are frame objects numbered after the function's.
     dag.first_temporary = info.next_stack_object();
     let tables = &info.jump_tables;
-    let mut lowering = WasmLowering { tables };
+    let stack_pointer = if dag.config().pointer == EVT::I64 { reg::SP64 } else { reg::SP32 };
+    let mut lowering = WasmLowering { tables, stack_pointer };
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }

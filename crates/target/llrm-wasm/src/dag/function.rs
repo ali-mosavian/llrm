@@ -151,6 +151,8 @@ impl BuilderArch for WasmArch {
 
 /// One block, selected and scheduled.
 pub struct Selected {
+    /// The block holds a dynamic `alloca` (`hasVarSizedObjects`).
+    pub var_sized: bool,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
     /// The memory accesses of each machine node, as load and store node ids.
@@ -312,6 +314,10 @@ pub fn select_function(
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
             one.dag.frame_alignments.clone_from(&alignments);
+            // `visitAlloca`: a dynamic one makes the function's frame
+            // variable-sized (`CreateVariableSizedObject`).
+            let var_sized =
+                one.dag.nodes().iter().any(|node| node.opcode == llrm_codegen::backend::selectiondag::isd::ISD::DynamicStackAlloc);
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
                     .map_err(|why| format!("{why:?}"))?;
@@ -326,6 +332,7 @@ pub fn select_function(
                 .map(|&(_, to, probability)| (to.0, probability))
                 .collect();
             selected.push(Selected {
+                var_sized,
                 id: id.0,
                 origin: origin.0,
                 unwind: if unwinding { unwind_of(function, origin) } else { None },

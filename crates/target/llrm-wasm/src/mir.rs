@@ -26,6 +26,14 @@ pub const IMPLICIT_DEF: u16 = u16::MAX - 1;
 /// pin's `isEHPad`.
 pub const EH_LABEL: u16 = u16::MAX - 2;
 
+/// A read of the physical stack pointer (`SP32`/`SP64`): `SP_READ dst`.
+/// The frame lowering makes it a `COPY` from the register it keeps the stack
+/// pointer in; until then no pass may move or delete it.
+pub const SP_READ: u16 = u16::MAX - 3;
+
+/// A write of the physical stack pointer: `SP_WRITE src`; see [`SP_READ`].
+pub const SP_WRITE: u16 = u16::MAX - 4;
+
 /// A virtual register, by index.
 pub type VReg = u32;
 
@@ -259,6 +267,9 @@ pub struct Function {
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,
+    /// `MachineFrameInfo::hasVarSizedObjects`: a dynamic `alloca` moves the
+    /// stack pointer by an amount only the running function knows.
+    pub var_sized: bool,
     /// `-g`: the variables whose home is a stack object.
     pub variables: Vec<Variable>,
     /// `-g`: the (metadata record, argument number) of each variable the IR
