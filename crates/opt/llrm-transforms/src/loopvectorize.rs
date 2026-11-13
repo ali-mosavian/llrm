@@ -198,6 +198,29 @@ fn element_ty(
     }
 }
 
+/// Whether every vector of the widened loop is a whole number of registers
+/// (`VF` lanes of its element type, of each operand's too).
+fn fills_registers(
+    cx: &Cx,
+    widening: &Widening,
+    vf: u32,
+    register_bits: u32,
+) -> bool {
+    let whole = |ty: TypeId| {
+        let bits = cx.layout.size_bits(&cx.context.types, ty);
+        (u64::from(vf) * u64::from(bits)) % u64::from(register_bits) == 0
+    };
+    widening
+        .steps
+        .iter()
+        .all(
+            |step| match step {
+                Step::Access(access) => whole(access.element),
+                Step::Operation(operation) => whole(operation.element) && whole(operation.operand_element),
+            },
+        )
+}
+
 /// The integer induction that steps by one and its step instruction.
 pub(crate) fn primary_and_step(
     se: &mut ScalarEvolution,
@@ -540,8 +563,15 @@ fn extract(
                 let dst = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
                 let source = function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped cast"))?;
                 let src = element_ty(cx, source).ok_or(Skipped("An element type the target has no vector of"))?;
-                if cx.layout.size_bits(&cx.context.types, source) != cx.layout.size_bits(&cx.context.types, data.ty) {
-                    return Err(Skipped("A cast that changes the lane width"));
+                // `sitofp`/`uitofp` of another width: narrowing is unrolled and
+                // widening is extended first by the backend
+                // (`LowerVectorINT_TO_FP`); the conversions to
+                // an integer take one width only (DEVIATE LV-X5,
+                // exit LV-W4: `LowerVectorFP_TO_INT`).
+                let changes_width =
+                    cx.layout.size_bits(&cx.context.types, source) != cx.layout.size_bits(&cx.context.types, data.ty);
+                if changes_width && !matches!(op, CastOp::SIToFP | CastOp::UIToFP) {
+                    return Err(Skipped("A conversion to an integer that changes the lane width"));
                 }
                 if used_outside(inst) {
                     return Err(Skipped("A cast used after the loop"));
@@ -1241,6 +1271,16 @@ impl FunctionPass for LoopVectorize {
                             opt_size,
                         };
                         match plan(&*tti, &facts) {
+                            Ok(chosen) if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits()) => {
+                                // DEVIATE LV-D6 (owner llrm-arm64-vec, exit
+                                // LV-W4): a
+                                // vector of lanes of two widths has one of them
+                                // under a
+                                // register, which the backend takes as no type
+                                // yet.
+                                why(unit, &outer, header, "plan: A vector narrower than a register");
+                                None
+                            }
                             Ok(chosen) => Some(Planned::Vector(chosen, widening)),
                             Err(not) => {
                                 why(unit, &outer, header, &format!("plan: {not:?}"));
