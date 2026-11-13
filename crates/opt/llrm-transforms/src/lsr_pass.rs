@@ -277,6 +277,7 @@ fn plan_loop(
         native_widths: tti.lsr_native_integer_widths(),
         use_list_order: tti.lsr_users_in_use_list_order(),
         phi_operand_uses: tti.lsr_phi_operand_uses(),
+        phi_users_first: tti.lsr_phi_users_first(),
     };
     let mut users = match carried {
         Some(users) => {

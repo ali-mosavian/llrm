@@ -1199,6 +1199,10 @@ impl Tti for X86 {
         self.tuning.lsr_phi_operand_uses
     }
 
+    fn lsr_phi_users_first(&self) -> bool {
+        self.tuning.lsr_phi_users_first
+    }
+
     fn splits_invariant_fmuladd(&self) -> bool {
         self.tuning.splits_invariant_fmuladd
     }
