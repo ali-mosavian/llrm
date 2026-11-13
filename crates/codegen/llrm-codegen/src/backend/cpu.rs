@@ -199,6 +199,8 @@ pub struct Profile {
     /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
     /// A/B has been made (`TailDuplicate` slot).
     pub post_ra_tail_duplicate: bool,
+    /// `TimingTable::tail_merge_pin_faithful`.
+    pub tail_merge_pin_faithful: bool,
     /// Equal literal stores share a register at the speed levels too
     /// (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
@@ -419,6 +421,7 @@ impl Profile {
             min_size: false,
             speed_rate: true,
             post_ra_tail_duplicate: false,
+            tail_merge_pin_faithful: false,
             share_literal_stores: false,
             pool_data_strict: false,
             size_one_is_xor_inc: false,
@@ -734,6 +737,7 @@ fn _profile(
         share_congruent_phis: table.share_congruent_phis,
         unordered_branch_odds: table.unordered_branch_odds,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
+        tail_merge_pin_faithful: table.tail_merge_pin_faithful,
         share_literal_stores: table.share_literal_stores,
         pool_data_strict: table.pool_data_strict,
         size_one_is_xor_inc: table.size_one_is_xor_inc,

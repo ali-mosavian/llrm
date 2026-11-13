@@ -1535,3 +1535,35 @@ entry:
     let x86 = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
     assert!(at(&x86, 29_791.0), "a target with no guard: the pin's verdict");
 }
+
+/// A float operation or cast on a target with no legal `FADD` is a library
+/// call: `visitBinaryOperator` and `visitCastInst` add `CALL_PENALTY` where
+/// `getFPOpCost` is `TCC_Expensive` (InlineCost.cpp:1959, :2317). Before, the
+/// m68k priced a soft-float `fadd` at 5 like an add, so a float-heavy callee
+/// was inlined at sites where the pin refuses it.
+#[test]
+fn test_a_float_operation_on_a_soft_float_target_costs_a_call() {
+    let text = format!(
+        "{GLOBAL}define internal double @callee(double %x, double %y) {{
+b0:
+  %a = fadd double %x, %y
+  %b = sitofp i32 3 to double
+  %c = fmul double %a, %y
+  ret double %c
+}}
+
+define double @f(double %p, double %q) {{
+b0:
+  %r = call double @callee(double %p, double %q)
+  %s = call double @callee(double %r, double %q)
+  ret double %s
+}}
+"
+    );
+    let hard = crate::testing::Flagged::default();
+    let soft = crate::testing::Flagged { soft_float: true, ..Default::default() };
+    let (hard_cost, _) = priced_with(&text, 0, false, CallerSize::Speed, Some(&hard));
+    let (soft_cost, _) = priced_with(&text, 0, false, CallerSize::Speed, Some(&soft));
+    // the fadd, the fmul (the constant sitofp folds)
+    assert_eq!(soft_cost - hard_cost, 2 * crate::inlinecost::CALL_PENALTY, "hard {hard_cost}, soft {soft_cost}");
+}

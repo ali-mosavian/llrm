@@ -152,9 +152,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `DIV8r`/`IDIV8r`, SD302).
     fn int_div_cheap(
         &self,
-        _vt: EVT,
+        vt: EVT,
     ) -> bool {
-        self.dag.config().int_div_cheap
+        let config = self.dag.config();
+        config.int_div_cheap || vt.size_in_bits() <= config.int_div_cheap_narrow
     }
 
     /// DEVIATE DIV-LIVE: the divide stays (`isIntDivCheap`) unless a narrow

@@ -315,6 +315,23 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     assert_eq!(listing.matches("movzx").count(), 9, "unrolled by 8 plus the remainder loop: {listing}");
 }
 
+/// `for (i = 0; i < n; ++i)` as a do-while: IndVarSimplify's test replacement made the exit `i != smax(n, 1)`, which costs
+/// `cmp; mov 1; cmovl` (8 B) before the loop where gcc keeps `inc; cmp; jl`. fib `k` m64 -Os 24 B against gcc's 22.
+/// DEVIATE LFTR-SIZE (gcc-bar only): the budget at size is one operation, so the limit that needs a `smax` stays `n`.
+#[test]
+fn a_loop_exit_limit_that_needs_a_clamp_is_not_replaced_at_m64_os() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @k(i32 %n) optsize {\nentry:\n  br label %loop\n\
+                loop:\n  %a = phi i32 [ 0, %entry ], [ %b, %loop ]\n  %b = phi i32 [ 1, %entry ], [ %s, %loop ]\n\
+                  %i = phi i32 [ 0, %entry ], [ %j, %loop ]\n  %s = add nuw nsw i32 %a, %b\n  %j = add nuw nsw i32 %i, 1\n\
+                  %c = icmp slt i32 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "k").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("cmov"), "the clamp of the exit limit is a cmov: {listing}");
+}
+
 /// A private callee called six times (`unpack`, three callers with two calls each) stayed out of line for the
 /// by-size guard, but the -Os trial of the first callers' sites measured -22 B a copy (the objects grew +5), accepted,
 /// and the guard of the last caller then saw two calls left and let its own through: all six inlined. gcc refuses at
@@ -352,6 +369,18 @@ fn an_argument_load_folded_into_its_copy_is_still_remade_at_m16() {
     let (built, _) = compiled(&flags(&["-m16", "-Os", "-march=i386", "--isel=dag"]), text, "WALK&").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains(", es"), "a segment register is stored to a slot: {listing}");
+/// `n = rd(); while (n > 0) { report(..); n = rd(); }`: the loop's guard and its latch end in the same five
+/// instructions (`mov; mov; mov; call rd; test; jg`). The pin's `TailMergeBlocks` shares them, one `call rd`; we kept
+/// both: the merge was skipped for a body of three blocks, and for a latch that ends in a branch on a cycle.
+/// bench_io m64 -O1 212 B against 197 with the merge (clang 207).
+/// Lifted at m64 (`tail_merge_pin_faithful`): T14 and D1 of docs/architecture/jumps-tailmerge-check.md.
+#[test]
+fn a_loop_guard_and_its_latch_share_their_call_at_m64() {
+    let text = include_str!("testdata/read_loop_calls.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let reads = listing.lines().filter(|line| line.trim() == "call rd").count();
+    assert_eq!(reads, 1, "{listing}");
 }
 
 /// A symbol's address passed to four calls in one block was made four times
@@ -6069,4 +6098,28 @@ fn an_uncounted_loop_is_rotated_at_os_on_m64_where_the_object_does_not_grow() {
     let (built, _) = compiled(&flags(&["-m64", "-Os"]), text, "bench_shellsort").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("sub di, ax"), "the loop is not rotated:\n{listing}");
+}
+
+/// `char *p = &big[0x12345]` in a 32-bit object wrote its pointer field as `45 23 00 00`: only the low word of the offset
+/// was stored (`0x12345` as `0x2345`; `-0x12345` as `bb dc 00 00`), and the linked program pointed 64 KB short.
+#[test]
+fn a_static_pointer_offset_past_64k_fills_the_whole_dword_of_a_32_bit_object() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @big = external global [1 x i8]\n\
+                @p = global ptr getelementptr (i8, ptr @big, i32 74565)\n\
+                @q = global ptr getelementptr (i8, ptr @big, i32 -74565)\n\
+                define i32 @f() {\n  ret i32 0\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-O2"]), text, "f").unwrap();
+    let omf = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::object::Format::Omf,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let has = |bytes: [u8; 4]| omf.windows(4).any(|window| window == bytes);
+    assert!(has(74565i32.to_le_bytes()), "0x12345 as 45 23 01 00");
+    assert!(has((-74565i32).to_le_bytes()), "-0x12345 as bb dc fe ff");
 }
