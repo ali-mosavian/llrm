@@ -138,12 +138,18 @@ fn the_programs_harness_leaves_no_temporary_tree_behind() {
     let tmp = tempfile::tempdir().unwrap();
     let scratch = tmp.path().join(format!("z80-harness-tmp-{}", std::process::id()));
     std::fs::create_dir_all(scratch.join("src")).expect("a scratch directory");
+    // Another process's tree in the shared temporary directory is not this run's: the harness works in `scratch`.
+    let stray = std::env::temp_dir().join(format!("z80prog-stray-{}", std::process::id()));
+    std::fs::create_dir_all(&stray).expect("a stray tree");
+    // `--llc`: run.py's default is a build in one person's scratch directory, which a clean machine has none of
+    // (the test failed there with "cannot ask ... for its runtime stamp") and a stale one tests an old compiler.
     let done = Command::new("python3")
-        .args(["-I", &format!("{dir}/tests/programs/run.py"), "--src"])
+        .args(["-I", &format!("{dir}/tests/programs/run.py"), "--llc", env!("CARGO_BIN_EXE_llrm-z80-llc"), "--src"])
         .arg(scratch.join("src"))
         .env("TMPDIR", &scratch)
         .output()
         .expect("python3 runs");
+    std::fs::remove_dir_all(&stray).ok();
     let left: Vec<_> = std::fs::read_dir(&scratch)
         .expect("the scratch directory")
         .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
