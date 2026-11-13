@@ -418,7 +418,7 @@ impl<const STACK: bool> Target for Mos<STACK> {
 
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
     fn reads_flags_set_just_before(inst: &Inst) -> bool {
-        inst.reads_flags && inst.terminator
+        inst.reads_flags() && inst.terminator
     }
 
     fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
@@ -1190,7 +1190,9 @@ impl Builder {
         inst.rematerializable |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
         // and a load sets N and Z, so it is not run again where a compare's
         // flags are live
-        inst.sets_flags |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
+        if matches!(inst.kind, Kind::Op("LDI" | "LDS")) {
+            inst.sets_flags = true;
+        }
         if inst.origin == 0 {
             inst.origin = self.origin;
         }
@@ -3073,7 +3075,7 @@ pub fn compare_before_step(
                     if !matches!(inst.kind, Kind::Copy | Kind::Op("LDI" | "CMP" | "SBC")) {
                         break;
                     }
-                    if inst.sets_flags {
+                    if inst.sets_flags() {
                         last = Some(end);
                     }
                     end += 1;
@@ -4686,8 +4688,8 @@ fn allocate<const STACK: bool>(
                     "in bb{at}.{i}: {:?} {:?}{}{}",
                     inst.kind,
                     inst.operands,
-                    if inst.sets_flags { " SF" } else { "" },
-                    if inst.reads_flags { " RF" } else { "" }
+                    if inst.sets_flags() { " SF" } else { "" },
+                    if inst.reads_flags() { " RF" } else { "" }
                 );
             }
         }
@@ -4712,8 +4714,8 @@ fn allocate_greedy<T: Target<Class = Class>>(
                     "bb{at}.{i}: {:?} {:?}{}{}",
                     inst.kind,
                     inst.operands,
-                    if inst.sets_flags { " SF" } else { "" },
-                    if inst.reads_flags { " RF" } else { "" }
+                    if inst.sets_flags() { " SF" } else { "" },
+                    if inst.reads_flags() { " RF" } else { "" }
                 );
             }
         }

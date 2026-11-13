@@ -120,7 +120,7 @@ pub fn verify(
             .insts
             .iter()
             .enumerate()
-            .map(|(i, inst)| Step { sets: inst.sets_flags, reads: inst.reads_flags, text: &lines[bounds[i]..bounds[i + 1]] })
+            .map(|(i, inst)| Step { sets: inst.sets_flags(), reads: inst.reads_flags(), text: &lines[bounds[i]..bounds[i + 1]] })
             .collect();
         check_block(&steps).map_err(|why| format!("{} bb{}: {why}", function.name, block.id))?;
     }
