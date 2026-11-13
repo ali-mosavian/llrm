@@ -243,3 +243,54 @@ fn factors_bounded_by_the_escape_test_are_narrowed() {
     let after = run(&module, "mandel", vec![], 10_000_000).expect("runs");
     assert_eq!(format!("{before:?}"), format!("{after:?}"));
 }
+
+const WHOLE: &str = "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+declare i32 @llvm.smul.fix.sat.i32(i32, i32, i32 immarg)
+
+define i32 @saturating(i32 %a) {
+b0:
+  %p = call i32 @llvm.smul.fix.sat.i32(i32 1536, i32 %a, i32 9)
+  ret i32 %p
+}
+
+define i32 @three(i32 %a) {
+b0:
+  %p = call i32 @llvm.smul.fix.i32(i32 1536, i32 %a, i32 9)
+  ret i32 %p
+}
+
+define i32 @minus_three(i32 %a) {
+b0:
+  %p = call i32 @llvm.smul.fix.i32(i32 %a, i32 -1536, i32 9)
+  ret i32 %p
+}
+
+define i32 @not_whole(i32 %a) {
+b0:
+  %p = call i32 @llvm.smul.fix.i32(i32 1500, i32 %a, i32 9)
+  ret i32 %p
+}
+";
+
+/// `3 * x` in Q9 (`smul.fix(1536, x, 9)`) kept the 64-bit `imul`/`shrd` for an
+/// `x` of any range, 4 instructions where `imul x, 3` is one; the product of a
+/// whole multiple of the scale is the `mul`, wrapping as the wide form's low
+/// half does.
+#[test]
+fn a_constant_factor_that_is_a_whole_multiple_of_the_scale_is_a_mul() {
+    let module = narrowed(WHOLE);
+    let three = body(&module, "three");
+    assert!(three.contains("mul i32 %a, 3") && !three.contains("smul.fix") && !three.contains("ashr"), "{three}");
+    let minus = body(&module, "minus_three");
+    assert!(minus.contains("mul i32 %a, -3") && !minus.contains("smul.fix"), "{minus}");
+    assert!(body(&module, "not_whole").contains("smul.fix"));
+    // The saturating form clamps where `mul` wraps: it keeps its call.
+    assert!(body(&module, "saturating").contains("smul.fix.sat"));
+    for a in [0_i64, 1, -1, 7, -1000, 0x7FFF_FFFF, -0x8000_0000, 0x4000_0001] {
+        let args = vec![Val::Int { bits: a as u128 & 0xFFFF_FFFF, width: 32 }];
+        let Ok(Val::Int { bits, .. }) = run(&module, "three", args.clone(), 1000) else { panic!() };
+        assert_eq!(bits as u32 as i32, ((a * 1536) >> 9) as i32, "{a}");
+        let Ok(Val::Int { bits, .. }) = run(&module, "minus_three", args, 1000) else { panic!() };
+        assert_eq!(bits as u32 as i32, ((a * -1536) >> 9) as i32, "{a}");
+    }
+}

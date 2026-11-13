@@ -416,6 +416,8 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            ipra_binds_local: true,
                             // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
@@ -438,6 +440,15 @@ impl llrm_target::Target for M64 {
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            // DEVIATE UNROLL-OS-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
+                            // m32 entry, see `Tuning::unroll_trial_at_size`. gcc completely peels a
+                            // small loop at -Os when the code does not grow.
+                            unroll_trial_at_size: Some(30),
+                            unroll_trial_bytes_strict: true,
+                            // DEVIATE UNROLL-O1, UNROLL-O1-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
+                            // m32 entries, see `Tuning::unroll_never_grows_at_o1`, `unroll_trial_at_o1`.
+                            unroll_never_grows_at_o1: true,
+                            unroll_trial_at_o1: Some(150),
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
                             // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
@@ -459,6 +470,9 @@ impl llrm_target::Target for M64 {
                             // `mov m64, imm32`: sign-extended.
                             unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
+                            // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): see
+                            // `selectoptimize::SelectOptimizePass`.
+                            branch_constant_arm_selects: true,
                             // DEVIATE INL-O2 RATE at m64 (owner x86-m64, exit 2026-11-24), as x86-m32's:
                             // a speed caller's inline pays the callee's bytes at the m64 net rate
                             // (312 milliclocks a byte); gcc's `ipa-inline` takes a copy only where its
@@ -477,6 +491,12 @@ impl llrm_target::Target for M64 {
                             // compiles the module again with those loops unrotated (gcc's `-Os` shape)
                             // and keeps the smaller object.
                             rotation_trial_at_size: true,
+                            // DEVIATE ROTATION-HOT at m64 (owner x86-m64, exit 2026-12-05), as m32's: an
+                            // uncounted loop RS1 leaves is also tried rotated, as the pin rotates it, and
+                            // kept where the finished code executes less. -Os is strict on bytes: only
+                            // where the object does not grow.
+                            rotation_hot_at_size: true,
+                            rotation_hot_bytes_per_loop: 0,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than

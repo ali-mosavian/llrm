@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "arm64"))
 import clocks  # noqa: E402
+import count  # noqa: E402
 
 HAVE_MCA = os.path.exists(f"{clocks.LLVM}/llvm-mca")
 
@@ -25,6 +26,26 @@ class Blocks(unittest.TestCase):
         # Cutting only after branches priced the pre-header and the loop body as one block of 4 instructions run 10 times.
         executed = {0x100: 1, 0x104: 10, 0x108: 10, 0x10C: 10, 0x110: 1}
         self.assertEqual(clocks.blocks(self.CODE, executed), [[0x100], [0x104, 0x108, 0x10C], [0x110]])
+
+
+class Range(unittest.TestCase):
+    def test_the_range_is_chosen_with_kernel_or_whole(self):
+        # The docstring promised `ELF [--kernel]` and the parser rejected it ("unrecognized arguments"), so the 11
+        # LVI cells were priced whole-program: runtime included, a 24% instruction cut read as 1.8% of the clocks.
+        self.assertTrue(clocks.parser().parse_args(["a.elf", "--kernel"]).kernel)
+        self.assertTrue(clocks.parser().parse_args(["a.elf", "--whole"]).whole)
+
+    def test_no_range_is_an_error_not_a_default(self):
+        # count.py's rule: a count with no flag once ran whole and was read as the kernel.
+        with self.assertRaises(SystemExit):
+            clocks.parser().parse_args(["a.elf"])
+
+    def test_the_kernel_histogram_leaves_out_main_and_the_runtime(self):
+        # Priced from a histogram that held every address, --kernel would still have priced the runtime.
+        self.assertTrue(count.histogram_wants("kernel", kernel=True))
+        self.assertFalse(count.histogram_wants("main", kernel=True))
+        self.assertFalse(count.histogram_wants("runtime", kernel=True))
+        self.assertTrue(all(count.histogram_wants(name, kernel=False) for name in ("kernel", "main", "runtime")))
 
 
 @unittest.skipUnless(HAVE_MCA, "needs the pin's llvm-mca (LLVM_BIN)")

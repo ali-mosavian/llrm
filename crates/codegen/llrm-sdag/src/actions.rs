@@ -698,6 +698,27 @@ impl TargetLowering {
         self.maps.trunc_store.get(&(vt, mem)).copied().unwrap_or(Action::Legal)
     }
 
+    /// `isTruncStoreLegal`
+    /// ([TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h)):
+    /// the value type is legal, and the truncating store is.
+    pub fn is_trunc_store_legal(
+        &self,
+        vt: MVT,
+        mem: MVT,
+    ) -> bool {
+        self.types.is_type_legal(EVT::Simple(vt)) && self.trunc_store_action(vt, mem) == Action::Legal
+    }
+
+    /// `isTruncStoreLegalOrCustom`.
+    pub fn is_trunc_store_legal_or_custom(
+        &self,
+        vt: MVT,
+        mem: MVT,
+    ) -> bool {
+        self.types.is_type_legal(EVT::Simple(vt))
+            && matches!(self.trunc_store_action(vt, mem), Action::Legal | Action::Custom)
+    }
+
     pub fn cond_code_action(
         &self,
         cc: CondCode,

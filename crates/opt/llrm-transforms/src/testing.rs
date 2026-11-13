@@ -166,6 +166,8 @@ pub struct Tuned {
     pub narrows_counters: bool,
     /// `Tti::narrows_counters_at_speed` answers no.
     pub narrows_counters_for_size_only: bool,
+    /// `Tti::unswitch_threshold_override`.
+    pub unswitch_threshold: Option<i64>,
     /// `Tti::sinks_unused_invariants`.
     pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
@@ -193,6 +195,7 @@ pub struct Flagged {
     pub exit_ne: bool,
     pub narrows_counters: bool,
     pub narrows_counters_for_size_only: bool,
+    pub unswitch_threshold: Option<i64>,
     pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
@@ -238,6 +241,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn narrows_counters_at_speed(&self) -> bool {
         !self.narrows_counters_for_size_only
+    }
+
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.unswitch_threshold
     }
 
     fn sinks_unused_invariants(&self) -> bool {
@@ -378,12 +385,14 @@ impl llrm_mir::target::Machine for Tuned {
             || self.fast_sqrt
             || self.second_ipsccp
             || self.ord_dear
+            || self.unswitch_threshold.is_some()
             || self.skip_partial_at_size)
             .then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
                 narrows_counters: self.narrows_counters,
                 narrows_counters_for_size_only: self.narrows_counters_for_size_only,
+                unswitch_threshold: self.unswitch_threshold,
                 sinks_invariants: self.sinks_invariants,
                 no_cmov: false,
                 no_global_base: self.no_global_base,

@@ -40,6 +40,16 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE PO1 (owner x86-m32-b, exit 2026-11-24 for the targets that keep it):
+    /// at -Os the arguments of a call are popped into a dead register in place
+    /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
+    /// the pin's, which pops only at `minsize` (X86FrameLowering.cpp:4116).
+    pub pops_arguments_at_size: bool,
+    /// The target has a libc `memcpy` to call, so LoopIdiomRecognize forms a
+    /// copy of run-time length whatever its size, as the pin does. false:
+    /// DEVIATE (loopidioms.rs `variable_copy_pays`): the copy stays a loop
+    /// where the inline `rep movs` that replaces it is more bytes.
+    pub libc_memcpy: bool,
     /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
     /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
     /// (`hardware_divide_wins`); false: the clocks and margin alone.
@@ -92,6 +102,16 @@ pub struct Tuning {
     /// finished object is smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
+    /// DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): a function that binds
+    /// locally (external linkage, hidden or protected, or default visibility in code that is not
+    /// shared-library code) takes part in the callee-written-registers facts, as GCC's `-fipa-ra`
+    /// uses every definition no other definition can replace; the pin's `RegUsageInfoCollector`
+    /// takes local linkage only (`isSafeForNoCSROpt`) and is off by default.
+    pub ipra_binds_local: bool,
+    /// DEVIATE UNROLL-OS-TRIAL-STRICT (owner llrm-target-x86-m64, exit 2026-11-24): the -Os unroll trial is kept
+    /// only where the object is smaller, never for a few bytes a function that the code runs less
+    /// (`trial::keeps_unroll_at_size`): bytes are the one strict axis at -Os. False: m32's rule.
+    pub unroll_trial_bytes_strict: bool,
     /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
     /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
     /// carries more bytes than its units where an argument is several words (x86-m16:
@@ -392,6 +412,8 @@ pub struct Tuning {
     pub rotation_trial_at_size: bool,
     /// DEVIATE ROTATION-HOT: see `Tti::rotation_hot_at_size`.
     pub rotation_hot_at_size: bool,
+    /// `Tti::rotation_hot_bytes_per_loop`.
+    pub rotation_hot_bytes_per_loop: i64,
     /// DEVIATE GVN-PRE-OPTSIZE: see `Tti::load_pre_off_at_size`.
     pub load_pre_off_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
@@ -463,6 +485,10 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE SELOPT-C (`selectoptimize::SelectOptimizePass`): SelectOptimize runs
+    /// at -O2/-O3 with constant-arm selects included. false: the pin's, which
+    /// runs it nowhere.
+    pub branch_constant_arm_selects: bool,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -533,6 +559,8 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        libc_memcpy: false,
+        pops_arguments_at_size: true,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         narrow_divide_live_max_bits: 31,
@@ -544,6 +572,8 @@ impl Tuning {
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
+        ipra_binds_local: false,
+        unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
         inline_never_grows_without_rate: false,
@@ -607,6 +637,7 @@ impl Tuning {
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,
         rotation_hot_at_size: false,
+        rotation_hot_bytes_per_loop: 4,
         load_pre_off_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
@@ -625,6 +656,7 @@ impl Tuning {
         unroll_prices_nest: false,
         phi_constant_chains: false,
         sink_select_arms: false,
+        branch_constant_arm_selects: false,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
@@ -836,6 +868,13 @@ pub trait Machine {
     /// copied before the result is made.
     fn two_address(&self) -> bool {
         false
+    }
+
+    /// Whether a call followed by a return can be emitted as a tail call
+    /// (LLVM's `TargetLowering::mayBeEmittedAsTailCall`), which is what makes
+    /// `CodeGenPrepare` copy the return into the call's block. Not wasm.
+    fn may_be_emitted_as_tail_call(&self) -> bool {
+        true
     }
 
     /// Whether the target has several registers a comparison's result can

@@ -4,7 +4,8 @@ A MODEL, not a measurement: each basic block is priced alone (no cache, no branc
 so every figure it prints says "modelled". A block that is its own loop is priced in steady state (cycles per iteration),
 any other block once, pipeline fill included.
 
-    clocks.py ELF [--kernel]       modelled clocks and executed instructions
+    clocks.py ELF --kernel|--whole    modelled clocks and executed instructions of the compiled kernels, or of the program
+                                      with its runtime (the range is chosen, never defaulted: count.py's rule)
 """
 import argparse, os, re, subprocess, sys
 
@@ -77,18 +78,25 @@ def modelled_clocks(code, histogram):
     return total, executed
 
 
-def main():
+def parser():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('elf')
-    args = ap.parse_args()
+    where = ap.add_mutually_exclusive_group(required=True)
+    where.add_argument('--kernel', action='store_true', help='price the compiled kernels only')
+    where.add_argument('--whole', action='store_true', help='price the whole program, runtime included')
+    return ap
+
+
+def main():
+    args = parser().parse_args()
     sys.path.insert(0, HERE)
     import count
     histogram = {}
-    reported, instrs, err = count.run(args.elf, kernel=False, histogram=histogram)
+    reported, instrs, err = count.run(args.elf, kernel=args.kernel, histogram=histogram)
     if err:
         raise SystemExit(f'clocks.py: {err}')
     clocks, executed = modelled_clocks(disassemble(args.elf), histogram)
-    print(f'{os.path.basename(args.elf)}: {clocks:.0f} modelled clocks, {executed} instructions (llvm-mca apple-m1 per block)')
+    print(f'{os.path.basename(args.elf)}: {clocks:.0f} modelled clocks, {executed} instructions ({"kernel" if args.kernel else "whole"}, llvm-mca apple-m1 per block)')
 
 
 if __name__ == '__main__':

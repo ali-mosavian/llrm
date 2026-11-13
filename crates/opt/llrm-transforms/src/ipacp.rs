@@ -141,6 +141,16 @@ const TIME_SCALE: i64 = 5;
 /// The most a block counts in a callee's time: the trips GCC's loop estimates
 /// stop at.
 const MAX_FREQUENCY: i64 = 10;
+/// What a target's default for `-fipa-cp-clone` tunes beyond gcc (DEVIATE
+/// IPACP-O2, IPACP-LOOPS); a flag given, or -Omax, is gcc's own.
+#[derive(Clone, Copy, Debug)]
+pub struct Tuning {
+    /// A copy whose only gain is a known loop bound is made.
+    pub hint_clones: bool,
+    /// The loop hint counts only bounds the unroller takes whole.
+    pub peel_limited: bool,
+}
+
 /// `max-completely-peel-times` (params.opt): the most trips the unroller takes whole.
 const MAX_PEEL_TIMES: i128 = 16;
 /// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known
@@ -189,7 +199,7 @@ pub fn cloned(
     private: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
     clone: bool,
-    hint_clones: bool,
+    tuning: Tuning,
     state: &mut Cloning,
 ) -> Changed {
     let mut changed = Changed { added: Vec::new(), edited: Vec::new(), unsound: Vec::new() };
@@ -318,10 +328,10 @@ pub fn cloned(
         let mut verdict = false;
         let (mut saved, mut loops, mut benefit) = (0, false, 0);
         for context in &contexts {
-            let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs);
+            let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited);
             let level = state.made.get(&origin).copied().unwrap_or(0);
             let (chain, chain_size) =
-                chain_benefit(module, layout, name, body, context, &callees, costs, level, &mut BTreeMap::new());
+                chain_benefit(module, layout, name, body, context, &callees, costs, tuning.peel_limited, level, &mut BTreeMap::new());
             let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
             // GCC's `incorporate_penalties`: a function in a cycle with others,
             // not one that calls itself.
@@ -337,7 +347,7 @@ pub fn cloned(
             // frames +2%). A copy with one caller is inlined into it.
             let shared = own && sites.len() > 1 && !replaces;
             let pays = !shared
-                && (context_saved > 0 || (context_loops && hint_clones))
+                && (context_saved > 0 || (context_loops && tuning.hint_clones))
                 && (replaces
                     || (context_benefit * 1000 >= EVAL_THRESHOLD * chain_size
                         && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
@@ -466,6 +476,7 @@ fn chain_benefit(
     known: &[Option<ConstantId>],
     callees: &Callees,
     costs: &OperationCosts,
+    peel_limited: bool,
     level: usize,
     memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), (i64, i64)>,
 ) -> (i64, i64) {
@@ -476,7 +487,7 @@ fn chain_benefit(
     memo.insert((known.to_vec(), level), (0, 0));
     let size_of = inline::operations(body);
     let mut chain_size = size_of;
-    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs);
+    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs, peel_limited);
     let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
     if level + 1 < MAX_CLONES {
         for (context, frequency) in next {
@@ -484,7 +495,7 @@ fn chain_benefit(
                 continue;
             }
             let (after, after_size) =
-                chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo);
+                chain_benefit(module, layout, name, body, &context, callees, costs, peel_limited, level + 1, memo);
             let factor = (MAX_CLONES - level) as i64;
             benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
             chain_size = chain_size.saturating_add(after_size);
@@ -505,6 +516,7 @@ fn time_saved(
     known: &[Option<ConstantId>],
     callees: &Callees,
     costs: &OperationCosts,
+    peel_limited: bool,
 ) -> (i64, bool, Vec<(Vec<Option<ConstantId>>, i64)>) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
@@ -700,7 +712,7 @@ fn time_saved(
                     // instructions, recpow 1207 -> 3060 B.
                     let reach = |bound: &Operand, counter: &Operand| {
                         let (Some(start), Some(end)) = (moving(counter), number(bound)) else { return false };
-                        (end - start).abs() <= MAX_PEEL_TIMES
+                        !peel_limited || (end - start).abs() <= MAX_PEEL_TIMES
                     };
                     compared.operands.len() == 2
                         && ((constant(&compared.operands[0]) && reach(&compared.operands[0], &compared.operands[1]))

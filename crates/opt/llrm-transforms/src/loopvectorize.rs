@@ -26,10 +26,10 @@
 //! # DEVIATE rows
 //! - LVP1 the vector loop is made in place: the scalar induction is the vector
 //!   loop's `index` (the pin makes `vector.ph`, `vector.body`, `middle.block`
-//!   and keeps the scalar loop as the remainder). The remainder is a copy of the
-//!   loop made first ([`crate::loopvectorizeskeleton`]); with a constant trip
-//!   count VF x IC divides there is none, as in the pin after SimplifyCFG. Exit:
-//!   the VPlan skeleton (VP1).
+//!   and keeps the scalar loop as the remainder). The remainder is a copy of
+//!   the loop made first ([`crate::loopvectorizeskeleton`]); with a constant
+//!   trip count VF x IC divides there is none, as in the pin after SimplifyCFG.
+//!   Exit: the VPlan skeleton (VP1).
 //! - LVP2 a loop whose induction value is used after the loop, or whose exit
 //!   test is not `icmp eq`/`ne` of the stepped induction against a
 //!   loop-invariant bound, is left alone (the induction may start anywhere: the
@@ -78,11 +78,11 @@ use crate::loopvectorizeskeleton::{self as skeleton, Shape, Skeleton};
 pub struct LoopVectorize {
     /// Vectorize whatever the target says of vector values (the unit tests').
     pub always: bool,
-    /// `LoopVectorizeOptions::VectorizeOnlyWhenForced` (`!PTO.LoopVectorization`,
-    /// clang's -O1). The pin still widens a loop that carries
-    /// `llvm.loop.vectorize.enable`; DEVIATE LV-F1: no frontend of llrm emits
-    /// that hint, so a forced loop is not looked for. Owner arm64-vec, exit
-    /// 2026-11-24.
+    /// `LoopVectorizeOptions::VectorizeOnlyWhenForced`
+    /// (`!PTO.LoopVectorization`, clang's -O1). The pin still widens a loop
+    /// that carries `llvm.loop.vectorize.enable`; DEVIATE LV-F1: no
+    /// frontend of llrm emits that hint, so a forced loop is not looked
+    /// for. Owner arm64-vec, exit 2026-11-24.
     pub only_when_forced: bool,
 }
 
@@ -212,14 +212,17 @@ fn extract(
     // Every use is a store's value or an integer binary operation of this
     // loop (the instruction itself is judged where it comes).
     let widened_users = |value: ValueId| {
-        function.users(value).iter().all(|one| {
-            function.parent(one.user) == Some(header)
-                && match function.instruction(one.user).opcode {
-                    Opcode::Store { .. } => one.index == 0,
-                    Opcode::Binary(_) => true,
-                    _ => false,
-                }
-        })
+        function
+            .users(value)
+            .iter()
+            .all(
+                |one| function.parent(one.user) == Some(header)
+                    && match function.instruction(one.user).opcode {
+                        Opcode::Store { .. } => one.index == 0,
+                        Opcode::Binary(_) => true,
+                        _ => false,
+                    },
+            )
     };
     // What an operand is: a value the loop widened, or a loop-invariant one.
     let source_of = |operand: Operand, widened: &[InstId]| -> Result<Source, Skipped> {
@@ -234,7 +237,10 @@ fn extract(
             };
         }
         if let Operand::Constant(c) = operand
-            && !matches!(cx.context.get(c).kind, ConstantKind::Int(_) | ConstantKind::Zero)
+            && !matches!(
+                cx.context.get(c).kind,
+                ConstantKind::Int(_) | ConstantKind::Zero
+            )
         {
             return Err(Skipped("An operand constant that is not an integer"));
         }
@@ -326,7 +332,10 @@ fn extract(
                     && matches!(data.operands[1], Operand::Constant(_))
                     && function.users(value).iter().all(|one| {
                         function.parent(one.user) == Some(header)
-                            && matches!(function.instruction(one.user).opcode, Opcode::GetElementPtr { .. })
+                            && matches!(
+                                function.instruction(one.user).opcode,
+                                Opcode::GetElementPtr { .. }
+                            )
                     });
                 if offsets_address {
                     continue;
@@ -399,7 +408,8 @@ fn extract(
                 } else {
                     None
                 };
-                let Some(bound_operand) = bound_operand.filter(|_| matches!(predicate, IntPredicate::Eq | IntPredicate::Ne))
+                let Some(bound_operand) =
+                    bound_operand.filter(|_| matches!(predicate, IntPredicate::Eq | IntPredicate::Ne))
                 else {
                     return Err(Skipped("The exit test is not the stepped induction against a loop-invariant bound"));
                 };
@@ -447,8 +457,13 @@ fn broadcast(
     let before = Position::Before(function.terminator(preheader).expect("a terminated preheader"));
     let poison = Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Poison }));
     let zero = Operand::Constant(context.int(context.types.intern(Type::Int(64)), 0));
-    let inserted =
-        function.create_instruction(Opcode::InsertElement, vector_ty, vec![poison, scalar, zero], Flags::default(), Some("broadcast.splatinsert"));
+    let inserted = function.create_instruction(
+        Opcode::InsertElement,
+        vector_ty,
+        vec![poison, scalar, zero],
+        Flags::default(),
+        Some("broadcast.splatinsert"),
+    );
     function.insert(inserted, before).expect("the preheader");
     let inserted = Operand::Value(function.instruction(inserted).result.expect("an insertelement"));
     let shuffled = function.create_instruction(
@@ -476,9 +491,9 @@ fn source_part(
     splats: &mut Vec<(Operand, Operand)>,
 ) -> Operand {
     match source {
-        Source::Wide(def) => Operand::Value(
-            wide.iter().find(|(old, _)| *old == def).expect("the definition comes first").1[part],
-        ),
+        Source::Wide(def) => {
+            Operand::Value(wide.iter().find(|(old, _)| *old == def).expect("the definition comes first").1[part])
+        }
         Source::Splat(scalar) => match splats.iter().find(|(one, _)| *one == scalar) {
             Some((_, made)) => *made,
             None => {
@@ -606,9 +621,21 @@ fn execute(
                 let vector_ty = vector_of(context, operation.element);
                 let mut parts = Vec::new();
                 for part in 0..plan.ic as usize {
-                    let operands = operation.operands.map(|source| {
-                        source_part(context, function, splat_block, vector_ty, plan.vf, source, part, &wide, &mut splats)
-                    });
+                    let operands = operation
+                        .operands
+                        .map(
+                            |source| source_part(
+                                context,
+                                function,
+                                splat_block,
+                                vector_ty,
+                                plan.vf,
+                                source,
+                                part,
+                                &wide,
+                                &mut splats,
+                            ),
+                        );
                     let made = function.create_instruction(
                         Opcode::Binary(operation.op),
                         vector_ty,
@@ -663,9 +690,10 @@ impl FunctionPass for LoopVectorize {
             eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));
         }
         let opt_size = has_opt_size(unit.function);
-        // DEVIATE LV-OS (owner llrm-arm64-vec, exit 2026-11-24): the pin widens an
-        // optsize loop whose trip count VF divides; here none, until the cause card
-        // for the bytes it adds at -Os (histo, scroll, jpeg) is closed.
+        // DEVIATE LV-OS (owner llrm-arm64-vec, exit 2026-11-24): the pin widens
+        // an optsize loop whose trip count VF divides; here none, until
+        // the cause card for the bytes it adds at -Os (histo, scroll,
+        // jpeg) is closed.
         if opt_size {
             return PreservedAnalyses::all();
         }
@@ -734,11 +762,12 @@ impl FunctionPass for LoopVectorize {
                         None
                     }
                 };
-                // `computeBestVF` chose VF 1 (or the widening is not translated):
-                // the loop may still be interleaved (L8067).
+                // `computeBestVF` chose VF 1 (or the widening is not
+                // translated): the loop may still be
+                // interleaved (L8067).
                 vector.or_else(|| {
                     let (primary, step) = primary_and_step(se, &legality).ok()?;
-                    let extracted = match interleave::extract(&cx, found, &legality, &*tti, primary, step) {
+                    let extracted = match interleave::extract(se, &cx, found, &legality, &*tti, primary, step) {
                         Ok(extracted) => extracted,
                         Err(Skipped(reason)) => {
                             why(unit, &outer, header, &format!("interleave: {reason}"));
@@ -758,7 +787,15 @@ impl FunctionPass for LoopVectorize {
                         opt_size,
                     };
                     if extracted.widening_mul || pin_may_vectorize(&*tti, &priced) {
-                        why(unit, &outer, header, "interleave: the pin may vectorize this loop (casts, reductions and some operations are not widened yet)");
+                        why(
+                            unit,
+                            &outer,
+                            header,
+                            &format!(
+                                "interleave: the pin may vectorize this loop ({}; casts, reductions and some operations are not widened yet)",
+                                crate::loopvectorizeplan::describe_costs(&*tti, &priced)
+                            ),
+                        );
                         return None;
                     }
                     let facts = ScalarFacts {
@@ -774,7 +811,10 @@ impl FunctionPass for LoopVectorize {
                         opt_size,
                     };
                     match choose_interleave(&*tti, &facts) {
-                        Ok(ic) => Some(Planned::Interleave(ic, extracted)),
+                        Ok(ic) => {
+                            why(unit, &outer, header, &format!("scalar loop costs: {}", facts.cost));
+                            Some(Planned::Interleave(ic, extracted))
+                        }
                         Err(not) => {
                             why(unit, &outer, header, &format!("interleave plan: {not:?}"));
                             None
@@ -853,29 +893,33 @@ enum Planned {
     Interleave(u32, Extracted),
 }
 
-/// The exit block's phis read values the loop does not define (LVS3): a remainder
-/// adds an arm from the middle block, which has no iteration's value to give,
-/// but for the last value of a reduction (`reductions`, the updates) that block
-/// computes.
+/// The exit block's phis read values the loop does not define (LVS3): a
+/// remainder adds an arm from the middle block, which has no iteration's value
+/// to give, but for the last value of a reduction (`reductions`, the updates)
+/// that block computes.
 fn exit_phis_are_invariant(
     function: &Function,
     shape: Shape,
     reductions: &[InstId],
 ) -> bool {
-    crate::edges::phis(function, shape.exit).into_iter().all(|phi| {
-        crate::lcssa::arms(function, phi).into_iter().all(|(value, from)| {
-            from != shape.header
-                || match value {
-                    Operand::Value(value) => match function.value(value).def {
-                        llrm_mir::module::ValueDef::Instruction(def) => {
-                            function.parent(def) != Some(shape.header) || reductions.contains(&def)
-                        }
-                        _ => true,
-                    },
-                    _ => true,
-                }
-        })
-    })
+    crate::edges::phis(function, shape.exit)
+        .into_iter()
+        .all(
+            |phi| crate::lcssa::arms(function, phi)
+                .into_iter()
+                .all(
+                    |(value, from)| from != shape.header
+                        || match value {
+                            Operand::Value(value) => match function.value(value).def {
+                                llrm_mir::module::ValueDef::Instruction(def) => {
+                                    function.parent(def) != Some(shape.header) || reductions.contains(&def)
+                                }
+                                _ => true,
+                            },
+                            _ => true,
+                        },
+                ),
+        )
 }
 
 /// `LLVM_DEBUG` of LoopVectorize (D3), on `LLRM_DEBUG=loop-vectorize`: the

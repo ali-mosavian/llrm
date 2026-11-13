@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os | -O0 -m32 | -O2 -m32
+// bar: not comparable (SDCC double is 32 bits); twin long_double_arguments_f32
 // long double arguments between ints, and a long double result: at -m32 the front end made long double a double, then the x87 type
 // was pushed as 10 bytes where the callee reads whole 12-byte slots, so the second argument and the ints after it were misread.
 extern void report(long value);

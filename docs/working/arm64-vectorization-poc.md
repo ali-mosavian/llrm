@@ -115,3 +115,22 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 - **Why it is more than SplitVector:** `sext <8 x i16>` to `<8 x i64>` splits to four `<2 x i64>` results with `<2 x i16>` sources. In order: (1) 64-bit D-register vectors legal (v8i8, v4i16, v2i32, v1i64), (2) SplitVector, (3) WidenVector for what stays under 64 bits, (4) ext/trunc lowering (`sshll`, `ushll`, `xtn`). Skipping (1) means widening everything to 128 bits: output unlike the pin.
 - **Cells:** histo:21 (`<16 x i16>`, trunc to `<16 x i8>`), particle init (`<8 x i64>`, trunc), recsum (`sext <2 x i32>`), scroll:28, plus the widened induction (`vec.ind`) they use.
 - **Slices:** (1) D-register types and their selection; (2) SplitVector for load, store, binary, shift; (3) casts and `vec.ind` in the vectorizer. No date; after LV-X3a.
+
+## LV-W: widening plan for the counted cells (2026-11-12, tip b227f477a5, card; owner llrm-arm64-vec)
+
+TL;DR: the pin's loop vectorizer removes the whole gap of six counted cells (`~/scratch/handoff/arm64-top-gap-cards-2026-11-12.md`). Our refusals say what each slice must lift; slices are in dependency order, each a draft until it moves a cell.
+
+| cell (O2/O3 instrs gap) | pin loops (`-Rpass`) | ours today (`LLRM_DEBUG=loop-vectorize`) |
+|---|---|---|
+| jpeg_single +1.33M / +1.54M | :137 VF 4 (IDCT pass 1: 8 strided `i64` loads, `sitofp`, `fmuladd`), :145 VF 8 (pass 2), :345 VF 16 IC 2, :318 VF 2 IC 2 | :345, :318 done; IDCT loops "Found a non-intrinsic callsite" (`llvm.fmuladd`) |
+| jpeg_fixed +0.95M / +1.13M | :165 VF 16, :345, :318; SLP horizontal reduction :150 | :345, :318 done; :165 "A binary result used other than by a store or a binary operation" |
+| stft_single +0.99M / +5.49M (gcc) | :48 VF 4 IC 2, :52 VF 16 IC 2, :74 butterfly VF 4; gcc: :74 versioned | :52 "memory conflicts" (needs runtime checks), :48 "no vector of the element type" |
+
+Slices (pin function in the PR body; each: fail-first, per-target md5 identity, compile-time wall clock):
+1. **LV-D4 intrinsic calls** (`LoopVectorizationLegality::canVectorizeInstrs` call arm, `getVectorIntrinsicIDForCall`; `VPWidenIntrinsicRecipe`, `getIntrinsicInstrCost`): `fmuladd`, `fabs`, `smin`... Cells: jpeg_single IDCT (with 2, 3).
+2. **FP lanes** (`VPWidenRecipe` fadd/fsub/fmul/fdiv/fneg, v4f32/v2f64 backend patterns): jpeg_single, stft_single.
+3. **Casts and legalization**: LV-X4 slices (D-registers, `SplitVector`, `sitofp`/`fptosi`/`trunc`): jpeg_single pass 1 (`<4 x i64>` to `<4 x float>`), stft :48.
+4. **Strided accesses** (`CM_Scalarize` replicate recipes, `VPReplicateRecipe`, the pin's `getMemInstScalarizationCost` already priced in #9473): jpeg_single pass 1 (`cosine[x][u]`), stft `tw[j*stride]`.
+5. **Binary result used by other than store/binary** (select, compare, reduction users): jpeg_fixed :165, reductions (`VPReductionPHIRecipe`, horizontal add).
+6. **Runtime alias checks** (`vector.memcheck`, `RuntimePointerChecking::generateChecks`, LV-M1): stft :52/:74, the O3 gcc bar. Own slice.
+LV-OS gate stays (DEVIATE LV-OS, exit 2026-11-24 cause card). Bytes at O2 vs gcc: jpeg_single +980 B, jpeg_fixed +1,540 B (O2 rate cells: +0.3 net per byte, 294/462 instrs against gaps of 1.33M/0.95M); gcc does not unroll at O2, not a vector cause.

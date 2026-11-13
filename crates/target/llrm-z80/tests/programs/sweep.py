@@ -189,7 +189,7 @@ def sdcc_cell(path, w, tag, flags, ctx, want):
     assemble(d, REPORT_SDCC, CRT0_SDCC)
     try:
         branch = branch_header(path.read_text(errors="replace"), ctx.predefined, d / "branch.h")
-        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", *ctx.defines, *branch, str(path), "-o", "p.rel"], d, timeout=300)
+        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", *ctx.defines, *branch, str(path), "-o", "p.rel"], d, timeout=ctx.sdcc_timeout)
     except subprocess.TimeoutExpired:
         raise Void("SDCC timeout")
     if s.returncode or not (d / "p.rel").exists():
@@ -237,15 +237,23 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--timeout", type=int, default=60, help="seconds a program may run on ucsim")
     ap.add_argument("--compile-timeout", type=int, default=120)
+    ap.add_argument("--sdcc-timeout", type=int, default=300, help="seconds SDCC may compile one cell (the -ma variants of div_constants_long need more)")
     ap.add_argument("--program-flags-to-llc", action="store_true")
     ap.add_argument("--ours-only", action="store_true")
     ap.add_argument("--sdcc-only", action="store_true")
     ap.add_argument("--runtime", default=str(run.RUNTIME), help="the z80_rt.s to link (the compiler's own build of it)")
     ap.add_argument("--allow-runtime-mismatch", action="store_true")
+    ap.add_argument("--no-library-checks", action="store_true", help="skip the soft-float library's own run checks (a full sweep runs them first)")
+    ap.add_argument("--no-softfloat", action="store_true", help="run without Z80_LIBC_EXTRA: the float programs will not link")
     ctx = ap.parse_args()
     run.RUNTIME = Path(ctx.runtime)
+    if why := guard.softfloat_library_missing(os.environ, ctx.sdcc_only, ctx.no_softfloat):
+        sys.exit(f"sweep.py: {why}")
     if not ctx.sdcc_only and not ctx.allow_runtime_mismatch and (why := run.runtime_mismatch(ctx.llc, run.RUNTIME)):
         sys.exit(f"sweep.py: {why}")
+    if not (ctx.sdcc_only or ctx.no_softfloat or ctx.no_library_checks or ctx.names):
+        if failed := guard.failed_library_checks(str(run.ROOT), ctx.llc):
+            sys.exit("sweep.py: library check failed: " + "; ".join(f"{script}: {line}" for script, line in failed.items()))
     corpus = [p.stem for p in run.selected(Path(ctx.src))]
     expected = ctx.names or corpus
     # a requested name the corpus does not select (a typo, or tagged for other targets) is a dropped program, not a skipped one

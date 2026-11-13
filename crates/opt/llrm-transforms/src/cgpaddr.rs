@@ -183,8 +183,9 @@ impl FunctionPass for CgpAddr {
         let merged = crate::emptyblocks::eliminated(unit.context, unit.layout, analyses, unit.function);
         // `dupRetToEnableTailCallOpts`: a return after a tail call is the
         // call's.
-        let merged =
-            crate::cgpretdup::returns_duplicated(unit.context, &analyses.outer().globals, unit.function) | merged;
+        let merged = (analyses.outer().target().may_be_emitted_as_tail_call()
+            && crate::cgpretdup::returns_duplicated(unit.context, &analyses.outer().globals, unit.function))
+            | merged;
         let closed = trivial_phis(unit.context, unit.layout, unit.function);
         let branched = crate::cgpbranch::branches_optimized(
             unit.context,

@@ -362,7 +362,7 @@ impl Cpu {
 /// registers the vector takes, and its legal lane count per register. A lane
 /// of 8, 16, 32 or 64 bits and a power-of-two count only (DEVIATE VT1: other
 /// shapes are widened or split by `TypeLegalizer` and are not priced).
-fn vector_pieces(ty: VectorTy) -> Option<(i64, u32)> {
+pub(crate) fn vector_pieces(ty: VectorTy) -> Option<(i64, u32)> {
     let lane = match ty.lane {
         Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
         Ty::Float => 32,
@@ -395,12 +395,16 @@ fn vector_memory_op_cost(
         CostKind::RecipThroughput => {}
     }
     // Unaligned 128-bit stores, on the cpus that set the feature.
-    if cpu.misaligned_128_store_slow() && op == MemoryOp::Store && u64::from(lane) * u64::from(ty.count) == 128 && align < 16 {
+    if cpu.misaligned_128_store_slow()
+        && op == MemoryOp::Store
+        && u64::from(lane) * u64::from(ty.count) == 128
+        && align < 16
+    {
         const AMORTIZATION_COST: i64 = 6;
         return Some(Cost::of(first * 2 * AMORTIZATION_COST));
     }
-    // `useNeonVector`: an element of a power of two between 8 and 64 bits, and an access that is
-    // not byte-aligned, costs the registers it takes.
+    // `useNeonVector`: an element of a power of two between 8 and 64 bits, and
+    // an access that is not byte-aligned, costs the registers it takes.
     if align != 1 {
         return Some(Cost::of(first));
     }
@@ -427,10 +431,11 @@ fn vector_memory_op_cost(
 }
 
 /// `AArch64TTIImpl::getArithmeticInstrCost` for a fixed vector, throughput:
-/// `add`/`sub`/`mul` and the bitwise and shift operations of a legal type are one
-/// instruction per register (L4985-4990, then `BaseT`). DEVIATE VT3: a `mul` of
-/// `<2 x i64>` (14 in the pin: no `mul.2d`) and the divisions and floating-point
-/// operations are not priced, so a loop that has one is not vectorized.
+/// `add`/`sub`/`mul` and the bitwise and shift operations of a legal type are
+/// one instruction per register (L4985-4990, then `BaseT`). DEVIATE VT3: a
+/// `mul` of `<2 x i64>` (14 in the pin: no `mul.2d`) and the integer divisions
+/// are not priced, so a loop that has one is not vectorized; `frem` of a vector
+/// (24 to 52 in the pin: libcalls) is not priced either.
 fn vector_arithmetic_cost(
     op: ArithOp,
     ty: VectorTy,
@@ -440,10 +445,16 @@ fn vector_arithmetic_cost(
         return None;
     }
     let (first, lane) = vector_pieces(ty)?;
+    let float = ty.lane.is_float();
     match op {
-        ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => Some(Cost::of(first)),
-        ArithOp::Shl | ArithOp::LShr | ArithOp::AShr => Some(Cost::of(first)),
-        ArithOp::Mul if lane < 64 => Some(Cost::of(first)),
+        ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor if !float => Some(Cost::of(first)),
+        ArithOp::Shl | ArithOp::LShr | ArithOp::AShr if !float => Some(Cost::of(first)),
+        ArithOp::Mul if !float && lane < 64 => Some(Cost::of(first)),
+        // L5283-5306: `fadd`, `fsub` and `fneg` are one per register, `fmul`
+        // and `fdiv` two (marked custom to lower them to SVE, at no added
+        // cost).
+        ArithOp::FAdd | ArithOp::FSub | ArithOp::FNeg if float => Some(Cost::of(first)),
+        ArithOp::FMul | ArithOp::FDiv if float => Some(Cost::of(2 * first)),
         _ => None,
     }
 }
@@ -469,7 +480,8 @@ impl Tti for AArch64 {
         true
     }
 
-    /// DEVIATE INL-SPEED-OS (owner w11, exit 2026-12-05): see `Tti::inline_trial_speed_at_size`.
+    /// DEVIATE INL-SPEED-OS (owner w11, exit 2026-12-05): see
+    /// `Tti::inline_trial_speed_at_size`.
     fn inline_trial_speed_at_size(&self) -> Option<i64> {
         Some(16)
     }
@@ -540,7 +552,8 @@ impl Tti for AArch64 {
         true
     }
 
-    /// DEVIATE ROTATION-TRIAL and ROTATION-HOT (owner w11, exit 2026-12-05): see `crate::trial`.
+    /// DEVIATE ROTATION-TRIAL and ROTATION-HOT (owner w11, exit 2026-12-05):
+    /// see `crate::trial`.
     fn rotation_trial_at_size(&self) -> bool {
         true
     }
@@ -623,9 +636,11 @@ impl Tti for AArch64 {
         Some((3, 5))
     }
 
-    /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear recursion called from another function is peeled into
-    /// the caller to gcc's caps. recpow -O2: 67,475 instructions / 260 B to 42,666 / 920 B (gcc 44,084 / 1,244); the other 71 cells of the
-    /// corpus are identical. Pin: none.
+    /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear
+    /// recursion called from another function is peeled into the caller to
+    /// gcc's caps. recpow -O2: 67,475 instructions / 260 B to 42,666 / 920 B
+    /// (gcc 44,084 / 1,244); the other 71 cells of the corpus are
+    /// identical. Pin: none.
     fn peels_linear_recursion(&self) -> bool {
         true
     }
@@ -775,6 +790,36 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Option<Cost> {
         vector_arithmetic_cost(op, ty, kind)
+    }
+
+    fn vector_cast_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::cast_cost(kind, dst, src, cost_kind)
+    }
+
+    fn vector_cmp_sel_cost(
+        &self,
+        op: CmpSel,
+        ty: VectorTy,
+        predicate: Option<Predicate>,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::cmp_sel_cost(op, ty, predicate, cost_kind)
+    }
+
+    fn scalarization_overhead(
+        &self,
+        ty: VectorTy,
+        insert: bool,
+        extract: bool,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::scalarization_overhead(ty, insert, extract, cost_kind)
     }
 
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
@@ -1366,8 +1411,8 @@ impl Lowering for AArch64Lowering {
     }
 
     // `isOperationLegalOrCustom`, read from the table the DAG legalizer uses
-    // (`TargetLowering::aarch64`, AArch64ISelLowering.cpp#L481): one table, so the IR-level
-    // answer cannot drift from the legalizer's.
+    // (`TargetLowering::aarch64`, AArch64ISelLowering.cpp#L481): one table, so
+    // the IR-level answer cannot drift from the legalizer's.
     fn is_operation_legal_or_custom(
         &self,
         op: Isd,
@@ -1402,15 +1447,17 @@ impl Lowering for AArch64Lowering {
         TABLE.with(|table| table.is_operation_legal_or_custom(node, EVT::integer(bits)))
     }
 
-    // AArch64ISelLowering.cpp#L1274, `EnableExtLdPromotion = true`: CodeGenPrepare promotes the
-    // operands of an extension towards the load that feeds them (CodeGenPrepare.cpp#L6747):
+    // AArch64ISelLowering.cpp#L1274, `EnableExtLdPromotion = true`:
+    // CodeGenPrepare promotes the operands of an extension towards the load
+    // that feeds them (CodeGenPrepare.cpp#L6747):
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1274
     fn enable_ext_ld_promotion(&self) -> bool {
         true
     }
 
-    // AArch64ISelLowering.cpp#L1141, `setLoadExtAction(SEXTLOAD, VT, i1, Expand)` for every
-    // integer type; the rest is the base class's `Legal`:
+    // AArch64ISelLowering.cpp#L1141, `setLoadExtAction(SEXTLOAD, VT, i1,
+    // Expand)` for every integer type; the rest is the base class's
+    // `Legal`:
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1141
     fn is_load_ext_legal(
         &self,

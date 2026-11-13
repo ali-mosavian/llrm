@@ -415,6 +415,7 @@ fn allocated_with(
     duplicate: bool,
 ) -> Result<Allocated, String> {
     let done = allocated_choosing(selected, name, request, duplicate);
+    HOT_LOOP_FOLD.with(|one| one.set(true));
     // what the later prices of this function weigh by: the blocks as the kept
     // allocation has them
     if let Ok((.., Some(own))) = &done {
@@ -441,6 +442,8 @@ fn allocated_choosing(
     }
     eliminate_phis_with(&mut function, false);
     merge_lone_constant_stores(&mut function);
+    let (joins, plain_first) = repeating_loop_fold_wins(&function, name, request.level);
+    HOT_LOOP_FOLD.with(|one| one.set(joins));
     let mut hoisted = function.clone();
     // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
     let mut split = function.clone();
@@ -452,7 +455,10 @@ fn allocated_choosing(
         // weighted cost. The other choices are explored on both: lz4c -O2 wants
         // the plain one's (exploring only the better first allocation made it 442
         // B against 427).
-        match (allocate(function.clone(), name, request.level), allocate(hoisted, name, request.level)) {
+        match (
+            allocate_from(function.clone(), name, request.level, plain_first),
+            allocate(hoisted, name, request.level),
+        ) {
             (Ok(plain), Ok(with)) => {
                 match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
                     (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
@@ -463,7 +469,7 @@ fn allocated_choosing(
             (plain, Err(_)) => plain,
         }
     } else {
-        allocate(function, name, request.level)
+        allocate_from(function, name, request.level, plain_first)
     };
     if !splits {
         return base;
@@ -513,7 +519,7 @@ fn cheaper(
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
+    let priced = |(bytes, clocks): (u32, u64)| clocks + u64::from(bytes) * crate::tti::SPEED_MILLICLOCKS_PER_BYTE as u64 / 1000;
     if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
 }
 
@@ -626,6 +632,41 @@ mod tests {
             assert!(sunk_operand(&function, 0, 2, Reg::Virt(1)).is_none(), "flag operand named: {named}");
         }
     }
+
+    /// `or a; ...; add hl, de; ...; cp a, 0; jr nz` lost its `or`: the test was dropped across the `add hl`, whose Z
+    /// the CPU keeps, but the flag liveness that followed read the `add` as a full flag def and deleted the `or`
+    /// chain; the `jr nz` then read the `add`'s flags and `(long)(3.0 / 1.0)` was 4 (f64 divide of a mantissa
+    /// at least 1 with fraction bits). The test stays whenever a flag setter lies between.
+    #[test]
+    fn a_zero_test_is_kept_where_another_flag_setter_lies_between() {
+        let (a, flags) = (Reg::Phys(crate::reg::A), Reg::Phys(crate::reg::FLAGS));
+        let mut or = Inst::new(Kind::Op("OR8r"), vec![Operand::Def(a), Operand::Use(a), Operand::Use(Reg::Virt(2))]);
+        or.sets_flags = true;
+        let mut add = Inst::new(Kind::Op("ADD16"), vec![Operand::Def(Reg::Virt(5)), Operand::Use(Reg::Virt(6))]);
+        add.sets_flags = true;
+        let mut test = Inst::new(Kind::Op("CP8i"), vec![Operand::Def(flags), Operand::Use(a), Operand::Imm(0)]);
+        test.sets_flags = true;
+        let mut jump = Inst::new(Kind::Op("JPNZ"), vec![Operand::Block(1), Operand::Use(flags)]);
+        jump.reads_flags = true;
+        jump.terminator = true;
+        let insts = vec![
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(1))]),
+            or,
+            Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(3)), Operand::Use(a)]),
+            add,
+            Inst::new(Kind::Copy, vec![Operand::Def(a), Operand::Use(Reg::Virt(3))]),
+            test,
+            jump,
+        ];
+        let mut function = MFunction::new("f");
+        function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+        eliminate_tests(&mut function);
+        eliminate_dead(&mut function);
+        let insts = &function.blocks[0].insts;
+        let reader = insts.iter().position(|inst| inst.reads_flags).expect("the jump stays");
+        let setter = insts[..reader].iter().rposition(|inst| inst.sets_flags).expect("something sets the flags it reads");
+        assert_ne!(insts[setter].kind, Kind::Op("ADD16"), "the jump reads the add's flags: {insts:?}");
+    }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -652,10 +693,21 @@ fn allocate(
     name: &str,
     level: Level,
 ) -> Result<Allocated, String> {
-    LOOPS_FOLDED.with(|one| one.set(false));
-    let first = allocate_first(function.clone(), name, level)?;
-    let folded = LOOPS_FOLDED.with(|one| one.get());
-    let best = improved(first, folded, function.clone(), name, level);
+    allocate_from(function, name, level, None)
+}
+
+/// [`allocate`], from the first allocation of `function` where one is at hand.
+fn allocate_from(
+    function: MFunction,
+    name: &str,
+    level: Level,
+    first: Option<First>,
+) -> Result<Allocated, String> {
+    let first = match first {
+        Some(first) => first,
+        None => allocate_first(function.clone(), name, level)?,
+    };
+    let best = improved(first, function.clone(), name, level);
     // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
     // slots are all frame cells, so it folds every spilled read. Here a slot
     // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
@@ -666,11 +718,7 @@ fn allocate(
         return Ok(best);
     }
     crate::regalloc::NO_FOLD.with(|one| one.set(true));
-    LOOPS_FOLDED.with(|one| one.set(false));
-    let other = allocate_first(function.clone(), name, level).map(|first| {
-        let folded = LOOPS_FOLDED.with(|one| one.get());
-        improved(first, folded, function, name, level)
-    });
+    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level));
     crate::regalloc::NO_FOLD.with(|one| one.set(false));
     Ok(match other {
         Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
@@ -679,6 +727,39 @@ fn allocate(
         },
         Err(_) => best,
     })
+}
+
+/// Whether joining the guard and latch of the repeating loops stays for this
+/// function: decided once, on the first allocation of each, so the variants
+/// below all run in the one mode. Joined, the allocator can spill and place
+/// slots worse; the function as it was wins where it prices cheaper (DEVIATE
+/// Z80T1).
+fn repeating_loop_fold_wins(
+    function: &MFunction,
+    name: &str,
+    level: Level,
+) -> (bool, Option<First>) {
+    if matches!(level, Level::Os | Level::Oz) {
+        return (true, None);
+    }
+    LOOPS_FOLDED.with(|one| one.set(false));
+    let Ok(joined) = allocate_first(function.clone(), name, level) else { return (true, None) };
+    if !LOOPS_FOLDED.with(|one| one.get()) {
+        return (true, Some(joined));
+    }
+    HOT_LOOP_FOLD.with(|one| one.set(false));
+    let apart = allocate_first(function.clone(), name, level);
+    HOT_LOOP_FOLD.with(|one| one.set(true));
+    let Ok(apart) = apart else { return (true, Some(joined)) };
+    // the allocation kept is the first of the plain function in the chosen mode
+    if matches!(
+        (priced_in_loops(&joined.0, level), priced_in_loops(&apart.0, level)),
+        (Some(now), Some(then)) if cheaper(level, then, now)
+    ) {
+        (false, Some(apart))
+    } else {
+        (true, Some(joined))
+    }
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
@@ -719,7 +800,6 @@ fn allocate_with(
 /// `a` and in a register of its own loaded through `a` or through `hl`.
 fn improved(
     (mut best, held, explore): First,
-    folded: bool,
     function: MFunction,
     name: &str,
     level: Level,
@@ -741,20 +821,6 @@ fn improved(
         if let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
             if cheaper(level, then, now) {
                 best = other;
-            }
-        }
-    }
-    if folded {
-        // The fold's new shape can allocate worse (more spills): the function
-        // as it was stays if it prices cheaper.
-        HOT_LOOP_FOLD.with(|one| one.set(false));
-        let other = allocate_with(None, true, function, name, level);
-        HOT_LOOP_FOLD.with(|one| one.set(true));
-        if let Ok((other, _)) = other {
-            if let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
-                if cheaper(level, then, now) {
-                    best = other;
-                }
             }
         }
     }
@@ -3447,8 +3513,7 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
 /// `optimizeCompareInstr`: the test of a byte against zero (`cp 0`) after the
 /// instruction that made the byte and set the flags by it is dropped when only
 /// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`.
-/// Every `ld` between leaves the flags alone, and so does `add hl, rr` (but
-/// for C, H and N).
+/// Every `ld` between leaves the flags alone.
 fn eliminate_tests(function: &mut MFunction) {
     for block in &mut function.blocks {
         let mut at = 1;
@@ -3486,14 +3551,11 @@ fn eliminate_tests(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // `add hl, rr` (Z80 CPU User Manual UM0080, ADD HL,ss): C is the
-            // carry out of bit 15, H out of bit 11, N is reset; S,
-            // Z and P/V are not affected, so the zero of the byte
-            // survives it. (`adc hl, rr` and `sbc hl, rr` set all
-            // of them.)
-            let flags_kept = block.insts[setter + 1..at - 1]
-                .iter()
-                .all(|inst| !inst.call && (!inst.sets_flags || inst.kind == Kind::Op("ADD16")));
+            // `optimizeCompareInstr` stops at an instruction between that sets the
+            // flags. `add hl, rr` keeps Z, but every flag scan after this
+            // (`eliminate_dead`, the expander's `flags_dead`) reads it as a full
+            // def, so a zero kept across it was deleted with its setter.
+            let flags_kept = block.insts[setter + 1..at - 1].iter().all(|inst| !inst.call && !inst.sets_flags);
             let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags);
             let only_zero = readers
                 .filter(|inst| inst.reads_flags)

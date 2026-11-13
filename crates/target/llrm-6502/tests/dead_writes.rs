@@ -70,3 +70,13 @@ fn a_compare_stays_when_a_branch_reads_its_zero_flag() {
     let text = "  cmp rc3\n  bne L\n  rts\nL:\n  rts\n";
     assert_eq!(run(text), text);
 }
+
+/// `bit` ands `a` with its operand: a load before it was dropped as dead.
+#[test]
+fn an_accumulator_load_stays_before_a_bit_test() {
+    let text = "  lda rc3\n  bit rc2\n  bne out\n  rts\nout:\n  rts\n";
+    let mut asm = Asm::parse(text);
+    asm.no_a_result = true;
+    drop_dead_writes(&mut asm);
+    assert_eq!(asm.text(), text);
+}

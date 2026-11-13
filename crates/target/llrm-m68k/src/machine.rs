@@ -437,6 +437,34 @@ impl Tti for M68k {
         if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
     }
 
+    /// DEVIATE SZ2-TRIPS (owner m68k, exit 2026-11-24): the callee's loop runs
+    /// its trips in the clocks the priced trial weighs against the copy's
+    /// bytes (recsum -O2: the constant trip count makes the `%` unsigned,
+    /// 24,009 clk the once-through count never saw).
+    fn inline_trial_by_trips(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the CPU has no 32-bit divide
+    /// instruction (68000, 68010) the divide is a libcall, and `divu.w` (16 bits) is one instruction.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        let has_long_divide = self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020);
+        (!has_long_divide).then_some(16)
+    }
+
+    /// DEVIATE UNROLL-OS-TRIAL (owner m68k, exit 2026-11-24): the unrolled size
+    /// up to which a loop the -Os threshold refused is unrolled on trial; the
+    /// driver keeps it where the finished functions are smaller (as x86-m32's
+    /// 30). The pin never unrolls at -Os past its threshold.
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        Some(100)
+    }
+
+    /// DEVIATE PEEL-OS-TRIAL: the same trial peels (`loopunrollpass`).
+    fn peels_on_trial_at_size(&self) -> bool {
+        true
+    }
+
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
@@ -699,6 +727,20 @@ impl Tti for M68k {
     ) -> Cost {
         if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020), self.speed_lowering);
+        }
+        // A quotient by a constant is the magic multiply the DAG makes of it:
+        // its clocks, not one operation's (SZ2-TRIPS: the unsigned and the
+        // signed differ by the sign's three instructions a trip).
+        if kind == CostKind::Latency
+            && let Some(clocks) = crate::sizes::constant_division_clocks(
+                self.cpu,
+                op,
+                ty,
+                right,
+                self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020),
+            )
+        {
+            return Cost::of(clocks);
         }
         // DEVIATE: the pin's base class prices a multiply or divide it expands
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last

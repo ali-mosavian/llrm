@@ -65,8 +65,13 @@ def check_sum(counted, whole):
         raise SystemExit(f'count.py: kernel+main+runtime = {parts}, whole = {whole}, outside every range = {counted.get("other", 0)}')
 
 
+def histogram_wants(name, kernel):
+    """Whether an address of class `name` goes in the histogram: with `kernel` only the kernels' own."""
+    return not kernel or name == 'kernel'
+
+
 def run(path, limit=300_000_000, kernel=None, histogram=None):
-    """`histogram`, a dict, is filled with the execution count of every address (tools/arm64/clocks.py prices them)."""
+    """`histogram`, a dict, is filled with the execution count of every address in the chosen range (tools/arm64/clocks.py prices them)."""
     from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_INTR
     from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_CPACR_EL1, UC_ARM64_REG_X30, UC_ARM64_REG_X8, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_PC
     d = open(path, 'rb').read()
@@ -100,8 +105,8 @@ def run(path, limit=300_000_000, kernel=None, histogram=None):
     counted, whole = {}, [0]
     def hook(u, a, s, ud):
         whole[0] += 1
-        if histogram is not None: histogram[a] = histogram.get(a, 0) + 1
         name = class_of(ranges, a)
+        if histogram is not None and histogram_wants(name, kernel): histogram[a] = histogram.get(a, 0) + 1
         counted[name] = counted.get(name, 0) + 1
     uc.hook_add(UC_HOOK_CODE, hook)
     files, written, nextfd = {}, hashlib.md5(), [3]

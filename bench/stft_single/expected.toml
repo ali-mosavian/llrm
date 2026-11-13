@@ -1,65 +1,99 @@
-reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
-blessed = "2026-11-10"
-corpus = "22aafb2ab0b9a19280dc9bafc6078e88"
+reason = "references re-measured after #9464: ow's far __doserror_; ow stft_single O2 (-or) and tc stft_single print another sum, left unmeasured"
+blessed = "2026-11-12"
+corpus = "41be7a109a18130dbc271dae5cbe1250"
+
+[ow.O1]
+instructions = 36168795
+memory_operands = 27637438
+clocks = 166166840
+layout_clocks = 166165290
+pad_nops = 1550
+code_bytes = 892
+data_bytes = 40
+bss_bytes = 5122
+helper_bytes = 24
+
+[ow.Os]
+instructions = 36168795
+memory_operands = 27637438
+clocks = 166166840
+layout_clocks = 166165290
+pad_nops = 1550
+code_bytes = 892
+data_bytes = 40
+bss_bytes = 5122
+helper_bytes = 24
 
 [bcc.O1]
 instructions = 80193778
 memory_operands = 25814169
 clocks = 257832549
+layout_clocks = 257766115
+pad_nops = 66434
 code_bytes = 1126
-helper_bytes = 0
 data_bytes = 39
 bss_bytes = 5122
+helper_bytes = 0
 kernel_ms = 1101.8621
 
 [bcc.O2]
 instructions = 57725874
 memory_operands = 23505985
 clocks = 208594869
+layout_clocks = 208528435
+pad_nops = 66434
 code_bytes = 1114
-helper_bytes = 0
 data_bytes = 39
 bss_bytes = 5122
+helper_bytes = 0
 kernel_ms = 802.1658
 
 [bcc.Os]
 instructions = 80193778
 memory_operands = 25814169
 clocks = 257832549
+layout_clocks = 257766115
+pad_nops = 66434
 code_bytes = 1126
-helper_bytes = 0
 data_bytes = 39
 bss_bytes = 5122
+helper_bytes = 0
 kernel_ms = 1101.8621
 
 [tcpp.O1]
 instructions = 86050856
 memory_operands = 31481439
 clocks = 268551748
+layout_clocks = 268485311
+pad_nops = 66437
 code_bytes = 1265
-helper_bytes = 23
 data_bytes = 39
 bss_bytes = 5122
+helper_bytes = 23
 kernel_ms = 1179.9883
 
 [tcpp.O2]
 instructions = 82847399
 memory_operands = 27489254
 clocks = 265281843
+layout_clocks = 265148976
+pad_nops = 132867
 code_bytes = 1281
-helper_bytes = 23
 data_bytes = 39
 bss_bytes = 5122
+helper_bytes = 23
 kernel_ms = 1137.2579
 
 [tcpp.Os]
 instructions = 86050856
 memory_operands = 31481439
 clocks = 268551748
+layout_clocks = 268485311
+pad_nops = 66437
 code_bytes = 1265
-helper_bytes = 23
 data_bytes = 39
 bss_bytes = 5122
+helper_bytes = 23
 kernel_ms = 1179.9883
 
 [bc.O2]

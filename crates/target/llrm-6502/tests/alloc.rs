@@ -3200,6 +3200,24 @@ fn a_load_into_x_is_dead_before_a_call_that_does_not_take_x() {
     assert_eq!(asm.text(), code("walk"));
 }
 
+/// A branch on the zero or sign between `ldx m` and its `txa` reads the flags the load set: deleting the
+/// load leaves it testing whatever came before (found by reading, 2026-11-13). A carry branch does not read them.
+#[test]
+fn a_zero_branch_between_the_load_and_its_transfer_keeps_the_load() {
+    use llrm_6502::peephole::load_straight_into_a;
+    let code = |branch: &str| format!("  ldx rc7\n  sta rc4\n  {branch} out\n  txa\n  sta rc5\n  rts\nout:\n  rts\n");
+    for branch in ["bne", "beq", "bmi", "bpl"] {
+        let mut asm = Asm::parse(&code(branch));
+        asm.no_x_result = true;
+        load_straight_into_a(&mut asm);
+        assert_eq!(asm.text(), code(branch), "{branch} reads the flags of the ldx");
+    }
+    let mut asm = Asm::parse(&code("bcs"));
+    asm.no_x_result = true;
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), "  sta rc4\n  bcs out\n  lda rc7\n  sta rc5\n  rts\nout:\n  rts\n", "a carry branch does not");
+}
+
 /// The same for `y`: PTRSTEP, `ldy rc3; lda rc2; cmp rc4; bne; tya; cmp rc5`
 /// kept the load and the `tya` (+1 B, +2 clocks) because `y` was live at the
 /// `jsr`/`rts` after it; the fold is `lda rc3` once `y` is dead there.
@@ -3300,10 +3318,20 @@ mod post_ra {
         function.blocks[0].insts.iter().position(|i| matches!(&i.kind, Kind::Op(name) if *name == op)).unwrap()
     }
     fn run(function: &mut MFunction<Class>) {
-        compare_before_step(function, &|r| match r {
-            Reg::Phys(p) => p,
-            Reg::Virt(_) => unreachable!("allocated"),
-        });
+        run_on(function, false);
+    }
+    fn run_on(
+        function: &mut MFunction<Class>,
+        cmos: bool,
+    ) {
+        compare_before_step(
+            function,
+            &|r| match r {
+                Reg::Phys(p) => p,
+                Reg::Virt(_) => unreachable!("allocated"),
+            },
+            cmos,
+        );
     }
     fn step() -> Inst {
         Inst::new(Kind::Op("INC16"), vec![def(reg::Y), def(reg::RC3), used(reg::Y), used(reg::RC3)])
@@ -3337,6 +3365,26 @@ mod post_ra {
         run(&mut f);
         assert!(at(&f, "CMP") < at(&f, "INC"), "the compare moved above the step");
         assert!(copies(&f).is_empty(), "the copy into y goes: {:?}", copies(&f));
+    }
+
+    /// div_constants_short at -Os (2026-11-12): a narrowed 12-trip counter in `a` steps with
+    /// `clc; adc #1`, which clears the carry the compare of its old value set. The compare moved
+    /// above it, `bcs` read the step's carry, and the loop ran 256 trips (239 wrong quotients).
+    /// On the 6502 the step in `a` stays above the compare; the 65C02's `inc a` leaves the carry.
+    #[test]
+    fn a_step_in_the_accumulator_keeps_the_compare_below_it_unless_it_leaves_the_carry() {
+        let cmp = || {
+            let mut cmp = Inst::new(Kind::Op("CMP"), vec![def(reg::FLAGS), used(reg::X), Operand::Imm(11)]);
+            cmp.sets_flags = true;
+            cmp
+        };
+        let step = || Inst::new(Kind::Op("INC"), vec![def(reg::A), used(reg::A)]);
+        let mut f = function(vec![copy(reg::X, reg::A), step(), cmp()]);
+        run_on(&mut f, false);
+        assert!(at(&f, "INC") < at(&f, "CMP"), "the compare stays below `clc; adc #1`");
+        let mut f = function(vec![copy(reg::X, reg::A), step(), cmp()]);
+        run_on(&mut f, true);
+        assert!(at(&f, "CMP") < at(&f, "INC"), "premise: `inc a` leaves the carry, the compare moves");
     }
 
     /// A copy into a cell is a real store (`stx rc3`): the compare moves above

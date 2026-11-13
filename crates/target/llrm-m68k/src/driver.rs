@@ -178,9 +178,64 @@ pub fn lowered_for(
     lowered(text, cpu, level, None, &Policy::default())
 }
 
+/// The unrolled size, in the unroll units, of the refused loops of a module
+/// above which -Os does not compile it again: the second compile is the
+/// module's whole mid-end. Over the corpus (116 of 434 cells run the trial,
+/// 34 keep it) none of the 11 modules above 700 kept it, and they took 9.9 of
+/// the 29.4 s the trial added (run/fixed_point 3,628 units: 0.95 s -> 3.7 s).
+const TRIAL_MAX_UNITS: u64 = 700;
+
+/// [`lowered_once`], then at -Os DEVIATE UNROLL-OS-TRIAL (the shared
+/// `llrm_transforms::trial`, as x86's driver): the module compiled again with
+/// the loops the -Os threshold refused unrolled, kept if its functions that
+/// differ are smaller, bytes then clocks (`Price::Size`). A module with no
+/// refused loop is compiled once.
+fn lowered(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    dump: Option<&std::path::Path>,
+    policy: &Policy,
+) -> Result<Module, String> {
+    use llrm_transforms::trial;
+    let _ = trial::take();
+    let base = lowered_once(text, cpu, level, dump, policy)?;
+    let (noted, units) = trial::take();
+    let limit = if matches!(level, Level::Os | Level::Oz) {
+        M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
+    } else {
+        None
+    };
+    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(base) };
+    let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(base) };
+    let _ = trial::take();
+    let cut = trial::differing(&base, &other);
+    if cut.is_empty() {
+        return Ok(base);
+    }
+    let backend = Options { size: true, mid_end: false, ..Options::default() };
+    let items = |module: &Module| -> Option<Vec<Item>> {
+        Some(
+            function_items(&trial::only(module, &cut), cpu, backend)
+                .ok()?
+                .into_iter()
+                .flat_map(|(_, items)| items)
+                .collect(),
+        )
+    };
+    let pays = matches!(
+        (items(&other), items(&base)),
+        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::Size)
+    );
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial unroll-os: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
+    }
+    Ok(if pays { other } else { base })
+}
+
 /// `text` through the shared mid-end, the expansions m68k needs, and the
 /// module's own mid-end, once: what both the assembly and the object print.
-fn lowered(
+fn lowered_once(
     text: &str,
     cpu: Cpu,
     level: Level,

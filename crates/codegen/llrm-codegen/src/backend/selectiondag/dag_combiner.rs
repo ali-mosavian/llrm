@@ -4195,8 +4195,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let source = self.dag.operand(value, 0);
         let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
-        let action = tli.trunc_store_action(wide, narrow);
-        let takes = action == Action::Legal || (!self.legal_operations() && action == Action::Custom);
+        // `canCombineTruncStore`: `isTruncStoreLegal` after operation legalization, `isTruncStoreLegalOrCustom`
+        // before; both need the value type to be legal (a soft-float target has no `f64` to store narrowed).
+        let takes = if self.legal_operations() {
+            tli.is_trunc_store_legal(wide, narrow)
+        } else {
+            tli.is_trunc_store_legal_or_custom(wide, narrow)
+        };
         takes.then(|| self.dag.get_store(chain, source, ptr, info))
     }
 

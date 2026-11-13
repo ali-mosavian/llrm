@@ -46,11 +46,11 @@ fn o1_unroll_limit(options: &Options) -> Option<u32> {
 enum Dimension {
     /// DEVIATE ROTATION-TRIAL: leave unrotated the counted loops RS1 rotated. The flag: a rotation that executes
     /// less for a few bytes a loop stays (DEVIATE ROTATION-HOT, `Tti::rotation_hot_at_size`).
-    Unrotate { hot: bool },
+    Unrotate { hot: bool, bytes: i64 },
     /// DEVIATE ROTATION-HOT: rotate the loops of an unfolded guard and uncounted trips RS1 left.
-    RotateMore,
+    RotateMore { bytes: i64 },
     /// DEVIATE UNROLL-OS-TRIAL: unroll the loops under this size that the -Os threshold refused.
-    Unroll(u32),
+    Unroll { limit: u32, bytes_strict: bool },
 }
 
 /// What the base compile noted for each dimension.
@@ -80,8 +80,8 @@ impl Noted {
     ) -> bool {
         match dimension {
             Dimension::Unrotate { .. } => !self.rotated.is_empty(),
-            Dimension::RotateMore => !self.left.0.is_empty(),
-            Dimension::Unroll(_) => !self.unroll.0.is_empty(),
+            Dimension::RotateMore { .. } => !self.left.0.is_empty(),
+            Dimension::Unroll { .. } => !self.unroll.0.is_empty(),
         }
     }
 }
@@ -95,13 +95,13 @@ impl Dimension {
         let Some(tti) = options.cpu().ok().and_then(|cpu| cpu.target().tti()) else { return Vec::new() };
         let mut all = Vec::new();
         if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() {
-            all.push(Dimension::Unrotate { hot: tti.rotation_hot_at_size() });
+            all.push(Dimension::Unrotate { hot: tti.rotation_hot_at_size(), bytes: tti.rotation_hot_bytes_per_loop() });
             if tti.rotation_hot_at_size() {
-                all.push(Dimension::RotateMore);
+                all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
             }
         }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
-            all.push(Dimension::Unroll(limit));
+            all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
         }
         all
     }
@@ -113,8 +113,8 @@ impl Dimension {
     ) -> T {
         match self {
             Dimension::Unrotate { .. } => trial::with_unrotated(body),
-            Dimension::RotateMore => trial::with_more_rotation(body),
-            Dimension::Unroll(limit) => trial::with(limit, body),
+            Dimension::RotateMore { .. } => trial::with_more_rotation(body),
+            Dimension::Unroll { limit, .. } => trial::with(limit, body),
         }
     }
 
@@ -122,23 +122,28 @@ impl Dimension {
     fn keeps(
         self,
         noted: &Noted,
-        (kept_bytes, kept_work): (i64, Option<f64>),
-        (other_bytes, other_work): (i64, Option<f64>),
+        (kept_sizes, kept_work): (Sizes, Option<f64>),
+        (other_sizes, other_work): (Sizes, Option<f64>),
     ) -> bool {
+        // A bytes-strict unroll trial compares the code alone: the constants a loop's removal frees are data, which
+        // a code-size column does not count.
+        let strict = matches!(self, Dimension::Unroll { bytes_strict: true, .. });
+        let (kept_bytes, other_bytes) =
+            if strict { (kept_sizes.code, other_sizes.code) } else { (kept_sizes.total(), other_sizes.total()) };
         let added = other_bytes - kept_bytes;
         let work = |one: Option<f64>| one.unwrap_or(0.0);
         let saved = (work(kept_work) - work(other_work)).round() as i64;
         let measured = kept_work.is_some() && other_work.is_some();
         let (what, pays) = match self {
             // The unrotated object is smaller; the rotated one stays if it executes less for a few bytes a loop.
-            Dimension::Unrotate { hot } => (
+            Dimension::Unrotate { hot, bytes } => (
                 "unrotated",
                 trial::keeps_at_size(added)
-                    && !(hot && trial::keeps_rotation_hot(-saved, -added, noted.rotated_loops)),
+                    && !(hot && trial::keeps_rotation_hot(-saved, -added, noted.rotated_loops, bytes)),
             ),
-            Dimension::RotateMore => ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1)),
-            Dimension::Unroll(_) => {
-                ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len()))
+            Dimension::RotateMore { bytes } => ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1, bytes)),
+            Dimension::Unroll { bytes_strict, .. } => {
+                ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
         };
         if llrm_support::debug::enabled("trial") {
@@ -178,6 +183,19 @@ fn rotation_work(
         .sum::<Option<f64>>()
 }
 
+/// The unpadded bytes of a finished module: its functions' code and its data sections' images.
+#[derive(Clone, Copy)]
+pub struct Sizes {
+    pub code: i64,
+    pub data: i64,
+}
+
+impl Sizes {
+    fn total(self) -> i64 {
+        self.code + self.data
+    }
+}
+
 /// A compiled variant of the module: its code, the program the backend took (the leaf-fold pair assembles it again)
 /// and whether the backend folded a leaf.
 struct Variant {
@@ -204,13 +222,13 @@ fn with_leaf_trial(
     variant: Variant,
     name: &str,
     options: &Options,
-    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
     if !variant.folded || !leaf_fold_trial(options) {
         return Ok(variant.built);
     }
     let second = crate::backend::leaffold::without(|| assembled(&variant.program, name, options))?;
-    let smaller = matches!((unpadded(&variant.built), unpadded(&second)), (Some(a), Some(b)) if b < a);
+    let smaller = matches!((unpadded(&variant.built), unpadded(&second)), (Some(a), Some(b)) if b.total() < a.total());
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial leaffold: {}", if smaller { "put back" } else { "kept" });
     }
@@ -234,10 +252,10 @@ pub fn compiled_module_trying(
     name: &str,
     options: &Options,
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
-    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
     if let Some(limit) = o1_unroll_limit(options) {
-        return compiled_module_at_o1(module, name, options, limit, bytes);
+        return compiled_module_at_o1(module, name, options, limit, bytes, unpadded);
     }
     let dimensions = Dimension::of(options);
     if dimensions.is_empty() {
@@ -258,7 +276,11 @@ fn compiled_module_at_o1(
     options: &Options,
     limit: u32,
     bytes: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
+    // A bytes-strict target (`unroll_trial_bytes_strict`) compares the code alone, as at -Os: the constants a
+    // loop's removal frees are data, which a code-size column does not count (call_cleanup_keeps_pair +13 B).
+    let strict = options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.unroll_trial_bytes_strict());
     let _ = trial::take();
     let kept = optimized_program(module.clone(), options)?;
     if trial::take().0.is_empty() {
@@ -271,7 +293,7 @@ fn compiled_module_at_o1(
     let other = assembled(&other, name, &again)?;
     let price = |built: &masm::Module| -> Option<(i64, f64)> {
         let work = built.procedures.iter().map(|one| executed::work(&one.body)).sum::<Option<f64>>()?;
-        Some((bytes(built)?, work))
+        Some((if strict { unpadded(built)?.code } else { bytes(built)? }, work))
     };
     let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
     let added = other_price.0 - kept_price.0;
@@ -293,7 +315,7 @@ fn compiled_module_at_size(
     name: &str,
     options: &Options,
     dimensions: &[Dimension],
-    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
     let _ = Noted::take();
     let base_program = optimized_program(module.clone(), options)?;

@@ -11,6 +11,7 @@ Owner x86-m32-c. Status: **closed 2026-11-11 (llrm-oversight ruling)**; S1 was b
 
 ## Scope
 - LLVM has no trial: the pin makes each decision once. These are DEVIATEs: UNROLL-O1-TRIAL (#9101) and ROTATION-TRIAL (#9141) in `codegen/driver/trial.rs`; the 6502's UNROLL-TRIAL / UP1 (`llrm-6502/src/driver.rs`) share the noting state (`transforms::trial`).
+- UNROLL-OS-TRIAL-STRICT (`Tuning::unroll_trial_bytes_strict`, on at m64; owner llrm-target-x86-m64, exit 2026-11-24): the -Os unroll is kept only where the code bytes shrink; m32's keep rule also takes a few bytes a loop for fewer clocks.
 - Out: #9145 (a price in placement, no second compile); m68k's trial (`llrm-m68k/trial.rs`, private, m68k-matrix owns it).
 - The default path (no trial noted, or a target with none) is untouched: it is today's single compile.
 

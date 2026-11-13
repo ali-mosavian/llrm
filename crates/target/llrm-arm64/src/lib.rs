@@ -40,6 +40,7 @@ pub mod trial;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;
+mod tti_vector;
 
 use llrm_lir::registers::RegId;
 

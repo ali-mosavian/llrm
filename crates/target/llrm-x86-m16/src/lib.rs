@@ -684,6 +684,8 @@ mod tuning_tests {
         assert!(table.cold_site_ignores_sinks, "#9102, DEVIATE BFS-1");
         assert!(table.frame_slot_is_free_base && table.lsr_address_fewest_registers, "#9312, DEVIATE LU31: [bp+si+disp] and the narrow filter");
         assert!(table.lsr_size_order, "#9352, DEVIATE LSR-SIZE: -Os LSR orders by x86 bytes");
+        assert!(!table.libc_memcpy, "m16 has no libc: a run-time copy stays a loop where `rep movs` is more bytes");
+        assert!(table.pops_arguments_at_size, "DEVIATE PO1: -Os pops a call's arguments; only x86-m32 is the pin's");
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,

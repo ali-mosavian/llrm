@@ -498,6 +498,9 @@ pub struct Rating<'a, 'b> {
     pub other_register_units: u32,
     /// The compile is for size.
     pub size: bool,
+    /// The bytes of the code a formula leaves are counted (-Os, and -O1 where
+    /// bytes outrank clocks), which `size` alone did.
+    pub bytes_counted: bool,
     /// The loop calls, and the target's call takes every register (LU13).
     pub across_call: bool,
 }
@@ -709,7 +712,7 @@ impl Cost {
             }
         }
 
-        if self.size
+        if r.bytes_counted
             && let Some(m) = r.tti.lsr_size_model()
         {
             if lu.kind == Kind::Address {
@@ -921,7 +924,7 @@ impl Cost {
                 self.c.num_regs += 1;
             }
             if loop_cost > 0
-                && self.size
+                && r.bytes_counted
                 && let Some(m) = r.tti.lsr_size_model()
             {
                 self.size_bytes += m.iv_step.bytes;
@@ -978,7 +981,7 @@ impl Cost {
         self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);
         // Even with the depth limit, the cost stays valid.
         self.c.setup_cost = self.c.setup_cost.min(1 << 16);
-        if self.size
+        if r.bytes_counted
             && let Some(m) = r.tti.lsr_size_model()
         {
             // A `mov` or `lea` of the register's start in the preheader.
