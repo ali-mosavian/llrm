@@ -3,7 +3,7 @@
 //! is asserted of the text is how many loops there are and where the test is.
 
 use crate::simpleloopunswitch::SimpleLoopUnswitch;
-use crate::testing::{managed, parsed, results};
+use crate::testing::{Tuned, managed, managed_on, parsed, results};
 
 /// `text` through the pass, `non_trivial` or not: its printed form, run as
 /// before on `inputs`.
@@ -293,4 +293,19 @@ fn test_a_header_test_of_loads_nothing_writes_is_unswitched() {
     assert_eq!(loops(&other), 2, "{other}");
     let same = unswitched(&partially_invariant("store i16 1, ptr @g"), inputs, true);
     assert_eq!(loops(&same), 1, "{same}");
+}
+
+/// x86-m16 sets `unswitch_threshold: Some(0)` (no loop is copied for size), but
+/// nothing read it: a -O3 m16 loop with an invariant branch was unswitched like
+/// any other. A target's bar is the pin's option, so 0 leaves every loop.
+#[test]
+fn the_targets_unswitch_threshold_is_the_bar_a_candidate_stays_under() {
+    let text = branch("%c = and i1 %z, true");
+    let run = |unswitch_threshold| {
+        let mut module = parsed(&text);
+        let machine = Tuned { unswitch_threshold, ..Default::default() };
+        loops(&managed_on(&mut module, SimpleLoopUnswitch { non_trivial: true }, machine))
+    };
+    assert_eq!(run(None), 2, "the pin's 50 unswitches it");
+    assert_eq!(run(Some(0)), 1, "a bar of 0 leaves the loop");
 }

@@ -531,6 +531,8 @@ pub struct Collection<'a, 'b> {
     /// The compile is for size: a setup instruction costs a byte like a loop
     /// one.
     pub size: bool,
+    /// The bytes of the formulae's code are counted (`Rating::bytes_counted`).
+    pub bytes_counted: bool,
     /// The loop calls and the target's call clobbers every register (LU13).
     pub across_call: bool,
     /// How many formulae were rated: the work the filter, narrowing and solver
@@ -565,6 +567,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             other_register_units: self.other_register_units,
             ignore_pressure: std::cell::Cell::new(self.ignore_pressure.get()),
             size: self.size,
+            bytes_counted: self.bytes_counted,
             across_call: self.across_call,
             rated: std::cell::Cell::new(self.rated.get()),
             chain_uses: self.chain_uses.clone(),
@@ -605,6 +608,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             other_register_units: 0,
             ignore_pressure: std::cell::Cell::new(false),
             size: false,
+            bytes_counted: false,
             across_call: false,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
@@ -984,6 +988,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     as_written: true,
                     other_register_units: self.pressure_units(),
                     size: self.size,
+                    bytes_counted: self.bytes_counted,
                     across_call: self.across_call,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);

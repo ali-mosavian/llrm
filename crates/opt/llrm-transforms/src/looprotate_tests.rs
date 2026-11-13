@@ -760,3 +760,62 @@ fn test_a_big_function_is_rotated_in_the_trial_too_and_not_noted() {
     assert!(crate::trial::take_rotated().is_empty(), "a big function is not noted");
     assert!(crate::trial::with_unrotated(|| rotated_guard_must_fold_trying(&big, true)), "the trial rotates it too");
 }
+
+/// `known_loads_walks` `f` at wasm32 -O1: a loop nested two deep in one that
+/// runs only while `i < m`, with an empty loop before it. Its copied guard
+/// `0 < m` was left as a compare and a branch, the pin dropped it (`m u> i`
+/// at the outer test says `m != 0`, found through the dominator tree), and
+/// the guard kept the loop from being deleted: +42 B.
+#[test]
+fn test_a_guard_the_dominating_test_implies_is_dropped_by_the_rotation() {
+    let mut module = parsed(
+        "define i8 @f(i8 %a, i8 %b, i8 %m) {
+entry:
+  br label %o
+
+o:
+  %i = phi i8 [ 0, %entry ], [ %in, %olatch ]
+  %c = phi i8 [ 0, %entry ], [ %c3, %olatch ]
+  %go = icmp ult i8 %i, %m
+  br i1 %go, label %body, label %exit
+
+body:
+  br label %j
+
+j:
+  %jv = phi i8 [ 0, %body ], [ %jn, %jb ]
+  %jc = icmp ult i8 %jv, %m
+  br i1 %jc, label %jb, label %k
+
+jb:
+  %jn = add i8 %jv, 1
+  br label %j
+
+k:
+  br label %l
+
+l:
+  %lv = phi i8 [ 0, %k ], [ %ln, %lb ]
+  %c2 = phi i8 [ %c, %k ], [ %v, %lb ]
+  %lc = icmp ult i8 %lv, %m
+  br i1 %lc, label %lb, label %olatch
+
+lb:
+  %v = and i8 %a, %b
+  %ln = add i8 %lv, 1
+  br label %l
+
+olatch:
+  %c3 = phi i8 [ %c2, %l ]
+  %in = add i8 %i, 1
+  br label %o
+
+exit:
+  ret i8 %c
+}
+",
+    );
+    assert!(rotated(&mut module));
+    let out = printed(&module);
+    assert_eq!(out.matches("icmp ult i8 0, %m").count(), 1, "{out}");
+}
