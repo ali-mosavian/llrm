@@ -1219,6 +1219,10 @@ impl Tti for X86 {
         self.tuning.inline_trial_defers_to_shared_growth
     }
 
+    fn add_to_or_disjoint(&self) -> bool {
+        self.tuning.add_to_or_disjoint
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         self.tuning.inline_chain_trial
     }
