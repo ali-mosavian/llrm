@@ -985,6 +985,10 @@ impl Tti for X86 {
         self.tuning.rep_stos_at_size
     }
 
+    fn rep_stos_priced_unit(&self) -> bool {
+        self.tuning.rep_stos_priced_unit
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }
@@ -1182,16 +1186,21 @@ impl Tti for X86 {
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
         self.tuning.lsr_size_order.then(|| {
-            if self.tuning.lsr_size_x86_64 {
+            let model = if self.tuning.lsr_size_x86_64 {
                 crate::encoding::lsr_size_model_64()
             } else {
                 llrm_mir::tti::LsrSizeModel::X86
-            }
+            };
+            llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
         })
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {
         self.tuning.lsr_phi_operand_uses
+    }
+
+    fn splits_invariant_fmuladd(&self) -> bool {
+        self.tuning.splits_invariant_fmuladd
     }
 
     fn lsr_users_in_use_list_order(&self) -> bool {
