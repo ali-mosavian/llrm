@@ -245,6 +245,17 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    /// A pair of `i64` divide and remainder is one call (`__divmoddi4`) where the multiply back is not the
+    /// 68020's `muls.l`: the pin's `DivRemPairs` would divide and then multiply the quotient by the divisor
+    /// with two `__mulsi3` calls (DEVIATE M68K-DIVMOD64: the pin's M68k has no such routine; exit: none).
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        bits == 64 && !self.cpu.has_wide_multiply()
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
     /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
     fn promote_va_list(&self) -> bool {
@@ -424,6 +435,14 @@ impl Tti for M68k {
     /// A size build refuses an inline of a callee that stays when it grows
     /// the code (SZ1): the callee's bytes against the call sequence's.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE INL-O1-TRIAL-M68K (owner m68k, exit 2026-11-24): at -O1 a callee
+    /// the growth bound refused is tried in the caller and kept where the
+    /// caller comes out smaller (uint64_to_float: `classify` x6 folds `main`
+    /// to constants, 368 B and 1514 B of routines against clang's 92 B).
+    fn inline_trials_at_o1(&self) -> bool {
         true
     }
 

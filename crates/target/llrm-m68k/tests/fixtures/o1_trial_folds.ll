@@ -1,0 +1,75 @@
+target datalayout = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16"
+@tab = internal constant [16 x i32] [i32 11, i32 48, i32 85, i32 122, i32 159, i32 196, i32 233, i32 19, i32 56, i32 93, i32 130, i32 167, i32 204, i32 241, i32 27, i32 64]
+define internal i32 @h(i32 %x) {
+  %i0 = and i32 %x, 15
+  %p0 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i0
+  %l0 = load i32, ptr %p0
+  %a0 = add i32 %l0, 1
+  %i1 = and i32 %a0, 15
+  %p1 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i1
+  %l1 = load i32, ptr %p1
+  %a1 = add i32 %l1, 4
+  %i2 = and i32 %a1, 15
+  %p2 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i2
+  %l2 = load i32, ptr %p2
+  %a2 = add i32 %l2, 7
+  %i3 = and i32 %a2, 15
+  %p3 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i3
+  %l3 = load i32, ptr %p3
+  %a3 = add i32 %l3, 10
+  %i4 = and i32 %a3, 15
+  %p4 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i4
+  %l4 = load i32, ptr %p4
+  %a4 = add i32 %l4, 13
+  %i5 = and i32 %a4, 15
+  %p5 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i5
+  %l5 = load i32, ptr %p5
+  %a5 = add i32 %l5, 16
+  %i6 = and i32 %a5, 15
+  %p6 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i6
+  %l6 = load i32, ptr %p6
+  %a6 = add i32 %l6, 19
+  %i7 = and i32 %a6, 15
+  %p7 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i7
+  %l7 = load i32, ptr %p7
+  %a7 = add i32 %l7, 22
+  %i8 = and i32 %a7, 15
+  %p8 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i8
+  %l8 = load i32, ptr %p8
+  %a8 = add i32 %l8, 25
+  %i9 = and i32 %a8, 15
+  %p9 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i9
+  %l9 = load i32, ptr %p9
+  %a9 = add i32 %l9, 28
+  %i10 = and i32 %a9, 15
+  %p10 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i10
+  %l10 = load i32, ptr %p10
+  %a10 = add i32 %l10, 31
+  %i11 = and i32 %a10, 15
+  %p11 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i11
+  %l11 = load i32, ptr %p11
+  %a11 = add i32 %l11, 34
+  %i12 = and i32 %a11, 15
+  %p12 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i12
+  %l12 = load i32, ptr %p12
+  %a12 = add i32 %l12, 37
+  %i13 = and i32 %a12, 15
+  %p13 = getelementptr [16 x i32], ptr @tab, i32 0, i32 %i13
+  %l13 = load i32, ptr %p13
+  %a13 = add i32 %l13, 40
+  ret i32 %a13
+}
+define i32 @f() {
+  %r0 = call i32 @h(i32 2)
+  %r1 = call i32 @h(i32 15)
+  %r2 = call i32 @h(i32 28)
+  %r3 = call i32 @h(i32 41)
+  %r4 = call i32 @h(i32 54)
+  %r5 = call i32 @h(i32 67)
+  %t0 = add i32 %r0, %r1
+  %t1 = add i32 %t0, %r2
+  %t2 = add i32 %t1, %r3
+  %t3 = add i32 %t2, %r4
+  %t4 = add i32 %t3, %r5
+  ret i32 %t4
+}

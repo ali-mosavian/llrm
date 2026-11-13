@@ -303,21 +303,23 @@ fn a_loop_storing_two_element_widths_compiles() {
     assert!(text.contains("report"), "{text}");
 }
 
-/// A store of the constant `<0, 1, .., 7>` was refused (`Legalize(custom
-/// lowering of BuildVector)`): a constant that is no splat is the pin's pool
-/// load (`adrp` + `ldr q`, the lanes in a 16-byte entry), and the widened
-/// induction's start is one.
+/// `a ^ b ^ c` over `<4 x i32>` selected `EOR3` ("machine opcode EOR3 has no
+/// arm64 instruction yet"): the one table is apple-m1's, which has SHA3, and
+/// `-mcpu=generic` (Linux) has not. Generic gets two `eor`s, as the pin's llc.
 #[test]
-fn a_constant_vector_that_is_no_splat_is_a_pool_load() {
+fn a_three_way_xor_is_two_eors_without_sha3() {
     let text = assembly(
-        "define void @f(ptr %d) {\n\
-         \x20 store <8 x i16> <i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>, ptr %d, align 16\n\
+        "define void @f(ptr %d, ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %x = load <4 x i32>, ptr %a, align 16\n\
+         \x20 %y = load <4 x i32>, ptr %b, align 16\n\
+         \x20 %z = load <4 x i32>, ptr %c, align 16\n\
+         \x20 %t = xor <4 x i32> %x, %y\n\
+         \x20 %r = xor <4 x i32> %t, %z\n\
+         \x20 store <4 x i32> %r, ptr %d, align 16\n\
          \x20 ret void\n}\n",
     );
-    assert!(text.contains("adrp") && text.contains("PAGEOFF"), "{text}");
-    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
-    // The lanes in memory order: 0, 1, 2, 3 then 4, 5, 6, 7 (16 bits each).
-    assert!(text.contains(".quad 0x3000200010000") && text.contains(".quad 0x7000600050004"), "{text}");
+    assert!(!text.contains("eor3"), "{text}");
+    assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("eor ")).count(), 2, "{text}");
 }
 
 /// A loop carrying a `<8 x i16>` phi (the widened induction `vec.ind`) panicked
@@ -344,21 +346,19 @@ fn a_loop_carried_vector_phi_lives_in_a_q_register() {
     assert!(text.contains("str q"), "{text}");
 }
 
-/// `a ^ b ^ c` over `<4 x i32>` selected `EOR3` ("machine opcode EOR3 has no
-/// arm64 instruction yet"): the one table is apple-m1's, which has SHA3, and
-/// `-mcpu=generic` (Linux) has not. Generic gets two `eor`s, as the pin's llc.
+/// A store of the constant `<0, 1, .., 7>` was refused (`Legalize(custom
+/// lowering of BuildVector)`): a constant that is no splat is the pin's pool
+/// load (`adrp` + `ldr q`, the lanes in a 16-byte entry), and the widened
+/// induction's start is one.
 #[test]
-fn a_three_way_xor_is_two_eors_without_sha3() {
+fn a_constant_vector_that_is_no_splat_is_a_pool_load() {
     let text = assembly(
-        "define void @f(ptr %d, ptr %a, ptr %b, ptr %c) {\n\
-         \x20 %x = load <4 x i32>, ptr %a, align 16\n\
-         \x20 %y = load <4 x i32>, ptr %b, align 16\n\
-         \x20 %z = load <4 x i32>, ptr %c, align 16\n\
-         \x20 %t = xor <4 x i32> %x, %y\n\
-         \x20 %r = xor <4 x i32> %t, %z\n\
-         \x20 store <4 x i32> %r, ptr %d, align 16\n\
+        "define void @f(ptr %d) {\n\
+         \x20 store <8 x i16> <i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>, ptr %d, align 16\n\
          \x20 ret void\n}\n",
     );
-    assert!(!text.contains("eor3"), "{text}");
-    assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("eor ")).count(), 2, "{text}");
+    assert!(text.contains("adrp") && text.contains("PAGEOFF"), "{text}");
+    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
+    // The lanes in memory order: 0, 1, 2, 3 then 4, 5, 6, 7 (16 bits each).
+    assert!(text.contains(".quad 0x3000200010000") && text.contains(".quad 0x7000600050004"), "{text}");
 }

@@ -52,8 +52,8 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 fn test_a_frame_larger_than_the_start_stack_adds_a_stack_segment() {
     let (listing, object) = _stack_of("bigframe").unwrap();
     // `print` takes its integer in AX: the chain is a word shorter than with
-    // the stack convention (4618).
-    assert!(listing.contains(".stack 4616"), "{listing}");
+    // the stack convention. The listing saves both `si` and `di`: two words of saves, 4618.
+    assert!(listing.contains(".stack 4618"), "{listing}");
     assert!(object.windows(5).any(|one| one == b"STACK"));
 }
 

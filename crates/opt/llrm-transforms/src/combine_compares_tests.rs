@@ -1201,3 +1201,45 @@ fn test_a_compare_of_a_shared_quotient_by_a_power_of_two_is_a_range_test_even_wh
     declared.place(&mut module).unwrap();
     assert!(printed(&module).contains("%v, 39"), "{}", printed(&module));
 }
+
+fn zero_quotient_compare_on(
+    keep: bool,
+) -> String {
+    let text = "define i1 @f(i16 %u, i16 %r, ptr %p) {
+  %q = udiv i16 %u, %r
+  store i16 %q, ptr %p
+  %c = icmp ne i16 %q, 0
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: keep, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `u / radix != 0` with the quotient the next trip's `u` became `radix <= u`,
+/// keeping `u` live across the divide call (6502 k_itoa -Os: two more cells
+/// saved and copied). The pin folds it; a target that keeps the compare does not.
+#[test]
+fn test_a_zero_test_of_a_shared_quotient_stays_a_test_of_the_quotient_where_kept() {
+    let kept = zero_quotient_compare_on(true);
+    assert!(kept.contains("icmp ne i16 %q, 0"), "{kept}");
+    let pin = zero_quotient_compare_on(false);
+    assert!(pin.contains("icmp ule i16 %r, %u"), "{pin}");
+}
