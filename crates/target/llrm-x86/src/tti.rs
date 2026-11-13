@@ -985,6 +985,10 @@ impl Tti for X86 {
         self.tuning.rep_stos_at_size
     }
 
+    fn rep_stos_priced_unit(&self) -> bool {
+        self.tuning.rep_stos_priced_unit
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }

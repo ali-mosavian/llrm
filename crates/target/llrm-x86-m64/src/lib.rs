@@ -442,6 +442,9 @@ impl llrm_target::Target for M64 {
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
+                            // `Tuning::rep_stos_priced_unit`. gcc fills a frame object with `rep stosb`.
+                            rep_stos_priced_unit: true,
                             // DEVIATE UNROLL-OS-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
                             // m32 entry, see `Tuning::unroll_trial_at_size`. gcc completely peels a
                             // small loop at -Os when the code does not grow.
