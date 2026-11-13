@@ -1129,6 +1129,30 @@ fn a_small_immediate_at_m32_os_is_a_mov_and_at_minsize_a_push_pop() {
     assert!(at_speed.contains("mov eax, 40") && !at_speed.contains("push"), "{at_speed}");
 }
 
+/// An unsigned int converted to long double stores a zero high dword (`fild qword`). The zero was made again on every trip
+/// (`xor esi,esi` in the loop, and a saved register for it) where the pin holds it from the preheader: x_ld_mix -Os +52 clk.
+#[test]
+fn a_zero_stored_for_a_conversion_is_made_outside_the_loop_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %n) optsize {\n\
+                entry:\n  %c = icmp sgt i32 %n, 0\n  br i1 %c, label %loop, label %out\n\
+                loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %j = phi i32 [ 0, %entry ], [ %j2, %loop ]\n\
+                \x20 %s = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %s2, %loop ]\n\
+                \x20 %u = uitofp i32 %i to x86_fp80\n  %v = add i32 %j, -294967296\n  %w = uitofp i32 %v to x86_fp80\n\
+                \x20 %t = fadd x86_fp80 %u, %w\n  %s2 = fadd x86_fp80 %s, %t\n  %i2 = add i32 %i, 4\n  %j2 = add i32 %j, 1\n\
+                \x20 %d = icmp eq i32 %j2, %n\n  br i1 %d, label %out, label %loop\n\
+                out:\n  %r = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %s2, %loop ]\n\
+                \x20 %k = fptosi x86_fp80 %r to i32\n  ret i32 %k\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let first = lines.iter().position(|line| line.starts_with("fild qword")).expect("a qword fild");
+    let top = lines[..first].iter().rposition(|line| line.ends_with(':')).expect("the loop label");
+    let back = top + lines[top..].iter().position(|line| line.starts_with("jne")).expect("the loop's branch");
+    assert!(!lines[top..back].iter().any(|line| line.starts_with("xor")), "{listing}");
+}
+
 /// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the
 /// bytes, and x_bubble -Os grew 3 B (273 against 270), quicksort 2, switch_sparse 1, jpeg_fixed 16, while the sparse switch
 /// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS.
