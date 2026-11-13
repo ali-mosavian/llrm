@@ -1777,6 +1777,45 @@ impl InlineSpiller<'_> {
         stack.merge_value_in_as_value(range, vni, &value);
     }
 
+    /// `LiveRangeEdit::foldAsLoad`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveRangeEdit.cpp#L145>):
+    /// a register with one definition, a load the target can fold, and one
+    /// reader has the load folded into the reader; the load is returned,
+    /// dead.
+    ///
+    /// A subset of the pin's test: only a load that reads no register
+    /// (`allUsesAvailableAt` holds) and is invariant (`isSafeToMove` with a
+    /// store assumed in between). Exit: loads that read a register.
+    fn fold_as_load(
+        &self,
+        lis: &mut LiveIntervals,
+        read: u32,
+    ) -> Option<InstrKey> {
+        let (mut def, mut user) = (None, None);
+        for operand in lis.operands(read) {
+            let slot = if operand.is_def { &mut def } else { &mut user };
+            if slot.is_some_and(|seen| seen != operand.instr) {
+                return None;
+            }
+            *slot = Some(operand.instr);
+        }
+        let (def, user) = (def?, user?);
+        let load = Arc::clone(lis.instr(def));
+        let what = load.what.as_ref()?;
+        let [Loc::Mem(cell)] = what.sources.as_slice() else { return None };
+        if !self.tii.can_fold_as_load(what) || !load.uses.is_empty() || !load.invariant() || load.volatile() {
+            return None;
+        }
+        let reader = Arc::clone(lis.instr(user));
+        if reader.defines.contains(&read) {
+            return None;
+        }
+        let folded = self.tii.fold_memory_operand(&reader, read, cell)?;
+        let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(user));
+        lis.rewrite_instr(block, user, folded);
+        Some(def)
+    }
+
     /// `eliminateDeadDefs` over `DeadDefs`: the stores and copies go, and the
     /// ranges of what they read are cut back to their other reads. An
     /// assigned register that is cut back is unassigned first and queued
@@ -1800,7 +1839,17 @@ impl InlineSpiller<'_> {
                     }
                 }
             }
-            for def in lis.erase_dead_defs(&round) {
+            let sources: Vec<u32> = round.iter().flat_map(|key| lis.instr(*key).uses.clone()).collect();
+            let erased = lis.erase_dead_defs(&round);
+            for read in sources {
+                if read != self.reg
+                    && lis.has_interval(read)
+                    && let Some(load) = self.fold_as_load(lis, read)
+                {
+                    dead.push(load);
+                }
+            }
+            for def in erased {
                 let one = lis.instr(def);
                 // An instruction of the program owns bytes of the object that
                 // an erased one would leave unclaimed.

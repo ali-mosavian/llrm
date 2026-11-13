@@ -329,6 +329,20 @@ fn a_callee_the_size_guard_keeps_out_of_line_is_not_inlined_by_the_trial_at_m64_
     assert_eq!(calls, 6, "{listing}");
 }
 
+/// Three prints of `(x op y) * K` with a call after each, K = 100.0 first and
+/// last: the one load of K is split around the calls, and the pin's
+/// `foldAsLoad` folds the load left with a single reader into the first
+/// `mulsd`. We kept `movsd xmm1, [K]; mulsd xmm0, xmm1`: soft_double_add_sub
+/// m64 -O1/-Os 4 B over clang.
+#[test]
+fn a_constant_load_left_with_one_reader_is_folded_into_it_at_m64() {
+    let text = include_str!("testdata/soft_double_calls.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let register_form = listing.lines().filter(|line| line.contains("mulsd") && !line.contains("ptr")).count();
+    assert_eq!(register_form, 0, "{listing}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the
