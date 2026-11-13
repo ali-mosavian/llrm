@@ -2098,8 +2098,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         {
             let x = self.dag.operand(self.dag.operand(n0, 0), 0);
             let narrow = self.dag.value_type(n0);
-            let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
-            let zext_free = self.hooks.is_zext_free(narrow, vt);
+            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
+            // isZExtFree(narrow, wide)`) both casts are free, and `ShrinkDemandedOp`
+            // makes the narrow form this fold would undo.
+            let narrows_free = self.hooks.free_narrowing(vt, narrow);
+            let x_type = self.dag.value_type(x);
+            let truncate_free = self.hooks.is_truncate_free(x_type, narrow) || (x_type == vt && narrows_free);
+            let zext_free = self.hooks.is_zext_free(narrow, vt) || narrows_free;
             let sext_cheaper = self.tli.is_some_and(|tli| tli.is_sext_cheaper_than_zext(narrow, vt));
             let fires = !truncate_free || if op == ISD::ZeroExtend { !zext_free } else { !zext_free && !sext_cheaper };
             if fires {
