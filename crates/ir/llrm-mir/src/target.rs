@@ -243,7 +243,8 @@ pub struct Tuning {
     /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
     /// `movabs`, a 3-byte op and a tail store. DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,
     /// exit 2026-11-30): `X86SelectionDAGInfo::emitConstantSizeRepstos` takes the alignment's
-    /// unit. false: the pin's.
+    /// unit. Assumes ERMS/FSRM: `rep stosb` is no slower than `rep stosq` plus a tail (measured
+    /// 24..4000 B, Zen 5); a target whose CPUs lack it must not set this. false: the pin's.
     pub rep_stos_priced_unit: bool,
     /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
     /// not the library call: the setup is a few bytes against the call's push

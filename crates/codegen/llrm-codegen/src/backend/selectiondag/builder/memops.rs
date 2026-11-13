@@ -2230,7 +2230,8 @@ impl Builder<'_> {
         u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
-    /// DEVIATE REP-STOS-UNIT: the unit of a constant `rep stos` at `-Os` that takes the fewest bytes,
+    /// DEVIATE REP-STOS-UNIT (ERMS/FSRM assumed, see `Tuning::rep_stos_priced_unit`): the unit of a
+    /// constant `rep stos` at `-Os` that takes the fewest bytes,
     /// the pin's (`block`) on a tie. Encodings at x86-64: the value in `eax` (`xor` 2, `mov al` 2,
     /// `mov ax` 4, `mov eax` 5, `mov rax, -1` 7, `movabs` 10), `mov ecx, count` 5, the string op
     /// (2, 3 with a prefix or REX), and each tail store at its shortest (`mov [m], imm`: dword 6, word 7,
