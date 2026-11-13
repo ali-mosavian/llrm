@@ -64,7 +64,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, IntPredicate, Opcode, Tail};
+use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_mir::tti::{ArithOp, Ty};
 use llrm_mir::types::{FloatKind, Type, TypeId};
@@ -115,13 +115,14 @@ enum WideOp {
     Binary(BinaryOp),
     FNeg,
     FMulAdd,
+    Cast(CastOp),
 }
 
 impl WideOp {
     fn arity(self) -> usize {
         match self {
             WideOp::Binary(_) => 2,
-            WideOp::FNeg => 1,
+            WideOp::FNeg | WideOp::Cast(_) => 1,
             WideOp::FMulAdd => 3,
         }
     }
@@ -134,6 +135,8 @@ struct Operation {
     op: WideOp,
     flags: Flags,
     element: TypeId,
+    /// The scalar type of the operands (a cast's source; else `element`).
+    operand_element: TypeId,
     /// The first `op.arity()` are read.
     operands: [Source; 3],
 }
@@ -245,6 +248,7 @@ fn extract(
                         Opcode::Store { .. } => one.index == 0,
                         Opcode::Binary(_) | Opcode::FNeg => true,
                         Opcode::Call(_) => widened_intrinsic(cx, one.user).is_some(),
+                        Opcode::Cast(_) => true,
                         _ => false,
                     },
             )
@@ -410,6 +414,7 @@ fn extract(
                     op: WideOp::Binary(op),
                     flags: data.flags,
                     element: data.ty,
+                    operand_element: data.ty,
                     operands: [operands[0], operands[1], operands[1]],
                 }));
             }
@@ -434,6 +439,48 @@ fn extract(
                     op: WideOp::FNeg,
                     flags: data.flags,
                     element: data.ty,
+                    operand_element: data.ty,
+                    operands: [operand; 3],
+                }));
+            }
+            // `VPWidenCastRecipe`: a conversion between integer and float
+            // lanes of one width. DEVIATE LV-X4 (owner llrm-arm64-vec, exit
+            // LV-W3b): the pin also widens `zext`/`sext`/`trunc` and the
+            // changes of width, which need the D-register and split
+            // legalization.
+            Opcode::Cast(op) => {
+                let kind = interleave::cast_kind(op).ok_or(Skipped("A cast the cost model does not know"))?;
+                if !matches!(
+                    op,
+                    CastOp::SIToFP | CastOp::UIToFP | CastOp::FPToSI | CastOp::FPToUI
+                ) {
+                    return Err(Skipped("A cast the target has no vector instruction for yet"));
+                }
+                let value = data.result.expect("a cast");
+                let dst = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                let source = function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped cast"))?;
+                let src = element_ty(cx, source).ok_or(Skipped("An element type the target has no vector of"))?;
+                if cx.layout.size_bits(&cx.context.types, source) != cx.layout.size_bits(&cx.context.types, data.ty) {
+                    return Err(Skipped("A cast that changes the lane width"));
+                }
+                if used_outside(inst) {
+                    return Err(Skipped("A cast used after the loop"));
+                }
+                if !widened_users(value) {
+                    return Err(Skipped("A cast result used other than by a store or an operation"));
+                }
+                let operand = source_of(data.operands[0], &widened)?;
+                if matches!(operand, Source::Splat(_)) {
+                    return Err(Skipped("A cast of a loop-invariant value"));
+                }
+                recipes.push(Recipe::Cast { kind, dst, src, folded: false });
+                widened.push(inst);
+                steps.push(Step::Operation(Operation {
+                    inst,
+                    op: WideOp::Cast(op),
+                    flags: data.flags,
+                    element: data.ty,
+                    operand_element: source,
                     operands: [operand; 3],
                 }));
             }
@@ -463,6 +510,7 @@ fn extract(
                     op: WideOp::FMulAdd,
                     flags: data.flags,
                     element: data.ty,
+                    operand_element: data.ty,
                     operands,
                 }));
             }
@@ -708,6 +756,7 @@ fn execute(
             Step::Operation(operation) => {
                 let before = Position::Before(operation.inst);
                 let vector_ty = vector_of(context, operation.element);
+                let operand_ty = vector_of(context, operation.operand_element);
                 let mut parts = Vec::new();
                 for part in 0..plan.ic as usize {
                     let arity = operation.op.arity();
@@ -718,7 +767,7 @@ fn execute(
                                 context,
                                 function,
                                 splat_block,
-                                vector_ty,
+                                operand_ty,
                                 plan.vf,
                                 source,
                                 part,
@@ -730,6 +779,7 @@ fn execute(
                     let opcode = match operation.op {
                         WideOp::Binary(op) => Opcode::Binary(op),
                         WideOp::FNeg => Opcode::FNeg,
+                        WideOp::Cast(op) => Opcode::Cast(op),
                         WideOp::FMulAdd => {
                             // `llvm.fmuladd.v4f32` of the widened arguments.
                             let function_type = context

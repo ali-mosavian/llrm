@@ -46,6 +46,7 @@ const SHIFT: &str = include_str!("../tests/lv/binop_shift.ll");
 const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
+const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
 const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
 const FP_SUB_DOUBLE: &str = include_str!("../tests/lv/fp_sub_double.ll");
 const FP_NEG_DOUBLE: &str = include_str!("../tests/lv/fp_neg_double.ll");
@@ -87,6 +88,18 @@ fn a_float_fmuladd_call_is_widened_to_a_vector_intrinsic() {
     assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
     assert_eq!(count(&text, "call float @llvm.fmuladd.f32"), 0, "{text}");
     assert_eq!(count(&text, "load <4 x float>"), 4, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `b[i] = (float)a[i] * 2.5f`: "An instruction the vectorizer does not widen
+/// yet" kept the `sitofp` loop scalar; the pin widens it (VF 4, IC 2: two
+/// `sitofp <4 x i32>`, step 8).
+#[test]
+fn an_int_to_float_conversion_is_widened_with_its_operand() {
+    let text = run(FP_CONVERT);
+    assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "load <4 x i32>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
 }
 
