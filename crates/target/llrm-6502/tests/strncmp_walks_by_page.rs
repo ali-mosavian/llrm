@@ -47,3 +47,13 @@ fn a_counted_pointer_walk_steps_one_index() {
     let body = text.split(".segment").next().unwrap();
     assert!(body.contains("iny"), "the loop steps both pointers each trip:\n{body}");
 }
+
+/// -O1 keeps no more bytes: the walk is one byte more here, and huffman_decode
+/// grew 1233 B to 1235 B at the new rate.
+#[test]
+fn at_o1_a_page_walk_that_adds_a_byte_is_refused() {
+    let ir = format!("target datalayout = \"{}\"\n{STRNCMP}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    assert!(!body.contains("iny"), "-O1 took a walk that grows the code:\n{body}");
+}
