@@ -9,7 +9,7 @@ DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"; INC="-include $R/confi
 cc() { # src name
   $P $XF --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -I$R/include $INC -S -emit-llvm $1 -o $2.raw.ll
   sed -E "s|^target datalayout = .*|target datalayout = \"$DL\"|; /^target triple/d" $2.raw.ll > $2.ll; $LLC -S -Os -o $2.s $2.ll; sed -i 's/___/__/g' $2.s; sdasz80 -g -o $2.rel $2.s; }
-mkdir lib; for m in fp/f64/div fp/f64/pack; do cc $R/lib/$m.c lib/$(basename $m); done
+mkdir lib; for m in fp/f64/div fp/f64/pack fp/f64/unpack; do cc $R/lib/$m.c lib/$(basename $m); done
 cc $R/lib/int/clzsi2.c lib/clzsi2; (INC=; cc $R/lib/int/int64.c lib/int64) 2>/dev/null || true; rm -f lib/int64.*
 cp $R/../../crates/target/llrm-z80/runtime/z80_rt.s . ; sdasz80 -g -o lib/zrt.rel z80_rt.s; sdasz80 -g -o lib/int32.rel $R/config/z80/int32.s; sdasz80 -g -o lib/umulhisi3.rel $R/config/z80/umulhisi3.s
 sdasz80 -g -o lib/div64.rel $R/config/z80/div64.s

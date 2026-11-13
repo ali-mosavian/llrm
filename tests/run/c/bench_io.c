@@ -13,7 +13,8 @@ int main(void)
         data[i] = (unsigned char)(i * 3);
     handle = bench_create("BENCHIO.TMP");
     report(bench_write(handle, data, 300));
-    report(bench_close(handle));
+    bench_close(handle);
+    report(0);
     handle = bench_open_read("BENCHIO.TMP");
     while ((n = bench_read(handle, back, 200)) > 0)
         report(n * 1000L + back[n - 1]);

@@ -21,6 +21,8 @@ static inline void sf_z80_mul32x32(uint32_t a, uint32_t b, uint32_t *hi, uint32_
 #define SF_DIV64_Z80 1
 /* sdld links an object whole: one object per f64 compare group (__cmpdf2 with eq/ne/lt/le as aliases of it, __gedf2 with gt) and per int-to-float entry, so a program linking one links one. */
 #define SF_CMP_SPLIT 1
+/* the f64 decode is one shared object: add, mul and div each carried a copy (208 B) */
+#define SF_UNPACK_SHARED 1
 #define SF_CMP_NOALIAS 1 /* llrm-z80-llc emits no alias: eq/ne/lt/le jump to __cmpdf2, gt to __gedf2, each its own object */
 #define SF_CONV_SPLIT 1
 #endif

@@ -727,7 +727,10 @@ pub fn reduced_held(
             }
             if split {
                 stable = false;
+                let scev = session.into_scev();
                 session = new_session(context, function);
+                session.adopt(scev);
+                session.forget_since_through_edges(context, layout, &outer.globals, &outer.metadata, function, mark);
                 mark = function.mark();
                 mark_opaque(&mut session, context, function);
             }
