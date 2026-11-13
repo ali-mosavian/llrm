@@ -112,3 +112,40 @@ fn a_constant_operand_is_left_to_the_pins_folds() {
     assert!(!out.contains("mulu\t") && !out.contains("muls\t"), "{out}");
     assert!(out.contains("#15"), "the fold's constant 3 * 5 is added after the product:\n{out}");
 }
+
+/// `(short n) * 1000` was `ext.l` and a chain or `__mulsi3` (68000 -O1 +60 B, -Os +70 B against gcc; -O2 +14 B; 68020+ +12 B in
+/// `register_args_truncate`) because the half multiply left every constant operand to the folds. gcc: `muls.w #1000,%d1`.
+#[test]
+fn a_halfword_times_a_constant_that_fits_it_is_one_muls_w() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 1000\n  ret i32 %m\n}";
+    for cpu in CPUS {
+        for level in [Level::O1, Level::Os] {
+            let out = asm(ir, cpu, level);
+            assert!(out.contains("muls\t") && out.contains("#1000") && !out.contains("__mulsi3") && !out.contains("muls.l"), "{cpu} {level:?}:\n{out}");
+        }
+    }
+}
+
+const NINE_LIVE: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 9\n  %r = sub i32 %m, %x\n  ret i32 %r\n}";
+const NINE_LAST: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 9\n  ret i32 %m\n}";
+
+/// algebra 68000 -Os +2 B: `(long)*a * 9 ... - (long)*a` took `muls.w` where the chain `x<<3 + x` stood. The half multiply
+/// overwrites its operand, so a live one costs a copy, which the chain's own move already counts.
+#[test]
+fn a_live_operand_costs_the_half_multiply_a_copy() {
+    for level in [Level::O1, Level::Os] {
+        let out = asm(NINE_LIVE, "68000", level);
+        assert!(!out.contains("muls"), "{level:?}:\n{out}");
+    }
+}
+
+/// algebra 68000 -O1 +2 B: the half multiply is smaller and slower than the chain, so at -O1 (each axis strict) it must beat
+/// the chain on both to replace it.
+#[test]
+fn at_o1_a_chain_the_half_multiply_does_not_beat_on_both_axes_stays() {
+    let out = asm(NINE_LAST, "68000", Level::O1);
+    assert!(!out.contains("muls"), "{out}");
+}
