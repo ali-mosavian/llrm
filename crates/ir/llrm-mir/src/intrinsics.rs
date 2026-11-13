@@ -1072,7 +1072,8 @@ pub fn is_reserved(name: &str) -> bool {
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
-fn mangle(
+/// The suffix an overloaded intrinsic's name has for `ty` (`i32`, `v4f32`).
+pub fn mangle(
     types: &Types,
     ty: TypeId,
 ) -> String {
@@ -1083,6 +1084,7 @@ fn mangle(
         Type::Float(FloatKind::X86Fp80) => "f80".to_owned(),
         Type::Float(FloatKind::F128) => "f128".to_owned(),
         Type::Pointer(space) => format!("p{space}"),
+        Type::Vector { element, count } => format!("v{count}{}", mangle(types, *element)),
         _ => types.display(ty),
     }
 }
@@ -1215,7 +1217,12 @@ impl Intrinsic {
         let mut bound: Vec<Option<TypeId>> = vec![None; spec.overloads.len()];
         let mut matches = |slot: Slot, ty: TypeId| -> bool {
             let mut overload = |at: usize, ty: TypeId| {
-                let kind = match types.get(ty) {
+                // `llvm_anyint_ty` and its kin take a vector of the kind too.
+                let lane = match types.get(ty) {
+                    Type::Vector { element, .. } => *element,
+                    _ => ty,
+                };
+                let kind = match types.get(lane) {
                     Type::Int(_) => Kind::Int,
                     Type::Float(_) => Kind::Float,
                     Type::Pointer(_) => Kind::Pointer,

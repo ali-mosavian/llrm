@@ -510,7 +510,7 @@ pub fn relax_copy_only_classes(function: &mut MFunction) -> bool {
             let v = *v as usize;
             // a move into an address register leaves the codes alone: a value a
             // flag setter defines stays in a data register
-            if inst.sets_flags && matches!(operand, Operand::Def(_)) {
+            if inst.sets_flags() && matches!(operand, Operand::Def(_)) {
                 fixed[v] = true;
             }
             match inst.kind {

@@ -178,7 +178,7 @@ pub fn eliminate_adjacent_tests(
                 // which sets the codes in hardware though the
                 // allocator does not count it as the setter
                 mnemonic == "tst"
-                    && (before.sets_flags || is_frame_load(before))
+                    && (before.sets_flags() || is_frame_load(before))
                     && flags_read_after(&block.insts, at)
                         .is_some_and(|needed| leaves_codes(before, result, size, needed, false))
             })();
@@ -213,14 +213,14 @@ fn droppable(
         if before.call || before.terminator {
             return None;
         }
-        if before.sets_flags {
+        if before.sets_flags() {
             if !hoist {
                 return None;
             }
             setters.push(index);
         }
     }
-    let def = def.filter(|&index| insts[index].sets_flags)?;
+    let def = def.filter(|&index| insts[index].sets_flags())?;
     if insts[def].rematerializable || (argument_remat && is_frame_load(&insts[def])) {
         return None;
     }
@@ -274,7 +274,7 @@ fn hoistable(
     at: usize,
     setters: &[usize],
 ) -> bool {
-    if insts[def..at].iter().any(|one| one.reads_flags) {
+    if insts[def..at].iter().any(|one| one.reads_flags()) {
         return false;
     }
     setters.iter().all(|&setter| {
@@ -324,10 +324,10 @@ pub fn flags_read_after(
     let mut needed = 0;
     for after in &insts[at + 1..] {
         // `subx` and `addx` read the extend flag and then set the codes
-        if after.reads_flags && !after.call {
+        if after.reads_flags() && !after.call {
             needed |= read_by(after)?;
         }
-        if after.sets_flags || after.call {
+        if after.sets_flags() || after.call {
             break;
         }
     }
