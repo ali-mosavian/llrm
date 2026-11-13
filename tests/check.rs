@@ -480,6 +480,28 @@ fn test_a_clang_that_is_not_the_pin_is_refused_with_both_versions() {
     assert!(common::cc::unpinned_clangs(set, pin, |_| None).is_empty(), "one that does not run is missing_env's");
 }
 
+/// An unset clang variable left the 113 m16 lines unrun (2026-11-13): it
+/// resolves to the build the pin's sha names in the cache, and to nothing when
+/// that build is absent or a different sha.
+#[test]
+fn test_an_unset_clang_resolves_to_the_pinned_build_in_the_cache() {
+    let pin = "d1106deb71cc0000000000000000000000000000\n7e3542bb53380000000000000000000000000000 # m16\n";
+    let cache = std::env::temp_dir().join(format!("check-cache-{}", std::process::id()));
+    let make = |dir: &str| {
+        std::fs::create_dir_all(cache.join("llrm").join(dir).join("bin")).unwrap();
+        std::fs::write(cache.join("llrm").join(dir).join("bin/clang"), "").unwrap();
+    };
+    make("clang-m16-4b787ddb5b7f");
+    assert_eq!(common::cc::pinned_clang("LLRM_CLANG_M16", pin, &cache), None, "a stale sha is not the pin");
+    make("clang-m16-7e3542bb5338");
+    make("clang-d1106deb71cc");
+    let m16 = common::cc::pinned_clang("LLRM_CLANG_M16", pin, &cache).unwrap();
+    assert!(m16.ends_with("clang-m16-7e3542bb5338/bin/clang"), "{m16:?}");
+    assert!(common::cc::pinned_clang("LLRM_PIN_CLANG", pin, &cache).unwrap().ends_with("clang-d1106deb71cc/bin/clang"));
+    assert_eq!(common::cc::pinned_clang("OW_TREE", pin, &cache), None);
+    std::fs::remove_dir_all(&cache).ok();
+}
+
 /// A stale cached m16 clang made `llrm-cc` refuse every line with "is not the
 /// pinned clang" on its stderr, which the harness dropped: 114 reds that all
 /// said "failed" (2026-11-12). The tool's first line is in the failure, and one

@@ -96,10 +96,39 @@ pub fn missing_env_for<S: AsRef<std::ffi::OsStr>>(
     missing_env(value, has("-m32"), has("-m64"))
 }
 
+/// The clang the pin file names for `name` (`LLRM_PIN_CLANG` line 1,
+/// `LLRM_CLANG_M16` line 2), in the cache `toolchain/clangbuild.sh pin|m16`
+/// fills (`<cache>/llrm/clang[-m16]-<sha12>`), if it is there.
+pub fn pinned_clang(
+    name: &str,
+    pin: &str,
+    cache: &Path,
+) -> Option<PathBuf> {
+    let (line, dir) = match name {
+        "LLRM_PIN_CLANG" => (0, "clang"),
+        "LLRM_CLANG_M16" => (1, "clang-m16"),
+        _ => return None,
+    };
+    let sha = pin.lines().nth(line)?.split_whitespace().next()?.get(..12)?;
+    Some(cache.join("llrm").join(format!("{dir}-{sha}")).join("bin/clang")).filter(|path| path.exists())
+}
+
 /// The process environment, with the Open Watcom tree where this machine keeps
-/// it.
+/// it, and an unset clang variable resolved to the pinned build in the cache
+/// (`toolchain/clangbuild.sh pin|m16` puts it there).
 pub fn toolchain_env(name: &str) -> Option<OsString> {
-    if name == "OW_TREE" { Some(llrm_cc::ow_tree().into()) } else { std::env::var_os(name) }
+    if name == "OW_TREE" {
+        return Some(llrm_cc::ow_tree().into());
+    }
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .or_else(
+            || {
+                let home = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"));
+                let cache = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or(home)?;
+                pinned_clang(name, PIN, &cache).map(Into::into)
+            },
+        )
 }
 
 /// Once per process: the clang `llrm-cc` will use, by path and md5, so a run's
@@ -214,6 +243,7 @@ impl LlrmC {
         };
         let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
         command
+            .envs(["LLRM_PIN_CLANG", "LLRM_CLANG_M16"].iter().filter_map(|name| Some((*name, toolchain_env(name)?))))
             .env(
                 "LLRM_CC_TARGET",
                 if flat64 {
