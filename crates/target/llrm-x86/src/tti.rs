@@ -1175,9 +1175,13 @@ impl Tti for X86 {
     }
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
-        self.tuning.lsr_size_order.then_some(llrm_mir::tti::LsrSizeModel {
-            derived_setup_free: self.tuning.lsr_derived_setup_free,
-            ..llrm_mir::tti::LsrSizeModel::X86
+        self.tuning.lsr_size_order.then(|| {
+            let model = if self.tuning.lsr_size_x86_64 {
+                crate::encoding::lsr_size_model_64()
+            } else {
+                llrm_mir::tti::LsrSizeModel::X86
+            };
+            llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
         })
     }
 
