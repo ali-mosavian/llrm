@@ -164,7 +164,7 @@ const UNIT_GROWTH: i64 = 10;
 const LARGE_UNIT: i64 = 16000;
 
 /// What the clones made so far come to.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Cloning {
     /// The function each clone is of.
     origin: BTreeMap<GlobalId, GlobalId>,

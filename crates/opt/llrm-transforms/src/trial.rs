@@ -17,6 +17,14 @@
 
 use std::cell::{Cell, RefCell};
 
+#[cfg(test)]
+#[path = "trial_prewalk_tests.rs"]
+mod prewalk_tests;
+
+use std::rc::Rc;
+
+use llrm_mir::program::Program;
+
 thread_local! {
     /// The unrolled size under which every loop is unrolled, set while the
     /// trial compile runs.
@@ -97,6 +105,50 @@ pub fn keeps_at_o1(
 /// running.
 pub fn unrotated() -> bool {
     UNROTATED.with(Cell::get)
+}
+
+/// What the pipeline has done before the CGSCC walk: the program there and the clones the step before it made.
+/// Every pass before the walk reads nothing a trial reverses, so a trial compile of the same module starts from
+/// here and not from the frontend's program.
+#[derive(Clone)]
+pub struct Prewalk {
+    pub(crate) program: Program,
+    pub(crate) cloning: crate::ipacp::Cloning,
+}
+
+/// What a pipeline run does with its [`Prewalk`].
+pub(crate) enum PrewalkMode {
+    Off,
+    /// Keeps it for the compiles of the same module that follow.
+    Record(Rc<RefCell<Option<Prewalk>>>),
+    /// Starts from it.
+    Resume(Prewalk),
+}
+
+thread_local! {
+    static PREWALK: RefCell<PrewalkMode> = const { RefCell::new(PrewalkMode::Off) };
+}
+
+pub(crate) fn prewalk_mode<T>(use_it: impl FnOnce(&PrewalkMode) -> T) -> T {
+    PREWALK.with(|mode| use_it(&mode.borrow()))
+}
+
+/// Runs `body`, which compiles a module, keeping what the pipeline had done before the walk.
+pub fn recording_prewalk<T>(body: impl FnOnce() -> T) -> (T, Option<Prewalk>) {
+    let kept = Rc::new(RefCell::new(None));
+    let before = PREWALK.with(|mode| mode.replace(PrewalkMode::Record(Rc::clone(&kept))));
+    let value = body();
+    PREWALK.with(|mode| *mode.borrow_mut() = before);
+    let taken = kept.borrow_mut().take();
+    (value, taken)
+}
+
+/// Runs `body`, a compile of the module `prewalk` was kept from, from where that left off.
+pub fn resuming_prewalk<T>(prewalk: &Prewalk, body: impl FnOnce() -> T) -> T {
+    let before = PREWALK.with(|mode| mode.replace(PrewalkMode::Resume(prewalk.clone())));
+    let value = body();
+    PREWALK.with(|mode| *mode.borrow_mut() = before);
+    value
 }
 
 /// Runs `body` with counted loops of an unfolded guard left unrotated.

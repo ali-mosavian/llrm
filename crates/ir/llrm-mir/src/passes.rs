@@ -3360,9 +3360,21 @@ pub struct PassManager {
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
     /// Pass runs so far, for `bisect`.
     pub(crate) runs: usize,
+    /// A boundary between two passes at which `at_split` sees the program,
+    /// and from which `resume_from` starts a run.
+    pub split: Option<usize>,
+    pub at_split: Option<Box<dyn FnMut(&Program)>>,
+    /// The first pass to run: the passes before it were run over the program
+    /// the run is given.
+    pub resume_from: Option<usize>,
 }
 
 impl PassManager {
+    /// The number of passes added so far: the index the next one gets.
+    pub fn len(&self) -> usize {
+        self.passes.len()
+    }
+
     /// `pass`, already boxed.
     pub fn add_boxed(
         &mut self,
@@ -3483,8 +3495,13 @@ impl PassManager {
                 }
             }
         }
-        let mut start = 0;
+        let mut start = self.resume_from.unwrap_or(0);
         while start < self.passes.len() {
+            if self.split == Some(start)
+                && let Some(seen) = &mut self.at_split
+            {
+                seen(program);
+            }
             if let Pass::Program(pass) = &mut self.passes[start] {
                 let name = pass.name();
                 if self.bisect.is_none_or(|limit| {

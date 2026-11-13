@@ -318,8 +318,14 @@ fn compiled_module_at_size(
     unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
     let _ = Noted::take();
-    let base_program = optimized_program(module.clone(), options)?;
+    let (base_program, prewalk) = trial::recording_prewalk(|| optimized_program(module.clone(), options));
+    let base_program = base_program?;
     let noted = Noted::take();
+    // The variants start where the base was before the walk: nothing before it reads what a variant reverses.
+    let resumed = |body: &dyn Fn() -> Result<Program, String>| match &prewalk {
+        Some(prewalk) => trial::resuming_prewalk(prewalk, body),
+        None => body(),
+    };
     let active: Vec<Dimension> = dimensions.iter().copied().filter(|one| noted.has(*one)).collect();
     let base = built(base_program, name, options)?;
     if active.is_empty() {
@@ -330,7 +336,7 @@ fn compiled_module_at_size(
     // A dimension that stays, with its variant assembled whole or the program not yet assembled.
     let mut kept: Vec<(Dimension, Result<Variant, Program>)> = Vec::new();
     for dimension in active {
-        let program = dimension.compile(|| optimized_program(module.clone(), &again))?;
+        let program = resumed(&|| dimension.compile(|| optimized_program(module.clone(), &again)))?;
         let _ = Noted::take();
         let cut = differing(&base.program.modules[0], &program.modules[0]);
         if llrm_support::debug::enabled("trial") {
@@ -380,7 +386,7 @@ fn compiled_module_at_size(
     };
     for (dimension, _) in kept {
         accepted.push(dimension);
-        let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
+        let program = resumed(&|| compiled_with(&accepted, || optimized_program(module.clone(), &again)))?;
         let _ = Noted::take();
         let together = built(program, name, &again)?;
         let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options)));

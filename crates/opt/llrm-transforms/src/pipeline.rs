@@ -1667,6 +1667,7 @@ pub fn recorded(
     manager.add_program(crate::interprocedural::Stamp);
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     let mut late_stage = None;
+    let mut split = None;
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
         // The walk simplifies each body: not a module-wide stage. The late
         // list follows the interprocedural passes.
@@ -1707,6 +1708,7 @@ pub fn recorded(
         // function pipeline, before the Simplify list.
         if at == 0 {
             manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline, cloning: cloning.clone() });
+            split = Some(manager.len());
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
@@ -1739,6 +1741,7 @@ pub fn recorded(
             o3: applied.options.inline.limit >= 250,
         }
     });
+    let shared_cloning = cloning.clone();
     manager.add_program(Interprocedural {
         late,
         cloning,
@@ -1959,6 +1962,23 @@ pub fn recorded(
     if applied.options.stored_homes {
         manager.add_module(crate::homes::Homes);
     }
+    // A trial compile of the module starts where the one before it was before the walk (`trial::Prewalk`).
+    manager.split = split;
+    crate::trial::prewalk_mode(|mode| match mode {
+        crate::trial::PrewalkMode::Off => {}
+        crate::trial::PrewalkMode::Record(kept) => {
+            let (kept, cloning) = (std::rc::Rc::clone(kept), shared_cloning.clone());
+            manager.at_split = Some(Box::new(move |program| {
+                *kept.borrow_mut() =
+                    Some(crate::trial::Prewalk { program: program.clone(), cloning: cloning.borrow().clone() });
+            }));
+        }
+        crate::trial::PrewalkMode::Resume(prewalk) => {
+            *program = prewalk.program.clone();
+            *shared_cloning.borrow_mut() = prewalk.cloning.clone();
+            manager.resume_from = split;
+        }
+    });
     let done = manager.run(program);
     if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
         for module in &program.modules {
