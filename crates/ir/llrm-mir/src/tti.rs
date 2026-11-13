@@ -338,6 +338,9 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
+    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its counter in one
+    /// instruction a trip has no setup to count ([`Tuning::lsr_derived_setup_free`]).
+    pub derived_setup_free: bool,
     /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
     /// order stands (LG3's byte test included).
     pub size_only: bool,
@@ -360,6 +363,7 @@ impl LsrSizeModel {
         constant_start: None,
         setup: OpCost::bytes(3),
         setup_cap: 4,
+        derived_setup_free: false,
         size_only: false,
         exit_compare: |_, _| 0,
     };
@@ -1558,6 +1562,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::rep_stos_priced_unit`.
+    fn rep_stos_priced_unit(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
@@ -2574,6 +2583,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
+    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
+    /// `fmul` and `fadd`, the product then leaving the loop; true where the
+    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
+    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    fn splits_invariant_fmuladd(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
@@ -3247,6 +3265,7 @@ mod size_model_tests {
         constant_start: None,
         setup: OpCost::bytes(7),
         setup_cap: 2,
+        derived_setup_free: false,
         size_only: false,
         exit_compare: |bits, _| bits,
     };
