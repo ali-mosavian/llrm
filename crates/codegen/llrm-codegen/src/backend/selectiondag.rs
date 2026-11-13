@@ -126,6 +126,7 @@ pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;
 pub mod combine_urem_eq;
+pub mod combine_extract;
 pub mod combine_vector;
 pub mod ctcount_combine;
 pub mod dag;

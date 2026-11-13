@@ -1053,6 +1053,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::InsertVectorElt => self.visit_insert_vector_elt(node),
+            ISD::ExtractElement => self.visit_extract_vector_elt(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),

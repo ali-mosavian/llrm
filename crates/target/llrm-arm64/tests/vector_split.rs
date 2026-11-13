@@ -96,4 +96,29 @@ fn a_narrowing_vector_int_to_float_conversion_is_unrolled() {
     assert_eq!(count(&text, "scvtf", " s"), 4, "{text}");
     assert_eq!(count(&text, "ins", ".s["), 2, "{text}");
     assert_eq!(count(&text, "ins", ".d["), 1, "{text}");
+    // the lanes are loaded as scalars (`scalarizeExtractedVectorLoad`), not
+    // taken out of a vector register with `umov`/`fmov`
+    assert_eq!(count(&text, "ldp", " x"), 2, "{text}");
+    assert_eq!(count(&text, "umov", " x"), 0, "{text}");
+    assert_eq!(count(&text, "fmov", " x"), 0, "{text}");
+}
+
+/// A lane of a vector built from scalars is the scalar
+/// (`SelectionDAG::getNode` of `EXTRACT_VECTOR_ELT`): the lanes of the `i64`
+/// vector were put into registers with `fmov`/`ins` only to be taken out again.
+#[test]
+fn a_lane_of_a_vector_built_from_scalars_is_the_scalar() {
+    let text = assembly(
+        "define void @f(ptr %d, i64 %p, i64 %q, i64 %r, i64 %s) {\n\
+         \x20 %v0 = insertelement <4 x i64> poison, i64 %p, i64 0\n\
+         \x20 %v1 = insertelement <4 x i64> %v0, i64 %q, i64 1\n\
+         \x20 %v2 = insertelement <4 x i64> %v1, i64 %r, i64 2\n\
+         \x20 %v3 = insertelement <4 x i64> %v2, i64 %s, i64 3\n\
+         \x20 %f = sitofp <4 x i64> %v3 to <4 x float>\n\
+         \x20 store <4 x float> %f, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "scvtf", " s"), 4, "{text}");
+    assert_eq!(count(&text, "umov", " x"), 0, "{text}");
+    assert_eq!(count(&text, "fmov", " d"), 0, "{text}");
 }
