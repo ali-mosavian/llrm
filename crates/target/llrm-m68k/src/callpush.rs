@@ -341,6 +341,7 @@ fn foldable(
     point: usize,
     src: llrm_lir::registers::RegId,
     stores: &[usize],
+    together: &[usize],
 ) -> Option<usize> {
     let root = REGISTER_INFO.root(src);
     // the call clobbers these: nothing reads the value after it
@@ -361,8 +362,11 @@ fn foldable(
     let address = reads(inst, assignment);
     // until another instruction sets them, the codes are the load's
     let mut load_codes = true;
+    let last_reader = together.iter().copied().max().unwrap_or(store);
+    let mut renamed = false;
     for i in load + 1..=point {
-        if i == store {
+        // the stores that read this load's register are folded with it
+        if i == store || together.contains(&i) {
             continue;
         }
         let other = insts[i];
@@ -370,15 +374,19 @@ fn foldable(
             continue;
         }
         let own_store = stores.contains(&i);
-        let names_root = other
-            .operands
-            .iter()
-            .any(
-                |operand| match operand {
-                    Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
-                    _ => false,
-                },
-            );
+        // beyond the last store that reads it the register may be redefined (a second load into it): the folded
+        // pushes need none of it, and what reads it after is the new value's
+        let names_root = !renamed
+            && other.operands.iter().any(|operand| match operand {
+                Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
+                Operand::Def(r) => {
+                    REGISTER_INFO.root(physical(*r, assignment)) == root && (together.is_empty() || i <= last_reader)
+                }
+                _ => false,
+            });
+        if !together.is_empty() && i > last_reader && defines(other, src, assignment) {
+            renamed = true;
+        }
         let defines_address = other
             .operands
             .iter()
@@ -402,7 +410,7 @@ fn foldable(
     }
     // the load goes with its push: a later store of the same register still
     // needs the value (`a + a`: both arguments are the one load)
-    if !unread_after(insts, assignment, point, root, src) {
+    if !renamed && !unread_after(insts, assignment, point, root, src) {
         return None;
     }
     Some(load)
@@ -669,6 +677,64 @@ fn sequences(
         let mut sorted = offsets.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
         let last_store = stores.iter().copied().max().unwrap_or(call);
+        // Several stores of one scratch register one load filled (`a + a`: both arguments are the load) are
+        // pushed from its memory together, each push reading it again, when that is cheaper than the load
+        // and the stores: the load goes only if every reader goes.
+        let mut group_folds: HashMap<usize, usize> = HashMap::new();
+        let mut group_first: HashSet<usize> = HashSet::new();
+        let mut group_reads: HashMap<usize, ((usize, u32), (usize, u32))> = HashMap::new();
+        if convertible {
+            let mut readers: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+            for &(store, _, source, _, _) in &parts {
+                let Source::Register(src) = source else { continue };
+                if addressed.contains_key(&store) {
+                    continue;
+                }
+                let load = (0..store)
+                    .rev()
+                    .take_while(|&i| {
+                        blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP")
+                    })
+                    .find(|&i| defines(insts[i], src, assignment));
+                if let Some(load) = load {
+                    readers.entry(load).or_default().push(store);
+                }
+            }
+            for (load, together) in readers {
+                let Some(&(_, _, Source::Register(src), _, _)) = parts.iter().find(|part| part.0 == together[0]) else {
+                    continue;
+                };
+                let point = if in_order { *together.last().unwrap_or(&call) } else { call - 1 };
+                if !together
+                    .iter()
+                    .all(|&store| foldable(insts, assignment, blocks, store, point, src, &stores, &together) == Some(load))
+                {
+                    continue;
+                }
+                let Kind::Op(name) = insts[load].kind else { continue };
+                let priced = (|| {
+                    let mut operands = priced_operands(insts[load], assignment)?;
+                    operands[0] = mc::Operand::Reg(reg::SP);
+                    let read = cost(&mc::Inst { opcode: memory_push(name)?, operands }, cpu).ok()?;
+                    let own = mc::Inst { opcode: name, operands: priced_operands(insts[load], assignment)? };
+                    Some((read, cost(&own, cpu).ok()?))
+                })();
+                let Some((read, load_price)) = priced else { continue };
+                let mut kept = load_price;
+                let mut pushed = (0, 0);
+                for part in parts.iter().filter(|part| together.contains(&part.0)) {
+                    kept = add(kept, part.3);
+                    pushed = add(pushed, read);
+                }
+                if cheaper(pushed, kept, price, cpu) {
+                    group_first.insert(together[0]);
+                    group_reads.insert(load, (read, load_price));
+                    for &store in &together {
+                        group_folds.insert(store, load);
+                    }
+                }
+            }
+        }
         // A deferred push is made as late as the pushed registers allow, so
         // the stack-pointer-relative instructions before it keep their offsets:
         // before the call, or before the first instruction after the last
@@ -678,7 +744,7 @@ fn sequences(
         if !in_order {
             for &(store, _, source, _, _) in &parts {
                 let Source::Register(src) = source else { continue };
-                if addressed.contains_key(&store) {
+                if addressed.contains_key(&store) || group_folds.contains_key(&store) {
                     continue;
                 }
                 match (store + 1..call).find(|&i| defines(insts[i], src, assignment)) {
@@ -702,10 +768,17 @@ fn sequences(
                 addresses.push((store, producers, base, offset));
                 kept = add(kept, made);
                 pushed = pea;
+            } else if let Some(&load) = group_folds.get(&store) {
+                let (read, load_price) = group_reads[&load];
+                folds.push((store, load));
+                if group_first.contains(&store) {
+                    kept = add(kept, load_price);
+                }
+                pushed = read;
             } else if let Source::Register(src) = source {
                 let point = if in_order { store } else { flush - 1 };
                 // a push that reads memory replaces the load and the push
-                let memory = foldable(insts, assignment, blocks, store, point, src, &stores).and_then(|load| {
+                let memory = foldable(insts, assignment, blocks, store, point, src, &stores, &[]).and_then(|load| {
                     let Kind::Op(name) = insts[load].kind else { return None };
                     let mut operands = priced_operands(insts[load], assignment)?;
                     operands[0] = mc::Operand::Reg(reg::SP);
