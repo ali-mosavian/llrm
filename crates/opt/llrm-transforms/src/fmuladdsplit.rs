@@ -29,9 +29,8 @@
 //! changes the unrolling price of the loop that holds it. Only the invariant
 //! product is split here.
 
-use std::collections::BTreeMap;
-
 use llrm_analysis::cfg;
+use llrm_mir::dense::IdMap;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Opcode};
@@ -91,9 +90,12 @@ fn candidates(
     if loops.is_empty() {
         return Vec::new();
     }
-    let block_of: BTreeMap<InstId, BlockId> = function.walk().map(|(block, inst)| (inst, block)).collect();
+    let mut block_of: IdMap<InstId, BlockId> = IdMap::new();
+    for (block, inst) in function.walk() {
+        block_of.insert(inst, block);
+    }
     let mut found = Vec::new();
-    for (&inst, &block) in &block_of {
+    for (block, inst) in function.walk() {
         let Some(callee) = llrm_mir::memory::callee(unit.context, function, inst) else { continue };
         if globals.get(callee.0 as usize).and_then(|global| global.intrinsic()) != Some(Intrinsic::FMulAdd) {
             continue;
