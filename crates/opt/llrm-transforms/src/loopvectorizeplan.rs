@@ -147,6 +147,8 @@ pub struct LoopFacts {
     pub widest_induction_bits: u32,
     /// The function is `optsize` or `minsize` (VP6).
     pub opt_size: bool,
+    /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
+    pub has_reductions: bool,
 }
 
 /// The chosen factors.
@@ -492,7 +494,7 @@ struct IcInputs {
 }
 
 /// `selectInterleaveCount` (LoopVectorize.cpp#L3705) of the vector plan, which
-/// has no reductions (VP5 prices its register pressure by the values).
+/// (VP5 prices its register pressure by the values).
 fn select_interleave_count(
     tti: &dyn Tti,
     facts: &LoopFacts,
@@ -508,7 +510,7 @@ fn select_interleave_count(
         invariants: 0,
         loads: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Load { .. })).count() as u32,
         stores: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Store { .. })).count() as u32,
-        has_reductions: false,
+        has_reductions: facts.has_reductions,
         nested: false,
     };
     interleave_count(tti, &inputs, vf, loop_cost)

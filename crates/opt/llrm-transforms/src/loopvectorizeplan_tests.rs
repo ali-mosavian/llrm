@@ -29,6 +29,7 @@ fn facts(
         store_load_forward_bits: None,
         widest_induction_bits: 64,
         opt_size: false,
+        has_reductions: false,
     }
 }
 
