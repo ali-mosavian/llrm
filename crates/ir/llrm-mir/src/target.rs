@@ -6,6 +6,25 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// What a reference to a spilled value adds in clocks when it folds into a
+/// memory operand, against the register form, and what one split copy costs
+/// (`Tuning::spill_fold`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpillFoldClocks {
+    /// A read folded (`add r, [slot]` for `add r, r2`).
+    pub read: i64,
+    /// A read and write of the same value folded (`inc [slot]` for `inc r`).
+    pub update: i64,
+    /// A write folded (`mov [slot], r`).
+    pub store: i64,
+    /// One split copy: the reload or store a region split inserts.
+    pub copy: i64,
+    /// What a copy of a value wider than the target's word adds (the
+    /// operand-size prefix of real-mode code); a folded form carries the same
+    /// prefix as the register form and adds nothing.
+    pub wide_copy: i64,
+}
+
 /// The tuning limits of a target: one default (the pin's value, which every
 /// target without an entry takes) and the overrides a target description
 /// states. The names are the pin's `TargetLoweringBase` fields.
@@ -319,6 +338,14 @@ pub struct Tuning {
     /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
     /// the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
+    /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
+    /// spilled value costs where its references fold into memory operands,
+    /// which `tryRegionSplit` weighs against the split's copies. The pin
+    /// splits any range with a compact region and never prices the spill,
+    /// which charges a reload and a store per reference (`calcSpillCost`)
+    /// even where `foldMemoryOperand` makes them memory operands. none: the
+    /// pin's.
+    pub spill_fold: Option<SpillFoldClocks>,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -618,6 +645,7 @@ impl Tuning {
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
+        spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
