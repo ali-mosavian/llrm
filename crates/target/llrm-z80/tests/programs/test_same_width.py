@@ -40,6 +40,31 @@ class SameWidth(unittest.TestCase):
         self.assertEqual(sw.f64_helpers("\tcall __extendsfdf2\n\tcall __adddf3\n\tcall __adddf3\n\tcall __truncdfsf2\n"), ["__adddf3", "__extendsfdf2", "__truncdfsf2"])
         self.assertEqual(sw.f64_helpers("\tcall __addsf3\n\tcall _report\n"), [])
 
+    def test_prepare_rewrites_only_the_sources_that_name_double(self):
+        """--same-width must leave an integer program byte for byte (its cell would otherwise move) and give a float program the same-width copy."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "ints.c").write_text("int f(void) { return 2; }\n")
+            (tmp / "floats.c").write_text("double f(double y) { return y * 2.0; }\n")
+            (tmp / "floats.out").write_text("4\n")
+            made = sw.prepare([tmp / "ints.c", tmp / "floats.c"], tmp / "out")
+            self.assertEqual(made[0], tmp / "ints.c")
+            self.assertEqual(made[1], tmp / "out" / "floats.c")
+            self.assertEqual(sw.double_literals(made[1].read_text()), [])
+            self.assertEqual((tmp / "out" / "floats.out").read_text(), "4\n")
+
+    def test_a_long_double_program_is_not_rewritten_and_a_wrong_f32_output_is_width_void(self):
+        """--same-width over the corpus failed 11 programs: `long double` became `long float` (CLANG error), and values that
+        depend on f64 (double_to_int64, float_bits) read WRONG at f32. Neither is a lost program."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "ld.c").write_text("long double f(double y) { return y; }\n")
+            self.assertEqual(sw.prepare([tmp / "ld.c"], tmp / "out"), [tmp / "ld.c"])
+        reasons = {"a": {"ours": "WRONG value 0: got 1, want 2"}, "b": {"ours": "CLANG error"}, "c": {}}
+        self.assertEqual(sw.width_void({"a", "b", "c"}, reasons), {"a"})
+
 
 if __name__ == "__main__":
     unittest.main()

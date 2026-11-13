@@ -18,13 +18,13 @@ fn assembly_of(file: &str, level: &str) -> String {
     String::from_utf8_lossy(&made.stdout).into_owned()
 }
 
-/// The pin's `OptSizeThreshold` inlined `cmp_bits` (101 B) into seven
-/// callers at -Os: sfm16_* grew 549 B each. A size build keeps a callee that
-/// would grow the code (`Tti::opt_size_inline_by_code_size`).
+/// The pin's `OptSizeThreshold` 50 inlines a helper at every site that prices under it, here
+/// four. The SZ1 size bound kept it a call at all four (`sf_cmp_bits` and 16 more -Os cells
+/// above the pin on bytes or executed instructions).
 #[test]
-fn a_size_build_keeps_a_helper_that_inlining_would_copy_into_every_caller() {
+fn a_size_build_inlines_a_helper_the_pin_prices_under_the_threshold_at_every_site() {
     let text = assembly("-Os");
-    assert_eq!(text.matches("call\thelper").count() + text.matches("call helper").count(), 4, "{text}");
+    assert_eq!(text.matches("call\thelper").count() + text.matches("call helper").count(), 0, "{text}");
 }
 
 /// A callee with one site is the pin's inline (cost 45 against `OptSizeThreshold` 50): the size

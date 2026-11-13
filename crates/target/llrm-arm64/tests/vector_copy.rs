@@ -362,3 +362,24 @@ fn a_constant_vector_that_is_no_splat_is_a_pool_load() {
     // The lanes in memory order: 0, 1, 2, 3 then 4, 5, 6, 7 (16 bits each).
     assert!(text.contains(".quad 0x3000200010000") && text.contains(".quad 0x7000600050004"), "{text}");
 }
+
+/// The unroller could not size a vector loop ("no cost for load"), so the
+/// 5-trip vector loop of scroll's splat fill stayed a loop of `str q` that
+/// clang's pin fully unrolls: ~21 more instructions per call.
+#[test]
+fn a_five_trip_vector_loop_is_fully_unrolled() {
+    let text = assembly(
+        "define void @fill(ptr noalias %a) {\n\
+         entry:\n  br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %next, %loop ]\n\
+         \x20 %d = getelementptr inbounds i16, ptr %a, i64 %i\n\
+         \x20 store i16 1824, ptr %d, align 2\n\
+         \x20 %next = add nuw nsw i64 %i, 1\n\
+         \x20 %done = icmp eq i64 %next, 80\n\
+         \x20 br i1 %done, label %exit, label %loop\n\
+         exit:\n  ret void\n}\n",
+    );
+    let branches = text.lines().filter(|l| l.trim().starts_with("b.") || l.trim().starts_with("cbnz")).count();
+    assert!(text.contains("q") && branches == 0, "{text}");
+}

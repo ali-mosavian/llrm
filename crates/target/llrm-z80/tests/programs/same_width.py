@@ -44,6 +44,30 @@ def same_width(text):
     return out
 
 
+def prepare(sources, out):
+    """`sources` with every one that names `double` replaced by its same-width copy in `out` (with its `.out`); the rest as they are."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    made = []
+    for path in sources:
+        text = path.read_text()
+        # `long double` would become `long float`; those programs test the x87 width and stay as they are
+        if not re.search(r"\bdouble\b", text) or re.search(r"\blong\s+double\b", text):
+            made.append(path)
+            continue
+        (out / path.name).write_text(same_width(text))
+        expected = path.with_suffix(".out")
+        if expected.exists():
+            (out / expected.name).write_text(expected.read_text())
+        made.append(out / path.name)
+    return made
+
+
+def width_void(rewritten, reasons):
+    """The rewritten programs whose output is not the f64 one at single precision: no same-width comparison exists for them."""
+    return {name for name in rewritten if str(reasons.get(name, {}).get("ours", "")).startswith("WRONG")}
+
+
 def main():
     src, out, names = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3:]
     out.mkdir(parents=True, exist_ok=True)
