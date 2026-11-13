@@ -144,7 +144,7 @@ impl LoopIdiomRecognize {
         //  %inc = add nsw %i.0, 1
         //  br i1 %tobool
         const IDIOM_CANONICAL_SIZE: usize = 6;
-        if !is_profitable_to_insert_ffs(run, found.direction, found.init_x, IDIOM_CANONICAL_SIZE) {
+        if !is_profitable_to_insert_ffs(run, found.direction, found.init_x, zero_check, IDIOM_CANONICAL_SIZE) {
             return false;
         }
 
@@ -322,18 +322,20 @@ fn is_profitable_to_insert_ffs(
     run: &Run,
     direction: Direction,
     init_x: Operand,
+    zero_check: bool,
     canonical_size: usize,
 ) -> bool {
     let Some(tti) = run.tti else { return false };
     let ty = run.function.operand_type(run.context, init_x).expect("a typed value");
     let width = run.context.types.int_bits(ty).expect("an integer");
     let header_size = run.function.iter_block(run.cur_loop.get_header()).count();
-    let cost = tti.intrinsic_cost(
-        &format!("llvm.{}.i{width}", direction.name()),
-        Some(llrm_mir::tti::Ty::Int(width)),
-        &[llrm_mir::tti::Ty::Int(width), llrm_mir::tti::Ty::Int(1)],
-        CostKind::SizeAndLatency,
-    );
+    let name = format!("llvm.{}.i{width}", direction.name());
+    let types = [llrm_mir::tti::Ty::Int(width), llrm_mir::tti::Ty::Int(1)];
+    let ret = Some(llrm_mir::tti::Ty::Int(width));
+    let cost = match zero_check {
+        true => tti.zero_poison_intrinsic_cost(&name, ret, &types, CostKind::SizeAndLatency),
+        false => tti.intrinsic_cost(&name, ret, &types, CostKind::SizeAndLatency),
+    };
     let basic = tti.tcc_basic(CostKind::SizeAndLatency);
     !(header_size != canonical_size && (!cost.valid || cost.value > basic.value))
 }
@@ -392,7 +394,7 @@ fn insert_ffs_if_profitable(
     //  %inc = add nsw %i.0, 1
     //  br i1 %tobool
     const IDIOM_CANONICAL_SIZE: usize = 6;
-    if !is_profitable_to_insert_ffs(run, found.direction, found.init_x, IDIOM_CANONICAL_SIZE) {
+    if !is_profitable_to_insert_ffs(run, found.direction, found.init_x, zero_check, IDIOM_CANONICAL_SIZE) {
         return false;
     }
 

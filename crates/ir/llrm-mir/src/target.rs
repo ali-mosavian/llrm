@@ -64,6 +64,10 @@ pub struct Tuning {
     /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
     /// the pin's, which pops only at `minsize` (X86FrameLowering.cpp:4116).
     pub pops_arguments_at_size: bool,
+    /// An x87 compare keeps `sahf` where bytes are held (-O1, size): `test ah,
+    /// mask` is 2 bytes longer. DEVIATE X87-FCMP-AH names the target's own
+    /// choice; the pin keeps `sahf` everywhere, so it is false there.
+    pub keeps_sahf_where_bytes_are_held: bool,
     /// The target has a libc `memcpy` to call, so LoopIdiomRecognize forms a
     /// copy of run-time length whatever its size, as the pin does. false:
     /// DEVIATE (loopidioms.rs `variable_copy_pays`): the copy stays a loop
@@ -243,7 +247,8 @@ pub struct Tuning {
     /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
     /// `movabs`, a 3-byte op and a tail store. DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,
     /// exit 2026-11-30): `X86SelectionDAGInfo::emitConstantSizeRepstos` takes the alignment's
-    /// unit. false: the pin's.
+    /// unit. Assumes ERMS/FSRM: `rep stosb` is no slower than `rep stosq` plus a tail (measured
+    /// 24..4000 B, Zen 5); a target whose CPUs lack it must not set this. false: the pin's.
     pub rep_stos_priced_unit: bool,
     /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
     /// not the library call: the setup is a few bytes against the call's push
@@ -434,6 +439,10 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as written derives from its
+    /// counter in one instruction a trip (`i << 4`) pays no setup bytes. Only a target whose byte
+    /// model was checked sets it: m16 grew 28 QCport modules and `huge` +27% B without (#9587).
+    pub lsr_derived_setup_free: bool,
     /// With `lsr_size_order`: price the code in x86-64's encodings (REX.W,
     /// `llrm_x86::encoding`) and the exit test's compare.
     pub lsr_size_x86_64: bool,
@@ -443,6 +452,8 @@ pub struct Tuning {
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
     /// `Tti::lsr_phi_operand_uses`.
     pub lsr_phi_operand_uses: bool,
+    /// `Tti::splits_invariant_fmuladd`.
+    pub splits_invariant_fmuladd: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -606,6 +617,7 @@ impl Tuning {
         multiply_by_clocks: false,
         libc_memcpy: false,
         pops_arguments_at_size: true,
+        keeps_sahf_where_bytes_are_held: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         narrow_divide_live_max_bits: 31,
@@ -679,9 +691,11 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
+        splits_invariant_fmuladd: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,

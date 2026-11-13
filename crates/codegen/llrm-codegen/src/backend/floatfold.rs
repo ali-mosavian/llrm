@@ -503,6 +503,7 @@ fn _refolded(
     }
     let flow = std::cell::OnceCell::new();
     let integers = std::cell::OnceCell::new();
+    let runs = std::cell::OnceCell::new();
     let mut insns: Vec<Vec<Arc<Insn>>> = body.blocks.iter().map(|block| block.insns.to_vec()).collect();
     let mut deleted: Vec<(usize, usize)> = Vec::new();
     // An instruction has one memory operand: the first load to take it keeps
@@ -518,7 +519,8 @@ fn _refolded(
             continue;
         };
         let mut plan = Vec::new();
-        let (mut saved, mut held) = (0, 0);
+        let (mut extra, mut held) = (0.0, 0);
+        let load_clocks = load_clocks(&load, cpu);
         let loaded = _memory_operation_bytes(cell_of(&load), body.bits);
         let (mut folded_bytes, mut foldable) = (0, true);
         for place in places {
@@ -541,7 +543,13 @@ fn _refolded(
             let what = one.what.as_ref().expect("an arithmetic instruction");
             held += REGISTER_FORM;
             folded_bytes += _memory_operation_bytes(cell_of(&load), body.bits);
-            saved += gain;
+            // `gain` counts the load saved once per read, as if the read ran as
+            // often as the load: a read in a hotter block pays its operation
+            // again on every run and saves the load only as often as the
+            // load ran.
+            let runs = runs.get_or_init(|| crate::analysis::frequency::Frequency::of(body));
+            let (read, made) = (runs.block(body.blocks[place.0].at), runs.block(body.blocks[home.0].at));
+            extra += if made > 0.0 { read / made } else { 1.0 } * (gain - load_clocks) as f64;
             plan.push((
                 *place,
                 semantics(
@@ -556,6 +564,8 @@ fn _refolded(
             continue;
         }
         let bytes = loaded * _loads_needed(body, *home, places) + held - folded_bytes;
+        // Clocks saved per run of the load, in thousandths.
+        let saved = ((load_clocks as f64 + extra) * 1000.0).round() as i64;
         // Built for size the bytes decide, on every target and with no
         // exchange rate; clocks only break a tie. At speed a target with a
         // rate takes clocks for bytes at it, and one without takes neither
@@ -567,7 +577,7 @@ fn _refolded(
             if rate == 0 {
                 saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
             } else {
-                saved * 1000 + bytes * rate > 0
+                saved + bytes * rate > 0
             }
         };
         if !pays {
@@ -767,9 +777,10 @@ pub fn read_from_cell(
 /// nothing else reads: `fild [i]; fmul dword [K]` becomes `fld dword [K];
 /// fimul [i]` where the target prices the integer memory form further below
 /// its pair than the float one (486: 13 + 16 - 23 = 6 against 3 + 16 - 14 = 5).
-/// The cells are the same two, so the bytes tie; the pin keeps the float form
-/// (the DAG folds the cell before the integer load is seen), gcc takes the
-/// integer one. DEVIATE (owner x87, exit 2026-11-28); not made for size.
+/// The cells are the same two, so the bytes tie (also for size, where the
+/// clocks it saves are free); the pin keeps the float form (the DAG folds the
+/// cell before the integer load is seen), gcc takes the integer one. DEVIATE
+/// (owner x87, exit 2026-11-28).
 ///
 /// Returns the load's place, the `fld` that replaces it and the instruction
 /// that reads the integer cell.
@@ -780,9 +791,6 @@ fn _repaired(
     floating: &HashSet<u32>,
     cpu: &crate::backend::cpu::Profile,
 ) -> Option<(usize, Arc<Insn>, Arc<Insn>)> {
-    if cpu.size || cpu.min_size {
-        return None;
-    }
     let arith = &insns[at];
     let what = arith.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)?;
     let [Loc::Held(held), Loc::Mem(float_cell)] = what.sources.as_slice() else { return None };
@@ -931,6 +939,16 @@ fn memory_form(
     cpu: &crate::backend::cpu::Profile,
 ) -> Option<(String, i64)> {
     memory_form_of(name, cell_is_left, name_is(load.what.as_ref()?, "fild"), cell_of(load).width, cpu)
+}
+
+/// The clocks `load` takes: what folding it into its reader saves besides the
+/// reader's own operation.
+fn load_clocks(
+    load: &Insn,
+    cpu: &crate::backend::cpu::Profile,
+) -> i64 {
+    let key = if load.what.as_ref().is_some_and(|what| name_is(what, "fild")) { "x87_load_i" } else { "x87_load" };
+    cpu.cost(key).unwrap_or(0)
 }
 
 /// [`memory_form`] for a cell of `width` bytes, an integer one if `integer`.
@@ -1298,6 +1316,67 @@ mod tests {
         ]);
         let done = names(&folded(&body, cpu, REGISTERS));
         assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
+    }
+
+    /// x_matmul_f -Os m32: `fild [i]; fmul dword [K]` was kept for size, where
+    /// gcc has `fld [K]; fimul [i]`: the same two cells, so the same bytes, and
+    /// 6 clocks fewer for 288 sites (69,492 against 69,449 clk, the best's).
+    #[test]
+    fn test_an_integer_load_and_a_float_cell_read_the_integer_one_from_memory_for_size() {
+        let mut size = crate::backend::cpu::named("486").expect("a profile").clone();
+        size.pool_data_strict = false;
+        size.size = true;
+        let cpu: &'static crate::backend::cpu::Profile = Box::leak(Box::new(size));
+        let body = one_block(vec![
+            insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
+            insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
+            fstp(2, 3, global(0, 0)),
+        ]);
+        let done = names(&folded(&body, cpu, REGISTERS));
+        assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
+    }
+
+    /// The `fild` of a loop-invariant integer, before a loop, and the `fadd`
+    /// that reads it each trip.
+    fn invariant_integer(looping: bool) -> LirBody {
+        let block = |at, insns, succ: Vec<i64>| {
+            crate::model::lir::Block::from(crate::model::lir::LirBlock {
+                succ: succ.into(),
+                ..crate::model::lir::LirBlock::new(at, insns)
+            })
+        };
+        let blocks = vec![
+            block(0, vec![insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))])], vec![16]),
+            block(
+                16,
+                vec![
+                    insn(16, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+                    arith(17, "fadd", 3, 2, 1),
+                    fstp(18, 3, global(0, 0)),
+                ],
+                if looping { vec![16, 32] } else { vec![32] },
+            ),
+            block(32, Vec::new(), vec![]),
+        ];
+        LirBody::new("fold", 0, blocks, Default::default(), Default::default())
+    }
+
+    /// x_ld_to_ulong -O1 m32: the `fild` of `r * 67108864` sat before the
+    /// inner loop and `fadd st, st(1)` (8 clocks) read it on every trip; read
+    /// from its cell as `fiadd` (20) on every trip it cost 1,719 clocks, the
+    /// fold having counted the load's 13 clocks as saved once per read. The
+    /// pin and gcc keep the load once. A read in a hotter block than the load
+    /// keeps the load; the same code without the loop is folded.
+    #[test]
+    fn test_an_integer_load_is_kept_for_a_read_in_a_hotter_block() {
+        let cpu = speed_profile("486").expect("a profile");
+        let looped = invariant_integer(true);
+        let runs = crate::analysis::frequency::Frequency::of(&looped);
+        assert!(runs.block(16) > runs.block(0), "premise: the read runs more often than the load");
+        let straight = names(&folded(&invariant_integer(false), cpu, REGISTERS));
+        assert_eq!(straight, ["fld1", "fiadd+m", "fstp"], "premise: the fold is taken without the loop: {straight:?}");
+        let kept = names(&folded(&looped, cpu, REGISTERS));
+        assert_eq!(kept, ["fild", "fld1", "fadd", "fstp"], "{kept:?}");
     }
 
     /// The 386 column priced the integer memory form at the 387's numbers

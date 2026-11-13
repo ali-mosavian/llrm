@@ -34,10 +34,21 @@ def test_a_nib_row_is_judged_against_the_c_compilers_on_the_twin_with_its_semant
     assert "[bar matmul~init]" in row[11]
 
 
-def test_a_nib_program_without_a_twin_keeps_the_plain_bar():
-    only = {k: v for k, v in matmul().items() if "~" not in k}
-    row = by_row(only)[("matmul", "nib", "O1")]
-    assert row[10] == "WORSE" and "code 334>298(bcc)" in row[11], row
+def test_a_nib_program_without_a_twin_source_keeps_the_plain_bar():
+    """sieve has no bench/sieve/twin: its Nib row is judged on the plain source."""
+    only = {"sieve/nib/O1": cell(120, 5000), "sieve/c/O1": cell(110, 4900), **refs("sieve", "O1", 111, 4800)}
+    row = by_row(only)[("sieve", "nib", "O1")]
+    assert row[10] == "WORSE" and "code 120>111(ow)" in row[11], row
+
+
+def test_a_nib_program_whose_twin_is_not_measured_is_not_judged_on_the_plain_source():
+    """jpeg_single, stft_single and four more Nib cells read WORSE (code 3601>2784, ow) on 2026-11-13 because the table held no twin rows: the plain
+    bar lacks the bounds checks and the I/O functions the Nib object holds. Against the measured twin (3980) the cell is better."""
+    nib, plain = {"jpeg_single/nib/O1": cell(3542, 90_000_000), "jpeg_single/c/O1": cell(2833, 84_000_000)}, refs("jpeg_single", "O1", 2784, 118_000_000)
+    assert by_row(nib | plain)[("jpeg_single", "nib", "O1")][10] == "NO_TWIN"
+    twin = {"jpeg_single~bounds/c/O1": cell(3134, 87_000_000), **refs("jpeg_single~bounds", "O1", 3980, 156_000_000)}
+    row = by_row(nib | plain | twin)[("jpeg_single", "nib", "O1")]
+    assert row[10] == "OK" and row[7] == 3980, row
 
 
 def test_the_c_row_keeps_its_own_bar_and_a_twin_row_is_not_judged():
