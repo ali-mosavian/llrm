@@ -64,6 +64,7 @@ fn no_pass_reads_the_flag_fields_raw() {
     sources(&root.join("src"), &mut files);
     sources(&root.join("../../target/llrm-z80/src"), &mut files);
     sources(&root.join("../../target/llrm-6502/src"), &mut files);
+    sources(&root.join("../../target/llrm-m68k/src"), &mut files);
     let mut bad = Vec::new();
     for file in files {
         if file.ends_with("llrm-spike-mf/src/mfunc.rs") {

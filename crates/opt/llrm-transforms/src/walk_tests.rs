@@ -3684,3 +3684,29 @@ b0:
     let top = printed.split("define").find(|one| one.contains("@top(")).expect("top");
     assert!(top.matches("call ").count() <= 1, "{printed}");
 }
+
+/// arm64 queens -O2: `place` was cloned per constant `row` and the clones
+/// inlined (252 -> 2,260 B; -O3 308 -> 832 B), 18/20 cells at or below the
+/// bars against 19/19 without, and the clone made frames worse on both axes.
+/// The target states no default clones: the output is what `-fno-ipa-cp-clone`
+/// gives.
+#[test]
+fn test_arm64_makes_no_ipa_cp_clones_unless_asked() {
+    let run = |cp_clone: Option<bool>| {
+        let mut module = parsed(ROW_RECURSION);
+        let mut options = crate::pipeline::Options::standard();
+        options.inline.cp_clone = cp_clone;
+        let applied = crate::pipeline::Applied { options, ..Default::default() };
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux }),
+            |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+        )
+        .and_then(|done| done)
+        .expect("the pipeline runs");
+        llrm_mir::print::module(&module)
+    };
+    let asked_not = run(Some(false));
+    assert_eq!(run(None), asked_not);
+    assert_ne!(run(Some(true)), asked_not, "the premise: the clones change this module");
+}

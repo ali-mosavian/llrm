@@ -55,6 +55,20 @@ fn priced_params(
     params: InlineParams,
     (calls, dies): (i64, bool),
 ) -> (i64, i64) {
+    priced_hot(text, at, sole, size, tti, params, (calls, dies), None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn priced_hot(
+    text: &str,
+    at: usize,
+    sole: bool,
+    size: CallerSize,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    params: InlineParams,
+    (calls, dies): (i64, bool),
+    frequency: Option<f64>,
+) -> (i64, i64) {
     let module: Module = parsed(text);
     let layout = DataLayout::default();
     let (caller_id, _, caller) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
@@ -80,7 +94,7 @@ fn priced_params(
         caller_recursive: false,
         callee_linear_recursive: false,
         caller_size: size,
-        relative_frequency: None,
+        relative_frequency: frequency,
         cold_frequency: None,
         entry_weight: None,
         planned: None,
@@ -1479,4 +1493,42 @@ define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee
         );
         assert_eq!(held(&with), held(&without), "{ops} instructions");
     }
+}
+
+/// jpeg_fixed -O1 (arm64): `tmul`, a 5-instruction static callee with 6 sites,
+/// stayed a call in the idct loops (frequency 29,791 times the caller's
+/// entry): 6.9M of the kernel's 25.5M instructions against clang's 19.8M.
+/// The -O1 guard holds a growing inline; a locally hot site (the pin's
+/// `HotCallSiteRelFreq`) whose growth is within the call it removes inlines.
+/// A cold site stays held, and so does a target that states no budget.
+#[test]
+fn a_hot_o1_site_inlines_a_callee_that_grows_the_code_by_less_than_a_call() {
+    let text = "define internal i64 @callee(i64 %a, i64 %b) nounwind {
+entry:
+  %m = mul i64 %a, %b
+  %s = ashr i64 %m, 63
+  %l = lshr i64 %s, 54
+  %t = add i64 %m, %l
+  %r = ashr i64 %t, 10
+  ret i64 %r
+}
+define i64 @f(i64 %x, i64 %y) {
+entry:
+  %p = call i64 @callee(i64 %x, i64 %y)
+  %q = call i64 @callee(i64 %p, i64 %y)
+  %s = add i64 %p, %q
+  ret i64 %s
+}
+";
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let at = |tti: &dyn llrm_mir::tti::Tti, frequency| {
+        let (cost, threshold) =
+            priced_hot(text, 0, false, CallerSize::Speed, Some(tti), params.clone(), (6, true), Some(frequency));
+        cost < threshold
+    };
+    assert!(at(&arm, 29_791.0), "hot: inlined");
+    assert!(!at(&arm, 1.0), "cold: held");
+    let x86 = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    assert!(at(&x86, 29_791.0), "a target with no guard: the pin's verdict");
 }

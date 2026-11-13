@@ -2407,6 +2407,15 @@ impl<'a> Analyzer<'a> {
         Some(bytes)
     }
 
+    /// `Tti::inline_o1_hot_growth_percent`: a locally hot site (the pin's
+    /// `HotCallSiteRelFreq`, the test of its `LocallyHotCallSiteThreshold`)
+    /// whose growth is within that share of the call sequence it removes.
+    fn hot_site_within_growth_budget(&self) -> bool {
+        let Some(percent) = self.site.tti.and_then(|tti| tti.inline_o1_hot_growth_percent()) else { return false };
+        self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ)
+            && self.growth_per_site() * 100 <= self.call_size() * percent
+    }
+
     /// Bytes one inlined site adds to the module: the callee's unfolded size
     /// less the call, spread over the sites when the callee dies with them.
     fn growth_per_site(&self) -> i64 {
@@ -2514,6 +2523,7 @@ impl<'a> Analyzer<'a> {
                     })
                 })
                 && self.grows_the_code()
+                && !(at_o1 && self.hot_site_within_growth_budget())
         };
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {

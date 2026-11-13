@@ -14,7 +14,7 @@
 //!
 //! The test is one clock on a 486 (`test r8, imm`) against two for `sahf`, and
 //! two bytes longer: made where the target prices `sahf` above a register-
-//! immediate ALU operation, and not when optimizing for size.
+//! immediate ALU operation, and not where bytes are held (-O1, size).
 //!
 //! # Example
 //! `fcomp; fnstsw ax; sahf; jbe L` (`x_ld_abs` -O1, 256 executions):
