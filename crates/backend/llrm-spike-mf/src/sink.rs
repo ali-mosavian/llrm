@@ -511,14 +511,28 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
                 Operand::Def(Reg::Virt(reg)) => {
                     if let Some(to) = found {
                         let mut local = false;
-                        if !self.all_uses_dominated(*reg, to, block, break_phi_edge, &mut local, self.own_reads(inst, *reg)) {
+                        if !self.all_uses_dominated(
+                            *reg,
+                            to,
+                            block,
+                            break_phi_edge,
+                            &mut local,
+                            self.own_reads(inst, *reg),
+                        ) {
                             return None;
                         }
                         continue;
                     }
                     for candidate in self.sorted_successors(block, parent, cache) {
                         let mut local = false;
-                        if self.all_uses_dominated(*reg, candidate, block, break_phi_edge, &mut local, self.own_reads(inst, *reg)) {
+                        if self.all_uses_dominated(
+                            *reg,
+                            candidate,
+                            block,
+                            break_phi_edge,
+                            &mut local,
+                            self.own_reads(inst, *reg),
+                        ) {
                             found = Some(candidate);
                             break;
                         }
@@ -969,8 +983,8 @@ pub fn machine_sink<T: Target + Jump>(function: &mut MFunction<T::Class>) -> boo
 /// SSA: the step goes to the successor that reads it. Sound on a register
 /// written more than once only where nothing writes it, or the registers the
 /// instruction reads, after it in the block, and the join it moves into has one
-/// predecessor (`tied_chains` guards in `sink_instruction`). Exit: a target that
-/// gives this pass SSA (row SINK-NONSSA-1, above-main-rows.md).
+/// predecessor (`tied_chains` guards in `sink_instruction`). Exit: a target
+/// that gives this pass SSA (row SINK-NONSSA-1, above-main-rows.md).
 pub fn machine_sink_in_place<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
     let mut sink = Sink::<T>::new(function);
     sink.allow_split = false;

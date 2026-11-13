@@ -266,20 +266,22 @@ fn counted_loop() -> MFunction<()> {
     let mut function = MFunction::new("f");
     function.classes = vec![(); 4];
     function.blocks.push(Block { id: 0, insts: vec![op("def", vec![Operand::Def(v(1))])], phis: vec![] });
-    function.blocks.push(
-        Block {
-            id: 1,
-            insts: vec![
-                copy(2, 1),
-                op("inc", vec![Operand::Def(v(2)), Operand::Use(v(2))]),
-                copy(3, 2),
-                op("test", vec![Operand::Use(v(1))]),
-                branch(3),
-                jump_to(2),
-            ],
-            phis: vec![],
-        },
-    );
+    function
+        .blocks
+        .push(
+            Block {
+                id: 1,
+                insts: vec![
+                    copy(2, 1),
+                    op("inc", vec![Operand::Def(v(2)), Operand::Use(v(2))]),
+                    copy(3, 2),
+                    op("test", vec![Operand::Use(v(1))]),
+                    branch(3),
+                    jump_to(2),
+                ],
+                phis: vec![],
+            },
+        );
     function.blocks.push(Block { id: 2, insts: vec![copy(1, 3), jump_to(1)], phis: vec![] });
     function.blocks.push(Block { id: 3, insts: vec![op("ret", vec![Operand::Use(v(1))])], phis: vec![] });
     function
@@ -318,7 +320,11 @@ fn a_copy_stays_above_a_later_write_of_its_source() {
     function.blocks[1].insts.insert(3, op("inc", vec![Operand::Def(v(2)), Operand::Use(v(2))]));
     machine_sink_in_place::<Two>(&mut function);
     let body = function.blocks.iter().find(|block| block.id == 1).unwrap();
-    assert!(body.insts.iter().any(|i| i.kind == Kind::Copy && i.operands.get(1) == Some(&Operand::Use(v(2)))), "{:?}", names(body));
+    assert!(
+        body.insts.iter().any(|i| i.kind == Kind::Copy && i.operands.get(1) == Some(&Operand::Use(v(2)))),
+        "{:?}",
+        names(body)
+    );
 }
 
 /// `b0` sets `v1` to 8 and may leave for the join `b2`, or go through `b1`,
@@ -331,21 +337,35 @@ fn a_value_one_arm_overwrites_stays_out_of_the_join() {
     function.classes = vec![(); 2];
     let mut eight = op("ldi", vec![Operand::Def(v(1))]);
     eight.rematerializable = true;
-    function.blocks.push(
-        Block {
-            id: 0,
-            insts: vec![op("def", vec![Operand::Def(v(0))]), eight, op("test", vec![Operand::Use(v(0))]), branch(2), jump_to(1)],
-            phis: vec![],
-        },
-    );
-    function.blocks.push(
-        Block {
-            id: 1,
-            insts: vec![op("ldi", vec![Operand::Def(v(1))]), op("test", vec![Operand::Use(v(0))]), branch(3), jump_to(2)],
-            phis: vec![],
-        },
-    );
-    function.blocks.push(Block { id: 2, insts: vec![op("use", vec![Operand::Use(v(1))]), op("ret", vec![])], phis: vec![] });
+    function
+        .blocks
+        .push(
+            Block {
+                id: 0,
+                insts: vec![
+                    op("def", vec![Operand::Def(v(0))]),
+                    eight,
+                    op("test", vec![Operand::Use(v(0))]),
+                    branch(2),
+                    jump_to(1),
+                ],
+                phis: vec![],
+            },
+        );
+    function.blocks.push(Block {
+        id: 1,
+        insts: vec![op("ldi", vec![Operand::Def(v(1))]), op("test", vec![Operand::Use(v(0))]), branch(3), jump_to(2)],
+        phis: vec![],
+    });
+    function
+        .blocks
+        .push(
+            Block {
+                id: 2,
+                insts: vec![op("use", vec![Operand::Use(v(1))]), op("ret", vec![])],
+                phis: vec![],
+            },
+        );
     function.blocks.push(Block { id: 3, insts: vec![op("ret", vec![])], phis: vec![] });
     machine_sink_in_place::<Two>(&mut function);
     let head = function.blocks.iter().find(|block| block.id == 0).unwrap();
