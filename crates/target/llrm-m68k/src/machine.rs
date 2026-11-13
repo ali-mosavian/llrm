@@ -245,6 +245,15 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    /// The pin's M68k has no FP register class: `FADD` is not legal on `float` or `double`, so
+    /// `getFPOpCost` is `TCC_Expensive` (every float operation is a soft-float call).
+    fn fp_op_expensive(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Float | Ty::Double)
+    }
+
     /// A pair of `i64` divide and remainder is one call (`__divmoddi4`) where the multiply back is not the
     /// 68020's `muls.l`: the pin's `DivRemPairs` would divide and then multiply the quotient by the divisor
     /// with two `__mulsi3` calls (DEVIATE M68K-DIVMOD64: the pin's M68k has no such routine; exit: none).
