@@ -447,6 +447,91 @@ impl VectorOp {
     }
 }
 
+/// The three-register float vector operations: `fadd v.4s, v.4s, v.4s`. The
+/// lanes are `S4` or `D2`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorFpOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl VectorFpOp {
+    /// (`U`, `a` (bit 23), `opcode`) of the "three same" float encoding.
+    pub(super) fn fields(self) -> (u32, u32, u32) {
+        match self {
+            VectorFpOp::Add => (0, 0, 0b11010),
+            VectorFpOp::Sub => (0, 1, 0b11010),
+            VectorFpOp::Mul => (1, 0, 0b11011),
+            VectorFpOp::Div => (1, 0, 0b11111),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorFpOp::Add => "fadd",
+            VectorFpOp::Sub => "fsub",
+            VectorFpOp::Mul => "fmul",
+            VectorFpOp::Div => "fdiv",
+        }
+    }
+}
+
+/// `fmla` and `fmls`: `rd += rn * rm` and `rd -= rn * rm`, every lane.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorFma {
+    Add,
+    Sub,
+}
+
+impl VectorFma {
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorFma::Add => "fmla",
+            VectorFma::Sub => "fmls",
+        }
+    }
+}
+
+/// The one-register float vector operations: `fneg v.4s, v.4s`, and the
+/// conversions between a float vector and an integer one of the same lane
+/// width (`scvtf v.4s, v.4s`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorFpUnary {
+    Neg,
+    Abs,
+    Scvtf,
+    Ucvtf,
+    Fcvtzs,
+    Fcvtzu,
+}
+
+impl VectorFpUnary {
+    /// (`U`, bit 23, `opcode`) of the "two-register misc" float encoding.
+    pub(super) fn fields(self) -> (u32, u32, u32) {
+        match self {
+            VectorFpUnary::Neg => (1, 1, 0b01111),
+            VectorFpUnary::Abs => (0, 1, 0b01111),
+            VectorFpUnary::Scvtf => (0, 0, 0b11101),
+            VectorFpUnary::Ucvtf => (1, 0, 0b11101),
+            VectorFpUnary::Fcvtzs => (0, 1, 0b11011),
+            VectorFpUnary::Fcvtzu => (1, 1, 0b11011),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorFpUnary::Neg => "fneg",
+            VectorFpUnary::Abs => "fabs",
+            VectorFpUnary::Scvtf => "scvtf",
+            VectorFpUnary::Ucvtf => "ucvtf",
+            VectorFpUnary::Fcvtzs => "fcvtzs",
+            VectorFpUnary::Fcvtzu => "fcvtzu",
+        }
+    }
+}
+
 /// The shifts of a vector by an immediate.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VectorShift {
@@ -883,6 +968,39 @@ pub enum Inst {
     },
     /// `not v.16b` (`mvn`).
     VectorNot {
+        rd: Vreg,
+        rn: Vreg,
+    },
+    /// A 16-byte float vector operation on every lane: `fadd v.4s, v.4s,
+    /// v.4s`; `lanes` is `S4` or `D2`.
+    VectorFpBinary {
+        op: VectorFpOp,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// `fmla v.4s, v.4s, v.4s`: `rd` is read and written; `lanes` is `S4` or
+    /// `D2`.
+    VectorFma {
+        op: VectorFma,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// `dup v.4s, v.s[index]`: one lane of `rn` in every lane of `rd` (a
+    /// scalar float register is lane 0 of its vector register).
+    VectorDupLane {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        index: u8,
+    },
+    /// `fneg v.4s, v.4s` and `fabs`; `lanes` is `S4` or `D2`.
+    VectorFpUnary {
+        op: VectorFpUnary,
+        lanes: Arrangement,
         rd: Vreg,
         rn: Vreg,
     },

@@ -472,6 +472,12 @@ impl Tti for AArch64 {
         true
     }
 
+    /// `Tti::opt_size_inline_guard_yields_to_negative_cost`: where the pin's own
+    /// cost is below zero it counts the inline as shrinking the caller.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        true
+    }
+
     /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
     /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
     /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites
@@ -568,6 +574,12 @@ impl Tti for AArch64 {
     /// and the rate below was fitted to that; x86-m32 sets 3500.)
     fn inline_o1_unit_bytes_milli(&self) -> i64 {
         BYTES_PER_COST_UNIT_MILLI
+    }
+
+    /// DEVIATE INL-O1-HOT: a hot -O1 site inlines where the code grows by no
+    /// more than the call it removes.
+    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
+        Some(100)
     }
 
     /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
