@@ -1553,6 +1553,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::rep_stos_priced_unit`.
+    fn rep_stos_priced_unit(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
@@ -2566,6 +2571,15 @@ pub trait Tti {
     /// `i*300-81472` merging in one phi leave one of the two a multiply chain.
     /// x_cordic m32 -O3: 100 trips of a 5-instruction chain gcc does not pay.
     fn lsr_phi_operand_uses(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
+    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
+    /// `fmul` and `fadd`, the product then leaving the loop; true where the
+    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
+    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    fn splits_invariant_fmuladd(&self) -> bool {
         false
     }
 

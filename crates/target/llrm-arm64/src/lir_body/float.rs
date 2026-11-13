@@ -5,7 +5,8 @@
 use super::*;
 use crate::mc::inst::Cond;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding, VectorOp, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding, VectorFma, VectorFpOp,
+    VectorFpUnary, VectorOp, VectorShift,
 };
 
 const UNARY: [(FpUnary, &str); 11] = [
@@ -140,6 +141,34 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
         Inst::VectorNot { rd, rn } => {
             semantics(Operation::Unary, "NOTv16i8", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
         }
+        Inst::VectorFma { op, lanes, rd, rn, rm } => semantics(
+            Operation::FloatMultiplyAdd,
+            vector_fp_name(op.mnemonic(), *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
+        Inst::VectorDupLane { lanes, rd, rn, index } => semantics(
+            Operation::Move,
+            format!("DUPv{}lane", lane_name(*lanes)),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+            None,
+        ),
+        Inst::VectorFpBinary { op, lanes, rd, rn, rm } => semantics(
+            Operation::Binary,
+            vector_fp_name(op.mnemonic(), *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
+        Inst::VectorFpUnary { op, lanes, rd, rn } => semantics(
+            Operation::Unary,
+            vector_fp_name(op.mnemonic(), *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128)],
+            None,
+        ),
         Inst::FpBinary { op, size, rd, rn, rm } => semantics(
             Operation::Binary,
             format!("{}{}rr", named(&BINARY, *op), size_letter(*size)),
@@ -285,6 +314,25 @@ fn lane_name(lanes: Arrangement) -> &'static str {
     }
 }
 
+/// `FADDv4f32`, `FNEGv2f64`.
+fn vector_fp_name(
+    mnemonic: &str,
+    lanes: Arrangement,
+) -> String {
+    let lanes = if lanes == Arrangement::D2 { "2f64" } else { "4f32" };
+    format!("{}v{lanes}", mnemonic.to_uppercase())
+}
+
+const VECTOR_FP_OPS: [VectorFpOp; 4] = [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div];
+const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
+    VectorFpUnary::Neg,
+    VectorFpUnary::Abs,
+    VectorFpUnary::Scvtf,
+    VectorFpUnary::Ucvtf,
+    VectorFpUnary::Fcvtzs,
+    VectorFpUnary::Fcvtzu,
+];
+
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
 fn vector_op_name(op: VectorOp, lanes: Arrangement) -> String {
     let stem = op.mnemonic().to_uppercase();
@@ -311,6 +359,41 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let (dest, s) = (what.dests.first(), &what.sources);
     if name == "NOTv16i8" {
         return Some(Inst::VectorNot { rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        for op in [VectorFma::Add, VectorFma::Sub] {
+            if name == vector_fp_name(op.mnemonic(), lanes) {
+                return Some(Inst::VectorFma { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) });
+            }
+        }
+    }
+    for lanes in ARRANGEMENTS {
+        if name == format!("DUPv{}lane", lane_name(lanes)) {
+            return Some(Inst::VectorDupLane {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                index: value_of(&s[1]) as u8,
+            });
+        }
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        for op in VECTOR_FP_OPS {
+            if name == vector_fp_name(op.mnemonic(), lanes) {
+                return Some(Inst::VectorFpBinary {
+                    op,
+                    lanes,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[0]),
+                    rm: vreg_of(&s[1]),
+                });
+            }
+        }
+        for op in VECTOR_FP_UNARY {
+            if name == vector_fp_name(op.mnemonic(), lanes) {
+                return Some(Inst::VectorFpUnary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
+            }
+        }
     }
     for op in VECTOR_OPS {
         for lanes in ARRANGEMENTS {
