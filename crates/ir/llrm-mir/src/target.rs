@@ -214,6 +214,13 @@ pub struct Tuning {
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
+    /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes (value setup, count,
+    /// string op and the inline tail), where the pin's unit is the destination's alignment: a
+    /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
+    /// `movabs`, a 3-byte op and a tail store. DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,
+    /// exit 2026-11-30): `X86SelectionDAGInfo::emitConstantSizeRepstos` takes the alignment's
+    /// unit. false: the pin's.
+    pub rep_stos_priced_unit: bool,
     /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
     /// not the library call: the setup is a few bytes against the call's push
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
@@ -604,6 +611,7 @@ impl Tuning {
         imul_at_size: false,
         mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
+        rep_stos_priced_unit: false,
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
         merge_functions_at_size: false,
