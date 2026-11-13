@@ -2436,6 +2436,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine leaves `icmp eq/ne (select c, a, b), (select c, b, a)` alone. The pin
+    /// compares the arms, `icmp eq/ne a, b` (`matchSymmetricPair`), on every target. DEVIATE
+    /// SYMPAIR-1 (owner llrm-target-wasm, exit 2026-11-24): at m16 a 64-bit arm compare is a
+    /// longer sequence than the two selects it replaces (+4 B in 24 sfm16_float objects).
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)
+    fn keeps_icmp_of_swapped_selects(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
