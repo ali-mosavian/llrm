@@ -3293,6 +3293,7 @@ mod post_ra {
             fixed: Default::default(),
             locals: Vec::new(),
             optimize_for_size: false,
+            optnone: false,
             returns_twice: false,
             places: Vec::new(),
             odds: None,

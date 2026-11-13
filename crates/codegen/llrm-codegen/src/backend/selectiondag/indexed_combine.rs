@@ -320,6 +320,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         let mut found = None;
         for op in self.dag.users(ptr).collect::<Vec<_>>() {
+            // The pin deletes `Op` once an access has taken it (`deleteAndRecombine(Op)`): an add with no
+            // users left is not a candidate, or a second access takes it with an updated base nobody reads.
+            if !self.dag.has_users(SDValue { node: op, res: 0 }) {
+                continue;
+            }
             // Check for #1.
             let Some((base, signed_offset)) = self.should_combine_to_post_inc(n, ptr, op) else { continue };
             // Check for #2: "Op must be independent of N".
