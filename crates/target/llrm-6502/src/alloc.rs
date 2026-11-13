@@ -93,12 +93,14 @@ thread_local! {
     /// Whether a long multiply calls `__mulsi3_fast` (see
     /// [`with_fast_multiply`]).
     static FAST_MULTIPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Whether a long division calls the speed routine at size too (see [`with_size_fast_division`]).
+    /// Whether a long division calls the speed routine at size too (see
+    /// [`with_size_fast_division`]).
     static SIZE_FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// `f` with the long divisions calling the speed routines at size: a module asks for them where the
-/// clocks they save are worth the bytes (`select::module_text`).
+/// `f` with the long divisions calling the speed routines at size: a module
+/// asks for them where the clocks they save are worth the bytes
+/// (`select::module_text`).
 pub fn with_size_fast_division<R>(
     allowed: bool,
     f: impl FnOnce() -> R,
@@ -961,7 +963,10 @@ impl Builder {
             self.copy(x, i);
             self.define(&cell);
             let d = self.byte(&cell)?;
-            self.push(Inst::new(Kind::Op("LDAX"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0), Operand::Use(x)]));
+            self.push(Inst::new(
+                Kind::Op("LDAX"),
+                vec![Operand::Def(acc), Operand::Symbol(symbol, 0), Operand::Use(x)],
+            ));
             self.copy(d, acc);
         } else if word {
             let (low, high) = self.write_word(&cell)?;
@@ -976,7 +981,8 @@ impl Builder {
             self.copy(d, acc);
         }
         let version = self.version(&cell);
-        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, index: None, wide: None });
+        self.pending =
+            Some(Compare { a, b: (cell, version), word, zero: false, memory: None, index: None, wide: None });
         Ok(())
     }
 
@@ -2287,7 +2293,8 @@ pub fn build_with_places(
                     b.load_compared_global(at)?;
                 }
             }
-            // a global indexed by a byte on the right: the same, with the index kept in `x`
+            // a global indexed by a byte on the right: the same, with the index
+            // kept in `x`
             op::CMP8MX => {
                 let (a, symbol) = (name(&o[1])?, indexed_address(&o[2], &o[3]).map_err(Unsupported)?);
                 let index = name(&o[4])?;
@@ -2376,8 +2383,8 @@ pub fn build_with_places(
                         shift(&mut b, ah, dl, "LSR", rest);
                         b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(dh), Operand::Imm(0)]));
                     }
-                    // the high byte is the sign of `ah`; by 15 the low byte is too,
-                    // and one splat is stored twice
+                    // the high byte is the sign of `ah`; by 15 the low byte is
+                    // too, and one splat is stored twice
                     _ => {
                         if rest != 7 {
                             shift(&mut b, ah, dl, "ASR", rest);
@@ -2524,7 +2531,8 @@ pub fn build_with_places(
             // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
             // words in `__sa` and `__sb`, the product in `__sa`
             code @ (op::UMULW16 | op::SMULW16) => {
-                // a multiplier whose high byte is known zero is a byte: the entry that walks to its last set
+                // a multiplier whose high byte is known zero is a byte: the
+                // entry that walks to its last set
                 // bit links only the byte loop
                 let byte = b.constants.get(&format!("{}+1", name(&o[3])?)) == Some(&0);
                 let routine = match (code == op::UMULW16, byte) {
@@ -3063,7 +3071,8 @@ pub fn compare_before_step(
                     continue;
                 }
                 let (step_writes, step_reads) = (regs(&block.insts[s], true), regs(&block.insts[s], false));
-                // `clc; adc #1` (`sec; sbc #1`) clears the carry the compare sets
+                // `clc; adc #1` (`sec; sbc #1`) clears the carry the compare
+                // sets
                 if !cmos && step_writes.contains(&reg::A) && matches!(block.insts[s].kind, Kind::Op("INC" | "DEC")) {
                     continue;
                 }
@@ -4536,14 +4545,7 @@ fn emit_with<const STACK: bool>(
     out.cmos = cmos;
     let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells);
     let (priced, text) = finish_pair(out, lines_of, tails);
-    Ok((
-        own_labels(&text, &function.name),
-        own_labels(&priced, &function.name),
-        slots,
-        sunk,
-        shared,
-        moved,
-    ))
+    Ok((own_labels(&text, &function.name), own_labels(&priced, &function.name), slots, sunk, shared, moved))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,

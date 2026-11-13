@@ -1,4 +1,5 @@
-//! A byte compared with a global byte indexed by a byte is `cmp g,x`: the load is not made into a cell first.
+//! A byte compared with a global byte indexed by a byte is `cmp g,x`: the load
+//! is not made into a cell first.
 
 use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
@@ -6,7 +7,10 @@ use llrm_6502::select::function_text;
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8";
 
-fn compile(body: &str, name: &str) -> String {
+fn compile(
+    body: &str,
+    name: &str,
+) -> String {
     let ir = format!("target datalayout = \"{DATALAYOUT}\"\n@buf = external global [16 x i8]\n{body}");
     let module = llrm_mir::parse::module(&ir).expect("parses");
     let selection = select_function(&module, name, Cpu::Mos6502).expect("selects");

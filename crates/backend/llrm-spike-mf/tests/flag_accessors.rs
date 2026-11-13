@@ -30,7 +30,10 @@ fn raw_reads(source: &str) -> Vec<(usize, String)> {
     found
 }
 
-fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+fn sources(
+    dir: &Path,
+    out: &mut Vec<std::path::PathBuf>,
+) {
     for entry in std::fs::read_dir(dir).expect("a source directory") {
         let path = entry.unwrap().path();
         if path.is_dir() {
