@@ -273,13 +273,21 @@ fn should_change_type(
     shared::should_change_type(c.env.layout, from, to)
 }
 
-/// Whether the cast `inst` has a type wider than `u128` holds (DEVIATE 5).
+/// Whether the cast `inst` is left alone: a type wider than `u128` holds
+/// (DEVIATE 5), or a vector one (DEVIATE 6: LoopVectorize makes vector
+/// `zext`/`sext`/`trunc`, and the folds here are written for integer scalars;
+/// owner llrm-arm64-vec, exit 2026-11-24).
 fn too_wide(
     c: &Combiner,
     inst: InstId,
 ) -> bool {
     let instruction = c.function.instruction(inst);
-    width(c, instruction.operands[0]).max(bits_of(c, instruction.ty)) > 128
+    let types = &c.context.types;
+    let (Some(src), Some(dest)) = (types.int_bits(c.type_of(instruction.operands[0])), types.int_bits(instruction.ty))
+    else {
+        return true;
+    };
+    src.max(dest) > 128
 }
 
 /// The evaluator's own rule for what is free in `ty`:
