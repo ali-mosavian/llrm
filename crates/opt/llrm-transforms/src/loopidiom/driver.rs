@@ -242,7 +242,9 @@ impl LoopIdiomRecognize {
         // DEVIATE: a fill beside a store of a computed value stays a loop
         // (`process_loop_strided_store`), and the pin makes both in this
         // run; the store a memcpy took away leaves the fill alone, so it is
-        // judged again, at speed by clocks and under -Os by bytes. Exit: none.
+        // judged again, at speed by clocks and under -Os by bytes. Exit
+        // 2026-12-15: the copy and the fill of one loop made in the order the
+        // pin's `processLoopStores` takes them. Owner llrm-target-x86-m64.
         if copied {
             {
                 let cx = cx!(run);
