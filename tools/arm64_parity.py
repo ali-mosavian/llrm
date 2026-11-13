@@ -18,7 +18,7 @@ REPO = Path(__file__).resolve().parents[1]
 PIN = Path(os.environ.get("LLRM_PIN_BUILD", Path.home() / "work/other/llvm-pin/build"))
 BIN = Path(os.environ.get("LLRM_BIN", REPO / "target/release"))
 TARGET = ["-target", "arm64-apple-macos"]
-FRONT = ["-ffp-contract=off", "-fno-vectorize", "-fno-slp-vectorize", "-Dmain=bench_main"]  # "scalar clang": vector MIR is deferred
+FRONT = ["-ffp-contract=off", "-ffreestanding", "-fno-vectorize", "-fno-slp-vectorize", "-Dmain=bench_main"]  # "scalar clang": vector MIR is deferred
 
 
 def sh(cmd, **kw):
@@ -161,7 +161,7 @@ def build_variants(src, lvl, tmp, ver):
     gcc = os.environ.get("LLRM_GCC", "gcc-13")
     if src.suffix == ".c" and shutil.which(gcc):
         o = tmp / f"{name}.gcc.o"
-        r = sh([gcc, f"-{lvl}", "-mmacosx-version-min=15.0", "-fno-tree-vectorize", "-fno-tree-slp-vectorize", "-ffp-contract=off", "-Dmain=bench_main", "-c", str(src), "-o", str(o)])
+        r = sh([gcc, f"-{lvl}", "-mmacosx-version-min=15.0", "-fno-tree-vectorize", "-fno-tree-slp-vectorize", "-ffp-contract=off", "-ffreestanding", "-Dmain=bench_main", "-c", str(src), "-o", str(o)])
         v["gcc"] = o if r.returncode == 0 else "gcc: " + r.stderr[:200]
     return v
 
