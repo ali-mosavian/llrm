@@ -1155,7 +1155,8 @@ fn a_zero_stored_for_a_conversion_is_made_outside_the_loop_at_m32_os() {
 
 /// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the
 /// bytes, and x_bubble -Os grew 3 B (273 against 270), quicksort 2, switch_sparse 1, jpeg_fixed 16, while the sparse switch
-/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS.
+/// shrank 2. The module is assembled both ways and the smaller kept. DEVIATE LEAF-FOLD-OS. The sparse switch keeps a join
+/// (`xor` of the result): since #9572 its leaves are `mov; ret` (no `push; pop`), so a bare `ret` leaves nothing to fold.
 #[test]
 fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
     let bubble = "target datalayout = \"@m32-datalayout@\"\n\
@@ -1245,7 +1246,8 @@ fn a_leaf_fold_that_grows_the_object_is_put_back_at_m32_os() {
                   br label %7\n\
                 7:\n\
                   %8 = phi i32 [ 0, %6 ], [ 61, %5 ], [ 52, %2 ], [ 93, %3 ], [ 17, %4 ], [ 31, %1 ]\n\
-                  ret i32 %8\n\
+                  %9 = xor i32 %8, %0\n\
+                  ret i32 %9\n\
                 }\n";
     let listing = |text: &str, name: &str, folded: bool| {
         let build = || compiled(&flags(&["-mabi=sysv", "-Os"]), text, name).unwrap();
@@ -3542,7 +3544,7 @@ fn dense_switch_ir() -> String {
 #[test]
 fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
     for (mode, layout, int, jump, tail) in [
-        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr $J", "]"),
+        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr cs:$J", "]"),
         ("-m32", "@m32-datalayout@", "i32", "jmp dword ptr $J", "*4]"),
     ] {
         let mut text = format!("target datalayout = \"{layout}\"\n");

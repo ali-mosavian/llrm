@@ -157,6 +157,8 @@ features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", 
 # Decided when a function is selected (the flag-gated vectors, ARM64-VEC POC): off, NEON patterns never match, as when they were pruned.
 [dynamic]
 "Subtarget->isNeonAvailable()" = "neon_available"
+# A feature the CPUs differ in (apple-m1 has SHA3, generic does not): the CPU answers at selection time, not the table.
+"Subtarget->hasSHA3()" = "has_feature(\"SHA3\")"
 
 [types]
 dead_prefixes = ["v", "nxv", "aarch64"]

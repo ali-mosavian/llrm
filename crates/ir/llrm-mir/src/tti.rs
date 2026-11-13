@@ -2617,6 +2617,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): with use-list
+    /// order, whether `IVUsers` meets a phi before the other users of a value.
+    /// The pin keeps the one operand of a phi it meets first (`Processed`, "do
+    /// not recurse into a phi twice"); use-list order is edit history, so
+    /// which operand that is changes with edits. A phi first is the order
+    /// program order gives. div_constants m64 -O1: 4334 B -> 4173 B and
+    /// 6960 B -> 6854 B, no cell larger by more than 3 B.
+    fn lsr_phi_users_first(&self) -> bool {
+        false
+    }
+
     /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
     /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
     /// `fmul` and `fadd`, the product then leaving the loop; true where the
