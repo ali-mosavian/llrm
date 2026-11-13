@@ -2655,6 +2655,14 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// largest object offset a byte index reaches in one address instruction
+    /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
+    /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
+    fn address_index_max(&self) -> Option<u64> {
+        None
+    }
+
     /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
     /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
     /// none: the pass does not run.
