@@ -168,6 +168,8 @@ pub struct Profile {
     pub commute_loop_carried: bool,
     /// DEVIATE PHI-SHARE on (`CpuTable::share_congruent_phis`).
     pub share_congruent_phis: bool,
+    /// DEVIATE UNORDERED-ODDS on (`CpuTable::unordered_branch_odds`).
+    pub unordered_branch_odds: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
     /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
@@ -408,6 +410,7 @@ impl Profile {
             tail_dup_hot_size: None,
             commute_loop_carried: false,
             share_congruent_phis: false,
+            unordered_branch_odds: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
             float_store: false,
@@ -425,6 +428,20 @@ impl Profile {
             model: arch.cost_model(),
             multiplies: Default::default(),
         }
+    }
+
+    /// The chance a branch of this mnemonic is taken where the target knows it
+    /// from what the branch tests, for a branch whose odds nobody stated: the
+    /// unordered case of a float compare, `BranchProbabilityInfo`'s
+    /// `FPH_UNO_WEIGHT` against `FPH_ORD_WEIGHT` (1 in 2^20), which an x86 `jp`
+    /// after `fucom`/`ucomis` takes. None unless the target has DEVIATE
+    /// UNORDERED-ODDS on, and never in a build for size: a constant sunk onto
+    /// the edge costs a block and a `jmp` there (sfm16_float -Os +48 B).
+    pub fn branch_odds(
+        &self,
+        name: &str,
+    ) -> Option<f64> {
+        (self.unordered_branch_odds && !self.size && name == "jp").then_some(1.0 / 1_048_576.0)
     }
 
     /// The existing target-ranking cost for one named instruction form.
@@ -715,6 +732,7 @@ fn _profile(
         tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
         share_congruent_phis: table.share_congruent_phis,
+        unordered_branch_odds: table.unordered_branch_odds,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         share_literal_stores: table.share_literal_stores,
         pool_data_strict: table.pool_data_strict,
