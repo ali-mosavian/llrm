@@ -274,9 +274,7 @@ fn plan_loop(
     let env_users = Env {
         safe_to_speculate: &safe_to_speculate,
         ephemeral: &is_ephemeral,
-        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
-        // wide loop grew tail_calls by 354 bytes.
-        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+        native_widths: tti.lsr_native_integer_widths(),
         use_list_order: tti.lsr_users_in_use_list_order(),
         phi_operand_uses: tti.lsr_phi_operand_uses(),
     };
