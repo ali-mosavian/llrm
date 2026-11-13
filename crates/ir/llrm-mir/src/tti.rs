@@ -1570,6 +1570,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::branch_constant_arm_selects`.
+    fn branches_constant_arm_selects(&self) -> bool {
+        false
+    }
+
     /// Whether `sinks_select_arms` also holds in a size build: the branch form
     /// leaves out the copy of the other arm, so it is not longer.
     fn sinks_select_arms_for_size(&self) -> bool {
