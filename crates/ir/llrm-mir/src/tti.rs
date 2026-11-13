@@ -2519,8 +2519,8 @@ pub trait Tti {
     /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
     /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit
     /// counter, product or pointer is reduced. None: the datalayout's.
-    /// Owner llrm-target-6502; exit: 16-bit widths and `-Os` with a byte-aware
-    /// LSR cost, 2026-11-20.
+    /// Held at `-Os` too. Owner llrm-target-6502; exit: a byte-aware LSR cost
+    /// (`lsr_size_model`) for the 6502, 2026-11-24.
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
         &[]
     }
