@@ -24,7 +24,10 @@ use crate::scaledindex::memory_at;
 
 /// `operand_class`, with the base and the index of an extending load (it has
 /// no printed operands, so the row names no class for them).
-fn class_at(name: &str, position: usize) -> Option<Class> {
+fn class_at(
+    name: &str,
+    position: usize,
+) -> Option<Class> {
     match (crate::scaledindex::memory_at(name), position) {
         (Some((base, _)), at) if at == base => Some(Class::Ar32),
         (Some((_, index)), at) if at == index => Some(Class::Xr32),
@@ -55,15 +58,18 @@ pub fn address_roles(function: &mut MFunction) {
             }
         }
     }
-    // a single-def copy of such a register, whose other uses allow an address register,
-    // is one too: selection copies the `lea` of a frame index for a second access
+    // a single-def copy of such a register, whose other uses allow an address
+    // register, is one too: selection copies the `lea` of a frame index for
+    // a second access
     let mut copy_of: Vec<Option<u32>> = vec![None; count];
     let mut arm = vec![Some(Class::Ar32); count];
     for block in &function.blocks {
         for inst in &block.insts {
             match inst.kind {
                 Kind::Copy => {
-                    if let (Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(s))) = (&inst.operands[0], &inst.operands[1]) {
+                    if let (Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(s))) =
+                        (&inst.operands[0], &inst.operands[1])
+                    {
                         copy_of[*d as usize] = Some(*s);
                     }
                 }

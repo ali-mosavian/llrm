@@ -44,7 +44,8 @@ fn options() -> Options {
 fn the_pointer_is_the_base_and_the_counter_the_index() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let out = text_with(&module(), "f", cpu, options()).expect("compiles");
-        // the array is addressed from the stack pointer (`frameindexed`) or a register holding its `lea`
+        // the array is addressed from the stack pointer (`frameindexed`) or a
+        // register holding its `lea`
         let store = out
             .lines()
             .find(|line| line.starts_with("\tmove.b\t%d") && (line.contains("(0,%a") || line.contains(",%sp,%d")))
@@ -100,7 +101,8 @@ x2:
 
 #[test]
 fn a_copied_frame_address_is_the_base_of_the_second_load() {
-    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{PAIR_LOOP}")).expect("parses");
+    let module =
+        llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{PAIR_LOOP}")).expect("parses");
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let out = text_with(&module, "g", cpu, options()).expect("compiles");
         assert!(!out.contains("move.l\t%a"), "{cpu:?}: the counter goes through a copy:\n{out}");
