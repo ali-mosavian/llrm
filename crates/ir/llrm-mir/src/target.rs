@@ -64,6 +64,10 @@ pub struct Tuning {
     /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
     /// the pin's, which pops only at `minsize` (X86FrameLowering.cpp:4116).
     pub pops_arguments_at_size: bool,
+    /// An x87 compare keeps `sahf` where bytes are held (-O1, size): `test ah,
+    /// mask` is 2 bytes longer. DEVIATE X87-FCMP-AH names the target's own
+    /// choice; the pin keeps `sahf` everywhere, so it is false there.
+    pub keeps_sahf_where_bytes_are_held: bool,
     /// The target has a libc `memcpy` to call, so LoopIdiomRecognize forms a
     /// copy of run-time length whatever its size, as the pin does. false:
     /// DEVIATE (loopidioms.rs `variable_copy_pays`): the copy stays a loop
@@ -243,7 +247,8 @@ pub struct Tuning {
     /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
     /// `movabs`, a 3-byte op and a tail store. DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,
     /// exit 2026-11-30): `X86SelectionDAGInfo::emitConstantSizeRepstos` takes the alignment's
-    /// unit. false: the pin's.
+    /// unit. Assumes ERMS/FSRM: `rep stosb` is no slower than `rep stosq` plus a tail (measured
+    /// 24..4000 B, Zen 5); a target whose CPUs lack it must not set this. false: the pin's.
     pub rep_stos_priced_unit: bool,
     /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
     /// not the library call: the setup is a few bytes against the call's push
@@ -372,6 +377,14 @@ pub struct Tuning {
     /// the mass and make the code after them cold (threshold 45, no bonuses).
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// Read-only data (a private constant, a jump table) that one procedure
+    /// only loads from follows that procedure in its code segment and is read
+    /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
+    /// puts it in the text section on a target whose data segment is scarce
+    /// (real mode: DS is DGROUP, code segments are not). false: the pin's
+    /// data section. Not when tuned for size: the `cs:` byte at every load
+    /// site outweighs the table's data bytes.
+    pub read_only_in_code: bool,
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
@@ -612,6 +625,7 @@ impl Tuning {
         multiply_by_clocks: false,
         libc_memcpy: false,
         pops_arguments_at_size: true,
+        keeps_sahf_where_bytes_are_held: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         narrow_divide_live_max_bits: 31,
@@ -672,6 +686,7 @@ impl Tuning {
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
+        read_only_in_code: false,
         min_jump_table_density: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,

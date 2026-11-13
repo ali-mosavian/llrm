@@ -1097,3 +1097,107 @@ fn test_a_target_that_declines_keeps_the_compare_of_a_constant_phi() {
     assert!(out.contains("icmp eq i32 %i, 0"), "{out}");
     assert!(!out.contains("phi i1"), "{out}");
 }
+
+fn division_compare_on(
+    keep: bool,
+) -> String {
+    let text = "define i1 @f(i16 %v, ptr %p) {
+  %q = udiv i16 %v, 10
+  store i16 %q, ptr %p
+  %c = icmp ugt i16 %q, 9
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: keep, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `v / 10 >= 10` with the quotient also stored became `v > 99`, which kept
+/// `v` live across the divide call beside the quotient (6502 digits -Os: +63 B
+/// of push, pop and copies). The pin folds it; a target that keeps it does not.
+#[test]
+fn test_a_compare_of_a_shared_quotient_stays_a_compare_of_the_quotient_where_kept() {
+    let kept = division_compare_on(true);
+    assert!(kept.contains("%q, 9"), "{kept}");
+    let pin = division_compare_on(false);
+    assert!(pin.contains("%v, 99"), "{pin}");
+}
+
+/// The quotient has no other use: the range test saves the divide, on every target.
+#[test]
+fn test_a_compare_of_an_unshared_quotient_is_a_range_test_even_where_kept() {
+    let text = "define i1 @f(i16 %v) {
+  %q = udiv i16 %v, 10
+  %c = icmp ugt i16 %q, 9
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: true, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    assert!(printed(&module).contains("%v, 99"), "{}", printed(&module));
+}
+
+/// A divide by a power of two is a shift: its compare folds as the pin's does
+/// (6502 idioms `i < n / 2`, +40 B when it was kept).
+#[test]
+fn test_a_compare_of_a_shared_quotient_by_a_power_of_two_is_a_range_test_even_where_kept() {
+    let text = "define i1 @f(i16 %v, ptr %p) {
+  %q = udiv i16 %v, 4
+  store i16 %q, ptr %p
+  %c = icmp ugt i16 %q, 9
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: true, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    assert!(printed(&module).contains("%v, 39"), "{}", printed(&module));
+}
