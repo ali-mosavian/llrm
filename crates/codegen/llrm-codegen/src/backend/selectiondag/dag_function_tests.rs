@@ -643,6 +643,46 @@ fn a_select_on_the_sign_is_the_sign_mask_not_a_branch() {
     }
 }
 
+const GZIP_SELECTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 63, i32 0
+  ret i32 %r
+}
+define i32 @g(i32 %x) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 96, i32 0
+  ret i32 %r
+}
+define i32 @h(i32 %x, i32 %a) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 %a, i32 0
+  ret i32 %r
+}
+";
+
+/// `x < 0 ? A : 0` was `test; mov ecx, A; js; xor ecx, ecx` (the rounding bias
+/// of a signed divide by 64 written as a select, a Nib `Q(c)` conversion:
+/// stft_fixed -Os +8 instructions per bias); the pin's `foldSelectCCToShiftAnd`
+/// ("gzip trick") makes it `and (sra x, 31), A`: no branch and no `cmov`, which
+/// an `i486` has not. (A single-bit `A` is `foldSelectOfConstants`' `shl (zext
+/// c)`.)
+#[test]
+fn a_select_of_a_value_or_zero_on_the_sign_is_a_shift_and_an_and_not_a_branch() {
+    let module = crate::testing::module(GZIP_SELECTS).expect("parses");
+    for (name, shift) in [("f", "sar"), ("g", "sar"), ("h", "sar")] {
+        let done =
+            selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+        assert!(
+            seen.contains(&shift) && seen.contains(&"and") && !seen.iter().any(|n| n.starts_with('j')),
+            "{name}: {seen:?}"
+        );
+    }
+}
+
 /// `if (c & 1) g(); else h();` written as a compare of the masked value, in
 /// both polarities and both arm orders, was `mov eax, [esp+4]; and al, 1; je`:
 /// only the truncate form narrowed. The pin's `X86ISD::CMP` case makes every
