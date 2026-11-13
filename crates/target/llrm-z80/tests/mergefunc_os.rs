@@ -1,4 +1,4 @@
-//! Two functions of one body are one function at -Os and -Oz (`MergeFunctions`).
+//! Two functions of one body are one function at every level but -O0 (`MergeFunctions` at -Os/-Oz, the local drop elsewhere).
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
@@ -33,12 +33,16 @@ fn two_functions_of_one_body_are_one_at_the_size_levels() {
     }
 }
 
-/// Above the size levels the copies stay: a merged body is a call to a shared name, never faster.
+/// signbit_idioms -O2/-O3 kept `bit_i16` beside `ge_i16`, the same code (+162 B over -O1, no clocks gained): a copy is
+/// one call either way, so the speed levels drop a local duplicate as -O1 does.
 #[test]
-fn the_speed_levels_keep_both() {
-    let calls = callees(Level::O2);
-    let twice: Vec<_> = calls.iter().filter(|name| name.contains("twice")).collect();
-    assert!(twice.len() < 2 || twice[0] != twice[1], "{calls:?}");
+fn the_speed_levels_drop_a_local_duplicate_too() {
+    for level in [Level::O2, Level::O3] {
+        let calls = callees(level);
+        let twice: Vec<_> = calls.iter().filter(|name| name.contains("twice")).collect();
+        assert_eq!(twice.len(), 2, "{level:?}: {calls:?}");
+        assert_eq!(twice[0], twice[1], "{level:?}: {calls:?}");
+    }
 }
 
 /// shl_long_by_one -O1 kept `twice` and `twice_signed` (151 B against SDCC's 147): a local function of the same body
