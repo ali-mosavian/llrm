@@ -70,3 +70,15 @@ fn a_caller_keeps_its_arguments_in_the_argument_registers_across_a_callee_that_o
         chain.lines().map(str::trim).filter(|line| line.starts_with("mov ") && (line.contains(" edi,") || line.contains(" esi,"))).collect();
     assert!(moves.is_empty(), "argument copies before the calls: {moves:?}\n{chain}");
 }
+
+/// A function that tail-calls another passes its arguments on in the registers it was given: the `jmp` reads `edi`
+/// and `esi`, it does not write them. Counting the `jmp`'s requirements as writes made every such function "write"
+/// them, so each call of one was preceded by argument copies (select_of_constants -Os, 136 of 413 functions).
+#[test]
+fn a_caller_keeps_its_arguments_across_a_callee_that_tail_calls_with_them() {
+    let text = assembly("ipra_tail_call.c");
+    let chain = text.split("chain_tail proc near").nth(1).and_then(|rest| rest.split("chain_tail endp").next()).expect("a chain_tail body");
+    let moves: Vec<&str> =
+        chain.lines().map(str::trim).filter(|line| line.starts_with("mov ") && (line.contains(" edi,") || line.contains(" esi,"))).collect();
+    assert!(moves.is_empty(), "argument copies before the calls: {moves:?}\n{chain}");
+}
