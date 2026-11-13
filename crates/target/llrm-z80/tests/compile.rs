@@ -1775,7 +1775,9 @@ fn a_counted_loop_counts_its_trips_in_a_byte() {
          \x20 br i1 %c, label %loop, label %exit\nexit:\n  ret void\n}}"
     );
     let out = text(&ir, "copy", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("ld b, #200"), "{out}");
+    // the register is the allocator's: with the guard and latch merged (#9454) the count sits in `h`, the loop
+    // is 67 T a trip against 70 and has no `ret z` and `jp`
+    assert!(["a", "b", "c", "d", "e", "h", "l"].iter().any(|r| out.contains(&format!("ld {r}, #200"))), "{out}");
     assert!(!out.contains("or a, e"), "the word count is tested no more: {out}");
 }
 
