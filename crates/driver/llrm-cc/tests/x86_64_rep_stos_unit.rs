@@ -41,3 +41,14 @@ fn a_fill_left_beside_a_copied_store_is_a_rep_stos_at_size() {
     assert!(text.contains("rep movs"), "no rep movs:\n{text}");
     assert!(text.contains("rep stosb"), "the fill stayed a loop:\n{text}");
 }
+
+/// A 512-byte zero fill of an aligned array was `rep stosb` with ecx = 512
+/// (the unit was chosen between the pin's quadword and a byte only); `rep
+/// stosd`, ecx = 128, is the same 9 B and a quarter of the iterations (histo
+/// -Os: +381 executed instructions over gcc).
+#[test]
+fn a_zero_fill_at_size_takes_the_widest_unit_of_the_fewest_bytes() {
+    let text = assembly("rep_stos_zero.c");
+    assert!(text.contains("rep stos"), "no rep stos:\n{text}");
+    assert!(!text.contains("rep stosb"), "the byte form:\n{text}");
+}

@@ -100,6 +100,12 @@ impl Placed {
         }
         let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
         let mut bss: Vec<(String, Vec<GlobalId>)> = Vec::new();
+        let in_code: BTreeSet<String> = built
+            .code_data
+            .values()
+            .flat_map(|datums| crate::backend::codetables::labels(datums))
+            .map(str::to_owned)
+            .collect();
         for (number, (segment, members)) in segments.into_iter().enumerate() {
             // Segment 0 is the default; the others a frontend named, which
             // LLVM would call a section: a stated alignment is kept exactly.
@@ -118,6 +124,10 @@ impl Placed {
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
+                // A table assembly put in the code of its reader stays there.
+                if in_code.contains(built.names[&(globals::space(module, global), i64::from(global.0))].as_str()) {
+                    continue;
+                }
                 if let Some(to) = crate::backend::globals::alignment(
                     module,
                     layout.as_ref(),
@@ -511,6 +521,7 @@ mod tests {
             far_bss: Default::default(),
             weak: Default::default(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),

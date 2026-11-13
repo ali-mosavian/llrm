@@ -82,6 +82,7 @@ use llrm_support::debug::timed;
 use crate::abi::runtime::Contract;
 use crate::backend::calleefacts;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::codetables;
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected, Unselected};
@@ -230,7 +231,11 @@ pub fn assembled_by(
     // Private constants of no alignment (string literals) go after every aligned datum: the pin
     // gives them their own mergeable `.rodata.str1.1` section, so an odd-sized one never pads what
     // follows it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single +2).
-    let mut unaligned_tail = Vec::new();
+    let mut unaligned_tail: Vec<codetables::Table> = Vec::new();
+    // Off when tuned for size: each load site costs the `cs:` byte, which the moved table's
+    // data bytes do not repay (QCport -Os grew).
+    let reads_in_code = cpu.target().tuning().read_only_in_code && !cpu.size;
+    let mut aligned_tables: Vec<codetables::Table> = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
@@ -326,7 +331,17 @@ pub fn assembled_by(
                     && segment_bytes != i64::MAX
                     && !datums.iter().any(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Pointer(_)))
                 {
-                    unaligned_tail.extend(datums);
+                    unaligned_tail.push(codetables::Table { key: (globals::space(module, id), at as i64), datums });
+                } else if reads_in_code
+                    && variable.constant
+                    && global.linkage == llrm_mir::Linkage::Private
+                    && comdat_of(module, name).is_none()
+                    && segment_bytes != i64::MAX
+                    && codetables::movable(&datums)
+                {
+                    // Aligned like the rest, a table that stays in data goes
+                    // after it (`tables`).
+                    aligned_tables.push(codetables::Table { key: (globals::space(module, id), at as i64), datums });
                 } else {
                     let start = data.len();
                     let zero_may_move = !variable.constant
@@ -584,9 +599,29 @@ pub fn assembled_by(
         pool_end += bytes.len() as i64;
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
-    data.extend(tables);
-    data.extend(unaligned_tail);
+    let (read_only, tables_of_jumps) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
+    let mut code_data = std::collections::BTreeMap::new();
+    if reads_in_code {
+        let mut tables = aligned_tables;
+        tables.extend(codetables::jump_tables(tables_of_jumps, &names));
+        tables.extend(unaligned_tail);
+        let others: Vec<&[masm::Datum]> = [&data[..], &far_data[..], &read_only[..]]
+            .into_iter()
+            .chain(sectioned.values().map(Vec::as_slice))
+            .chain(huge_objects.iter().map(|(_, datums)| datums.as_slice()))
+            .collect();
+        let aliased: BTreeSet<codetables::Key> = module
+            .aliases
+            .iter()
+            .map(|alias| (globals::space(module, alias.aliasee), i64::from(alias.aliasee.0)))
+            .collect();
+        let (placed, kept) = codetables::placed(&mut procedures, tables, &names, &others, &aliased);
+        code_data = placed;
+        data.extend(kept.into_iter().flat_map(|table| table.datums));
+    } else {
+        data.extend(tables_of_jumps);
+        data.extend(unaligned_tail.into_iter().flat_map(|table| table.datums));
+    }
     if !read_only.is_empty() {
         sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
     }
@@ -700,6 +735,7 @@ pub fn assembled_by(
         far_bss: BTreeSet::new(),
         weak,
         code_segments,
+        code_data,
         comdats,
         stack: 0,
         object: arch.object(),
