@@ -166,6 +166,8 @@ pub struct Profile {
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
+    /// DEVIATE FB3 on (`CpuTable::widen_word_immediate`).
+    pub widen_word_immediate: bool,
     /// DEVIATE PHI-SHARE on (`CpuTable::share_congruent_phis`).
     pub share_congruent_phis: bool,
     /// DEVIATE UNORDERED-ODDS on (`CpuTable::unordered_branch_odds`).
@@ -411,6 +413,7 @@ impl Profile {
             tail_dup_threshold: None,
             tail_dup_hot_size: None,
             commute_loop_carried: false,
+            widen_word_immediate: false,
             share_congruent_phis: false,
             unordered_branch_odds: false,
             mispredict_penalty: None,
@@ -553,6 +556,14 @@ impl Profile {
     /// wider: x_adler -O1 gained a callee-saved register (+2 B, +5 clk).
     pub fn commutes_loop_carried_flow(&self) -> bool {
         self.commutes_loop_carried() && !self.bytes_strict()
+    }
+
+    /// DEVIATE FB3 applies here: the table's key, where the operand-size
+    /// prefix costs a clock (the 486), at -Os and at speed (-O2, -O3). Not at
+    /// -O1: its bytes are strict and the clock buys no counted cell there
+    /// (x_idioms +20 B for -120 clk).
+    pub fn widens_word_immediate(&self) -> bool {
+        self.widen_word_immediate && self.prefix_cost > 0 && (self.size || self.min_size || self.speed_rate)
     }
 
     /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
@@ -734,6 +745,7 @@ fn _profile(
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        widen_word_immediate: table.widen_word_immediate,
         share_congruent_phis: table.share_congruent_phis,
         unordered_branch_odds: table.unordered_branch_odds,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
@@ -1349,5 +1361,22 @@ mod bytes_strict_tests {
         assert!(!at(true, true, true).commutes_loop_carried_flow(), "-Os");
         let without_key = Profile { commute_loop_carried: false, ..at(true, false, true) };
         assert!(!without_key.commutes_loop_carried_flow(), "no key: the pin's order");
+    }
+
+    /// FB3 holds at -Os and at speed, not at -O1 (strict bytes, no speed rate):
+    /// x_idioms -O1 +20 B for -120 clk, no counted cell.
+    #[test]
+    fn the_word_immediate_widening_is_not_made_at_o1() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |size, speed_rate| Profile {
+            optimized: true,
+            size,
+            speed_rate,
+            widen_word_immediate: true,
+            ..base.clone()
+        };
+        assert!(at(true, true).widens_word_immediate(), "-Os");
+        assert!(at(false, true).widens_word_immediate(), "-O2 and -O3");
+        assert!(!at(false, false).widens_word_immediate(), "-O1");
     }
 }
