@@ -19,6 +19,7 @@ for m in $MODULES; do
   sdasz80 -g -o $OUT/$n.rel $OUT/$n.s
 done
 sdasz80 -g -o "$OUT/div64.rel" config/z80/div64.s; cp config/z80/div64.s "$OUT/div64.s"
+sdasz80 -g -o "$OUT/mul64.rel" config/z80/mul64.s; cp config/z80/mul64.s "$OUT/mul64.s"
 sdasz80 -g -o "$OUT/umulhisi3.rel" config/z80/umulhisi3.s; cp config/z80/umulhisi3.s "$OUT/umulhisi3.s"
 # f32 add sub mul div, int<->float and compares are hand asm (config/z80/sf32_*.s): 1705 + 171 B for all of them, 3-14x SDCC's clocks. Like SDCC's own f32 library they keep
 # operands in static cells and are not reentrant, and they clobber IY (free in the llrm-z80 convention).
