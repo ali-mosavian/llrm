@@ -64,6 +64,22 @@ struct Emitter<'a> {
 }
 
 impl Emitter<'_> {
+    /// The register `ReplacePhysRegs` makes of `SP32` / `SP64`: one for the
+    /// function, the one its prologue defines.
+    fn stack_pointer(
+        &mut self,
+        ty: ValType,
+    ) -> VReg {
+        match self.f.sp {
+            Some(reg) => reg,
+            None => {
+                let reg = self.f.new_vreg(ty);
+                self.f.sp = Some(reg);
+                reg
+            }
+        }
+    }
+
     fn builder_reg(
         &mut self,
         number: u32,
@@ -157,18 +173,36 @@ impl Emitter<'_> {
             line = dag.lines.get(data.order as usize).copied().flatten().map_or(0, |at| at.line);
             match data.opcode {
                 ISD::CopyFromReg => {
-                    let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
-                    if let Some(ty) = class(data.values[0]) {
-                        let reg = self.builder_reg(number, ty);
-                        self.results.insert((node, 0), reg);
-                    }
+                    let Some(ty) = class(data.values[0]) else { continue };
+                    let reg = match dag.node(data.ops[1]).data {
+                        NodeData::Register(number) => self.builder_reg(number, ty),
+                        // `InstrEmitter`: a read of a physical register is a
+                        // `COPY` into a new one; the register changes later.
+                        NodeData::PhysReg(_) => {
+                            let source = self.stack_pointer(ty);
+                            let reg = self.f.new_vreg(ty);
+                            out.push(Inst::new(copy(ty), &[Operand::Def(reg), Operand::Use(source)]));
+                            reg
+                        }
+                        _ => continue,
+                    };
+                    self.results.insert((node, 0), reg);
                 }
                 ISD::CopyToReg => {
-                    let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
+                    let register = match dag.node(data.ops[1]).data {
+                        NodeData::Register(number) => Some(number),
+                        // `ReplacePhysRegs` names `SP32` and `SP64` one
+                        // register.
+                        NodeData::PhysReg(_) => None,
+                        _ => continue,
+                    };
                     let value = data.ops[2];
                     match (class(dag.value_type(value)), self.operand(dag, value)) {
                         (Some(ty), Some(Operand::Use(src))) => {
-                            let dst = self.builder_reg(number, ty);
+                            let dst = match register {
+                                Some(number) => self.builder_reg(number, ty),
+                                None => self.stack_pointer(ty),
+                            };
                             if dst != src {
                                 out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
                             }
@@ -177,7 +211,10 @@ impl Emitter<'_> {
                         // lowering turns the index into the stack pointer
                         // plus its offset.
                         (Some(ty), Some(frame @ Operand::Frame(_))) => {
-                            let dst = self.builder_reg(number, ty);
+                            let dst = match register {
+                                Some(number) => self.builder_reg(number, ty),
+                                None => self.stack_pointer(ty),
+                            };
                             out.push(Inst::new(copy(ty), &[Operand::Def(dst), frame]));
                         }
                         _ => {}
@@ -335,6 +372,7 @@ pub fn emit(
     let mut f = Function::new(name);
     f.params = params.to_vec();
     f.frame = blocks.first().map_or(Vec::new(), |block| block.frame.clone());
+    f.has_var_sized = blocks.first().is_some_and(|block| block.has_var_sized);
     f.results = results.to_vec();
     let layout = blocks.first().map_or(Vec::new(), |block| block.layout.clone());
     f.blocks = vec![Vec::new(); layout.len().max(1)];

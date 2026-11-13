@@ -1125,7 +1125,7 @@ pub(crate) fn fills_pay(
     // The loop stays for the stores of computed values: a fill saves one
     // store, less than itself, unless the trips pay for it.
     if kept > 0 {
-        return fill_beside_computed_stores_pays(at_speed, clocks, stores - kept, fills);
+        return fill_beside_computed_stores_pays(at_speed, clocks, stores, stores - kept, fills);
     }
     // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
@@ -1166,11 +1166,15 @@ pub(crate) fn fills_pay(
 fn fill_beside_computed_stores_pays(
     at_speed: bool,
     clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
+    stores: i64,
     removed: i64,
     fills: i64,
 ) -> bool {
     let (Some((clocks, _, Some(trips), Some(cells))), true) = (clocks, at_speed) else { return false };
-    trips * removed * clocks.store_immediate > fills * clocks.fill + cells * clocks.fill_cell
+    // `cells` counts every store of the loop; the fills cover the `removed` ones' share (priced over all, a loop of
+    // one computed and one constant store stored twice the cells it fills: `reset`'s 1200 trips lost the fill).
+    let fill_cells = cells * removed / stores.max(1);
+    trips * removed * clocks.store_immediate > fills * clocks.fill + fill_cells * clocks.fill_cell
 }
 
 /// A fill the backend may store inline: `bytes` long, and the most stores a

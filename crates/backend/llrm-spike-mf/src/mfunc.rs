@@ -51,14 +51,15 @@ pub struct Inst {
     pub terminator: bool,
     /// Control never falls through it (`isBarrier`).
     pub barrier: bool,
-    /// It sets the status flags a later instruction may read.
+    /// It sets the status flags a later instruction may read. Read it through
+    /// [`Inst::sets_flags`]; write it here.
     pub sets_flags: bool,
     /// It was made again by the spiller and its original sets the flags, but
     /// `sets_flags` is clear so the reader after the original keeps the
     /// original's ([`Target::remade_sets_no_flags`]). The target restores the
     /// truth once it has placed the flag readers.
     pub remade_sets_flags: bool,
-    /// It reads the status flags.
+    /// It reads the status flags. Read it through [`Inst::reads_flags`].
     pub reads_flags: bool,
     /// `mayLoad`, `mayStore`, `hasUnmodeledSideEffects`, `isAsCheapAsAMove`.
     pub may_load: bool,
@@ -95,6 +96,22 @@ pub struct Inst {
 }
 
 impl Inst {
+    /// It kills every flag lane at once: a later reader of any lane sees this
+    /// instruction's result, never an earlier setter's. A setter that leaves a
+    /// lane alone (an `inc` that keeps carry) must say so here, in this
+    /// accessor, before a pass may rely on the lane surviving it: the pin's
+    /// `optimizeCompareInstr` stops at the first EFLAGS modifier for the same
+    /// reason (#9532).
+    pub fn sets_flags(&self) -> bool {
+        self.sets_flags
+    }
+
+    /// It reads the flags as a whole: any lane may be the one it needs, so no
+    /// setter may be moved or removed across it.
+    pub fn reads_flags(&self) -> bool {
+        self.reads_flags
+    }
+
     pub fn new(
         kind: Kind,
         operands: Vec<Operand>,
