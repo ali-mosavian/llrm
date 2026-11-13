@@ -925,6 +925,12 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            // `PromoteIntRes_VECREDUCE`: the result type changes, the vector
+            // does not.
+            op if op.vec_reduce_base_opcode().is_some() => {
+                let vector = self.dag.operand(value, 0);
+                self.dag.get_node(op, to, &[vector])
+            }
             op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
                 // `PromoteIntRes_SimpleIntBinOp` with `SExtPromotedInteger` for
                 // the signed forms and `ZExtPromotedInteger` for the unsigned.

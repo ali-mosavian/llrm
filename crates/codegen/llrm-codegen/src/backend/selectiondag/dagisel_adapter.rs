@@ -206,6 +206,9 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         ConcatVectors => pin::CONCAT_VECTORS,
         // No pattern names it: a target lowers every shuffle first.
         VectorShuffle => u16::MAX,
+        // Lowered before selection: no pattern names them.
+        VecReduceAdd | VecReduceMul | VecReduceAnd | VecReduceOr | VecReduceXor | VecReduceSMax | VecReduceSMin
+        | VecReduceUMax | VecReduceUMin => u16::MAX,
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
