@@ -704,9 +704,25 @@ pub(crate) fn execute(
         }
         folded.push(total);
     }
+    hand_on(function, shape, skeleton, middle, reductions, &folded);
+}
+
+/// What follows the middle block's fold of the reductions: the exit block
+/// reads each total from the middle block (and the remainder's own last value
+/// from the remainder), and the remainder resumes each reduction from its total
+/// (`bc.merge.rdx`), or from its start where the vector loop was skipped.
+/// `totals[i]` is the value of `reductions[i]` after the vector loop.
+pub(crate) fn hand_on(
+    function: &mut Function,
+    shape: &Shape,
+    skeleton: &Skeleton,
+    middle: BlockId,
+    reductions: &[Reduction],
+    totals: &[Operand],
+) {
     let exit = shape.exit;
     let remainder_block = skeleton.remainder.as_ref().map(|(block, _)| *block);
-    for (reduction, total) in reductions.iter().zip(&folded) {
+    for (reduction, total) in reductions.iter().zip(totals) {
         let original = Operand::Value(function.instruction(reduction.latch).result.expect("an update"));
         let copy_in_remainder = skeleton.remainder.as_ref().map(|(_, pairs)| {
             let phi = pairs.iter().find(|(from, _)| *from == reduction.phi).expect("the copy of the phi").1;
