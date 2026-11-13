@@ -12,8 +12,10 @@ class ParseClocks(unittest.TestCase):
     def test_the_clocks_cell_of_the_program_row(self):
         self.assertEqual(parse_clocks(TABLE), "43404")
 
-    def test_a_data_dependent_bound_keeps_its_star(self):
-        self.assertEqual(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"), "24634*")
+    def test_a_bound_is_unmeasured_not_exact(self):
+        # `cycles` prints N* for a lower bound; read as exact it made fake gcc cells
+        self.assertIsNone(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"))
+        self.assertIsNone(parse_clocks("| a.exe | 9 | 24634? | 1.0 |\n"))
 
     def test_no_program_row_is_none_not_zero(self):
         self.assertIsNone(parse_clocks("| exe | insns | 68000 clk |\n"))

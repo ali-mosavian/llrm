@@ -4,7 +4,7 @@
 m68k_clk.py [--cc LLRM_CC] [--cpus 68000,68020] [--levels O1,O2,Os] [--jobs N] FILE.c...
 
 Each program is linked with the support objects of `m68k_exec_sweep`, run under qemu-m68k and priced by the `cycles` example (CYCLES_CPUS).
-`*` after a count: a data-dependent bound; an empty count: nothing priced (uncovered code), not zero.
+An empty clocks cell is unmeasured: no row, a bound (`N*`, unknown loop count) or uncovered code (`?`); never a number.
 Environment: GCC_M68K (the cross toolchain root), LLRM_CC, CYCLES (the built `cycles` example; default under CARGO_TARGET_DIR).
 """
 import argparse
@@ -20,11 +20,12 @@ sys.path.insert(0, str(HERE))
 
 
 def parse_clocks(stdout):
-    """The clocks cell of the first `| NAME.exe | insns | clk | clk/call |` row, `None` when there is no such row."""
+    """The clocks cell of the first `| NAME.exe | insns | clk | clk/call |` row. `None` (unmeasured) when there is no such row, the cell is empty, or it is a bound (`N*`: unknown loop count) or uncovered (`?`): a bound is not a count."""
     for line in stdout.splitlines():
         if line.startswith("| ") and ".exe" in line:
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            return cells[2] if len(cells) > 2 and cells[2] else None
+            cell = cells[2] if len(cells) > 2 else ""
+            return cell if cell.isdigit() else None
     return None
 
 
