@@ -347,6 +347,8 @@ pub struct TargetHooks {
     pub keeps_shared_division_compare: bool,
     /// DEVIATE PHICONST-2 (`Tti::folds_phi_constant_chains`).
     pub phi_constant_chains: bool,
+    /// DEVIATE SYMPAIR-1 (`Tti::keeps_icmp_of_swapped_selects`).
+    pub keeps_swapped_select_compare: bool,
 }
 
 pub struct Env<'a> {

@@ -1055,6 +1055,20 @@ impl Function {
         found
     }
 
+    /// [`Self::predecessors`] once per edge, in use-list order: LLVM's
+    /// `predecessors(block)` as GVN's scalar PRE walks it (a `switch` with two
+    /// cases to `block` is two).
+    pub fn predecessor_edges(
+        &self,
+        block: BlockId,
+    ) -> Vec<BlockId> {
+        self.block_users(block)
+            .into_iter()
+            .filter(|one| self.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| self.parent(one.user))
+            .collect()
+    }
+
     /// LLVM's `predecessors(block)`: the blocks whose terminators name
     /// `block`, once per edge (a `switch` with two cases to it is two), by
     /// block id. A phi of `block` has one input for each.
