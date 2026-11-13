@@ -6,7 +6,7 @@
 //! not placed).
 
 use llrm_spike_mf::cfg::Cfg;
-use llrm_spike_mf::placement::{Graph, Layout, Odds, place};
+use llrm_spike_mf::placement::{Graph, Layout, Odds};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::frame::Lowered;
@@ -750,24 +750,25 @@ pub fn fold(
                 );
             }
         }
-        // DEVIATE (dev switch, removed before ready): LLRM_ARM64_PLACER=lir0 places on the shared placer with
-        // tail duplication off, `lir` with it on.
-        let pinned = match std::env::var("LLRM_ARM64_PLACER").as_deref() {
-            Ok(mode @ ("lir0" | "lir")) => {
-                let dense_of: HashMap<&str, usize> =
-                    reachable.iter().enumerate().map(|(new, &old)| (blocks[old].label.as_str(), new)).collect();
-                let kept: Vec<&Lowered> = reachable.iter().map(|&old| &blocks[old]).collect();
-                let dup = if mode == "lir0" { Some(0) } else { None };
-                let placed = crate::lir_place::order(&kept, &edges, &shares, &dense_of, optsize, dup);
-                let lens: Vec<usize> = kept.iter().map(|block| block.insts.len()).collect();
-                let starts: Vec<usize> = lens.iter().scan(0, |at, &len| { let start = *at; *at += len; Some(start) }).collect();
-                if placed.copied(&starts, &lens) {
-                    copies = Some(placed.blocks.clone());
-                }
-                placed.order()
-            }
-            _ => place(&graph),
-        };
+        // `MachineBlockPlacement` with `TailDupPlacement`: the one translation x86 uses (`llrm_codegen`), on
+        // this function's blocks as LIR (`lir_place`). A copied tail comes back in `copies`.
+        let dense_of: HashMap<&str, usize> =
+            reachable.iter().enumerate().map(|(new, &old)| (blocks[old].label.as_str(), new)).collect();
+        let kept: Vec<&Lowered> = reachable.iter().map(|&old| &blocks[old]).collect();
+        let placed = crate::lir_place::order(&kept, &edges, &shares, &dense_of, optsize);
+        let lens: Vec<usize> = kept.iter().map(|block| block.insts.len()).collect();
+        let starts: Vec<usize> = lens
+            .iter()
+            .scan(0, |at, &len| {
+                let start = *at;
+                *at += len;
+                Some(start)
+            })
+            .collect();
+        if placed.copied(&starts, &lens) {
+            copies = Some(placed.blocks.clone());
+        }
+        let pinned = placed.order();
         // DEVIATE: the old first-successor chain is kept where placement
         // executes more jumps by the same frequencies; the pin's
         // placement ignores that cost (quicksort's swap path gains a
