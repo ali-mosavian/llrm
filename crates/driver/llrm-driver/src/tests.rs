@@ -6045,3 +6045,27 @@ fn an_uncounted_loop_is_rotated_at_os_on_m64_where_the_object_does_not_grow() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("sub di, ax"), "the loop is not rotated:\n{listing}");
 }
+
+/// `char *p = &big[0x12345]` in a 32-bit object wrote its pointer field as `45 23 00 00`: only the low word of the offset
+/// was stored (`0x12345` as `0x2345`; `-0x12345` as `bb dc 00 00`), and the linked program pointed 64 KB short.
+#[test]
+fn a_static_pointer_offset_past_64k_fills_the_whole_dword_of_a_32_bit_object() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @big = external global [1 x i8]\n\
+                @p = global ptr getelementptr (i8, ptr @big, i32 74565)\n\
+                @q = global ptr getelementptr (i8, ptr @big, i32 -74565)\n\
+                define i32 @f() {\n  ret i32 0\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-O2"]), text, "f").unwrap();
+    let omf = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::object::Format::Omf,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let has = |bytes: [u8; 4]| omf.windows(4).any(|window| window == bytes);
+    assert!(has(74565i32.to_le_bytes()), "0x12345 as 45 23 01 00");
+    assert!(has((-74565i32).to_le_bytes()), "-0x12345 as bb dc fe ff");
+}
