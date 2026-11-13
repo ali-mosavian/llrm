@@ -2,8 +2,8 @@
 //! integer of any width, as `i24` before promotion).
 
 /// A simple value type, the pin's `MVT` with the vectors of integers and of
-/// `f32`/`f64` that are 128 bits or wider, and `v2f32` (DEVIATE SD13: no
-/// 64-bit integer vector, no `v1i64`; vector POC, owner m64).
+/// `f32`/`f64` that are 128 bits or wider, `v2f32` and the 64-bit integer
+/// vectors (DEVIATE SD13: no `v1i64`; owners m64, llrm-arm64-vec).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MVT {
     I1,
@@ -26,8 +26,12 @@ pub enum MVT {
     V2F64,
     /// `v2f32`: the 64-bit float vector `FPR64` holds (`addDRTypeForNEON`).
     V2F32,
-    /// The 256-bit vectors no register holds: the type legalizer splits each
-    /// in two (`TypeSplitVector`).
+    /// The 64-bit integer vectors `FPR64` holds (arm64, `addDRTypeForNEON`).
+    V8I8,
+    V4I16,
+    V2I32,
+    /// The vectors no register holds: the type legalizer splits each in two
+    /// (`TypeSplitVector`).
     V32I8,
     V16I16,
     V8I32,
@@ -119,7 +123,7 @@ impl MVT {
 }
 
 /// Every vector type: its element and its lane count.
-const VECTORS: [(MVT, MVT, u32); 25] = [
+const VECTORS: [(MVT, MVT, u32); 28] = [
     (MVT::V16I8, MVT::I8, 16),
     (MVT::V8I16, MVT::I16, 8),
     (MVT::V4I32, MVT::I32, 4),
@@ -133,6 +137,9 @@ const VECTORS: [(MVT, MVT, u32); 25] = [
     (MVT::V4I64, MVT::I64, 4),
     (MVT::V8F32, MVT::F32, 8),
     (MVT::V4F64, MVT::F64, 4),
+    (MVT::V8I8, MVT::I8, 8),
+    (MVT::V4I16, MVT::I16, 4),
+    (MVT::V2I32, MVT::I32, 2),
     (MVT::V64I8, MVT::I8, 64),
     (MVT::V32I16, MVT::I16, 32),
     (MVT::V16I32, MVT::I32, 16),

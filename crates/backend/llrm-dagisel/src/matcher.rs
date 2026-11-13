@@ -26,6 +26,15 @@ pub type Opcode = u16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Vt(pub u16);
 
+impl Vt {
+    /// The 64-bit integer vectors only an arm64 table names, which
+    /// `generated/ids.rs` (the x86 tables' types) does not list; the pin's
+    /// numbers (`ValueTypes.td` order).
+    pub const V8I8: Vt = Vt(47);
+    pub const V4I16: Vt = Vt(58);
+    pub const V2I32: Vt = Vt(73);
+}
+
 /// Operand flags of `EmitNode`/`MorphNodeTo` (`OPFL_*`).
 pub mod opfl {
     pub const CHAIN: u8 = 1;

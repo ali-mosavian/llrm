@@ -314,6 +314,8 @@ impl SelectionDAG {
         let n2_const = self.constant(n2);
         let is_i1 = vt == EVT::I1;
         match opcode {
+            // `getNode` of `EXTRACT_SUBVECTOR`: "Trivial extraction."
+            ISD::ExtractSubvector if vt == self.value_type(n1) => return Folded::Done(n1),
             ISD::TokenFactor => {
                 if self.opcode(n1) == ISD::EntryToken || n1 == n2 {
                     return Folded::Done(if self.opcode(n1) == ISD::EntryToken { n2 } else { n1 });
@@ -401,6 +403,21 @@ impl SelectionDAG {
                             return Folded::Done(value);
                         }
                     }
+                }
+            }
+            // `EXTRACT_SUBVECTOR` (`getNode`, SelectionDAG.cpp#L8840): the
+            // whole vector, a piece of undef, a piece of a `CONCAT_VECTORS` of
+            // pieces that size.
+            ISD::ExtractSubvector => {
+                if vt == self.value_type(n1) {
+                    return Folded::Done(n1);
+                }
+                if self.is_undef(n1) {
+                    return Folded::Done(self.get_undef(vt));
+                }
+                if self.opcode(n1) == ISD::ConcatVectors && self.value_type(self.operand(n1, 0)) == vt {
+                    let at = n2_const.expect("EXTRACT_SUBVECTOR index") / u128::from(vt.lanes());
+                    return Folded::Done(self.operand(n1, at as usize));
                 }
             }
             ISD::ExtractElement => {

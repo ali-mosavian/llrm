@@ -1306,17 +1306,21 @@ impl<'a> Analyzer<'a> {
             Opcode::Cast(
                 CastOp::FPTrunc | CastOp::FPExt | CastOp::UIToFP | CastOp::SIToFP | CastOp::FPToUI | CastOp::FPToSI
             )
-        ) && self.fp_expensive()
+        ) && self.fp_expensive(operation.ty)
         {
             self.add_cost(CALL_PENALTY);
         }
         self.free_instruction(inst)
     }
 
-    /// `getFPOpCost == TCC_Expensive` (D2): the generic answer, an FP type the
-    /// hardware does not have; x86 with an x87 has them all.
-    fn fp_expensive(&self) -> bool {
-        false
+    /// `getFPOpCost(ty) == TCC_Expensive` (D2): an FP type the target has no
+    /// legal `FADD` on (`Tti::fp_op_expensive`); none: generic, legal.
+    fn fp_expensive(
+        &self,
+        ty: llrm_mir::types::TypeId,
+    ) -> bool {
+        let Some(tti) = self.site.tti else { return false };
+        Ty::of(&self.context.types, ty).is_some_and(|ty| tti.fp_op_expensive(ty))
     }
 
     /// `visitCmpInst` (:2206).
@@ -1431,7 +1435,7 @@ impl<'a> Analyzer<'a> {
         }
         self.disable_sroa(operation.operands[0]);
         self.disable_sroa(operation.operands[1]);
-        if matches!(self.context.types.get(operation.ty), Type::Float(_)) && self.fp_expensive() {
+        if matches!(self.context.types.get(operation.ty), Type::Float(_)) && self.fp_expensive(operation.ty) {
             self.add_cost(CALL_PENALTY);
         }
         false

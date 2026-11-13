@@ -402,6 +402,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         let vt = self.dag.value_type(node);
         let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        // A memory type a register holds (`isTypeLegal(SrcVT)`): a plain load
+        // and the extension of it.
+        if info.mem_vt.is_vector() && self.tli.types.is_type_legal(info.mem_vt) {
+            let load = self.dag.get_load(info.mem_vt, chain, ptr, MemInfo { ext: None, ..info });
+            let op = if ext == super::actions::LoadExt::SExtLoad { ISD::SignExtend } else { ISD::ZeroExtend };
+            let value = self.dag.get_node(op, vt, &[load]);
+            return Some((value, SDValue { node: load.node, res: 1 }));
+        }
         let any =
             self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, ptr, MemInfo { ext: None, ..info });
         let value = if ext == super::actions::LoadExt::SExtLoad {
@@ -555,8 +563,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
-        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds CTTZ_ZERO_POISON): the value as is, the
-        // routine's `int` result sign-extended or truncated to the node's type.
+        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds
+        // CTTZ_ZERO_POISON): the value as is, the routine's `int`
+        // result sign-extended or truncated to the node's type.
         if matches!(op, ISD::CtLzZeroPoison | ISD::CtPop | ISD::CtTzZeroPoison) {
             let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
             let int = EVT::integer(self.tli.types.int_size());
@@ -959,7 +968,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let (src, dst) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let src_vt = self.dag.value_type(src);
         let EVT::Simple(src_mvt) = src_vt else { return None };
-        if !matches!(self.tli.operation_action(ISD::SIntToFp, src_vt), Action::Legal | Action::Custom) {
+        if !matches!(
+            self.tli.operation_action(ISD::SIntToFp, src_vt),
+            Action::Legal | Action::Custom
+        ) {
             return None;
         }
         if self.dag.node(node).flags.0 & SDNodeFlags::NON_NEG.0 != 0 {
@@ -1030,6 +1042,29 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(loaded)
     }
 
+    /// `SelectionDAG::UnrollVectorOp` for the lane-wise operations: each lane
+    /// of the operands extracted, the scalar operation on each, a
+    /// `BUILD_VECTOR` of the results.
+    fn unroll_vector_op(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let (op, flags) = (self.dag.opcode(node), self.dag.node(node).flags);
+        let operands = self.dag.node(node).ops.clone();
+        let lanes: Vec<SDValue> = (0..vt.lanes())
+            .map(|lane| {
+                let index = self.dag.get_constant(u128::from(lane), EVT::I64);
+                let scalars: Vec<SDValue> = operands
+                    .iter()
+                    .map(|operand| self.dag.get_node(ISD::ExtractElement, vt.element(), &[*operand, index]))
+                    .collect();
+                self.dag.get_node_flags(op, vt.element(), &scalars, flags)
+            })
+            .collect();
+        self.dag.get_build_vector(vt, &lanes)
+    }
+
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
     fn expand_node(
@@ -1040,6 +1075,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
         match op {
+            // `VectorLegalizer::Expand`: a lane-wise operation the target has
+            // not is done a lane at a time.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor if vt.is_vector() => {
+                Some(vec![self.unroll_vector_op(node)])
+            }
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::SignExtendInReg => {
                 // An in-register sign extension of a boolean is a negation of
@@ -1228,8 +1268,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             // `expandVAArg`: load the list pointer, round it up to the
             // type's ABI alignment when that exceeds the minimum stack
-            // argument alignment (`getMinStackArgumentAlignment`), step it by the
-            // type's allocation size, store it back and load the value.
+            // argument alignment (`getMinStackArgumentAlignment`), step it by
+            // the type's allocation size, store it back and load the value.
             ISD::VAArg => {
                 let vt = self.dag.value_type(node);
                 let (chain, list) = (self.dag.operand(node, 0), self.dag.operand(node, 1));

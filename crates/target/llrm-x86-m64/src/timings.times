@@ -42,6 +42,8 @@ commute_loop_carried 1
 unordered_branch_odds 1
 share_congruent_phis 1
 post_ra_tail_duplicate 1
+# Tail-merge guards T14 and D1 lifted: see CpuTable::tail_merge_pin_faithful.
+tail_merge_pin_faithful 1
 [clocks]
 alu_rr              =
 cmov                =

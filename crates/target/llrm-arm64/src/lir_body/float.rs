@@ -5,8 +5,8 @@
 use super::*;
 use crate::mc::inst::Cond;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding, VectorFma, VectorFpOp,
-    VectorFpUnary, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, NarrowLane, Rounding, VectorFma,
+    VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 
 const UNARY: [(FpUnary, &str); 11] = [
@@ -138,6 +138,27 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), imm(i64::from(*amount))],
             None,
         ),
+        Inst::VectorLongShift { op, lane, high, rd, rn, amount } => semantics(
+            Operation::Binary,
+            long_name(*op, *lane, *high),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, if *high { 128 } else { 64 }), imm(i64::from(*amount))],
+            None,
+        ),
+        Inst::VectorLong { op, lane, high, rd, rn, rm } => {
+            let narrow = if *high { 128 } else { 64 };
+            let mut sources = vec![vreg_loc(*rn, if op.adds_wide() { 128 } else { narrow }), vreg_loc(*rm, narrow)];
+            if op.accumulates() {
+                sources.insert(0, vreg_loc(*rd, 128));
+            }
+            semantics(
+                if op.accumulates() { Operation::FloatMultiplyAdd } else { Operation::Binary },
+                long_name(*op, *lane, *high),
+                vec![vreg_loc(*rd, 128)],
+                sources,
+                None,
+            )
+        }
         Inst::VectorNot { rd, rn } => {
             semantics(Operation::Unary, "NOTv16i8", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
         }
@@ -169,9 +190,30 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::VectorUnzip { second, lanes, rd, rn, rm } => semantics(
+            Operation::Binary,
+            unzip_name(*second, *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
+        Inst::VectorNarrow { high, wide, rd, rn } => semantics(
+            if *high { Operation::Binary } else { Operation::Unary },
+            format!("XTN{}", narrow_name(*wide, *high)),
+            vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
+            if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] },
+            None,
+        ),
         Inst::VectorFmulLane { lanes, rd, rn, rm, index } => semantics(
             Operation::Binary,
             format!("FMULv{}_indexed", if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
+            None,
+        ),
+        Inst::VectorMulLane { rd, rn, rm, index } => semantics(
+            Operation::Binary,
+            "MULv4i32_indexed".to_string(),
             vec![vreg_loc(*rd, 128)],
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
@@ -191,6 +233,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             format!("INSv{}lane", ins_lane(*lanes)),
             vec![vreg_loc(*rd, 128)],
             vec![vreg_loc(*rd, 128), imm(i64::from(*index)), vreg_loc(*rn, 128), imm(i64::from(*src))],
+            None,
+        ),
+        Inst::VectorDupScalar { lanes, rd, rn, index } => semantics(
+            Operation::Move,
+            format!("DUP{}", ins_lane(*lanes)),
+            vec![vreg_loc(*rd, 64)],
+            vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
             None,
         ),
         Inst::VectorReduce { op, lanes, rd, rn } => semantics(
@@ -356,7 +405,8 @@ fn dup_name(arrangement: Arrangement) -> &'static str {
     }
 }
 
-/// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the lanes as the pin's opcode names spell them.
+/// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the lanes as the pin's opcode names
+/// spell them.
 fn lane_name(lanes: Arrangement) -> &'static str {
     match lanes {
         Arrangement::B16 => "16i8",
@@ -366,6 +416,44 @@ fn lane_name(lanes: Arrangement) -> &'static str {
     }
 }
 
+/// `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: the narrow
+/// operand's arrangement, and the result's for all but the shift.
+fn long_name(
+    op: VectorLongOp,
+    lane: NarrowLane,
+    high: bool,
+) -> String {
+    let narrow = match (lane, high) {
+        (NarrowLane::B, false) => "8i8",
+        (NarrowLane::B, true) => "16i8",
+        (NarrowLane::H, false) => "4i16",
+        (NarrowLane::H, true) => "8i16",
+        (NarrowLane::S, false) => "2i32",
+        (NarrowLane::S, true) => "4i32",
+    };
+    let stem = op.mnemonic().to_uppercase();
+    if op.is_shift() {
+        return format!("{stem}v{narrow}_shift");
+    }
+    let wide = match lane {
+        NarrowLane::B => "8i16",
+        NarrowLane::H => "4i32",
+        NarrowLane::S => "2i64",
+    };
+    format!("{stem}v{narrow}_v{wide}")
+}
+
+const LONG_OPS: [VectorLongOp; 8] = [
+    VectorLongOp::Ushll,
+    VectorLongOp::Sshll,
+    VectorLongOp::Uaddw,
+    VectorLongOp::Saddw,
+    VectorLongOp::Umull,
+    VectorLongOp::Smull,
+    VectorLongOp::Umlal,
+    VectorLongOp::Smlal,
+];
+
 /// `FADDv4f32`, `FNEGv2f64`.
 fn vector_fp_name(
     mnemonic: &str,
@@ -373,6 +461,37 @@ fn vector_fp_name(
 ) -> String {
     let lanes = if lanes == Arrangement::D2 { "2f64" } else { "4f32" };
     format!("{}v{lanes}", mnemonic.to_uppercase())
+}
+
+/// `UZP1v8i16`: the pin's name of an unzip.
+fn unzip_name(
+    second: bool,
+    lanes: Arrangement,
+) -> String {
+    let lanes = match lanes {
+        Arrangement::B16 => "v16i8",
+        Arrangement::H8 => "v8i16",
+        Arrangement::S4 => "v4i32",
+        Arrangement::D2 => "v2i64",
+    };
+    format!("UZP{}{lanes}", if second { 2 } else { 1 })
+}
+
+/// `v8i8`, `v16i8`, `v4i16`, ...: the narrow arrangement of an `xtn` or
+/// the source of a `sshll`, as the pin names it.
+fn narrow_name(
+    wide: Arrangement,
+    high: bool,
+) -> &'static str {
+    match (wide, high) {
+        (Arrangement::H8, false) => "v8i8",
+        (Arrangement::H8, true) => "v16i8",
+        (Arrangement::S4, false) => "v4i16",
+        (Arrangement::S4, true) => "v8i16",
+        (Arrangement::D2, false) => "v2i32",
+        (Arrangement::D2, true) => "v4i32",
+        (Arrangement::B16, _) => unreachable!("no lane is narrower than a byte"),
+    }
 }
 
 /// `i8`, `i16`, `i32`, `i64`: the lane of an `INSvi32lane`.
@@ -416,7 +535,10 @@ const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
 ];
 
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
-fn vector_op_name(op: VectorOp, lanes: Arrangement) -> String {
+fn vector_op_name(
+    op: VectorOp,
+    lanes: Arrangement,
+) -> String {
     let stem = op.mnemonic().to_uppercase();
     let lanes = if op.is_logical() { "16i8" } else { lane_name(lanes) };
     format!("{stem}v{lanes}")
@@ -465,6 +587,38 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
+    for (wide, high) in [
+        (Arrangement::H8, false),
+        (Arrangement::H8, true),
+        (Arrangement::S4, false),
+        (Arrangement::S4, true),
+        (Arrangement::D2, false),
+        (Arrangement::D2, true),
+    ] {
+        let narrow = narrow_name(wide, high);
+        if name == format!("XTN{narrow}") {
+            return Some(Inst::VectorNarrow { high, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+        }
+    }
+    for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
+        if name == unzip_name(second, lanes) {
+            return Some(Inst::VectorUnzip {
+                second,
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                rm: vreg_of(&s[1]),
+            });
+        }
+    }
+    if name == "MULv4i32_indexed" {
+        return Some(Inst::VectorMulLane {
+            rd: vreg_of(dest?),
+            rn: vreg_of(&s[0]),
+            rm: vreg_of(&s[1]),
+            index: value_of(&s[2]) as u8,
+        });
+    }
     for lanes in [Arrangement::S4, Arrangement::D2] {
         let lane = if lanes == Arrangement::D2 { "2i64" } else { "4i32" };
         if name == format!("FMULv{lane}_indexed") {
@@ -508,6 +662,14 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 src: value_of(&s[3]) as u8,
             });
         }
+        if name == format!("DUP{}", ins_lane(lanes)) {
+            return Some(Inst::VectorDupScalar {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                index: value_of(&s[1]) as u8,
+            });
+        }
         if name == format!("DUPv{}lane", lane_name(lanes)) {
             return Some(Inst::VectorDupLane {
                 lanes,
@@ -541,7 +703,43 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 && (!op.is_logical() || lanes == Arrangement::B16)
                 && !(op == VectorOp::Mul && lanes == Arrangement::D2)
             {
-                return Some(Inst::VectorBinary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]), rm: vreg_of(&s[1]) });
+                return Some(Inst::VectorBinary {
+                    op,
+                    lanes,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[0]),
+                    rm: vreg_of(&s[1]),
+                });
+            }
+        }
+    }
+    for op in LONG_OPS {
+        for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+            for high in [false, true] {
+                if name != long_name(op, lane, high) {
+                    continue;
+                }
+                return Some(if op.is_shift() {
+                    Inst::VectorLongShift {
+                        op,
+                        lane,
+                        high,
+                        rd: vreg_of(dest?),
+                        rn: vreg_of(&s[0]),
+                        amount: value_of(&s[1]) as u8,
+                    }
+                } else {
+                    // The accumulating forms list the tied `rd` first.
+                    let at = usize::from(op.accumulates());
+                    Inst::VectorLong {
+                        op,
+                        lane,
+                        high,
+                        rd: vreg_of(dest?),
+                        rn: vreg_of(&s[at]),
+                        rm: vreg_of(&s[at + 1]),
+                    }
+                });
             }
         }
     }

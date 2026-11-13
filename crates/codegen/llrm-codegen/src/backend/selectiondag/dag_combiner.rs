@@ -345,9 +345,10 @@ pub trait CombineHooks {
         false
     }
 
-    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another reader
-    /// takes narrow may be widened for an extension only if the truncate back is free.
-    /// The pin asks the same query as everywhere else; a target may answer it apart.
+    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another
+    /// reader takes narrow may be widened for an extension only if the
+    /// truncate back is free. The pin asks the same query as everywhere
+    /// else; a target may answer it apart.
     fn extend_uses_truncate_free(
         &self,
         from: EVT,
@@ -1091,6 +1092,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::InsertVectorElt => self.visit_insert_vector_elt(node),
+            ISD::VectorShuffle => self.visit_vector_shuffle(node),
             ISD::ExtractElement => self.visit_extract_vector_elt(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
@@ -2118,8 +2120,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the loaded
-    /// value (its chain may have users).
+    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the
+    /// loaded value (its chain may have users).
     fn reduce_load_width(
         &mut self,
         node: SDValue,
@@ -2195,8 +2197,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         {
             let x = self.dag.operand(self.dag.operand(n0, 0), 0);
             let narrow = self.dag.value_type(n0);
-            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
-            // isZExtFree(narrow, wide)`) `ShrinkDemandedOp` makes the narrow form
+            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide,
+            // narrow) && isZExtFree(narrow, wide)`)
+            // `ShrinkDemandedOp` makes the narrow form
             // this fold would undo, and the two would run in turn forever.
             let narrows_free = self.hooks.free_narrowing(vt, narrow);
             let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
@@ -2392,9 +2395,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let from = self.dag.value_type(n0);
+        // `SignBitIsZero`: the sign bit of a lane, in a vector.
+        let lane_bits = if from.is_vector() { from.element().size_in_bits() } else { from.size_in_bits() };
         if self.tli?.is_sext_cheaper_than_zext(from, vt)
             || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
-            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
+            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (lane_bits - 1))
         {
             return None;
         }
@@ -2446,9 +2451,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             _ => false,
         };
         // `tryToFoldExtOfLoad`: `(!LegalOperations && !isVolatile) ||
-        // isLoadExtLegal`: after legalization, and for a volatile load, the
-        // extending load must be legal.
-        if (info.volatile || self.legal_operations()) && !legal {
+        // isLoadExtLegal`: after legalization, for a volatile load and for a
+        // fixed-length vector, the extending load must be legal.
+        if (info.volatile || self.legal_operations() || wide.is_vector()) && !legal {
             return None;
         }
         if !others.is_empty() {
@@ -4440,8 +4445,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let source = self.dag.operand(value, 0);
         let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
-        // `canCombineTruncStore`: `isTruncStoreLegal` after operation legalization, `isTruncStoreLegalOrCustom`
-        // before; both need the value type to be legal (a soft-float target has no `f64` to store narrowed).
+        // `canCombineTruncStore`: `isTruncStoreLegal` after operation
+        // legalization, `isTruncStoreLegalOrCustom` before; both need
+        // the value type to be legal (a soft-float target has no `f64` to store
+        // narrowed).
         let takes = if self.legal_operations() {
             tli.is_trunc_store_legal(wide, narrow)
         } else {
@@ -4824,8 +4831,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
         }
-        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits to
-        // spare (DAGCombiner.cpp#L17478): the shifted-in zeros are all sign.
+        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits
+        // to spare (DAGCombiner.cpp#L17478): the shifted-in zeros are
+        // all sign.
         if self.dag.opcode(n0) == ISD::Srl
             && let Some(amount) = self.dag.constant(self.dag.operand(n0, 1))
             && amount <= u128::from(bits - ext_bits)

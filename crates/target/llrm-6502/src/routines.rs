@@ -9,6 +9,9 @@ pub struct CopyPrices {
     pub call_clocks: u64,
     /// The clocks a byte of code is worth, at speed and at size.
     pub byte_clocks: (u64, u64),
+    /// The same, for a loop that walks by page against the loop as written (speed only: at size
+    /// both are bytes first).
+    pub page_byte_clocks: u64,
 }
 
 pub fn copy_prices() -> CopyPrices {
@@ -24,6 +27,13 @@ pub fn copy_prices() -> CopyPrices {
     CopyPrices {
         call_clocks: number("entry_clocks") + number("typical_bytes") * number("clocks_per_byte"),
         byte_clocks: (number("byte_clocks_speed"), number("byte_clocks_size")),
+        page_byte_clocks: doc
+            .get("page")
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get("byte_clocks_speed"))
+            .and_then(|v| v.as_integer())
+            .and_then(|v| u64::try_from(v).ok())
+            .expect("page.byte_clocks_speed is a count"),
     }
 }
 

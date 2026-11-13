@@ -13,7 +13,8 @@ use crate::mc::inst::{
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
-    Addr, Arrangement, Gpr, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorReduce, VectorShift,
+    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp,
+    VectorReduce, VectorShift,
 };
 use crate::mfunc::Callee;
 
@@ -247,12 +248,36 @@ pub(super) fn instructions() -> Vec<Inst> {
     for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
         out.push(Inst::VectorShift { op, lanes: Arrangement::H8, rd: v(0), rn: v(1), amount: 3 });
     }
+    for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+        for high in [false, true] {
+            for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
+                out.push(Inst::VectorLongShift { op, lane, high, rd: v(0), rn: v(1), amount: 0 });
+            }
+            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+                out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
+            }
+        }
+    }
     out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         out.push(Inst::VectorFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
     }
     out.push(Inst::VectorFmulLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), rm: v(2), index: 1 });
+    out.push(Inst::VectorMulLane { rd: v(0), rn: v(1), rm: v(2), index: 1 });
+    out.push(Inst::VectorDupScalar { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
+    for (high, wide) in [(false, Arrangement::H8), (true, Arrangement::S4), (false, Arrangement::D2)] {
+        out.push(Inst::VectorNarrow { high, wide, rd: v(0), rn: v(1) });
+    }
+    for (high, lane) in [(false, NarrowLane::B), (true, NarrowLane::H), (false, NarrowLane::S)] {
+        for op in [VectorLongOp::Umlal, VectorLongOp::Smlal] {
+            out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        out.push(Inst::VectorUnzip { second: false, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        out.push(Inst::VectorUnzip { second: true, lanes, rd: v(0), rn: v(1), rm: v(2) });
+    }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
         out.push(Inst::VectorInsLane { lanes, rd: v(0), rn: v(1), index: 1, src: 0 });
@@ -348,6 +373,8 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBinary { .. } => "VectorBinary",
         Inst::VectorShift { .. } => "VectorShift",
         Inst::VectorNot { .. } => "VectorNot",
+        Inst::VectorLongShift { .. } => "VectorLongShift",
+        Inst::VectorLong { .. } => "VectorLong",
         Inst::VectorFma { .. } => "VectorFma",
         Inst::VectorInsGpr { .. } => "VectorInsGpr",
         Inst::VectorInsLane { .. } => "VectorInsLane",
@@ -355,6 +382,10 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorStoreLane { .. } => "VectorStoreLane",
         Inst::VectorFmaLane { .. } => "VectorFmaLane",
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
+        Inst::VectorMulLane { .. } => "VectorMulLane",
+        Inst::VectorNarrow { .. } => "VectorNarrow",
+        Inst::VectorUnzip { .. } => "VectorUnzip",
+        Inst::VectorDupScalar { .. } => "VectorDupScalar",
         Inst::VectorReduce { .. } => "VectorReduce",
         Inst::VectorDupLane { .. } => "VectorDupLane",
         Inst::VectorFpBinary { .. } => "VectorFpBinary",
@@ -371,7 +402,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 61] = [
+const ALL: [&str; 67] = [
     "Mark",
     "Label",
     "Cfi",
@@ -416,6 +447,8 @@ const ALL: [&str; 61] = [
     "VectorBinary",
     "VectorShift",
     "VectorNot",
+    "VectorLongShift",
+    "VectorLong",
     "VectorFma",
     "VectorInsGpr",
     "VectorInsLane",
@@ -423,6 +456,10 @@ const ALL: [&str; 61] = [
     "VectorStoreLane",
     "VectorFmaLane",
     "VectorFmulLane",
+    "VectorMulLane",
+    "VectorNarrow",
+    "VectorUnzip",
+    "VectorDupScalar",
     "VectorReduce",
     "VectorDupLane",
     "VectorFpBinary",

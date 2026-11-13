@@ -94,6 +94,26 @@ pub struct VectorTy {
     pub count: u32,
 }
 
+/// An operand that is a `sext` or a `zext` of `src` lanes, as the pin's `Args`
+/// (the operand values of the instruction priced) show it to the widening
+/// rules of `getArithmeticInstrCost` and `getCastInstrCost`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtOperand {
+    pub kind: CastKind,
+    pub src: Ty,
+}
+
+/// A user of an extension, for `GetUserAbsorbedCastCost`: `op` is the user's
+/// operation if it is an `add`, `sub` or `mul` (none: a user that cannot
+/// absorb the extension), `operands` what its two operands are, `index` the
+/// one that is the extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtUser {
+    pub op: Option<ArithOp>,
+    pub operands: [Option<ExtOperand>; 2],
+    pub index: usize,
+}
+
 /// `TargetTransformInfo::RegisterClass`, by the pin's class id: 0 scalar, 1
 /// vector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -338,8 +358,9 @@ pub struct LsrSizeModel {
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
-    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its counter in one
-    /// instruction a trip has no setup to count ([`Tuning::lsr_derived_setup_free`]).
+    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its
+    /// counter in one instruction a trip has no setup to count
+    /// ([`Tuning::lsr_derived_setup_free`]).
     pub derived_setup_free: bool,
     /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
     /// order stands (LG3's byte test included).
@@ -705,6 +726,34 @@ pub trait Tti {
         None
     }
 
+    /// `getArithmeticInstrCost` of a vector operation whose operands `args` are
+    /// extensions (the widening forms: `smull`, `uaddl`, ...). `Err(())`: the
+    /// pin's cost depends on known bits this port does not compute. The
+    /// default is the cost with no operand information.
+    fn vector_arithmetic_cost_ext(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _args: [Option<ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Result<Option<Cost>, ()> {
+        Ok(self.vector_arithmetic_cost(op, ty, kind))
+    }
+
+    /// `getCastInstrCost` of an extension between fixed vectors whose users
+    /// are `users`: free where every user absorbs it
+    /// (`GetUserAbsorbedCastCost`), else as [`Tti::vector_cast_cost`].
+    fn vector_ext_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        _users: &[ExtUser],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_cast_cost(kind, dst, src, cost_kind)
+    }
+
     /// `getCastInstrCost` between fixed vectors of one lane count. `None`: not
     /// priced, which is not scalarized: the pin's cost is one this port does
     /// not know.
@@ -829,7 +878,10 @@ pub trait Tti {
     /// [`Self::inline_size_view`] for a caller lowered for `speed` (-O2,
     /// -O3), where the target's lowering of an operation is larger than a
     /// size caller's. The default is the one view.
-    fn inline_size_view_at(&self, _speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+    fn inline_size_view_at(
+        &self,
+        _speed: bool,
+    ) -> Option<std::rc::Rc<dyn Tti>> {
         self.inline_size_view()
     }
 
@@ -1167,8 +1219,8 @@ pub trait Tti {
         false
     }
 
-    /// Bytes a loop ROTATION-HOT rotates may add where the finished code executes less. 0: the object
-    /// may not grow (-Os strict on bytes).
+    /// Bytes a loop ROTATION-HOT rotates may add where the finished code
+    /// executes less. 0: the object may not grow (-Os strict on bytes).
     fn rotation_hot_bytes_per_loop(&self) -> i64 {
         4
     }
@@ -1208,9 +1260,16 @@ pub trait Tti {
     /// it).
     /// Whether an -Os caller's SZ2 trial also inlines the sites its splice
     /// brings (`Tuning::inline_chain_trial`).
-    /// An -Os caller's SZ2 trial leaves a callee that stays, with two or more calls left, to the
-    /// by-size guard (`Tuning::inline_trial_defers_to_shared_growth`).
+    /// An -Os caller's SZ2 trial leaves a callee that stays, with two or more
+    /// calls left, to the by-size guard
+    /// (`Tuning::inline_trial_defers_to_shared_growth`).
     fn inline_trial_defers_to_shared_growth(&self) -> bool {
+        false
+    }
+
+    /// `visitADD`'s or-disjoint for adds of operands that share no bits
+    /// (`Tuning::add_to_or_disjoint`).
+    fn add_to_or_disjoint(&self) -> bool {
         false
     }
 
@@ -1409,6 +1468,17 @@ pub trait Tti {
 
     /// `Tuning::unroll_trial_nests_only`.
     fn unroll_trial_nests_only(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE UNROLL-NEST-TRIAL: at -O2 and -O3 the loops with a subloop that
+    /// the target's own `unroll_threshold_overrides` refused but the pin's
+    /// threshold admits are noted, and the driver compiles the module again
+    /// with them unrolled and keeps that where the finished code prices
+    /// better at the CPU's byte rate. The pin never judges such a loop by its
+    /// savings (`analyzeLoopUnrollCost` skips a loop with a subloop), only
+    /// by size.
+    fn unroll_trial_nests_at_speed(&self) -> bool {
         false
     }
 
@@ -1664,8 +1734,8 @@ pub trait Tti {
 
     /// DEVIATE LG1, LG2: `GenerateICmpZeroScales` scales a compare against zero
     /// by a factor whose product may wrap, where it is still a zero test
-    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as the
-    /// pin has it (wasm). owner: wasm, exit: 2026-12-04.
+    /// (`lsr_generate`). False: `getExactSDiv`'s no-overflow check alone, as
+    /// the pin has it (wasm). owner: wasm, exit: 2026-12-04.
     fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
         true
     }
@@ -1704,8 +1774,9 @@ pub trait Tti {
     }
 
     /// DEVIATE IPACP-O3: whether a function is copied for the constants its
-    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone` (on at -O3) does and the
-    /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
+    /// callers pass at -O2 and -O3 (gcc: -O3 only), as gcc's `-fipa-cp-clone`
+    /// (on at -O3) does and the pin's pipeline does not;
+    /// `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
     }
@@ -1797,7 +1868,10 @@ pub trait Tti {
     /// and NaN and overflow come out as its most negative value) when the
     /// result is `bits` wide; none: the range of the integer is checked on the
     /// float.
-    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+    fn wide_float_to_int(
+        &self,
+        bits: u32,
+    ) -> Option<u32> {
         let _ = bits;
         None
     }
@@ -2431,6 +2505,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine leaves `icmp eq/ne (select c, a, b), (select c, b, a)` alone. The pin
+    /// compares the arms, `icmp eq/ne a, b` (`matchSymmetricPair`), on every target. DEVIATE
+    /// SYMPAIR-1 (owner llrm-target-wasm, exit 2026-11-24): at m16 a 64-bit arm compare is a
+    /// longer sequence than the two selects it replaces (+4 B in 24 sfm16_float objects).
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)
+    fn keeps_icmp_of_swapped_selects(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
@@ -2555,6 +2638,20 @@ pub trait Tti {
         true
     }
 
+    /// `TargetTransformInfo::isProfitableToSinkOperands`: the uses of `inst`'s
+    /// operands (and of theirs, dominating ones first) the target folds into
+    /// `inst` when they sit in its block; pushed onto `ops`. Asked by
+    /// CodeGenPrepare's `tryToSinkFreeOperands`.
+    fn is_profitable_to_sink_operands(
+        &self,
+        _context: &crate::context::Context,
+        _function: &crate::module::Function,
+        _inst: crate::module::InstId,
+        _ops: &mut Vec<crate::module::Use>,
+    ) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false
@@ -2644,11 +2741,12 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
-    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
-    /// `fmul` and `fadd`, the product then leaving the loop; true where the
-    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
-    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM
+    /// splits an `llvm.fmuladd` of a loop whose factors the loop does not
+    /// write into `fmul` and `fadd`, the product then leaving the loop;
+    /// true where the target has no fused multiply-add to make of it.
+    /// x_ld_to_ulong m32 -O1: `r * 67108864` made on every trip of the
+    /// inner loop, gcc holds it.
     fn splits_invariant_fmuladd(&self) -> bool {
         false
     }
@@ -2715,9 +2813,9 @@ pub trait Tti {
         None
     }
 
-    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
-    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
-    /// none: the pass does not run.
+    /// The width of the narrow divide instruction, where an unsigned divide or
+    /// remainder whose operands ScalarEvolution proves that narrow is done
+    /// in the narrow type (`narrowrange`); none: the pass does not run.
     fn range_narrowing_width(&self) -> Option<u32> {
         None
     }
@@ -2901,6 +2999,17 @@ pub trait Tti {
         )
     }
 
+    /// `getFPOpCost(ty) == TCC_Expensive`
+    /// ([BasicTTIImpl.h:698](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L698)):
+    /// no legal `FADD` on `ty`, so a float operation or cast on it is a library
+    /// call. Default: legal (an FPU, or the x87).
+    fn fp_op_expensive(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
     /// `haveFastSqrt`: a legal `FSQRT` on `ty`
     /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
     /// Default: none, for a target without an FPU or a sqrt instruction.
@@ -2981,9 +3090,10 @@ pub trait Tti {
         if is_free_intrinsic(name) { Cost::FREE } else { base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 
-    /// `intrinsic_cost` of a `ctlz` or `cttz` whose `is_zero_poison` argument is the constant true: some targets
-    /// price it apart (`X86TTIImpl::getIntrinsicInstrCost`, `CTLZ_ZERO_POISON`). The same price as `intrinsic_cost`
-    /// where a target has no such rows.
+    /// `intrinsic_cost` of a `ctlz` or `cttz` whose `is_zero_poison` argument
+    /// is the constant true: some targets price it apart
+    /// (`X86TTIImpl::getIntrinsicInstrCost`, `CTLZ_ZERO_POISON`). The same
+    /// price as `intrinsic_cost` where a target has no such rows.
     fn zero_poison_intrinsic_cost(
         &self,
         name: &str,
@@ -3369,10 +3479,7 @@ mod size_model_tests {
     #[test]
     fn the_x86_table_is_the_numbers_lsr_held() {
         let m = LsrSizeModel::X86;
-        assert_eq!(
-            (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes),
-            (4, 2, 1, 4)
-        );
+        assert_eq!((m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes), (4, 2, 1, 4));
         assert_eq!((m.base_add.bytes, (m.step)(32, Some(1)), m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
     }
 }

@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, VectorFma, VectorFpOp, VectorFpUnary, VectorOp, VectorReduce,
-    VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp,
+    VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -559,14 +559,17 @@ fn gpr_width(letter: &str) -> Option<Width> {
 }
 
 /// The values the float register file holds across blocks: floats and the
-/// 128-bit integer vectors.
+/// vectors.
 fn in_float_file(ty: EVT) -> bool {
-    ty.is_floating_point() || is_quad(ty)
+    ty.is_floating_point() || ty.is_vector() || is_quad(ty)
 }
 
 /// A value of 128 bits in a float register (`q`): `F128` and the vectors.
 fn is_quad(ty: EVT) -> bool {
-    matches!(ty, EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64))
+    matches!(
+        ty,
+        EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 | MVT::V4F32 | MVT::V2F64)
+    )
 }
 
 /// `DUPv8i16gpr`, `MOVIv2d_ns`, `MOVIv8i16`, `MVNIv4s_msl`: a vector made from
@@ -687,17 +690,78 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `DUPi64`: one lane of a vector register as a scalar.
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        let suffix = match lanes {
+            Arrangement::B16 => "i8",
+            Arrangement::H8 => "i16",
+            Arrangement::S4 => "i32",
+            Arrangement::D2 => "i64",
+        };
+        if name == format!("DUP{suffix}") {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Imm(index)] => {
+                    Ok(Inst::VectorDupScalar { lanes, rd, rn: *rn, index: *index as u8 })
+                }
+                _ => wrong(),
+            });
+        }
+    }
     // `DUPv4i32lane`, `DUPv2i64lane`: a lane of a vector register in every
     // lane (the float splat's `dup v.4s, v.s[0]`).
     if let Some(lanes) = name.strip_prefix("DUPv").and_then(|rest| rest.strip_suffix("lane")).and_then(lanes_of) {
         return Some(match operands {
-            [Operand::Fpr(rn), Operand::Imm(index)] => Ok(Inst::VectorDupLane { lanes, rd, rn: *rn, index: *index as u8 }),
+            [Operand::Fpr(rn), Operand::Imm(index)] => {
+                Ok(Inst::VectorDupLane { lanes, rd, rn: *rn, index: *index as u8 })
+            }
             _ => wrong(),
         });
     }
     if let Some((op, lanes)) = reduction(name) {
         return Some(match operands {
             [Operand::Fpr(rn)] => Ok(Inst::VectorReduce { op, lanes, rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    // `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: a narrow
+    // operand (a half of a vector, with `2`) into wide lanes.
+    for op in [
+        VectorLongOp::Ushll,
+        VectorLongOp::Sshll,
+        VectorLongOp::Uaddw,
+        VectorLongOp::Saddw,
+        VectorLongOp::Umull,
+        VectorLongOp::Smull,
+        VectorLongOp::Umlal,
+        VectorLongOp::Smlal,
+    ] {
+        let Some(rest) = name.strip_prefix(&op.mnemonic().to_uppercase()).and_then(|rest| rest.strip_prefix('v'))
+        else {
+            continue;
+        };
+        let narrow = rest.split('_').next().unwrap_or(rest);
+        let Some((lane, high)) = [
+            ("8i8", NarrowLane::B, false),
+            ("16i8", NarrowLane::B, true),
+            ("4i16", NarrowLane::H, false),
+            ("8i16", NarrowLane::H, true),
+            ("2i32", NarrowLane::S, false),
+            ("4i32", NarrowLane::S, true),
+        ]
+        .into_iter()
+        .find(|(text, ..)| *text == narrow)
+        .map(|(_, lane, high)| (lane, high)) else {
+            continue;
+        };
+        return Some(match (op.is_shift(), operands) {
+            (true, [Operand::Fpr(rn), Operand::Imm(amount)]) => {
+                Ok(Inst::VectorLongShift { op, lane, high, rd, rn: *rn, amount: *amount as u8 })
+            }
+            // The accumulating forms list the tied register first.
+            (false, [Operand::Fpr(rn), Operand::Fpr(rm)])
+            | (false, [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorLong { op, lane, high, rd, rn: *rn, rm: *rm })
+            }
             _ => wrong(),
         });
     }
@@ -724,7 +788,61 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    // `FMLAv4i32_indexed`: the multiplier is a lane of `rm`.
+    // `XTNv8i16`: the narrowing move (the name is the arrangement of the narrow
+    // side).
+    for (wide, high) in [
+        (Arrangement::H8, false),
+        (Arrangement::H8, true),
+        (Arrangement::S4, false),
+        (Arrangement::S4, true),
+        (Arrangement::D2, false),
+        (Arrangement::D2, true),
+    ] {
+        let narrow = match (wide, high) {
+            (Arrangement::H8, false) => "v8i8",
+            (Arrangement::H8, true) => "v16i8",
+            (Arrangement::S4, false) => "v4i16",
+            (Arrangement::S4, true) => "v8i16",
+            (Arrangement::D2, false) => "v2i32",
+            _ => "v4i32",
+        };
+        if name == format!("XTN{narrow}") {
+            return Some(match operands {
+                [Operand::Fpr(rn)] | [Operand::Fpr(_), Operand::Fpr(rn)] => {
+                    Ok(Inst::VectorNarrow { high, wide, rd, rn: *rn })
+                }
+                _ => wrong(),
+            });
+        }
+    }
+    // `UZP1v8i16`: two sources, no tied register.
+    for (second, lanes) in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .flat_map(|lanes| [(false, lanes), (true, lanes)])
+    {
+        let lane = match lanes {
+            Arrangement::B16 => "v16i8",
+            Arrangement::H8 => "v8i16",
+            Arrangement::S4 => "v4i32",
+            Arrangement::D2 => "v2i64",
+        };
+        if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorUnzip { second, lanes, rd, rn: *rn, rm: *rm }),
+                _ => wrong(),
+            });
+        }
+    }
+    // `MULv4i32_indexed`: the multiplier is a lane of `rm`.
+    if name == "MULv4i32_indexed" {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::VectorMulLane { rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
+    // `FMULv4i32_indexed`: the multiplier is a lane of `rm`.
     if let Some(lanes) =
         name.strip_prefix("FMULv").and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
             "4i32" => Some(Arrangement::S4),
@@ -1968,6 +2086,13 @@ impl Emitter<'_> {
                     let size = match self.dag.value_type(node.ops[2]) {
                         EVT::Simple(MVT::F32) => FpSize::S,
                         EVT::Simple(MVT::F64) => FpSize::D,
+                        // A quad vector (the undefined half of a split splat
+                        // read in another block): `movi v.2d, #0`.
+                        ty if is_quad(ty) => {
+                            self.mf.wide.extend([Reg::Fpr(dst)]);
+                            self.ops.push(Op::I(Inst::VectorFill { rd: dst, fill: Fill::Zero }));
+                            return Ok(());
+                        }
                         other => return Err(format!("a copy of an undefined {other:?}")),
                     };
                     let width = if size == FpSize::D { Width::X } else { Width::W };
@@ -2150,6 +2275,8 @@ impl Emitter<'_> {
                     if let (
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
+                        | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
+                        | Inst::VectorNarrow { high: true, .. }
                         | Inst::VectorInsGpr { .. }
                         | Inst::VectorInsLane { .. },
                         Some(Operand::Fpr(acc)),

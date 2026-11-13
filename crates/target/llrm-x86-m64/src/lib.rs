@@ -416,6 +416,9 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
+                            // Tuning. m64 -Os 22 files smaller (-189 B), sieve +1 cell, spill_store_order +16 B.
+                            lftr_size_budget: 1,
                             // DEVIATE OS-INLINE-GROWTH (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
                             // Tuning. m64 -Os sfm16_float_* -39 B each, vla_callee_constant +8 B.
                             inline_trial_defers_to_shared_growth: true,
@@ -442,6 +445,8 @@ impl llrm_target::Target for M64 {
                             // `Tti::lsr_phi_users_first`.
                             lsr_phi_users_first: true,
                             lsr_size_order: true,
+                            // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
+                            add_to_or_disjoint: true,
                             lsr_size_x86_64: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
