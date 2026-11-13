@@ -515,3 +515,31 @@ fn a_float_loop_the_pin_vectorizes_is_widened_not_interleaved_alone() {
     assert_eq!(count(&text, "fmul float"), 0, "{text}");
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }
+
+const MEMCHECK_COPY: &str = include_str!("../tests/lv/memcheck_copy.ll");
+const MEMCHECK_COPY_CONST: &str = include_str!("../tests/lv/memcheck_copy_const.ll");
+
+/// `b[i] = a[i]` over plain pointers stayed scalar (`Runtime memory checks are
+/// needed`). The pin's block order (`opt -passes=loop-vectorize`): the
+/// iteration check, `vector.memcheck` (one `diff.check`), `vector.ph`; an
+/// overlap runs the scalar loop whole, from index 0.
+#[test]
+fn plain_pointers_are_widened_behind_a_memory_check() {
+    let text = run(MEMCHECK_COPY);
+    assert_eq!(count(&text, "vector.memcheck:"), 1, "{text}");
+    assert_eq!(count(&text, "diff.check = icmp ult"), 1, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    let check = text.split("vector.memcheck:").nth(1).expect("the block").split("vector.ph:").next().unwrap();
+    assert!(check.contains("br i1 %diff.check, label %scalar.ph, label %vector.ph"), "{text}");
+    assert!(text.contains("[ 0, %vector.memcheck ]"), "{text}");
+}
+
+/// A constant trip count the lanes divide needs no remainder, but a memory
+/// conflict runs the scalar loop: the check keeps its `scalar.ph`.
+#[test]
+fn a_memory_check_keeps_the_remainder_of_a_divisible_constant_trip() {
+    let text = run(MEMCHECK_COPY_CONST);
+    assert_eq!(count(&text, "vector.memcheck:"), 1, "{text}");
+    assert_eq!(count(&text, "scalar.ph:"), 1, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+}

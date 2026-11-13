@@ -73,6 +73,7 @@ use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
 use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, ScalarFacts, choose_interleave, pin_may_vectorize, plan};
 use crate::loopvectorizeskeleton::{self as skeleton, Shape, Skeleton};
+use crate::runtimechecks::Rewriter;
 
 /// `LoopVectorizePass`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -1050,6 +1051,14 @@ impl FunctionPass for LoopVectorize {
                         continue;
                     }
                 };
+                // Hard cutoff on the checks one loop may need
+                // (`VectorizeMemoryCheckThreshold`, `GeneratedRTChecks::create`).
+                let rtc = lai.runtime_pointer_checking();
+                if rtc.need && rtc.number_of_checks() > VECTORIZE_MEMORY_CHECK_THRESHOLD {
+                    why(unit, &outer, header, "legality: too many memory checks needed");
+                    continue;
+                }
+                let memory_checks = rtc.need.then(|| rtc.clone());
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
                 let dep = lai.dep_checker();
                 let vector = match extract(&cx, se, found, &legality) {
@@ -1080,7 +1089,7 @@ impl FunctionPass for LoopVectorize {
                 // `computeBestVF` chose VF 1 (or the widening is not
                 // translated): the loop may still be
                 // interleaved (L8067).
-                vector.or_else(|| {
+                let planned = vector.or_else(|| {
                     let (primary, step) = primary_and_step(se, &legality).ok()?;
                     let extracted = match interleave::extract(se, &cx, found, &legality, &*tti, primary, step) {
                         Ok(extracted) => extracted,
@@ -1135,26 +1144,54 @@ impl FunctionPass for LoopVectorize {
                             None
                         }
                     }
-                })
+                });
+                planned.map(|planned| (planned, memory_checks))
             };
-            let Some(planned) = planned else { continue };
-            let (lanes, shape, reduced) = match &planned {
-                Planned::Vector(chosen, widening) => {
-                    (u64::from(chosen.vf) * u64::from(chosen.ic), widening.shape, Vec::new())
-                }
+            let Some((planned, memory_checks)) = planned else { continue };
+            let (vf, ic, shape, reduced) = match &planned {
+                Planned::Vector(chosen, widening) => (chosen.vf, chosen.ic, widening.shape, Vec::new()),
                 Planned::Interleave(ic, extracted) => {
                     let latches = extracted.interleaving.reductions.iter().map(|one| one.latch).collect();
-                    (u64::from(*ic), extracted.interleaving.shape, latches)
+                    (1, *ic, extracted.interleaving.shape, latches)
                 }
             };
+            let lanes = u64::from(vf) * u64::from(ic);
             let trip_count = {
                 let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
                 let cx = env.cx(&*unit.context, &*unit.function);
                 u64::from(se.get_small_constant_trip_count(&cx, header))
             };
-            // A constant trip count the lanes divide needs no remainder (LVP1).
+            if trip_count != 0 && trip_count < lanes {
+                why(unit, &outer, header, "plan: The loop runs fewer iterations than one vector iteration");
+                continue;
+            }
+            // The memory checks, in the preheader: the skeleton moves them to
+            // `vector.memcheck`.
+            let memory = match memory_checks {
+                None => None,
+                Some(rtc) => {
+                    let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
+                    let mut rw = Rewriter {
+                        context: &mut *unit.context,
+                        declared: &mut *unit.declared,
+                        function: &mut *unit.function,
+                        se,
+                        env,
+                        callees: outer.callees(),
+                    };
+                    match skeleton::add_memory_checks(&mut rw, &rtc, header, shape.preheader, vf, ic) {
+                        Ok(checks) => checks,
+                        Err(reason) => {
+                            why(unit, &outer, header, &format!("plan: {reason}"));
+                            continue;
+                        }
+                    }
+                }
+            };
+            // A constant trip count the lanes divide needs no remainder (LVP1),
+            // but for the one a memory conflict runs.
             let with_middle = !reduced.is_empty();
-            let skeleton = if trip_count != 0 && trip_count % lanes == 0 {
+            let skeleton = if trip_count != 0 && trip_count % lanes == 0 && memory.is_none() {
                 let branch = unit.function.terminator(header).expect("a terminated loop");
                 skeleton::mark_vectorized(unit.context, unit.declared, unit.metadata, unit.function, branch);
                 let middle = with_middle.then(|| skeleton::add_middle(unit.function, shape));
@@ -1171,6 +1208,7 @@ impl FunctionPass for LoopVectorize {
                     shape,
                     lanes,
                     with_middle,
+                    memory,
                 ) {
                     Some(skeleton) => skeleton,
                     None => {
@@ -1199,6 +1237,10 @@ impl FunctionPass for LoopVectorize {
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
+
+/// `VectorizeMemoryCheckThreshold`: the most runtime memory checks a loop may
+/// need.
+const VECTORIZE_MEMORY_CHECK_THRESHOLD: usize = 128;
 
 /// What the pass does to a loop.
 enum Planned {

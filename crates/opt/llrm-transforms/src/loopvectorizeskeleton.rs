@@ -49,8 +49,12 @@ use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::types::{Type, TypeId};
 
+use llrm_analysis::runtimecheck::{RuntimePointerChecking, VectorizerParams};
+use llrm_analysis::scev::expander::Expander;
+
 use crate::edges;
 use crate::lcssa::{arms, from_arms};
+use crate::runtimechecks::Rewriter;
 
 /// The loop the remainder is made for.
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +69,43 @@ pub(crate) struct Shape {
     pub compare: InstId,
     pub bound_operand: usize,
     pub index_ty: TypeId,
+}
+
+/// The memory checks, made at the end of the preheader: the first instruction
+/// of them, and the `i1` that is true when some pair of pointer groups may
+/// overlap (`GeneratedRTChecks::MemRuntimeCheckCond`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemChecks {
+    pub first: InstId,
+    pub conflict: Operand,
+}
+
+/// `GeneratedRTChecks::create`'s memory part (L1636): the checks that the
+/// groups of `rtc` do not overlap, made at the end of the preheader of the loop
+/// at `header`, for `vf` x `ic` lanes. `Ok(None)` where they fold away (no
+/// conflict); `Err` where one always conflicts, so the vector loop never runs.
+pub(crate) fn add_memory_checks(
+    rw: &mut Rewriter,
+    rtc: &RuntimePointerChecking,
+    header: BlockId,
+    preheader: BlockId,
+    vf: u32,
+    ic: u32,
+) -> Result<Option<MemChecks>, &'static str> {
+    let term = rw.function.terminator(preheader).expect("a terminated preheader");
+    // The checks are made before the terminator, after the existing instructions.
+    let existing = rw.function.iter_block(preheader).count() - 1;
+    let mut exp = Expander::new("scev.check");
+    let conflict = match rtc.diff_checks() {
+        Some(diff) => rw.add_diff_runtime_checks(&mut exp, term, diff, vf, ic),
+        None => rw.add_runtime_checks(&mut exp, term, header, rtc, &rtc.checks, VectorizerParams::default().hoist_runtime_checks),
+    };
+    let Some(conflict) = conflict else { return Ok(None) };
+    if let Some(value) = constant_int(rw.context, conflict) {
+        return if value == 0 { Ok(None) } else { Err("the memory checks always conflict") };
+    }
+    let first = rw.function.iter_block(preheader).nth(existing).unwrap_or(term);
+    Ok(Some(MemChecks { first, conflict }))
 }
 
 /// The blocks around a widened loop.
@@ -142,7 +183,9 @@ fn end_with(
 ///
 /// `None`, with the loop untouched, where a constant trip count is under
 /// `vf_ic`: the vector loop would not run. `with_middle`: the loop has
-/// reductions, so a middle block is made even where the checks fold.
+/// reductions, so a middle block is made even where the checks fold. `memory`:
+/// the checks made in the preheader; they move to `vector.memcheck`, between
+/// the iteration check and `vector.ph`, and a conflict goes to `scalar.ph`.
 pub(crate) fn add_remainder(
     context: &mut Context,
     function: &mut Function,
@@ -151,6 +194,7 @@ pub(crate) fn add_remainder(
     shape: Shape,
     vf_ic: u64,
     with_middle: bool,
+    memory: Option<MemChecks>,
 ) -> Option<Skeleton> {
     let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty } = shape;
     let bits = bits_of(context, index_ty);
@@ -206,7 +250,10 @@ pub(crate) fn add_remainder(
     let vector_ph;
     let mut middle_block = None;
     let mut scalar_block = None;
-    if let (Some(start_value), Some(bound_value)) = (start_value, bound_value) {
+    // A loop with memory checks keeps its remainder: a conflict runs it whole.
+    if let (Some(start_value), Some(bound_value)) = (start_value, bound_value)
+        && memory.is_none()
+    {
         // Both ends known: the checks fold (the pin's constant folder).
         let trip = bound_value.wrapping_sub(start_value) & mask(bits);
         let end = constant(context, start_value + (trip - trip % u128::from(vf_ic)));
@@ -228,7 +275,8 @@ pub(crate) fn add_remainder(
         vector_ph = preheader;
     } else {
         let bool_ty = context.types.intern(Type::Int(1));
-        let before = Position::Before(preheader_term);
+        // The iteration check comes before the memory checks.
+        let before = Position::Before(memory.map_or(preheader_term, |checks| checks.first));
         // n = bound - start, the iterations of the loop.
         let trip = if start_value == Some(0) {
             bound
@@ -258,17 +306,37 @@ pub(crate) fn add_remainder(
         };
         end_with(function, vector, void, vec![Operand::Block(header)]);
 
-        // The preheader branches around the vector loop for a short trip.
+        // The preheader branches around the vector loop for a short trip; the
+        // memory checks, if any, are the block between.
+        let memcheck = memory.map(|checks| {
+            let block = edges::split_block_at(function, preheader, checks.first);
+            function.set_block_name(block, "vector.memcheck");
+            block
+        });
+        let guard_at = function.terminator(preheader).expect("a terminated preheader");
         let guard = function.create_instruction(
             Opcode::Br,
             void,
-            vec![min_iters, Operand::Block(scalar_ph), Operand::Block(vector)],
+            vec![min_iters, Operand::Block(scalar_ph), Operand::Block(memcheck.unwrap_or(vector))],
             Flags::default(),
             None,
         );
-        function.insert(guard, Position::Before(preheader_term)).expect("a placed terminator");
-        function.set_operands(preheader_term, Vec::new());
-        function.erase(preheader_term).expect("the old jump");
+        function.insert(guard, Position::Before(guard_at)).expect("a placed terminator");
+        function.set_operands(guard_at, Vec::new());
+        function.erase(guard_at).expect("the old jump");
+        if let Some(checks) = memory {
+            let conflict = function.create_instruction(
+                Opcode::Br,
+                void,
+                vec![checks.conflict, Operand::Block(scalar_ph), Operand::Block(vector)],
+                Flags::default(),
+                None,
+            );
+            function.insert(conflict, Position::Before(preheader_term)).expect("a placed terminator");
+            function.set_operands(preheader_term, Vec::new());
+            function.erase(preheader_term).expect("the old jump");
+        }
+        let entry = memcheck.unwrap_or(preheader);
 
         // The vector loop enters from vector.ph, compares to the end and leaves
         // to the middle block.
@@ -281,7 +349,7 @@ pub(crate) fn add_remainder(
                 continue;
             }
             let moved: Vec<_> =
-                arms(function, phi).into_iter().map(|(value, from)| (value, if from == preheader { vector } else { from })).collect();
+                arms(function, phi).into_iter().map(|(value, from)| (value, if from == entry { vector } else { from })).collect();
             function.set_operands(phi, from_arms(&moved));
         }
         function.set_operand(compare, bound_operand, end);
@@ -298,7 +366,11 @@ pub(crate) fn add_remainder(
             llrm_mir::module::ValueDef::Instruction(def) => def,
             _ => unreachable!("a phi"),
         };
-        function.set_operands(resume_phi, from_arms(&[(end, middle), (start, preheader)]));
+        let mut resumed = vec![(end, middle), (start, preheader)];
+        if let Some(block) = memcheck {
+            resumed.push((start, block));
+        }
+        function.set_operands(resume_phi, from_arms(&resumed));
         end_with(function, scalar_ph, void, vec![Operand::Block(remainder)]);
         function.set_operands(remainder_phi, from_arms(&[(resume, scalar_ph), (stepped, remainder)]));
         retarget_exit_phis(function, exit, header, &[middle, remainder]);

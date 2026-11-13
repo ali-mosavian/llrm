@@ -331,13 +331,6 @@ fn can_vectorize_memory(
         // (LV-D6).
         return Err(Refusal("Can't vectorize due to memory conflicts"));
     }
-    // The pin guards such a loop with `vector.memcheck` (LoopVectorize L1637)
-    // or refuses it in a low-trip loop (L7809). DEVIATE LV-M1: the guard block
-    // is not built, so a loop whose pointers LAA can only separate at run time
-    // is refused. Owner arm64-vec, exit 2026-11-24.
-    if lai.runtime_pointer_checking().need {
-        return Err(Refusal("Runtime memory checks are needed"));
-    }
     if lai.has_load_store_dependence_involving_loop_invariant_address() {
         return Err(Refusal("We don't allow storing to uniform addresses"));
     }
