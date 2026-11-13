@@ -473,7 +473,7 @@ fn tail(
             let mut other = select_function(looped, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, looped, &selection, request)? {
+            if cheaper(module, name, &other, looped, &selection, request, crate::routines::copy_prices().byte_clocks.0)? {
                 selection = other;
                 as_called = false;
                 source = Some(looped);
@@ -483,7 +483,7 @@ fn tail(
             let mut other = select_function(paged, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, paged, &selection, request)? {
+            if cheaper(module, name, &other, paged, &selection, request, crate::routines::copy_prices().page_byte_clocks)? {
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
@@ -628,10 +628,11 @@ fn cheaper(
     alt_module: &llrm_mir::module::Module,
     selected: &crate::dagisel::function::Selection,
     request: &Request,
+    speed_byte_clocks: u64,
 ) -> Result<bool, String> {
     let prices = crate::routines::copy_prices();
     let routines = [("memcpy", prices.call_clocks)];
-    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { prices.byte_clocks.0 };
+    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { speed_byte_clocks };
     let cost = |module: &llrm_mir::module::Module, selection| -> Option<u64> {
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
