@@ -123,6 +123,8 @@ pub struct Os {
     pub stack_reserve: i64,
     /// Whether the start-up zeroes the far uninitialised data.
     pub far_bss: bool,
+    /// Whether the start-up makes SS the data group's selector.
+    pub stack_shares_data: bool,
     /// What the assembler is told of the description (`assembler_defines`):
     /// each symbol and the value of the field it stands for, so the files
     /// that name no constant of their own.
@@ -208,6 +210,7 @@ impl Os {
                 .ok_or("stack_base is not an integer")?,
             stack_reserve: layer.integer("stack_reserve")?,
             far_bss: layer_table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
+            stack_shares_data: layer_table.get("stack_shares_data").and_then(|one| one.as_bool()).unwrap_or(false),
             defines,
             directory: std::fs::canonicalize(layer.directory)
                 .map_or_else(|_| layer.directory.to_owned(), |path| path.to_string_lossy().into_owned()),
