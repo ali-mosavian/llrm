@@ -545,7 +545,7 @@ impl Tti for AArch64 {
         true
     }
 
-    /// DEVIATE LM2 (owner w11, exit 2026-11-27): nbody_fixed -O3 723,134
+    /// DEVIATE LM2 (owner w11, exit 2026-11-24): nbody_fixed -O3 723,134
     /// instructions against 645,136; the pos[body] loads of the unrolled pair
     /// loop were redone in every copy.
     fn licm_range_deref(&self) -> bool {

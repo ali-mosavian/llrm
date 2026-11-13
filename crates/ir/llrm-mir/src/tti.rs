@@ -1171,7 +1171,7 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-27): LICM may hoist
+    /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-24): LICM may hoist
     /// a load behind a loop guard when SCEV bounds the offset of its pointer
     /// inside the object it is based on (`licm::range_deref`), not only where
     /// the pin's constant-offset rule proves it dereferenceable. Not at
@@ -1482,7 +1482,7 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32,
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-24; users: x86-m32,
     /// m68k with `va_arg_slot` = 4): `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
@@ -2879,7 +2879,7 @@ pub trait Tti {
         basic_case_clusters(cases, index_bits, for_size)
     }
 
-    /// DEVIATE (owner m68k, exit 2026-11-27): the code size, in the unit of the
+    /// DEVIATE (owner m68k, exit 2026-11-24): the code size, in the unit of the
     /// inliner's size view, of a switch's compares and jump table beyond its
     /// one branch; `clusters` and `table` as
     /// [`Self::estimated_number_of_case_clusters`]. The pin counts a switch
