@@ -296,7 +296,21 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorShift { rd, rn, .. } | Inst::VectorNot { rd, rn } => {
+            Inst::VectorFma { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorDupLane { rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorFpBinary { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorShift { rd, rn, .. } | Inst::VectorNot { rd, rn } | Inst::VectorFpUnary { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }

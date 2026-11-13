@@ -303,6 +303,34 @@ fn branches() {
         }
     }
     all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
+    for (op, lanes) in [
+        (VectorFma::Add, Arrangement::S4),
+        (VectorFma::Add, Arrangement::D2),
+        (VectorFma::Sub, Arrangement::S4),
+        (VectorFma::Sub, Arrangement::D2),
+    ] {
+        all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+    }
+    for (lanes, index) in
+        [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)]
+    {
+        all.push(Inst::VectorDupLane { lanes, rd: Vreg(5), rn: Vreg(26), index });
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
+            all.push(Inst::VectorFpBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+        }
+        for op in [
+            VectorFpUnary::Neg,
+            VectorFpUnary::Abs,
+            VectorFpUnary::Scvtf,
+            VectorFpUnary::Ucvtf,
+            VectorFpUnary::Fcvtzs,
+            VectorFpUnary::Fcvtzu,
+        ] {
+            all.push(Inst::VectorFpUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
+        }
+    }
     all.push(Inst::VectorMov { rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::VectorMov { rd: Vreg(31), rn: Vreg(30) });
     for (subtract, set_flags, width) in [

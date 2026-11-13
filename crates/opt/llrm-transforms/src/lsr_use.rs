@@ -542,7 +542,6 @@ impl Cost {
             setup_cost: u32::MAX,
             scale_cost: u32::MAX,
             spills: u32::MAX,
-            size_bytes: u32::MAX,
         };
     }
 
@@ -584,8 +583,7 @@ impl Cost {
         // the registers an address holds come next: LLVM's `NumRegs` comes
         // before the rest in `isLess`, and an address register is the scarcer
         // one there (DEVIATE LU8).
-        let model = tti.lsr_size_model();
-        if (self.size || other.size) && model.is_some_and(|m| !m.target_orders) {
+        if (self.size || other.size) && tti.lsr_size_model().is_some() {
             let restricted = tti.address_registers() < tti.number_of_gpr_registers();
             let key = |x: &Cost| {
                 let c = &x.c;
@@ -603,10 +601,6 @@ impl Cost {
                 )
             };
             return key(self) < key(other);
-        }
-        if model.is_some_and(|m| m.target_orders) {
-            let counted = |x: &Cost| LsrCost { size_bytes: if x.is_loser() { u32::MAX } else { x.size_bytes }, ..x.c };
-            return tti.is_lsr_cost_less(&counted(self), &counted(other));
         }
         tti.is_lsr_cost_less(&self.c, &other.c)
     }
@@ -675,8 +669,7 @@ impl Cost {
         if parts > 1 && inside {
             // Not the base and a possible second register, if the target folds
             // two.
-            let folded = f.scale != 0
-                && (is_am_completely_folded(r.tti, lu, f) || is_global_byte_indexed(r, lu, f));
+            let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
             self.c.num_base_adds += (parts - (1 + usize::from(folded))) as u32;
         }
         // DEVIATE LU2: the offset beside two registers is the displacement of
@@ -729,11 +722,12 @@ impl Cost {
                 }
             }
             // An add or lea for each register not folded, and its immediate.
-            let adds = self.c.num_base_adds - prev_base_adds;
-            if adds != 0 {
-                let register = f.scaled_reg.or(f.base_regs.first().copied());
-                let bits = register.map_or(u32::MAX, |reg| r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg)));
-                self.size_bytes += m.add_bytes(bits) * adds;
+            self.size_bytes += m.base_add.bytes * (self.c.num_base_adds - prev_base_adds);
+            // The exit test's `cmp` unless the counter ends at zero.
+            if lu.kind == Kind::ICmpZero && !f.has_zero_end() {
+                let immediate = f.base_regs.len() == 1 && f.scaled_reg.is_none();
+                let immediate = immediate.then_some(f.base_offset.0);
+                self.size_bytes += (m.exit_compare)(narrowest_bits(r, lu, f), immediate);
             }
         }
 
@@ -939,12 +933,15 @@ impl Cost {
                 && r.bytes_counted
                 && let Some(m) = r.tti.lsr_size_model()
             {
-                let unit = r
-                    .se
-                    .match_affine_add_rec(reg)
-                    .and_then(|(_, step, _)| r.se.as_constant(step))
-                    .is_some_and(|step| step.sext_value() == 1);
-                self.size_bytes += m.step_bytes(r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg)), unit);
+                let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
+                let (start, step) = match r.se.match_affine_add_rec(reg) {
+                    Some((start, step, _)) => (r.se.as_constant(start), r.se.as_constant(step)),
+                    None => (None, None),
+                };
+                self.size_bytes += (m.step)(bits, step.map(|c| c.sext_value() as i64));
+                if let (Some(start), Some(bytes)) = (start, m.constant_start) {
+                    self.size_bytes += bytes(bits, start.sext_value() as i64);
+                }
             }
             if loop_cost > 0
                 && let Some(m) = r.tti.lsr_bytes()
@@ -1001,16 +998,25 @@ impl Cost {
         if r.bytes_counted
             && let Some(m) = r.tti.lsr_size_model()
         {
-            // A `mov` or `lea` of the register's start in the preheader.
-            let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
-            // A global's address is the instruction's operand where the
-            // target says so (`LsrSizeModel::setup_constant`).
-            let each = if matches!(r.se.unknown_value(reg), Some(Operand::Constant(_))) {
-                m.setup_constant.bytes
-            } else {
-                m.setup_bytes(bits)
-            };
-            self.size_bytes += each * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            // A `mov` or `lea` of the register's start in the preheader; a
+            // constant start the model prices by value is counted already.
+            let priced_start = m.constant_start.is_some()
+                && r.se.match_affine_add_rec(reg).is_some_and(|(start, _, _)| r.se.as_constant(start).is_some());
+            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew without
+            // it checked): not for an integer recurrence the loop as
+            // written derives from its counter by one instruction each trip
+            // (`i << 4`, `i - 192`): it is no register stepped from a start,
+            // so there is nothing to set up. The pin counts it a recurrence
+            // like any other; a byte model prices the two apart.
+            let derived = m.derived_setup_free
+                && r.as_written
+                && r.se.addrec_header(reg) == Some(r.l)
+                && !r.se.type_of(reg).is_pointer()
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_some())
+                && !is_existing_phi(r.se, r.cx, reg);
+            if !priced_start && !derived {
+                self.size_bytes += m.setup.bytes * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            }
         }
         if let Some(m) = r.tti.lsr_bytes() {
             // A local set in the preheader, and a constant for each
@@ -1185,23 +1191,6 @@ pub fn setup_cost(
 
 /// Whether `s` takes no register in an address: a constant, or an address-space
 /// cast (a far pointer made of a segment, its offset zero).
-/// DEVIATE LSR-IDX: `global + index`, the index bounded by what the target's
-/// one-instruction form takes (`Tti::address_index_max`).
-fn is_global_byte_indexed(
-    r: &mut Rating,
-    lu: &Use,
-    f: &Formula,
-) -> bool {
-    let (Some(max), Some(index), [base]) = (r.tti.address_index_max(), f.scaled_reg, f.base_regs.as_slice()) else {
-        return false;
-    };
-    lu.kind == Kind::Address
-        && f.scale == 1
-        && !f.unfolded_offset.is_non_zero()
-        && matches!(r.se.unknown_value(*base), Some(Operand::Constant(_)))
-        && r.se.get_unsigned_range(r.cx, index).get_unsigned_max() <= llrm_mir::apint::Word::from_u128(u128::from(max))
-}
-
 fn holds_no_offset(
     r: &mut Rating,
     s: Scev,

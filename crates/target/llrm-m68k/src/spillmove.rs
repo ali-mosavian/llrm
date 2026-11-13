@@ -32,9 +32,9 @@ use crate::{REGISTER_INFO, mc, reg};
 /// `Some(false)` sets without reading, `None` neither. A call sets them (it
 /// leaves them undefined).
 fn touches(inst: &Inst) -> Option<bool> {
-    if inst.reads_flags && !inst.call {
+    if inst.reads_flags() && !inst.call {
         Some(true)
-    } else if inst.sets_flags || inst.call {
+    } else if inst.sets_flags() || inst.call {
         Some(false)
     } else {
         None

@@ -520,10 +520,10 @@ fn copy_point(
     source: Reg,
 ) -> usize {
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
-    if !insts[first..].iter().any(|inst| inst.reads_flags) {
+    if !insts[first..].iter().any(|inst| inst.reads_flags()) {
         return first;
     }
-    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags) else { return first };
+    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags()) else { return first };
     let defines_source = insts[setter..first]
         .iter()
         .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(reg) if *reg == source)));
@@ -548,9 +548,9 @@ fn hoisted_point(
     let uses_source = |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Use(reg) if *reg == source));
     let Some(last) = insts[..point].iter().rposition(uses_source) else { return point };
     let strands_reader = (last..point).any(|at| {
-        insts[at].reads_flags
-            && !insts[at].sets_flags
-            && insts[..at].iter().rposition(|i| i.sets_flags).is_some_and(|setter| setter < last)
+        insts[at].reads_flags()
+            && !insts[at].sets_flags()
+            && insts[..at].iter().rposition(|i| i.sets_flags()).is_some_and(|setter| setter < last)
     });
     if strands_reader { point } else { last }
 }
@@ -600,6 +600,10 @@ pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
     }
 }
 
+/// The `MFunction` form of the shared `PHIElimination` (`phielimination.rs`),
+/// which m68k and z80 run it in place of while their allocators take an
+/// `MFunction` (`CompileOptions::shared_prelude` is the bridge, off: the corpus
+/// was tuned on this). Keep the two in the pin's order.
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
 /// register at the end of its predecessor, and a copy of that register into
 /// the phi's at the top of its block, so parallel phis do not overwrite each
@@ -637,6 +641,11 @@ pub fn eliminate_phis_with<C: Copy>(
             }
             heads.push(Inst::copy(phi.result, temporary));
         }
+        // `LowerPHINode` inserts each copy before the earlier ones: the last
+        // phi's copy is first. A phi that reads another phi's old value then
+        // reads its register before that one is redefined, so the two can
+        // share one.
+        heads.reverse();
         function.blocks[at].insts.splice(0..0, heads);
     }
 }

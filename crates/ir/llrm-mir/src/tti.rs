@@ -314,7 +314,7 @@ impl OpCost {
 /// DEVIATE LSR-SIZE (owner w12): the target's byte table for the code LSR's
 /// formulae leave behind, in the place of the numbers `lsr_use.rs` held.
 /// `None` from [`Tti::lsr_size_model`] is the pin's order.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct LsrSizeModel {
     /// A displacement from a global's address.
     pub disp_global: OpCost,
@@ -327,32 +327,27 @@ pub struct LsrSizeModel {
     /// The add or lea for each register not folded into the address, with
     /// its immediate.
     pub base_add: OpCost,
-    /// The step added each trip to a counter.
-    pub iv_step: OpCost,
+    /// The bytes of the step added each trip to a `bits`-wide counter, by
+    /// the step where it is a constant.
+    pub step: fn(bits: u32, constant: Option<i64>) -> u32,
+    /// The bytes of loading a counter's constant start in the preheader, where
+    /// the target prices it by the value (a zero, a byte, a dword). `None`:
+    /// `setup` for each, as the pin counts them.
+    pub constant_start: Option<fn(bits: u32, value: i64) -> u32>,
     /// A `mov` or `lea` of a register's start in the preheader.
     pub setup: OpCost,
     /// Setup instructions counted for one formula, at most.
     pub setup_cap: u32,
-    /// A `setup` for a register that holds a global's address: 0 where the
-    /// address is the using instruction's own operand (the 6502's `abs,x`).
-    pub setup_constant: OpCost,
-    /// The target orders the formulae itself ([`Tti::is_lsr_cost_less`], the
-    /// pin's hook), reading the bytes this table counted in
-    /// [`LsrCost::size_bytes`], not the shared key (instructions, registers,
-    /// bytes, ...). x86: false.
-    pub target_orders: bool,
-    /// Bytes `iv_step` grows by for each byte of the register's width past
-    /// the first: a target with no wide registers (x86) has 0.
-    pub step_per_byte: u32,
-    /// The same for `base_add`.
-    pub add_per_byte: u32,
-    /// `iv_step` and its per-byte growth for a step other than one (the 6502
-    /// steps a counter by one with `inc` and any other amount with an add of
-    /// the constant). x86: the same as `iv_step`.
-    pub step_other: OpCost,
-    pub step_other_per_byte: u32,
-    /// The same for `setup`.
-    pub setup_per_byte: u32,
+    /// DEVIATE LSR-DERIVED: a recurrence the loop as written derives from its counter in one
+    /// instruction a trip has no setup to count ([`Tuning::lsr_derived_setup_free`]).
+    pub derived_setup_free: bool,
+    /// Ordering by the model's bytes applies at -Os only; at -O1 the pin's
+    /// order stands (LG3's byte test included).
+    pub size_only: bool,
+    /// The `cmp` an exit test costs when the counter does not end at zero
+    /// (a count down to zero takes its flags from the step): its bytes for a
+    /// compare of `bits` against an immediate, or a register where `None`.
+    pub exit_compare: fn(bits: u32, immediate: Option<i64>) -> u32,
 }
 
 impl LsrSizeModel {
@@ -364,48 +359,14 @@ impl LsrSizeModel {
         disp_short: OpCost::bytes(1),
         disp_long: OpCost::bytes(4),
         base_add: OpCost::bytes(3),
-        iv_step: OpCost::bytes(3),
+        step: |_, _| 3,
+        constant_start: None,
         setup: OpCost::bytes(3),
         setup_cap: 4,
-        setup_constant: OpCost::bytes(3),
-        target_orders: false,
-        step_per_byte: 0,
-        add_per_byte: 0,
-        step_other: OpCost::bytes(3),
-        step_other_per_byte: 0,
-        setup_per_byte: 0,
+        derived_setup_free: false,
+        size_only: false,
+        exit_compare: |_, _| 0,
     };
-
-    /// The bytes of the step a register of `bits` takes each trip: by one, or
-    /// by any other `amount`.
-    pub fn step_bytes(
-        &self,
-        bits: u32,
-        unit: bool,
-    ) -> u32 {
-        let wide = bits.div_ceil(8).max(1) - 1;
-        if unit {
-            self.iv_step.bytes + self.step_per_byte * wide
-        } else {
-            self.step_other.bytes + self.step_other_per_byte * wide
-        }
-    }
-
-    /// The bytes of an add of registers of `bits`.
-    pub fn add_bytes(
-        &self,
-        bits: u32,
-    ) -> u32 {
-        self.base_add.bytes + self.add_per_byte * (bits.div_ceil(8).max(1) - 1)
-    }
-
-    /// The bytes of a setup instruction for a register of `bits`.
-    pub fn setup_bytes(
-        &self,
-        bits: u32,
-    ) -> u32 {
-        self.setup.bytes + self.setup_per_byte * (bits.div_ceil(8).max(1) - 1)
-    }
 
     /// The bytes of one address displacement.
     pub fn displacement(
@@ -455,10 +416,6 @@ pub struct LsrCost {
     /// DEVIATE LU13: frame words a trip reloads or stores for the registers
     /// kept across a call that clobbers them (0 unless the target says so).
     pub spills: u32,
-    /// DEVIATE LSR-SIZE: the bytes of the formulae's code by the target's
-    /// [`LsrSizeModel`], filled in for [`Tti::is_lsr_cost_less`] when the
-    /// model leaves the order to the target; 0 where bytes are not counted.
-    pub size_bytes: u32,
 }
 
 /// `TTI::MemIndexedMode`.
@@ -1043,6 +1000,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE INL-O1-HOT (owner w10, exit 2026-11-24): where -O1 holds a
+    /// growing inline (`by_size`), a site the pin calls locally hot
+    /// (`HotCallSiteRelFreq`, 60 times the caller's entry) still inlines when
+    /// its growth is at most this percent of the call sequence removed. None:
+    /// the guard holds every growing inline.
+    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// What a call to a callee whose peak register pressure is `peak` values
     /// costs in clocks to save and restore the registers it must preserve (a
     /// register the callee takes beyond the scratch ones is pushed and popped
@@ -1585,11 +1551,6 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::push_imm_at_size`.
-    fn push_imm_at_size(&self) -> bool {
-        false
-    }
-
     /// `Tuning::sdiv_pow2_stays_at_size`.
     fn sdiv_pow2_stays_at_size(&self) -> bool {
         false
@@ -1602,6 +1563,11 @@ pub trait Tti {
 
     /// `Tuning::rep_stos_at_size`.
     fn rep_stos_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_stos_priced_unit`.
+    fn rep_stos_priced_unit(&self) -> bool {
         false
     }
 
@@ -2419,6 +2385,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// largest object offset a byte index reaches in one address instruction
+    /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
+    /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
+    fn address_index_max(&self) -> Option<u64> {
+        None
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
@@ -2621,6 +2595,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): whether LICM splits
+    /// an `llvm.fmuladd` of a loop whose factors the loop does not write into
+    /// `fmul` and `fadd`, the product then leaving the loop; true where the
+    /// target has no fused multiply-add to make of it. x_ld_to_ulong m32 -O1:
+    /// `r * 67108864` made on every trip of the inner loop, gcc holds it.
+    fn splits_invariant_fmuladd(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
@@ -2653,6 +2636,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE EXT-LOAD-COST: whether a load that widens costs clocks over
+    /// the plain load, so CGP's `optimizeExt` leaves an extension in the
+    /// block that reads it. The pin has no such cost: it moves it.
+    fn ext_load_costs_extra(&self) -> bool {
+        false
+    }
+
     /// The bits one general-purpose register holds: an `i32` takes one at 32,
     /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
     fn gpr_bits(&self) -> u32 {
@@ -2666,14 +2656,6 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
-    }
-
-    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
-    /// largest object offset a byte index reaches in one address instruction
-    /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
-    /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
-    fn address_index_max(&self) -> Option<u64> {
-        None
     }
 
     /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
@@ -3291,16 +3273,13 @@ mod size_model_tests {
         disp_short: OpCost::bytes(10),
         disp_long: OpCost::bytes(70),
         base_add: OpCost::bytes(5),
-        iv_step: OpCost::bytes(6),
+        step: |_, _| 6,
+        constant_start: None,
         setup: OpCost::bytes(7),
         setup_cap: 2,
-        setup_constant: OpCost::bytes(11),
-        target_orders: false,
-        step_per_byte: 8,
-        add_per_byte: 11,
-        step_other: OpCost::bytes(12),
-        step_other_per_byte: 13,
-        setup_per_byte: 9,
+        derived_setup_free: false,
+        size_only: false,
+        exit_compare: |bits, _| bits,
     };
 
     /// Each displacement form is read from its own field; zero is free.
@@ -3324,20 +3303,6 @@ mod size_model_tests {
             (m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes),
             (4, 2, 1, 4)
         );
-        assert_eq!((m.base_add.bytes, m.iv_step.bytes, m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
-        // no width scaling: a 64-bit step costs what a 32-bit one does
-        assert_eq!((m.step_bytes(8, true), m.step_bytes(64, false), m.setup_bytes(8), m.setup_bytes(64)), (3, 3, 3, 3));
-        assert_eq!((m.add_bytes(8), m.add_bytes(64)), (3, 3));
-        assert_eq!(m.setup_constant, m.setup, "a global's address is set up like any register on x86");
-    }
-
-    /// A wide register's step and setup cost more bytes, each from its own field.
-    #[test]
-    fn a_register_steps_and_sets_up_by_its_width() {
-        let m = DISTINCT;
-        assert_eq!((m.step_bytes(8, true), m.step_bytes(16, true), m.step_bytes(32, true)), (6, 14, 30));
-        assert_eq!((m.step_bytes(8, false), m.step_bytes(16, false)), (12, 25));
-        assert_eq!((m.setup_bytes(8), m.setup_bytes(16), m.setup_bytes(32)), (7, 16, 34));
-        assert_eq!((m.add_bytes(8), m.add_bytes(16), m.add_bytes(32)), (5, 16, 38));
+        assert_eq!((m.base_add.bytes, (m.step)(32, Some(1)), m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
     }
 }

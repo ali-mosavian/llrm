@@ -342,6 +342,14 @@ impl Machine for Dos {
             carry_slot_indexes: false,
             // DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29): see Tuning.
             address_reference_milliweight: 3000,
+            // DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): see Tuning.
+            spill_fold: Some(llrm_mir::target::SpillFoldClocks {
+                read: self.costs.load,
+                update: (self.costs.memory_update - self.costs.add).max(0),
+                store: self.costs.store,
+                copy: self.costs.load.max(self.costs.store),
+                wide_copy: self.costs.prefix,
+            }),
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -382,6 +390,8 @@ impl Machine for Dos {
             // (`r_recursive_world_node` 194 -> 176).
             keep_constant_displacements: true,
             frame_slot_is_free_base: true,
+            // DEVIATE EXT-LOAD-COST (owner llrm-target-x86-m16, exit 2026-11-27): see `Tuning::ext_load_extra_clocks`.
+            ext_load_extra_clocks: (self.costs.extend - self.costs.load).max(0),
             lsr_address_fewest_registers: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a

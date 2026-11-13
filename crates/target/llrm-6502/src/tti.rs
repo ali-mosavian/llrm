@@ -74,21 +74,6 @@ impl Mos6502 {
             + 4 * u64::from(c.imm_cost)
     }
 
-    /// DEVIATE LSR-MUL-BYTES (owner llrm-target-6502, exit 2026-11-24): the
-    /// bytes of the two terms the size model does not price. A multiply is the
-    /// call and its argument cells (`jsr`, two `sta`, two `lda`); the linked
-    /// routine is not counted yet (plan: the member's size, shared by the
-    /// loop's uses). An immediate is one byte-wide add of it (`lda; adc #;
-    /// sta`).
-    fn lsr_byte_weights() -> (u32, u32) {
-        let bytes = |mnemonic: &str, operand: &str| {
-            crate::timing::instruction(crate::dagisel::hooks::Cpu::Mos6502, mnemonic, operand)
-                .map_or(0, |cost| cost.bytes)
-        };
-        let (load, store) = (bytes("lda", "rc2"), bytes("sta", "rc2"));
-        (bytes("jsr", "__mulhi3") + 2 * (load + store), load + bytes("adc", "#0") + store)
-    }
-
     pub fn new() -> Mos6502 {
         let layout = DataLayout::parse(&Mos.layout().datalayout).expect("the 6502's datalayout parses");
         Mos6502 {
@@ -150,6 +135,53 @@ impl Default for Mos6502 {
     fn default() -> Mos6502 {
         Mos6502::new()
     }
+}
+
+/// The bytes of `mnemonic operand` from the emitter's own instruction table.
+fn lsr_instruction_bytes(
+    mnemonic: &str,
+    operand: &str,
+) -> u32 {
+    crate::timing::instruction(crate::dagisel::hooks::Cpu::Mos6502, mnemonic, operand).map_or(0, |cost| cost.bytes)
+}
+
+/// The step added each trip to a `bits`-wide counter: `inc zp` and, for each
+/// byte past the first, `bne; inc` (a unit step); any other constant is an
+/// add of it, `clc; lda; adc #; sta`, and `lda; adc #; sta` a byte (stride
+/// priced: a pointer stepped by 4 costs more than one by 1).
+fn lsr_step_bytes(
+    bits: u32,
+    constant: Option<i64>,
+) -> u32 {
+    let b = lsr_instruction_bytes;
+    let bytes = bits.div_ceil(8).max(1);
+    let unit = matches!(constant, Some(1));
+    if unit {
+        b("inc", "rc2") + (bytes - 1) * (b("bne", "x") + b("inc", "rc2"))
+    } else {
+        let each = b("lda", "rc2") + b("adc", "#0") + b("sta", "rc2");
+        b("clc", "") + bytes * each
+    }
+}
+
+/// A constant start of a `bits`-wide counter: `lda #; sta zp` for each byte.
+fn lsr_constant_start_bytes(
+    bits: u32,
+    _value: i64,
+) -> u32 {
+    bits.div_ceil(8).max(1) * (lsr_instruction_bytes("lda", "#0") + lsr_instruction_bytes("sta", "rc2"))
+}
+
+/// The `cmp` an exit test costs where the counter does not end at zero:
+/// `lda; cmp` for a byte, `lda; sbc` for each byte past the first.
+fn lsr_exit_compare_bytes(
+    bits: u32,
+    immediate: Option<i64>,
+) -> u32 {
+    let operand = if immediate.is_some() { "#0" } else { "rc2" };
+    let bytes = bits.div_ceil(8).max(1);
+    let b = lsr_instruction_bytes;
+    b("lda", "rc2") + b("cmp", operand) + (bytes - 1) * (b("lda", "rc2") + b("sbc", operand))
 }
 
 impl Tti for Mos6502 {
@@ -292,20 +324,6 @@ impl Tti for Mos6502 {
         a: &LsrCost,
         b: &LsrCost,
     ) -> bool {
-        // Where the model counted bytes (-Os): the bytes of the steps, setups,
-        // displacements and base adds it priced, and what it does not
-        // price (see `lsr_byte_weights`).
-        if a.size_bytes != 0 || b.size_bytes != 0 {
-            let (mul, imm) = Self::lsr_byte_weights();
-            let key = |c: &LsrCost| {
-                let bytes = u64::from(c.size_bytes)
-                    + u64::from(mul) * u64::from(c.num_iv_muls)
-                    + u64::from(imm) * u64::from(c.imm_cost);
-                // Equal bytes: the instruction-count order of the speed levels.
-                (bytes, Self::lsr_work(c), c.num_regs, c.scale_cost, c.setup_cost)
-            };
-            return key(a) < key(b);
-        }
         let key = |c: &LsrCost| (Self::lsr_work(c), c.num_regs, c.scale_cost, c.setup_cost);
         key(a) < key(b)
     }
@@ -344,16 +362,13 @@ impl Tti for Mos6502 {
             disp_short: OpCost::bytes(bytes("ldy", "#0")),
             disp_long: OpCost::bytes(add16),
             base_add: OpCost::bytes(add8),
-            iv_step: OpCost::bytes(step),
-            setup: OpCost::bytes(setup),
+            step: lsr_step_bytes,
+            constant_start: Some(lsr_constant_start_bytes),
+            setup: OpCost::bytes(2 * setup),
             setup_cap: 4,
-            setup_constant: OpCost::bytes(0),
-            target_orders: true,
-            step_per_byte: step_more,
-            step_other: OpCost::bytes(step_other),
-            step_other_per_byte: step_other_more,
-            add_per_byte: add_more,
-            setup_per_byte: setup,
+            derived_setup_free: true,
+            size_only: true,
+            exit_compare: lsr_exit_compare_bytes,
         })
     }
 

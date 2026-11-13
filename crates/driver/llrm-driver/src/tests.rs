@@ -1105,11 +1105,11 @@ fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
     assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
 }
 
-/// `mov $40, %eax` (5 B) where the pin's llc at `minsize` writes `push $40; pop %eax` (3 B):
-/// `ExpandMOVImmSExti8` was never expanded. At m32 -Os, and for a function marked `minsize`.
-/// Zero and -1 stay `xor` and `or`. DEVIATE PUSH-IMM-OS.
+/// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1, and the pin writes it at `minsize` only: at m32 -Os it
+/// was also written in once-per-call blocks (`push 0x4d; pop edx` in x_histo2), +3..+9 clk in nine -Os cells and 244k pops
+/// in jpeg_fixed, each of them over by that much with bytes under the bar. -Os and -O2 keep the `mov`; `minsize` pushes.
 #[test]
-fn a_small_immediate_at_m32_os_is_push_pop() {
+fn a_small_immediate_at_m32_os_is_a_mov_and_at_minsize_a_push_pop() {
     let text = |attrs: &str, value: i32| {
         format!(
             "target datalayout = \"@m32-datalayout@\"\n\
@@ -1122,33 +1122,35 @@ fn a_small_immediate_at_m32_os_is_push_pop() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let at_os = listing(&["-mabi=sysv", "-Os"], "optsize", 40);
-    assert!(at_os.contains("pushd 40") && at_os.contains("pop eax"), "{at_os}");
+    assert!(at_os.contains("mov eax, 40") && !at_os.contains("push"), "{at_os}");
     let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize", 40);
     assert!(marked.contains("pushd 40") && marked.contains("pop eax"), "{marked}");
     let at_speed = listing(&["-mabi=sysv", "-O2"], "", 40);
     assert!(at_speed.contains("mov eax, 40") && !at_speed.contains("push"), "{at_speed}");
-    let wide = listing(&["-mabi=sysv", "-Os"], "optsize", 4000);
-    assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
 }
 
-/// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1: at m32 -Os it was used in loops as well, and jpeg_fixed -Os ran
-/// 244k more `pop`s than main (+1.3% clk, 46 B). A constant in a loop is a `mov`; one that runs once per call stays a push and pop.
-/// DEVIATE PUSH-IMM-OS.
+/// An unsigned int converted to long double stores a zero high dword (`fild qword`). The zero was made again on every trip
+/// (`xor esi,esi` in the loop, and a saved register for it) where the pin holds it from the preheader: x_ld_mix -Os +52 clk.
 #[test]
-fn a_small_immediate_at_m32_os_is_a_mov_in_a_loop() {
+fn a_zero_stored_for_a_conversion_is_made_outside_the_loop_at_m32_os() {
     let text = "target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
-                define i32 @f(i32 %n, ptr %p) optsize {\n\
-                entry:\n  %first = load volatile i32, ptr %p\n  %z = icmp slt i32 %first, 0\n  br i1 %z, label %early, label %loop\n\
-                early:\n  ret i32 41\n\
-                loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %s = phi i32 [ %first, %entry ], [ %s2, %loop ]\n\
-                \x20 %v = load volatile i32, ptr %p\n  %c = icmp slt i32 %v, 0\n  %k = select i1 %c, i32 40, i32 50\n\
-                \x20 %s2 = add i32 %s, %k\n  %i2 = add i32 %i, 1\n  %d = icmp eq i32 %i2, %n\n  br i1 %d, label %out, label %loop\n\
-                out:\n  ret i32 %s2\n}\n";
+                define i32 @f(i32 %n) optsize {\n\
+                entry:\n  %c = icmp sgt i32 %n, 0\n  br i1 %c, label %loop, label %out\n\
+                loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %j = phi i32 [ 0, %entry ], [ %j2, %loop ]\n\
+                \x20 %s = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %s2, %loop ]\n\
+                \x20 %u = uitofp i32 %i to x86_fp80\n  %v = add i32 %j, -294967296\n  %w = uitofp i32 %v to x86_fp80\n\
+                \x20 %t = fadd x86_fp80 %u, %w\n  %s2 = fadd x86_fp80 %s, %t\n  %i2 = add i32 %i, 4\n  %j2 = add i32 %j, 1\n\
+                \x20 %d = icmp eq i32 %j2, %n\n  br i1 %d, label %out, label %loop\n\
+                out:\n  %r = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %s2, %loop ]\n\
+                \x20 %k = fptosi x86_fp80 %r to i32\n  ret i32 %k\n}\n";
     let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("pushd 40") && !listing.contains("pushd 50"), "{listing}");
-    assert!(listing.contains("pushd 41"), "the once-per-call constant stays push/pop: {listing}");
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let first = lines.iter().position(|line| line.starts_with("fild qword")).expect("a qword fild");
+    let top = lines[..first].iter().rposition(|line| line.ends_with(':')).expect("the loop label");
+    let back = top + lines[top..].iter().position(|line| line.starts_with("jne")).expect("the loop's branch");
+    assert!(!lines[top..back].iter().any(|line| line.starts_with("xor")), "{listing}");
 }
 
 /// LEAF-FOLD-OS makes a leaf's constant in the branching block; what that does to the registers after it decides the

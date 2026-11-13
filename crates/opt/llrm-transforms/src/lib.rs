@@ -252,6 +252,7 @@ pub mod float2int;
 pub mod floatfold;
 pub mod floativ;
 pub mod floatloop;
+pub mod fmuladdsplit;
 pub mod fold;
 pub mod gepbyteindex;
 pub mod gepoffset;

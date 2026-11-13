@@ -796,8 +796,14 @@ impl Tti for X86 {
 
     /// DEVIATE INL-O1 SIZE: the inliner counts a callee in bytes of code.
     fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
-        (self.tuning.inline_size_bytes && !self.size_bytes)
+        ((self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1) && !self.size_bytes)
             .then(|| std::rc::Rc::new(X86 { size_bytes: true, ..self.clone() }) as std::rc::Rc<dyn Tti>)
+    }
+
+    /// `Tuning::inline_trials_at_o1` alone gives the byte view to -O1 only: the -O2 and -O3 callers keep the
+    /// units their rate was fitted in.
+    fn inline_size_view_at(&self, speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+        if speed && !self.tuning.inline_size_bytes { None } else { self.inline_size_view() }
     }
 
     fn access_address_cost(
@@ -806,7 +812,7 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::address(form);
+            return crate::sizes::address(form, self.quad);
         }
         Cost::FREE
     }
@@ -836,7 +842,7 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::call(arguments);
+            return crate::sizes::call(arguments, self.quad);
         }
         Cost::BASIC * (arguments + 1)
     }
@@ -890,15 +896,15 @@ impl Tti for X86 {
     }
 
     fn inline_trials_at_o1(&self) -> bool {
-        self.tuning.inline_size_bytes
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
     fn inline_size_view_is_measured(&self) -> bool {
-        self.tuning.inline_size_bytes
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
     fn inline_second_round_at_o1(&self) -> bool {
-        self.tuning.inline_size_bytes
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
     fn callee_saved_clocks(&self, peak: usize) -> i64 {
@@ -963,10 +969,6 @@ impl Tti for X86 {
         self.tuning.imul_at_size
     }
 
-    fn push_imm_at_size(&self) -> bool {
-        self.tuning.push_imm_at_size
-    }
-
     fn merge_functions_at_size(&self) -> bool {
         self.tuning.merge_functions_at_size
     }
@@ -981,6 +983,10 @@ impl Tti for X86 {
 
     fn rep_stos_at_size(&self) -> bool {
         self.tuning.rep_stos_at_size
+    }
+
+    fn rep_stos_priced_unit(&self) -> bool {
+        self.tuning.rep_stos_priced_unit
     }
 
     fn has_cmov(&self) -> bool {
@@ -1179,11 +1185,22 @@ impl Tti for X86 {
     }
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
-        self.tuning.lsr_size_order.then_some(llrm_mir::tti::LsrSizeModel::X86)
+        self.tuning.lsr_size_order.then(|| {
+            let model = if self.tuning.lsr_size_x86_64 {
+                crate::encoding::lsr_size_model_64()
+            } else {
+                llrm_mir::tti::LsrSizeModel::X86
+            };
+            llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
+        })
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {
         self.tuning.lsr_phi_operand_uses
+    }
+
+    fn splits_invariant_fmuladd(&self) -> bool {
+        self.tuning.splits_invariant_fmuladd
     }
 
     fn lsr_users_in_use_list_order(&self) -> bool {
@@ -1470,7 +1487,7 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::cmp_sel(op, ty, self.cmov);
+            return crate::sizes::cmp_sel(op, ty, self.cmov, self.quad);
         }
         let Some((count, _)) = legalized(ty, self.native()) else { return Cost::INVALID };
         if let Some(each) = sse_cmp_sel(self, op, ty).and_then(|row| row[kind.index()]) {
@@ -1495,7 +1512,7 @@ impl Tti for X86 {
         stored_constant: bool,
     ) -> Cost {
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::memory(op, ty, stored_constant);
+            return crate::sizes::memory(op, ty, stored_constant, self.quad);
         }
         // Load latency is not modelled here: the base answers 4.
         if op == MemoryOp::Load && kind == CostKind::Latency {
@@ -1782,6 +1799,10 @@ impl Tti for X86 {
         true
     }
 
+    fn ext_load_costs_extra(&self) -> bool {
+        self.tuning.ext_load_extra_clocks > 0
+    }
+
     /// 64 in long mode, else 32 (also at m16, on a 386 or later).
     fn gpr_bits(&self) -> u32 {
         if self.quad { 64 } else { 32 }
@@ -1944,7 +1965,7 @@ impl Tti for X86 {
     ) -> Cost {
         use ArithOp::*;
         if self.size_bytes && kind == CostKind::CodeSize {
-            return crate::sizes::arithmetic(op, ty, second);
+            return crate::sizes::arithmetic(op, ty, second, self.quad);
         }
         let Some((count, legal)) = legalized(ty, self.native()) else { return Cost::INVALID };
         let none = OperandInfo::ANY;

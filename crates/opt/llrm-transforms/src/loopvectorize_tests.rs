@@ -45,6 +45,12 @@ const SPLAT: &str = include_str!("../tests/lv/binop_splat.ll");
 const SHIFT: &str = include_str!("../tests/lv/binop_shift.ll");
 const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
+const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
+const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
+const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
+const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
+const FP_SUB_DOUBLE: &str = include_str!("../tests/lv/fp_sub_double.ll");
+const FP_NEG_DOUBLE: &str = include_str!("../tests/lv/fp_neg_double.ll");
 
 /// `c[i] = a[i] + b[i]` stayed scalar ("An instruction the vectorizer does not
 /// widen yet"); the pin takes VF 8, IC 2 (`opt -passes=loop-vectorize`: four
@@ -57,6 +63,79 @@ fn an_add_of_two_loaded_arrays_is_widened() {
     assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
     assert_eq!(count(&text, "load i16"), 0, "{text}");
+}
+
+/// `c[i] = a[i] * b[i] + 2.5` over `float` stayed scalar ("An element type the
+/// target has no vector of"); the pin takes VF 4, IC 2 (`opt
+/// -passes=loop-vectorize -mcpu=generic`: four `load <4 x float>`, step 8) and
+/// splats the constant.
+#[test]
+fn a_float_multiply_add_of_loaded_arrays_is_widened() {
+    let text = run(FP_AXPY);
+    assert_eq!(count(&text, "load <4 x float>"), 4, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "fadd <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+    assert_eq!(count(&text, "load float"), 0, "{text}");
+}
+
+/// `d[i] = fmuladd(a[i], k, b[i])`: "Found a non-intrinsic callsite" kept the
+/// loop scalar; the pin widens the call (VF 4, IC 2: two `llvm.fmuladd.v4f32`,
+/// `k` splatted, step 8).
+#[test]
+fn a_float_fmuladd_call_is_widened_to_a_vector_intrinsic() {
+    let text = run(FP_FMULADD);
+    assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
+    assert_eq!(count(&text, "call float @llvm.fmuladd.f32"), 0, "{text}");
+    assert_eq!(count(&text, "load <4 x float>"), 4, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `b[i] = (float)a[i] * 2.5f`: "An instruction the vectorizer does not widen
+/// yet" kept the `sitofp` loop scalar; the pin widens it (VF 4, IC 2: two
+/// `sitofp <4 x i32>`, step 8).
+#[test]
+fn an_int_to_float_conversion_is_widened_with_its_operand() {
+    let text = run(FP_CONVERT);
+    assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "load <4 x i32>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// The IDCT pass-1 shape (two stride-8 `i32` loads, `sitofp`, `fmuladd`,
+/// consecutive store): "An access that is not consecutive" kept it scalar; the
+/// pin makes four scalar loads per access and puts them together with
+/// `insertelement` (`CM_Scalarize`, VF 4).
+#[test]
+fn strided_loads_are_scalarized_and_put_together() {
+    let text = run(FP_STRIDED);
+    assert_eq!(count(&text, "load i32"), 8, "{text}");
+    assert_eq!(count(&text, "insertelement <4 x i32>"), 8, "{text}");
+    assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
+}
+
+/// `double` lanes: pin VF 2, IC 2 (step 4).
+#[test]
+fn a_double_subtract_of_loaded_arrays_is_widened() {
+    let text = run(FP_SUB_DOUBLE);
+    assert_eq!(count(&text, "load <2 x double>"), 4, "{text}");
+    assert_eq!(count(&text, "fsub <2 x double>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
+}
+
+/// `c[i] = -(a[i] - b[i])`: the `fneg` was "a binary result used other than by
+/// a store or a binary operation"; the pin widens it with the `fsub` (VF 2,
+/// IC 2).
+#[test]
+fn a_float_negation_is_widened_with_its_operand() {
+    let text = run(FP_NEG_DOUBLE);
+    assert_eq!(count(&text, "fneg <2 x double>"), 2, "{text}");
+    assert_eq!(count(&text, "fsub <2 x double>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
 }
 
 /// A chain of operations feeds one into the next, a constant operand is a
@@ -425,12 +504,14 @@ fn a_loop_the_pin_finds_vectorization_not_beneficial_for_is_interleaved() {
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }
 
-/// A scale of consecutive floats the pin widens (VF 4) must not be interleaved
-/// alone: that was the +12,213 and +31,612 instruction failure of an interleave
-/// where a vector factor takes the loop.
+/// A scale of consecutive floats the pin widens (VF 4, IC 2) is widened, not
+/// interleaved alone: interleaving where a vector factor takes the loop was the
+/// +12,213 and +31,612 instruction failure; while floats were not widened the
+/// loop stayed scalar for that reason.
 #[test]
-fn a_float_loop_the_pin_vectorizes_is_not_interleaved_alone() {
+fn a_float_loop_the_pin_vectorizes_is_widened_not_interleaved_alone() {
     let text = run(FP_SCALE);
-    assert_eq!(count(&text, "fmul float"), 1, "{text}");
-    assert_eq!(count(&text, "llvm.loop.isvectorized"), 0, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "fmul float"), 0, "{text}");
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }

@@ -958,6 +958,11 @@ impl Builder<'_> {
                         .and_then(|lane| MVT::vector(lane, *count))
                         .map(EVT::Simple)
                         .ok_or(Refused("vector with no register class")),
+                    // `v4f32`, `v2f64`
+                    Type::Float(kind @ (llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)) => {
+                        let lane = if matches!(kind, llrm_mir::types::FloatKind::Float) { MVT::F32 } else { MVT::F64 };
+                        MVT::vector(lane, *count).map(EVT::Simple).ok_or(Refused("vector with no register class"))
+                    }
                     _ => Err(Refused("vector with no register class")),
                 }
             }
@@ -3311,7 +3316,11 @@ impl Builder<'_> {
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
             ConstantKind::Null | ConstantKind::Zero => {
-                let zero = self.dag.get_constant(0, lane_vt);
+                let zero = if lane_vt.is_floating_point() {
+                    self.dag.get_constant_fp(0, lane_vt)
+                } else {
+                    self.dag.get_constant(0, lane_vt)
+                };
                 Ok(self.dag.get_splat_build_vector(vt, zero))
             }
             ConstantKind::Aggregate(lanes) => {
@@ -3322,10 +3331,14 @@ impl Builder<'_> {
                     .iter()
                     .map(|lane| match self.module.context.get(*lane).kind {
                         ConstantKind::Int(bits) => Ok(self.dag.get_constant(bits, lane_vt)),
+                        ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(bits), lane_vt)),
+                        ConstantKind::Null | ConstantKind::Zero if lane_vt.is_floating_point() => {
+                            Ok(self.dag.get_constant_fp(0, lane_vt))
+                        }
                         ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, lane_vt)),
                         ConstantKind::Undef => Ok(self.dag.get_undef(lane_vt)),
                         ConstantKind::Poison => Ok(self.dag.get_poison(lane_vt)),
-                        _ => Err(Refused("a vector constant lane that is not an integer")),
+                        _ => Err(Refused("a vector constant lane that is not an integer or a float")),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.dag.get_build_vector(vt, &ops))
@@ -4124,6 +4137,8 @@ impl Builder<'_> {
         let high = self.dag.get_constant(u128::from(!mask) & self::mask(pointer.size_in_bits()), pointer);
         let size = self.dag.get_node(ISD::And, pointer, &[size, high]);
         let alignment = self.dag.get_constant(u128::from(alignment), pointer);
+        // `visitAlloca`: `CreateVariableSizedObject`.
+        self.info.has_var_sized_objects = true;
         let root = self.root();
         let node = self.dag.get_node_multi(ISD::DynamicStackAlloc, &[pointer, EVT::OTHER], &[root, size, alignment]);
         self.dag.set_root(SDValue { node: node.node, res: 1 });

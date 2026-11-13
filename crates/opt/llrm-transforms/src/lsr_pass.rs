@@ -437,7 +437,7 @@ fn plan_loop(
         let bytes_larger = cost.size_bytes > pin_cost.size_bytes;
         let saves_insns = cost.c.insns < pin_cost.c.insns;
         let bytes_outweigh_saving = bytes_strict
-            && tti.lsr_size_model().is_some()
+            && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
             && if size { bytes_larger } else { cost.c.insns > pin_cost.c.insns || (bytes_larger && !saves_insns) };
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
@@ -727,7 +727,10 @@ pub fn reduced_held(
             }
             if split {
                 stable = false;
+                let scev = session.into_scev();
                 session = new_session(context, function);
+                session.adopt(scev);
+                session.forget_since_through_edges(context, layout, &outer.globals, &outer.metadata, function, mark);
                 mark = function.mark();
                 mark_opaque(&mut session, context, function);
             }
