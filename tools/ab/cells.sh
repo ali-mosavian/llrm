@@ -35,7 +35,7 @@ while read -r _ tg lvl f; do
   fl=""; case $tg in x86_16-wat) fl=-march=i386;; x86_32-linux) fl=-m32;; esac
   # The program's own flags (`// flags:`, first variant): a cell built without them is another program (div_constants_*
   # without -fno-inline-functions inlined to 145 kB on z80 where the row is 17.5 kB).
-  pf=$(python3 "$(dirname "$0")/cell_flags.py" "$f")
+  pf=$(python3 "$(dirname "$0")/cell_flags.py" "$f" "$tg")
   # A program that includes llrm_os.h or bench_io.h needs the posix runtime dir (and bench/): a sweep without it refused every one at every target
   # ('llrm_os.h' file not found, 52 cells) and hid the real errors behind it. corpus_refusals.py gives the same two dirs. The posix dir goes after every other: a target's own llrm_os.h (x86-m16's DOS one has LLRM_OS_TEXT_SCREEN) must win.
   os_inc=""; grep -qE '#[[:space:]]*include[[:space:]]*"[^"]*(llrm_os|bench_io)\.h"' "$f" 2>/dev/null && os_inc="-idirafter $repo/runtime/shared/posix -I $repo/bench"
