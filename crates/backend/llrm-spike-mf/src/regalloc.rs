@@ -600,6 +600,10 @@ pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
     }
 }
 
+/// The `MFunction` form of the shared `PHIElimination` (`phielimination.rs`),
+/// which m68k and z80 run it in place of while their allocators take an
+/// `MFunction` (`CompileOptions::shared_prelude` is the bridge, off: the corpus
+/// was tuned on this). Keep the two in the pin's order.
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
 /// register at the end of its predecessor, and a copy of that register into
 /// the phi's at the top of its block, so parallel phis do not overwrite each
