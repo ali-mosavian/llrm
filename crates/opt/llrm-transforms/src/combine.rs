@@ -343,6 +343,8 @@ pub struct TargetHooks {
     /// its users. Off where bytes are strict: a phi of constants costs a move
     /// per edge.
     pub phi_constant_users: bool,
+    /// DEVIATE ICMPDIV-1 (`Tti::keeps_icmp_of_shared_division`).
+    pub keeps_shared_division_compare: bool,
     /// DEVIATE PHICONST-2 (`Tti::folds_phi_constant_chains`).
     pub phi_constant_chains: bool,
 }

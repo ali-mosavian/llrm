@@ -82,12 +82,29 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
 /// argument went from whose value then has no other reader (what computed it
 /// is dead now).
 pub fn removed_with(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
+    removed_among(module, false)
+}
+
+/// [`removed_with`] over the functions that call themselves alone: the
+/// recursion copier prices a body without the parameters nothing reads, as
+/// gcc's IPA-SRA leaves it for `-finline-recursive` (W1).
+pub fn removed_from_recursions(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
+    removed_among(module, true)
+}
+
+fn removed_among(
+    module: &mut Module,
+    recursive_only: bool,
+) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
     let mut unsound = BTreeSet::new();
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let mut changed = BTreeSet::new();
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };
+        if recursive_only && !calls.iter().any(|&(caller, _)| caller == id) {
+            continue;
+        }
         let gone = dead(module, id);
         if gone.is_empty() {
             continue;

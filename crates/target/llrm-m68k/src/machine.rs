@@ -471,6 +471,16 @@ impl Tti for M68k {
         Some(100)
     }
 
+    /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at
+    /// -O1, where the pin does not unroll past its threshold and gcc does:
+    /// the driver keeps the unrolled module where its finished functions are
+    /// no larger and no slower (float_in_memory_loop: 16 `fadd`s on a constant
+    /// fold to one, 100 B and 1264 B of soft-float routines against gcc's 70
+    /// B).
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        Some(100)
+    }
+
     /// DEVIATE PEEL-OS-TRIAL: the same trial peels (`loopunrollpass`).
     fn peels_on_trial_at_size(&self) -> bool {
         true

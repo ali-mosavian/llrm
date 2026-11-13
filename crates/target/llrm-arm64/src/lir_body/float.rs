@@ -148,6 +148,51 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
             None,
         ),
+        Inst::VectorInsGpr { lanes, rd, rn, index } => {
+            let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
+            semantics(
+                Operation::Move,
+                format!("INSv{}gpr", ins_lane(*lanes)),
+                vec![vreg_loc(*rd, 128)],
+                vec![vreg_loc(*rd, 128), imm(i64::from(*index)), gpr_loc(*rn, width)],
+                None,
+            )
+        }
+        Inst::VectorFmaLane { op, lanes, rd, rn, rm, index } => semantics(
+            Operation::FloatMultiplyAdd,
+            format!(
+                "{}v{}_indexed",
+                op.mnemonic().to_uppercase(),
+                if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }
+            ),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
+            None,
+        ),
+        Inst::VectorFmulLane { lanes, rd, rn, rm, index } => semantics(
+            Operation::Binary,
+            format!("FMULv{}_indexed", if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
+            None,
+        ),
+        Inst::VectorUmov { lanes, rd, rn, index } => {
+            let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
+            semantics(
+                Operation::Move,
+                format!("UMOVv{}", ins_lane(*lanes)),
+                vec![gpr_loc(*rd, width)],
+                vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+                None,
+            )
+        }
+        Inst::VectorInsLane { lanes, rd, rn, index, src } => semantics(
+            Operation::Move,
+            format!("INSv{}lane", ins_lane(*lanes)),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), imm(i64::from(*index)), vreg_loc(*rn, 128), imm(i64::from(*src))],
+            None,
+        ),
         Inst::VectorDupLane { lanes, rd, rn, index } => semantics(
             Operation::Move,
             format!("DUPv{}lane", lane_name(*lanes)),
@@ -323,6 +368,16 @@ fn vector_fp_name(
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
+/// `i8`, `i16`, `i32`, `i64`: the lane of an `INSvi32lane`.
+fn ins_lane(lanes: Arrangement) -> &'static str {
+    match lanes {
+        Arrangement::B16 => "i8",
+        Arrangement::H8 => "i16",
+        Arrangement::S4 => "i32",
+        Arrangement::D2 => "i64",
+    }
+}
+
 const VECTOR_FP_OPS: [VectorFpOp; 4] = [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div];
 const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
     VectorFpUnary::Neg,
@@ -367,7 +422,60 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             }
         }
     }
+    for (lanes, op) in [Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .flat_map(|lanes| [VectorFma::Add, VectorFma::Sub].map(|op| (lanes, op)))
+    {
+        let lane = if lanes == Arrangement::D2 { "2i64" } else { "4i32" };
+        if name == format!("{}v{lane}_indexed", op.mnemonic().to_uppercase()) {
+            return Some(Inst::VectorFmaLane {
+                op,
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[1]),
+                rm: vreg_of(&s[2]),
+                index: value_of(&s[3]) as u8,
+            });
+        }
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2] {
+        let lane = if lanes == Arrangement::D2 { "2i64" } else { "4i32" };
+        if name == format!("FMULv{lane}_indexed") {
+            return Some(Inst::VectorFmulLane {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+                rm: vreg_of(&s[1]),
+                index: value_of(&s[2]) as u8,
+            });
+        }
+    }
     for lanes in ARRANGEMENTS {
+        if name == format!("INSv{}gpr", ins_lane(lanes)) {
+            return Some(Inst::VectorInsGpr {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: gpr_of(&s[2]),
+                index: value_of(&s[1]) as u8,
+            });
+        }
+        if name == format!("UMOVv{}", ins_lane(lanes)) {
+            return Some(Inst::VectorUmov {
+                lanes,
+                rd: gpr_of(dest?),
+                rn: vreg_of(&s[0]),
+                index: value_of(&s[1]) as u8,
+            });
+        }
+        if name == format!("INSv{}lane", ins_lane(lanes)) {
+            return Some(Inst::VectorInsLane {
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[2]),
+                index: value_of(&s[1]) as u8,
+                src: value_of(&s[3]) as u8,
+            });
+        }
         if name == format!("DUPv{}lane", lane_name(lanes)) {
             return Some(Inst::VectorDupLane {
                 lanes,
