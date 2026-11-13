@@ -78,3 +78,18 @@ echo "x wasm32 -O2 $d/p.c" > "$d/list"
 out=$("$cells" "$d" "$d/list" 2>&1)
 case $out in "wasm32 -O2 p.c bytes "[0-9]*" instrs 4 4"*) ;; *) echo "FAIL: a wasm cell is not counted from its object: $out"; exit 1;; esac
 echo ok
+# Regression (2026-11-13): a sweep with no CELLS_INC refused every program that includes llrm_os.h or bench_io.h at every target ('llrm_os.h' file not
+# found, 52 cells, the real errors behind it). cells.sh gives such a source the posix runtime dir and bench/ itself; a source that does not include them
+# gets neither.
+for v in base new; do { cat "$d/fake-cc"; echo "# $v"; } > "$d/$v/llrm-cc"; chmod +x "$d/$v/llrm-cc"; done
+printf '#include "../../../bench/bench_io.h"\nint main(void) { return 0; }\n' > "$d/io.c"
+echo "x t -O2 $d/io.c" > "$d/list"
+: > "$d/args"; unset CELLS_INC
+"$cells" "$d" "$d/list" >/dev/null 2>&1
+grep -q -- "runtime/shared/posix" "$d/args" || { echo "FAIL: a bench_io.h source compiled without the posix runtime dir: $(cat "$d/args")"; exit 1; }
+printf 'int main(void) { return 0; }\n' > "$d/plain.c"
+echo "x t -O2 $d/plain.c" > "$d/list"
+: > "$d/args"
+"$cells" "$d" "$d/list" >/dev/null 2>&1
+if grep -q -- "runtime/shared/posix" "$d/args"; then echo "FAIL: a source with no OS header got the posix runtime dir"; exit 1; fi
+

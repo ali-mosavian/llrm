@@ -1717,7 +1717,20 @@ fn _stored(
     // default space's (a huge array): the count would be wider than the
     // target's `rep stos` takes, and isel cannot lower it.
     let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
-    (matches!(width, 16 | 32) && counted).then_some((pointer, Byte::Pattern(value), bytes))
+    // Only where the target's library has the function
+    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`, LoopIdiomRecognize.cpp#L372).
+    (matches!(width, 16 | 32) && counted && _has_memset_pattern(unit)).then_some((pointer, Byte::Pattern(value), bytes))
+}
+
+/// `TLI->has(LibFunc_memset_pattern16)` of the unit's target: a target stating
+/// no library has the pin's defaults for an unknown OS, which lack it.
+fn _has_memset_pattern(unit: &Unit) -> bool {
+    use llrm_mir::libfunc::{Generic, LibFunc, TargetLibraryInfo};
+    let Some(outer) = unit.outer else { return false };
+    match outer.target().library() {
+        Some(library) => TargetLibraryInfo::new(&*library).has(LibFunc::MemsetPattern16),
+        None => TargetLibraryInfo::new(&Generic { int_bits: 32, size_t_bits: 32 }).has(LibFunc::MemsetPattern16),
+    }
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

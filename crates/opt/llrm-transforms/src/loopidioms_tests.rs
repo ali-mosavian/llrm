@@ -5,7 +5,7 @@ use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::passes::{Declared, Outer};
 
 use super::{LoopIdioms, Merge, filled};
-use crate::testing::{managed, parsed, printed, results};
+use crate::testing::{Tuned, managed, managed_on, parsed, printed, results};
 
 const MEMSET: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\n";
 
@@ -42,9 +42,19 @@ fn managed_fill_on(
     text: &str,
     inputs: &[&[i128]],
 ) -> String {
+    managed_fill_by(target, text, inputs, Tuned::default())
+}
+
+/// `managed_fill_on` for `machine`.
+fn managed_fill_by(
+    target: &str,
+    text: &str,
+    inputs: &[&[i128]],
+    machine: Tuned,
+) -> String {
     let before = parsed(&format!("{target}{text}"));
     let mut module = before.clone();
-    let after = managed(&mut module, LoopIdioms { size: false });
+    let after = managed_on(&mut module, LoopIdioms { size: false }, machine);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -160,6 +170,26 @@ fn a_loop_with_a_volatile_store_is_kept() {
     kept(&looped("i8", "%n", body, "%e"), TRIPS);
 }
 
+/// `managed_fill` on a target whose library has `memset_pattern16`.
+fn patterned(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
+    managed_fill_by(DOS, text, inputs, Tuned { memset_pattern: true, ..Tuned::default() })
+}
+
+/// A target whose library lacks `memset_pattern16` (every one but Darwin, the
+/// pin's `TLI->has`) kept a word fill a store loop for the vectorizer: the
+/// pass turned it into `llvm.experimental.memset.pattern`, which arm64-linux
+/// expands back to a scalar `strh` loop.
+#[test]
+fn a_word_fill_stays_a_store_loop_without_memset_pattern16() {
+    let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
+    let text = looped("i16", "10", body, "0");
+    let after = managed_fill(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
+    assert!(!after.contains("memset.pattern") && after.contains("store i16 4660"), "{after}");
+}
+
 /// A word whose bytes differ stayed a loop, `rep stosw` being isel's alone:
 /// each of its trips cost a store. It is one pattern fill of the cells.
 #[test]
@@ -167,7 +197,7 @@ fn a_word_of_two_bytes_is_one_pattern_fill() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
     let text = looped("i16", "10", body, "0");
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    let after = managed_fill(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
+    let after = patterned(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
     assert!(
         after.contains(
             "call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr align 2 %p, i16 4660, i16 10, i1 false)"
@@ -181,7 +211,7 @@ fn a_word_of_two_bytes_is_one_pattern_fill() {
 #[test]
 fn an_invariant_word_is_one_pattern_fill() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 %q, ptr %p\n";
-    let after = managed_fill(&looped("i16", "%n", body, "%e"), &[&[0, 7], &[1, 7], &[40, 4660], &[-5, 3]]);
+    let after = patterned(&looped("i16", "%n", body, "%e"), &[&[0, 7], &[1, 7], &[40, 4660], &[-5, 3]]);
     assert!(
         after.contains(
             "call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr align 2 %p, i16 %q, i16 %1, i1 false)"
@@ -393,7 +423,7 @@ b3:
 }
 ";
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    let after = managed_fill(text, &[&[0], &[1], &[300]]);
+    let after = patterned(text, &[&[0], &[1], &[300]]);
     assert!(!after.contains("memset.pattern"), "{after}");
     assert!(after.contains("store i16 4660"), "{after}");
     let bytes =
