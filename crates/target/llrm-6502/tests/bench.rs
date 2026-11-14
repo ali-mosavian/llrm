@@ -217,8 +217,9 @@ fn driver(
     }
     s.push_str(&format!("  lda #{calls}\n  sta cnt\nloop:\n"));
     let last = kernel.args.len().wrapping_sub(1);
-    // ours: a byte takes the first free of a, x, rc2.., a word or pointer the
-    // first free pair of a:x, rc2:rc3.. (`backfill`); a and x are loaded last
+    // ours: a byte takes the first free of a, x, rc2.., a word the first free
+    // pair of a:x, rc2:rc3.. (`backfill`), a pointer the first free of
+    // rc2:rc3.. (never a:x); a and x are loaded last
     let mut used = [false; 8];
     let (mut in_a, mut in_x) = (String::new(), String::new());
     for (i, &arg) in kernel.args.iter().enumerate() {
@@ -236,8 +237,9 @@ fn driver(
                 }
             }
             Abi::Ours => {
+                let first_pair = usize::from(matches!(arg, P(..)));
                 let at = if wide {
-                    (0..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
+                    (first_pair..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
                 } else {
                     (0..8).find(|&p| !used[p]).expect("a free byte")
                 };

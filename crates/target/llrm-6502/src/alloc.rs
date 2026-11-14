@@ -3425,17 +3425,45 @@ pub fn parallel_move(
     moves: &[(RegId, RegId)],
     a_live: bool,
 ) {
+    parallel_move_with(out, moves, a_live, None);
+}
+
+/// `parallel_move` with `spare`, an index register nothing live holds: a move
+/// of a cell to a cell goes through it (`ldx c; stx d`) and `a` is saved only
+/// for a move that has no other way (`x` to `y`, or a cell to a cell with no
+/// spare). A move into or out of a cell or `a` leaves `a` alone.
+pub fn parallel_move_with(
+    out: &mut Asm,
+    moves: &[(RegId, RegId)],
+    a_live: bool,
+    spare: Option<&str>,
+) {
     let mut pending: Vec<(RegId, Option<RegId>)> =
         moves.iter().filter(|(d, s)| d != s).map(|(d, s)| (*d, Some(*s))).collect();
     if pending.is_empty() {
         return;
     }
+    let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
+    // a move reading what another writes, or a cycle, goes through `a` and
+    // the stack
+    let independent = pending.iter().enumerate().all(|(i, (d, _))| {
+        pending.iter().enumerate().all(|(j, (_, s))| i == j || *s != Some(*d))
+    });
+    let spare = spare.filter(|name| {
+        independent && pending.iter().all(|(d, s)| register_name(*d) != *name && s.is_none_or(|s| register_name(s) != *name))
+    });
     let a_is_dest = pending.iter().any(|(d, _)| *d == reg::A);
-    let save = a_live && !a_is_dest;
+    let scratch_a = |d: RegId, s: Option<RegId>| match s {
+        Some(s) if direct(d) && direct(s) => d != reg::A && s != reg::A,
+        Some(s) if !direct(d) && !direct(s) => spare.is_none(),
+        _ => false,
+    };
+    let save = a_live && !a_is_dest && (!independent || pending.iter().any(|(d, s)| scratch_a(*d, *s)));
     if save {
         out.push_str("  pha\n");
     }
-    let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
+    // `a` is live and left alone: a cell to a cell goes through the spare
+    let through_spare = a_live && !save && !a_is_dest;
     while !pending.is_empty() {
         let a_wanted = |skip: usize, pending: &[(RegId, Option<RegId>)]| {
             pending.iter().enumerate().any(|(i, (_, s))| i != skip && *s == Some(reg::A))
@@ -3455,7 +3483,7 @@ pub fn parallel_move(
             Some(i) => {
                 let (d, s) = pending.remove(i);
                 match s {
-                    Some(s) => move_byte(out, d, s, false, None, None),
+                    Some(s) => move_byte(out, d, s, through_spare, spare, None),
                     None => {
                         out.push_str("  pla\n");
                         move_byte(out, d, reg::A, false, None, None);
@@ -3961,7 +3989,7 @@ fn emit_with<const STACK: bool>(
             match (inst.kind, &inst.operands[..]) {
                 (Kind::Copy, _) if is_word(regs[0]) && is_word(regs[1]) => {
                     let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
-                    parallel_move(&mut out, &moves, a_live);
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 // a word copied into a byte is its low half (`trunc`
                 // at -O0); `lane` of a byte register named a cell no pair has
@@ -3977,10 +4005,11 @@ fn emit_with<const STACK: bool>(
                         .into_iter()
                         .filter(|(to, _)| after[b][i].contains(to))
                         .collect();
-                    parallel_move(&mut out, &moves, a_live);
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 (Kind::Op("PACK"), _) => {
-                    parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
+                    let moves = [(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])];
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 // d := s + k on a pair: the low byte bumped, the high on carry
                 (Kind::Op("PADD"), [_, _, Operand::Imm(k), ..]) => {

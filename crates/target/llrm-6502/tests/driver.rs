@@ -596,7 +596,7 @@ fn exit_code_with(
 /// them with the program's start: `text` is the compiled function, the rest a
 /// `_main` and a `memset` that fills the tail.
 fn clocks_of_strncpy(text: &str) -> u64 {
-    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<src\n  sta rc2\n  lda #>src\n  sta rc3\n  lda #30\n  sta rc4\n  lda #0\n  sta rc5\n  lda #<dst\n  ldx #>dst\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  sta rc6\n  stx rc7\n  lda rc2\n  sta rc8\n  lda rc4\n  ora rc5\n  beq @done\n  ldy #0\n@loop:\n  lda rc8\n  sta (rc6),y\n  iny\n  bne @c\n  inc rc7\n@c:\n  lda rc4\n  bne @d\n  dec rc5\n@d:\n  dec rc4\n  lda rc4\n  ora rc5\n  bne @loop\n@done:\n  rts\n";
+    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<dst\n  sta rc2\n  lda #>dst\n  sta rc3\n  lda #<src\n  sta rc4\n  lda #>src\n  sta rc5\n  ldx #0\n  lda #30\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  sta rc8\n  lda rc4\n  ora rc5\n  beq @done\n  ldy #0\n@loop:\n  lda rc8\n  sta (rc2),y\n  iny\n  bne @c\n  inc rc3\n@c:\n  lda rc4\n  bne @d\n  dec rc5\n@d:\n  dec rc4\n  lda rc4\n  ora rc5\n  bne @loop\n@done:\n  rts\n";
     let dir = std::env::temp_dir().join(format!("llrm6502-clocks-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("t.s"), format!("{text}\n{MAIN}")).unwrap();
@@ -776,12 +776,17 @@ fn the_copy_loop_made_from_a_call_runs() {
 }
 
 /// A copy with nothing live across it is the call: 20 bytes against 78 as a
-/// loop.
+/// loop. A second caller shares the library's bytes: alone, the loop is the
+/// smaller image.
 #[test]
 fn a_copy_with_nothing_live_across_it_stays_a_call() {
     let ir = module(
         r#"declare void @llvm.memcpy.p0.p0.i16(ptr noalias, ptr noalias, i16, i1)
 define void @copy(ptr noalias %d, ptr noalias %s, i16 %n) {
+  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
+  ret void
+}
+define void @copy_again(ptr noalias %d, ptr noalias %s, i16 %n) {
   call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
   ret void
 }"#,

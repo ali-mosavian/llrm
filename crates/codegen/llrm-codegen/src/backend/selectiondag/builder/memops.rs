@@ -1587,6 +1587,8 @@ impl Builder<'_> {
         let callee = self.dag.get_external_symbol(self.target.dag.pointer, name);
         let pointer = self.module.context.types.ptr(0);
         self.dag.set_root(chain);
+        // `memset`'s second argument is the fill byte
+        self.call_pointers = vec![true, name != "memset", false];
         self.lower_call_with(calling, callee, &args, &[ISD::AnyExtend; 3], &[], pointer, false)?;
         Ok(self.dag.get_root())
     }
@@ -2068,6 +2070,8 @@ impl Builder<'_> {
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
+        // `memset`'s second argument is the fill byte
+        self.call_pointers = arg_types.iter().map(|ty| self.is_pointer_type(*ty)).collect();
         // `isTailCall`: the intrinsic is marked `tail` and ends the function,
         // and the target takes the sibling call.
         let tail = match self.tail_candidate.take() {
