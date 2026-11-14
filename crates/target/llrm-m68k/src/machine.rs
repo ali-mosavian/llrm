@@ -409,17 +409,18 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
-    /// DEVIATE M68K-INLINE-RATE (owner m68k, exit 2026-11-27): an inline into a
-    /// speed caller (-O2, -O3) that grows the code is refused when its bytes at
-    /// the CPU's `timings.times` rate cost more clocks than the call saves at
-    /// the site's frequency; the rate is the one the O2/O3 verdicts are judged
-    /// at (0.5 B per clk on the 68000, 1.33 on the 68020, 3.2 from the 68030).
-    /// The pin inlines to its threshold (225) alone; the flat 50 this replaces
-    /// kept a loop's call to a 100-instruction callee (a call per trip).
-    /// No exemption for a callee loop with a constant bound: it admitted
-    /// growth with no gain (`switch`, `sieve` 68020).
+    /// -O1, -O2 and -O3 are judged by clocks (user ruling 2026-11-14): a byte
+    /// of growth costs nothing there, so an inline into a speed caller stops
+    /// at the pin's threshold (225) alone. The rate that held a growing inline
+    /// to its clocks at -O2/-O3 (M68K-INLINE-RATE, 0.5 B per clk on the
+    /// 68000) is gone; -Os keeps its size rule (`inline_policy`).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        crate::timing::byte_milliclocks(self.cpu)
+        0
+    }
+
+    /// -O1 takes the same threshold-alone verdict as -O2.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
     }
 
     /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond
