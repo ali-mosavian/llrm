@@ -761,16 +761,20 @@ fn cheaper(
         crate::weights::by_branch_weights(module, function, &mut weights);
         let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
         let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
-        // a library routine the text calls is linked once for its callers: this function pays its share
-        let mut called: Vec<&str> =
-            text.lines().filter_map(|line| line.trim().strip_prefix("jsr ").or_else(|| line.trim().strip_prefix("jmp "))).collect();
+        // a library routine the text calls is linked once for its callers: this
+        // function pays its share
+        let mut called: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("jsr ").or_else(|| line.trim().strip_prefix("jmp ")))
+            .collect();
         called.sort_unstable();
         called.dedup();
         let library: u64 = called
             .iter()
             .filter(|routine| crate::RUNTIME.contains(&format!("\n{routine}:")))
             .map(|routine| {
-                u64::from(crate::mulimage::library_bytes(routine)) / llrm_transforms::memloops::callers(original, routine).max(1) as u64
+                u64::from(crate::mulimage::library_bytes(routine))
+                    / llrm_transforms::memloops::callers(original, routine).max(1) as u64
             })
             .sum();
         Some((priced.cycles, u64::from(priced.bytes) + library))

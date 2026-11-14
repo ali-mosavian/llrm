@@ -1,5 +1,6 @@
 //! Copy propagation across a store of the other register: `k_mulax3` kept
-//! `sta rc4` and loaded it back after `stx rc3; lda rc3` (A:X live-in, 2026-11-09).
+//! `sta rc4` and loaded it back after `stx rc3; lda rc3` (A:X live-in,
+//! 2026-11-09).
 
 use llrm_6502::asm::Asm;
 use llrm_6502::copyprop::{copy_propagation, enabled};
@@ -11,7 +12,8 @@ fn run(text: &str) -> String {
     asm.text()
 }
 
-/// The copies that nothing reads go too; `results` are the cells the function returns.
+/// The copies that nothing reads go too; `results` are the cells the function
+/// returns.
 fn run_and_drop(
     text: &str,
     results: &[&str],
@@ -36,7 +38,8 @@ fn a_cell_that_mirrors_another_is_read_from_the_earlier_and_a_transfer_replaces_
     );
 }
 
-/// The source is written between the copy and the read: the copy holds the old value.
+/// The source is written between the copy and the read: the copy holds the old
+/// value.
 #[test]
 fn a_cell_is_not_read_from_a_source_that_changed() {
     let text = "  sta rc2\n  sta rc4\n  lda #1\n  sta rc2\n  lda rc4\n  rts\n";
@@ -51,8 +54,9 @@ fn a_reload_of_the_value_a_holds_goes_when_the_flags_are_unread() {
     assert_eq!(run(text), text);
 }
 
-/// `lda rc1` fed only `tax`'s source and was dead itself: rewriting `ldx rc1` to
-/// `tax` kept it alive, 65C02 `fill_nest` +2 B and +64 executed instructions.
+/// `lda rc1` fed only `tax`'s source and was dead itself: rewriting `ldx rc1`
+/// to `tax` kept it alive, 65C02 `fill_nest` +2 B and +64 executed
+/// instructions.
 #[test]
 fn a_load_into_a_that_nothing_reads_does_not_make_a_transfer_out_of_an_index_load() {
     assert_eq!(
@@ -61,8 +65,8 @@ fn a_load_into_a_that_nothing_reads_does_not_make_a_transfer_out_of_an_index_loa
     );
 }
 
-/// The pass shipped behind `LLRM_6502_MCP=1` and nothing exercised it in the product:
-/// it runs unless the variable is `0`.
+/// The pass shipped behind `LLRM_6502_MCP=1` and nothing exercised it in the
+/// product: it runs unless the variable is `0`.
 #[test]
 fn the_pass_runs_unless_the_kill_switch_is_zero() {
     use std::ffi::OsStr;
@@ -72,8 +76,8 @@ fn the_pass_runs_unless_the_kill_switch_is_zero() {
 }
 
 /// A pointer copied out of another pair was read through its copy: `k_itoa`
-/// copied the frame pointer `rc0:rc1` into `rc4:rc5` for each `tmp[n]` access (4 B
-/// and 8 clocks apiece, 2026-11-14). The pair is read where it is, and the
+/// copied the frame pointer `rc0:rc1` into `rc4:rc5` for each `tmp[n]` access
+/// (4 B and 8 clocks apiece, 2026-11-14). The pair is read where it is, and the
 /// copy goes.
 #[test]
 fn a_pointer_pair_that_copies_another_is_read_as_that_pair() {
@@ -84,7 +88,8 @@ fn a_pointer_pair_that_copies_another_is_read_as_that_pair() {
     assert_eq!(asm.text(), "  ldy #3\n  lda (rc0),y\n  rts\n");
 }
 
-/// One byte of the pair copied is no copy of the pair: the high byte is another value.
+/// One byte of the pair copied is no copy of the pair: the high byte is another
+/// value.
 #[test]
 fn a_pointer_pair_whose_high_byte_differs_is_not_forwarded() {
     let text = "  lda rc0\n  sta rc4\n  lda #1\n  sta rc5\n  ldy #3\n  lda (rc4),y\n  rts\n";

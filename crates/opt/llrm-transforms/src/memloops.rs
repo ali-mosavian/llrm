@@ -69,7 +69,10 @@ fn copies(
         .walk()
         .filter_map(|(_, inst)| {
             let callee = llrm_mir::memory::callee(context, function, inst)?;
-            let copy = matches!(intrinsics[callee.0 as usize]?, Intrinsic::MemCpy | Intrinsic::MemSet);
+            let copy = matches!(
+                intrinsics[callee.0 as usize]?,
+                Intrinsic::MemCpy | Intrinsic::MemSet
+            );
             (copy
                 && constant_value(context, function.instruction(inst).operands[2]).is_none()
                 && !volatile(context, function, inst))
@@ -96,10 +99,12 @@ pub fn callers(
         .iter()
         .filter(|global| {
             let GlobalKind::Function(function) = &global.kind else { return false };
-            copies(&module.context, &intrinsics, function).iter().any(|call| {
-                llrm_mir::memory::callee(&module.context, function, call)
-                    .is_some_and(|callee| intrinsics[callee.0 as usize] == Some(wanted))
-            })
+            copies(&module.context, &intrinsics, function)
+                .iter()
+                .any(
+                    |call| llrm_mir::memory::callee(&module.context, function, call)
+                        .is_some_and(|callee| intrinsics[callee.0 as usize] == Some(wanted)),
+                )
         })
         .count()
 }

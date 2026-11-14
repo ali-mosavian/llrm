@@ -59,7 +59,8 @@
 //! through that flow, so there is no allocated `LirBody` to run it on. Not
 //! checked: its byte-lane tracker against A/X/Y, the zero-page cells and the
 //! zero/sign flag rule (MCP2). At 6502-a's allocated-`LirBody` POC (2026-11-20,
-//! window to about 11-27) check hosting there, then migrate or re-justify MCP1-3.
+//! window to about 11-27) check hosting there, then migrate or re-justify
+//! MCP1-3.
 //!
 //! # Not subsumed
 //! With the pass on, skipping a special-case peephole (162 cells, 2026-11-09)
@@ -188,7 +189,10 @@ fn cell_of(operand: &Operand) -> Option<String> {
 /// The instructions that read their memory operand and write nothing to it.
 fn reads_cell(op: Op) -> bool {
     use Op::*;
-    matches!(op, Lda | Ldx | Ldy | Adc | Sbc | And | Ora | Eor | Cmp | Cpx | Cpy | Bit)
+    matches!(
+        op,
+        Lda | Ldx | Ldy | Adc | Sbc | And | Ora | Eor | Cmp | Cpx | Cpy | Bit
+    )
 }
 
 /// The number of a zero-page register cell `rc<N>`.
@@ -197,7 +201,8 @@ fn register_number(name: &str) -> Option<u32> {
 }
 
 impl Tracker {
-    /// The adjacent pair `rcM`, `rcM+1` (other than `rcN`) that holds the value of the pair `rcN`, `rcN+1`.
+    /// The adjacent pair `rcM`, `rcM+1` (other than `rcN`) that holds the value
+    /// of the pair `rcN`, `rcN+1`.
     fn earlier_pair(
         &mut self,
         n: u32,
@@ -213,20 +218,24 @@ impl Tracker {
                 Unit::Cell(name) => register_number(name),
                 _ => None,
             })
-            .filter(|&m| m != n && holds(&self.held, format!("rc{m}"), low) && holds(&self.held, format!("rc{}", m + 1), high))
+            .filter(|&m| {
+                m != n && holds(&self.held, format!("rc{m}"), low) && holds(&self.held, format!("rc{}", m + 1), high)
+            })
             .min()
     }
 }
 
-/// Whether the pass runs, given the value of `LLRM_6502_MCP`: on unless it is `0`.
+/// Whether the pass runs, given the value of `LLRM_6502_MCP`: on unless it is
+/// `0`.
 pub fn enabled(setting: Option<&OsStr>) -> bool {
     setting.is_none_or(|value| value != "0")
 }
 
 /// Forward copy propagation of `asm`.
 pub fn copy_propagation(asm: &mut Asm) {
-    // The pin deletes a copy nothing reads as it walks (`MaybeDeadCopies`): a dead
-    // load into `a` must not be kept alive as the source of a transfer.
+    // The pin deletes a copy nothing reads as it walks (`MaybeDeadCopies`): a
+    // dead load into `a` must not be kept alive as the source of a
+    // transfer.
     crate::peephole::drop_dead_writes(asm);
     let mut out: Vec<Line> = Vec::with_capacity(asm.lines.len());
     let mut track = Tracker::default();
@@ -245,7 +254,8 @@ pub fn copy_propagation(asm: &mut Asm) {
         {
             inst.operand = Operand::IndirectY(format!("rc{m}"));
         }
-        // what the rest of the block (from `lines`, as it stands) does with the flags
+        // what the rest of the block (from `lines`, as it stands) does with the
+        // flags
         let flags_dead = || flags_unread_after(&lines, at + 1);
         match (inst.op, cell_of(&inst.operand)) {
             (Op::Lda, Some(c)) => {
@@ -288,7 +298,8 @@ pub fn copy_propagation(asm: &mut Asm) {
                 track.set(Unit::Cell(c), v);
             }
             (op, Some(c)) if reads_cell(op) => {
-                // adc, sbc, and, ora, eor, cmp, cpx, cpy, bit: read another cell holding the value
+                // adc, sbc, and, ora, eor, cmp, cpx, cpy, bit: read another
+                // cell holding the value
                 let v = track.value(&Unit::Cell(c.clone()));
                 if let Some(s) = track.earlier_cell(v, &c) {
                     inst.operand = Operand::Direct(s);
@@ -338,7 +349,8 @@ fn step(
         },
         Sta | Stx | Sty | Stz => match cell_of(&inst.operand) {
             Some(c) => track.kill(Unit::Cell(c)),
-            // a global named directly is no cell; anything indexed or through a pointer may be
+            // a global named directly is no cell; anything indexed or through a
+            // pointer may be
             None if matches!(inst.operand, Operand::Direct(_)) => {}
             None => track.forget_cells(),
         },
