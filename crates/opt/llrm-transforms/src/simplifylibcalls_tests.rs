@@ -230,3 +230,22 @@ fn test_strlen_of_an_unknown_string_stays_a_call() {
          define i16 @f(ptr %p) {\nb0:\n  %n = call i16 @strlen(ptr %p)\n  ret i16 %n\n}\n");
     assert!(after.contains("call i16 @strlen(ptr %p)"), "{after}");
 }
+
+/// A target that decorates its C names (DOS: `_strlen`) forms `strlen` under
+/// the decorated symbol, which the library table does not know by name: the
+/// call the idiom pass made stayed a call, and strlen_idiom -O2 at x86_32-dos
+/// (no `-ffreestanding`) was 24 B over the pin.
+#[test]
+fn test_a_decorated_strlen_of_a_literal_is_its_length() {
+    let mut module = parsed(&format!(
+        "{HEAD}@s = private constant [4 x i8] c\"abc\\00\"\n\
+         declare i16 @_strlen(ptr)\n\
+         define i16 @f() {{\nb0:\n  %n = call i16 @_strlen(ptr @s)\n  ret i16 %n\n}}\n"
+    ));
+    let routines = vec![Routine { standard: "strlen", symbol: "_strlen".into(), calling_convention: 0 }];
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(SimplifyLibCalls::with_routines(routines));
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("ret i16 3"), "{after}");
+}

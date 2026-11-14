@@ -528,6 +528,21 @@ fn puts(
     Some(put_char(site, Operand::Constant(unit.context.int(site.int, i128::from(b'\n')))))
 }
 
+/// The library function a global is by the symbol the compile states for it
+/// (`Routine::symbol`: a target that decorates its C names, DOS's `_strlen`,
+/// names the routine its idioms form so), where its undecorated name is not
+/// the global's.
+fn stated(
+    info: &TargetLibraryInfo,
+    routines: &[Routine],
+    unit: &Unit,
+    global: &llrm_mir::module::GlobalValue,
+) -> Option<LibFunc> {
+    let name = global.name.as_deref()?;
+    let routine = routines.iter().find(|one| one.symbol == name)?;
+    info.get_lib_func(&unit.context.types, routine.standard, global.function()?.ty)
+}
+
 impl FunctionPass for SimplifyLibCalls {
     fn adds_memory_operations(&self) -> bool {
         false
@@ -575,9 +590,9 @@ impl FunctionPass for SimplifyLibCalls {
         let size = unit.context.types.int(size_bits);
         for call in calls {
             let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, call) else { continue };
-            let Some(func) =
-                outer.globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&unit.context.types, one))
-            else {
+            let Some(func) = outer.globals.get(global.0 as usize).and_then(|one| {
+                info.get_lib_func_of(&unit.context.types, one).or_else(|| stated(&info, &self.routines, unit, one))
+            }) else {
                 continue;
             };
             let site = Site { env, call, int, size, optimize_size };
