@@ -1,6 +1,6 @@
-reason = "references re-measured after #9464: ow's far __doserror_; ow stft_single O2 (-or) and tc stft_single print another sum, left unmeasured"
-blessed = "2026-11-12"
-corpus = "527a458fc987f9e681ce216c11a8a6f6"
+reason = "BASIC references re-measured under the stored-bytes rule of sizes.py: BC_VARS is stored data, not bss"
+blessed = "2026-11-14"
+corpus = "fcc6c47b01f6c602118a5bee453e8044"
 
 [ow.O1]
 instructions = 31245390
@@ -146,18 +146,29 @@ kernel_ms = 806.5953
 [bc.O2]
 instructions = 168408816
 memory_operands = 45192831
+clocks = 481927299
+layout_clocks = 481927299
+pad_nops = 0
 code_bytes = 6399
-data_bytes = 1257
-bss_bytes = 3718
+data_bytes = 4975
+bss_bytes = 0
 
 [pds71.O2]
+instructions = 154526805
+memory_operands = 42957610
+clocks = 461942495
+layout_clocks = 461942495
+pad_nops = 0
 code_bytes = 6157
-data_bytes = 1257
-bss_bytes = 3718
-kernel_ms = 2091.4243
+data_bytes = 4975
+bss_bytes = 0
 
 [vbdos.O2]
-code_bytes = 6101
-data_bytes = 1305
-bss_bytes = 3718
-kernel_ms = 2708.6217
+instructions = 200327406
+memory_operands = 54541492
+clocks = 569825166
+layout_clocks = 569825166
+pad_nops = 0
+code_bytes = 6100
+data_bytes = 5023
+bss_bytes = 0

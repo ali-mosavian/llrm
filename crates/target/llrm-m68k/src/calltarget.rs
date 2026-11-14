@@ -160,6 +160,10 @@ pub fn choose(
     price: Price,
     lines: impl Fn(&MFunction) -> Result<Vec<Line>, String>,
 ) -> Result<Vec<(String, RegId)>, String> {
+    // DEVIATE M68K-CALLTARGET-O1: `-O1`'s strict price (no larger and no slower) refuses the register's `lea` and
+    // save, which cost ~12 static clk in straight-line code, though each call is 4 B and 4 clk shorter; gcc takes
+    // it at -O1. The bytes decide, the clocks break ties. Owner m68k. Exit: 2026-12-05, with the rest of this pass.
+    let price = if matches!(price, Price::Strict) { Price::Size } else { price };
     let mut chosen: Vec<(String, RegId)> = Vec::new();
     if function.returns_twice {
         return Ok(chosen);

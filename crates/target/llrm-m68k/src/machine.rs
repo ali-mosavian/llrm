@@ -509,6 +509,14 @@ impl Tti for M68k {
         Some(100)
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): the -Os
+    /// trial's bar is met by a loop whose copies fold to under it
+    /// (switch_jump_table: ten trips of a switch on a constant counter are
+    /// ten calls), not only by one whose copies are that small.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at
     /// -O1, where the pin does not unroll past its threshold and gcc does:
     /// the driver keeps the unrolled module where its finished functions are
