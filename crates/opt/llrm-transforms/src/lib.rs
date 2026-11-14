@@ -378,6 +378,9 @@ pub mod narrowspace;
 mod narrowspace_tests;
 mod noaliasscopes;
 pub mod pageindex;
+pub mod rangesplit;
+#[cfg(test)]
+mod rangesplit_tests;
 #[cfg(test)]
 mod pageindex_tests;
 pub mod parity;

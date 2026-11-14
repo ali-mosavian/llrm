@@ -443,6 +443,21 @@ fn tail(
         })
         .transpose()?
         .filter(|(names, _)| !names.is_empty());
+    // The range tests that two compares do better than the joined one: priced against it, below.
+    let ranged = |source: &llrm_mir::module::Module| -> Result<Option<(Vec<String>, llrm_mir::module::Module)>, String> {
+        if request.level == Level::O0 {
+            return Ok(None);
+        }
+        let mut split = source.clone();
+        let names = llrm_transforms::rangesplit::unmerged(&mut split)?;
+        crate::prepare::split_phi_edges(&mut split);
+        Ok((!names.is_empty()).then_some((names, split)))
+    };
+    let ranged_base = ranged(&program.modules[0])?;
+    let ranged_paged = match &paged {
+        Some((_, paged)) => ranged(paged)?,
+        None => None,
+    };
     llrm_6502_prepare(&mut program);
     let module = &program.modules[0];
     let names: Vec<String> = module
@@ -489,9 +504,24 @@ fn tail(
                 source = Some(paged);
             }
         }
+        let mut range_chosen = false;
+        if as_called || paged_chosen {
+            let candidate = if paged_chosen { ranged_paged.as_ref() } else { ranged_base.as_ref() };
+            if let Some((_, split)) = candidate.filter(|(names, _)| names.contains(name)) {
+                let mut other = select_function(split, name, request.cpu)?;
+                other.zero_page = request.platform.zero_page;
+                other.tuning = request.level.tuning();
+                let kept = source.unwrap_or(module);
+                if cheaper(kept, name, &other, split, &selection, request, crate::routines::copy_prices().page_byte_clocks, true)? {
+                    selection = other;
+                    range_chosen = true;
+                    source = Some(split);
+                }
+            }
+        }
         selections.push(selection);
         sources.push(source);
-        from_module.push(as_called && !paged_chosen);
+        from_module.push(as_called && !paged_chosen && !range_chosen);
     }
     crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
