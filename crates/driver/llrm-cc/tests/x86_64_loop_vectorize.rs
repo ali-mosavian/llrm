@@ -122,3 +122,11 @@ fn loops_that_leave_vector_image_constants_compile_at_o2_and_o3() {
         assert!(text.contains("stack_copy") && text.contains("square_sum"), "{level}");
     }
 }
+
+/// A `<8 x i16>` multiply is `pmullw`: the loop was kept scalar because the multiply had no price.
+#[test]
+fn a_short_multiply_loop_uses_pmullw() {
+    let text = assembly("x86_64-linux", "-O2");
+    let multiply = body(&text, "multiply_shorts");
+    assert!(multiply.contains("pmullw"), "{multiply}");
+}

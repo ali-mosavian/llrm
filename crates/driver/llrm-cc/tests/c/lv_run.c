@@ -10,6 +10,8 @@ __attribute__((noinline)) void bwd(unsigned char *dst, const unsigned char *src,
     unsigned long i;
     for (i = n; i > 0; i--) dst[i - 1] = src[i - 1];
 }
+void multiply_shorts(void);
+extern short sa[1024], sb[1024];
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -36,5 +38,8 @@ int main(void) {
         if (run_sum(ints, n) != s || run_xor(ints, n) != x) bad++;
     }
     if (stack_copy(63) * 100 + stack_copy(5) != 303 || square_sum(5) != 30 || square_sum(50) != 40425) bad++;
+    for (int i = 0; i < 1024; i++) { sa[i] = (short)(i * 31 - 7000); sb[i] = (short)(i * 17 + 3); }
+    multiply_shorts();
+    for (int i = 0; i < 1024; i++) if (sa[i] != (short)((short)(i * 31 - 7000) * (short)(i * 17 + 3))) bad++;
     printf("bad %d\n", bad);
 }

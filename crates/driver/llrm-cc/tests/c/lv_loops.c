@@ -28,3 +28,6 @@ int square_sum(int n) {
   for (int i = 0; i < n; i++) s += a[i];
   return s;
 }
+
+short sa[1024], sb[1024];
+void multiply_shorts(void) { for (int i = 0; i < 1024; ++i) sa[i] *= sb[i]; }

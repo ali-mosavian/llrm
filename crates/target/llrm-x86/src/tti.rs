@@ -1321,6 +1321,8 @@ impl Tti for X86 {
         let _ = kind;
         match op {
             ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            // `pmullw`: the one SSE2 integer multiply that keeps the lane (a 32- or 64-bit lane needs `pmuludq`).
+            ArithOp::Mul if ty.lane == Ty::Int(16) => xmm_pieces(ty).map(Cost::of),
             _ => None,
         }
     }
