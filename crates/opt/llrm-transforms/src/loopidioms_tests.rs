@@ -1477,8 +1477,20 @@ fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
 #[test]
 fn inline_fill_stores_are_priced_as_immediate_stores() {
     let prices = crate::profit::OperationCosts { store: 6, store_immediate: 10, prefix: 1, ..Default::default() };
-    let fill = super::InlineFills { max_stores: 8, bytes: 8 };
+    let fill = super::InlineFills { max_stores: 8, bytes: 8, prefixed: true };
     assert_eq!(fill.price(&prices), 2 * (10 + 1));
+}
+
+/// Flat code stores a dword with no operand-size prefix: the inline fill of
+/// 64 bytes was priced 16 x (store + prefix), +60% of its clocks, which the
+/// clock gate read as a loop that costs more than `rep stos` (fill_nest -O2
+/// at x86_32-dos priced 42 clocks a trip for 26).
+#[test]
+fn a_flat_dword_store_is_priced_without_the_prefix() {
+    let prices = crate::profit::OperationCosts { store_immediate: 1, prefix: 1, ..Default::default() };
+    let flat = super::InlineFills { max_stores: 16, bytes: 64, prefixed: false };
+    let sixteen_bit = super::InlineFills { prefixed: true, ..flat };
+    assert_eq!((flat.price(&prices), sixteen_bit.price(&prices)), (16, 32));
 }
 
 /// A loop of a known count that zeroes one array and numbers another.
