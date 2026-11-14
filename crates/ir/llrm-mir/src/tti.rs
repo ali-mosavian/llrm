@@ -1591,6 +1591,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE INL-DEFER: `Tuning::inline_deferral`.
+    fn inline_deferral(&self) -> bool {
+        false
+    }
+
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
         false

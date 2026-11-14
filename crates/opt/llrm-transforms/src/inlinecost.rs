@@ -213,6 +213,9 @@ pub struct InlineParams {
     pub last_call_to_static: bool,
     /// DEVIATE BFS-1 (owner x86-m16-b, exit: A/B, then land or drop): the cold-site test reads the frequency in which failure sinks carry no mass. Off: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// `EnableDeferral` (`shouldInline`, InlineAdvisor.cpp): a site is deferred where inlining it would keep
+    /// its caller from being inlined into the caller's own callers. The pin's is off outside PGO.
+    pub defer: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -247,6 +250,7 @@ impl InlineParams {
             recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
             cold_site_ignores_sinks: false,
+            defer: false,
             tti: Tti::Generic,
         }
     }
@@ -3231,6 +3235,13 @@ pub fn sites_with_trials(
                 crate::trial::note_loop_copy();
             }
         }
+        let deferred = decision.inline
+            && context.params.defer
+            && should_be_deferred(module, layout, caller_id, &decision.cost, &context);
+        if deferred && llrm_support::debug::enabled("inline") {
+            eprintln!("inline:   deferred: inlining it would keep {} from being inlined into its callers", caller_global_name(module, caller_id));
+        }
+        let decision = Decision { inline: decision.inline && !deferred, ..decision };
         if decision.inline {
             planned.insert(inst);
         }
@@ -3278,6 +3289,64 @@ pub fn sites_with_trials(
         }
     }
     out
+}
+
+/// `shouldBeDeferred` (InlineAdvisor.cpp): whether inlining the site priced `candidate` into `caller_id`
+/// would keep `caller_id` from being inlined into its own callers, where inlining it there is worth more
+/// (a local `caller_id`: the `LastCallToStatic` bonus of the callers that all inline it).
+/// `InlineDeferralScale` is the pin's default, 2.
+fn should_be_deferred(
+    module: &Module,
+    layout: &DataLayout,
+    caller_id: GlobalId,
+    candidate: &InlineCost,
+    context: &DecideContext,
+) -> bool {
+    let InlineCost::Cost { cost, .. } = candidate else { return false };
+    // For now only local functions are handled (`hasLocalLinkage`); a non-positive cost does not stop the
+    // caller being inlined.
+    if !local_linkage(module.global(caller_id).linkage) || *cost <= 0 {
+        return false;
+    }
+    let candidate_cost = cost - 1;
+    let addressed = context.addressed.contains(&caller_id);
+    // `hasLocalLinkage() && !hasOneUse()`: every use is a call that inlines.
+    let mut last_call_bonus = !addressed && context.counts.get(&caller_id).copied() != Some(1);
+    let (mut secondary, mut users, mut prevents) = (0, 0, false);
+    for (user, _, function) in module.functions() {
+        let frequencies = std::cell::OnceCell::new();
+        for (_, call) in function.walk() {
+            if llrm_mir::memory::callee(&module.context, function, call) != Some(caller_id) {
+                continue;
+            }
+            let frequencies = frequencies.get_or_init(|| caller_frequencies(module, layout, function));
+            let Some(second) = decide(module, layout, user, call, context, frequencies, None) else {
+                last_call_bonus = false;
+                continue;
+            };
+            match second.cost {
+                InlineCost::Always(_) => {}
+                InlineCost::Never(_) => last_call_bonus = false,
+                InlineCost::Cost { cost: outer, threshold, .. } => {
+                    if outer >= threshold {
+                        last_call_bonus = false;
+                    } else if threshold - outer <= candidate_cost {
+                        // Inlining the candidate would erase the headroom this outer inline has.
+                        prevents = true;
+                        secondary += outer;
+                        users += 1;
+                    }
+                }
+            }
+        }
+    }
+    if !prevents {
+        return false;
+    }
+    if last_call_bonus && context.params.last_call_to_static {
+        secondary -= LAST_CALL_TO_STATIC_BONUS;
+    }
+    secondary + cost * users < cost * 2
 }
 
 /// What `decide` reads of the module besides the site.

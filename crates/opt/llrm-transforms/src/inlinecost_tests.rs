@@ -1567,3 +1567,50 @@ b0:
     // the fadd, the fmul (the constant sitofp folds)
     assert_eq!(soft_cost - hard_cost, 2 * crate::inlinecost::CALL_PENALTY, "hard {hard_cost}, soft {soft_cost}");
 }
+
+/// x_jpeg_fixed -O1: `next` (a cold refill) inlined into the small `getbit` made it too big to inline into
+/// `decode`, its hot caller, and cost 446k clk and 1,052 B over leaving it. The pin's `shouldBeDeferred`
+/// (`-inline-deferral`, off outside PGO) defers a site whose inlining erases the headroom its caller's own
+/// inline has; the walk reads `InlineParams::defer`.
+fn deferral_text() -> String {
+    let chain = |name: &str, from: &str, n: usize| {
+        (1..=n).map(|i| format!("  %{name}{i} = add i32 %{}, %x\n", if i == 1 { from.to_string() } else { format!("{name}{}", i - 1) })).collect::<String>()
+    };
+    format!(
+        "define internal i32 @c(i32 %x) {{\nentry:\n{}  ret i32 %c20\n}}\n\n\
+         define internal i32 @b(i32 %x) {{\nentry:\n  %v = call i32 @c(i32 %x)\n  %w = call i32 @c(i32 %v)\n{}  ret i32 %b55\n}}\n\n\
+         define i32 @a1(i32 %x) {{\nentry:\n  %r = call i32 @b(i32 %x)\n  ret i32 %r\n}}\n\n\
+         define i32 @a2(i32 %x) {{\nentry:\n  %r = call i32 @b(i32 %x)\n  ret i32 %r\n}}\n",
+        chain("c", "x", 20),
+        chain("b", "w", 55),
+    )
+}
+
+fn inlined_into_b(defer: bool) -> (usize, Vec<InlineCost>) {
+    let module = parsed(&deferral_text());
+    let id = |name: &str| module.globals.iter().position(|one| one.name.as_deref() == Some(name)).unwrap();
+    let mut decided = Vec::new();
+    let taken = crate::inlinecost::sites(
+        &module,
+        &DataLayout::default(),
+        llrm_mir::context::GlobalId(id("b") as u32),
+        &crate::inline::call_counts(&module),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        InlineParams { defer, ..InlineParams::from_level(2) },
+        CallerSize::Speed,
+        false,
+        None,
+        Some(&mut decided),
+    );
+    (taken.len(), decided.into_iter().map(|(_, _, cost)| cost).collect())
+}
+
+#[test]
+fn test_a_site_that_would_stop_its_caller_inlining_into_the_callers_is_deferred() {
+    let (off, priced) = inlined_into_b(false);
+    assert_eq!(off, 2, "premise: the pin inlines both `c` into `b`: {priced:?}");
+    let (on, priced) = inlined_into_b(true);
+    assert_eq!(on, 0, "`b` stays inlinable into `a1` and `a2` where `c` is not inlined into it: {priced:?}");
+}
