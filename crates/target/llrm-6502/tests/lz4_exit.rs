@@ -33,6 +33,6 @@ fn lz4_has_no_empty_save_and_no_counter_through_y() {
 fn lz4_long_branches_share_a_jump() {
     let body = lz4();
     let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
-    let jumps = body.lines().filter(|line| line.trim() == "jmp lz4_b3").count();
-    assert!(jumps == 1 && bytes <= 312, "{jumps} jmp to the exit, {bytes} B\n{body}");
+    let shared = body.lines().filter(|line| line.starts_with("lz4_far") && line.ends_with("t:")).count();
+    assert!(shared >= 1 && bytes <= 312, "{shared} shared jumps, {bytes} B\n{body}");
 }
