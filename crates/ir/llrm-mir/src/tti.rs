@@ -94,6 +94,26 @@ pub struct VectorTy {
     pub count: u32,
 }
 
+/// An operand that is a `sext` or a `zext` of `src` lanes, as the pin's `Args`
+/// (the operand values of the instruction priced) show it to the widening
+/// rules of `getArithmeticInstrCost` and `getCastInstrCost`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtOperand {
+    pub kind: CastKind,
+    pub src: Ty,
+}
+
+/// A user of an extension, for `GetUserAbsorbedCastCost`: `op` is the user's
+/// operation if it is an `add`, `sub` or `mul` (none: a user that cannot
+/// absorb the extension), `operands` what its two operands are, `index` the
+/// one that is the extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtUser {
+    pub op: Option<ArithOp>,
+    pub operands: [Option<ExtOperand>; 2],
+    pub index: usize,
+}
+
 /// `TargetTransformInfo::RegisterClass`, by the pin's class id: 0 scalar, 1
 /// vector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -713,6 +733,34 @@ pub trait Tti {
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
+    }
+
+    /// `getArithmeticInstrCost` of a vector operation whose operands `args` are
+    /// extensions (the widening forms: `smull`, `uaddl`, ...). `Err(())`: the
+    /// pin's cost depends on known bits this port does not compute. The
+    /// default is the cost with no operand information.
+    fn vector_arithmetic_cost_ext(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _args: [Option<ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Result<Option<Cost>, ()> {
+        Ok(self.vector_arithmetic_cost(op, ty, kind))
+    }
+
+    /// `getCastInstrCost` of an extension between fixed vectors whose users
+    /// are `users`: free where every user absorbs it
+    /// (`GetUserAbsorbedCastCost`), else as [`Tti::vector_cast_cost`].
+    fn vector_ext_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        _users: &[ExtUser],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_cast_cost(kind, dst, src, cost_kind)
     }
 
     /// `getCastInstrCost` between fixed vectors of one lane count. `None`: not
@@ -2623,6 +2671,20 @@ pub trait Tti {
         _inst: crate::module::InstId,
     ) -> bool {
         true
+    }
+
+    /// `TargetTransformInfo::isProfitableToSinkOperands`: the uses of `inst`'s
+    /// operands (and of theirs, dominating ones first) the target folds into
+    /// `inst` when they sit in its block; pushed onto `ops`. Asked by
+    /// CodeGenPrepare's `tryToSinkFreeOperands`.
+    fn is_profitable_to_sink_operands(
+        &self,
+        _context: &crate::context::Context,
+        _function: &crate::module::Function,
+        _inst: crate::module::InstId,
+        _ops: &mut Vec<crate::module::Use>,
+    ) -> bool {
+        false
     }
 
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.

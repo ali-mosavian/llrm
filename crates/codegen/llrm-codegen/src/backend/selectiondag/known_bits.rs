@@ -123,7 +123,8 @@ pub fn known_bits(
 }
 
 /// `computeKnownBits(Op, Depth)`: the walk starts `depth` operands down, so it
-/// stops at `MaxRecursionDepth` sooner (the pin's callers pass their own depth).
+/// stops at `MaxRecursionDepth` sooner (the pin's callers pass their own
+/// depth).
 pub fn known_bits_at(
     dag: &SelectionDAG,
     value: SDValue,
@@ -150,6 +151,46 @@ fn binary(
     KnownBits::from_mir(op(&lhs.to_mir(), &rhs.to_mir()))
 }
 
+/// The bits of a lane of an integer vector, the same in every lane the
+/// demanded elements name (all of them here): `BUILD_VECTOR` (the operands'
+/// common bits, an operand wider than the lane implicitly truncated),
+/// `ZERO_EXTEND`, and the logical operations; the rest is unknown.
+fn walk_vector(
+    dag: &SelectionDAG,
+    value: SDValue,
+    depth: u32,
+) -> KnownBits {
+    let width = dag.value_type(value).element().size_in_bits();
+    let all = mask(width);
+    if depth >= MAX_DEPTH {
+        return KnownBits::unknown(width);
+    }
+    let lane = |at: usize| walk(dag, dag.operand(value, at), depth + 1);
+    match dag.opcode(value) {
+        ISD::BuildVector => {
+            let mut known = KnownBits { zero: all, one: all, width };
+            for at in 0..dag.node(value).ops.len() {
+                let one = lane(at);
+                known = known.intersect(KnownBits { zero: one.zero & all, one: one.one & all, width });
+            }
+            known
+        }
+        ISD::ZeroExtend => {
+            let inner = lane(0);
+            KnownBits { zero: inner.zero | (all & !mask(inner.width)), one: inner.one, width }
+        }
+        ISD::And => {
+            let (lhs, rhs) = (lane(0), lane(1));
+            KnownBits { zero: lhs.zero | rhs.zero, one: lhs.one & rhs.one, width }
+        }
+        ISD::Or => {
+            let (lhs, rhs) = (lane(0), lane(1));
+            KnownBits { zero: lhs.zero & rhs.zero, one: lhs.one | rhs.one, width }
+        }
+        _ => KnownBits::unknown(width),
+    }
+}
+
 fn walk(
     dag: &SelectionDAG,
     value: SDValue,
@@ -158,6 +199,9 @@ fn walk(
     #[cfg(test)]
     KNOWN_VISITS.with(|visits| visits.set(visits.get() + 1));
     let vt = dag.value_type(value);
+    if vt.is_vector() && vt.element().is_integer() {
+        return walk_vector(dag, value, depth);
+    }
     if !vt.is_integer() {
         return KnownBits::unknown(1);
     }
@@ -219,7 +263,8 @@ fn walk(
             let zero = inner.zero | (all & !mask(asserted.min(width)));
             KnownBits { zero, one: inner.one & !zero, width }
         }
-        // `computeKnownBits`, `BUILD_PAIR`: the low half's bits below the high half's.
+        // `computeKnownBits`, `BUILD_PAIR`: the low half's bits below the high
+        // half's.
         ISD::BuildPair if dag.config().known_bits_of_build_pair && width % 2 == 0 => {
             let (low, high) = (operand(0), operand(1));
             let half = width / 2;
@@ -348,7 +393,8 @@ fn num_sign_bits_at(
 ) -> u32 {
     #[cfg(test)]
     SIGN_BITS_VISITS.with(|visits| visits.set(visits.get() + 1));
-    let width = dag.value_type(value).size_in_bits();
+    // `VTBits`: the lane of a vector.
+    let width = scalar_bits(dag.value_type(value));
     if let Some(constant) = dag.constant(value) {
         // `Val.getNumSignBits()`, before the depth is looked at.
         let sign = 1u128 << (width - 1);
@@ -360,7 +406,7 @@ fn num_sign_bits_at(
     }
     if dag.opcode(value) == ISD::SignExtend {
         let inner = dag.operand(value, 0);
-        return num_sign_bits_at(dag, inner, depth + 1) + width - dag.value_type(inner).size_in_bits();
+        return num_sign_bits_at(dag, inner, depth + 1) + width - scalar_bits(dag.value_type(inner));
     }
     // `ComputeNumSignBits` of `AssertSext` (`VTBits - Bits + 1`) and
     // `AssertZext` (`VTBits - Bits`).
@@ -390,7 +436,7 @@ fn num_sign_bits_at(
     {
         // `ComputeNumSignBits` of `SIGN_EXTEND_INREG`: the larger of what the
         // extension makes and what the operand has.
-        let made = width - inner.size_in_bits() + 1;
+        let made = width - scalar_bits(inner) + 1;
         return made.max(num_sign_bits_at(dag, dag.operand(value, 0), depth + 1));
     }
     // `ComputeNumSignBits` of a `SEXTLOAD` (`VTBits - MemBits + 1`) and a
@@ -415,6 +461,24 @@ fn num_sign_bits_at(
             if left != 1 {
                 first = left.min(signs(1));
             }
+        }
+        // The least of the operands' sign bits; an operand wider than the lane
+        // is implicitly truncated.
+        ISD::BuildVector => {
+            let mut least = width;
+            for at in 0..dag.node(value).ops.len() {
+                let operand = dag.operand(value, at);
+                let source = scalar_bits(dag.value_type(operand));
+                let mut bits = num_sign_bits_at(dag, operand, depth + 1);
+                if source != width {
+                    bits = if bits > source - width { bits - (source - width) } else { 1 };
+                }
+                least = least.min(bits);
+                if least == 1 {
+                    break;
+                }
+            }
+            return least;
         }
         ISD::Select => {
             let (left, right) = (signs(1), signs(2));
@@ -482,7 +546,7 @@ fn num_sign_bits_at(
             }
         }
         ISD::Truncate => {
-            let source = dag.value_type(dag.operand(value, 0)).size_in_bits();
+            let source = scalar_bits(dag.value_type(dag.operand(value, 0)));
             let source_signs = signs(0);
             if source_signs > source - width {
                 return source_signs - (source - width);
@@ -509,7 +573,12 @@ pub fn max_significant_bits(
     dag: &SelectionDAG,
     value: SDValue,
 ) -> u32 {
-    dag.value_type(value).size_in_bits() - num_sign_bits(dag, value) + 1
+    scalar_bits(dag.value_type(value)) - num_sign_bits(dag, value) + 1
+}
+
+/// `getScalarSizeInBits`.
+fn scalar_bits(vt: super::mvt::EVT) -> u32 {
+    if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() }
 }
 
 /// A count of at most `most` in `width` bits: the bits from `bit_width(most)`

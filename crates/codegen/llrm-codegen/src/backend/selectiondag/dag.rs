@@ -300,8 +300,8 @@ pub struct DagConfig {
     pub div_live_max_bits: u32,
     /// The values live across the narrow divides of the block this DAG is of.
     pub div_live: u32,
-    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0 where none was
-    /// computed. DEVIATE DIV-HOT reads it.
+    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0
+    /// where none was computed. DEVIATE DIV-HOT reads it.
     pub block_frequency: f64,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
@@ -353,8 +353,10 @@ pub struct DagConfig {
     /// arm64 leaves it off (no `AliasOracle` is wired for it, as wasm's is).
     /// Exit: 2026-11-12, owner w15.
     pub use_aa: bool,
-    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the pin always does). DEVIATE: off by
-    /// default so the other targets' output stays as it was until their owners judge it. Exit: all targets judged.
+    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the
+    /// pin always does). DEVIATE: off by default so the other targets'
+    /// output stays as it was until their owners judge it. Exit: all targets
+    /// judged.
     pub known_bits_of_build_pair: bool,
 }
 
@@ -2280,7 +2282,8 @@ impl SelectionDAG {
         vt: EVT,
     ) -> Option<SDValue> {
         let bits = bits & super::fold::mask(vt.size_in_bits());
-        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false }).map(|node| SDValue { node, res: 0 })
+        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false })
+            .map(|node| SDValue { node, res: 0 })
     }
 
     /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.
