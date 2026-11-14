@@ -94,3 +94,34 @@ fn the_check_refuses_a_loaded_byte_stored_aside() {
     let stored = lines("lda (rc2),y; sta rc6; clc; adc rc4");
     assert_eq!(loaded_byte_problem(&stored), Some("the loaded byte is stored aside"));
 }
+
+/// A word multiply by six kept the argument's high byte in a cell for the
+/// whole sequence (`stx rc3` .. `adc rc3`) where X still held it: the hand
+/// code reads it with `txa; adc` and steps the shifted copy in place. k_mulax6
+/// was 31 B against 25 (2026-11-14).
+#[test]
+fn a_word_times_six_reads_the_high_byte_from_x() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine i16 @f(i16 %x) {{\n  %r = mul i16 %x, 6\n  ret i16 %r\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    let size = llrm_6502::timing::estimate(llrm_6502::dagisel::hooks::Cpu::Mos6502, body).unwrap().bytes;
+    assert!(size <= 27, "{size} B:\n{body}");
+}
+
+/// A byte times 20 has no high byte to spare a copy of: stepping the shifted
+/// value in its cell (`asl rc3`) was a byte a shift dearer than in `a`, 36 B
+/// against 34 (2026-11-14).
+#[test]
+fn a_byte_times_twenty_shifts_in_the_accumulator() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine i16 @f(i8 %x) {{\n  %z = zext i8 %x to i16\n  %r = mul i16 %z, 20\n  ret i16 %r\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    let size = llrm_6502::timing::estimate(llrm_6502::dagisel::hooks::Cpu::Mos6502, body).unwrap().bytes;
+    assert!(size <= 34, "{size} B:\n{body}");
+}

@@ -721,6 +721,19 @@ pub trait Tti {
         None
     }
 
+    /// `getArithmeticInstrCost` of a vector operation by `second` (`Op2Info`):
+    /// a divide by a constant is a few multiplies, not a division. The default
+    /// is the cost with no operand information.
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_arithmetic_cost(op, ty, kind)
+    }
+
     /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
     /// step the pin's `ExpandReductions` or the target's lowering makes). A
     /// port that does not yet lowers none, and no loop with a reduction is
@@ -1839,6 +1852,12 @@ pub trait Tti {
     /// `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
+    }
+
+    /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
+    /// (gcc's `ipa-cp-max-recursive-depth` is 8).
+    fn ipa_cp_max_clones(&self) -> usize {
+        4
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
