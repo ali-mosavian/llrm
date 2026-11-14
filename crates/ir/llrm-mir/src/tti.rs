@@ -1420,6 +1420,16 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): whether
+    /// the -Os trial measures a loop by the cost `analyzeLoopUnrollCost`
+    /// finds once the trips' constants fold (a switch on the counter keeps
+    /// one arm a trip), not by the copies' size. gcc's `cunroll`
+    /// counts what folds away; the pin's optsize threshold is 0 and never
+    /// looks.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_trial_bytes_strict`.
     fn unroll_trial_bytes_strict(&self) -> bool {
         false
