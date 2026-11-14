@@ -66,6 +66,7 @@ fn lowered(build: impl FnOnce(&mut SelectionDAG, [SDValue; 3]) -> (SDValue, SDVa
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -120,6 +121,7 @@ fn a_select_on_a_raw_low_bit_is_arithmetic_too() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )

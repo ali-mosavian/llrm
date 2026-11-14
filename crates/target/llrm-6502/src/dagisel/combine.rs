@@ -114,7 +114,8 @@ fn keeps_pair_shift_whole(
     if dag.value_type(shift) != EVT::I16 || dag.opcode(logic) != ISD::Or {
         return false;
     }
-    // exactly the legalizer's `BuildPair`: `zext lo | (anyext hi << 8)`, both pieces bytes
+    // exactly the legalizer's `BuildPair`: `zext lo | (anyext hi << 8)`, both
+    // pieces bytes
     let byte_extended = |value: SDValue, ops: &[ISD]| {
         ops.contains(&dag.opcode(value)) && dag.value_type(dag.operand(value, 0)) == EVT::I8
     };
@@ -214,7 +215,9 @@ impl CombineHooks for MosCombines {
                 .or_else(|| word_with_loaded_byte(dag, node))
                 .or_else(|| funnel_by_one(dag, node))
                 .or_else(|| low_bit_in_carry(dag, node)),
-            ISD::Sub => borrow_of_ult(dag, node).or_else(|| word_with_loaded_byte(dag, node)),
+            ISD::Sub => borrow_of_ult(dag, node)
+                .or_else(|| negated_high_byte_minus(dag, node))
+                .or_else(|| word_with_loaded_byte(dag, node)),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Shl => shifted_byte_in_pieces(dag, node),
             ISD::Or => funnel_by_one(dag, node),
@@ -552,6 +555,46 @@ fn word_with_loaded_byte(
         EVT::I16,
         &[SDValue { node: low.node, res: 0 }, SDValue { node: high.node, res: 0 }],
     ))
+}
+
+/// `(zext (0 - y) << 8) - b` of a word, `y` a byte, is `0 - ((zext y << 8) +
+/// b)`: the shift drops the bits where `0 - y` and `0 - (y << 8)` differ.
+/// `instcombine` narrows `0 - (hi << 8 | lo)` to the first form; the negation
+/// outside lets `out + (0 - w)` be `out - w`, one borrow chain over the two
+/// loaded bytes, not a negation chain and an add chain (lz4 -O2 335 -> 320 B).
+///
+/// DEVIATE 6502-NEG-SHIFT (owner llrm-target-6502, exit 2026-11-24): the
+/// pin's legalizer splits the narrowed form into byte lanes and combines
+/// them; the word stays whole here (see [`word_with_loaded_byte`]).
+fn negated_high_byte_minus(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if dag.value_type(node) != EVT::I16 {
+        return None;
+    }
+    let (shifted, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.opcode(shifted) != ISD::Shl || dag.constant(dag.operand(shifted, 1)) != Some(8) {
+        return None;
+    }
+    let extended = dag.operand(shifted, 0);
+    if !matches!(dag.opcode(extended), ISD::ZeroExtend | ISD::AnyExtend) {
+        return None;
+    }
+    let negated = dag.operand(extended, 0);
+    if dag.value_type(negated) != EVT::I8
+        || dag.opcode(negated) != ISD::Sub
+        || !dag.is_null_constant(dag.operand(negated, 0))
+    {
+        return None;
+    }
+    let y = dag.operand(negated, 1);
+    let y = dag.get_node(ISD::ZeroExtend, EVT::I16, &[y]);
+    let eight = dag.get_constant(8, EVT::I8);
+    let high = dag.get_node(ISD::Shl, EVT::I16, &[y, eight]);
+    let sum = dag.get_node(ISD::Add, EVT::I16, &[high, b]);
+    let zero = dag.get_constant(0, EVT::I16);
+    Some(dag.get_node(ISD::Sub, EVT::I16, &[zero, sum]))
 }
 
 /// `(zext x) << c` of a byte `x` to a word, `c` of 6 or 7: the pieces are

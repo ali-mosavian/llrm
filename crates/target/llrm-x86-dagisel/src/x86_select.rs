@@ -28,7 +28,9 @@ use llrm_dagisel::interp::{Outcome, Selector};
 
 use crate::x86_arith_imm::select_arith_register_form;
 use crate::x86_divrem::select_divrem;
-use crate::x86_fcmp::{select_fcmp, select_fist16, select_pop_from_x87, select_setcc_carry};
+use crate::x86_fcmp::{
+    select_fcmp, select_fist16, select_fstatus, select_pop_from_x87, select_setcc_carry, select_status_test,
+};
 use crate::x86_fplogic::select_fp_logic;
 use crate::x86_hooks::{Cpu, X86Hooks};
 use crate::x86_llrm::{
@@ -96,6 +98,16 @@ pub fn select_node<D: AddrDag>(
             // `UCOMIS*rr` and `UCOM_FpIr*` patterns select the compare. Every
             // x86-64 CPU has CMOV; the 32-bit ones in the tables do not.
             if hooks.options.cpu != Cpu::X64 && select_fcmp(dag, node) {
+                return Outcome::Selected;
+            }
+        }
+        x86isd::LLRM_FSTATUS => {
+            if select_fstatus(dag, node) {
+                return Outcome::Selected;
+            }
+        }
+        x86isd::LLRM_STATUS_TEST => {
+            if select_status_test(dag, node) {
                 return Outcome::Selected;
             }
         }
