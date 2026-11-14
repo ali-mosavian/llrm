@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 const PRIMES: &str = "long f(int n)\n{\n    int i, d, count = 0;\n    for (i = 2; i < n; ++i) { for (d = 2; d * d <= i; ++d) if (i % d == 0) break; if (d * d > i) ++count; }\n    return count;\n}\n";
+const MASKED: &str = "long f(int n)\n{\n    int i, x = 1;\n    long s = 0;\n    for (i = 0; i < n; ++i) { x = (x * 5 + i) & 0xFFFF; s += x; }\n    return s;\n}\n";
 const SOURCE: &str = "long f(long n)\n{\n    long i, y1 = 0, y2 = 0, sum = 0;\n    for (i = 0; i < n; ++i) {\n        long y = (i * 1024 + y1 * 1600 - y2 * 700) >> 10;\n        y2 = y1; y1 = y; sum += y;\n    }\n    return sum;\n}\n";
 
 fn compile(
@@ -56,4 +57,12 @@ fn at_o1_the_first_trip_of_a_loop_with_constant_entry_values_is_peeled() {
         text.lines().any(|line| line.trim().starts_with("test") && line.trim().ends_with(", 1")),
         "no `i % 2` as a test:\n{text}"
     );
+}
+
+/// x_funcptr -O1: `x & 0xFFFF` was `movzx eax, ax`, 3 clk on the i486, 1,500
+/// times: 34,525 clk against gcc's 31,529 (`X86_TUNE_ZERO_EXTEND_WITH_AND`).
+#[test]
+fn at_o1_a_word_mask_is_an_and_not_a_movzx() {
+    let text = compile(MASKED, &[]);
+    assert!(!text.contains("movzx"), "a movzx of 3 clk is left where `and` takes 1:\n{text}");
 }
