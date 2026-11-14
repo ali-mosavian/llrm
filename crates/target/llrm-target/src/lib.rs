@@ -1008,6 +1008,7 @@ pub trait Target {
             object_aligned: self.frame_object_aligned(),
             red_zone: self.frame_red_zone(),
             slot_scratch: self.frame_slot_scratch(),
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -1120,6 +1121,10 @@ pub struct FrameRegisters {
     /// The registers a one-slot frame pushes and pops (`calling.toml`'s
     /// `frame_slot_push`/`frame_slot_pop`), where it does.
     pub slot_scratch: Option<(RegId, RegId)>,
+    /// The popped register of `slot_scratch` was chosen as dead at every return, a sibling call's
+    /// arguments included (`X86RegisterInfo::findDeadCallerSavedReg`): the frame may be a push and
+    /// a pop where a return is a sibling call.
+    pub slot_dead_checked: bool,
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.
     pub free: bool,

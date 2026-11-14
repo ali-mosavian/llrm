@@ -130,7 +130,9 @@ fn overlap(
 }
 
 /// The indices of the instructions of block `b` that can move together, or
-/// none: the greatest set whose every member passes [`keeps`].
+/// none: the greatest set whose every member's requirements ([`needs`]) are
+/// met by members. Each requirement is "that instruction moves too", so a
+/// dropped member drops those that need it, once, in one pass.
 fn closed_group(
     function: &MFunction,
     b: usize,
@@ -141,108 +143,173 @@ fn closed_group(
     let insts = &function.blocks[b].insts;
     let end = insts.iter().position(|inst| inst.terminator).unwrap_or(insts.len());
     let mut group: Vec<bool> = (0..insts.len()).map(|at| at < end && movable(&insts[at])).collect();
-    loop {
-        let mut dropped = false;
-        for at in 0..end {
-            if group[at] && !keeps(insts, end, at, &group, b, dominated, defs, uses) {
+    let needs = needs(insts, end, &group, b, dominated, defs, uses);
+    let mut needed_by: Vec<Vec<usize>> = vec![Vec::new(); insts.len()];
+    let mut dropped = Vec::new();
+    for (at, need) in needs.iter().enumerate() {
+        match need {
+            Some(need) => need.iter().for_each(|&other| needed_by[other].push(at)),
+            None if group[at] => {
                 group[at] = false;
-                dropped = true;
+                dropped.push(at);
             }
+            None => {}
         }
-        if !dropped {
-            break;
+    }
+    dropped.extend((0..end).filter(|&at| !group[at] && needs[at].is_some()));
+    while let Some(gone) = dropped.pop() {
+        for &at in &needed_by[gone] {
+            if group[at] {
+                group[at] = false;
+                dropped.push(at);
+            }
         }
     }
     let chosen: Vec<usize> = (0..end).filter(|&at| group[at]).collect();
     // what the pin's MachineSink moves one instruction at a time is not this pass's: a group is here for the
-    // flag chain it holds together (a reader of the flags and, by `keeps`, the setter it reads)
+    // flag chain it holds together (a reader of the flags and, by `needs`, the setter it reads)
     chosen.iter().any(|&at| insts[at].reads_flags()).then_some(chosen)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn keeps(
+/// For each instruction `at` below `end` that is a candidate, the instructions
+/// that must move with it, or `None` where it cannot move whatever the rest
+/// does. Computed in one scan each way, so the cost is linear in the block:
+/// the instruction that last wrote or next touches a register comes from a
+/// table of the registers seen so far, not from a search of the block.
+fn needs(
     insts: &[Inst],
     end: usize,
-    at: usize,
-    group: &[bool],
+    candidate: &[bool],
     b: usize,
     dominated: &HashSet<usize>,
     defs: &HashMap<u32, Vec<(usize, usize)>>,
     uses: &HashMap<u32, Vec<(usize, usize)>>,
-) -> bool {
-    let inst = &insts[at];
+) -> Vec<Option<Vec<usize>>> {
+    let mut needs: Vec<Option<Vec<usize>>> = vec![Some(Vec::new()); insts.len()];
+    // the instruction at `n` is a member: a later reader outside the group (or past the branch) cannot be
+    let member = |needs: &mut Option<Vec<usize>>, n: usize| match needs {
+        Some(list) if n < end => list.push(n),
+        _ => *needs = None,
+    };
+
     // the status flags are no operand: an instruction `sets_flags` or `reads_flags`
-    if inst.sets_flags() {
-        for (n, later) in insts.iter().enumerate().skip(at + 1) {
-            if later.reads_flags() {
-                if n >= end || !group[n] {
-                    return false;
-                }
-                break;
-            }
-            if later.sets_flags() {
-                break;
+    let mut next_flags: Option<usize> = None;
+    // the last write of each physical register and the next touch of it (and whether that touch reads it)
+    let mut next_touch: Vec<(Reg, usize, bool)> = Vec::new();
+    let mut last_def_in_group: HashMap<u32, usize> = HashMap::default();
+    for (at, inst) in insts.iter().enumerate().take(end) {
+        for operand in &inst.operands {
+            if let Operand::Def(Reg::Virt(v)) = operand {
+                last_def_in_group.insert(*v, at);
             }
         }
     }
-    if inst.reads_flags() {
-        let setter = insts[..at].iter().rposition(Inst::sets_flags);
-        if !setter.is_some_and(|w| group[w]) {
-            return false;
-        }
-    }
-    for operand in &inst.operands {
-        match operand {
-            Operand::Def(Reg::Virt(v)) => {
-                // a two-address step defines its register twice: every write is the group's
-                if !defs.get(v).is_some_and(|all| all.iter().all(|&(block, n)| block == b && n < end && group[n])) {
-                    return false;
-                }
-                for &(block, n) in uses.get(v).map_or(&[][..], Vec::as_slice) {
-                    // a two-address step reads what it writes
-                    if block == b && n == at {
-                        continue;
-                    }
-                    let inside = block == b && n > at && n < end && group[n];
-                    if !(inside || (block != b && dominated.contains(&block))) {
-                        return false;
-                    }
+    for at in (0..insts.len()).rev() {
+        let inst = &insts[at];
+        if candidate[at] {
+            if inst.sets_flags() {
+                if let Some(n) = next_flags.filter(|&n| insts[n].reads_flags()) {
+                    member(&mut needs[at], n);
                 }
             }
-            Operand::Use(Reg::Virt(v)) => {
-                // a later write in the block would be read by the moved reader
-                let redefined = insts[at + 1..end]
-                    .iter()
-                    .any(|later| later.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(d)) if d == v)));
-                if redefined {
-                    return false;
-                }
-            }
-            Operand::Def(phys @ Reg::Phys(_)) => {
-                // the next instruction to touch it, the branch included, must write it, or none
-                for (n, later) in insts.iter().enumerate().skip(at + 1) {
-                    if later.operands.iter().any(|o| matches!(o, Operand::Use(r) if overlap(*r, *phys))) {
-                        if n >= end || !group[n] {
-                            return false;
+            for operand in &inst.operands {
+                if let Operand::Def(phys @ Reg::Phys(_)) = operand {
+                    // the next instruction to touch it, the branch included, must write it, or none
+                    let first = next_touch.iter().filter(|(reg, ..)| overlap(*reg, *phys)).map(|&(_, n, _)| n).min();
+                    if let Some(n) = first {
+                        let read = next_touch.iter().any(|&(reg, m, read)| m == n && read && overlap(reg, *phys));
+                        if read {
+                            member(&mut needs[at], n);
                         }
-                        break;
-                    }
-                    if later.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlap(*r, *phys))) {
-                        break;
                     }
                 }
             }
-            Operand::Use(phys @ Reg::Phys(_)) => {
-                // what it reads was written by an earlier member of the group
-                let writer = insts[..at].iter().rposition(|earlier| {
-                    earlier.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlap(*r, *phys)))
-                });
-                if !writer.is_some_and(|w| group[w]) {
-                    return false;
-                }
+        }
+        if inst.reads_flags() || inst.sets_flags() {
+            next_flags = Some(at);
+        }
+        for operand in &inst.operands {
+            let (reg @ Reg::Phys(_), read) = (match operand {
+                Operand::Use(reg) => (*reg, true),
+                Operand::Def(reg) => (*reg, false),
+                _ => continue,
+            }) else {
+                continue;
+            };
+            match next_touch.iter_mut().find(|(seen, ..)| *seen == reg) {
+                Some(entry) if entry.1 == at => entry.2 |= read,
+                Some(entry) => *entry = (reg, at, read),
+                None => next_touch.push((reg, at, read)),
             }
-            _ => {}
         }
     }
-    true
+
+    let mut last_setter: Option<usize> = None;
+    let mut last_write: Vec<(Reg, usize)> = Vec::new();
+    for (at, inst) in insts.iter().enumerate().take(end) {
+        if candidate[at] {
+            if inst.reads_flags() {
+                match last_setter {
+                    Some(w) => member(&mut needs[at], w),
+                    None => needs[at] = None,
+                }
+            }
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Def(Reg::Virt(v)) => {
+                        // a two-address step defines its register twice: every write is the group's
+                        let Some(all) = defs.get(v) else {
+                            needs[at] = None;
+                            continue;
+                        };
+                        for &(block, n) in all {
+                            if block != b {
+                                needs[at] = None;
+                            } else {
+                                member(&mut needs[at], n);
+                            }
+                        }
+                        for &(block, n) in uses.get(v).map_or(&[][..], Vec::as_slice) {
+                            // a two-address step reads what it writes
+                            if block == b && n == at {
+                                continue;
+                            }
+                            if block == b && n > at {
+                                member(&mut needs[at], n);
+                            } else if block == b || !dominated.contains(&block) {
+                                needs[at] = None;
+                            }
+                        }
+                    }
+                    Operand::Use(Reg::Virt(v)) => {
+                        // a later write in the block would be read by the moved reader
+                        if last_def_in_group.get(v).is_some_and(|&last| last > at) {
+                            needs[at] = None;
+                        }
+                    }
+                    Operand::Use(phys @ Reg::Phys(_)) => {
+                        // what it reads was written by an earlier member of the group
+                        let writer = last_write.iter().filter(|(reg, _)| overlap(*reg, *phys)).map(|&(_, n)| n).max();
+                        match writer {
+                            Some(w) => member(&mut needs[at], w),
+                            None => needs[at] = None,
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if inst.sets_flags() {
+            last_setter = Some(at);
+        }
+        for operand in &inst.operands {
+            if let Operand::Def(reg @ Reg::Phys(_)) = operand {
+                match last_write.iter_mut().find(|(seen, _)| seen == reg) {
+                    Some(entry) => entry.1 = at,
+                    None => last_write.push((*reg, at)),
+                }
+            }
+        }
+    }
+    needs
 }

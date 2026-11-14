@@ -239,6 +239,10 @@ pub struct EmitBlock {
     pub at: i64,
     pub phis: Vec<Phi>,
     pub insns: Vec<Arc<Insn>>,
+    /// The block's fall-through successor comes before its branch target, as a
+    /// custom inserter adds them (`EmitLoweredSelect`: `copy0MBB`, then
+    /// `sinkMBB`). Placement breaks a tie between even odds in that order.
+    pub fall_first: bool,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the

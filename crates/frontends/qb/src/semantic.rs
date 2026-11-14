@@ -4547,7 +4547,7 @@ impl Compiler {
                     }
                     self.emit_runtime_call("B$PEOS", Vec::new(), Vec::new());
                 }
-                Statement::Data { values, .. } => {
+                Statement::Data { text, .. } => {
                     let row = self.next_read_data_row;
                     self.next_read_data_row += 1;
                     // READ enters at the DATA statement: a block of its own, so
@@ -4560,7 +4560,7 @@ impl Compiler {
                     }
                     self.data_entries.push(self.blocks[self.current_block].id);
                     self.emit_runtime_call(&format!("$QB$DATA:{row}"), Vec::new(), Vec::new());
-                    self.append_read_data(values)?;
+                    self.append_read_data(text)?;
                 }
                 Statement::Read { destinations, .. } => {
                     for destination in destinations {
@@ -5274,9 +5274,11 @@ impl Compiler {
 
     fn append_read_data(
         &mut self,
-        values: &[Expr],
+        text: &str,
     ) -> Result<(), SemanticError> {
-        let line = values.iter().map(|value| self.read_data_constant(value)).collect::<Result<Vec<_>, _>>()?.join(", ");
+        if text.contains('\0') || !text.is_ascii() {
+            return self.fail("a DATA statement can only hold plain ASCII text");
+        }
         let index = if let Some(index) = self.data.iter().position(|object| object.name == READ_DATA_OBJECT) {
             index
         } else {
@@ -5296,31 +5298,10 @@ impl Compiler {
             self.data.len() - 1
         };
         let bytes = &mut self.data[index].bytes;
-        bytes.push(b' ');
-        bytes.extend_from_slice(line.as_bytes());
+        // The text as written, blanks and all: BC keeps it so and READ parses it at run time.
+        bytes.extend_from_slice(text.as_bytes());
         bytes.push(0);
         Ok(())
-    }
-
-    fn read_data_constant(
-        &self,
-        value: &Expr,
-    ) -> Result<String, SemanticError> {
-        match value {
-            Expr::Literal(Literal::Integer(value, _), _) => Ok(value.to_string()),
-            Expr::Literal(Literal::Real(value, _), _) => Ok(value.clone()),
-            Expr::Literal(Literal::String(value), _) => {
-                if !value.is_ascii() || value.contains(['"', '\0']) {
-                    return self.fail("a DATA string can only hold plain ASCII text without quotes for now");
-                }
-                Ok(format!("\"{value}\""))
-            }
-            Expr::Unary { op, operand, .. } if matches!(op, Unary::Positive | Unary::Negative) => {
-                let literal = self.read_data_constant(operand)?;
-                Ok(if *op == Unary::Negative { format!("-{literal}") } else { literal })
-            }
-            _ => self.fail("DATA accepts only numeric and string constants"),
-        }
     }
 
     fn if_statement(
