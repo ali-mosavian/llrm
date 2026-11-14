@@ -259,11 +259,13 @@ fn run_suffix(
     drop_zero_compares(asm);
     zero_test_through_an_index(asm);
     step_in_place(asm);
+    step_through_y(asm);
     shift_in_place(asm);
     load_straight_into_a(asm);
     compare_through_an_index(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
+    drop_empty_save(asm);
     crate::peephole_cells::carry_stays_in_the_flag(asm);
     crate::peephole_cells::fold_temp_operand(asm);
     crate::peephole_cells::fold_spill_copy(asm);
@@ -279,6 +281,7 @@ fn run_suffix(
     }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
+    // the dead stores left a save with nothing between its `pha` and `pla`
     drop_empty_save(asm);
     drop_repeated_test(asm);
     crate::peephole_cells::drop_unused_saves(asm);
@@ -769,26 +772,6 @@ pub fn drop_repeated_test(asm: &mut Asm) {
             && test(&asm.lines, next).is_some_and(|second| second == first)
         {
             asm.lines.drain(next..next + 3);
-        } else {
-            at += 1;
-        }
-    }
-}
-
-/// `pha; pla` with nothing between: what a save of `a` leaves once the copies
-/// it bracketed are dead (`drop_dead_stores`, `drop_dead_writes`). `pla` sets
-/// the zero and sign flags from `a`, so the pair goes only where nothing reads
-/// them.
-pub fn drop_empty_save(asm: &mut Asm) {
-    let mut at = 0;
-    while at + 1 < asm.lines.len() {
-        let pair = matches!(
-            (&asm.lines[at], &asm.lines[at + 1]),
-            (Line::Inst(Inst { op: Op::Pha, .. }), Line::Inst(Inst { op: Op::Pla, .. }))
-        );
-        if pair && nz_dead_from(&asm.lines, at + 2, &mut HashSet::default()) {
-            asm.lines.drain(at..at + 2);
-            at = at.saturating_sub(1);
         } else {
             at += 1;
         }
@@ -1680,6 +1663,30 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
     asm.lines = out;
 }
 
+/// `pha; pla`: `a` comes back as it went, so the pair is gone when the flags
+/// it would set are unread, or the instruction before it set them from `a`.
+/// The allocator's save around a literal store (`pha; lda #n; sta m; pla`)
+/// left the pair when the dead store of `m` was dropped (lz4's exit: 2 B, 7
+/// clocks, and the `pla` that hid `y` from `load_straight_into_a`).
+pub fn drop_empty_save(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 1 < asm.lines.len() {
+        let pair = matches!(
+            (asm.lines[at].inst().map(|i| i.op), asm.lines[at + 1].inst().map(|i| i.op)),
+            (Some(Op::Pha), Some(Op::Pla))
+        );
+        let flags_kept = pair
+            && (flags_unread_after(&asm.lines, at + 2)
+                || at.checked_sub(1).and_then(|b| asm.lines[b].inst()).is_some_and(sets_nz_of_a));
+        if flags_kept {
+            asm.lines.drain(at..at + 2);
+            at = at.saturating_sub(1);
+        } else {
+            at += 1;
+        }
+    }
+}
+
 /// `pha; X; pla; pha; Y; pla` where `Y` is straight-line code that starts
 /// with a load into `a`: `pha; X; Y; pla`. `Y` writes `a` before it reads it
 /// and holds the stack as the second `pha` left it, so the `pla; pha` that
@@ -2087,6 +2094,7 @@ pub(crate) fn dead_from(
                 | Op::Inc
                 | Op::Dec
                 | Op::Pha
+                | Op::Pla
                 | Op::Php
                 | Op::Cld
                 | Op::Sed
@@ -2600,6 +2608,44 @@ pub fn step_in_place(asm: &mut Asm) {
             let place = asm.lines[at].inst().map_or(0, |i| i.place);
             let op = if up { Op::Inc } else { Op::Dec };
             asm.lines.splice(at..after, [Line::Inst(Inst { op, operand: cell, place })]);
+        }
+        at += 1;
+    }
+}
+
+/// `ldy m; tya; bne l; dex; l: dey; sty m; tya`: the low byte of a counter
+/// that is tested, stepped and stored through `y`, with a borrow into `x` on
+/// zero. `lda m; bne l; dex; l: dec m` does it where `a` and `y` are dead
+/// after: `dec` leaves the flags of the new byte, as the last `tya` did (a
+/// 16-bit count down in lz4's match copy: 3 B).
+pub fn step_through_y(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 7 <= asm.lines.len() {
+        let lines = &asm.lines;
+        let inst = |n: usize| lines.get(at + n);
+        let found = match (inst(0), inst(1), inst(2), inst(3), inst(4), inst(5), inst(6), inst(7)) {
+            (
+                Some(Line::Inst(Inst { op: Op::Ldy, operand: cell @ Operand::Direct(_), .. })),
+                Some(Line::Inst(Inst { op: Op::Tya, .. })),
+                Some(Line::Inst(Inst { op: Op::Bne, operand: Operand::Direct(skip), .. })),
+                Some(Line::Inst(Inst { op: Op::Dex, .. })),
+                Some(Line::Label(label)),
+                Some(Line::Inst(Inst { op: Op::Dey, .. })),
+                Some(Line::Inst(Inst { op: Op::Sty, operand: stored, .. })),
+                Some(Line::Inst(Inst { op: Op::Tya, .. })),
+            ) if label == skip && stored == cell && references(lines, label) == 1 => Some(cell.clone()),
+            _ => None,
+        };
+        if let Some(cell) = found
+            && dead_from(&asm.lines, at + 8, Registers::A, &mut HashSet::default(), Exits::of(asm))
+            && dead_from(&asm.lines, at + 8, Registers::Y, &mut HashSet::default(), Exits::of(asm))
+        {
+            let keep = |op, operand| Line::Inst(Inst::new(op, operand));
+            let (bne, label) = (asm.lines[at + 2].clone(), asm.lines[at + 4].clone());
+            asm.lines.splice(
+                at..at + 8,
+                [keep(Op::Lda, cell.clone()), bne, keep(Op::Dex, Operand::None), label, keep(Op::Dec, cell)],
+            );
         }
         at += 1;
     }
