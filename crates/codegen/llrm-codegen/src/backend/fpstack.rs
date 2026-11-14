@@ -1057,6 +1057,14 @@ impl Fps<'_> {
         let produced: HashSet<u32> = one.defines.iter().copied().collect();
         let comparison = self.out.last().expect("a comparison was emitted");
         let mut made = (**comparison).clone();
+        // DEVIATE X87-STATUS: a compare that defines the status word as a value (`gcc`'s
+        // `ix86_expand_fp_compare` keeps the `fnstsw` word and tests it per reader) gets the
+        // `fnstsw` and a copy of AX into that value, and no `sahf`.
+        // Allocated, the word is a register (`Loc::Reg`); before, a value (`Loc::Held`).
+        let word_value = one.what.as_ref().and_then(|what| match &what.dests[..] {
+            [dest @ (Loc::Held(_) | Loc::Reg(_))] => Some(dest.clone()),
+            _ => None,
+        });
         made.defines = comparison.defines.iter().copied().filter(|value| !produced.contains(value)).collect();
         made.delivers =
             comparison.delivers.iter().copied().filter(|(held, _)| !produced.contains(&held.value)).collect();
@@ -1069,7 +1077,8 @@ impl Fps<'_> {
             vec![Loc::Reg(Reg { register: self.status_word, width: 2 })],
             Vec::new(),
         );
-        let mut word = Insn::new(at, Some((at, at)), Some(status), one.defines.clone(), Vec::new());
+        let word_defines = if word_value.is_some() { Vec::new() } else { one.defines.clone() };
+        let mut word = Insn::new(at, Some((at, at)), Some(status), word_defines, Vec::new());
         word.clobbers = BTreeSet::from([self.status_word]);
         word.delivers = one.delivers.clone();
         word.widths = one.widths.iter().copied().filter(|pair| produced.contains(&pair.0)).collect();
@@ -1084,6 +1093,31 @@ impl Fps<'_> {
             }
         };
         self.out.push(Arc::new(word));
+        if let Some(dest) = word_value {
+            match dest {
+                Loc::Held(value) => {
+                    let mut copy = inserted(
+                        at,
+                        semantics(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Held(held)]),
+                    );
+                    copy.defines = vec![value.value];
+                    copy.uses = vec![held.value];
+                    copy.widths = vec![(value.value, value.width)];
+                    copy.requires = vec![(held, self.status_word)];
+                    self.out.push(Arc::new(copy));
+                }
+                // `fnstsw` writes AX alone: the word is copied from there unless it stays there.
+                Loc::Reg(reg) if reg.register != self.status_word => {
+                    let from = Loc::Reg(Reg { register: self.status_word, width: 2 });
+                    let mut copy = inserted(at, semantics(Operation::Move, "mov", vec![Loc::Reg(reg)], vec![from]));
+                    copy.uses = vec![held.value];
+                    copy.requires = vec![(held, self.status_word)];
+                    self.out.push(Arc::new(copy));
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         let mut sahf = inserted(at, semantics(Operation::Nothing, "sahf", Vec::new(), Vec::new()));
         sahf.uses = vec![held.value];
         sahf.requires = vec![(held, self.status_word)];

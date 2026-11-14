@@ -1217,6 +1217,7 @@ fn is_logical_cmp(
     let op = dag.opcode(flags);
     op == x86isd::CMP
         || op == x86isd::FCMP
+        || op == crate::x86isd::LLRM_STATUS_TEST
         || (flags.res == 1 && [x86isd::ADD, x86isd::SUB, x86isd::OR, x86isd::XOR, x86isd::AND].contains(&op))
 }
 

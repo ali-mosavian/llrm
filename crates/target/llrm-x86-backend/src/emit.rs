@@ -2025,6 +2025,19 @@ impl Emitter<'_, '_> {
             .find_map(|copy| self.glue_reaching(copy, |name| name == "SAHF"))
     }
 
+    /// The `FNSTSW16r` that reads the status word of the compare `n`.
+    fn status_node(
+        &self,
+        n: u32,
+    ) -> Option<u32> {
+        self.glue_users
+            .get(&SDValue { node: n, res: 0 })
+            .into_iter()
+            .flatten()
+            .copied()
+            .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))
+    }
+
     /// What the instruction at the end of the glue chain from the `CopyToReg`
     /// node `n` is, if `wanted` accepts its name.
     fn glue_reaches(
@@ -2906,13 +2919,32 @@ impl Emitter<'_, '_> {
                     Some(sahf) => {
                         self.pending_fcom.insert(sahf, (left, right));
                     }
-                    None => self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]),
+                    // DEVIATE X87-STATUS: no `sahf` follows; the compare defines the status word
+                    // as a value its readers test.
+                    None => match self.status_node(n) {
+                        Some(word) => {
+                            let held = self.fresh(2);
+                            self.values.insert(SDValue { node: word, res: 0 }, held.value);
+                            self.push(
+                                Operation::Compare,
+                                "fcom",
+                                vec![Loc::Held(held)],
+                                vec![Loc::Held(left), Loc::Held(right)],
+                            );
+                        }
+                        None => {
+                            self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)])
+                        }
+                    },
                 }
                 return Ok(Some(()));
             }
             "FNSTSW16r" => {
-                let held = self.fresh(2);
-                self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                // The compare made it a value already (DEVIATE X87-STATUS).
+                if !self.values.contains_key(&SDValue { node: n, res: 0 }) {
+                    let held = self.fresh(2);
+                    self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                }
                 return Ok(Some(()));
             }
             // `llvm.trap`: the `TRAP` node the intrinsic made.

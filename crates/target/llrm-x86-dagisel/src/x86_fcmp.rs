@@ -80,15 +80,12 @@ pub fn select_status_test<D: AddrDag>(
     let (Some(mask), Some(value)) = (dag.constant(dag.operand(node, 1)), dag.constant(dag.operand(node, 2))) else {
         return false;
     };
-    let high = dag.target_constant(i64::from(x86::sub_8bit_hi), mvt::i32);
-    let ah = SDValue::new(dag.machine_node(target_opcode::EXTRACT_SUBREG, &[mvt::i8], &[word, high]), 0);
-    let mask = dag.target_constant(mask, mvt::i8);
+    // The condition bits are in the word's high byte: C0 bit 8, C2 bit 10, C3 bit 14.
+    let mask = dag.target_constant(mask << 8, mvt::i16);
     let flags = if value == 0 {
-        SDValue::new(dag.machine_node(x86::TEST8ri, &[mvt::i32], &[ah, mask]), 0)
+        SDValue::new(dag.machine_node(x86::TEST16ri, &[mvt::i32], &[word, mask]), 0)
     } else {
-        let anded = SDValue::new(dag.machine_node(x86::AND8ri, &[mvt::i8, mvt::i32], &[ah, mask]), 0);
-        let value = dag.target_constant(value, mvt::i8);
-        SDValue::new(dag.machine_node(x86::CMP8ri, &[mvt::i32], &[anded, value]), 0)
+        return false;
     };
     dag.replace_uses(SDValue::new(node, 0), flags);
     dag.remove_dead_node(node);
