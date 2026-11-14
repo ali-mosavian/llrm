@@ -165,8 +165,13 @@ fn links_callees(found: &mut std::collections::BTreeSet<String>) {
     let mut pending: Vec<String> = found.iter().cloned().collect();
     while let Some(routine) = pending.pop() {
         for line in routine_code(&routine).lines() {
-            let callee = line.split(';').next().unwrap_or("").trim().strip_prefix("jsr ").map(str::trim);
-            if let Some(callee) = callee.filter(|one| crate::RUNTIME.contains(&format!("\n{one}:"))) {
+            let code = line.split(';').next().unwrap_or("").trim();
+            // a routine that branches into another one (`udivmod16`: `bne udivmod16c`) links it too
+            let callee = code
+                .strip_prefix("jsr ")
+                .or_else(|| ["bne ", "beq ", "bcc ", "bcs ", "bmi ", "bpl ", "bvc ", "bvs "].iter().find_map(|op| code.strip_prefix(op)))
+                .map(str::trim);
+            if let Some(callee) = callee.filter(|one| !one.starts_with('@') && crate::RUNTIME.contains(&format!("\n{one}:"))) {
                 if found.insert(callee.to_owned()) {
                     pending.push(callee.to_owned());
                 }

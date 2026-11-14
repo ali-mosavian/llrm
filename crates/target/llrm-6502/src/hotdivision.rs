@@ -52,6 +52,28 @@ pub const SAVED_AT_SIZE: f64 = 2700.0;
 /// The static runs of the 32-bit divisions of `module` that are not by a known byte: 10 per level of loop
 /// depth, times the runs of the function.
 pub fn runs(module: &Module) -> f64 {
+    runs_of_width(module, 32)
+}
+
+/// What a call saves at speed, in clocks, when the speed 16-bit division (a byte divisor takes a short path)
+/// is called and not the compact one (the 16-step bit loop), over four shapes (sim65, `k_tosudivax`):
+/// 60707 / 37 saves 352, 40000 / 300 saves -6, 65535 / 2 saves 522, 9999 / 1000 saves -6; the mean is 215.
+/// The speed routine is 31 bytes over the compact one.
+pub const SAVED_AT_SPEED_16: f64 = 215.0;
+
+/// What a call of the compact 16-bit division costs on average over the same four shapes: 866, 818, 1106 and
+/// 794 clocks.
+pub const CLOCKS_COMPACT_16: f64 = 896.0;
+
+/// [`runs`] of the 16-bit divisions.
+pub fn runs16(module: &Module) -> f64 {
+    runs_of_width(module, 16)
+}
+
+fn runs_of_width(
+    module: &Module,
+    width: u32,
+) -> f64 {
     let calls = call_weights(module);
     let mut runs = 0.0;
     for (index, global) in module.globals.iter().enumerate() {
@@ -71,7 +93,7 @@ pub fn runs(module: &Module) -> f64 {
                 };
                 let long = instruction
                     .result
-                    .is_some_and(|result| module.context.types.int_bits(function.value(result).ty) == Some(32));
+                    .is_some_and(|result| module.context.types.int_bits(function.value(result).ty) == Some(width));
                 let byte = matches!(
                     instruction.operands.get(1),
                     Some(Operand::Constant(id)) if matches!(module.context.get(*id).kind, ConstantKind::Int(1..=255))

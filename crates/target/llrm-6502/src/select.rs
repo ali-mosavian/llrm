@@ -214,6 +214,24 @@ pub fn module_text(
             texts = faster;
         }
     }
+    // at speed the 16-bit divisions are the speed routine (31 bytes over the
+    // compact one, linked once): a module takes the compact one, bytes first,
+    // unless the clocks the speed one saves are worth them
+    let speed_division16 = |text: &str| {
+        ["__udivhi3", "__divhi3", "__umodhi3", "__modhi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+    };
+    if !size && texts.iter().any(|text| speed_division16(text)) {
+        let mut compact = texts.clone();
+        for at in 0..compact.len() {
+            if speed_division16(&compact[at]) {
+                compact[at] =
+                    alloc::with_compact_division16(true, || function_text(module, parts[at].0, parts[at].1))?;
+            }
+        }
+        if !speed_division16_pays(module, parts, &texts, &compact)? {
+            texts = compact;
+        }
+    }
     // the speed multiply is 19 bytes linked once: a module whose multiplies
     // are cold keeps the compact routine
     let calls_multiply = |text: &str| text.contains(" __mulsi3\n");
@@ -987,6 +1005,29 @@ fn priced(
         })
         .collect();
     crate::weights::run_cost(first.cpu, &names, texts, &weights)
+}
+
+/// Whether a module at speed keeps the speed 16-bit divisions: the share of its clocks they save is at
+/// least `[share] percent_per_percent` times the share of its bytes they add (the image they link).
+///
+/// DEVIATE 6502-DIV-16 (owner llrm-target-6502, exit 2026-11-24): the pin's `__udivhi3` is one routine.
+/// Reason: bytes first on this target at every level (user ruling 2026-11-14); the compact routine is 31 bytes
+/// smaller and 215 clocks slower a call on average (`hotdivision::SAVED_AT_SPEED_16`).
+fn speed_division16_pays(
+    module: &Module,
+    parts: &[(&str, &Selection)],
+    speed: &[String],
+    compact: &[String],
+) -> Result<bool, String> {
+    let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
+    let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, speed))
+        - crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
+    let (clocks, bytes) = priced(module, parts, compact)?;
+    // the priced clocks leave out the routine's own run
+    let runs = crate::hotdivision::runs16(module);
+    let clocks = clocks + (runs * crate::hotdivision::CLOCKS_COMPACT_16) as u64;
+    let saved = (runs * crate::hotdivision::SAVED_AT_SPEED_16) as u64;
+    Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }
 
 /// At size the speed long divisions (the small wide path, bytes by the image they link) are the module's

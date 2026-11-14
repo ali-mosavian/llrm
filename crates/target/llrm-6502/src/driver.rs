@@ -678,7 +678,11 @@ fn cheaper(
         let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
         Some((priced.cycles, u64::from(priced.bytes)))
     };
-    Ok(match (cost(alt_module, alt), cost(module, selected)) {
+    let (alt_cost, kept_cost) = (cost(alt_module, alt), cost(module, selected));
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}, {byte} clocks a byte");
+    }
+    Ok(match (alt_cost, kept_cost) {
         // -O1 keeps no more bytes and no more clocks (6502-UNROLL-O1)
         (Some(alt), Some(kept)) if strict_at_o1 && request.level == Level::O1 => {
             alt.0 <= kept.0 && alt.1 <= kept.1 && alt != kept
