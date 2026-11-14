@@ -1637,6 +1637,9 @@ pub fn recorded(
     let resolved = Applied {
         options: Options {
             inline: inline::Threshold {
+                // gcc copies a recursion into itself with `-finline-small-functions`
+                // (-O2); at -O1 the speed rate (SPEED-O1) must not switch it on.
+                recursive: applied.options.inline.recursive.or((unroll_level(&applied.options) < 2).then_some(false)),
                 cp_clone: Some(applied.options.inline.cp_clone.unwrap_or_else(|| {
                     cp_clones_by_default(
                         &applied.options,
