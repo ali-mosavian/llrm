@@ -174,6 +174,7 @@ done:
         let adds = text.lines().filter(|line| line.trim_start().starts_with("adc")).count();
         assert!(adds < 4 && text.contains("bne"), "{level:?}: {adds} adds, the loop was copied out:\n{text}");
     }
+}
 
 /// The trial priced the functions' bytes only: static_pointers' unroll folds a
 /// 6-byte switch table away for 3 bytes of code, was put back as +3 B, and the
