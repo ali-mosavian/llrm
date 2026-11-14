@@ -1480,6 +1480,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): whether the driver compiles the module again under
+    /// unroll variants at -O2 and -O3 (`llrm_transforms::trial::SpeedUnroll`), so the pass notes which of its
+    /// decisions a variant would change.
+    fn unroll_speed_trial(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
