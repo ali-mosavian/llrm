@@ -25,6 +25,14 @@
 //! the pin keeps them on the blocks after allocation (`addLiveIns`). Reason:
 //! the spike machine function has no live-in lists. Exit: the neutral-LIR task.
 //!
+//! DEVIATE: [`PhysLiveness::live_before`] answers from checkpoints kept every
+//! [`STRIDE`] instructions of a block, built on the first query of the block,
+//! so a pass that asks about every instruction of a block steps back at most
+//! `STRIDE` instructions a query, not to the block's end (a block of 6000
+//! instructions took 140 M steps for 800 call sites). The pin's users keep a
+//! running `LivePhysRegs` per block instead (`stepForward`). Reason: the
+//! callers here ask at random positions. Exit: none.
+//!
 //! DEVIATE: `MachineBasicBlock::computeRegisterLiveness`
 //! ([MachineBasicBlock.cpp#L1706]) scans a bounded neighbourhood and answers
 //! unknown beyond it; this answers exactly, from the solved live-ins. Reason:
@@ -130,9 +138,20 @@ impl LiveLanes {
     }
 }
 
+/// How many instructions apart a block's checkpoints are.
+const STRIDE: usize = 16;
+
+/// A block's live sets every [`STRIDE`] instructions from its end: entry `j`
+/// is what is live before instruction `len - j * STRIDE` (the live-out first).
+struct Checkpoints {
+    len: usize,
+    sets: Vec<LiveLanes>,
+}
+
 /// The registers live out of each block of an allocated function.
 pub struct PhysLiveness {
     live_out: Vec<LiveLanes>,
+    checkpoints: std::cell::RefCell<Vec<Option<Checkpoints>>>,
 }
 
 impl PhysLiveness {
@@ -166,10 +185,12 @@ impl PhysLiveness {
                 }
             }
         }
-        PhysLiveness { live_out }
+        PhysLiveness { live_out, checkpoints: std::cell::RefCell::new((0..blocks).map(|_| None).collect()) }
     }
 
-    /// What is live just before instruction `at` of block `b`.
+    /// What is live just before instruction `at` of block `b`. The block's
+    /// instructions from `at` on are the ones asked about, so a change before
+    /// `at` (not of the block's length) leaves the answer as it was.
     pub fn live_before<T: Target>(
         &self,
         function: &MFunction<T::Class>,
@@ -178,9 +199,35 @@ impl PhysLiveness {
         b: usize,
         at: usize,
     ) -> LiveLanes {
-        let mut live = self.live_out[b].clone();
-        for inst in function.blocks[b].insts[at..].iter().rev() {
+        let insts = &function.blocks[b].insts;
+        let mut checkpoints = self.checkpoints.borrow_mut();
+        let stale = checkpoints[b].as_ref().is_none_or(|kept| kept.len != insts.len());
+        if stale {
+            let mut sets = vec![self.live_out[b].clone()];
+            let mut live = self.live_out[b].clone();
+            for (stepped, inst) in insts.iter().rev().enumerate() {
+                live.step_backward::<T>(info, assignment, inst);
+                if (stepped + 1) % STRIDE == 0 {
+                    sets.push(live.clone());
+                }
+            }
+            checkpoints[b] = Some(Checkpoints { len: insts.len(), sets });
+        }
+        let kept = checkpoints[b].as_ref().expect("built above");
+        let nearest = (insts.len() - at) / STRIDE;
+        let mut live = kept.sets[nearest].clone();
+        for inst in insts[at..insts.len() - nearest * STRIDE].iter().rev() {
             live.step_backward::<T>(info, assignment, inst);
+        }
+        // a change after `at` that keeps the block's length is not seen by the checkpoints: checked in full on
+        // short blocks, on every 4096th position of a long one
+        #[cfg(debug_assertions)]
+        if insts.len() <= 512 || at % 4096 == 0 {
+            let mut slow = self.live_out[b].clone();
+            for inst in insts[at..].iter().rev() {
+                slow.step_backward::<T>(info, assignment, inst);
+            }
+            assert_eq!(live, slow, "live_before: block {b} changed after its liveness was solved");
         }
         live
     }

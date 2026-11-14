@@ -22,11 +22,12 @@ BAS_REFS = ("bc", "pds71", "vbdos")
 OURS = ("c", "nib", "bas", "bq16")
 
 
-def counts(row: dict | None) -> dict | None:
-    """The four axes of a measured row, None where the cell is missing or errored."""
+def counts(row: dict | None, program: str = "", name: str = "") -> dict | None:
+    """The four axes of a measured row, None where the cell is missing or errored. `static` is data + bss + the arrays `name` allocates at
+    run time for the BASIC `program` (bench.run_time_arrays): a reference that allocates what llrm holds in its data is not smaller for it."""
     if not row or "error" in row or "clocks" not in row or "code_bytes" not in row:
         return None
-    return {"code": row["code_bytes"], "clocks": row["clocks"], "data": row.get("data_bytes", 0), "static": row.get("data_bytes", 0) + row.get("bss_bytes", 0)}
+    return {"code": row["code_bytes"], "clocks": row["clocks"], "data": row.get("data_bytes", 0), "static": bench.with_footprint({"data_bytes": row.get("data_bytes", 0), "bss_bytes": row.get("bss_bytes", 0)}, bench.run_time_arrays(program, name))["static_bytes"]}
 
 
 def has_twin_source(program: str) -> bool:
@@ -62,14 +63,14 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
         program, language, level = key.rsplit("/", 2)
         if language in C_REFS + BAS_REFS or language not in OURS:
             continue
-        ours = counts(value)
+        ours = counts(value, program, language)
         if language in ("c", "nib"):
             bar, names, at = bench.bar_program(program, language, present), C_REFS, level
         else:
             bar, names, at = program, BAS_REFS, "O2"
-        refs = {name: counts(table.get(f"{bar}/{name}/{at}")) for name in names}
+        refs = {name: counts(table.get(f"{bar}/{name}/{at}"), bar, name) for name in names}
         have = {name: r for name, r in refs.items() if r}
-        plain = {name: counts(table.get(f"{program}/{name}/{at}")) for name in names} if bar != program else {}
+        plain = {name: counts(table.get(f"{program}/{name}/{at}"), program, name) for name in names} if bar != program else {}
         plain = {name: r for name, r in plain.items() if r}
         if not ours:
             verdict, why = ("REFUSED" if "error" in (value or {}) else "UNMEASURED"), (value or {}).get("error", "")[:60]

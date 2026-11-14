@@ -206,7 +206,12 @@ fn lowered(
     let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
         M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
     } else {
-        None
+        // DEVIATE UNROLL-NEST-TRIAL (-O2, -O3): the pin's threshold, for the
+        // loops with a subloop
+        M68kMachine { cpu }
+            .tti()
+            .filter(|tti| tti.unroll_trial_nests_at_speed())
+            .map(|_| llrm_transforms::loopunrollpass::pin_full_unroll_threshold(if level == Level::O3 { 3 } else { 2 }))
     };
     let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(base) };
     let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(base) };
@@ -228,7 +233,7 @@ fn lowered(
     };
     let pays = matches!(
         (items(&other), items(&base)),
-        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, if small { crate::timing::Price::Size } else { crate::timing::Price::Strict })
+        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::of(small, !small))
     );
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });

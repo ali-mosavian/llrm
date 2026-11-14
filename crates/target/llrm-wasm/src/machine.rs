@@ -524,4 +524,16 @@ mod tests {
         assert_eq!(cost("llvm.fmuladd.f32", CostKind::RecipThroughput), Cost::of(4));
         assert_eq!(cost("llvm.lifetime.start.p0", CostKind::CodeSize), Cost::FREE);
     }
+
+    /// The saturating add, subtract and shift had no price, so a loop that held
+    /// one could not be sized or unrolled (ssub_sat_i64_loop, sat_sub_u64_shared_compare
+    /// -O2/-O3: the pin unrolls the 3-trip loop, ours kept it, +25 and +347 instructions).
+    #[test]
+    fn a_saturating_operation_has_the_pins_price() {
+        let cost = |name, kind| Wasm.intrinsic_cost(name, None, &[], kind);
+        assert_eq!(cost("llvm.ssub.sat.i64", CostKind::CodeSize), Cost::of(7));
+        assert_eq!(cost("llvm.usub.sat.i64", CostKind::CodeSize), Cost::of(3));
+        assert_eq!(cost("llvm.uadd.sat.i8", CostKind::Latency), Cost::of(3));
+        assert!(cost("llvm.sadd.sat.i32", CostKind::RecipThroughput).valid);
+    }
 }
