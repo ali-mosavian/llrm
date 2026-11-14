@@ -302,6 +302,7 @@ pub trait CombineHooks {
     /// target measures it or the pin gains it.
     fn synth_mul_chain(
         &self,
+        _dag: &SelectionDAG,
         _vt: EVT,
         _c: u128,
     ) -> Option<MulPlan> {
@@ -4672,7 +4673,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(decomposed);
                 }
             }
-            if let Some(plan) = self.hooks.synth_mul_chain(vt, c) {
+            if let Some(plan) = self.hooks.synth_mul_chain(self.dag, vt, c) {
                 return Some(self.build_mul_plan(&plan, n0, vt));
             }
         }
