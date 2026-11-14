@@ -257,11 +257,8 @@ pub fn keeps(
     }
 }
 
-/// Whether `without` replaces `with`. The size and rate prices keep `with`
-/// only where it beats `without` (a tie goes to `without`). The strict price
-/// (-O1: no worse in bytes and in clocks) replaces `with` only where `without`
-/// is no worse in both: where each wins one, `with` stands, so neither axis is
-/// given up for the other. `cold_clocks` false credits clocks only inside loops
+/// Whether `without` replaces `with`: `with` stays only where it beats
+/// `without` (a tie goes to `without`). `cold_clocks` false credits clocks only inside loops
 /// (a straight-line multiply may never run: size decides, as in the pin). False
 /// when either cannot be priced.
 pub fn prefers_without(
@@ -274,10 +271,7 @@ pub fn prefers_without(
     let (Some(with_cost), Some(without_cost)) = (price_of(with, cpu, cold_clocks), price_of(without, cpu, cold_clocks)) else {
         return false;
     };
-    match price {
-        Price::Strict => without_cost.0 <= with_cost.0 && without_cost.1 <= with_cost.1,
-        Price::Size | Price::Rate => !price.beats(cpu, with_cost, without_cost),
-    }
+    !price.beats(cpu, with_cost, without_cost)
 }
 
 /// `with` if it beats `without` under `price` on `cpu`, else `without`.

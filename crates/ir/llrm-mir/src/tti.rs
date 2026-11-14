@@ -2415,6 +2415,13 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::fills_pattern_at_speed`: isel fills a word or dword pattern
+    /// itself (`rep stosw`/`rep stosd`), so the pass forms it and no pre-ISel
+    /// store loop is made.
+    fn fills_pattern_at_speed(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a shift by a variable amount needs the count
     /// in one fixed register (x86's `cl`), which costs a move and holds the
     /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than

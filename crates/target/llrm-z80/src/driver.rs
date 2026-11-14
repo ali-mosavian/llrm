@@ -182,7 +182,7 @@ fn program_of(
         program.modules.iter_mut().for_each(crate::prepare::mark_constant_fills);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_shifts);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_divides);
-        if matches!(request.level, Level::O1 | Level::Os | Level::Oz) {
+        if request.level != Level::O0 {
             program.modules.iter_mut().for_each(crate::prepare::mark_word_chains);
         }
     }
@@ -300,10 +300,9 @@ pub fn selections_with_alternatives(
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
-            // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
-            // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
-            // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
-            let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
+            // The all-calls form is priced bytes first at every level (it was -O1 only: at 1 B = 3 T the static loop
+            // weights, about 5x under the measured ones, made -368 B for +5970 T look like a gain on call_keeps).
+            let muls = calls_the_routine(name).filter(|sized| *sized || request.level != Level::O0);
             let fills = has_fills(name);
             let shifts = has_shifts(name);
             let divides = has_divides(name);

@@ -375,9 +375,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         } else {
             self.dag.get_ext_load(kind, vt, chain, ptr, narrow)
         };
+        let ty = self.dag.get_value_type_node(info.mem_vt);
         let value = if ext == super::actions::LoadExt::SExtLoad {
-            let ty = self.dag.get_value_type_node(info.mem_vt);
             self.dag.get_node(ISD::SignExtendInReg, vt, &[byte, ty])
+        } else if ext == super::actions::LoadExt::ZExtLoad || vt == EVT::I8 {
+            // `ExtType == ISD::ZEXTLOAD || NVT == Result.getValueType()`: all
+            // the top bits are zero, which the optimizers are told.
+            self.dag.get_node(ISD::AssertZext, vt, &[byte, ty])
         } else {
             byte
         };
