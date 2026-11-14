@@ -773,6 +773,12 @@ impl Tti for AArch64 {
         128
     }
 
+    /// The selector has `CMxx`, `FCMxx` and `BSL`/`BIT`/`BIF` for a vector
+    /// `icmp`, `fcmp` and `select`.
+    fn selects_vector_compares(&self) -> bool {
+        true
+    }
+
     /// `AArch64TTIImpl::getNumberOfRegisters`: 32 NEON registers, 31 general.
     fn number_of_registers(
         &self,

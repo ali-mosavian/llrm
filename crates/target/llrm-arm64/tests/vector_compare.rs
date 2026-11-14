@@ -133,3 +133,78 @@ fn integer_compares_of_64_bit_vectors_are_cm_instructions() {
         }
     }
 }
+
+/// The pin's `opt -O2` and then `llc`: `ours` runs the middle end too, and
+/// instcombine rewrites a select by `sge` into one by `slt` with the arms
+/// swapped, which raw `llc` does not.
+fn pin_optimized(source: &str) -> Option<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let build = std::env::var("LLVM_BUILD").unwrap_or_else(|_| format!("{home}/scratch/llvm-build-aarch64"));
+    let opt = PathBuf::from(&build).join("bin/opt");
+    if !opt.exists() {
+        eprintln!("skipped the pin comparison: no {}", opt.display());
+        return None;
+    }
+    let said = Command::new(opt)
+        .args(["-O2", "-mtriple=aarch64-unknown-linux-gnu", "-S", "-o", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(source.as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(said.status.success());
+    pin(&String::from_utf8(said.stdout).unwrap())
+}
+
+/// `select (icmp <pred> a, b), a, c`.
+fn select_ir(
+    pred: &str,
+    vector: &str,
+) -> String {
+    let mut parts = vector.trim_matches(['<', '>']).split(' ');
+    let lanes: u32 = parts.next().unwrap().parse().unwrap();
+    let width: u32 = parts.nth(1).unwrap().trim_start_matches('i').parse().unwrap();
+    let align = (lanes * width / 8).min(16);
+    format!(
+        "{HEAD}define void @f(ptr %a, ptr %b, ptr %c, ptr %d) {{\n\
+         \x20 %x = load {vector}, ptr %a, align {align}\n\
+         \x20 %y = load {vector}, ptr %b, align {align}\n\
+         \x20 %m = icmp {pred} {vector} %x, %y\n\
+         \x20 %t = load {vector}, ptr %c, align {align}\n\
+         \x20 %s = select <{lanes} x i1> %m, {vector} %x, {vector} %t\n\
+         \x20 store {vector} %s, ptr %d, align {align}\n\
+         \x20 ret void\n}}\n"
+    )
+}
+
+/// A vector `select` was refused ("vector with no register class"). Every
+/// predicate on each 128-bit type is a compare and a `bit`/`bif`/`bsl`, as the
+/// pin's `opt -O2 | llc` makes it.
+#[test]
+fn vector_selects_are_a_compare_and_a_bit_select() {
+    for vector in ["<16 x i8>", "<8 x i16>", "<4 x i32>", "<2 x i64>"] {
+        for pred in PREDICATES {
+            let source = select_ir(pred, vector);
+            let text = ours(&source).unwrap_or_else(|why| panic!("refused: {why}\n{source}"));
+            if let Some(pinned) = pin_optimized(&source) {
+                assert_eq!(shapes(&text), shapes(&pinned), "{pred} {vector}\nours:\n{text}\npin:\n{pinned}");
+            }
+        }
+    }
+}
+
+/// `c[i] = a[i] < b[i] ? a[i] : b[i]` over `float` stayed a scalar loop of
+/// `fcsel` (jpeg_single's clamp, +1.1M instructions at -O2): the loop is
+/// vectorized into `fcm*` and a `bit`/`bif`/`bsl` over `.4s`.
+#[test]
+fn a_float_select_loop_is_vectorized() {
+    let loop_ir = include_str!("../../../opt/llrm-transforms/tests/lv/float_select.ll");
+    let text = ours(&format!("target triple = \"aarch64-unknown-linux-gnu\"\n{loop_ir}")).unwrap();
+    let vector = |prefix: &str| text.lines().any(|line| line.trim().starts_with(prefix) && line.contains(".4s"));
+    assert!(vector("fcm"), "no vector fcm:\n{text}");
+    assert!(vector("bit") || vector("bif") || vector("bsl"), "no bit select:\n{text}");
+}
