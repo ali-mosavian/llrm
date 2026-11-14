@@ -459,6 +459,43 @@ pub(crate) fn vector_arithmetic_cost(
     }
 }
 
+/// `AArch64TTIImpl::getArithmeticInstrCost` of an unsigned divide or
+/// remainder by a constant ([L5149][pin]): a shift or a mask for a power of
+/// two, else the multiply-high sequence (`umull` and `umull2` for a 128-bit
+/// register, the two adds, the shifts, and for a remainder the multiply and
+/// the subtract).
+///
+/// Priced for whole 128-bit registers of 8 to 32-bit lanes only: the others
+/// (a 64-bit lane, a 64-bit vector) have no multiply-high here, and the pin's
+/// scalarized price is not one a backend that cannot select the divide can
+/// take.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5149
+pub(crate) fn vector_divide_by_constant_cost(
+    op: ArithOp,
+    ty: VectorTy,
+    second: OperandInfo,
+    kind: CostKind,
+) -> Option<Cost> {
+    if !matches!(op, ArithOp::UDiv | ArithOp::URem) || !second.constant || ty.lane.is_float() {
+        return None;
+    }
+    let (_, lane) = vector_pieces(ty)?;
+    if lane == 64 || u64::from(lane) * u64::from(ty.count) < 128 {
+        return None;
+    }
+    let price = |op| vector_arithmetic_cost(op, ty, kind).map(|cost| cost.value);
+    if second.power_of_two {
+        return price(if op == ArithOp::UDiv { ArithOp::LShr } else { ArithOp::And }).map(Cost::of);
+    }
+    let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+    // `HasMULH` is false: the multiply-high is `umull` and `umull2`, and its
+    // shift is one more.
+    let divide = mul * 2 + shr + add * 2 + shr;
+    Some(Cost::of(divide + if op == ArithOp::URem { mul + add } else { 0 }))
+}
+
 impl Tti for AArch64 {
     /// `isProfitableToSinkOperands`: see [`crate::tti_sink`].
     fn is_profitable_to_sink_operands(
@@ -827,6 +864,16 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Option<Cost> {
         vector_arithmetic_cost(op, ty, kind)
+    }
+
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| vector_arithmetic_cost(op, ty, kind))
     }
 
     fn vector_reduction_cost(

@@ -59,8 +59,8 @@
 //!   so the pin's NEON loops end in an epilogue, as here.
 
 use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, Predicate, RegisterClass, Tti, Ty,
-    VectorTy,
+    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, OperandInfo, Predicate, RegisterClass,
+    Tti, Ty, VectorTy,
 };
 
 /// One widenable instruction of the loop, by what its cost and widening need.
@@ -74,7 +74,7 @@ pub enum Recipe {
     /// A binary operation of `lane`, integer or floating point; `ext`: which
     /// operands are a `sext` or `zext` (the pin's `Args`: the widening
     /// forms price on them).
-    Binary { op: ArithOp, lane: Ty, ext: [Option<ExtOperand>; 2] },
+    Binary { op: ArithOp, lane: Ty, ext: [Option<ExtOperand>; 2], second: OperandInfo },
     /// `llvm.fmuladd` of `lane`s (`VPWidenIntrinsicRecipe`): AArch64 prices it
     /// as one `fmul` (`getIntrinsicInstrCost`, L797).
     FMulAdd { lane: Ty },
@@ -321,9 +321,9 @@ fn iteration_cost(
                     unknown(tti.vector_arithmetic_cost(ArithOp::FMul, vector(lane), kind))?
                 }
             }
-            Recipe::Binary { op, lane, ext } => {
+            Recipe::Binary { op, lane, ext, second } => {
                 if vf == 1 {
-                    tti.arithmetic_cost(op, lane, kind, Default::default(), Default::default())
+                    tti.arithmetic_cost(op, lane, kind, Default::default(), second)
                 } else if ext.iter().any(Option::is_some) {
                     // The widening forms; `Err`: a price that needs known bits.
                     match tti.vector_arithmetic_cost_ext(op, vector(lane), ext, kind) {
@@ -338,7 +338,7 @@ fn iteration_cost(
                     // An integer operation the target does not price is the
                     // pin's scalarized one (a multiply of
                     // `<2 x i64>`).
-                    tti.vector_arithmetic_cost(op, vector(lane), kind).ok_or(NotTaken)?
+                    tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
                 }
             }
             Recipe::Scalarized { op, lane } => {
