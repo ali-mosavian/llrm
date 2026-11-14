@@ -153,6 +153,7 @@ use std::sync::Arc;
 use llrm_analysis::aa::MemoryLocation;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::Unit;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
@@ -230,9 +231,10 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
-/// Each loop of `shape` with a trip count `induction` proves, as (the LIR
-/// address of its header, the trips): what the executed-work estimate scales
-/// the loop by. `header_at` names the LIR block a MIR block became.
+/// Each loop of `shape` with a trip count `induction` proves, or else
+/// ScalarEvolution does (`getSmallConstantTripCount`), as (the LIR address of
+/// its header, the trips): what the executed-work estimate scales the loop by.
+/// `header_at` names the LIR block a MIR block became.
 pub fn proven_trips(
     unit: &Unit,
     shape: &llrm_analysis::cfg::Shape,
@@ -243,13 +245,17 @@ pub fn proven_trips(
     // for every loop's proof.
     let assumed = llrm_analysis::assumptions::Assumptions::of(unit);
     let unit = &(*unit).with_assumptions(&assumed);
+    let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
     let mut counts: Vec<(i64, i64)> = shape
         .loops
         .iter()
         .filter_map(|one| {
             let header = header_at(cfg::block(one.header))?;
-            let count = llrm_analysis::induction::trip_count(unit, one, facts)?;
-            Some((header, i64::try_from(count).expect("a trip count fits an int64")))
+            let count = match llrm_analysis::induction::trip_count(unit, one, facts) {
+                Some(count) => i64::try_from(count).expect("a trip count fits an int64"),
+                None => llrm_transforms::profit::scev_trips(&mut session, unit, one)?,
+            };
+            Some((header, count))
         })
         .collect();
     counts.sort();
