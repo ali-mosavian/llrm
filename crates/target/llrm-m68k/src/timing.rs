@@ -214,6 +214,8 @@ fn operand(text: &str) -> Result<Operand, String> {
                 }
                 (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
                 (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
+                // a label in the brief form's 8 bits: the table `jmp` and its `move.w` (M68K-WORD-TABLE)
+                (None, true) if disp.starts_with('.') => Ok(Operand::Mode(Mode::PcIndex, 0)),
                 (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
             },
             [base, index] if (is_address(base) || *base == "%pc") && is_index(index) => {
