@@ -9,7 +9,10 @@ use std::process::Command;
 
 fn assembly(target: &str, level: &str) -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-{}-{target}-{level}", std::process::id()));
+    // Tests run in parallel: a directory of its own for each call.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-{}-{call}-{target}-{level}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
