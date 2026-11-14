@@ -7,7 +7,9 @@
 
 use llrm_mir::intrinsics::ReduceKind;
 use llrm_mir::opcode::FloatPredicate;
-use llrm_mir::tti::{ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, Predicate, Ty, VectorTy};
+use llrm_mir::tti::{
+    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, LaneOp, Predicate, Ty, VectorInstrContext, VectorTy,
+};
 
 use crate::tti::{vector_arithmetic_cost, vector_pieces};
 
@@ -508,4 +510,70 @@ pub(crate) fn reduction_cost(
         }
         ReduceKind::Mul | ReduceKind::FMul => None,
     }
+}
+
+/// `AArch64TTIImpl::getVectorInstrCost`
+/// ([L4842](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L4842))
+/// over `getVectorInstrCostHelper` (L4646), NEON only. A lane of a register
+/// other than the first costs the base cost (1 for code size); lane 0 of a
+/// floating-point vector is already in the register, an integer one needs a
+/// move; an insert of a one-use load is a `ld1` lane, free where the cpu has a
+/// fast one (`fast_ld1_single`).
+///
+/// DEVIATE VI1 (owner w12, exit 2026-11-30): an extract that fuses with a
+/// scalar `fmul` (`ExtractCanFuseWithFmul`, L4772) is priced as any other
+/// extract, since the hook is not given its users. Types the port does not
+/// price (`vector_pieces`) are `None`.
+pub(crate) fn vector_instr_cost(
+    op: LaneOp,
+    ty: VectorTy,
+    index: Option<u32>,
+    into_poison: bool,
+    context: VectorInstrContext,
+    cost_kind: CostKind,
+    fast_ld1_single: bool,
+) -> Option<Cost> {
+    // A vector inserted into a poison one at lane 0 is a `dup`: free.
+    if op == LaneOp::Insert && index == Some(0) && into_poison {
+        return Some(Cost::of(0));
+    }
+    let (_, lane) = vector_pieces(ty)?;
+    let base = if cost_kind == CostKind::CodeSize { 1 } else { INSERT_EXTRACT_BASE_COST };
+    if ty.count == 1 {
+        return Some(Cost::of(0));
+    }
+    if let Some(index) = index {
+        // The type may be split: the lane is taken within its register.
+        let index = index % (128 / lane).min(ty.count);
+        if index == 0 && ty.lane.is_float() {
+            return Some(Cost::of(0));
+        }
+        if context == VectorInstrContext::Load {
+            let cost = if fast_ld1_single || cost_kind == CostKind::CodeSize { 0 } else { base + 1 };
+            return Some(Cost::of(cost));
+        }
+    }
+    Some(Cost::of(base))
+}
+
+/// `AArch64TTIImpl::getStoreMinimumVF`
+/// ([L537](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.h#L537)):
+/// a chain of 4 or more `i8` stores in a power-of-two count is cut to 4;
+/// else `BasicTTIImpl::getStoreMinimumVF` halves the VF while a store of half
+/// the lanes is a legal one (at most one register). DEVIATE VI2 (owner w12,
+/// exit 2026-11-30): the pin's truncating-store test for an illegal half is
+/// not made (no vector truncating store is priced).
+pub(crate) fn store_minimum_vf(
+    vf: u32,
+    mem: Ty,
+) -> u32 {
+    if mem == Ty::Int(8) && vf.is_power_of_two() && vf >= 4 {
+        return 4;
+    }
+    let legal = |lanes: u32| matches!(vector_pieces(v(mem, lanes)), Some((1, _)));
+    let mut vf = vf;
+    while vf > 2 && legal(vf / 2) {
+        vf /= 2;
+    }
+    vf
 }

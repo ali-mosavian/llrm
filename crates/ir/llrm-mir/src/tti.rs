@@ -94,6 +94,37 @@ pub struct VectorTy {
     pub count: u32,
 }
 
+/// The element instruction `getVectorInstrCost` prices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaneOp {
+    Insert,
+    Extract,
+}
+
+/// `TargetTransformInfo::VectorInstrContext` (`getVectorInstrContextHint`): how
+/// the scalar of a lane instruction is made or used. An insert of a one-use
+/// load is `Load`; an extract whose only user is a store is `Store`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VectorInstrContext {
+    None,
+    Load,
+    Store,
+}
+
+/// `TargetTransformInfo::ShuffleKind` (`SK_*`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShuffleKind {
+    Broadcast,
+    Reverse,
+    Select,
+    Transpose,
+    InsertSubvector,
+    ExtractSubvector,
+    PermuteSingleSrc,
+    PermuteTwoSrc,
+    Splice,
+}
+
 /// An operand that is a `sext` or a `zext` of `src` lanes, as the pin's `Args`
 /// (the operand values of the instruction priced) show it to the widening
 /// rules of `getArithmeticInstrCost` and `getCastInstrCost`.
@@ -804,6 +835,61 @@ pub trait Tti {
         _ty: VectorTy,
         _insert: bool,
         _extract: bool,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getMinVectorRegisterBitWidth`: the narrowest vector the SLP vectorizer
+    /// forms (TargetTransformInfoImpl L654: 128).
+    fn min_vector_register_bits(&self) -> u32 {
+        128
+    }
+
+    /// `getMaximumVF(ElemWidth, Opcode)`: the widest VF for `elem_bits`-bit
+    /// lanes of `opcode`; 0 where the target puts no limit.
+    fn maximum_vf(
+        &self,
+        _elem_bits: u32,
+        _opcode: crate::opcode::Opcode,
+    ) -> u32 {
+        0
+    }
+
+    /// `getStoreMinimumVF(VF, ScalarMemTy, ScalarValTy, ...)`: the VF a store
+    /// chain of `vf` lanes of `mem` is cut to at least; `vf` where the target
+    /// does not say (TargetTransformInfoImpl L672).
+    fn store_minimum_vf(
+        &self,
+        vf: u32,
+        _mem: Ty,
+        _value: Ty,
+    ) -> u32 {
+        vf
+    }
+
+    /// `getVectorInstrCost` of one `insertelement` or `extractelement` of
+    /// `ty`, at the constant lane `index` (`None`: a variable one).
+    /// `into_poison`: the vector inserted into is poison. `None`: not priced.
+    fn vector_instr_cost(
+        &self,
+        _op: LaneOp,
+        _ty: VectorTy,
+        _index: Option<u32>,
+        _into_poison: bool,
+        _context: VectorInstrContext,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getShuffleCost` of a `kind` shuffle of `ty` by `mask`. `None`: not
+    /// priced (the SLP vectorizer then does not form a tree that needs it).
+    fn shuffle_cost(
+        &self,
+        _kind: ShuffleKind,
+        _ty: VectorTy,
+        _mask: &[i32],
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
