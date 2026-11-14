@@ -39,9 +39,11 @@ fn bytes_at(
     items_bytes(&items_with(&module, "f", Cpu::M68000, options).expect("compiles"))
 }
 
+/// 12 calls is the one size where the chain is still larger (322 B against 318 B, 2026-11-14): from 16 calls up the
+/// scheduler no longer spills and the chain is smaller (24 calls: 506 B against 606 B).
 #[test]
 fn a_function_the_chain_makes_larger_keeps_the_multiply() {
-    let ir = hash_of(24);
+    let ir = hash_of(12);
     let (chain, kept, trial) = (bytes(&ir, Mode::Pin), bytes(&ir, Mode::Kept), bytes(&ir, Mode::Trial));
     assert!(chain > kept, "premise: the chain spills here ({chain} B against {kept} B)");
     assert!(trial <= kept, "the trial kept the chain: {trial} B against {kept} B kept");
@@ -79,14 +81,14 @@ fn a_call_through_the_hoisted_target_register_is_priced_as_the_routine() {
     assert!(calls <= 1, "{calls} library calls kept:\n{out}");
 }
 
-/// -O1 asks for no worse in bytes AND clocks. With 100 calls the function is
+/// -O1 asks for no worse in bytes AND clocks. With 12 calls the function is
 /// smaller with the multiply kept and slower (a library routine of 162 clocks
 /// or more against two shifts): neither build is no worse in both, and giving
 /// the clocks up for the bytes put select_of_constants -O1 at +4.29M clocks over
 /// the chain. The chain stands.
 #[test]
 fn at_the_strict_level_the_chain_stands_where_each_build_wins_one_axis() {
-    let ir = hash_of(100);
+    let ir = hash_of(12);
     let (chain, kept) = (bytes_at(&ir, Mode::Pin, false, true), bytes_at(&ir, Mode::Kept, false, true));
     assert!(chain > kept, "premise: the multiply is smaller ({kept} B against {chain} B)");
     assert_eq!(bytes_at(&ir, Mode::Trial, false, true), chain, "the trial gave the clocks up for bytes");
