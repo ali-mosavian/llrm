@@ -159,6 +159,8 @@ pub struct Tuned {
     pub two_address: bool,
     /// The target's library has `memset_pattern16`, as a Darwin one does.
     pub memset_pattern: bool,
+    /// `Machine::fills_by_pattern`: the target's isel fills a pattern itself.
+    pub fills_pattern: bool,
     /// A global is never a base, and a register and an index are the only
     /// forms.
     pub no_global_base: bool,
@@ -400,6 +402,10 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn fills_by_pattern(&self) -> bool {
+        self.fills_pattern
+    }
+
     fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
         self.memset_pattern.then(|| std::rc::Rc::new(WithMemsetPattern) as _)
     }

@@ -46,7 +46,7 @@ fn run_with(cpu: &str) {
     let (Some(mut assemble), Some(mut link)) = (binutils("as"), binutils("gcc")) else { return };
     let Some(qemu) = support::qemu() else { return };
     let text = driver::assembly(&switch(), driver::cpu_of(cpu).expect("a cpu"), Level::O2).expect("compiles");
-    assert!(text.contains("jmp\t(%a0)") && text.matches("\t.long\t.LBB").count() == 10, "premise: a table:\n{text}");
+    assert!(text.contains("jmp\t(.LJTI") && text.matches("\t.word\t.LBB").count() == 10, "premise: a table:\n{text}");
     let source = support::unique_path("jt-s");
     let object = support::unique_path("jt-o");
     let exe = support::unique_path("jt-exe");
