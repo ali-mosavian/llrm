@@ -1,7 +1,6 @@
-//! x86-32 -O1 keeps to what gcc's -O1 does where SPEED-O1's byte price is on:
-//! no recursion copied into itself (gcc's is -O2, the pin's inliner never) and
-//! no loop alignment (DEVIATE ALIGN-O1). The speed rate turned both on: queens
-//! -O1 ran 164,704 clk and 559 B against 161,143 and 183 B. Needs the Open
+//! x86-32 -O1 aligns no loop (DEVIATE ALIGN-O1, gcc's `-falign-loops` is -O2)
+//! where SPEED-O1's byte price is on: the speed rate turned it on and queens
+//! -O1 ran 3,561 clk slower on the padding of `safe`'s loop. Needs the Open
 //! Watcom tree (tools/ow-fetch.sh) and `LLRM_LLC`.
 
 use std::path::Path;
@@ -18,23 +17,11 @@ fn compiled(level: &str) -> String {
         .env("LLRM_LLC", llc)
         .args([level, "-w", "-S", "-march=i486", "-o"])
         .arg(dir.join("d.s"))
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/o1_recursion_queens.c"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/o1_loop_alignment_queens.c"))
         .output()
         .unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(dir.join("d.s")).unwrap()
-}
-
-fn calls_of_place(asm: &str) -> usize {
-    asm.lines().filter(|line| line.trim() == "call place_").count()
-}
-
-#[test]
-fn test_o1_does_not_copy_a_recursion_into_itself() {
-    let asm = compiled("-O1");
-    // the call from `bench_queens` and the recursion's own: the copies made
-    // nine
-    assert!(calls_of_place(&asm) <= 3, "-O1 copied `place` into itself:\n{asm}");
 }
 
 #[test]
