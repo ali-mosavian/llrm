@@ -856,6 +856,9 @@ fn items_once(
             function.returns_twice =
                 module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
             if options.short {
+                // `addMachineSSAOptimization`: what selection built and nothing reads, before the
+                // selects become branches
+                llrm_spike_mf::dead_machine_instruction_elim(&mut function);
                 crate::cmpelim::eliminate_tests(
                     &mut function,
                     options.hoist_flag_setters,
