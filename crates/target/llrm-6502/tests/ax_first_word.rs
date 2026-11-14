@@ -52,12 +52,17 @@ fn a_call_hands_the_first_word_over_in_a_and_x() {
 }
 
 /// `memcpy` takes dst in `rc2:rc3`, src in `rc4:rc5` and n in A:X: a copy that
-/// receives them in those registers jumps to it with nothing moved.
+/// receives them in those registers jumps to it with nothing moved. A second
+/// caller shares the library's bytes: alone, the loop is the smaller image.
 #[test]
 fn a_libcall_takes_its_first_word_in_a_and_x() {
     let asm = text(
         "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
 define void @copy(ptr %d, ptr %s, i16 %n) {
+  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
+  ret void
+}
+define void @copy_again(ptr %d, ptr %s, i16 %n) {
   call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
   ret void
 }
