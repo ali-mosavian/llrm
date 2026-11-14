@@ -17,12 +17,12 @@
 //! [`price`]: bytes are four a word plus the pool; work is `executed` of each
 //! function after allocation: instructions, memory operands, taken branches and
 //! jumps, by the branch odds and proven trips. The unrotated decision reads it
-//! as laid out ([`add`]): by the odds placement read, a loop's guard entering as
-//! often as the loop continues ([`guards`]). Priced before layout, the unrotated
-//! recsum read 293 against 136.5 for the same 10005 instructions: a `b` to the
-//! next block per trip that placement removes. ROTATION-HOT and GM-TRIAL keep
-//! the price before layout their limits were set on. The count the harness
-//! reports is what the keep is checked against, not this model.
+//! as laid out ([`add`]): by the odds placement read, a loop's guard entering
+//! as often as the loop continues ([`guards`]). Priced before layout, the
+//! unrotated recsum read 293 against 136.5 for the same 10005 instructions: a
+//! `b` to the next block per trip that placement removes. ROTATION-HOT and
+//! GM-TRIAL keep the price before layout their limits were set on. The count
+//! the harness reports is what the keep is checked against, not this model.
 
 use llrm_codegen::backend::executed;
 use llrm_codegen::model::lir::{BlockOdds, LirBlock, LirBody};
@@ -31,8 +31,8 @@ use llrm_transforms::trial;
 
 use crate::emit::Function;
 use crate::frame::Lowered;
-use crate::machine::Platform;
 use crate::layout::Likelihood;
+use crate::machine::Platform;
 use crate::mc::inst::Inst;
 use crate::mfunc::{MBlock, MFunc, Op};
 
@@ -117,9 +117,8 @@ pub fn add(
         return;
     }
     PRICED.with(|count| count.set(count.get() + 1));
-    let work = |body: &LirBody| {
-        executed::executed(body).map(|one| one.instructions + one.memory + one.taken + one.jumps)
-    };
+    let work =
+        |body: &LirBody| executed::executed(body).map(|one| one.instructions + one.memory + one.taken + one.jumps);
     let before = crate::lir_body::to_lir(function).ok().map(|lowered| lowered.body);
     let early = before.as_ref().and_then(work);
     // A function the layout cannot be read for is priced as it was.
@@ -127,9 +126,10 @@ pub fn add(
     WORK.with(|cell| {
         // A function with no finite estimate poisons the sum: no work saved is
         // claimed.
-        cell.set(cell.get().map(|(one, two)| {
-            (early.map_or(f64::NAN, |now| one + now), placed.map_or(f64::NAN, |now| two + now))
-        }));
+        cell.set(
+            cell.get()
+                .map(|(one, two)| (early.map_or(f64::NAN, |now| one + now), placed.map_or(f64::NAN, |now| two + now))),
+        );
     });
 }
 
@@ -162,9 +162,18 @@ fn finished(
     let at_of: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let mut shaped = Vec::with_capacity(blocks.len());
     for (at, block) in blocks.iter().enumerate() {
-        let mut succ: Vec<i64> =
-            block.insts.iter().filter_map(crate::layout::label_of).filter_map(|label| at_of.get(label)).map(|&to| to as i64).collect();
-        let ends = matches!(block.insts.last(), Some(Inst::Branch { link: false, .. } | Inst::Ret { .. } | Inst::Brk { .. }));
+        let mut succ: Vec<i64> = block
+            .insts
+            .iter()
+            .filter_map(crate::layout::label_of)
+            .filter_map(|label| at_of.get(label))
+            .map(|&to| to as i64)
+            .collect();
+        let ends =
+            matches!(
+                block.insts.last(),
+                Some(Inst::Branch { link: false, .. } | Inst::Ret { .. } | Inst::Brk { .. })
+            );
         if !ends && at + 1 < blocks.len() {
             succ.push(at as i64 + 1);
         }
@@ -174,7 +183,8 @@ fn finished(
                 body.odds.taken.insert((at as i64, to), numerator);
             }
         }
-        // The guard may have taken its preheader in: its edge goes to the preheader or the header itself.
+        // The guard may have taken its preheader in: its edge goes to the
+        // preheader or the header itself.
         if let Some(guard) = guards.iter().find(|guard| guard.block == block.label)
             && let Some(&continues) = likelihood.get(&guard.latch)
             && let Some(&into) = succ.iter().find(|&&to| guard.enters.contains(&blocks[to as usize].label))
@@ -242,8 +252,9 @@ fn guards(function: &MFunc) -> Vec<Guard> {
     out
 }
 
-/// How many function bodies this thread has priced: the cost of the trials' pricing, which a module that
-/// noted nothing must not pay (compile time x2.5 on nbody -Os before).
+/// How many function bodies this thread has priced: the cost of the trials'
+/// pricing, which a module that noted nothing must not pay (compile time x2.5
+/// on nbody -Os before).
 pub fn priced() -> usize {
     PRICED.with(std::cell::Cell::get)
 }
@@ -295,7 +306,12 @@ pub fn keeps_rotated(
     loops: usize,
 ) -> bool {
     !(kept.work.is_nan() || other.work.is_nan())
-        && trial::keeps_rotation_hot((kept.work - other.work).round() as i64, other.bytes - kept.bytes, loops, trial::ROTATION_HOT_BYTES_PER_LOOP)
+        && trial::keeps_rotation_hot(
+            (kept.work - other.work).round() as i64,
+            other.bytes - kept.bytes,
+            loops,
+            trial::ROTATION_HOT_BYTES_PER_LOOP,
+        )
 }
 
 /// Whether `platform`'s target asks for the trial at `size` builds.
