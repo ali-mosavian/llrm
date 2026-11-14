@@ -126,13 +126,12 @@ use crate::profit::{self, OperationCosts};
 const EVAL_THRESHOLD: i64 = 500;
 /// `ipa-cp-max-recursive-depth` (params.opt:225), which
 /// `ipa-cp-value-list-size` (:253) also makes the clones one function gets.
-/// DEVIATE IPACP-DEPTH (owner x86-m32-c, exit 2026-12-05; gcc's is 8): the
-/// clones' compile cost grows faster than their number. m32 -O3, instructions
-/// against no clones, clocks of queens: depth 2 x1.55 151,615; 4 x4.13
-/// 140,365; 6 x18.95 113,064; 8 x71.1 79,692 (121 programs, total +3.3% /
-/// +4.2% / +8.8% / +24.9%). Each superlinear pass fixed lets a deeper depth
-/// fit the bar (row M32-QUEENS-O3).
-const MAX_CLONES: usize = 4;
+/// DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24; gcc's is 8): a
+/// target's default is 4, as the clones' compile cost grows faster than their
+/// number (m32 -O3 instructions on queens against no clones: depth 2 x1.55,
+/// 4 x4.13, 8 x71). x86-m32 states 8 (`Tti::ipa_cp_max_clones`): queens -O3
+/// 140,156 -> 73,196 clk (gcc 94,851) for 5.8 G instructions to compile it.
+pub const DEFAULT_MAX_CLONES: usize = 4;
 /// Our clocks, at our block frequencies (held to ten trips), per GCC time unit:
 /// `place` with `row` known saves 667 here and 245.8 in GCC's dump
 /// (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1)
@@ -149,6 +148,8 @@ pub struct Tuning {
     pub hint_clones: bool,
     /// The loop hint counts only bounds the unroller takes whole.
     pub peel_limited: bool,
+    /// The most clones one function gets (`ipa-cp-max-recursive-depth`).
+    pub max_clones: usize,
 }
 
 /// `max-completely-peel-times` (params.opt): the most trips the unroller takes whole.
@@ -176,7 +177,7 @@ pub struct Cloning {
 }
 
 /// The clones made so far, shared by the cloning before the walk and the one
-/// after it: a function gets at most `MAX_CLONES` between them.
+/// after it: a function gets at most `Tuning::max_clones` between them.
 pub type Shared = std::rc::Rc<std::cell::RefCell<Cloning>>;
 
 /// One kind of call: a callee and the constants it is called with.
@@ -289,7 +290,7 @@ pub fn cloned(
             redirect(module, existing, &sites, &mut changed);
             continue;
         }
-        if state.made.get(&origin).copied().unwrap_or(0) >= MAX_CLONES {
+        if state.made.get(&origin).copied().unwrap_or(0) >= tuning.max_clones {
             continue;
         }
         let size = inline::operations(body);
@@ -331,7 +332,7 @@ pub fn cloned(
             let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited);
             let level = state.made.get(&origin).copied().unwrap_or(0);
             let (chain, chain_size) =
-                chain_benefit(module, layout, name, body, context, &callees, costs, tuning.peel_limited, level, &mut BTreeMap::new());
+                chain_benefit(module, layout, name, body, context, &callees, costs, tuning.peel_limited, tuning.max_clones, level, &mut BTreeMap::new());
             let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
             // GCC's `incorporate_penalties`: a function in a cycle with others,
             // not one that calls itself.
@@ -477,6 +478,7 @@ fn chain_benefit(
     callees: &Callees,
     costs: &OperationCosts,
     peel_limited: bool,
+    max_clones: usize,
     level: usize,
     memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), (i64, i64)>,
 ) -> (i64, i64) {
@@ -489,14 +491,14 @@ fn chain_benefit(
     let mut chain_size = size_of;
     let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs, peel_limited);
     let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
-    if level + 1 < MAX_CLONES {
+    if level + 1 < max_clones {
         for (context, frequency) in next {
             if context.as_slice() == known {
                 continue;
             }
             let (after, after_size) =
-                chain_benefit(module, layout, name, body, &context, callees, costs, peel_limited, level + 1, memo);
-            let factor = (MAX_CLONES - level) as i64;
+                chain_benefit(module, layout, name, body, &context, callees, costs, peel_limited, max_clones, level + 1, memo);
+            let factor = (max_clones - level) as i64;
             benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
             chain_size = chain_size.saturating_add(after_size);
         }
