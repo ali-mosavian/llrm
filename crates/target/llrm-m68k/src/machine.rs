@@ -464,6 +464,13 @@ impl Tti for M68k {
         true
     }
 
+    /// -O1 walks the call graph a second time once the dead globals are gone,
+    /// as m32 does: `bar` stored a sum nothing reads, ends as a `ret`, and
+    /// `foo` drops its call (byvalue_struct_address -O1, 24 B above clang).
+    fn inline_second_round_at_o1(&self) -> bool {
+        true
+    }
+
     /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
     /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
     /// range check, the dispatch and a word a case.
@@ -500,6 +507,14 @@ impl Tti for M68k {
     /// 30). The pin never unrolls at -Os past its threshold.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         Some(100)
+    }
+
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): the -Os
+    /// trial's bar is met by a loop whose copies fold to under it
+    /// (switch_jump_table: ten trips of a switch on a constant counter are
+    /// ten calls), not only by one whose copies are that small.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        true
     }
 
     /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at
