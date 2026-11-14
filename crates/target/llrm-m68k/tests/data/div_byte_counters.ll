@@ -4,6 +4,8 @@ target datalayout = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16
 target triple = "m68k-unknown-linux-gnu"
 
 ; Function Attrs: nounwind
+declare void @sink(i32)
+
 define dso_local i32 @total() #0 {
   %1 = alloca i32, align 2
   %2 = alloca i32, align 2
@@ -56,6 +58,7 @@ define dso_local i32 @total() #0 {
   %31 = mul nsw i32 %30, 11
   %32 = add i32 %25, %31
   store i32 %32, ptr %1, align 2, !tbaa !8
+  call void @sink(i32 %32)
   call void @llvm.lifetime.end.p0(ptr %5) #2
   br label %33
 
