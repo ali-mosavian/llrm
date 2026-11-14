@@ -915,9 +915,41 @@ fn float_flags(
     setcc: SDValue,
     status: bool,
 ) -> Option<(SDValue, SDValue)> {
+    let status = status && status_word_pays(dag, setcc);
     let (mut lhs, mut rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
-    let code = translate_fp_cc(dag, cond_of(dag, dag.operand(setcc, 2)), &mut lhs, &mut rhs)?;
+    let cc = cond_of(dag, dag.operand(setcc, 2));
+    if status && matches!(cc, CondCode::SetOEq | CondCode::SetUNe) {
+        // gcc: `and ah, 0x45; cmp ah, 0x40` is `==` and not unordered, one flag instead of two.
+        let word = dag.get_node(crate::x86isd::LLRM_FSTATUS, EVT::I32, &[lhs, rhs]);
+        let (mask, value) = (dag.get_constant(0x45, EVT::I8), dag.get_constant(0x40, EVT::I8));
+        let flags = dag.get_node(crate::x86isd::LLRM_STATUS_TEST, EVT::I32, &[word, mask, value]);
+        let code = if cc == CondCode::SetOEq { cond::E } else { cond::NE };
+        return Some((flags, cond_code(dag, code)));
+    }
+    let code = translate_fp_cc(dag, cc, &mut lhs, &mut rhs)?;
     Some(fp_flags(dag, lhs, rhs, code, status))
+}
+
+/// Whether the compare `setcc` is read by two or more conditions of its operand pair. One
+/// reader costs a copy and a wide `test` where `sahf` costs a byte; a shared pair needs the word,
+/// since a flag-clobbering instruction between readers kills what `sahf` set (gcc picks the
+/// strategy per compare from `ix86_fp_comparison_cost`).
+fn status_word_pays(
+    dag: &SelectionDAG,
+    setcc: SDValue,
+) -> bool {
+    let (lhs, rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
+    let readers: usize = dag
+        .users(lhs)
+        .filter(|&user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::SetCC)
+        .filter(|&user| {
+            let user = SDValue { node: user, res: 0 };
+            let pair = (dag.operand(user, 0), dag.operand(user, 1));
+            pair == (lhs, rhs) || pair == (rhs, lhs)
+        })
+        .map(|user| dag.users(SDValue { node: user, res: 0 }).count().max(1))
+        .sum();
+    readers >= 2
 }
 
 /// The flags of `lhs` against `rhs` for the `sahf` condition `code` and the code that reads them: `FCMP`
@@ -948,7 +980,7 @@ fn fp_flags(
         let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
         return (flags, cond_code(dag, code));
     };
-    let word = dag.get_node(crate::x86isd::LLRM_FSTATUS, EVT::I16, &[lhs, rhs]);
+    let word = dag.get_node(crate::x86isd::LLRM_FSTATUS, EVT::I32, &[lhs, rhs]);
     let (mask, zero) = (dag.get_constant(mask, EVT::I8), dag.get_constant(0, EVT::I8));
     let flags = dag.get_node(crate::x86isd::LLRM_STATUS_TEST, EVT::I32, &[word, mask, zero]);
     (flags, cond_code(dag, code))
@@ -1504,17 +1536,18 @@ fn lower_float_brcond(
 ) -> Option<SDValue> {
     let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 2));
     let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
+    let status = status && status_word_pays(dag, cond);
     let branch_on = |dag: &mut SelectionDAG, chain, dest, code, flags| {
         dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
     };
     match cond_of(dag, dag.operand(cond, 2)) {
-        CondCode::SetUNe => {
+        CondCode::SetUNe if !status => {
             let (ne_flags, ne) = fp_flags(dag, lhs, rhs, cond::NE, status);
             let first = branch_on(dag, chain, dest, ne, ne_flags);
             let (p_flags, p) = fp_flags(dag, lhs, rhs, cond::P, status);
             Some(branch_on(dag, first, dest, p, p_flags))
         }
-        CondCode::SetOEq => {
+        CondCode::SetOEq if !status => {
             let users: Vec<u32> = dag.users(node).collect();
             let [user] = users[..] else { return None };
             let user = SDValue { node: user, res: 0 };

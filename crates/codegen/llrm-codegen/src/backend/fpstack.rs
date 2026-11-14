@@ -1085,10 +1085,15 @@ impl Fps<'_> {
         let held = match word.delivers.iter().find(|(_, register)| *register == self.status_word) {
             Some(&(held, _)) => held,
             None => {
-                let held = Held { value: self.take_fresh(), width: 2, offset: 0 };
+                let width = match &word_value {
+                    Some(Loc::Reg(reg)) => reg.width,
+                    Some(Loc::Held(value)) => value.width,
+                    _ => 2,
+                };
+                let held = Held { value: self.take_fresh(), width, offset: 0 };
                 word.defines.push(held.value);
                 word.delivers.push((held, self.status_word));
-                word.widths.push((held.value, 2));
+                word.widths.push((held.value, width));
                 held
             }
         };
@@ -1108,7 +1113,9 @@ impl Fps<'_> {
                 }
                 // `fnstsw` writes AX alone: the word is copied from there unless it stays there.
                 Loc::Reg(reg) if reg.register != self.status_word => {
-                    let from = Loc::Reg(Reg { register: self.status_word, width: 2 });
+                    // A 32-bit copy reads EAX: the high half is garbage the readers never test.
+                    let source = if reg.width == 4 { self.status_word.full_register32() } else { self.status_word };
+                    let from = Loc::Reg(Reg { register: source, width: reg.width });
                     let mut copy = inserted(at, semantics(Operation::Move, "mov", vec![Loc::Reg(reg)], vec![from]));
                     copy.uses = vec![held.value];
                     copy.requires = vec![(held, self.status_word)];

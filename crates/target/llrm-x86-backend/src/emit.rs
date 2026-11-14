@@ -2923,7 +2923,8 @@ impl Emitter<'_, '_> {
                     // as a value its readers test.
                     None => match self.status_node(n) {
                         Some(word) => {
-                            let held = self.fresh(2);
+                            // 32 bits: the readers mask bits 8..16 only, and a 32-bit copy carries no prefix.
+                            let held = self.fresh(4);
                             self.values.insert(SDValue { node: word, res: 0 }, held.value);
                             self.push(
                                 Operation::Compare,
@@ -2942,7 +2943,7 @@ impl Emitter<'_, '_> {
             "FNSTSW16r" => {
                 // The compare made it a value already (DEVIATE X87-STATUS).
                 if !self.values.contains_key(&SDValue { node: n, res: 0 }) {
-                    let held = self.fresh(2);
+                    let held = self.fresh(4);
                     self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 }
                 return Ok(Some(()));

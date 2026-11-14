@@ -933,7 +933,9 @@ pub mod x86 {
     pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
     pub const TEST8mr: u16 = 5023;
+    pub const AND32ri: u16 = 860;
     pub const AND8ri: u16 = 938;
+    pub const CMP32ri: u16 = 1324;
     pub const CMP8ri: u16 = 1342;
     pub const TEST8ri: u16 = 5024;
     pub const TEST8rr: u16 = 5025;
@@ -990,6 +992,7 @@ pub mod x86 {
         (834, "AND16rr"),
         (845, "AND32mi"),
         (855, "AND32mr"),
+        (860, "AND32ri"),
         (870, "AND32rm"),
         (875, "AND32rr"),
         (911, "AND64rm"),
@@ -1001,6 +1004,7 @@ pub mod x86 {
         (949, "AND8rr"),
         (977, "ANDPSrm"),
         (1202, "CDQ"),
+        (1324, "CMP32ri"),
         (1342, "CMP8ri"),
         (1396, "CQO"),
         (1506, "CWD"),
