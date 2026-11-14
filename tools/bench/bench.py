@@ -407,6 +407,21 @@ def io_cost(opt: str, folder: Path) -> int | str:
     return sizes_of[0] - sizes_of[1]
 
 
+def fixed_io_skeleton() -> dict[str, int]:
+    """The std.io skeleton's code bytes per level, as measured once (io_skeleton/fixed.toml): what a Nib cell's net code (`net_code`) subtracts. Refused when
+    io_skeleton.nib is no longer the program they were measured on."""
+    stored = tomllib.loads((IO_SKELETON / "fixed.toml").read_text())
+    if stored["source"] != hashlib.sha256((IO_SKELETON / "io_skeleton.nib").read_bytes()).hexdigest()[:16]:
+        raise ValueError("io_skeleton.nib changed since io_skeleton/fixed.toml was measured: measure again")
+    return stored["bytes"]
+
+
+def net_code(gross: int, opt: str) -> int:
+    """A Nib cell's code bytes less the std.io skeleton's fixed bytes at `opt`: the measure that is judged against plain C, which links its I/O from the
+    library. Never the build's own measure of the skeleton (`io_skeleton_bytes`): that one moves with the compiler under test and a base differs from a head."""
+    return gross - fixed_io_skeleton()[opt]
+
+
 def io_programs(selected: list[str]) -> set[str]:
     """The benchmarks whose bench.toml says `io_skeleton = true`: their Nib cells do file I/O through std.io."""
     return {directory_name(one) for one in benchmarks(selected) if tomllib.loads((one / "bench.toml").read_text()).get("io_skeleton")}
