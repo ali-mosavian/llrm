@@ -138,3 +138,10 @@ def test_at_os_a_data_table_that_replaces_code_is_total_bytes_not_a_data_miss():
     only = {"sieve/c/Os": cell(288, 500000, 12), **refs("sieve", "Os", 559, 960000)}
     row = by_row(only)[("sieve", "c", "Os")]
     assert row[10] == "OK", row
+
+
+def test_at_os_a_basic_cell_is_code_plus_static_so_a_table_that_replaces_code_is_ok():
+    """switch bas at -Os: 396 B of code and 27 B static against bc's 1128 B and 19 B: total 423 vs 1147. Graded on static alone, 27 > 19 made it WORSE (oversight, 2026-11-14)."""
+    measured = {"switch/bas/Os": cell(396, 604295, 27), "switch/bc/O2": cell(1128, 4221878, 19), "switch/pds71/O2": cell(1070, 4060681, 19), "switch/vbdos/O2": cell(1080, 4164707, 19)}
+    row = by_row(measured)[("switch", "bas", "Os")]
+    assert row[10] == "OK", row

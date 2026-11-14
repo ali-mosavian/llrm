@@ -40,4 +40,4 @@ def test_a_reference_that_allocates_the_arrays_llrm_holds_is_not_smaller_for_it(
     measured = {"stft_fixed/bas/Os": cell(900, 10000, 4677), "stft_fixed/bc/O2": cell(2000, 90000, 31, 130), "stft_fixed/pds71/O2": cell(2100, 91000, 29, 130), "stft_fixed/vbdos/O2": cell(2200, 92000, 35, 136)}
     found, _ = table.rows(measured)
     row = next(one for one in found if one[:3] == ("stft_fixed", "bas", "Os"))
-    assert "static" not in row[11], row
+    assert "total" not in row[11], row

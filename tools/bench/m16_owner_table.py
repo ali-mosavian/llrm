@@ -1,7 +1,7 @@
 """m16_owner_table.py BENCH.json DIST OUT.tsv [HARNESS_COMMIT]: the m16 owner table, from a `bench.py --opt O1 O2 Os --references --no-judge --json` run.
 
 One row per program, language and level of ours, judged per axis against the best external (C: ow, bcc, tc, tcpp; BASIC: bc, pds71, vbdos): -Os on total bytes
-(code + data; BASIC also static) and clocks; O1/O2/O3 on clocks only, the code bytes over the bar reported in the note (user ruling 2026-11-14). A Nib row's bar is the C compilers on the C twin that has the Nib semantics
+(code + data; BASIC code + static) and clocks; O1/O2/O3 on clocks only, the code bytes over the bar reported in the note (user ruling 2026-11-14). A Nib row's bar is the C compilers on the C twin that has the Nib semantics
 (`bench.bar_program`: `NAME~init`, `NAME~bounds`), the compilers on the plain source stay beside it (`plain_ext_*`); a twin's own row is reference-only (verdict TWIN); a Nib program with a twin on disk and none measured is NO_TWIN, never judged on the plain source.
 The header names the dist, the md5 of its compilers, the harness commit and `date -u`: a table without them is not evidence.
 """
@@ -27,7 +27,10 @@ def counts(row: dict | None, program: str = "", name: str = "") -> dict | None:
     run time for the BASIC `program` (bench.run_time_arrays): a reference that allocates what llrm holds in its data is not smaller for it."""
     if not row or "error" in row or "clocks" not in row or "code_bytes" not in row:
         return None
-    return {"code": row["code_bytes"], "total": row["code_bytes"] + row.get("data_bytes", 0), "clocks": row["clocks"], "data": row.get("data_bytes", 0), "static": bench.with_footprint({"data_bytes": row.get("data_bytes", 0), "bss_bytes": row.get("bss_bytes", 0)}, bench.run_time_arrays(program, name))["static_bytes"]}
+    static = bench.with_footprint({"data_bytes": row.get("data_bytes", 0), "bss_bytes": row.get("bss_bytes", 0)}, bench.run_time_arrays(program, name))["static_bytes"]
+    # Total bytes at -Os: code and initialised data, and for BASIC (11-13 ruling) code and static: data, bss and the arrays allocated at run time, of both sides.
+    total = row["code_bytes"] + (static if name in ("bas", "bq16", *BAS_REFS) else row.get("data_bytes", 0))
+    return {"code": row["code_bytes"], "total": total, "clocks": row["clocks"], "data": row.get("data_bytes", 0), "static": static}
 
 
 def has_twin_source(program: str) -> bool:
@@ -36,12 +39,12 @@ def has_twin_source(program: str) -> bool:
     return any((bench.BENCH / program / "twin" / f"{semantic}.c").exists() for semantic in bench.TWINS)
 
 
-def findings(level: str, ours: dict, refs: dict, basic: bool = False) -> list[str]:
+def findings(level: str, ours: dict, refs: dict) -> list[str]:
     """Where `ours` is worse than the best of `refs`, under the user's ruling of 2026-11-14 and oversight's reading of it (the same day): -Os matches the best
-    on total bytes (code + initialised data; BASIC also on its static, data + bss) and on clocks; O1/O2/O3 match the best on clocks, the code bytes over the
+    on total bytes (code + initialised data; BASIC code + static: data, bss and run-time arrays) and on clocks; O1/O2/O3 match the best on clocks, the code bytes over the
     bar reported (`bytes_over`) and not required. The per-axis code and data stay in their columns."""
     found = []
-    for axis in (("total", "clocks", *(("static",) if basic else ())) if level == "Os" else ("clocks",)):
+    for axis in (("total", "clocks") if level == "Os" else ("clocks",)):
         best = min((r[axis], name) for name, r in refs.items())
         if ours[axis] > best[0]:
             found.append(f"{axis} {ours[axis]}>{best[0]}({best[1]})")
@@ -91,7 +94,7 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
         elif not have:
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_BAR", "")
         else:
-            found = findings(level, ours, have, language in ("bas", "bq16"))
+            found = findings(level, ours, have)
             verdict = "OK" if not found else ("WORSE_LB" if len(names) - len(have) else "WORSE")
             note = ";".join([*found, *filter(None, [bytes_over(level, ours, have)])]) + (f" [bar {bar}]" if bar != program else "")
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), verdict, note)
@@ -113,7 +116,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         f"# dist {dist}; md5: {md5_lines(dist)}",
         f"# harness commit {harness}; bench.py --opt O1 O2 Os --references --no-judge; flags -march=i386",
         "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
-        "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC also static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
+        "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
         "# verdicts: OK, WORSE, WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
