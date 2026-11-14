@@ -3464,18 +3464,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(x)
     }
 
-    /// `freeze(op(x, ...))` to `op(freeze(x), ...)`: the operation cannot make
-    /// undef or poison itself (flags ignored), has one use, and has at most one
-    /// operand that may be undef or poison (a `setcc` may have two).
+    /// `visitFREEZE`'s `freeze(op(x, ...))` to `op(freeze(x), ...)`: the
+    /// operation cannot make undef or poison itself (flags ignored), has one
+    /// use, and has at most one operand that may be undef or poison (a `setcc`
+    /// may have two).
     fn push_freeze_through(
         &mut self,
         op: SDValue,
     ) -> Option<SDValue> {
         let opcode = self.dag.opcode(op);
         let is_setcc = opcode == ISD::SetCC;
-        let integer_setcc = is_setcc && self.dag.value_type(self.dag.operand(op, 0)).is_integer();
         if !self.hooks.push_freeze_through_operands()
-            || !(integer_setcc || matches!(opcode, ISD::And | ISD::Or | ISD::Xor | ISD::Add | ISD::Sub))
+            || !self.cannot_create_undef_or_poison_without_flags(op)
+            || self.dag.node(op).values.len() != 1
             || !self.dag.has_one_use(op.node)
         {
             return None;
@@ -3509,6 +3510,43 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let vt = self.dag.value_type(op);
         // The node is rebuilt without its poison-generating flags.
         Some(self.dag.get_node(opcode, vt, &ops))
+    }
+
+    /// `!canCreateUndefOrPoison(Op, UndefOrPoison, ConsiderFlags=false)`, for
+    /// the integer nodes `visitFREEZE` pushes a freeze through: the bitwise,
+    /// add, subtract and multiply nodes, the extensions and the truncation,
+    /// an integer `setcc`, and a shift by a constant below the width. `srl`
+    /// is left out as `visitFREEZE` does (an `assert ext` under it blocks its
+    /// folds).
+    ///
+    /// DEVIATE SD213: any other node is taken to create poison. Exit: the
+    /// rest of the pin's list. Owner wasm-3, review 2026-12-10.
+    fn cannot_create_undef_or_poison_without_flags(
+        &self,
+        op: SDValue,
+    ) -> bool {
+        let vt = self.dag.value_type(op);
+        match self.dag.opcode(op) {
+            ISD::SetCC => self.dag.value_type(self.dag.operand(op, 0)).is_integer(),
+            ISD::And
+            | ISD::Or
+            | ISD::Xor
+            | ISD::Add
+            | ISD::Sub
+            | ISD::Mul
+            | ISD::ZeroExtend
+            | ISD::SignExtend
+            | ISD::Truncate
+            | ISD::SignExtendInReg => vt.is_integer(),
+            ISD::Shl | ISD::Sra => {
+                vt.is_integer()
+                    && self
+                        .dag
+                        .constant(self.dag.operand(op, 1))
+                        .is_some_and(|amount| amount < u128::from(vt.size_in_bits()))
+            }
+            _ => false,
+        }
     }
 
     /// `isGuaranteedNotToBeUndefOrPoison`, for the nodes the combiner builds:

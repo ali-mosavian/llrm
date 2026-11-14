@@ -1137,9 +1137,11 @@ fn an_and_with_a_sum_of_a_not_stays_where_the_target_has_no_and_not() {
     assert_eq!(dag.opcode(dag.operand(dag.get_root(), 1)), ISD::Add);
 }
 
-/// `select_cc` on a compare of two constants made `get_setcc` fold the compare to a constant, and `visit_setcc` read
-/// the operands of that constant: `tests/fixtures/c/bitfield` panicked (`index out of bounds`, `dag.rs:1202`) at O1 on
-/// arm64. The pin's `SimplifySelectCC` takes the arm the constant compare names.
+/// `select_cc` on a compare of two constants made `get_setcc` fold the compare
+/// to a constant, and `visit_setcc` read the operands of that constant:
+/// `tests/fixtures/c/bitfield` panicked (`index out of bounds`, `dag.rs:1202`)
+/// at O1 on arm64. The pin's `SimplifySelectCC` takes the arm the constant
+/// compare names.
 #[test]
 fn a_select_cc_on_a_constant_compare_is_the_arm_it_names() {
     let mut dag = dag();
@@ -1150,4 +1152,49 @@ fn a_select_cc_on_a_constant_compare_is_the_arm_it_names() {
     dag.set_root(root);
     DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.get_root(), x, "1 < 2 picks the true arm");
+}
+
+fn frozen_exact_shift(dag: &mut SelectionDAG) {
+    let x = dag.get_register(EVT::I32, 5);
+    let amount = dag.get_constant(24, EVT::I32);
+    let shifted = dag.get_node_flags(ISD::Sra, EVT::I32, &[x, amount], SDNodeFlags::EXACT);
+    let root = dag.get_node(ISD::Freeze, EVT::I32, &[shifted]);
+    dag.set_root(root);
+}
+
+/// `freeze (sra exact x, 24)` of a register stayed a freeze, which kept the
+/// `sext_inreg` of a byte divide's operand (`div8_os` -O3 on wasm, one
+/// `extend16_s` per iteration); the pin drops the flag and the freeze.
+#[test]
+fn a_frozen_shift_by_a_constant_is_the_shift_of_a_defined_register() {
+    let mut dag = dag();
+    frozen_exact_shift(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Sra, "{}", dag.dump());
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_frozen_shift() {
+    let mut dag = dag();
+    frozen_exact_shift(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Freeze);
+}
+
+/// `freeze (trunc nsw (assertsext x))`: the assertion may be poison, so the
+/// freeze moves under the truncation, which is no longer `nsw`.
+#[test]
+fn a_freeze_of_a_truncation_moves_to_its_operand() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let ty = dag.get_value_type_node(EVT::I8);
+    let asserted = dag.get_node(ISD::AssertSext, EVT::I32, &[x, ty]);
+    let narrow = dag.get_node_flags(ISD::Truncate, EVT::I16, &[asserted], SDNodeFlags::NO_SIGNED_WRAP);
+    let root = dag.get_node(ISD::Freeze, EVT::I16, &[narrow]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Truncate, "{}", dag.dump());
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Freeze, "{}", dag.dump());
+    assert_eq!(dag.node(root).flags, SDNodeFlags::default(), "the flag is dropped");
 }
