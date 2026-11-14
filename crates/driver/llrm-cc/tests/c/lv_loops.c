@@ -8,3 +8,8 @@ int sum_array(const int *a, int n) {
   for (int i = 0; i < n; i++) total += a[i];
   return total;
 }
+
+void fill_rows(short t[64][64]) {
+  for (int y = 0; y < 64; ++y)
+    for (int x = 0; x < 64; ++x) t[y][x] = 4660;
+}
