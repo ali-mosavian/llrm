@@ -1220,6 +1220,20 @@ impl Tti for AArch64 {
         AArch64::is_legal_addressing_mode_for(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// DEVIATE LSR-OUTER (hook of x87's #9182; owner m16-b): a multiply of an
+    /// outer loop's counter that is two instructions (`lsl` + `sub` for `2^N -
+    /// 1`) is a counter stepped by the multiplier, one `add` a trip. Gcc's
+    /// ivopts does it on every loop; the pin's LSR skips a loop with a subloop.
+    /// Judged in instructions, as the arm64 cells are: a multiply that is one
+    /// (`madd`, a shifted add) gains nothing from a register held across the
+    /// inner loop, and one that is not a constant is a `mul`.
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        multiplier.is_some_and(|m| multiply_instructions(m) >= 2)
+    }
+
     /// `adrp` + `add` for each symbol base (see the trait).
     fn lsr_symbol_base_setup_insns(&self) -> u32 {
         2
@@ -1636,4 +1650,13 @@ impl Lowering for AArch64Lowering {
     ) -> bool {
         op == llrm_mir::lowering::OverflowOp::UAdd && llrm_mir::lowering::simple_int(bits)
     }
+}
+
+
+/// The instructions of `x * m` as `performMulCombine` leaves it (dag/combine.rs
+/// `combine_mul`): `2^N + 1` is one shifted add, `2^N - 1` a shift and a `sub`,
+/// and every other constant a `mul` (an even one is a `madd` with an add user:
+/// the combine keeps it whole).
+fn multiply_instructions(m: u128) -> u32 {
+    if m > 1 && m & 1 == 1 && (m + 1).is_power_of_two() { 2 } else { 1 }
 }
