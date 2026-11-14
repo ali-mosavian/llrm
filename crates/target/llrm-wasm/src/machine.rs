@@ -177,12 +177,6 @@ impl Tti for Wasm {
         true
     }
 
-    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
-    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
-    fn lftr_any_stride(&self) -> bool {
-        true
-    }
-
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
         &self,
@@ -483,11 +477,10 @@ impl Tti for Wasm {
 mod tests {
     use super::*;
 
-    /// DEVIATE LFTR1: the pin's step-one rule cost wasm bytes in
-    /// byte_multiply and variadic; the knob must stay on here.
+    /// The pin's IndVars takes a unit-stride counter only (LFTR1 is gone).
     #[test]
-    fn lftr_counts_any_constant_stride() {
-        assert!(Wasm.lftr_any_stride());
+    fn lftr_takes_the_pins_unit_stride() {
+        assert!(!Wasm.lftr_any_stride());
     }
 
     /// A `zext` of a loaded byte cost one unit, where the pin prices it at none
