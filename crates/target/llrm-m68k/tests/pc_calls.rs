@@ -20,7 +20,8 @@ define i32 @f(i32 %a) {
   %x = call i32 @h(i32 %a)
   %y = call i32 @ext(i32 %x)
   %z = call i32 @w(i32 %y)
-  ret i32 %z
+  %q = add i32 %z, 1
+  ret i32 %q
 }
 ";
 
