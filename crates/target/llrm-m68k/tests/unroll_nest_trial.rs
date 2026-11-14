@@ -46,3 +46,15 @@ fn an_outer_loop_over_a_constant_table_is_unrolled_when_that_shrinks_the_code() 
         assert!(!out.contains("tbl"), "{cpu}: the table is still read:\n{out}");
     }
 }
+
+/// The trial lowers the nest's function once with the unroll and once without,
+/// to price them; the side it keeps was printed from those items. Lowering the
+/// winner again for the output cost 1.5x the compile (matmul -O2 68000: 4466 M
+/// instructions against 3334 M).
+#[test]
+fn the_trials_kept_side_is_lowered_once() {
+    let before = llrm_m68k::driver::lowerings();
+    let out = assembly(NEST, cpu_of("68000").unwrap(), Level::O2).expect("compiles");
+    assert!(!out.contains("tbl"), "premise: the unrolled side is kept:\n{out}");
+    assert_eq!(llrm_m68k::driver::lowerings() - before, 2, "one function, lowered with and without the unroll");
+}
