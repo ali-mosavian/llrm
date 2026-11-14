@@ -1270,12 +1270,6 @@ impl Tti for X86 {
         if self.vector_values() { 16 } else { 0 }
     }
 
-    /// The pin expands a reduction to shuffles (`ExpandReductions`); the
-    /// backend has no vector shuffle yet. DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR).
-    fn lowers_vector_reductions(&self) -> bool {
-        false
-    }
-
     /// `X86TTIImpl::getMaxInterleaveFactor`: a scalar loop is left to the
     /// unroller; a vector one is interleaved twice (4 needs AVX).
     fn max_interleave_factor(
@@ -1292,15 +1286,21 @@ impl Tti for X86 {
     /// (DEVIATE X86V1, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR: the pin widens or scalarizes it; isel here takes none).
     fn vector_memory_op_cost(
         &self,
-        _op: MemoryOp,
+        op: MemoryOp,
         ty: VectorTy,
         _align: u64,
         kind: CostKind,
     ) -> Option<Cost> {
-        if !self.vector_values() || kind != CostKind::RecipThroughput {
+        if !self.vector_values() {
             return None;
         }
-        xmm_pieces(ty).map(Cost::of)
+        let pieces = xmm_pieces(ty)?;
+        // Every other kind is `TCC_Basic` ("TODO: Handle other cost kinds"), a load's latency the base's 4.
+        Some(match kind {
+            CostKind::RecipThroughput => Cost::of(pieces),
+            CostKind::Latency if op == MemoryOp::Load => Cost::of(4),
+            _ => Cost::BASIC,
+        })
     }
 
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
@@ -1314,9 +1314,11 @@ impl Tti for X86 {
         ty: VectorTy,
         kind: CostKind,
     ) -> Option<Cost> {
-        if !self.vector_values() || kind != CostKind::RecipThroughput {
+        if !self.vector_values() {
             return None;
         }
+        // A kind other than throughput is the base's: one per legal register.
+        let _ = kind;
         match op {
             ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
             _ => None,
