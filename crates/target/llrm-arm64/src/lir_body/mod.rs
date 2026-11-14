@@ -27,8 +27,8 @@ mod tests;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use llrm_codegen::backend::lanes::{Lanes, enter};
 use llrm_analysis::placealias::Object;
+use llrm_codegen::backend::lanes::{Lanes, enter};
 use llrm_codegen::model::lir::{Insn, LirBlock, LirBody};
 use llrm_codegen::model::memref::MemRef;
 use llrm_codegen::support::hash::IndexMap;
@@ -255,10 +255,15 @@ pub(crate) fn intern(
     symbols: &mut Vec<String>,
     name: &str,
 ) -> i64 {
-    let at = symbols.iter().position(|each| each == name).unwrap_or_else(|| {
-        symbols.push(name.to_owned());
-        symbols.len() - 1
-    });
+    let at = symbols
+        .iter()
+        .position(|each| each == name)
+        .unwrap_or_else(
+            || {
+                symbols.push(name.to_owned());
+                symbols.len() - 1
+            },
+        );
     at as i64
 }
 
@@ -681,12 +686,27 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     let mut body = LirBody::new(function.name.clone(), 0, blocks, IndexMap::default(), IndexMap::default());
     body.registers = Some(Regs(&crate::REGISTER_INFO));
     body.symbols = Arc::new(symbols);
-    // The edge odds, by block position (`at`); the body keeps the numerator over 2^31.
+    // The edge odds, by block position (`at`); the body keeps the numerator
+    // over 2^31.
     for (&(from, to), &(probability, _)) in function.alloc_odds.iter().flatten() {
         body.odds.taken.insert((i64::from(from), i64::from(to)), probability.get_numerator());
     }
     let tied = ties.iter().map(|(&old, &new)| (new, old)).collect();
     Ok(Lowered { body, debug_values, tied })
+}
+
+/// `op` as the scheduling model reads an instruction: its form and operands.
+/// `None` where the form has no mapping.
+pub fn insn_of(
+    function: &MFunc,
+    op: &Op,
+) -> Option<Insn> {
+    let wide: Vec<Reg> = Vec::new();
+    let mut symbols = Vec::new();
+    let _file = enter(Regs(&crate::REGISTER_INFO));
+    let what = one(&mut To { function, symbols: &mut symbols, wide: &wide }, op).ok()?;
+    let (defines, uses) = values_of(&what);
+    Some(Insn::new(0, None, Some(what), defines, uses))
 }
 
 fn show(

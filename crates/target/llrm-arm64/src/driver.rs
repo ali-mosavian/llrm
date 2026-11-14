@@ -183,7 +183,8 @@ pub fn optimized_at(
     lowered_before_selection(program)?;
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
     if let Some(mut merge) = program.target.global_merge(level == Level::O3) {
-        // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the pin does, nothing at -Os.
+        // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the
+        // pin does, nothing at -Os.
         merge.optsize_counts &= !crate::trial::unmerged();
         for module in &mut program.modules {
             let before = module.globals.len();
@@ -246,9 +247,14 @@ fn lower_function(
     let global = module.global(id);
     let function = global.function().ok_or("not a function")?;
     let name = global.name.owned().ok_or("an unnamed function")?;
-    let mut machine = dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
+    let mut machine =
+        dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
     crate::mfunc::remove_unreachable_blocks(&mut machine);
+    if let Some(mode) = crate::ifcvt::mode_from_env() {
+        crate::ifcvt::run(&mut machine, mode);
+        dump("EarlyIfConversion", &machine);
+    }
     // The shared phases that need SSA see the body as selection made it,
     // phis and all; the private phases below see it after phi elimination.
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
@@ -287,8 +293,8 @@ fn lower_function(
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
-        // The body carries the edge odds by block position; no pass between here and the
-        // conversion adds or removes a block.
+        // The body carries the edge odds by block position; no pass between
+        // here and the conversion adds or removes a block.
         machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         machine = crate::lir_body::round_trip(&machine)?;
     }
@@ -527,8 +533,8 @@ fn compiled(
             (notes.left, notes.left_loops) = trial::take_left();
             (notes.rotated, notes.loops) = (trial::take_rotated(), trial::rotated_loops());
             notes.merged = crate::trial::take_merged();
-            // A module nothing was noted in is compiled once, unpriced: the pricing is a second walk of every
-            // function.
+            // A module nothing was noted in is compiled once, unpriced: the
+            // pricing is a second walk of every function.
             let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0);
             if noted || (unrotated, more, unmerged) != (false, false, false) {
                 crate::trial::start();
@@ -548,7 +554,11 @@ fn compiled(
     let mut best = once((false, false, false))?;
     let notes = std::mem::take(&mut best.3);
     let mut state = (false, false, false);
-    let mut try_one = |best: &mut Built, other: (bool, bool, bool), what: &str, pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool| -> Result<bool, String> {
+    let mut try_one = |best: &mut Built,
+                       other: (bool, bool, bool),
+                       what: &str,
+                       pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool|
+     -> Result<bool, String> {
         trial::clear_rotated_loops();
         let other_built = once(other)?;
         let (kept, now) = (best.2, other_built.2);
