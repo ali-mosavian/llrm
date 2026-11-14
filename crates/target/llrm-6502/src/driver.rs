@@ -408,6 +408,29 @@ pub fn selected() -> usize {
     SELECTED.with(std::cell::Cell::get)
 }
 
+/// The bytes the initialised data in `text` takes in the image: what a trial
+/// that folds a table away saves, which the functions' own bytes leave out.
+/// Zero-filled `.res` of the BSS is not in the image.
+pub fn data_bytes(text: &str) -> i64 {
+    let mut in_image = true;
+    let mut total = 0;
+    for line in text.lines().map(str::trim) {
+        if let Some(segment) = line.strip_prefix(".segment") {
+            in_image = !segment.contains("BSS");
+        } else if in_image {
+            let count = |rest: &str| rest.split(',').filter(|one| !one.trim().is_empty()).count() as i64;
+            if let Some(rest) = line.strip_prefix(".byte") {
+                total += count(rest);
+            } else if let Some(rest) = line.strip_prefix(".word").or_else(|| line.strip_prefix(".addr")) {
+                total += 2 * count(rest);
+            } else if let Some(rest) = line.strip_prefix(".res") {
+                total += rest.trim().split(',').next().and_then(|n| n.trim().parse::<i64>().ok()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
+
 /// A program's assembly and, when asked for, its price: the clocks and bytes
 /// of the functions as the pass that wrote them estimates them.
 struct Assembled {
@@ -634,6 +657,9 @@ fn tail(
         let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
         (clocks, bytes) = (run as i64, size as i64);
     }
+    if price {
+        bytes += data_bytes(&data.0);
+    }
     let mut text = pieces.concat();
     for (name, label) in &data.1 {
         text = text.replace(name.as_str(), label);
@@ -671,7 +697,6 @@ fn trial_unrolled(
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial candidates: {} functions, {units} units", eligible.len());
     }
-    let rate = tti.as_ref().map_or(0, |tti| tti.unroll_milliclocks_per_byte());
     let other = trial::with(limit, || program(text, request))?;
     let growth = instructions(&other).saturating_sub(instructions(&built));
     if !trial_fits(growth) {
@@ -682,7 +707,7 @@ fn trial_unrolled(
     }
     let (kept, tried) = (tail(built, request, true, false)?, tail(other, request, true, false)?);
     let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
-    let pays = trial_pays(request.level, rate, saved, added);
+    let pays = trial_pays(request.level, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial unroll: {added:+} bytes, {saved:+} clocks saved: {}", if pays { "kept" } else { "put back" });
     }
@@ -711,12 +736,11 @@ fn instructions(program: &Program) -> usize {
 /// fitted.
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
-/// Whether a trial that saved `saved` clocks for `added` bytes is kept. Bytes
-/// only at size, as everywhere else; at speed a byte is worth `rate`
-/// thousandths of a clock.
+/// Whether a trial that saved `saved` clocks for `added` bytes is kept: bytes
+/// first at every level (user ruling 2026-11-14), so one that adds none, and
+/// saves no fewer clocks, or one that removes some.
 pub fn trial_pays(
     level: Level,
-    rate: i64,
     saved: i64,
     added: i64,
 ) -> bool {
@@ -724,10 +748,9 @@ pub fn trial_pays(
         return false;
     }
     match level {
-        Level::Os => added < 0 || (added == 0 && saved >= 0),
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
         Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added),
-        _ => saved * 1000 >= added * rate,
+        _ => added < 0 || (added == 0 && saved >= 0),
     }
 }
 
