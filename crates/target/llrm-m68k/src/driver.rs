@@ -190,7 +190,7 @@ const TRIAL_MAX_UNITS: u64 = 700;
 /// the loops the -Os threshold refused unrolled, kept if its functions that
 /// differ are smaller, bytes then clocks (`Price::Size`). At -O1 the same
 /// trial (DEVIATE UNROLL-O1-TRIAL, `Tti::unroll_trial_threshold`) keeps them
-/// where the functions are no larger and no slower (`Price::Strict`). A module
+/// where the functions are cheaper in clocks (`Price::Rate`). A module
 /// with no refused loop is compiled once.
 fn lowered(
     text: &str,
@@ -233,7 +233,7 @@ fn lowered(
     };
     let pays = matches!(
         (items(&other), items(&base)),
-        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::of(small, !small))
+        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::of(small))
     );
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
