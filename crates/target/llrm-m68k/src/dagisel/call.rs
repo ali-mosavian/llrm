@@ -419,12 +419,17 @@ impl TargetCalling for M68kCalling {
     }
 
     /// `LowerCall`'s sibcall: `TC_RETURN chain, callee, fpdiff`, for a direct
-    /// callee whose every argument is the caller's own, in the slot the callee
-    /// reads it from (`MatchingStackOffset`).
+    /// callee whose arguments fit the caller's incoming slots: an argument
+    /// that is the caller's own, in the slot the callee reads it from, stays
+    /// (`MatchingStackOffset`); any other is stored into that slot.
     ///
-    /// DEVIATE: the pin also stores other arguments into the caller's
-    /// incoming slots (`IsEligibleForTailCallOptimization`, L1255); here such
-    /// a call stays a call. Exit: with those stores.
+    /// DEVIATE: the M68k pin keeps a call whose argument is not already in
+    /// place (it stores only under `-tailcallopt`). This is AArch64's sibcall
+    /// (`isEligibleForTailCallOptimization`: the callee's stack size within
+    /// `getBytesInStackArgArea`; `LowerCall`: `IsTailCall` stores at FPDiff 0,
+    /// `addTokenForArgument`), as gcc does. A slot is stored only if the
+    /// caller has an immutable 4-byte object there; a caller with a `byval`
+    /// parameter keeps the call. Exit: none, the pin's x86 and ARM do the same.
     fn lower_tail_call(
         &self,
         dag: &mut SelectionDAG,
@@ -432,26 +437,68 @@ impl TargetCalling for M68kCalling {
         callee: SDValue,
         outs: &[Out],
     ) -> Option<SDValue> {
-        let (offsets, _) = self.place(outs.len());
-        let forwarded = outs
-            .iter()
-            .zip(offsets)
-            .all(
-                |(out, offset)| {
-                    let NodeData::Mem(info) = dag.node(out.value).data else { return false };
-                    let MemBase::Stack(index) = info.base else { return false };
-                    dag.opcode(out.value) == ISD::Load
-                        && dag.value_type(out.value) == EVT::I32
-                        && dag.fixed_offsets.get(&index) == Some(&offset)
-                },
-            );
-        if !forwarded {
+        if outs.iter().any(|out| out.byval.is_some()) {
             return None;
         }
         // a direct callee, already the target form (`callee` above)
         let target = match dag.opcode(callee) {
             ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode => callee,
             _ => return None,
+        };
+        let (offsets, _) = self.place(outs.len());
+        let mut stores = Vec::new();
+        for (out, offset) in outs.iter().zip(offsets) {
+            let slot = *dag.fixed_offsets.iter().find(|(_, at)| **at == offset)?.0;
+            if dag.fixed_objects.get(&slot) != Some(&(4, true)) {
+                return None;
+            }
+            let own = matches!(dag.node(out.value).data, NodeData::Mem(info) if info.base == MemBase::Stack(slot));
+            if own && dag.opcode(out.value) == ISD::Load && dag.value_type(out.value) == EVT::I32 {
+                continue;
+            }
+            stores.push((slot, out.value, out.ext));
+        }
+        // the caller's incoming loads hang off the entry token, unordered
+        // against the stores: each is chained ahead of them, and is no longer
+        // immutable (`addTokenForArgument`)
+        let mut chains = vec![chain];
+        if !stores.is_empty() {
+            let entry = dag.entry_node();
+            let loads: Vec<u32> = dag
+                .users(entry)
+                .filter(|&user| {
+                    let load = SDValue { node: user, res: 0 };
+                    dag.opcode(load) == ISD::Load
+                        && matches!(dag.node(load).data,
+                            NodeData::Mem(info) if matches!(info.base, MemBase::Stack(index) if index < 0))
+                })
+                .collect();
+            for load in loads {
+                dag.invariant_loads.remove(&load);
+                chains.push(SDValue { node: load, res: 1 });
+            }
+        }
+        let ordered = if chains.len() > 1 { dag.get_token_factor(&chains) } else { chain };
+        let mut done = Vec::new();
+        for (slot, value, ext) in stores {
+            // `CCPromoteToType<i32>`
+            let value = if dag.value_type(value) == EVT::I32 { value } else { dag.get_node(ext.node(), EVT::I32, &[value]) };
+            let address = dag.get_frame_index(EVT::I32, slot);
+            let info = MemInfo {
+                mem_vt: EVT::I32,
+                align: 2,
+                volatile: false,
+                base: MemBase::Stack(slot),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            done.push(dag.get_store(ordered, value, address, info));
+        }
+        let chain = if done.is_empty() {
+            chain
+        } else {
+            dag.get_token_factor(&done)
         };
         let fpdiff = dag.get_constant(0, EVT::I32);
         Some(dag.get_node(m68kisd::TC_RETURN, EVT::OTHER, &[chain, target, fpdiff]))

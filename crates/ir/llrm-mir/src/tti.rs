@@ -1272,6 +1272,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-24): LICM may hoist
+    /// a load behind a loop guard when SCEV bounds the offset of its pointer
+    /// inside the object it is based on (`licm::range_deref`), not only where
+    /// the pin's constant-offset rule proves it dereferenceable. Not at
+    /// `optsize` or `minsize`: the hoisted value costs a register for the
+    /// loop's length. False: the pin's rule.
+    fn licm_range_deref(&self) -> bool {
+        false
+    }
+
     /// DEVIATE RL-EXITING-LATCH: whether `LoopRotate` also rotates a loop whose latch already exits when the copy of
     /// its header folds away in the preheader (the pin: only when a header phi dies or the latch's exit count
     /// becomes computable). gcc's header copy does it. False: the pin's.
@@ -1626,7 +1636,7 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32,
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-24; users: x86-m32,
     /// m68k with `va_arg_slot` = 4): `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
@@ -3126,7 +3136,7 @@ pub trait Tti {
         basic_case_clusters(cases, index_bits, for_size)
     }
 
-    /// DEVIATE (owner m68k, exit 2026-11-27): the code size, in the unit of the
+    /// DEVIATE (owner m68k, exit 2026-11-24): the code size, in the unit of the
     /// inliner's size view, of a switch's compares and jump table beyond its
     /// one branch; `clusters` and `table` as
     /// [`Self::estimated_number_of_case_clusters`]. The pin counts a switch

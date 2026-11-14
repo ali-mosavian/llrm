@@ -97,3 +97,14 @@ fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let ran = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "bad 0");
 }
+
+/// The vector loop of a 64-lane row (VF 8, IC 2: four trips) was kept as a loop: the unroller found no size for a
+/// `<8 x i16>` store ("no cost for store") and never fully unrolled it. The pin unrolls it to one trip of eight
+/// stores per row.
+#[test]
+fn a_vector_loop_of_four_trips_is_fully_unrolled() {
+    let text = assembly("x86_64-linux", "-O2");
+    let fill = body(&text, "fill_rows");
+    let stores = fill.matches("movaps xmmword ptr [").count() + fill.matches("movups xmmword ptr [").count();
+    assert!(stores >= 8, "{fill}");
+}
