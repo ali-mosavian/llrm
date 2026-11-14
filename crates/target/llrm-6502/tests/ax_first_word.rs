@@ -1,5 +1,6 @@
-//! The first word argument is in A:X (llvm-mos's CC_MOS), for the program's own
-//! functions and for the routines the compiler names (mem*, compiler-rt).
+//! The first integer word argument is in A:X (llvm-mos's CC_MOS), for the program's
+//! own functions and for the routines the compiler names (mem*, compiler-rt); a
+//! pointer is in the pointer pairs (`pointer_args_in_cells.rs`).
 
 mod common;
 
@@ -50,7 +51,7 @@ fn a_call_hands_the_first_word_over_in_a_and_x() {
     assert!(caller.contains("sty rc2") && !caller.contains("rc4"), "{caller}");
 }
 
-/// `memcpy` takes dst in A:X, src in `rc2:rc3` and n in `rc4:rc5`: a copy that
+/// `memcpy` takes dst in `rc2:rc3`, src in `rc4:rc5` and n in A:X: a copy that
 /// receives them in those registers jumps to it with nothing moved.
 #[test]
 fn a_libcall_takes_its_first_word_in_a_and_x() {
@@ -66,17 +67,18 @@ define void @copy(ptr %d, ptr %s, i16 %n) {
     assert_eq!(copy.trim(), "copy:\n  jmp memcpy", "{copy}");
 }
 
-/// `g(&local)` took the address as two byte copies with a `UNPACK` between
+/// `g((int)&local)` took the address as two byte copies with a `UNPACK` between
 /// them; the call's uses ended the run of copies at the `UNPACK` and listed `a`
 /// only, so the copy into `x` was dead and `g` got a stale high byte (the
 /// struct-by-pointer run returned 7, not 10).
 #[test]
 fn the_high_byte_of_a_passed_address_is_set_in_x() {
     let asm = text(
-        "declare void @g(ptr)
+        "declare void @g(i16)
 define void @func() {
   %s = alloca [2 x i8]
-  call void @g(ptr %s)
+  %a = ptrtoint ptr %s to i16
+  call void @g(i16 %a)
   ret void
 }
 ",
@@ -93,7 +95,7 @@ define void @func() {
 #[test]
 fn an_argument_in_x_is_loaded_before_an_indirect_call() {
     let asm = text(
-        "define i8 @t2(ptr %f, i8 %x, i8 %y) {
+        "define i8 @t2(i8 %p, i8 %q, i8 %x, i8 %y, ptr %f) {
   %a = call i8 %f(i8 %x, i8 %y)
   ret i8 %a
 }

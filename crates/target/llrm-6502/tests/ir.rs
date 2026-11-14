@@ -149,9 +149,10 @@ fn a_call_passes_a_byte_and_a_word() {
     assert_eq!(common::run_with("call-word", &format!("{setup}  jsr caller\n"), &format!("{text}{g}")), 54);
 }
 
-/// Five bytes the memory tests point at; `rc2:rc3` gets their address.
+/// Five bytes the memory tests point at; `rc2:rc3` gets their address (a
+/// pointer is never in A:X).
 const BUFFER: &str = ".segment \"DATA\"\nbuf: .byte $10, $20, $30, $40, $50\n.segment \"CODE\"\n";
-const POINT: &str = "  lda #<buf\n  ldx #>buf\n";
+const POINT: &str = "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n";
 
 fn memory(
     name: &str,
@@ -161,7 +162,7 @@ fn memory(
     after: &str,
 ) -> i32 {
     let text = compile(ir, &[function]);
-    common::run_with(name, &format!("{setup}{POINT}  jsr {function}\n{after}"), &format!("{text}{BUFFER}"))
+    common::run_with(name, &format!("{POINT}{setup}  jsr {function}\n{after}"), &format!("{text}{BUFFER}"))
 }
 
 /// A byte through a pointer argument: `buf[0]` = 0x10 = 16.
@@ -190,9 +191,9 @@ fn a_word_load_runs() {
 #[test]
 fn a_byte_store_runs() {
     let ir = "define void @st(ptr %p, i8 %v) {\n  store i8 %v, ptr %p\n  ret void\n}";
-    let setup = set("rc2", 0x5A);
-    assert_eq!(memory("st-0", ir, "st", &setup, "  lda buf\n"), 0x5A);
-    assert_eq!(memory("st-1", ir, "st", &setup, "  lda buf+1\n"), 0x20);
+    let setup = "  lda #$5A\n";
+    assert_eq!(memory("st-0", ir, "st", setup, "  lda buf\n"), 0x5A);
+    assert_eq!(memory("st-1", ir, "st", setup, "  lda buf+1\n"), 0x20);
 }
 
 /// `st16(buf, 0x1234)` stores the low byte first: `buf[0]` = 0x34, `buf[1]` =
@@ -200,9 +201,9 @@ fn a_byte_store_runs() {
 #[test]
 fn a_word_store_runs() {
     let ir = "define void @st16(ptr %p, i16 %v) {\n  store i16 %v, ptr %p\n  ret void\n}";
-    let setup = set("rc2", 0x1234) + &set("rc3", 0x12);
-    assert_eq!(memory("st16-0", ir, "st16", &setup, "  lda buf\n"), 0x34);
-    assert_eq!(memory("st16-1", ir, "st16", &setup, "  lda buf+1\n"), 0x12);
+    let setup = "  ldx #$12\n  lda #$34\n";
+    assert_eq!(memory("st16-0", ir, "st16", setup, "  lda buf\n"), 0x34);
+    assert_eq!(memory("st16-1", ir, "st16", setup, "  lda buf+1\n"), 0x12);
 }
 
 const GLOBAL: &str = "@g = global i8 7\n";

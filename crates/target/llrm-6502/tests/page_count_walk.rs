@@ -7,7 +7,10 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::driver::{Level, Request, assembly};
 
-const MEMCMP: &str = "define i16 @k_memcmp(ptr %a, ptr %b, i16 %n) {
+/// The count is the fourth argument, in `rc6:rc7` (a count arriving in A:X is
+/// priced 2 B higher in the counted form, which the page walk then beats at
+/// -O2).
+const MEMCMP: &str = "define i16 @k_memcmp(ptr %a, ptr %b, i16 %unused, i16 %n) {
 entry:
   %z = icmp eq i16 %n, 0
   br i1 %z, label %done, label %head

@@ -811,6 +811,7 @@ impl<'a> Builder<'a> {
             call_clobbers: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
+            call_pointers: Vec::new(),
             call_result_assert: None,
             call_result_range_bits: None,
             fixed_args: 0,
@@ -876,6 +877,9 @@ struct Builder<'a> {
     call_attrs_move_arguments: bool,
     /// The arguments of the call being lowered that carry `sret`.
     call_sret: Vec<bool>,
+    /// The arguments of the call being lowered that are pointers
+    /// (`ArgFlags.isPointer()`); none listed means none are.
+    call_pointers: Vec<bool>,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -2271,6 +2275,7 @@ impl Builder<'_> {
             .iter()
             .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
             .collect();
+        self.call_pointers = owner.iter().map(|argument| self.is_pointer_type(arg_types[*argument])).collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -2539,6 +2544,7 @@ impl Builder<'_> {
         // call it was for a fixed one).
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
+        let pointer_args = std::mem::take(&mut self.call_pointers);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2584,7 +2590,7 @@ impl Builder<'_> {
                 outs.push(Out {
                     value: piece,
                     ext,
-                    pointer: false,
+                    pointer: pointer_args.get(at).copied().unwrap_or(false),
                     arg_vt,
                     split,
                     variadic: at >= variadic_from,
