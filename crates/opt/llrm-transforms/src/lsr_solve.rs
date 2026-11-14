@@ -333,7 +333,11 @@ impl Collection<'_, '_> {
         // "saved" them (x_sf_add -O3 m32: nine other registers live, the
         // rewrite kept as 1 instruction against 4, and it held three more
         // induction registers across a 600-byte body).
-        let honest = self.ignore_pressure.get() && self.tti.lsr_tie_keeps_loop_under_pressure();
+        // Only where the loop's own values leave no register at all: with one or two left the
+        // pressured price of the loop as written is the better judge (x_iir -O2 m32: six other
+        // registers, the rewrite saves the fill and runs 3% faster).
+        let full = self.other_register_units >= self.tti.number_of_gpr_registers().saturating_sub(1);
+        let honest = self.ignore_pressure.get() && full && self.tti.lsr_tie_keeps_loop_under_pressure();
         let baseline = if honest { self.baseline_unpressured(se) } else { self.baseline_cost.clone() };
         llrm_support::debug!("lsr", "chosen {:?} against {:?} as it stands", solution_cost.c, baseline.c);
         for (at, &chosen) in solution.iter().enumerate() {
