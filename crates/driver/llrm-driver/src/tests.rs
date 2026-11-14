@@ -4616,6 +4616,25 @@ fn the_pop_of_a_one_slot_frame_spares_a_sibling_calls_arguments_at_m64() {
     assert!(!["rdi", "rsi", "rdx", "rcx"].iter().any(|reg| tail.contains(reg)), "{listing}");
 }
 
+/// `cmp edi, 1 / jne ret / jmp f` (+2 B) where the pin lays the return after the compare and folds the tail call into
+/// `je f`: BranchFolder moves a block with no successor to the end when its predecessor falls into it, then folds
+/// (sibling_call_callees `g` O1 +2 B).
+#[test]
+fn a_compare_chain_of_sibling_calls_is_conditional_tail_jumps_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @f()\ndeclare void @h()\n\
+                define void @g(i32 %n) {\n  switch i32 %n, label %out [i32 1, label %a\n i32 2, label %b]\n\
+                a:\n  tail call void @f()\n  ret void\n\
+                b:\n  tail call void @h()\n  ret void\n\
+                out:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "g").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let jumps = listing.lines().filter(|line| line.trim_start().starts_with('j')).map(str::trim).collect::<Vec<_>>();
+    assert!(jumps.iter().all(|jump| jump.starts_with("je ")), "a conditional jump over a tail jump: {listing}");
+    assert_eq!(jumps.len(), 2, "{listing}");
+}
+
 /// A leaf's 100-byte local paid `sub rsp, 104` / `add rsp, 104` (about 12 B);
 /// the pin keeps it in the 128-byte red zone below `rsp`. A call, `noredzone`
 /// and a frame past the zone keep their `sub`.
