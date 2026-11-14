@@ -36,8 +36,8 @@
 //! DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP, load,
 //! `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 //! `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
-//! `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`, and
-//! `foldDependentIVs`. Exit: later slices.
+//! `foldIntegerTypedPHI` and `foldDependentIVs`
+//! (`SliceUpIllegalIntegerPHI` is `combine_phi_slice`). Exit: later slices.
 //!
 //! DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 //! cannot have a phi before; no debug locations.
@@ -95,6 +95,14 @@ impl Combiner<'_> {
         }
         if let Some(poison) = self.unused_induction_variable(phi) {
             return Visit::Replace(poison);
+        }
+        // an integer phi of a width the target does not compute natively, read
+        // through truncates
+        if let Some(bits) = self.context.types.int_bits(self.function.instruction(phi).ty)
+            && !self.env.layout.legal_integer(bits)
+            && let Some(sliced) = self.slice_up_illegal_integer_phi(phi)
+        {
+            return Visit::Replace(sliced);
         }
         if let Some(folded) = self.simplify_using_control_flow(phi, &incoming) {
             return Visit::Replace(folded);

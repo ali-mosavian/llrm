@@ -268,3 +268,92 @@ exit:
     ));
     assert!(after.contains("%p15 = phi"), "{after}");
 }
+
+const SELECT_ARMS: &str = "define i32 @f(i1 %c, i32 %x, i32 %n) {
+b0:
+  %w = zext i32 %x to i64
+  %k = zext i32 %n to i64
+  br i1 %c, label %l, label %r
+l:
+  %a = shl i64 %w, %k
+  br label %m
+r:
+  %b = lshr i64 %w, %k
+  br label %m
+m:
+  %p = phi i64 [ %a, %l ], [ %b, %r ]
+  %t = trunc i64 %p to i32
+  ret i32 %t
+}
+";
+
+/// u64_shift_select_arms: the call's result was a `phi i64` of two shifts
+/// truncated to 32 bits after the join, so the right shift kept its high-half
+/// funnel (`lsr #1; eori #31; lsr`) for a half nothing read: 398 B and 8018 clk
+/// at -O2 on the 68000 against clang's 368 B and 7780. The pin narrows the phi
+/// of an integer type the target lacks (`SliceUpIllegalIntegerPHI`), the
+/// truncate going into each arm.
+#[test]
+fn a_truncated_phi_of_an_illegal_width_is_a_phi_of_truncates() {
+    let after = combined(SELECT_ARMS);
+    assert!(after.contains("phi i32") && !after.contains("phi i64"), "{after}");
+}
+
+/// A phi read by `trunc(lshr C)` too has a piece per read.
+#[test]
+fn a_phi_read_as_two_halves_is_two_phis() {
+    let after = combined(
+        "define i32 @f(i1 %c, i64 %x, i64 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  br label %m
+r:
+  br label %m
+m:
+  %p = phi i64 [ %x, %l ], [ %y, %r ]
+  %h = lshr i64 %p, 32
+  %hi = trunc i64 %h to i32
+  %lo = trunc i64 %p to i32
+  %s = add i32 %hi, %lo
+  ret i32 %s
+}
+",
+    );
+    assert_eq!(after.matches("= phi i32").count(), 2, "{after}");
+    assert!(!after.contains("phi i64"), "{after}");
+}
+
+/// A user that reads the whole value keeps the phi.
+#[test]
+fn a_phi_read_whole_is_kept() {
+    let after = combined(
+        "define i64 @f(i1 %c, i64 %x, i64 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  br label %m
+r:
+  br label %m
+m:
+  %p = phi i64 [ %x, %l ], [ %y, %r ]
+  %t = trunc i64 %p to i32
+  %e = zext i32 %t to i64
+  %s = add i64 %p, %e
+  ret i64 %s
+}
+",
+    );
+    assert!(after.contains("phi i64"), "{after}");
+}
+
+/// A width the layout computes natively is left alone.
+#[test]
+fn a_legal_width_is_kept() {
+    let mut module = parsed(SELECT_ARMS);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::parse("e-n8:16:32:64").expect("parses"), function, visit);
+    assert!(printed(&module).contains("phi i64"), "{}", printed(&module));
+}

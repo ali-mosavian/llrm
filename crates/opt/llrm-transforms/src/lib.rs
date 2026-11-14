@@ -173,6 +173,7 @@ pub mod combine_or;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_phi_args;
+pub mod combine_phi_slice;
 pub mod combine_ptrcast;
 pub mod combine_returned_arg;
 pub mod combine_select;

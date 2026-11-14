@@ -34,8 +34,8 @@ constant right operand, the intersection of the binary operators' flags.
 DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP, load,
 `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
-`foldDeadPhiWeb`, `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`,
-and `foldDependentIVs`. Exit: later slices.
+`foldDeadPhiWeb`, `foldIntegerTypedPHI` and `foldDependentIVs`
+(`SliceUpIllegalIntegerPHI` is `combine_phi_slice`). Exit: later slices.
 
 DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 cannot have a phi before; no debug locations.
