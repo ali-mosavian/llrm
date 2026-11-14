@@ -217,6 +217,45 @@ done:
     assert_eq!(body.loop_trip_counts, vec![(looped.at, 8)], "{:?}", body.loop_trip_counts);
 }
 
+/// x_list -Os, ROTATION-HOT's trial: rotating an inner loop copied the outer
+/// counter's `add` into both arms of its guard, `phi [%a, %l1], [%b, %l2]` of
+/// two equal adds. `induction` did not read the phi as the add, the outer loop
+/// lost its 10 trips and read 31 in 32: the rotated body was priced 13,401 of
+/// work against 7,259 for the one that is 4,070 clocks faster, and put back.
+/// ScalarEvolution's `createNodeForPHIWithIdenticalOperands` reads it.
+#[test]
+fn a_loops_trips_are_proved_where_its_counter_is_a_phi_of_two_equal_adds() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %latch ]
+  %z = icmp eq i32 %a, 0
+  br i1 %z, label %l1, label %l2
+l1:
+  %j1 = add nuw nsw i32 %i, 1
+  br label %latch
+l2:
+  %j2 = add nuw nsw i32 %i, 1
+  br label %latch
+latch:
+  %j = phi i32 [ %j1, %l1 ], [ %j2, %l2 ]
+  %more = icmp ne i32 %j, 10
+  br i1 %more, label %loop, label %done
+done:
+  ret i32 %j
+}
+",
+    )
+    .expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let trips: Vec<i64> = done.body.loop_trip_counts.iter().map(|(_, count)| *count).collect();
+    assert_eq!(trips, vec![10], "{:?}", done.body.loop_trip_counts);
+}
+
 /// d_faces -m32 -O2: every loop's trip proof found the body's `llvm.assume`s
 /// again, a walk of the whole function (`Unit::assumptions` builds them when
 /// the unit carries none): 120 M of 11,900 M on 160 loops, a loop times the

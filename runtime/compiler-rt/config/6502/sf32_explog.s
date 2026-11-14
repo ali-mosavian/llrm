@@ -2,12 +2,12 @@
 ; byte-coded program over eight work cells and a constant table, each step calling sf_add_c/sf_sub_c/sf_mul_c/sf_div_c or
 ; the int conversions, so a polynomial costs four bytes per operation instead of a call sequence. Special values, the
 ; exponent split and the final power-of-two scaling are plain 6502 code in front of and behind the program.
-; ABI as sf32.s: x in rc2..rc5, result A:X:rc2:rc3. State lives in BSS (not reentrant), so nothing depends on the
+; ABI as sf32_abi.s: x in A:X and rc2:rc3 (moved to rc2..rc5 on entry), result A:X:rc2:rc3. State lives in BSS (not reentrant), so nothing depends on the
 ; zero-page cells the arithmetic routines clobber.
 
 .setcpu "6502"
 .include "sf32.inc"
-.import sf_add_c, sf_sub_c, sf_mul_c, sf_div_c, __floatsisf, __fixsfsi
+.import sf_add_c, sf_sub_c, sf_mul_c, sf_div_c, sf_floatsisf_c, sf_fixsfsi_c
 .export expf, logf
 
 ; program steps: op, dst, a, b; operand 0..7 is a work cell, 8.. a constant copied behind them; $ff ends
@@ -118,9 +118,9 @@ callop:
     pha
     rts
 optab_lo:
-    .lobytes sf_add_c-1, sf_sub_c-1, sf_mul_c-1, sf_div_c-1, __floatsisf-1, __fixsfsi-1
+    .lobytes sf_add_c-1, sf_sub_c-1, sf_mul_c-1, sf_div_c-1, sf_floatsisf_c-1, sf_fixsfsi_c-1
 optab_hi:
-    .hibytes sf_add_c-1, sf_sub_c-1, sf_mul_c-1, sf_div_c-1, __floatsisf-1, __fixsfsi-1
+    .hibytes sf_add_c-1, sf_sub_c-1, sf_mul_c-1, sf_div_c-1, sf_floatsisf_c-1, sf_fixsfsi_c-1
 
 ; ---- helpers
 isnan:                      ; carry set when rc2..rc5 is a NaN
@@ -179,13 +179,23 @@ mulc:                       ; rc2..rc5 *= the constant whose bytes 3 and 2 are A
 
 ; rc8 and rc9 belong to the caller: the wrappers give them back
 logf:
+    jsr ax2cells
     jsr save89
     jsr logf_c
     jmp rest89
 expf:
+    jsr ax2cells
     jsr save89
     jsr expf_c
     jmp rest89
+ax2cells:               ; x from A:X and rc2:rc3 into rc2..rc5, through Y
+    ldy rc3
+    sty rc5
+    ldy rc2
+    sty rc4
+    sta rc2
+    stx rc3
+    rts
 save89:
     lda rc8
     sta sv8

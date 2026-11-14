@@ -52,6 +52,9 @@ div_r16 = 24
 lahf = 3
 sahf = 2
 lea = 1
+# rep stosd: 7 + 4n (5 if n = 0), stosd 5, rep movsd 12 + 3n, mov m32,r32 1, jcc 1 / 3 taken: 80x86 Integer Instruction Set Timings,
+# the 486 column (www2.math.uni-wuppertal.de/~fpf/Uebungen/GdR-SS02/opcode_i.html, STOS and MOVS sections), a table of the
+# Intel486 data book's counts; the data book itself is not in the repo. Checked 2026-11-14, not measured.
 rep_stos = 7
 rep_stos_cell = 4
 rep_movs = 12

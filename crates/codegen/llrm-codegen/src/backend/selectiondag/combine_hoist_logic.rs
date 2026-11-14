@@ -75,8 +75,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return None;
             }
             // Sinking a free truncate gains nothing; no logic operation on an
-            // illegal type.
-            if self.hooks.is_zext_free(vt, x_vt) && self.hooks.is_truncate_free(x_vt, vt) {
+            // illegal type. The pin's one pair, `isZExtFree(VT, XVT) &&
+            // isTruncateFree(XVT, VT)`, is two hooks here, and
+            // `free_narrowing` is the one `ShrinkDemandedOp` asks: both are
+            // read, or a target that answers only that one (z80) has the
+            // shrink undo the hoist for ever.
+            if self.hooks.free_narrowing(x_vt, vt)
+                || (self.hooks.is_zext_free(vt, x_vt) && self.hooks.is_truncate_free(x_vt, vt))
+            {
                 return None;
             }
             if !self.tli.is_some_and(|tli| tli.types.is_type_legal(x_vt)) {

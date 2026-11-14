@@ -1197,6 +1197,9 @@ fn fill_beside_computed_stores_pays(
 pub(crate) struct InlineFills {
     pub max_stores: i64,
     pub bytes: i64,
+    /// A dword store carries the operand-size prefix: the target's word is
+    /// 16 bits (m16); flat code has none.
+    pub prefixed: bool,
 }
 
 impl InlineFills {
@@ -1212,7 +1215,8 @@ impl InlineFills {
         prices: &OperationCosts,
     ) -> i64 {
         let dwords = self.bytes / 4;
-        dwords * (prices.store_immediate + prices.prefix) + (self.stores() - dwords) * prices.store_immediate
+        let prefix = if self.prefixed { prices.prefix } else { 0 };
+        dwords * (prices.store_immediate + prefix) + (self.stores() - dwords) * prices.store_immediate
     }
 }
 
@@ -1718,7 +1722,8 @@ fn _stored(
     // target's `rep stos` takes, and isel cannot lower it.
     let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
     // Only where the target's library has the function
-    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`, LoopIdiomRecognize.cpp#L372).
+    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`,
+    // LoopIdiomRecognize.cpp#L372).
     (matches!(width, 16 | 32) && counted && _has_memset_pattern(unit)).then_some((pointer, Byte::Pattern(value), bytes))
 }
 
