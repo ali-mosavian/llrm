@@ -10,6 +10,7 @@ use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
@@ -144,6 +145,10 @@ pub fn select_block(
         .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     DagCombiner::new(dag, &mut MosLateCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
+    // DEVIATE 6502-ASSERT (owner wasm-3, exit 2026-11-24): the pin keeps an
+    // assertion to selection; one a truncation reads blocks the byte
+    // narrowing of a loaded boolean (`lda g`), leaving `lda (zp),y`.
+    drop_assertions_read_as_bytes(dag);
     DagCombiner::new(dag, &mut MosLateCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
 
     let selector = Selector::new(match cpu {
@@ -155,4 +160,20 @@ pub fn select_block(
         .map_err(|why| Refusal::CannotSelect(format!("{why:?}")))?;
     let root: SDValue = dag.get_root();
     Ok(schedule(dag, root, &MosSched))
+}
+
+/// An `assertzext` or `assertsext` only truncations read: the byte they keep
+/// is the operand's low byte, so the assertion tells nothing and blocks the
+/// narrowing of the operand's load.
+fn drop_assertions_read_as_bytes(dag: &mut SelectionDAG) {
+    for node in dag.node_ids().collect::<Vec<_>>() {
+        let value = SDValue { node, res: 0 };
+        if matches!(dag.opcode(value), ISD::AssertSext | ISD::AssertZext)
+            && dag.has_users(value)
+            && dag.users(value).all(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Truncate)
+        {
+            let operand = dag.operand(value, 0);
+            dag.replace_all_uses_with(value, operand);
+        }
+    }
 }
