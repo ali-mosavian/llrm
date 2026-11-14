@@ -21,6 +21,7 @@ llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # `run` (optional) is the command that runs an executable of the target, the executable last; the checks use it.
 
