@@ -61,12 +61,13 @@ fn at_o1_a_page_walk_that_is_no_larger_is_taken() {
 /// The counter's step sat before the exit test, so the old and the new value
 /// lived side by side and were shuffled through two more cells each trip
 /// (k_strncmp 84 B / 1189 clocks); the step moves to the successor that reads
-/// it, in place.
+/// it, in place. `a` arrives in A:X and is stored to rc6:rc7 (+4 B, row
+/// 6502-AX-PTR): 72 B + 4.
 #[test]
 fn a_counted_loop_steps_its_counter_in_place() {
     let ir = format!("target datalayout = \"{}\"\n{STRNCMP}", datalayout());
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     let body = text.split(".segment").next().unwrap();
     let size = llrm_6502::timing::estimate(llrm_6502::dagisel::hooks::Cpu::Mos6502, body).unwrap().bytes;
-    assert!(size <= 72, "{size} B:\n{body}");
+    assert!(size <= 76, "{size} B:\n{body}");
 }
