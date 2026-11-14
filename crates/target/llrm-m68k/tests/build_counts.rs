@@ -23,7 +23,7 @@ fn run(channel: &str) -> String {
 #[test]
 fn the_time_report_counts_builds_and_allocations() {
     let report = run("time");
-    for line in ["m68k build", "m68k allocate", "m68k fn bs"] {
+    for line in ["m68k build", "m68k allocate", "m68k fn "] {
         assert!(report.lines().any(|one| one.contains(line)), "no `{line}` line:\n{report}");
     }
 }

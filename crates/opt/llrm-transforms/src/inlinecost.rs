@@ -371,7 +371,7 @@ fn call_info(
 /// `getAttributeBasedInliningDecision` (InlineCost.cpp:3191): some verdict the
 /// callee's and call's attributes settle, or none.
 ///
-/// D4: no coroutine, target-feature, strict FP, `optnone`, `flatten` checks.
+/// D4: no coroutine, target-feature, strict FP, `flatten` checks.
 pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     let call = call_info(site.caller, site.call)?;
     let callee_attrs = &site.callee.attrs;
@@ -390,6 +390,10 @@ pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     }
     if has_flag(&call.attrs, "noinline") {
         return Some(Err("noinline call site attribute".into()));
+    }
+    // Don't inline into a function that has the optnone attribute.
+    if site.caller.has_opt_none() {
+        return Some(Err("optnone attribute".into()));
     }
     // Don't inline what can be interposed at link time: the body is not the
     // definition that runs.

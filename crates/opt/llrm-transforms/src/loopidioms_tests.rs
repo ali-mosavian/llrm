@@ -203,6 +203,23 @@ fn a_word_fill_forms_where_the_target_fills_a_pattern_itself() {
     assert!(after.contains("memset.pattern") && !after.contains("store i16 4660"), "{after}");
 }
 
+/// m32 filled a 64x64 word nest by a loop (fill_nest -O2: 27,771 clk against
+/// gcc's 24,667): its pattern fill was expanded before isel, so the fill was
+/// never formed. A target whose tuning says isel fills patterns at speed forms
+/// it with no library.
+#[test]
+fn a_word_fill_forms_where_the_tuning_fills_patterns_at_speed() {
+    let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
+    let text = looped("i16", "10", body, "0");
+    let after = managed_fill_by(
+        DOS,
+        &text,
+        &[&[0, 0], &[0, 9], &[0, 10]],
+        Tuned { fills_pattern_at_speed: true, ..Tuned::default() },
+    );
+    assert!(after.contains("memset.pattern") && !after.contains("store i16 4660"), "{after}");
+}
+
 /// A word whose bytes differ stayed a loop, `rep stosw` being isel's alone:
 /// each of its trips cost a store. It is one pattern fill of the cells.
 #[test]
