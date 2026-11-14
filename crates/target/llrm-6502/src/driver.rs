@@ -443,6 +443,23 @@ fn tail(
         })
         .transpose()?
         .filter(|(names, _)| !names.is_empty());
+    // The same walks that also end a counted loop on the index and a page
+    // count: priced against the walks above.
+    let counted = paged
+        .as_ref()
+        .zip(index_bits)
+        .map(|(_, bits)| {
+            let mut counted = program.modules[0].clone();
+            let mut cse = llrm_mir::passes::PassManager::default();
+            cse.add(llrm_transforms::earlycse::EarlyCse { memory_ssa: false });
+            cse.run_module(&mut counted, machine())?;
+            llrm_transforms::pageindex::indexed_counting(&mut counted, bits).map(|names| {
+                crate::prepare::split_phi_edges(&mut counted);
+                (names, counted)
+            })
+        })
+        .transpose()?
+        .filter(|(names, _)| !names.is_empty());
     llrm_6502_prepare(&mut program);
     let module = &program.modules[0];
     let names: Vec<String> = module
@@ -487,6 +504,17 @@ fn tail(
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
+            }
+        }
+        if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| paged_chosen && names.contains(name)) {
+            let mut other = select_function(counted, name, request.cpu)?;
+            other.zero_page = request.platform.zero_page;
+            other.tuning = request.level.tuning();
+            let kept = source.unwrap_or(module);
+            let rate = crate::routines::copy_prices().page_byte_clocks;
+            if cheaper(kept, name, &other, counted, &selection, request, rate, true)? {
+                selection = other;
+                source = Some(counted);
             }
         }
         selections.push(selection);
