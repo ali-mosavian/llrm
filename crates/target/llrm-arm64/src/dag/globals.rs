@@ -2,12 +2,12 @@
 //! `GlobalAddress` node carries: the linker's name, whether the address comes
 //! from the GOT, and the alignment a pointer to it has.
 
-use llrm_support::hash::HashMap;
 use std::rc::Rc;
 
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, Module};
+use llrm_support::hash::HashMap;
 
 use crate::machine::Platform;
 
@@ -95,21 +95,33 @@ pub(crate) fn global_needs_got(
     platform: Platform,
     global: GlobalId,
 ) -> bool {
-    use llrm_mir::{GlobalKind, Linkage};
     let global = module.global(global);
-    let defined = match &global.kind {
-        GlobalKind::Function(function) => !function.is_declaration(),
-        GlobalKind::Variable(variable) => variable.initializer.is_some(),
-    };
-    let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
     // Darwin reaches anything not defined here through the GOT; Linux static
     // code reaches all of it directly, and position-independent code (the
     // module's "PIC Level" flag) goes through the GOT for what is not defined
     // here, as the pin's `shouldAssumeDSOLocal` (clang -fPIE marks a definition
     // `dso_local`).
-    // A hidden or protected declaration binds inside the module: the pin loads
-    // it directly (`shouldAssumeDSOLocal`), not through the GOT, at Linux
-    // PIE.
-    let bound_here = global.visibility != llrm_mir::module::Visibility::Default;
-    (platform == Platform::Darwin || (flagged_pic(module) && !bound_here)) && !local && !defined
+    (platform == Platform::Darwin && !binds_here(global)) || reached_through_got(global, flagged_pic(module))
+}
+
+/// Whether `global` is defined in its module or internal to it.
+fn binds_here(global: &llrm_mir::module::GlobalValue) -> bool {
+    use llrm_mir::{GlobalKind, Linkage};
+    let defined = match &global.kind {
+        GlobalKind::Function(function) => !function.is_declaration(),
+        GlobalKind::Variable(variable) => variable.initializer.is_some(),
+    };
+    defined || matches!(global.linkage, Linkage::Internal | Linkage::Private)
+}
+
+/// Position-independent code loads what is not bound in its module from the
+/// GOT. A hidden or protected declaration binds inside the module: the pin
+/// loads it directly (`shouldAssumeDSOLocal`), not through the GOT, at Linux
+/// PIE.
+pub(crate) fn reached_through_got(
+    global: &llrm_mir::module::GlobalValue,
+    position_independent: bool,
+) -> bool {
+    let default_visibility = global.visibility == llrm_mir::module::Visibility::Default;
+    position_independent && default_visibility && !binds_here(global)
 }

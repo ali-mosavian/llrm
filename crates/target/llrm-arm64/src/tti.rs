@@ -1178,6 +1178,20 @@ impl Tti for AArch64 {
         2
     }
 
+    /// A global loaded from the GOT is in a register the loop's base shares:
+    /// `@sym+4000` is one `add` on it.
+    fn lsr_symbol_offset_setup_insns(
+        &self,
+        global: &llrm_mir::module::GlobalValue,
+        position_independent: bool,
+    ) -> u32 {
+        if crate::dag::globals::reached_through_got(global, position_independent) {
+            1
+        } else {
+            self.lsr_symbol_base_setup_insns()
+        }
+    }
+
     fn is_legal_addressing_mode_at(
         &self,
         _addr_space: u32,
