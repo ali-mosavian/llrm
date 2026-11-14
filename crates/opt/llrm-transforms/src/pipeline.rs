@@ -1645,6 +1645,7 @@ pub fn recorded(
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
                 cp_peel_limited: applied.options.inline.cp_clone.is_none(),
+                cp_max_clones: program.target.tti().map_or(crate::ipacp::DEFAULT_MAX_CLONES, |tti| tti.ipa_cp_max_clones()),
                 ..applied.options.inline
             },
             ..applied.options.clone()
