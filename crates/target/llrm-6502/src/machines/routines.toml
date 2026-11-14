@@ -1,5 +1,5 @@
-# What the runtime's memcpy costs a call, in clocks, and what a byte of code is worth when a function with
-# the copy as a call is priced against the same function with it as a loop. Memcpy's own figures are
+# What the runtime's memcpy costs a call, in clocks, when a function with the copy as a call is priced
+# against the same function with it as a loop (bytes first, clocks break a tie). Memcpy's own figures are
 # measured from mos_rt.s.
 [copy]
 # Entry and exit: the page count, the return value, the saved byte.
@@ -8,19 +8,6 @@ entry_clocks = 60
 clocks_per_byte = 16
 # The length a copy of unknown length is priced at (`profit::UNKNOWN_TRIPS`).
 typical_bytes = 10
-# Policy: the exchange rate of a byte of code against the estimate's loop-weighted clocks, at speed and at
-# size (like the -O2/-Os split). Any value from 100 to 2000 gives the same choices on lz4 and 8 hot loops of
-# 0 to 6 live words (sim65 cycles checked); 0 always keeps the call.
-byte_clocks_speed = 500
-byte_clocks_size = 5000
-
-[page]
-# Policy: the exchange rate of a byte of code against the loop-weighted clocks, at speed, when a loop that
-# walks by page is priced against the loop as written. The scoreboard's -O2 rate is 1 B = 3 clocks of a run
-# and a loop weighs ten trips: 30. (The copy rate above buys a call out of a loop of unknown length; used
-# here it priced one byte at fifty clocks a trip and kept k_strncmp's counter-and-pointer loop, 84 B /
-# 1189 clocks paged against 83 B / 1297.)
-byte_clocks_speed = 30
 
 [compact]
 # A routine with a compact variant: the same result in fewer bytes and more clocks. The call is renamed

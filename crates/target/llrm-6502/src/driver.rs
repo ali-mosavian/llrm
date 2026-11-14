@@ -529,16 +529,7 @@ fn tail(
             let mut other = select_function(looped, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(
-                module,
-                name,
-                &other,
-                looped,
-                &selection,
-                request,
-                crate::routines::copy_prices().byte_clocks.0,
-                false,
-            )? {
+            if cheaper(module, name, &other, looped, &selection, request, false)? {
                 selection = other;
                 as_called = false;
                 source = Some(looped);
@@ -548,16 +539,7 @@ fn tail(
             let mut other = select_function(paged, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(
-                module,
-                name,
-                &other,
-                paged,
-                &selection,
-                request,
-                crate::routines::copy_prices().page_byte_clocks,
-                true,
-            )? {
+            if cheaper(module, name, &other, paged, &selection, request, true)? {
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
@@ -568,8 +550,7 @@ fn tail(
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
             let kept = source.unwrap_or(module);
-            let rate = crate::routines::copy_prices().page_byte_clocks;
-            if cheaper(kept, name, &other, counted, &selection, request, rate, true)? {
+            if cheaper(kept, name, &other, counted, &selection, request, true)? {
                 selection = other;
                 counted_chosen = true;
                 source = Some(counted);
@@ -587,16 +568,7 @@ fn tail(
                 other.zero_page = request.platform.zero_page;
                 other.tuning = request.level.tuning();
                 let kept = source.unwrap_or(module);
-                if cheaper(
-                    kept,
-                    name,
-                    &other,
-                    split,
-                    &selection,
-                    request,
-                    crate::routines::copy_prices().page_byte_clocks,
-                    true,
-                )? {
+                if cheaper(kept, name, &other, split, &selection, request, true)? {
                     selection = other;
                     range_chosen = true;
                     source = Some(split);
@@ -732,9 +704,8 @@ pub fn trial_pays(
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
-/// `selected`: the clocks (a trip through a loop weighs ten) and the bytes at
-/// `routines.toml`'s price. A function either
-/// can't be priced for keeps its calls.
+/// `selected`: fewer bytes, the clocks (a trip through a loop weighs ten) only
+/// breaking a tie. A function either can't be priced for keeps its calls.
 fn cheaper(
     module: &llrm_mir::module::Module,
     name: &str,
@@ -742,12 +713,10 @@ fn cheaper(
     alt_module: &llrm_mir::module::Module,
     selected: &crate::dagisel::function::Selection,
     request: &Request,
-    speed_byte_clocks: u64,
     strict_at_o1: bool,
 ) -> Result<bool, String> {
     let prices = crate::routines::copy_prices();
     let routines = [("memcpy", prices.call_clocks), ("memset", prices.call_clocks)];
-    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { speed_byte_clocks };
     let original = module;
     let cost = |module: &llrm_mir::module::Module, selection| -> Option<(u64, u64)> {
         let text = crate::select::function_text(module, name, selection).ok()?;
@@ -781,16 +750,16 @@ fn cheaper(
     };
     let (alt_cost, kept_cost) = (cost(alt_module, alt), cost(module, selected));
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
-        eprintln!(
-            "cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}, {byte} clocks a byte"
-        );
+        eprintln!("cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}");
     }
     Ok(match (alt_cost, kept_cost) {
         // -O1 keeps no more bytes and no more clocks (6502-UNROLL-O1)
         (Some(alt), Some(kept)) if strict_at_o1 && request.level == Level::O1 => {
             alt.0 <= kept.0 && alt.1 <= kept.1 && alt != kept
         }
-        (Some(alt), Some(kept)) => alt.0 + byte * alt.1 < kept.0 + byte * kept.1,
+        // bytes first at every level, clocks break a tie (user ruling
+        // 2026-11-14)
+        (Some(alt), Some(kept)) => (alt.1, alt.0) < (kept.1, kept.0),
         _ => false,
     })
 }
