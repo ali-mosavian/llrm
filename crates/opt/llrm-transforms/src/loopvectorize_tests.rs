@@ -720,6 +720,85 @@ exit:
     assert_eq!(answer(&after), answer(&before), "{text}");
 }
 
+const REVERSE_UPDATE_INDEX: &str = include_str!("../tests/lv/reverse_update_index.ll");
+const FORWARD_UPDATE_INDEX: &str = include_str!("../tests/lv/forward_update_index.ll");
+
+/// `for (i = n; i > 0; i--) a[i + 2] = a[i - 1]` indexes with the update `i -
+/// 1`, which the widened loop steps by VF x IC. The widened addresses read the
+/// stepped update and sat VF x IC - 1 bytes low: 340 of the 1000 overlapping
+/// copies of the arm64 -O2 build wrote below the destination. Run by the
+/// interpreter before and after.
+#[test]
+fn a_reverse_copy_indexed_by_the_induction_update_keeps_the_answers_of_the_scalar_loop() {
+    assert_widened_copy_keeps_answers(REVERSE_UPDATE_INDEX);
+}
+
+/// The same for a loop that counts up and indexes with its update (`a[i + 1]`
+/// by the stepped `i`).
+#[test]
+fn a_forward_copy_indexed_by_the_induction_update_keeps_the_answers_of_the_scalar_loop() {
+    assert_widened_copy_keeps_answers(FORWARD_UPDATE_INDEX);
+}
+
+/// Widens `f` (a copy of `n` bytes at `@s + 8`, three bytes on), runs the
+/// interpreter before and after on sizes around the vector width, and compares
+/// a checksum of the whole array.
+fn assert_widened_copy_keeps_answers(f: &str) {
+    let source = format!(
+        "{f}
+@s = global [200 x i8] zeroinitializer, align 16
+define i64 @g(i64 %n) {{
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %v = trunc i64 %i to i8
+  %m = mul i8 %v, 13
+  %w = add i8 %m, 5
+  %p = getelementptr inbounds i8, ptr @s, i64 %i
+  store i8 %w, ptr %p, align 1
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 200
+  br i1 %fd, label %run, label %fill
+run:
+  %base = getelementptr inbounds i8, ptr @s, i64 8
+  call void @f(ptr %base, i64 %n)
+  br label %sum
+sum:
+  %k = phi i64 [ 0, %run ], [ %kn, %sum ]
+  %acc = phi i64 [ 0, %run ], [ %an, %sum ]
+  %q = getelementptr inbounds i8, ptr @s, i64 %k
+  %x = load i8, ptr %q, align 1
+  %xe = zext i8 %x to i64
+  %mul = mul i64 %acc, 31
+  %an = add i64 %mul, %xe
+  %kn = add nuw nsw i64 %k, 1
+  %kd = icmp eq i64 %kn, 200
+  br i1 %kd, label %out, label %sum
+out:
+  ret i64 %an
+}}
+"
+    );
+    let before = crate::testing::parsed(&source);
+    let text = run(&source);
+    assert!(text.contains("<16 x i8>"), "the loop was not widened:\n{text}");
+    let after = crate::testing::parsed(&text);
+    let answer = |module: &llrm_mir::module::Module, n: i64| {
+        llrm_mir::interpret::run(
+            module,
+            "g",
+            vec![llrm_mir::interpret::Val::Int { bits: n as u128, width: 64 }],
+            5_000_000,
+        )
+        .unwrap_or_else(|trap| panic!("n = {n}: {trap:?}\n{}", crate::testing::printed(module)))
+    };
+    for n in [1, 3, 31, 32, 33, 63, 64, 65, 100] {
+        let want = answer(&before, n);
+        assert_eq!(answer(&after, n), want, "n = {n}:\n{text}");
+    }
+}
+
 const REDUCTION_SUM: &str = include_str!("../tests/lv/reduction_sum.ll");
 const SCROLL_CHECKSUM: &str = include_str!("../tests/lv/scroll_checksum.ll");
 
