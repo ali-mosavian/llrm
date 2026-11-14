@@ -630,14 +630,29 @@ fn hoist_in_successors(
 }
 
 pub fn fold(
-    mut blocks: Vec<Lowered>,
+    blocks: Vec<Lowered>,
     tables: &mut [Table],
     odds: &Odds,
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
+    fold_with_odds(blocks, tables, odds, optsize, exits).0
+}
+
+/// The odds of the edges between blocks by label, as placement read them.
+pub type Likelihood = HashMap<(String, String), u32>;
+
+/// [`fold`], and the probability numerators (over 2^31) of the edges it placed
+/// by; empty where the entry has a predecessor and the order is kept.
+pub fn fold_with_odds(
+    mut blocks: Vec<Lowered>,
+    tables: &mut [Table],
+    odds: &Odds,
+    optsize: bool,
+    exits: &[crate::mc::visit::Reg],
+) -> (Vec<Lowered>, Likelihood) {
     if blocks.is_empty() {
-        return blocks;
+        return (blocks, Likelihood::default());
     }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
@@ -742,7 +757,7 @@ pub fn fold(
     // DEVIATE: an entry that a branch returns to (the pin's IR never has one;
     // block forwarding can make one) keeps the layout order, as frequencies
     // need an entry that is no loop header. Exit: 11-12.
-    let mut likelihood: HashMap<(String, String), u32> = HashMap::default();
+    let mut likelihood = Likelihood::default();
     let mut copies: Option<Vec<(usize, Vec<usize>)>> = None;
     let placed: Vec<usize> = if edges.iter().any(|next| next.contains(&0)) {
         reachable.clone()
@@ -848,6 +863,7 @@ pub fn fold(
         };
         order.into_iter().map(|new| reachable[new]).collect()
     };
+    let mut copied_tails: Vec<((String, String), u32)> = Vec::new();
     let mut ordered: Vec<Lowered> = if let Some(list) = copies {
         // The blocks the shared placer made: each instruction by the number
         // `lir_place` gave it, over the reachable blocks in order.
@@ -855,6 +871,18 @@ pub fn fold(
             .iter()
             .flat_map(|&old| blocks[old].insts.iter().zip(blocks[old].locs.iter().copied()))
             .collect();
+        // A block that took a copied tail goes where the tail went, by the tail's odds.
+        let owner: Vec<usize> =
+            reachable.iter().flat_map(|&old| std::iter::repeat_n(old, blocks[old].insts.len())).collect();
+        for (at, numbers) in &list {
+            let (Some(&last), this) = (numbers.last(), &blocks[reachable[*at]].label) else { continue };
+            let tail = &blocks[owner[last]].label;
+            for ((from, to), &odds) in &likelihood {
+                if from == tail && tail != this {
+                    copied_tails.push(((this.clone(), to.clone()), odds));
+                }
+            }
+        }
         list.into_iter()
             .map(|(at, numbers)| Lowered {
                 label: blocks[reachable[at]].label.clone(),
@@ -920,7 +948,13 @@ pub fn fold(
             insts[len - 1] = jump;
         }
     }
-    ordered
+    // Placement's odds, and the copied tails' besides: for the trial's pricing only, `optimizeBranches` above read
+    // none of them.
+    let mut priced = likelihood;
+    for (edge, odds) in copied_tails {
+        priced.entry(edge).or_insert(odds);
+    }
+    (ordered, priced)
 }
 
 #[cfg(test)]

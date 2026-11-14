@@ -59,8 +59,8 @@ fn a_module_nothing_was_noted_in_is_not_priced_at_os() {
 #[test]
 fn a_modelled_gain_under_the_noise_margin_does_not_unmerge() {
     use llrm_arm64::trial::{Price, keeps_unmerged};
-    let jpeg = (Price { bytes: 3348, work: 14241593806.5 }, Price { bytes: 3396, work: 14241052075.1 });
+    let jpeg = (Price { bytes: 3348, work: 14241593806.5, ..Price::default() }, Price { bytes: 3396, work: 14241052075.1, ..Price::default() });
     assert!(!keeps_unmerged(jpeg.0, jpeg.1, 15));
-    let nbody = (Price { bytes: 400, work: 683286.0 }, Price { bytes: 404, work: 681179.0 });
+    let nbody = (Price { bytes: 400, work: 683286.0, ..Price::default() }, Price { bytes: 404, work: 681179.0, ..Price::default() });
     assert!(keeps_unmerged(nbody.0, nbody.1, 4));
 }

@@ -338,12 +338,11 @@ fn lower_function(
     crate::copyprop::run(&mut machine);
     crate::postrasink::run(&mut machine);
     dump("PostRaSink", &machine);
-    crate::trial::add(&machine);
     let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
     let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
         .map_err(|why| format!("@{name}: {why}"))?;
     let mut tables = crate::jumptable::tables_of(&machine);
-    let blocks = crate::layout::fold(
+    let (blocks, likelihood) = crate::layout::fold_with_odds(
         blocks,
         &mut tables,
         &crate::layout::odds_by_label_number(
@@ -356,6 +355,7 @@ fn lower_function(
     let blocks = crate::pairs::fold(blocks);
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
     crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
+    crate::trial::add(&machine, &blocks, &likelihood);
     let written = crate::ipra::written(&machine);
     Ok((
         crate::emit::Function {
