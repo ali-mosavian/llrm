@@ -1325,6 +1325,8 @@ impl Tti for X86 {
             // there is no 64-bit arithmetic shift before AVX-512.
             ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
             ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
+            // `3*pmuludq/4*shuffle` (the pin's SSE2 row for `v4i32`): six a register.
+            ArithOp::Mul if ty.lane == Ty::Int(32) => xmm_pieces(ty).map(|pieces| Cost::of(6 * pieces)),
             // `pmullw`: the one SSE2 integer multiply that keeps the lane (a 32- or 64-bit lane needs `pmuludq`).
             ArithOp::Mul if ty.lane == Ty::Int(16) => xmm_pieces(ty).map(Cost::of),
             _ => None,

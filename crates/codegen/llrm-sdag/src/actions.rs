@@ -948,6 +948,12 @@ impl TargetLowering {
             &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
             Action::Expand,
         );
+        // `LowerBUILD_VECTOR`: a splat of a scalar is `movd` + `pshufd`; the other builds (and
+        // the constant ones, a pool load) stay the expansion. DEVIATE X86V3 now covers only
+        // the 8- and 16-bit lanes and the non-splat builds.
+        t.set_ops(&[ISD::BuildVector], &[MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the odd lanes.
+        t.set_ops(&[ISD::Mul], &[MVT::V4I32], Action::Custom);
         // `LowerShift`: a shift by a constant splat is `VSHLI`/`VSRLI`/`VSRAI`;
         // `psraq` is AVX-512, so a 64-bit arithmetic shift is left to the
         // expansion.

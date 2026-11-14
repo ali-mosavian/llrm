@@ -51,12 +51,13 @@ fn a_runtime_trip_count_loop_has_a_vector_body_and_a_scalar_remainder() {
     assert!(copy.contains("add ") || copy.contains("inc "), "the scalar remainder: {copy}");
 }
 
-/// A `<4 x i32>` multiply is not priced (no SSE2 `pmulld`): the loop stays scalar until the next step prices it.
+/// A `<4 x i32>` multiply has no SSE2 `pmulld`: `pmuludq` on the even and the odd lanes, then `punpckldq` (the pin's
+/// `LowerMUL`). It was unpriced, so the loop stayed scalar.
 #[test]
-fn a_loop_with_a_vector_multiply_stays_scalar_until_it_is_priced() {
+fn an_int_multiply_loop_uses_pmuludq() {
     let text = assembly("x86_64-linux", "-O2");
     let multiply = body(&text, "multiply_arrays");
-    assert!(!multiply.contains("xmm"), "{multiply}");
+    assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
 #[test]
@@ -138,4 +139,16 @@ fn a_loop_of_constant_shifts_uses_the_immediate_forms() {
     let text = assembly("x86_64-linux", "-O2");
     let shifts = body(&text, "shift_ints");
     assert!(shifts.contains("pslld") && shifts.contains("psrad") && shifts.contains("psrld"), "{shifts}");
+}
+
+/// A splat of a variable was four stores through the stack (`BUILD_VECTOR` expanded); it is `movd` + `pshufd` (and
+/// `movq` + `punpcklqdq` for 64-bit lanes), as the pin's `LowerBUILD_VECTOR` makes it.
+#[test]
+fn a_splat_of_a_variable_is_movd_and_pshufd() {
+    let text = assembly("x86_64-linux", "-O2");
+    let ints = body(&text, "fill_value");
+    assert!(ints.contains("movd xmm") && ints.contains("pshufd"), "{ints}");
+    assert!(!ints.contains("[rsp"), "{ints}");
+    let longs = body(&text, "fill_long_value");
+    assert!(longs.contains("movq xmm") && longs.contains("punpcklqdq"), "{longs}");
 }

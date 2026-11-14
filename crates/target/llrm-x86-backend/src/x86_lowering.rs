@@ -69,6 +69,12 @@ pub mod x86isd {
     pub const MUL_IMM: ISD = ISD::Target(694);
     /// `X86ISD::VSHLI`, `VSRAI`, `VSRLI`: a vector shifted by an `i8` target constant (`PSLL*ri`, `PSRA*ri`,
     /// `PSRL*ri`).
+    /// `X86ISD::PSHUFD`: `v4i32` lanes by an `i8` target constant (two bits a lane).
+    pub const PSHUFD: ISD = ISD::Target(714);
+    /// `X86ISD::UNPCKL`: the low lanes of two vectors interleaved (`punpckl*`).
+    pub const UNPCKL: ISD = ISD::Target(779);
+    /// `X86ISD::PMULUDQ`: the unsigned products of the even `i32` lanes, as `v2i64`.
+    pub const PMULUDQ: ISD = ISD::Target(710);
     pub const VSHLI: ISD = ISD::Target(933);
     pub const VSRAI: ISD = ISD::Target(937);
     pub const VSRLI: ISD = ISD::Target(941);
@@ -770,6 +776,8 @@ impl Hooks for X86Lowering<'_> {
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::Shl | ISD::Srl | ISD::Sra if dag.value_type(node).is_vector() => lower_vector_shift(dag, node),
+            ISD::BuildVector => lower_build_vector_splat(dag, node),
+            ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V4I32) => Some(lower_mul_v4i32(dag, node)),
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -3358,6 +3366,62 @@ fn lower_dynamic_stackalloc(
     let chain = SDValue { node: chain.node, res: 0 };
     let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
     Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
+}
+
+/// `LowerBUILD_VECTOR`, a splat of one scalar (`v4i32`, `v2i64`): `movd`/`movq` into the low lane, then
+/// `pshufd` (`punpcklqdq` for quadwords) copies it ([L12031][pin], `X86ISD::VBROADCAST` with AVX). Any other build is left to the expansion.
+///
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L12031
+fn lower_build_vector_splat(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let lanes = dag.node(node).ops.clone();
+    let first = *lanes.first()?;
+    if lanes.iter().any(|lane| *lane != first) || dag.constant(first).is_some() || dag.is_undef(first) {
+        return None;
+    }
+    let lane_vt = match vt {
+        EVT::Simple(MVT::V4I32) => EVT::I32,
+        EVT::Simple(MVT::V2I64) => EVT::I64,
+        _ => return None,
+    };
+    let value = if dag.value_type(first) == lane_vt { first } else { dag.get_sext_or_trunc(first, lane_vt) };
+    let low = dag.get_node(ISD::ScalarToVector, vt, &[value]);
+    // A pair of quadwords: `punpcklqdq` with itself.
+    if lane_vt == EVT::I64 {
+        return Some(dag.get_node(x86isd::UNPCKL, vt, &[low, low]));
+    }
+    let by = dag.get_constant_with(0, EVT::I8, true, false);
+    Some(dag.get_node(x86isd::PSHUFD, vt, &[low, by]))
+}
+
+/// `LowerMUL` for `v4i32` without `pmulld` ([L30010][pin]): `pmuludq` of the even lanes and of the odd lanes (moved
+/// down by `pshufd`), then the two products' low halves interleaved by `pshufd` and `punpckldq`.
+///
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30010
+fn lower_mul_v4i32(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (four, two) = (EVT::Simple(MVT::V4I32), EVT::Simple(MVT::V2I64));
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let mut shuffle = |dag: &mut SelectionDAG, value: SDValue, order: u128| {
+        let by = dag.get_constant_with(order, EVT::I8, true, false);
+        dag.get_node(x86isd::PSHUFD, four, &[value, by])
+    };
+    // The odd lanes down to the even places: {1, 1, 3, 3}.
+    let (a_odd, b_odd) = (shuffle(dag, a, 0xF5), shuffle(dag, b, 0xF5));
+    let product = |dag: &mut SelectionDAG, x: SDValue, y: SDValue| {
+        let (x, y) = (dag.get_node(ISD::BitCast, two, &[x]), dag.get_node(ISD::BitCast, two, &[y]));
+        let wide = dag.get_node(x86isd::PMULUDQ, two, &[x, y]);
+        dag.get_node(ISD::BitCast, four, &[wide])
+    };
+    let (evens, odds) = (product(dag, a, b), product(dag, a_odd, b_odd));
+    // The low half of each 64-bit product: {0, 2, 2, 3}, then the evens' and the odds' first two lanes interleaved.
+    let (evens, odds) = (shuffle(dag, evens, 0xE8), shuffle(dag, odds, 0xE8));
+    dag.get_node(x86isd::UNPCKL, four, &[evens, odds])
 }
 
 /// `LowerShift` for a vector shifted by a constant splat
