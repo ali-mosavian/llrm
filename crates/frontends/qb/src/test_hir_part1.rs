@@ -10,6 +10,7 @@ use llrm_codegen::objectfile::omf;
 use llrm_codegen::support::hash::IndexMap;
 
 use super::cli::parse_args;
+use super::driver as qb_driver;
 use super::qbstages;
 use super::test_hir::*;
 
@@ -113,7 +114,7 @@ fn test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() {
 
 /// Every BASIC variable starts at zero, and each was stored in BC_DATA: jpeg_fixed's 28 KB of arrays were data bytes of the image, 29135 B
 /// against BC's 4483. llrm's runtime zeroes the BSS class at start-up, so its zero variables go in `_BSS` (group DGROUP, no stored byte);
-/// the Microsoft runtimes' CLEAR zeroes BC_DATA whole and keep them there.
+/// the Microsoft runtimes' module zeroes its own `_BSS` (below).
 const ZERO_ARRAY: &[u8] = b"DEFINT A-Z\r\nDIM SHARED a(0 TO 99)\r\nDIM SHARED k AS INTEGER\r\nREAD k\r\na(k) = k\r\nPRINT a(k + 1)\r\nDATA 7\r\n";
 
 fn stored(records: &[std::rc::Rc<omf::Record>], wanted: &str) -> usize {
@@ -131,9 +132,38 @@ fn test_the_llrm_runtime_keeps_zero_variables_in_an_unstored_bss() {
     assert_eq!(stored(&llrm, "_BSS"), 0, "no byte of _BSS is stored");
     assert!(segment(&llrm, "BSSB").1 == 0, "the empty BSSB opens the class");
     assert!(omf::groups(&llrm)["DGROUP"].len() >= 2, "DGROUP holds the BSS segments");
-    let microsoft = records(&parsed_as(&source, "qb45", "qb45"), "bss.bas");
-    assert!(!omf::segments(&microsoft).iter().flatten().any(|(name, _)| name == "_BSS"), "the Microsoft runtimes' CLEAR needs BC_DATA whole");
-    assert!(stored(&microsoft, "BC_DATA") >= 200);
+}
+
+/// The bytes of the module's code, from its listing's object.
+fn code_bytes(program: &model::Program) -> usize {
+    let records = records(program, "bss.bas");
+    omf::segments(&records).iter().flatten().filter(|(name, _)| name.contains("CODE") || name.ends_with("_TEXT")).map(|(_, size)| *size as usize).sum()
+}
+
+fn microsoft_program(source: &std::path::Path) -> model::Program {
+    let frontend = qb_driver::Frontend { zero_bss: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    qb_driver::parsed(source, &frontend, None).expect("parses")
+}
+
+/// The Microsoft runtimes' start-up zeroes no BSS and their CLEAR (B$SCLR) only BC_DATA: the module zeroes `_BSS` itself, in a routine called at
+/// entry and after each CLEAR. Where that costs more than it saves (30 B) the variables stay in BC_DATA, and no routine is written.
+#[test]
+fn test_the_microsoft_runtimes_get_a_module_that_zeroes_its_own_bss() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(&tmp, "bss.bas", ZERO_ARRAY);
+    let program = microsoft_program(&source);
+    let microsoft = records(&program, "bss.bas");
+    assert!(segment(&microsoft, "_BSS").1 >= 200, "the 100-element array is in _BSS");
+    assert_eq!(stored(&microsoft, "_BSS"), 0, "no byte of _BSS is stored");
+    let text = listing(&program);
+    assert!(text.contains("call far ptr $QB$ZBSS"), "the entry zeroes it:\n{text}");
+    assert!(text.contains("$QB$ZBSS proc far"), "the routine is the module's:\n{text}");
+    let bare = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    assert_eq!(code_bytes(&program) - code_bytes(&bare), llrm_codegen::driver::basic::ZEROING_COST, "the threshold is what the routine and its call weigh");
+    let small = written(&tmp, "small.bas", b"DEFINT A-Z\r\nDIM SHARED a(0 TO 3)\r\nDIM SHARED k AS INTEGER\r\nREAD k\r\na(k) = k\r\nPRINT a(k + 1)\r\nDATA 1\r\n");
+    let little = microsoft_program(&small);
+    assert!(!omf::segments(&records(&little, "small.bas")).iter().flatten().any(|(name, _)| name == "_BSS"), "ten bytes cost less stored");
+    assert!(!listing(&little).contains("$QB$ZBSS"), "and nothing zeroes them");
 }
 
 /// A DATA line was stored re-rendered with ", " between its values: jpeg_fixed's ten rows of "362,502,473" grew 118 B of BC_DS over BC's, which

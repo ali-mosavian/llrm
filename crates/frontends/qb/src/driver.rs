@@ -84,6 +84,8 @@ pub struct Frontend {
     pub error_lines: bool,
     /// `-g` in BC's CodeView layout, not standard CodeView 4: `--bc-codeview`.
     pub bc_codeview: bool,
+    /// The module zeroes its own `_BSS`, as the runtime it links does not (the Microsoft ones').
+    pub zero_bss: bool,
     /// Built for the run-time module BRUN45, as BC without /O:
     /// `--run-time-module`.
     pub run_time_module: bool,
@@ -129,6 +131,7 @@ impl Frontend {
             runtime_frames: false,
             error_lines: false,
             bc_codeview: false,
+            zero_bss: false,
             run_time_module: false,
             segment_bytes: None,
             near_bytes: 0,
@@ -183,6 +186,7 @@ fn _options(
             far_bytes: frontend.far_bytes,
             without_extended_float: frontend.without_extended_float,
             bc_codeview: frontend.bc_codeview,
+            zero_bss: frontend.zero_bss,
             run_time_module: frontend.run_time_module,
         },
         debug: frontend.debug,

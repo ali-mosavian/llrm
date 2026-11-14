@@ -1123,7 +1123,8 @@ fn should_full_unroll(
                 !run.tti.unroll_trial_nests_only() || price::nest_unroll_fits(run, se, analyzed, lp, up, limit)
             })
         {
-            note_for_trial(run, lp, unrolled_size);
+            let held = trial_size(run, se, analyzed, lp, eph, full_unroll_trip_count, unrolled_size);
+            note_for_trial(run, lp, held);
         }
         return unroll.then_some(full_unroll_trip_count);
     }
@@ -1132,7 +1133,8 @@ fn should_full_unroll(
     if let Some(limit) = trial::active() {
         // UNROLL-NEST-TRIAL takes the loops with a subloop only
         let nests_only = nest_trial(run) && lp.is_innermost();
-        if unrolled_size < u64::from(limit) && !nests_only {
+        let held = trial_size(run, se, analyzed, lp, eph, full_unroll_trip_count, unrolled_size);
+        if held < u64::from(limit) && !nests_only {
             why(run, lp, "trial unroll");
             return Some(full_unroll_trip_count);
         }
@@ -1194,13 +1196,42 @@ fn should_full_unroll(
                 .then_some(full_unroll_trip_count);
         }
     }
-    note_for_trial(run, lp, unrolled_size);
+    let held = trial_size(run, se, analyzed, lp, eph, full_unroll_trip_count, unrolled_size);
+    note_for_trial(run, lp, held);
     None
 }
 
 /// Whether this is a speed build of a target that runs UNROLL-NEST-TRIAL.
 fn nest_trial(run: &Run) -> bool {
     run.options.opt_level >= 2 && !run.options.opt_size && run.tti.unroll_trial_nests_at_speed()
+}
+
+/// DEVIATE UNROLL-OS-TRIAL-ANALYZED: the size the -Os and -O1 trials hold a
+/// loop to: the copies' size, or where that is over the bar and the target says
+/// so, the cost the analysis finds once the trips' constants fold, if that is
+/// under it; a call the copies keep is priced as one instruction (gcc's
+/// `estimate_num_insns`), where the pin's analysis gives up on it.
+#[allow(clippy::too_many_arguments)]
+fn trial_size(
+    run: &mut Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    eph: &IdSet<InstId>,
+    trips: u32,
+    unrolled_size: u64,
+) -> u64 {
+    if !(run.options.opt_size || run.options.opt_level == 1) || !run.tti.unroll_trial_by_analyzed_cost() {
+        return unrolled_size;
+    }
+    let bar = if run.options.opt_size { run.tti.unroll_trial_at_size() } else { run.tti.unroll_trial_threshold() };
+    let Some(limit) = trial::active().or(bar) else { return unrolled_size };
+    if unrolled_size < u64::from(limit) {
+        return unrolled_size;
+    }
+    let reach = run.tti.unroll_o1_analyzed_trips().unwrap_or(0).max(trips);
+    analyze_loop_unroll_cost(run, se, analyzed, lp, trips, eph, limit, reach, None, true)
+        .map_or(unrolled_size, |cost| unrolled_size.min(u64::from(cost.unrolled_cost)))
 }
 
 /// DEVIATE UNROLL-TRIAL: a loop the walk refused is noted for the trial that

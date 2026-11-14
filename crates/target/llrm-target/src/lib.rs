@@ -260,6 +260,10 @@ struct Described {
 }
 
 impl llrm_mir::target::Machine for Described {
+    fn has_vector_mir(&self) -> bool {
+        self.tti.as_ref().is_some_and(|tti| tti.vector_values())
+    }
+
     fn throughput(&self) -> Option<&llrm_mir::target::Throughput> {
         self.throughput.as_ref()
     }

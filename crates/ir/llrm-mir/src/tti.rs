@@ -628,6 +628,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether the target's pipeline takes vector values
+    /// (`Machine::has_vector_mir`): a function holding one is refused
+    /// before the mid-end where it does not. Independent of
+    /// [`Self::vector_register_bits`]: a target may hold a vector value and not
+    /// widen loops.
+    fn vector_values(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
@@ -1420,6 +1429,16 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): whether
+    /// the -Os trial measures a loop by the cost `analyzeLoopUnrollCost`
+    /// finds once the trips' constants fold (a switch on the counter keeps
+    /// one arm a trip), not by the copies' size. gcc's `cunroll`
+    /// counts what folds away; the pin's optsize threshold is 0 and never
+    /// looks.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_trial_bytes_strict`.
     fn unroll_trial_bytes_strict(&self) -> bool {
         false
@@ -1599,9 +1618,10 @@ pub trait Tti {
         false
     }
 
-    /// Drop the local functions that are the same code at -O1
-    /// (`MergeLocalFunctions`); no thunk is written.
-    fn merge_local_functions_at_o1(&self) -> bool {
+    /// Drop the local functions that are the same code at the levels that
+    /// allow no trade between bytes and clocks, and at speed (`MergeLocalFunctions`);
+    /// no thunk is written.
+    fn merge_local_functions_at_speed(&self) -> bool {
         false
     }
 
