@@ -235,6 +235,12 @@ impl CombineHooks for X86Lowering<'_> {
         !self.branch_constants()
     }
 
+    /// `tryStoreMergeOfLoads`' vector arm: the vector types the target holds
+    /// are the 128-bit ones of `x86_64_vectors`, empty elsewhere.
+    fn merge_stores_to_vectors(&self) -> bool {
+        true
+    }
+
     /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
     /// The only vector a store here holds is the opaque 16 bytes of an SSE
     /// move (`I128`).
