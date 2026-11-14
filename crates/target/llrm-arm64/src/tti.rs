@@ -804,6 +804,10 @@ impl Tti for AArch64 {
         self.cpu.max_interleave_factor()
     }
 
+    fn vectorizes_epilogues(&self) -> bool {
+        true
+    }
+
     /// `AArch64TTIImpl::shouldMaximizeVectorBandwidth`: true for fixed-width
     /// NEON (L375).
     fn should_maximize_vector_bandwidth(&self) -> bool {
@@ -1611,7 +1615,6 @@ impl Lowering for AArch64Lowering {
         op == llrm_mir::lowering::OverflowOp::UAdd && llrm_mir::lowering::simple_int(bits)
     }
 }
-
 
 /// The instructions of `x * m` as `performMulCombine` leaves it (dag/combine.rs
 /// `combine_mul`): `2^N + 1` is one shifted add, `2^N - 1` a shift and a `sub`,
