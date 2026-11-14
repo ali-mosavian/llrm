@@ -69,6 +69,10 @@ pub mod x86isd {
     pub const MUL_IMM: ISD = ISD::Target(694);
     /// `X86ISD::VSHLI`, `VSRAI`, `VSRLI`: a vector shifted by an `i8` target constant (`PSLL*ri`, `PSRA*ri`,
     /// `PSRL*ri`).
+    /// `X86ISD::PSHUFD`: `v4i32` lanes by an `i8` target constant (two bits a lane).
+    pub const PSHUFD: ISD = ISD::Target(714);
+    /// `X86ISD::UNPCKL`: the low lanes of two vectors interleaved (`punpckl*`).
+    pub const UNPCKL: ISD = ISD::Target(779);
     pub const VSHLI: ISD = ISD::Target(933);
     pub const VSRAI: ISD = ISD::Target(937);
     pub const VSRLI: ISD = ISD::Target(941);
@@ -779,6 +783,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::Shl | ISD::Srl | ISD::Sra if dag.value_type(node).is_vector() => lower_vector_shift(dag, node),
+            ISD::BuildVector => lower_build_vector_splat(dag, node),
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -3466,6 +3471,35 @@ fn lower_dynamic_stackalloc(
     let chain = SDValue { node: chain.node, res: 0 };
     let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
     Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
+}
+
+/// `LowerBUILD_VECTOR`, a splat of one scalar (`v4i32`, `v2i64`): `movd`/`movq` into the low lane, then
+/// `pshufd` (`punpcklqdq` for quadwords) copies it ([L12031][pin], `X86ISD::VBROADCAST` with AVX). Any other build is left to the expansion.
+///
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L12031
+fn lower_build_vector_splat(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let lanes = dag.node(node).ops.clone();
+    let first = *lanes.first()?;
+    if lanes.iter().any(|lane| *lane != first) || dag.constant(first).is_some() || dag.is_undef(first) {
+        return None;
+    }
+    let lane_vt = match vt {
+        EVT::Simple(MVT::V4I32) => EVT::I32,
+        EVT::Simple(MVT::V2I64) => EVT::I64,
+        _ => return None,
+    };
+    let value = if dag.value_type(first) == lane_vt { first } else { dag.get_sext_or_trunc(first, lane_vt) };
+    let low = dag.get_node(ISD::ScalarToVector, vt, &[value]);
+    // A pair of quadwords: `punpcklqdq` with itself.
+    if lane_vt == EVT::I64 {
+        return Some(dag.get_node(x86isd::UNPCKL, vt, &[low, low]));
+    }
+    let by = dag.get_constant_with(0, EVT::I8, true, false);
+    Some(dag.get_node(x86isd::PSHUFD, vt, &[low, by]))
 }
 
 /// `LowerShift` for a vector shifted by a constant splat
