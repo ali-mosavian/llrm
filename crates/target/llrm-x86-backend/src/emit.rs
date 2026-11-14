@@ -850,6 +850,8 @@ fn width(
         EVT::Simple(MVT::I32) => 4,
         EVT::Simple(MVT::I64) => 8,
         EVT::Simple(MVT::I128) => 16,
+        // A vector is the bytes of its xmm register (`VR128`).
+        vt if vt.is_vector() => vt.size_in_bits().div_ceil(8),
         EVT::Int(bits) => bits.div_ceil(8),
         // A floating value is one 10-byte register value of the x87 stack.
         EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
