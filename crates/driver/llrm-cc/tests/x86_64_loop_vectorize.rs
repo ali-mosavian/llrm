@@ -81,18 +81,22 @@ fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-run-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let object = dir.join("a.o");
-    let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
-        .env("LLRM_CC_TARGET", "x86_64-linux")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set"))
-        .args(["-O2", "-w", "-c", "-o"])
-        .arg(&object)
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/lv_run.c"))
-        .output()
-        .unwrap();
-    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let mut objects = Vec::new();
+    for source in ["lv_run.c", "lv_loops.c"] {
+        let object = dir.join(format!("{source}.o"));
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "x86_64-linux")
+            .env("LLRM_LLC", std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set"))
+            .args(["-O2", "-w", "-c", "-o"])
+            .arg(&object)
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c").join(source))
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{source}: {}", String::from_utf8_lossy(&built.stderr));
+        objects.push(object);
+    }
     let exe = dir.join("a.out");
-    let linked = Command::new("gcc").args(["-static", "-no-pie", "-o"]).arg(&exe).arg(&object).output().unwrap();
+    let linked = Command::new("gcc").args(["-static", "-no-pie", "-o"]).arg(&exe).args(&objects).output().unwrap();
     assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
     let ran = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "bad 0");
@@ -107,4 +111,14 @@ fn a_vector_loop_of_four_trips_is_fully_unrolled() {
     let fill = body(&text, "fill_rows");
     let stores = fill.matches("movaps xmmword ptr [").count() + fill.matches("movups xmmword ptr [").count();
     assert!(stores >= 8, "{fill}");
+}
+
+/// A vector constant the folder left as `bitcast (<16 x i8> .. to i128)` or `bitcast (i128 N to <4 x i32>)` stopped
+/// the compile (`CannotSelect("Truncate")`, "a vector constant that is not a list of integers"): both build now.
+#[test]
+fn loops_that_leave_vector_image_constants_compile_at_o2_and_o3() {
+    for level in ["-O2", "-O3"] {
+        let text = assembly("x86_64-linux", level);
+        assert!(text.contains("stack_copy") && text.contains("square_sum"), "{level}");
+    }
 }
