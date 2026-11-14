@@ -21,6 +21,8 @@ features = ["X87", "CX8"]
 # x87 for `long double`; no SSE yet (scalar floating point is D64-4), so a float pattern stays on x87.
 [cpu.x64]
 features = ["X87", "CX8", "CMOV", "SSE1", "SSE2"]
+# The 128-bit integer vectors of SSE2: loads, stores and moves (x86 vectors plan, PR-A).
+live_types = ["v16i8", "v8i16", "v4i32", "v2i64"]
 
 [cpu.x64.atom]
 "Subtarget->is64Bit()" = true
@@ -134,6 +136,11 @@ alignednontemporalstore = "non_temporal_store"
 CommutableCMPCC = "commutable_cmp_cc"
 X86sub_flag_nocf = "sub_no_carry_flag_uses"
 X86lock_add_nocf = "no_carry_flag_uses_of_result"
+# The vector memory and multiply operands the SSE2 integer vectors reach (x86 vectors plan, PR-A).
+atomic_load_128_v2i64 = "memory_vt_v2i64"
+atomic_load_128_v4i32 = "memory_vt_v4i32"
+anonymous_15796 = "upper_half_is_zero"
+anonymous_17816 = "upper_half_is_zero"
 def32 = "def32"
 or_disjoint = "or_disjoint"
 X86tcret_enough_regs = "tcret_enough_regs"

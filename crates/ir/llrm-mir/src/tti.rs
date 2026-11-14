@@ -628,6 +628,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether the target's pipeline takes vector values
+    /// (`Machine::has_vector_mir`): a function holding one is refused
+    /// before the mid-end where it does not. Independent of
+    /// [`Self::vector_register_bits`]: a target may hold a vector value and not
+    /// widen loops.
+    fn vector_values(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
