@@ -35,6 +35,9 @@ pub(crate) fn unroll_pays(
     saved * 1000 >= added * rate
 }
 
+/// The rate of the no-growth variant (UNROLL-SPEED-TRIAL): a byte costs more than any clocks can repay.
+const NO_GROW_RATE: i64 = 1 << 40;
+
 /// Whether the full unroll of `lp` by `trips` stays, at the target's rate
 /// (`Tti::unroll_milliclocks_per_byte`). At -O2/-O3, and -O1 where bytes are
 /// priced at speed: -Os and -Oz hold to the pin's bytes.
@@ -51,7 +54,7 @@ pub(super) fn full_unroll_pays(
     // DEVIATE UNROLL-SPEED-TRIAL: the compile that unrolls only what adds no bytes prices every loop, an inlinable
     // callee's too.
     let no_grow = trial::speed_unroll() == Some(trial::SpeedUnroll::NoGrow);
-    let rate = if no_grow { 1 << 40 } else { run.tti.unroll_milliclocks_per_byte() };
+    let rate = if no_grow { NO_GROW_RATE } else { run.tti.unroll_milliclocks_per_byte() };
     // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
     // (the pin's order): a veto in a function the inliner can take leaves a
     // small rolled helper that is then inlined, and unrolled, at every site
@@ -81,9 +84,11 @@ pub(super) fn full_unroll_pays(
     // alone and kept rolled, +38,016).
     // Only where nests are priced: at -O3 the pin prices these copies (matmul
     // -O3 700 B; unpriced 1,208 B).
-    let carried = run.decided.contains(&lp.get_header())
-        && run.tti.unroll_prices_nest_loops_without_outer_counter()
-        && run.options.opt_level < 3;
+    // The no-growth variant of UNROLL-SPEED-TRIAL prices every nest, at any level and on any target: it keeps no
+    // unroll that adds bytes, where the pin's threshold decides a nest unpriced.
+    let prices_nest_here = no_grow
+        || (run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3);
+    let carried = run.decided.contains(&lp.get_header()) && prices_nest_here;
     if !run.first.contains(&lp.get_header()) || carried {
         why(run, lp, "unpriced unroll: a copy of this run");
         return true;
@@ -97,7 +102,7 @@ pub(super) fn full_unroll_pays(
     // 857 at 6) for 700 -> 292 B, and no rate keeps shellsort and jpeg at the
     // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves the
     // rows slower than gcc and clang at the pin's value.
-    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
+    let prices_nest = prices_nest_here;
     // DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 the
     // pin decides a loop inside a loop of known trips by its size alone, as it
     // decides the nest (below). Priced, the inner loop was vetoed while the
@@ -386,14 +391,16 @@ fn priced_verdict(
     // that converts its totals to the body's bytes and clocks.
     let unit = analysis.as_ref().map_or(rolled_units, |cost| (i64::from(cost.rolled_dynamic_cost) / i64::from(trips.max(1))).max(1));
     let added = match analysis.as_ref() {
-        Some(cost) if cost.through_call => (cost.unrolled_bytes - body_bytes).max(0),
+        // The no-growth variant counts the bytes the copies emit, not the latency units of the analysis: a loop
+        // of calls folds to few units and 10 copies of `push imm; call` (mul_words_to_long -O3 +70 B, priced 0 B).
+        Some(cost) if cost.through_call || rate >= NO_GROW_RATE => (cost.unrolled_bytes - body_bytes).max(0),
         _ => ((unrolled_units - unit).max(0) * body_bytes) / unit,
     };
     let (nested_uses, known) = constant_operand_uses(run, analyzed, lp);
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, se, analyzed, lp, &known, up, memory_aware, projection);
+    let (mut promoted, mut promoted_runs, ints, floats, forwarded, tables) = promoted_accesses(run, se, analyzed, lp, &known, up, memory_aware, projection);
     let rmw = forwarded.len();
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
@@ -422,7 +429,11 @@ fn priced_verdict(
             promoted_runs = 0;
         }
     }
-    let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
+    // The analysis has already folded the loads of a constant table out of the bytes it counts: crediting them
+    // again took mul_words_to_long -O3's +51 B to 0 B. Only in the no-growth variant, which a compile of the
+    // module must beat to be kept (the default rate keeps its credit, as the other targets' rows were tuned on it).
+    let credited = if analysis.is_some() && rate >= NO_GROW_RATE { promoted - tables } else { promoted };
+    let added = (added - i64::from(trips) * credited * bytes.load).max(0);
     let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
     let credited_operands = if analysis.is_none() && run.tti.unroll_credits_immediate_operands() { nested_uses } else { 0 };
     let (saved_units, constant_clocks) = match analysis {
@@ -822,8 +833,9 @@ fn promoted_accesses(
     up: &UnrollingPreferences,
     memory_aware: bool,
     projection: Option<&Projection>,
-) -> (i64, i64, usize, usize, IdSet<ValueId>) {
+) -> (i64, i64, usize, usize, IdSet<ValueId>, i64) {
     let function = &*run.function;
+    let mut tables = 0;
     let mut resident: std::collections::BTreeMap<u32, bool> = Default::default();
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
@@ -870,6 +882,9 @@ fn promoted_accesses(
             if free {
                 let weight = projection.map_or(1, |projection| projection.of(block));
                 found += weight;
+                if matches!(local_array_at(run, pointer, known), Some(Base::Table)) {
+                    tables += weight;
+                }
                 runs += projection.map_or(ASSUMED_TRIPS.pow(nested.min(2)), |_| weight);
                 if let Some(Base::Local(root)) = local_array_at(run, pointer, known) {
                     let stored = match one.opcode {
@@ -892,7 +907,7 @@ fn promoted_accesses(
             }
         }
     }
-    (found, runs, ints.len(), floats.len(), rmw)
+    (found, runs, ints.len(), floats.len(), rmw, tables)
 }
 
 /// A store of an integer that is a constant in each copy (a constant, or a value of the counters alone) and

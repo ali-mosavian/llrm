@@ -88,3 +88,27 @@ fn a_modules_code_and_data_are_made_by_one_mid_end_run() {
     llrm_z80::data::text(LOOP_FUSION, &request).expect("data");
     assert_eq!(take_mid_end_runs(), 1);
 }
+
+/// huffman_decode -O3 (`-fno-inline-functions`): the no-growth variant left the nests to the pin's -O3 threshold and
+/// kept the unrolled `build`/`decode` loops, 1085 B in the module price where the same variant at -O2 is 698 B (the
+/// cell was 1035 B against SDCC's 719). The variant prices every nest, at any level.
+#[test]
+fn the_no_growth_variant_prices_nests_at_o3() {
+    let ir = include_str!("data/huffman_decode_o3.ll");
+    let chosen = effective(ir, &Request::new(Level::O3)).expect("chooses");
+    let bytes = module_prices(ir, &chosen).unwrap().0;
+    assert!(bytes <= 750, "{bytes} B kept at -O3 (-O2: 698)");
+}
+
+const MUL_WORDS: &str = include_str!("kernels/ir/mul_words_to_long.ll");
+
+/// mul_words_to_long -O3: the pin unrolls the 10-trip loop of calls whose table loads fold (207 B; 137 B rolled, SDCC
+/// 197 B). The no-growth variant priced the copies at 0 B: the analysis had folded the table's loads out of the bytes
+/// it counts and the promoted-load credit took them out again (51 B added, priced 0).
+#[test]
+fn an_unroll_whose_table_loads_are_already_folded_is_not_credited_twice() {
+    let unrolled = Request::new(Level::O3);
+    let chosen = effective(MUL_WORDS, &unrolled).expect("chooses");
+    let (before, after) = (module_prices(MUL_WORDS, &unrolled).unwrap().0, module_prices(MUL_WORDS, &chosen).unwrap().0);
+    assert!(after + 40 <= before, "{before} B kept as {after} B");
+}
