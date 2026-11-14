@@ -472,7 +472,11 @@ impl Tti for Wasm {
         match intrinsic_price(kind, name) {
             Some(cost) => Cost::of(cost),
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+            // A scalar intrinsic with no case of its own (`stacksave`) is
+            // "turned into a library call": `BasicTTIImplBase`'s
+            // `SingleCallCost` (1 for code size, else 10).
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2323
+            None => base_intrinsic_cost(name).unwrap_or(Cost::of(if kind == "code-size" { 1 } else { 10 })),
         }
     }
 }
@@ -522,6 +526,17 @@ mod tests {
         assert!(Wasm.ext_load_free(CastKind::ZExt, Ty::Int(64), Ty::Int(32)));
         assert!(!Wasm.ext_load_free(CastKind::ZExt, Ty::Int(32), Ty::Int(1)));
         assert!(!Wasm.ext_load_free(CastKind::Trunc, Ty::Int(8), Ty::Int(32)));
+    }
+
+    /// `stacksave` and `stackrestore` had no price, so a loop that held a
+    /// variable-length array could not be unrolled (vla_callee_constant -O2:
+    /// 3,021 instructions against the pin's 994). The pin prices them as a
+    /// library call: 1 for code size, else 10.
+    #[test]
+    fn a_stack_save_or_restore_is_priced_as_a_library_call() {
+        let cost = |name, ret, args: &[Ty], kind| Wasm.intrinsic_cost(name, ret, args, kind);
+        assert_eq!(cost("llvm.stacksave.p0", Some(Ty::Pointer), &[], CostKind::CodeSize), Cost::of(1));
+        assert_eq!(cost("llvm.stackrestore.p0", None, &[Ty::Pointer], CostKind::SizeAndLatency), Cost::of(10));
     }
 
     /// `llvm.fmuladd` had no price, so a loop that held one could not be
