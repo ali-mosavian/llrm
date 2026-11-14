@@ -310,7 +310,20 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorFmulLane { rd, rn, rm, .. } => {
+            Inst::VectorNarrow { high: false, rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorUnzip { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorNarrow { high: true, rd, rn, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorFmulLane { rd, rn, rm, .. } | Inst::VectorMulLane { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
@@ -327,7 +340,7 @@ impl Inst {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
             }
-            Inst::VectorDupLane { rd, rn, .. } => {
+            Inst::VectorDupLane { rd, rn, .. } | Inst::VectorDupScalar { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
@@ -336,8 +349,8 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorLong { rd, rn, rm, .. } => {
-                f(Fpr(rd), Role::Def);
+            Inst::VectorLong { op, rd, rn, rm, .. } => {
+                f(Fpr(rd), if op.accumulates() { Role::UseDef } else { Role::Def });
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }

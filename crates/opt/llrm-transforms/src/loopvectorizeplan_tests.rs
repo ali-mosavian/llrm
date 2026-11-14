@@ -18,7 +18,7 @@ fn facts(
     let align = u64::from(lane_bits / 8);
     let mut recipes = vec![Recipe::Load { lane, align }];
     if add {
-        recipes.push(Recipe::Binary { op: ArithOp::Add, lane });
+        recipes.push(Recipe::Binary { op: ArithOp::Add, lane, ext: [None, None] });
     }
     recipes.push(Recipe::Store { lane, align });
     LoopFacts {
@@ -114,17 +114,17 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     assert_eq!(plan(&tti, &size), Ok(Plan { vf: 8, ic: 1 }));
 }
 
-/// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) took VF 8 for a
-/// loop storing `i16` and `i64`: a `<8 x i64>` the backend cannot split, so
-/// arm64 refused the whole function ("vector with no register class"); at VF 2
-/// the `<2 x i16>` has no register either. With no VF filling a register for
-/// every type, the loop stays scalar (LV-SPLIT).
+/// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) takes VF 8 for a
+/// loop storing `i16` and `i64`. It was held scalar (LV-SPLIT) while the
+/// backend could not split a `<8 x i64>`; it splits it into four registers
+/// now, as the pin does.
 #[test]
-fn a_loop_whose_types_fill_no_common_register_is_not_vectorized() {
+fn a_loop_whose_types_need_split_registers_is_vectorized_as_the_pin_does() {
     let tti = AArch64::of_cpu("generic").unwrap();
     let store = |bits: u32| Recipe::Store { lane: Ty::Int(bits), align: u64::from(bits / 8) };
     let mixed = LoopFacts { recipes: vec![store(16), store(64)], ..facts(16, 64, false) };
-    assert!(plan(&tti, &mixed).is_err(), "{:?}", plan(&tti, &mixed));
+    let plan = plan(&tti, &mixed).expect("the backend splits a <8 x i64> into four registers");
+    assert_eq!(plan.vf, 8, "{plan:?}");
 }
 
 fn loop_of(recipes: Vec<Recipe>) -> LoopFacts {
@@ -145,11 +145,11 @@ fn a_loop_of_scattered_floats_is_priced_as_the_pin_prices_it() {
     let recipes = vec![
         Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
         Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
-        Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float },
+        Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float, ext: [None, None] },
         Recipe::Compare { op: CmpSel::FCmp, lane: Ty::Float, predicate: Predicate::Float(uno) },
-        Recipe::Cast { kind: CastKind::BitCast, dst: Ty::Int(32), src: Ty::Float, folded: false },
+        Recipe::Cast { kind: CastKind::BitCast, dst: Ty::Int(32), src: Ty::Float, folded: false, users: Vec::new() },
         Recipe::Select { lane: Ty::Int(32), predicate: Some(Predicate::Float(uno)) },
-        Recipe::Binary { op: ArithOp::Add, lane: Ty::Int(32) },
+        Recipe::Binary { op: ArithOp::Add, lane: Ty::Int(32), ext: [None, None] },
     ];
     let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();
     assert_eq!((costs(1), costs(2), costs(4)), (11, 26, 48));
@@ -165,7 +165,7 @@ fn a_loop_of_consecutive_floats_is_priced_as_the_pin_prices_it() {
     let tti = AArch64::of_cpu("apple-m1").unwrap();
     let recipes = vec![
         Recipe::Load { lane: Ty::Float, align: 4 },
-        Recipe::Binary { op: ArithOp::FMul, lane: Ty::Float },
+        Recipe::Binary { op: ArithOp::FMul, lane: Ty::Float, ext: [None, None] },
         Recipe::Store { lane: Ty::Float, align: 4 },
     ];
     let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();

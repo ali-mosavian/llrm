@@ -374,7 +374,7 @@ pub(crate) fn extract(
                     return Err(Skipped("An operation the target does not price"));
                 }
                 cost += price.value;
-                priced.push(Recipe::Binary { op: arith, lane: ty });
+                priced.push(Recipe::Binary { op: arith, lane: ty, ext: [None, None] });
                 let extended = |operand: Operand| {
                     matches!(
                         operand,
@@ -411,7 +411,7 @@ pub(crate) fn extract(
                     }
                     cost += price.value;
                 }
-                priced.push(Recipe::Cast { kind: ck, dst, src, folded });
+                priced.push(Recipe::Cast { kind: ck, dst, src, folded, users: Vec::new() });
                 body.push(inst);
             }
             Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Select => {

@@ -345,9 +345,10 @@ pub trait CombineHooks {
         false
     }
 
-    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another reader
-    /// takes narrow may be widened for an extension only if the truncate back is free.
-    /// The pin asks the same query as everywhere else; a target may answer it apart.
+    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another
+    /// reader takes narrow may be widened for an extension only if the
+    /// truncate back is free. The pin asks the same query as everywhere
+    /// else; a target may answer it apart.
     fn extend_uses_truncate_free(
         &self,
         from: EVT,
@@ -771,6 +772,11 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     worklist: Vec<u32>,
     /// The last sweep of an after-legalize combine (`pack_word_pairs`).
     pub(super) late: bool,
+    /// The node count a run may not pass (`RUNAWAY_GROWTH` times the nodes it
+    /// started with, and `RUNAWAY_FLOOR`): set by `run_bounded`.
+    node_limit: usize,
+    runaway: bool,
+    last_combined: Option<u32>,
     queued: NodeSet,
     /// `CombinedNodes`: the nodes already visited, whose operands are not
     /// queued again by a visit of their user.
@@ -800,6 +806,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             level,
             worklist: Vec::new(),
             late: false,
+            node_limit: usize::MAX,
+            runaway: false,
+            last_combined: None,
             queued: NodeSet::default(),
             combined: NodeSet::default(),
             tli: None,
@@ -875,7 +884,34 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     /// `Run`.
+    /// [`Self::run_bounded`] where a loop is a bug to stop at: tests and the
+    /// helpers that have no way to refuse.
     pub fn run(&mut self) {
+        if let Err(why) = self.run_bounded() {
+            panic!("{why}");
+        }
+    }
+
+    /// `Run`, with a guard the pin has not: two combines that undo each other
+    /// make a node a visit, for ever, and the arena grows until the machine is
+    /// out of memory (the z80 `or (trunc a), (trunc b)` that took 10 GB). A run
+    /// that makes more than `RUNAWAY_GROWTH` times the nodes it started with
+    /// (and `RUNAWAY_FLOOR`) is an error naming the last node it combined.
+    pub fn run_bounded(&mut self) -> Result<(), CombineRunaway> {
+        self.node_limit = self.dag.node_count().saturating_mul(RUNAWAY_GROWTH).max(RUNAWAY_FLOOR);
+        self.run_unbounded();
+        if self.runaway {
+            let last = self.last_combined;
+            return Err(CombineRunaway {
+                level: self.level,
+                opcode: last.map(|node| self.dag.opcode(SDValue { node, res: 0 })),
+                nodes: self.dag.node_count(),
+            });
+        }
+        Ok(())
+    }
+
+    fn run_unbounded(&mut self) {
         // `RemoveDeadNodes`: what an earlier phase replaced no longer counts as
         // a user. Newest first, so a user goes before the nodes it reads.
         for node in self.dag.node_ids().rev() {
@@ -928,6 +964,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
             self.combined.insert(n);
+            self.last_combined = Some(n);
+            if self.dag.node_count() > self.node_limit {
+                self.runaway = true;
+                self.worklist.clear();
+                return;
+            }
             // `SDLoc(N)`: what the combine makes takes the node's order.
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
@@ -1091,6 +1133,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::InsertVectorElt => self.visit_insert_vector_elt(node),
+            ISD::VectorShuffle => self.visit_vector_shuffle(node),
             ISD::ExtractElement => self.visit_extract_vector_elt(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
@@ -2124,8 +2167,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the loaded
-    /// value (its chain may have users).
+    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the
+    /// loaded value (its chain may have users).
     fn reduce_load_width(
         &mut self,
         node: SDValue,
@@ -2201,8 +2244,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         {
             let x = self.dag.operand(self.dag.operand(n0, 0), 0);
             let narrow = self.dag.value_type(n0);
-            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
-            // isZExtFree(narrow, wide)`) `ShrinkDemandedOp` makes the narrow form
+            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide,
+            // narrow) && isZExtFree(narrow, wide)`)
+            // `ShrinkDemandedOp` makes the narrow form
             // this fold would undo, and the two would run in turn forever.
             let narrows_free = self.hooks.free_narrowing(vt, narrow);
             let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
@@ -2398,14 +2442,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let from = self.dag.value_type(n0);
-        // DEVIATE: the known bits of a vector are not modelled (the pin asks
-        // for the sign bit of each lane).
-        if vt.is_vector() {
-            return None;
-        }
+        // `SignBitIsZero`: the sign bit of a lane, in a vector.
+        let lane_bits = if from.is_vector() { from.element().size_in_bits() } else { from.size_in_bits() };
         if self.tli?.is_sext_cheaper_than_zext(from, vt)
             || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
-            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
+            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (lane_bits - 1))
         {
             return None;
         }
@@ -4457,8 +4498,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let source = self.dag.operand(value, 0);
         let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
-        // `canCombineTruncStore`: `isTruncStoreLegal` after operation legalization, `isTruncStoreLegalOrCustom`
-        // before; both need the value type to be legal (a soft-float target has no `f64` to store narrowed).
+        // `canCombineTruncStore`: `isTruncStoreLegal` after operation
+        // legalization, `isTruncStoreLegalOrCustom` before; both need
+        // the value type to be legal (a soft-float target has no `f64` to store
+        // narrowed).
         let takes = if self.legal_operations() {
             tli.is_trunc_store_legal(wide, narrow)
         } else {
@@ -4841,8 +4884,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
         }
-        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits to
-        // spare (DAGCombiner.cpp#L17478): the shifted-in zeros are all sign.
+        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits
+        // to spare (DAGCombiner.cpp#L17478): the shifted-in zeros are
+        // all sign.
         if self.dag.opcode(n0) == ISD::Srl
             && let Some(amount) = self.dag.constant(self.dag.operand(n0, 1))
             && amount <= u128::from(bits - ext_bits)
@@ -4940,6 +4984,33 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let _ = node;
         Some(extended)
+    }
+}
+
+/// How many times the nodes a run started with it may make before it is
+/// stopped, and the least it may make (see [`DagCombiner::run_bounded`]).
+const RUNAWAY_GROWTH: usize = 64;
+const RUNAWAY_FLOOR: usize = 1 << 17;
+
+/// A combine run that did not end: the nodes it made passed its limit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CombineRunaway {
+    pub level: CombineLevel,
+    /// The opcode of the last node the run combined.
+    pub opcode: Option<ISD>,
+    pub nodes: usize,
+}
+
+impl std::fmt::Display for CombineRunaway {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            out,
+            "the DAG combiner does not end at {:?}: {} nodes made, last combined {:?}",
+            self.level, self.nodes, self.opcode
+        )
     }
 }
 
