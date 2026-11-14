@@ -977,6 +977,7 @@ fn items_once(
         crate::constreg::immediate_from_free_register(&mut function, &assignment);
         crate::narrow_add::narrow_adds(&mut function, &assignment);
         crate::narrow_add::narrow_compares(&mut function, &assignment);
+        crate::narrow_add::narrow_counters(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
