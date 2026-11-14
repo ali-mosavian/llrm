@@ -259,6 +259,13 @@ fn program_of(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
+        // DEVIATE Z80-O3-COPY-BUDGET (owner z80, exit 2026-11-24): -O3 keeps -O2's copy budget (the target's 100%, not
+        // LLVM's -O3 200%). The z80 goal is the smallest code at every level; the wider budget fully unrolled and grew
+        // huffman_decode 694 -> 1035 B, shift_until_idioms 1053 -> 1162 B, mul_words_to_long 137 -> 206 B and
+        // long_shift_by_a_call_result 431 -> 568 B over -O2's.
+        if request.level == Level::O3 {
+            options.limits = Level::O2.options().limits;
+        }
         // No zero- or sign-extending load: the compare of a loaded byte stays a
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
