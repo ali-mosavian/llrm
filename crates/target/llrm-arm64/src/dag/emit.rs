@@ -765,9 +765,13 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    if name == "NOTv16i8" {
+    if let Some(quad) = match name {
+        "NOTv16i8" => Some(true),
+        "NOTv8i8" => Some(false),
+        _ => None,
+    } {
         return Some(match operands {
-            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
+            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { quad, rd, rn: *rn }),
             _ => wrong(),
         });
     }
@@ -923,6 +927,23 @@ fn vector_inst(
         }
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    // `CMGTv4i32`, `CMLTv8i8rz`, `FCMGEv2f32`, `BSPv16i8`.
+    if let Some(form) = crate::vector_forms::parse(name) {
+        use crate::vector_forms::VectorForm;
+        return Some(match (form, operands) {
+            (VectorForm::Compare { op, lanes, quad }, [Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorCompare { op, lanes, quad, rd, rn: *rn, rm: *rm })
+            }
+            // The zero is part of the form.
+            (VectorForm::CompareZero { op, lanes, quad }, [Operand::Fpr(rn), ..]) => {
+                Ok(Inst::VectorCompareZero { op, lanes, quad, rd, rn: *rn })
+            }
+            (VectorForm::Bsp { quad }, [Operand::Fpr(mask), Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorBsp { quad, rd, mask: *mask, rn: *rn, rm: *rm })
+            }
             _ => wrong(),
         });
     }

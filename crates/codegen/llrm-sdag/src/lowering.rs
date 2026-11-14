@@ -273,8 +273,22 @@ impl TargetLoweringInfo {
                 }
                 None => match mvt {
                     _ if mvt.is_vector() => {
+                        // `getPreferredVectorAction`: promote the lanes to the
+                        // narrowest integer type that makes a legal vector of
+                        // as many lanes (`v4i1` is `v4i16` where `v4i8` is not
+                        // a type).
+                        let promoted = (mvt.element() == Some(MVT::I1))
+                            .then(|| {
+                                [MVT::I8, MVT::I16, MVT::I32, MVT::I64]
+                                    .into_iter()
+                                    .filter_map(|lane| MVT::vector(lane, mvt.lanes()?))
+                                    .find(|wider| self.vectors.contains(wider))
+                            })
+                            .flatten();
                         if self.vectors.contains(&mvt) {
                             (TypeAction::Legal, vt)
+                        } else if let Some(wider) = promoted {
+                            (TypeAction::PromoteInteger, EVT::Simple(wider))
                         } else if let Some(half) = mvt
                             .element()
                             .zip(mvt.lanes())
@@ -312,11 +326,15 @@ impl TargetLoweringInfo {
         }
     }
 
-    /// `getSetCCResultType`: one type, whatever the operands (scalars only).
+    /// `getSetCCResultType`: one type for scalars; a vector compare makes the
+    /// integer vector of its operand's lane width (AArch64).
     pub fn set_cc_result_type(
         &self,
-        _operand: EVT,
+        operand: EVT,
     ) -> EVT {
+        if operand.is_vector() {
+            return operand.change_vector_element_type_to_integer();
+        }
         EVT::Simple(self.set_cc_result)
     }
 

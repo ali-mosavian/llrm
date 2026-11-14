@@ -804,6 +804,10 @@ pub mod opcode {
     pub const BICv4i32: u16 = 2186;
     pub const BICv8i16: u16 = 2187;
     pub const BICv8i8: u16 = 2188;
+    pub const BIFv16i8: u16 = 2189;
+    pub const BIFv8i8: u16 = 2190;
+    pub const BITv16i8: u16 = 2191;
+    pub const BITv8i8: u16 = 2192;
     pub const BL: u16 = 2193;
     pub const BLR: u16 = 2194;
     pub const BLRA: u16 = 524;
@@ -826,6 +830,8 @@ pub mod opcode {
     pub const BSL1N_ZZZZ: u16 = 2219;
     pub const BSL2N_ZZZZ: u16 = 2220;
     pub const BSL_ZZZZ: u16 = 2221;
+    pub const BSLv16i8: u16 = 2222;
+    pub const BSLv8i8: u16 = 2223;
     pub const BSPv16i8: u16 = 534;
     pub const BSPv8i8: u16 = 535;
     pub const Bcc: u16 = 2224;

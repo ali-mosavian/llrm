@@ -141,6 +141,73 @@ impl TypeLegalizer<'_> {
         Some((self.dag.get_node_flags(op, lo_vt, &[lo], flags), self.dag.get_node_flags(op, hi_vt, &[hi], flags)))
     }
 
+    /// `GetSplitOp`: the halves of an operand, those the legalizer made where
+    /// its type splits and extractions where it does not.
+    fn split_operand(
+        &mut self,
+        value: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.action(self.dag.value_type(value)) == TypeAction::SplitVector {
+            Some(self.split_vector(value))
+        } else {
+            self.split_vector_of(value)
+        }
+    }
+
+    /// `SplitVecRes_SETCC`: a compare of each half of the operands, into the
+    /// halves of the result type.
+    fn split_setcc(
+        &mut self,
+        setcc: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        let (lo_vt, hi_vt) = split_dest(self.dag.value_type(setcc))?;
+        let (lhs, rhs, cc) = (self.dag.operand(setcc, 0), self.dag.operand(setcc, 1), self.dag.operand(setcc, 2));
+        let flags = self.dag.node(setcc).flags;
+        let (ll, lh) = self.split_operand(lhs)?;
+        let (rl, rh) = self.split_operand(rhs)?;
+        Some((
+            self.dag.get_node_flags(ISD::SetCC, lo_vt, &[ll, rl, cc], flags),
+            self.dag.get_node_flags(ISD::SetCC, hi_vt, &[lh, rh, cc], flags),
+        ))
+    }
+
+    /// `SplitRes_Select` of a `VSELECT`: the halves of the arms, and of the
+    /// mask by whichever way costs least.
+    fn split_vselect(
+        &mut self,
+        select: SDValue,
+        lo_vt: EVT,
+        hi_vt: EVT,
+    ) -> Option<(SDValue, SDValue)> {
+        let (then, other, cond) = (self.dag.operand(select, 1), self.dag.operand(select, 2), self.dag.operand(select, 0));
+        let (ll, lh) = self.split_operand(then)?;
+        let (rl, rh) = self.split_operand(other)?;
+        let cond_vt = self.dag.value_type(cond);
+        let (cl, ch) = if let Some(mask) = self.widen_vselect_mask(select) {
+            self.split_vector_of(mask)?
+        } else if self.action(cond_vt) == TypeAction::SplitVector {
+            self.split_vector(cond)
+        } else if self.dag.opcode(cond) == ISD::SetCC {
+            // Two narrow compares beat splitting a wide result, unless the
+            // compare already makes this `i1` vector from a legal operand.
+            let operand_vt = self.dag.value_type(self.dag.operand(cond, 0));
+            if cond_vt.element() == EVT::I1
+                && self.action(operand_vt) == TypeAction::Legal
+                && self.tli.types.set_cc_result_type(operand_vt) == cond_vt
+            {
+                self.split_vector_of(cond)?
+            } else {
+                self.split_setcc(cond)?
+            }
+        } else {
+            self.split_vector_of(cond)?
+        };
+        Some((
+            self.dag.get_node(ISD::VSelect, lo_vt, &[cl, ll, rl]),
+            self.dag.get_node(ISD::VSelect, hi_vt, &[ch, lh, rh]),
+        ))
+    }
+
     /// `GetSplitVector`.
     fn split_vector(
         &self,
@@ -227,6 +294,8 @@ impl TypeLegalizer<'_> {
                 his.extend_from_slice(&ops[1..]);
                 (self.dag.get_node_flags(op, lo_vt, &los, flags), self.dag.get_node_flags(op, hi_vt, &his, flags))
             }
+            ISD::SetCC => self.split_setcc(value).ok_or_else(|| unsupported("split compare"))?,
+            ISD::VSelect => self.split_vselect(value, lo_vt, hi_vt).ok_or_else(|| unsupported("split select"))?,
             // `SplitVecRes_CONCAT_VECTORS`: the first operands, then the rest.
             ISD::ConcatVectors => {
                 let ops = self.dag.node(value).ops.clone();

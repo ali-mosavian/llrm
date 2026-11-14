@@ -4314,7 +4314,9 @@ impl Builder<'_> {
         let then = self.get_value(instruction.operands[1])?;
         let other = self.get_value(instruction.operands[2])?;
         let vt = self.dag.value_type(then);
-        let node = self.dag.get_node(ISD::Select, vt, &[cond, then, other]);
+        // `visitSelect`: a vector condition picks lane by lane.
+        let opcode = if self.dag.value_type(cond).is_vector() { ISD::VSelect } else { ISD::Select };
+        let node = self.dag.get_node(opcode, vt, &[cond, then, other]);
         self.set_value(instruction.result.expect("a select has a result"), node);
         Ok(())
     }

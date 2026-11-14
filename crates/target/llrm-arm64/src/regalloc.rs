@@ -331,7 +331,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             }
             Op::I(Inst::VectorMov { rd, rn })
             | Op::I(Inst::VectorShift { rd, rn, .. })
-            | Op::I(Inst::VectorNot { rd, rn })
+            | Op::I(Inst::VectorNot { quad: true, rd, rn })
             | Op::I(Inst::VectorFpUnary { rd, rn, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
             }
@@ -393,6 +393,16 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             | Op::I(Inst::VectorFmulLane { rd, rn, rm, .. })
             | Op::I(Inst::VectorMulLane { rd, rn, rm, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
+            }
+            Op::I(Inst::VectorCompare { quad: true, rd, rn, rm, .. })
+            | Op::I(Inst::VectorBitSelect { quad: true, rd, rn, rm, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
+            }
+            Op::I(Inst::VectorCompareZero { quad: true, rd, rn, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
+            }
+            Op::I(Inst::VectorBsp { quad: true, rd, mask, rn, rm }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*mask), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
             Op::Copy { dst: dst @ Reg::Fpr(_), src } => copies.push((*dst, *src)),
             _ => {}

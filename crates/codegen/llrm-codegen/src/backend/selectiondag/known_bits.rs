@@ -218,7 +218,8 @@ fn walk(
     match opcode {
         ISD::SetCC if value.res == 0 => {
             // A compare is 0 or 1 where the target's boolean contents say so.
-            let zero_or_one = dag.config().boolean_contents == BooleanContents::ZeroOrOne && width > 1;
+            let zero_or_one =
+                dag.config().boolean_contents_of(dag.value_type(value)) == BooleanContents::ZeroOrOne && width > 1;
             KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
         }
         // `X86TargetLowering::computeKnownBitsForTargetNode`:
@@ -419,7 +420,7 @@ fn num_sign_bits_at(
     // `ComputeNumSignBits` of `SETCC`: all bits where it returns 0 or -1.
     if dag.opcode(value) == ISD::SetCC
         && value.res == 0
-        && dag.config().boolean_contents == BooleanContents::ZeroOrNegativeOne
+        && dag.config().boolean_contents_of(dag.value_type(value)) == BooleanContents::ZeroOrNegativeOne
     {
         return width;
     }

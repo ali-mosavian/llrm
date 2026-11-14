@@ -1191,7 +1191,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::MulHU => self.simplify_demanded(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
-                .fold_extend_of_cast(node)
+                .fold_sext_setcc(node)
+                .or_else(|| self.fold_extend_of_cast(node))
                 .or_else(|| self.visit_extend(node))
                 .or_else(|| self.sext_of_non_negative(node))
                 .or_else(|| self.zext_nneg_of_existing_sext(node)),
@@ -1268,10 +1269,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             return None;
         }
+        let vt = self.dag.value_type(node);
+        if op_type.is_vector() {
+            if !op_type.element().is_integer() {
+                return None;
+            }
+            // `SimplifySetCC` of a splat constant against an extreme value.
+            let c1 = self.dag.const_or_splat(n1)?;
+            let before_ops = self.level < CombineLevel::AfterLegalizeVectorOps;
+            return super::setcc_extreme::fold_against_an_extreme(self.dag, vt, n0, c1, cond, before_ops);
+        }
         if !op_type.is_integer() {
             return None;
         }
-        let vt = self.dag.value_type(node);
         let (c0, c1) = (self.dag.constant(n0), self.dag.constant(n1));
         if c0.is_some() && c1.is_none() {
             return Some(self.dag.get_setcc(vt, n1, n0, cond.swapped_operands()));
@@ -1382,7 +1392,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
             return Some(folded);
         }
-        if let Some(folded) = super::setcc_extreme::fold_against_an_extreme(self.dag, vt, n0, c1, cond) {
+        if let Some(folded) = super::setcc_extreme::fold_against_an_extreme(self.dag, vt, n0, c1, cond, true) {
             return Some(folded);
         }
         // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >=
@@ -2213,6 +2223,48 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new.node, res: 1 });
         Some(new)
+    }
+
+    /// `foldSextSetcc`: where a vector compare's result is as wide as its
+    /// operands, `sext (setcc x, y)` is the compare made at the sext's own type
+    /// (or at the matching integer vector, then resized).
+    ///
+    /// DEVIATE FS1 (owner llrm-arm64-vec, exit 2026-11-27): the pin's closing
+    /// arm, a compare whose operands are free to extend (constants, simple
+    /// loads), is not translated.
+    fn fold_sext_setcc(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, n0) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        if self.dag.opcode(node) != ISD::SignExtend
+            || self.dag.opcode(n0) != ISD::SetCC
+            || !vt.is_vector()
+            || self.legal_operations()
+        {
+            return None;
+        }
+        let tli = self.tli?;
+        let (lhs, rhs, cc) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1), self.dag.operand(n0, 2));
+        let operand_vt = self.dag.value_type(lhs);
+        if self.dag.config().boolean_contents_of(operand_vt) != super::dag::BooleanContents::ZeroOrNegativeOne {
+            return None;
+        }
+        let setcc_vt = tli.types.set_cc_result_type(operand_vt);
+        // Already the type the target wants.
+        if setcc_vt == self.dag.value_type(n0) {
+            return None;
+        }
+        let flags = self.dag.node(n0).flags;
+        if vt.size_in_bits() == setcc_vt.size_in_bits() {
+            return Some(self.dag.get_node_flags(ISD::SetCC, vt, &[lhs, rhs, cc], flags));
+        }
+        let matching = operand_vt.change_vector_element_type_to_integer();
+        if setcc_vt == matching {
+            let compare = self.dag.get_node_flags(ISD::SetCC, matching, &[lhs, rhs, cc], flags);
+            return Some(self.dag.get_sext_or_trunc(compare, vt));
+        }
+        None
     }
 
     /// `visitANY_EXTEND`, `visitZERO_EXTEND` and `visitSIGN_EXTEND`, the folds
@@ -4834,7 +4886,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let vt = self.dag.value_type(node);
         let super::dag::NodeData::ValueType(ext) = self.dag.node(n1).data else { return None };
-        let (bits, ext_bits) = (vt.size_in_bits(), ext.size_in_bits());
+        // `VTBits` and `ExtVTBits` are of a lane, for a vector.
+        let lane = |vt: EVT| if vt.is_vector() { vt.element() } else { vt };
+        let (bits, ext_bits) = (lane(vt).size_in_bits(), lane(ext).size_in_bits());
         if self.dag.is_undef(n0) {
             return Some(self.dag.get_constant(0, vt));
         }
@@ -4857,15 +4911,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         };
         match self.dag.opcode(n0) {
             ISD::SignExtend | ISD::AnyExtend if sext_legal => {
-                let small = self.dag.value_type(n00).size_in_bits();
+                let small = lane(self.dag.value_type(n00)).size_in_bits();
                 if small <= ext_bits
-                    || self.dag.value_type(n00).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00) + 1
+                    || lane(self.dag.value_type(n00)).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00) + 1
                         <= ext_bits
                 {
                     return Some(self.dag.get_node(ISD::SignExtend, vt, &[n00]));
                 }
             }
-            ISD::ZeroExtend if sext_legal && self.dag.value_type(n00).size_in_bits() == ext_bits => {
+            ISD::ZeroExtend if sext_legal && lane(self.dag.value_type(n00)).size_in_bits() == ext_bits => {
                 return Some(self.dag.get_node(ISD::SignExtend, vt, &[n00]));
             }
             _ => {}

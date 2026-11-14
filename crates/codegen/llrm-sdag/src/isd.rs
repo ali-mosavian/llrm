@@ -170,6 +170,8 @@ pub enum ISD {
 
     SetCC,
     Select,
+    /// `VSELECT`: a vector of booleans picks each lane of the first or the second operand.
+    VSelect,
     SelectCC,
     BrCC,
     BrCond,
@@ -429,6 +431,7 @@ impl ISD {
             FCopySign => "fcopysign",
             SetCC => "setcc",
             Select => "select",
+            VSelect => "vselect",
             SelectCC => "select_cc",
             BrCC => "br_cc",
             BrCond => "brcond",

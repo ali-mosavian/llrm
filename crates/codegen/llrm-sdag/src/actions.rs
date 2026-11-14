@@ -1056,6 +1056,32 @@ impl TargetLowering {
         // operand's type.
         t.set_ops(&[SIntToFp, UIntToFp], &vectors, Custom);
         t.set_ops(&[FpToSInt, FpToUInt], &[MVT::V4F32, MVT::V2F64, MVT::V2F32], Custom);
+        // `addTypeForNEON`: a compare is `LowerVSETCC`, a select a mask
+        // expression (`ExpandVSELECT`), and the integer codes the compares
+        // lack are made by swapping or inverting ("Let common code emit
+        // inverted variants of compares we do support").
+        let neon = [
+            MVT::V16I8,
+            MVT::V8I16,
+            MVT::V4I32,
+            MVT::V2I64,
+            MVT::V4F32,
+            MVT::V2F64,
+            MVT::V2F32,
+            MVT::V8I8,
+            MVT::V4I16,
+            MVT::V2I32,
+        ];
+        t.set_ops(&[SetCC], &neon, Custom);
+        t.set_ops(&[Select, SelectCC, VSelect], &neon, Expand);
+        // `initActions`: "These operations default to expand for vector
+        // types".
+        t.set_ops(&[SignExtendInReg], &MVT::vectors().collect::<Vec<_>>(), Expand);
+        for vt in neon.into_iter().filter(|vt| vt.element().is_some_and(|lane| !matches!(lane, MVT::F32 | MVT::F64))) {
+            for cc in [CondCode::SetNe, CondCode::SetLe, CondCode::SetLt, CondCode::SetULe, CondCode::SetULt] {
+                t.set_cond_code_action(cc, vt, Expand);
+            }
+        }
         t.set_ops(&[VAStart, VACopy, VAArg], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
         // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value

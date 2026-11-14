@@ -825,3 +825,12 @@ pub fn lower_vec_reduce(
     };
     Some(reduction_node(dag, across_lanes, node))
 }
+
+/// `LowerVSETCC` for integer lanes: the compare is selected as it is, by the
+/// `CMEQ`, `CMGT`, ... fragments over `SETCC`.
+pub fn lower_vsetcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    dag.value_type(dag.operand(node, 0)).element().is_integer().then_some(node)
+}

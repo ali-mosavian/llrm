@@ -258,7 +258,18 @@ pub(super) fn instructions() -> Vec<Inst> {
             }
         }
     }
-    out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
+    for quad in [true, false] {
+        out.push(Inst::VectorNot { quad, rd: v(0), rn: v(1) });
+    }
+    for (_, form) in crate::vector_forms::all() {
+        use crate::vector_forms::VectorForm;
+        out.push(match form {
+            VectorForm::Compare { op, lanes, quad } => Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) },
+            VectorForm::CompareZero { op, lanes, quad } => Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) },
+            VectorForm::BitSelect { op, quad } => Inst::VectorBitSelect { op, quad, rd: v(0), rn: v(1), rm: v(2) },
+            VectorForm::Bsp { quad } => Inst::VectorBsp { quad, rd: v(0), mask: v(3), rn: v(1), rm: v(2) },
+        });
+    }
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         out.push(Inst::VectorFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
@@ -373,6 +384,10 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBinary { .. } => "VectorBinary",
         Inst::VectorShift { .. } => "VectorShift",
         Inst::VectorNot { .. } => "VectorNot",
+        Inst::VectorCompare { .. } => "VectorCompare",
+        Inst::VectorCompareZero { .. } => "VectorCompareZero",
+        Inst::VectorBitSelect { .. } => "VectorBitSelect",
+        Inst::VectorBsp { .. } => "VectorBsp",
         Inst::VectorLongShift { .. } => "VectorLongShift",
         Inst::VectorLong { .. } => "VectorLong",
         Inst::VectorFma { .. } => "VectorFma",
@@ -402,7 +417,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 67] = [
+const ALL: [&str; 71] = [
     "Mark",
     "Label",
     "Cfi",
@@ -447,6 +462,10 @@ const ALL: [&str; 67] = [
     "VectorBinary",
     "VectorShift",
     "VectorNot",
+    "VectorCompare",
+    "VectorCompareZero",
+    "VectorBitSelect",
+    "VectorBsp",
     "VectorLongShift",
     "VectorLong",
     "VectorFma",

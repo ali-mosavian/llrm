@@ -457,7 +457,34 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 | vreg(*rn)? << 5
                 | vreg(*rd)?
         }
-        Inst::VectorNot { rd, rn } => 0x6E20_5800 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::VectorNot { quad, rd, rn } => 0x2E20_5800 | u32::from(*quad) << 30 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::VectorCompare { op, lanes, quad, rd, rn, rm } => {
+            let (u, bit23, opcode) = op.fields();
+            // The float forms put the lane size (`sz`) at bit 22, the
+            // integer ones in `size`.
+            let size = if op.is_float() { bit23 << 1 | u32::from(*lanes == Arrangement::D2) } else { lanes.size() };
+            0x0E20_0400
+                | u32::from(*quad) << 30
+                | u << 29
+                | size << 22
+                | vreg(*rm)? << 16
+                | opcode << 11
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
+        Inst::VectorCompareZero { op, lanes, quad, rd, rn } => {
+            let (u, opcode) = op.fields();
+            let (base, size) = if op.is_float() {
+                (0x0EA0_0800, u32::from(*lanes == Arrangement::D2))
+            } else {
+                (0x0E20_0800, lanes.size())
+            };
+            base | u32::from(*quad) << 30 | u << 29 | size << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorBitSelect { op, quad, rd, rn, rm } => {
+            0x2E20_1C00 | u32::from(*quad) << 30 | op.size() << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorBsp { .. } => return error("a bit-select pseudo is expanded after allocation"),
         Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
             let (u, a, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);

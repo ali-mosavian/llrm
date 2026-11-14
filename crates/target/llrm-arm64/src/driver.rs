@@ -342,6 +342,7 @@ fn lower_function(
     let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
     let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
         .map_err(|why| format!("@{name}: {why}"))?;
+    let blocks = crate::expand_pseudo::run(blocks);
     let mut tables = crate::jumptable::tables_of(&machine);
     let blocks = crate::layout::fold(
         blocks,

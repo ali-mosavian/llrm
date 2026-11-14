@@ -26,6 +26,12 @@ pub enum MVT {
     V2F64,
     /// `v2f32`: the 64-bit float vector `FPR64` holds (`addDRTypeForNEON`).
     V2F32,
+    /// The vectors of booleans (`v2i1`..`v16i1`): no register holds one, the
+    /// type legalizer promotes the lanes (`getPreferredVectorAction`).
+    V2I1,
+    V4I1,
+    V8I1,
+    V16I1,
     /// The 64-bit integer vectors `FPR64` holds (arm64, `addDRTypeForNEON`).
     V8I8,
     V4I16,
@@ -123,7 +129,11 @@ impl MVT {
 }
 
 /// Every vector type: its element and its lane count.
-const VECTORS: [(MVT, MVT, u32); 28] = [
+const VECTORS: [(MVT, MVT, u32); 32] = [
+    (MVT::V2I1, MVT::I1, 2),
+    (MVT::V4I1, MVT::I1, 4),
+    (MVT::V8I1, MVT::I1, 8),
+    (MVT::V16I1, MVT::I1, 16),
     (MVT::V16I8, MVT::I8, 16),
     (MVT::V8I16, MVT::I16, 8),
     (MVT::V4I32, MVT::I32, 4),
@@ -196,6 +206,18 @@ impl EVT {
 
     pub fn is_vector(self) -> bool {
         matches!(self, EVT::Simple(vt) if vt.is_vector())
+    }
+
+    /// `changeVectorElementTypeToInteger`: the vector of integer lanes as wide
+    /// as this one's (a scalar's own type is its integer of that width).
+    pub fn change_vector_element_type_to_integer(self) -> EVT {
+        match self {
+            EVT::Simple(vt) if vt.is_vector() => {
+                let lane = MVT::integer(self.element().size_in_bits()).expect("an integer lane of a simple width");
+                MVT::vector(lane, vt.lanes().expect("a vector")).map(EVT::Simple).expect("an integer vector type")
+            }
+            other => other,
+        }
     }
 
     /// `getVectorElementType`.

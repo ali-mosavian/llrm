@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::mc::inst::Cond;
+use crate::vector_forms::VectorForm;
 use crate::mc::inst::{
     Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, NarrowLane, Rounding, VectorFma,
     VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
@@ -159,8 +160,55 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
-        Inst::VectorNot { rd, rn } => {
-            semantics(Operation::Unary, "NOTv16i8", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
+        Inst::VectorNot { quad, rd, rn } => {
+            let bits = if *quad { 128 } else { 64 };
+            semantics(
+                Operation::Unary,
+                if *quad { "NOTv16i8" } else { "NOTv8i8" },
+                vec![vreg_loc(*rd, bits)],
+                vec![vreg_loc(*rn, bits)],
+                None,
+            )
+        }
+        Inst::VectorCompare { op, lanes, quad, rd, rn, rm } => {
+            let bits = if *quad { 128 } else { 64 };
+            semantics(
+                Operation::Binary,
+                vector_form_name(VectorForm::Compare { op: *op, lanes: *lanes, quad: *quad }),
+                vec![vreg_loc(*rd, bits)],
+                vec![vreg_loc(*rn, bits), vreg_loc(*rm, bits)],
+                None,
+            )
+        }
+        Inst::VectorCompareZero { op, lanes, quad, rd, rn } => {
+            let bits = if *quad { 128 } else { 64 };
+            semantics(
+                Operation::Unary,
+                vector_form_name(VectorForm::CompareZero { op: *op, lanes: *lanes, quad: *quad }),
+                vec![vreg_loc(*rd, bits)],
+                vec![vreg_loc(*rn, bits)],
+                None,
+            )
+        }
+        Inst::VectorBitSelect { op, quad, rd, rn, rm } => {
+            let bits = if *quad { 128 } else { 64 };
+            semantics(
+                Operation::FloatMultiplyAdd,
+                vector_form_name(VectorForm::BitSelect { op: *op, quad: *quad }),
+                vec![vreg_loc(*rd, bits)],
+                vec![vreg_loc(*rd, bits), vreg_loc(*rn, bits), vreg_loc(*rm, bits)],
+                None,
+            )
+        }
+        Inst::VectorBsp { quad, rd, mask, rn, rm } => {
+            let bits = if *quad { 128 } else { 64 };
+            semantics(
+                Operation::FloatMultiplyAdd,
+                vector_form_name(VectorForm::Bsp { quad: *quad }),
+                vec![vreg_loc(*rd, bits)],
+                vec![vreg_loc(*mask, bits), vreg_loc(*rn, bits), vreg_loc(*rm, bits)],
+                None,
+            )
         }
         Inst::VectorFma { op, lanes, rd, rn, rm } => semantics(
             Operation::FloatMultiplyAdd,
@@ -454,6 +502,11 @@ const LONG_OPS: [VectorLongOp; 8] = [
     VectorLongOp::Smlal,
 ];
 
+/// The pin's name of a compare or bit-select form that has one.
+fn vector_form_name(form: VectorForm) -> String {
+    crate::vector_forms::name_of(form).expect("an emitted form has a name")
+}
+
 /// `FADDv4f32`, `FNEGv2f64`.
 fn vector_fp_name(
     mnemonic: &str,
@@ -561,8 +614,25 @@ const ARRANGEMENTS: [Arrangement; 4] = [Arrangement::B16, Arrangement::H8, Arran
 pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let name = what.name.as_deref()?;
     let (dest, s) = (what.dests.first(), &what.sources);
-    if name == "NOTv16i8" {
-        return Some(Inst::VectorNot { rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
+    if name == "NOTv16i8" || name == "NOTv8i8" {
+        return Some(Inst::VectorNot { quad: name == "NOTv16i8", rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
+    }
+    if let Some(form) = crate::vector_forms::parse(name) {
+        let rd = vreg_of(dest?);
+        return Some(match form {
+            VectorForm::Compare { op, lanes, quad } => {
+                Inst::VectorCompare { op, lanes, quad, rd, rn: vreg_of(&s[0]), rm: vreg_of(&s[1]) }
+            }
+            VectorForm::CompareZero { op, lanes, quad } => {
+                Inst::VectorCompareZero { op, lanes, quad, rd, rn: vreg_of(&s[0]) }
+            }
+            VectorForm::BitSelect { op, quad } => {
+                Inst::VectorBitSelect { op, quad, rd, rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) }
+            }
+            VectorForm::Bsp { quad } => {
+                Inst::VectorBsp { quad, rd, mask: vreg_of(&s[0]), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) }
+            }
+        });
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {
         for op in [VectorFma::Add, VectorFma::Sub] {

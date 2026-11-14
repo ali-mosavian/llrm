@@ -181,6 +181,19 @@ pub enum BooleanContents {
     Undefined,
 }
 
+impl DagConfig {
+    /// `getBooleanContents(Type)`: the contents of a compare that makes a `vt`.
+    pub fn boolean_contents_of(
+        &self,
+        vt: EVT,
+    ) -> BooleanContents {
+        match self.vector_boolean_contents {
+            Some(contents) if vt.is_vector() => contents,
+            _ => self.boolean_contents,
+        }
+    }
+}
+
 /// What a target charges for the operations a divide by a constant is made of
 /// or replaced by: the divide's own price, and the multiply-high sequence's
 /// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
@@ -254,6 +267,9 @@ pub struct DagConfig {
     /// own where one is installed.
     pub nodes: super::builder::LoweringNodes,
     pub boolean_contents: BooleanContents,
+    /// `setBooleanVectorContents`: what a vector compare's lanes hold, where
+    /// it differs from the scalar's (AArch64: all ones).
+    pub vector_boolean_contents: Option<BooleanContents>,
     /// A boolean sign-extends cheaper than it zero-extends (z80: the carry flag
     /// is `sbc a, a`, a zero extension is a branch or a shift), so `add
     /// (sext i1 c), x` stays an add where the pin makes it `sub x, (zext i1 c)`
@@ -371,6 +387,7 @@ impl Default for DagConfig {
         DagConfig {
             nodes: super::builder::LoweringNodes::installed(),
             boolean_contents: BooleanContents::ZeroOrOne,
+            vector_boolean_contents: None,
             sext_bool_add_max_bits: 0,
             offset_folding: false,
             global_addresses_constant: false,
@@ -1504,6 +1521,52 @@ impl SelectionDAG {
         self.intern(ISD::TargetConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
+    /// `ISD::isBuildVectorAllZeros`/`isBuildVectorAllOnes`: every defined lane
+    /// is the constant (its low lane bits; a float's, `bitcastToAPInt`), and
+    /// one is defined.
+    pub fn is_build_vector_all(
+        &self,
+        value: SDValue,
+        ones: bool,
+    ) -> bool {
+        if self.opcode(value) != ISD::BuildVector {
+            return false;
+        }
+        let lane_bits = self.value_type(value).element().size_in_bits();
+        let mask = (1u128 << lane_bits) - 1;
+        let lanes = &self.node(value).ops;
+        lanes.iter().any(|&lane| !self.is_undef(lane))
+            && lanes.iter().all(|&lane| {
+                self.is_undef(lane)
+                    || self
+                        .constant(lane)
+                        .or_else(|| self.fp_constant(lane))
+                        .is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
+            })
+    }
+
+    /// `isConstOrConstSplat` of an integer: the constant, or the one value of
+    /// every defined lane of a `BUILD_VECTOR`.
+    pub fn const_or_splat(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        if self.opcode(value) != ISD::BuildVector {
+            return self.constant(value);
+        }
+        let mut splat = None;
+        for &lane in &self.node(value).ops {
+            if self.is_undef(lane) {
+                continue;
+            }
+            let bits = self.constant(lane)?;
+            if *splat.get_or_insert(bits) != bits {
+                return None;
+            }
+        }
+        splat
+    }
+
     pub fn get_all_ones_constant(
         &mut self,
         vt: EVT,
@@ -1520,7 +1583,7 @@ impl SelectionDAG {
         if !value {
             return self.get_constant(0, vt);
         }
-        match self.config.boolean_contents {
+        match self.config.boolean_contents_of(vt) {
             BooleanContents::ZeroOrOne | BooleanContents::Undefined => self.get_constant(1, vt),
             BooleanContents::ZeroOrNegativeOne => self.get_all_ones_constant(vt),
         }
@@ -1533,7 +1596,7 @@ impl SelectionDAG {
     ) -> Option<bool> {
         let bits = self.constant(value)?;
         let all_ones = super::fold::mask(self.width(value));
-        match self.config.boolean_contents {
+        match self.config.boolean_contents_of(self.value_type(value)) {
             BooleanContents::ZeroOrOne => (bits <= 1).then_some(bits == 1),
             BooleanContents::ZeroOrNegativeOne => (bits == 0 || bits == all_ones).then_some(bits != 0),
             BooleanContents::Undefined => Some(bits != 0),
@@ -1896,7 +1959,7 @@ impl SelectionDAG {
         value: SDValue,
         vt: EVT,
     ) -> SDValue {
-        if self.config.boolean_contents == BooleanContents::ZeroOrOne {
+        if self.config.boolean_contents_of(self.value_type(value)) == BooleanContents::ZeroOrOne {
             return self.get_zext_or_trunc(value, vt);
         }
         let (one, zero) = (self.get_constant(1, vt), self.get_constant(0, vt));

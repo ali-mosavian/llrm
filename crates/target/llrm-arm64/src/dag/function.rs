@@ -35,6 +35,8 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             // picks the offset.
             dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
+            // `setBooleanVectorContents(ZeroOrNegativeOneBooleanContent)`.
+            vector_boolean_contents: Some(BooleanContents::ZeroOrNegativeOne),
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
             vectors: crate::machine::vectors_enabled(),

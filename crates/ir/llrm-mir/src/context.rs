@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use crate::arena::Arena;
 use crate::hash::HashMap;
 use crate::opcode::{BinaryOp, CastOp};
-use crate::types::{FloatKind, TypeId, Types};
+use crate::types::{FloatKind, Type, TypeId, Types};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConstantId(u32);
@@ -196,6 +196,22 @@ impl Context {
         let interned =
             self.constants.iter().enumerate().rev().map(|(at, one)| (one.clone(), ConstantId(at as u32))).collect();
         self.interned = Box::new(RefCell::new(interned));
+    }
+
+    /// `ConstantInt::get(Type *, ..)`: `value` as an integer of `ty`, or in
+    /// every lane of a vector `ty`.
+    pub fn int_splat(
+        &self,
+        ty: TypeId,
+        value: i128,
+    ) -> ConstantId {
+        match self.types.get(ty) {
+            Type::Vector { element, count } => {
+                let lane = self.int(*element, value);
+                self.constant(Constant { ty, kind: ConstantKind::Aggregate(vec![lane; *count as usize]) })
+            }
+            _ => self.int(ty, value),
+        }
     }
 
     /// `value` modulo the width of the integer type `ty`.
