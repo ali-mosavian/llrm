@@ -63,3 +63,15 @@ fn a_callee_the_folds_emptied_is_not_called_at_o1() {
         assert!(!foo.contains("bar"), "{cpu}: `foo` still calls the empty `bar`:\n{out}");
     }
 }
+
+/// The second walk keeps a re-simplified body where its code units shrink; the
+/// units do not count data. crc16's bit loop became a 512 B Sarwate table at
+/// -O1 (kernel 64 -> 580 B, gcc 84 B).
+#[test]
+fn the_second_walk_adds_no_table_at_o1() {
+    let ir = include_str!("../bench/library/crc16.ll");
+    for cpu in ["68000", "68020"] {
+        let out = assembly(ir, cpu_of(cpu).unwrap(), Level::O1).expect("compiles");
+        assert!(!out.contains("crctable"), "{cpu}: a CRC table at -O1:\n{out}");
+    }
+}
