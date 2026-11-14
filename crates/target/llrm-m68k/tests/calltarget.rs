@@ -34,6 +34,19 @@ fn a_callee_called_six_times_is_called_through_a_register() {
     assert_eq!(through, 6, "calls stay absolute:\n{}", out.join("\n"));
 }
 
+/// `-O1` priced the call target strictly (no larger, no slower): the `lea` and the saved register
+/// are ~12 static clk in straight-line code, so six `jsr g` stayed absolute (float_bits, 18 cells +10..+20 B
+/// over gcc). The bytes decide there.
+#[test]
+fn a_callee_called_six_times_is_called_through_a_register_at_o1() {
+    let plain = calls(6, "g").replace(" optsize", "");
+    for cpu in ["68000", "68020"] {
+        let out = lines(&plain, cpu, Level::O1);
+        let through = out.iter().filter(|line| line.starts_with("jsr") && line.contains("(%a")).count();
+        assert_eq!(through, 6, "{cpu}: calls stay absolute:\n{}", out.join("\n"));
+    }
+}
+
 /// Two calls cannot pay for the load and the saved register.
 #[test]
 fn a_callee_called_twice_stays_absolute() {

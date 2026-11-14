@@ -641,7 +641,11 @@ fn successors(
             if !ends && !sinks.contains(&block.at) {
                 if let Some(next) = emitted.get(i + 1) {
                     if !out.contains(&next.at) {
-                        out.push(next.at);
+                        if block.fall_first {
+                            out.insert(0, next.at);
+                        } else {
+                            out.push(next.at);
+                        }
                     }
                 }
             }
