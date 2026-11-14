@@ -51,12 +51,13 @@ fn a_runtime_trip_count_loop_has_a_vector_body_and_a_scalar_remainder() {
     assert!(copy.contains("add ") || copy.contains("inc "), "the scalar remainder: {copy}");
 }
 
-/// A `<4 x i32>` multiply is not priced (no SSE2 `pmulld`): the loop stays scalar until the next step prices it.
+/// A `<4 x i32>` multiply has no SSE2 `pmulld`: `pmuludq` on the even and the odd lanes, then `punpckldq` (the pin's
+/// `LowerMUL`). It was unpriced, so the loop stayed scalar.
 #[test]
-fn a_loop_with_a_vector_multiply_stays_scalar_until_it_is_priced() {
+fn an_int_multiply_loop_uses_pmuludq() {
     let text = assembly("x86_64-linux", "-O2");
     let multiply = body(&text, "multiply_arrays");
-    assert!(!multiply.contains("xmm"), "{multiply}");
+    assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
 #[test]
