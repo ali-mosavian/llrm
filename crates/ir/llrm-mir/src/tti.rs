@@ -721,6 +721,14 @@ pub trait Tti {
         None
     }
 
+    /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
+    /// step the pin's `ExpandReductions` or the target's lowering makes). A
+    /// port that does not yet lowers none, and no loop with a reduction is
+    /// widened.
+    fn lowers_vector_reductions(&self) -> bool {
+        true
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:

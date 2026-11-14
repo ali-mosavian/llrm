@@ -1975,6 +1975,8 @@ impl Emitter<'_, '_> {
             // The 16-byte mask of `fabs`, `fneg` and `copysign` (the pin's
             // vector constant): the bitwise SSE instruction reads all of it.
             EVT::Simple(MVT::I128) => 16,
+            // A vector constant `ExpandBUILD_VECTOR` loads whole (`movups`).
+            EVT::Simple(MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64) => 16,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))
