@@ -55,6 +55,7 @@ pub mod routine;
 pub mod scaledindex;
 pub mod sextacc;
 pub mod shiftadd;
+pub mod wordtable;
 pub mod sizes;
 pub mod slotreg;
 pub mod spillmove;

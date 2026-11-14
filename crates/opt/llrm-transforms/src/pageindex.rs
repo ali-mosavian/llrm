@@ -96,15 +96,35 @@ pub fn indexed(
     module: &mut Module,
     index_bits: u32,
 ) -> Result<Vec<String>, String> {
+    walked(module, index_bits, false).map(|(names, _)| names)
+}
+
+/// [`indexed`], with the loops' counters ended on the walk's own index and a
+/// page count (see [`crate::pagecount`]); the names of the functions that had
+/// a counter to end so.
+pub fn indexed_counting(
+    module: &mut Module,
+    index_bits: u32,
+) -> Result<Vec<String>, String> {
+    walked(module, index_bits, true).map(|(_, counted)| counted)
+}
+
+fn walked(
+    module: &mut Module,
+    index_bits: u32,
+    count_pages: bool,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let context = &mut module.context;
     let metadata = &mut module.metadata;
     let mut changed = Vec::new();
+    let mut counted = Vec::new();
     for global in &mut module.globals {
         let GlobalKind::Function(function) = &mut global.kind else { continue };
         if function.is_declaration() {
             continue;
         }
         let mut done = false;
+        let mut ended = false;
         let loops = loops_of(function);
         // innermost loops only: their blocks are not another loop's header
         let headers: Vec<i64> = loops.iter().map(|one| one.header).collect();
@@ -120,13 +140,18 @@ pub fn indexed(
                 one.latches.iter().copied().collect(),
                 &one.body,
                 index_bits,
+                count_pages,
+                &mut ended,
             )?;
         }
         if let (true, Some(name)) = (done, global.name.as_deref()) {
             changed.push(name.to_owned());
+            if ended {
+                counted.push(name.to_owned());
+            }
         }
     }
-    Ok(changed)
+    Ok((changed, counted))
 }
 
 fn int(
@@ -150,7 +175,26 @@ fn constant(
     }
 }
 
-fn arms(
+/// States how often each successor of the conditional `branch` runs, as LLVM's
+/// loop passes do for a block they make (`!prof`).
+pub(crate) fn weigh(
+    context: &mut Context,
+    metadata: &mut Vec<MetadataNode>,
+    function: &mut Function,
+    branch: InstId,
+    weights: [u32; 2],
+) -> Result<(), String> {
+    let weight_ty = context.types.int(32);
+    let mut operands = vec![MetadataOperand::String("branch_weights".to_owned())];
+    for weight in weights {
+        operands.push(MetadataOperand::Constant(context.int(weight_ty, i128::from(weight))));
+    }
+    metadata.push(MetadataNode { distinct: false, operands });
+    function.annotate(branch, "prof", MetadataId(u32::try_from(metadata.len() - 1).map_err(|_| "metadata ids")?));
+    Ok(())
+}
+
+pub(crate) fn arms(
     function: &Function,
     phi: InstId,
 ) -> Vec<(Operand, BlockId)> {
@@ -165,7 +209,7 @@ fn arms(
         .collect()
 }
 
-fn set_arms(
+pub(crate) fn set_arms(
     function: &mut Function,
     phi: InstId,
     arms: &[(Operand, BlockId)],
@@ -290,6 +334,8 @@ fn rewrite(
     latches: Vec<i64>,
     body: &llrm_mir::forest::Body,
     index_bits: u32,
+    count_pages: bool,
+    counted: &mut bool,
 ) -> Result<bool, String> {
     let [latch_at] = latches[..] else { return Ok(false) };
     let (header, latch) = (cfg::block(header_at), cfg::block(latch_at));
@@ -320,9 +366,14 @@ fn rewrite(
         }
     }
 
+    let counter = if count_pages && step == 1 {
+        crate::pagecount::find(context, function, header, preheader, latch, index_bits, &in_loop)
+    } else {
+        None
+    };
     let others: Vec<InstId> = crate::edges::phis(function, header)
         .into_iter()
-        .filter(|phi| !found.iter().any(|one| one.phi == *phi))
+        .filter(|phi| !found.iter().any(|one| one.phi == *phi) && counter.as_ref().is_none_or(|one| one.phi() != *phi))
         .collect();
     let index_ty = context.types.int(index_bits);
     let flag = context.types.int(1);
@@ -440,13 +491,7 @@ fn rewrite(
     // that often less than the stepper (`!prof`, as LLVM's loop passes state
     // the frequency of a block they make)
     let trips = u32::try_from((1u128 << index_bits) / step).map_err(|_| "a page of trips")?;
-    let weight_ty = context.types.int(32);
-    let mut operands = vec![MetadataOperand::String("branch_weights".to_owned())];
-    for weight in [1, trips.saturating_sub(1).max(1)] {
-        operands.push(MetadataOperand::Constant(context.int(weight_ty, i128::from(weight))));
-    }
-    metadata.push(MetadataNode { distinct: false, operands });
-    function.annotate(wrap, "prof", MetadataId(u32::try_from(metadata.len() - 1).map_err(|_| "metadata ids")?));
+    weigh(context, metadata, function, wrap, [1, trips.saturating_sub(1).max(1)])?;
     let page = int(context, word, 1 << index_bits);
     let mut moved = Vec::new();
     for (walker, base) in found.iter().zip(&bases) {
@@ -493,6 +538,11 @@ fn rewrite(
             set_arms(function, *base, &[(walker.start, preheader), (ahead, join)]);
             set_arms(function, *onward, &[(own, stepper), (value_of(function, *moved), bump)]);
         }
+    }
+    if let Some(counter) = counter {
+        let walk = crate::pagecount::Walk { preheader, header, join, stepper, bump, index, index_bits };
+        crate::pagecount::apply(context, metadata, function, counter, &walk)?;
+        *counted = true;
     }
     // the sum is made where the pointer was read, for the selector to fold
     // into the access
