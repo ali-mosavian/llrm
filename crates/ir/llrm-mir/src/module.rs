@@ -648,6 +648,11 @@ impl Function {
         self.layout.is_empty()
     }
 
+    /// `Function::hasOptNone`: the source asked for no optimization of the body.
+    pub fn has_opt_none(&self) -> bool {
+        self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optnone"))
+    }
+
     /// The body is one `unreachable`: what the inliner leaves of a private
     /// function at its last inlined call, in place of the deletion the pin's
     /// CGSCC walk makes (`removeDeadFunctions`). No pass has a use for it.
