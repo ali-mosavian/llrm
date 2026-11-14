@@ -2721,7 +2721,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
                 env,
                 header,
             );
-            let after = unrolled_blocks(run, capacity, &body);
+            // Only the loop that remains (`L->getBlocks()`,
+            // LoopUnrollPass.cpp:1417): the peeled copies keep what they were
+            // cloned as.
+            let after = unrolled_blocks(run, usize::MAX, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
             // `LoopFullUnrollPass` does not revisit the loop it peeled; the
