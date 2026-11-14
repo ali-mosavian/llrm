@@ -4658,6 +4658,24 @@ fn adjacent_cell_copies_are_16_byte_moves_at_m64() {
     }
 }
 
+/// The high half of a widening multiply sits in DX, and the pin's TwoAddress pass knows it (the `COPY` out of DX is
+/// in the function): it commutes `add a, b` so the sum lands in the register the call wants, `mov rdi, rdx; shr rdi,
+/// 63; sar rdx, 18; add rdi, rdx`. Ours made the copies after the pass, saw no register, and ended with a `mov rdi,
+/// rdx` after the add (data_int64 main +3 B at O1/O2/O3).
+#[test]
+fn a_quotient_by_a_constant_is_summed_in_the_register_the_call_wants_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @report(i64)\n\
+                define void @f(i64 %x) {\n  %q = sdiv i64 %x, 1000000\n  call void @report(i64 %q)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let call = lines.iter().position(|l| l.starts_with("jmp") || l.starts_with("call")).unwrap();
+    assert!(!lines[call - 1].starts_with("mov rdi, rdx"), "a copy of the sum after the add: {listing}");
+    let shr = lines.iter().position(|l| l.starts_with("shr")).unwrap();
+    assert_eq!(lines[shr - 1], "mov rdi, rdx", "the sum is built in rdi: {listing}");
+}
+
 /// A target without the vector forms keeps refusing a vector value: `-m32` and
 /// `-m16` objects do not move.
 #[test]

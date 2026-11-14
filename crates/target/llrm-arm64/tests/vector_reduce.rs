@@ -291,3 +291,24 @@ fn a_reduction_with_no_lowering_is_refused_by_name() {
         assert!(why.contains(said), "{why}");
     }
 }
+
+/// `ADDXrr`/`ADDWrr` are pseudos, and their operands were not constrained to
+/// the general register class: a reduced lane in a vector register reached the
+/// scalar `add` as is (`ADDXrr: operands are not those of its form`), which
+/// failed LoopVectorize's output for `huge` and `tile` at -O2.
+#[test]
+fn a_reduction_feeding_a_scalar_add_moves_the_lane_to_a_general_register() {
+    for (bits, lanes) in [(64, 2), (64, 8), (32, 4)] {
+        let vector = format!("<{lanes} x i{bits}>");
+        let source = format!(
+            "{HEAD}define i{bits} @f(ptr %p, i{bits} %a) {{\n\
+             \x20 %x = load {vector}, ptr %p, align 16\n\
+             \x20 %r = call i{bits} @llvm.vector.reduce.add.v{lanes}i{bits}({vector} %x)\n\
+             \x20 %s = add i{bits} %r, %a\n\
+             \x20 ret i{bits} %s\n}}\n\
+             declare i{bits} @llvm.vector.reduce.add.v{lanes}i{bits}({vector})\n"
+        );
+        let text = matches_the_pin(&source);
+        assert_eq!(count(&text, "fmov", ""), 1, "{text}");
+    }
+}
