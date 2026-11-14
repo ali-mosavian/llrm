@@ -1553,8 +1553,10 @@ impl Builder<'_> {
             self.live_ins.push((reg, vreg));
             vreg
         };
-        let mut make_object = |_size: u32, offset: i64, _immutable: bool| {
+        let mut objects: Vec<(u32, bool)> = Vec::new();
+        let mut make_object = |size: u32, offset: i64, immutable: bool| {
             offsets.push(offset);
+            objects.push((size, immutable));
             -(offsets.len() as i32)
         };
         let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
@@ -1588,6 +1590,7 @@ impl Builder<'_> {
         }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
+            self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
         }
         let mut next = 0;
         for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
