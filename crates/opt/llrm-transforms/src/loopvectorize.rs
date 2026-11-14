@@ -542,6 +542,10 @@ fn extract(
                     BinaryOp::FSub => ArithOp::FSub,
                     BinaryOp::FMul => ArithOp::FMul,
                     BinaryOp::FDiv => ArithOp::FDiv,
+                    // `VPWidenRecipe` of a divide: the pin widens it where the
+                    // divisor is safe to speculate; a non-zero constant is.
+                    BinaryOp::UDiv => ArithOp::UDiv,
+                    BinaryOp::URem => ArithOp::URem,
                     _ => return Err(Skipped("A binary operation the vectorizer does not widen yet")),
                 };
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
@@ -580,8 +584,14 @@ fn extract(
                 if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
+                let second = interleave::divisor_info(cx.context, op, data.operands[1], lane);
+                if matches!(op, BinaryOp::UDiv | BinaryOp::URem)
+                    && !(second.constant && second.value != Some(0) && matches!(operands[1], Source::Splat(_)))
+                {
+                    return Err(Skipped("A division by a value that is not a non-zero constant"));
+                }
                 let ext = [ext_of(data.operands[0]), ext_of(data.operands[1])];
-                recipes.push(Recipe::Binary { op: arith, lane, ext });
+                recipes.push(Recipe::Binary { op: arith, lane, ext, second });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -606,7 +616,7 @@ fn extract(
                 if matches!(operand, Source::Splat(_)) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
-                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane, ext: [None, None] });
+                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane, ext: [None, None], second: Default::default() });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -1607,10 +1617,7 @@ impl FunctionPass for LoopVectorize {
                             has_reductions: !legality.reductions.is_empty(),
                         };
                         match plan(&*tti, &facts) {
-                            // DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR): the pin's
-                            // x86 expands `llvm.vector.reduce.*` to shuffles
-                            // (`ExpandReductions`), which this backend does
-                            // not select yet.
+                            // A target whose backend selects no vector reduction keeps the loop scalar.
                             Ok(_) if !widening.reductions.is_empty() && !tti.lowers_vector_reductions() => {
                                 why(unit, &outer, header, "plan: The target does not lower a vector reduction");
                                 None

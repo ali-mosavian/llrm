@@ -441,11 +441,21 @@ pub(crate) fn vector_arithmetic_cost(
     ty: VectorTy,
     kind: CostKind,
 ) -> Option<Cost> {
-    if kind != CostKind::RecipThroughput {
+    if kind == CostKind::Latency {
         return None;
     }
     let (first, lane) = vector_pieces(ty)?;
     let float = ty.lane.is_float();
+    // L5233-5306: only the throughput kind is priced further (`BaseT` for a
+    // floating-point operation, 1); an integer operation is `LT.first` in
+    // every kind.
+    if kind != CostKind::RecipThroughput && float {
+        return matches!(
+            op,
+            ArithOp::FAdd | ArithOp::FSub | ArithOp::FMul | ArithOp::FDiv | ArithOp::FNeg
+        )
+            .then_some(Cost::BASIC);
+    }
     match op {
         ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor if !float => Some(Cost::of(first)),
         ArithOp::Shl | ArithOp::LShr | ArithOp::AShr if !float => Some(Cost::of(first)),
@@ -457,6 +467,43 @@ pub(crate) fn vector_arithmetic_cost(
         ArithOp::FMul | ArithOp::FDiv if float => Some(Cost::of(2 * first)),
         _ => None,
     }
+}
+
+/// `AArch64TTIImpl::getArithmeticInstrCost` of an unsigned divide or
+/// remainder by a constant ([L5149][pin]): a shift or a mask for a power of
+/// two, else the multiply-high sequence (`umull` and `umull2` for a 128-bit
+/// register, the two adds, the shifts, and for a remainder the multiply and
+/// the subtract).
+///
+/// Priced for whole 128-bit registers of 8 to 32-bit lanes only: the others
+/// (a 64-bit lane, a 64-bit vector) have no multiply-high here, and the pin's
+/// scalarized price is not one a backend that cannot select the divide can
+/// take.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5149
+pub(crate) fn vector_divide_by_constant_cost(
+    op: ArithOp,
+    ty: VectorTy,
+    second: OperandInfo,
+    kind: CostKind,
+) -> Option<Cost> {
+    if !matches!(op, ArithOp::UDiv | ArithOp::URem) || !second.constant || ty.lane.is_float() {
+        return None;
+    }
+    let (_, lane) = vector_pieces(ty)?;
+    if lane == 64 || u64::from(lane) * u64::from(ty.count) < 128 {
+        return None;
+    }
+    let price = |op| vector_arithmetic_cost(op, ty, kind).map(|cost| cost.value);
+    if second.power_of_two {
+        return price(if op == ArithOp::UDiv { ArithOp::LShr } else { ArithOp::And }).map(Cost::of);
+    }
+    let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+    // `HasMULH` is false: the multiply-high is `umull` and `umull2`, and its
+    // shift is one more.
+    let divide = mul * 2 + shr + add * 2 + shr;
+    Some(Cost::of(divide + if op == ArithOp::URem { mul + add } else { 0 }))
 }
 
 impl Tti for AArch64 {
@@ -566,6 +613,13 @@ impl Tti for AArch64 {
     /// because rotation was refused, lived in x19 across the recursive call and
     /// kept the frame ahead of the base case.
     fn licm_speculation_keeps_frame_late(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LM2 (owner w11, exit 2026-11-24): nbody_fixed -O3 723,134
+    /// instructions against 645,136; the pos[body] loads of the unrolled pair
+    /// loop were redone in every copy.
+    fn licm_range_deref(&self) -> bool {
         true
     }
 
@@ -822,6 +876,16 @@ impl Tti for AArch64 {
         vector_arithmetic_cost(op, ty, kind)
     }
 
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| vector_arithmetic_cost(op, ty, kind))
+    }
+
     fn vector_reduction_cost(
         &self,
         kind: llrm_mir::intrinsics::ReduceKind,
@@ -860,7 +924,7 @@ impl Tti for AArch64 {
         users: &[llrm_mir::tti::ExtUser],
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        if cost_kind != CostKind::RecipThroughput {
+        if cost_kind == CostKind::Latency {
             return None;
         }
         crate::tti_vector::ext_cost(kind, dst, src, users)
@@ -1604,7 +1668,6 @@ impl Lowering for AArch64Lowering {
         op == llrm_mir::lowering::OverflowOp::UAdd && llrm_mir::lowering::simple_int(bits)
     }
 }
-
 
 /// The instructions of `x * m` as `performMulCombine` leaves it (dag/combine.rs
 /// `combine_mul`): `2^N + 1` is one shifted add, `2^N - 1` a shift and a `sub`,

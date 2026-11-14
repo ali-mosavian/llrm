@@ -123,6 +123,28 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
+    alloc::forget_wide_commuted();
+    let text = function_text_once(module, name, selection)?;
+    // the allocator's wider commute guesses it spares a copy; where it took
+    // a choice the narrow rule would not, the function is also allocated
+    // without it and the smaller kept
+    if !alloc::wide_commuted() {
+        return Ok(text);
+    }
+    let apart = alloc::with_wide_commute(false, || function_text_once(module, name, selection))?;
+    let cpu = selection.cpu;
+    let size = |text: &str| crate::timing::estimate(cpu, text).map(|e| (e.bytes, e.cycles));
+    Ok(match (size(&text), size(&apart)) {
+        (Ok(with), Ok(without)) if without < with => apart,
+        _ => text,
+    })
+}
+
+fn function_text_once(
+    module: &Module,
+    name: &str,
+    selection: &Selection,
+) -> Result<String, String> {
     // a call through a pointer no `!callees` bounds may come back into this
     // function
     let recursive = module

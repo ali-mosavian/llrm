@@ -71,6 +71,7 @@ fn selects(body: &str) -> Result<(), String> {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
             &machine,

@@ -48,6 +48,10 @@ fn is_elementwise(op: ISD) -> bool {
         ISD::Add
             | ISD::Sub
             | ISD::Mul
+            | ISD::UDiv
+            | ISD::SDiv
+            | ISD::URem
+            | ISD::SRem
             | ISD::And
             | ISD::Or
             | ISD::Xor

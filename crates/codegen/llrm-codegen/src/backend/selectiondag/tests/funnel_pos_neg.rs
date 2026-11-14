@@ -25,6 +25,7 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue, SDValue) -> 
         sext_load: false,
         zext_free: false,
         branch_constant_selects: false,
+        status_word_tests: false,
         multiply_early_out: None,
         profile: None,
     };
