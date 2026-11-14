@@ -775,18 +775,27 @@ fn the_copy_loop_made_from_a_call_runs() {
     assert_eq!(exit_code_of(&text, "records"), 22, "{text}");
 }
 
-/// A copy with nothing live across it is the call: 20 bytes against 78 as a
-/// loop.
+/// A copy with nothing live across it is the call when the linked routine is
+/// shared: 20 bytes against 78 as a loop. A lone caller pays the whole routine
+/// (`memloops::callers`, #9883), so the loop is smaller there; this test had
+/// one caller and went red on that, not on a regression.
 #[test]
 fn a_copy_with_nothing_live_across_it_stays_a_call() {
-    let ir = module(
-        r#"declare void @llvm.memcpy.p0.p0.i16(ptr noalias, ptr noalias, i16, i1)
-define void @copy(ptr noalias %d, ptr noalias %s, i16 %n) {
+    let copy = |name: &str| {
+        format!(
+            r#"define void @{name}(ptr noalias %d, ptr noalias %s, i16 %n) {{
   call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
   ret void
-}"#,
-    );
-    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+}}
+"#
+        )
+    };
+    let head = "declare void @llvm.memcpy.p0.p0.i16(ptr noalias, ptr noalias, i16, i1)\n";
+    let request = Request::new(Level::O2);
+    let alone = assembly(&module(&format!("{head}{}", copy("c0"))), &request).unwrap();
+    assert!(!alone.contains("memcpy"), "the premise: a lone caller pays the routine, so a loop\n{alone}");
+    let many: String = (0..8).map(|n| copy(&format!("c{n}"))).collect();
+    let text = assembly(&module(&format!("{head}{many}")), &request).unwrap();
     assert!(text.contains("jsr memcpy") || text.contains("jmp memcpy"), "{text}");
 }
 
