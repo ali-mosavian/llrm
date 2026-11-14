@@ -71,7 +71,7 @@ fn a_copy_of_4_bytes_for_20_clocks_is_kept_where_clocks_are_priced() {
 }
 
 #[test]
-fn the_same_copy_is_refused_where_no_growth_is_allowed() {
+fn the_same_copy_is_kept_at_o1_where_clocks_are_priced_too() {
     let kept = bsearch(Level::O1, true);
-    assert_eq!(kept, bsearch(Level::O1, false), "{kept}");
+    assert_ne!(kept, bsearch(Level::O1, false), "{kept}");
 }

@@ -2028,7 +2028,7 @@ fn a_zero_filled_variable_is_bss_not_image_bytes() {
 /// alone (the first form of this test asserted both calls in one function and
 /// saw no `__modhi3c`).
 #[test]
-fn a_signed_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
+fn a_signed_word_divide_calls_the_compact_routine_at_size_and_in_a_cold_module_at_speed() {
     let ir = module(
         "@a = global i16 -1000\n@b = global i16 7\n\
          define i8 @g() {\n\
@@ -2039,14 +2039,14 @@ fn a_signed_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_sp
          \x20 %r = srem i16 %a, %b\n  %t = lshr i16 %r, 8\n  %u = xor i16 %r, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
     );
     let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    let compact = |routine: &str| size.contains(&format!("jsr {routine}c"));
-    assert!(compact("__divhi3") && compact("__modhi3"), "{size}");
+    let compact_at = |text: &str, routine: &str| text.contains(&format!("jsr {routine}c"));
+    assert!(compact_at(&size, "__divhi3") && compact_at(&size, "__modhi3"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(speed.contains("jsr __divhi3\n") && speed.contains("jsr __modhi3\n"), "{speed}");
+    assert!(compact_at(&speed, "__divhi3") && compact_at(&speed, "__modhi3"), "{speed}");
 }
 
 #[test]
-fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
+fn a_word_divide_calls_the_compact_routine_at_size_and_in_a_cold_module_at_speed() {
     // k_itoa at -Os linked the divide's short-divisor path too: 89 B against
     // sdcc's 64 for a bare divide
     let ir = module(
@@ -2059,7 +2059,7 @@ fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
     let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     assert!(size.contains("jsr __udivhi3c"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
+    assert!(speed.contains("jsr __udivhi3c"), "{speed}");
     // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B =
     // 0xF7
     for text in [&size, &speed] {

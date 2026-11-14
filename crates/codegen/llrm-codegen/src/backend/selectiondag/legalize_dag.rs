@@ -375,9 +375,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         } else {
             self.dag.get_ext_load(kind, vt, chain, ptr, narrow)
         };
+        let ty = self.dag.get_value_type_node(info.mem_vt);
         let value = if ext == super::actions::LoadExt::SExtLoad {
-            let ty = self.dag.get_value_type_node(info.mem_vt);
             self.dag.get_node(ISD::SignExtendInReg, vt, &[byte, ty])
+        } else if ext == super::actions::LoadExt::ZExtLoad || vt == EVT::I8 {
+            // `ExtType == ISD::ZEXTLOAD || NVT == Result.getValueType()`: all
+            // the top bits are zero, which the optimizers are told.
+            self.dag.get_node(ISD::AssertZext, vt, &[byte, ty])
         } else {
             byte
         };
@@ -995,6 +999,49 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
     }
 
+    /// `ExpandVectorBuildThroughStack`: each defined lane stored to its place in
+    /// a 16-byte stack slot, the slot loaded as the vector. The pin's
+    /// `LowerBUILD_VECTOR` of an x86 splat is a `movd` and a `pshufd`; this is
+    /// the target-independent fallback every lane shape takes.
+    fn expand_build_vector_through_stack(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let element = vt.element();
+        let lane_bytes = element.size_in_bits() / 8;
+        let size = vt.size_in_bits() / 8;
+        if lane_bytes == 0 || self.dag.config().big_endian {
+            return None;
+        }
+        let cell = self.dag.create_stack_temporary(size, 16);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let lane_info = MemInfo {
+            mem_vt: element,
+            align: lane_bytes.min(16),
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let entry = self.dag.entry_node();
+        let mut stores = Vec::new();
+        for (at, lane) in self.dag.node(node).ops.clone().into_iter().enumerate() {
+            if self.dag.is_undef(lane) {
+                continue;
+            }
+            let value =
+                if self.dag.value_type(lane) == element { lane } else { self.dag.get_sext_or_trunc(lane, element) };
+            let to = self.dag.get_object_ptr_offset(slot, (at as u32 * lane_bytes) as i64);
+            stores.push(self.dag.get_store(entry, value, to, lane_info));
+        }
+        let chain = if stores.is_empty() { entry } else { self.dag.get_token_factor(&stores) };
+        let info = MemInfo { mem_vt: vt, align: 16, ..lane_info };
+        Some(self.dag.get_load(vt, chain, slot, info))
+    }
+
     /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
     /// constants or undefined is loaded from the constant pool, its lanes laid
     /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
@@ -1018,7 +1065,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             // A float lane is its bits; the operand may be wider than the
             // lane (an implicit truncation).
-            let value = self.dag.constant(lane).or_else(|| self.dag.fp_constant(lane))?;
+            let Some(value) = self.dag.constant(lane).or_else(|| self.dag.fp_constant(lane)) else {
+                return self.expand_build_vector_through_stack(node);
+            };
             image |= (value & mask) << (at as u32 * lane_bits);
         }
         let pointer = self.dag.config().pointer;

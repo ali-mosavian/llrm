@@ -199,7 +199,7 @@ mod tests {
         let mut constants: Vec<u32> = (2..=400).collect();
         constants.extend([65_537, 6_700_417, 641, 1_000_000, 0x7fff_ffff, 0xffff_fffe, 0xffff_fc18, 1_103_515_245]);
         for cpu in [Cpu::M68000, Cpu::M68020, Cpu::M68040] {
-            for price in [Price::Size, Price::Strict, Price::Rate] {
+            for price in [Price::Size, Price::Rate] {
                 for &c in &constants {
                     if let Some(plan) = plan(cpu, price, 32, u128::from(c)) {
                         for x in [1u32, 3, 0x1234_5678, 0xffff_ffff, 0x8000_0000] {

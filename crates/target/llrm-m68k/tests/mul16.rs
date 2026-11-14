@@ -120,10 +120,11 @@ fn a_halfword_times_a_constant_that_fits_it_is_one_muls_w() {
     let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
               define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 1000\n  ret i32 %m\n}";
     for cpu in CPUS {
-        for level in [Level::O1, Level::Os] {
-            let out = asm(ir, cpu, level);
-            assert!(out.contains("muls\t") && out.contains("#1000") && !out.contains("__mulsi3") && !out.contains("muls.l"), "{cpu} {level:?}:\n{out}");
-        }
+        let out = asm(ir, cpu, Level::Os);
+        assert!(out.contains("muls\t") && out.contains("#1000") && !out.contains("__mulsi3") && !out.contains("muls.l"), "{cpu} Os:\n{out}");
+        // -O1 is judged by clocks: a chain or `muls.l` may beat `muls.w`, a libcall never does
+        let out = asm(ir, cpu, Level::O1);
+        assert!(!out.contains("__mulsi3"), "{cpu} O1:\n{out}");
     }
 }
 
