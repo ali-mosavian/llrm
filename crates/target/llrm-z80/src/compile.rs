@@ -7,6 +7,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_addre
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::Level;
+use llrm_transforms::trial::UnrollDecisions;
 use crate::driver::{Request, selections_with_alternatives};
 use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
@@ -100,7 +101,7 @@ thread_local! {
     /// The six modules most recently run through the mid-end and selection (-Oz compiles a module three ways, as
     /// -Oz and as -Os twice, and each may be compiled again with its loop copies refused), most recent first, with
     /// what each was run for.
-    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, usize)>> =
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>))>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
     /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
@@ -113,13 +114,52 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    /// The data text of the six modules most recently compiled, by what each was compiled with.
+    static DATA_TEXT: std::cell::RefCell<Vec<(String, SelectionKey, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The data text of `ir` compiled with `request`: the one its selection made, else `make`'s.
+pub(crate) fn kept_data_text(
+    ir: &str,
+    request: &Request,
+    make: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    let key = selection_key(request);
+    let held = DATA_TEXT.with(|held| {
+        held.borrow().iter().find(|(text, was, _)| text == ir && *was == key).map(|(.., data)| data.clone())
+    });
+    if let Some(data) = held {
+        return Ok(data);
+    }
+    let data = make()?;
+    keep_data_text(ir, request, Ok(data.clone()));
+    Ok(data)
+}
+
+/// Keeps `data` (an error is not kept) as the data text of `ir` compiled with `request`.
+fn keep_data_text(
+    ir: &str,
+    request: &Request,
+    data: Result<String, String>,
+) {
+    let Ok(data) = data else { return };
+    let key = selection_key(request);
+    DATA_TEXT.with(|held| {
+        let mut held = held.borrow_mut();
+        held.retain(|(text, was, _)| !(text == ir && *was == key));
+        held.insert(0, (ir.to_owned(), key, data));
+        held.truncate(6);
+    });
+}
+
 /// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
 fn selection_key(request: &Request) -> SelectionKey {
     let mut environment: Vec<(String, String)> =
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only, request.refuse_loop_copies)),
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only, request.refuse_loop_copies, request.unroll_variant)),
         environment,
     )
 }
@@ -191,7 +231,7 @@ pub fn effective(
     if let Some(chosen) = held {
         return Ok(chosen);
     }
-    let (_, _, copies) = cached_with_copies(ir, &base)?;
+    let (_, _, (copies, decisions, fingerprint)) = cached_with_copies(ir, &base)?;
     let chosen = if copies == 0 {
         base
     } else {
@@ -209,7 +249,50 @@ pub fn effective(
         KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
         chosen
     };
+    let chosen = if (decisions.made > 0 || decisions.refused > 0) && matches!(chosen.level, Level::O2 | Level::O3) { unroll_choice(ir, chosen, decisions, fingerprint)? } else { chosen };
     COPY_CHOICE.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+    Ok(chosen)
+}
+
+/// `request`, or its twin under the `unroll_variant` that makes the module smaller in bytes, then in clocks.
+/// DEVIATE UNROLL-SPEED-TRIAL (`Request::unroll_variant`; owner z80, exit 2026-11-24): neither the pin's threshold nor
+/// the unroll's price sees what a full unroll frees or copies on: loop_fusion -O2 (831 B smaller with the loops
+/// unrolled), memmove_overlap -O3 (`fill` unrolled and then inlined, 740 B larger). Variants: no unroll that adds
+/// bytes, and at -O2 the -O3 threshold. A tie keeps the request.
+fn unroll_choice(
+    ir: &str,
+    request: Request,
+    decisions: UnrollDecisions,
+    fingerprint: Option<crate::driver::Fingerprint>,
+) -> Result<Request, String> {
+    use llrm_transforms::trial::SpeedUnroll;
+    let mut variants = Vec::new();
+    if decisions.made > 0 {
+        variants.push(SpeedUnroll::NoGrow);
+    }
+    if decisions.refused > 0 && request.level == Level::O2 {
+        variants.push(SpeedUnroll::Wide(llrm_transforms::trial::WIDE_THRESHOLD));
+    }
+    let mut best = (module_priced(ir, &request)?, request);
+    for variant in variants {
+        let other = Request { unroll_variant: Some(variant), ..best.1.clone() };
+        // a variant whose mid-end leaves the module as it is gives the same object: not selected again
+        let price = crate::driver::with_unroll_base(fingerprint, || module_priced(ir, &other));
+        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() && price.is_err() {
+            eprintln!("unroll {variant:?}: {price:?}");
+        }
+        let Ok(price) = price else { continue };
+        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
+            eprintln!("unroll {variant:?}: {price:?}, held {:?}", best.0);
+        }
+        if price < best.0 {
+            best = (price, other);
+        }
+    }
+    let chosen = best.1;
+    // keep only the lines of the module that stays
+    let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+    KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
     Ok(chosen)
 }
 
@@ -337,7 +420,7 @@ fn cached_both(
 fn cached_with_copies(
     ir: &str,
     request: &Request,
-) -> Result<(Selections, Selections, usize), String> {
+) -> Result<(Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>)), String> {
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
@@ -354,7 +437,10 @@ fn cached_with_copies(
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (main, alternatives) = selections_with_alternatives(ir, request)?;
-    let copies = crate::driver::loop_copies_made();
+    if let Some(data) = crate::driver::data_of_last_selection() {
+        keep_data_text(ir, request, data);
+    }
+    let copies = (crate::driver::loop_copies_made(), crate::driver::speed_unrolls_made(), crate::driver::mid_end_fingerprint());
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
