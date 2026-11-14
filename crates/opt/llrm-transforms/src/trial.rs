@@ -39,6 +39,41 @@ thread_local! {
     static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
 }
 
+thread_local! {
+    /// Set while the trial compile of LOOP-COPY-TRIAL runs: a callee that holds a loop is not inlined at
+    /// several sites of a loop of its caller.
+    static REFUSE_LOOP_COPIES: Cell<bool> = const { Cell::new(false) };
+    /// The inlines of that kind the pass made since [`take_loop_copies`].
+    static LOOP_COPIES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// DEVIATE LOOP-COPY-TRIAL (beyond the pin; owner z80, exit 2026-11-24): whether the trial compile that
+/// refuses the copies of a loop-holding callee at several sites inside a loop is running. The pin's
+/// InlineCost prices the call away and the callee's body, never the registers the merged loop needs (its
+/// `LoopPenalty` binds minsize callers only): on the z80 each copy spilled its pointers and the module came
+/// out larger and slower (idioms -O2: 4555 B / 25.58M T against 1993 B / 24.49M T).
+pub fn refusing_loop_copies() -> bool {
+    REFUSE_LOOP_COPIES.with(Cell::get)
+}
+
+/// Runs `body` with those copies refused.
+pub fn with_refused_loop_copies<T>(body: impl FnOnce() -> T) -> T {
+    let before = REFUSE_LOOP_COPIES.with(|cell| cell.replace(true));
+    let value = body();
+    REFUSE_LOOP_COPIES.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes one inline the trial may refuse.
+pub(crate) fn note_loop_copy() {
+    LOOP_COPIES.with(|count| count.set(count.get() + 1));
+}
+
+/// The inlines [`note_loop_copy`] saw since the last call.
+pub fn take_loop_copies() -> usize {
+    LOOP_COPIES.with(|count| count.replace(0))
+}
+
 /// The trial threshold in force, if a trial compile is running.
 pub fn active() -> Option<u32> {
     TRIAL.with(Cell::get)
