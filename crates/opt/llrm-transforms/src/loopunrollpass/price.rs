@@ -36,8 +36,8 @@ pub(crate) fn unroll_pays(
 }
 
 /// Whether the full unroll of `lp` by `trips` stays, at the target's rate
-/// (`Tti::unroll_milliclocks_per_byte`). Only at -O2/-O3: -Os and -Oz hold to
-/// the pin's bytes.
+/// (`Tti::unroll_milliclocks_per_byte`). At -O2/-O3, and -O1 where bytes are
+/// priced at speed: -Os and -Oz hold to the pin's bytes.
 pub(super) fn full_unroll_pays(
     run: &mut Run,
     se: &mut ScalarEvolution,
@@ -48,7 +48,10 @@ pub(super) fn full_unroll_pays(
     uce: &UnrollCostEstimator,
     up: &UnrollingPreferences,
 ) -> bool {
-    let rate = run.tti.unroll_milliclocks_per_byte();
+    // DEVIATE UNROLL-SPEED-TRIAL: the compile that unrolls only what adds no bytes prices every loop, an inlinable
+    // callee's too.
+    let no_grow = trial::speed_unroll() == Some(trial::SpeedUnroll::NoGrow);
+    let rate = if no_grow { 1 << 40 } else { run.tti.unroll_milliclocks_per_byte() };
     // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
     // (the pin's order): a veto in a function the inliner can take leaves a
     // small rolled helper that is then inlined, and unrolled, at every site
@@ -57,11 +60,12 @@ pub(super) fn full_unroll_pays(
     // (`-fno-inline-functions` with called-once off, or `noinline`) there is
     // no late pass for it: the loop is priced here (huffman_decode -O3: 17
     // calls of getbit unrolled unpriced, +915 B over gcc).
-    let inlinable = !run.options.target_unrolling
+    let inlinable = !no_grow
+        && !run.options.target_unrolling
         && run.options.inliner_follows
         && llrm_mir::facts::Facts::of(&run.function.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
         && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
-    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || (run.options.opt_level < 2 && !run.options.speed_rate) {
         why(run, lp, &format!("unpriced unroll: inlinable {inlinable}, rate {rate}"));
         return true;
     }

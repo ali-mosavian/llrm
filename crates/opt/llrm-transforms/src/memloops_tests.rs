@@ -81,3 +81,31 @@ fn a_call_of_fewer_than_three_operands_is_no_candidate_and_no_panic() {
     let module = llrm_mir::parse::module(&text).expect("parses");
     assert_eq!(crate::memloops::candidates(&module), vec!["f".to_owned()]);
 }
+
+const FILL: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\
+    define i16 @f(i16 %n) {\n  %a = alloca [8 x i8]\n\
+    %p0 = getelementptr inbounds i8, ptr %a, i16 0\n  store i8 11, ptr %p0\n\
+    %p2 = getelementptr inbounds i8, ptr %a, i16 2\n  store i8 33, ptr %p2\n\
+    %p7 = getelementptr inbounds i8, ptr %a, i16 7\n  store i8 77, ptr %p7\n\
+    call void @llvm.memset.p0.i16(ptr %a, i8 5, i16 %n, i1 false)\n\
+    %x = load i8, ptr %p0\n  %y = load i8, ptr %p2\n  %z = load i8, ptr %p7\n\
+    %xw = zext i8 %x to i16\n  %yw = zext i8 %y to i16\n  %zw = zext i8 %z to i16\n\
+    %r = shl i16 %xw, 8\n  %s = or i16 %r, %yw\n  %t = add i16 %s, %zw\n  ret i16 %t\n}\n";
+
+/// A `memset` of a run-time length was never a candidate: a function that fills
+/// with it kept the call and its 39 B of library (k_strncpy 128 B against
+/// cc65's hand code at 102). The loop stores the byte as far as the length
+/// reaches and leaves the rest alone.
+#[test]
+fn a_fill_of_a_run_time_length_is_a_loop_that_stores_the_byte() {
+    let before = llrm_mir::parse::module(FILL).expect("parses");
+    assert_eq!(crate::memloops::candidates(&before), vec!["f".to_owned()]);
+    assert_eq!(crate::memloops::callers(&before, "memset"), 1);
+    let mut after = before.clone();
+    crate::memloops::expanded(&mut after, &|_| true).expect("expands");
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+    assert_eq!(llrm_mir::print::module(&after).matches("call void @llvm.memset").count(), 0, "the call is gone");
+    for n in [0, 1, 2, 3, 8] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}
