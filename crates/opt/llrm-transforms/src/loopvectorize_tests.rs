@@ -568,10 +568,7 @@ const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");
 #[test]
 fn a_truncated_induction_is_widened_to_a_vec_ind() {
     let text = run(INDUCTION_TRUNC);
-    assert!(
-        text.contains("<i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>"),
-        "{text}"
-    );
+    assert!(text.contains("<i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>"), "{text}");
     assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
     assert_eq!(count(&text, "step.add = add <8 x i16>"), 1, "{text}");
     assert_eq!(count(&text, "vec.ind.next = add <8 x i16>"), 1, "{text}");
@@ -810,6 +807,18 @@ out:
 
 const REDUCTION_SUM: &str = include_str!("../tests/lv/reduction_sum.ll");
 const SCROLL_CHECKSUM: &str = include_str!("../tests/lv/scroll_checksum.ll");
+const SUM_ZEXT_BYTES: &str = include_str!("../tests/lv/sum_zext_bytes.ll");
+
+/// textfill's checksum (a sum of 4000 extended bytes) stayed scalar: VF 16
+/// makes `<16 x i64>` lanes, eight registers, which the plan did not take
+/// (32009 instructions at -O2). The pin takes VF 16, IC 2.
+#[test]
+fn a_sum_of_extended_bytes_takes_the_vector_factor_of_the_bytes() {
+    let text = run(SUM_ZEXT_BYTES);
+    assert_eq!(count(&text, "load <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "zext <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v16i64"), 1, "{text}");
+}
 
 /// `Reductions are not widened yet` left every sum of a loop scalar. The sum of
 /// 1003 words is a vector phi per part from `<start, 0, 0, 0>`, folded in the
