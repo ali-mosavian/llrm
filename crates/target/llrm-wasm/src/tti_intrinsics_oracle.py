@@ -17,6 +17,8 @@ for ty in ["i8", "i16", "i32", "i64"]:
         intr(f"llvm.{m}.{ty}", ty, [ty, ty])
     for m in ["sadd", "uadd", "ssub", "usub", "smul", "umul"]:
         intr(f"llvm.{m}.with.overflow.{ty}", "{ " + ty + ", i1 }", [ty, ty])
+    for m in ["sadd", "uadd", "ssub", "usub", "sshl", "ushl"]:
+        intr(f"llvm.{m}.sat.{ty}", ty, [ty, ty])
     intr(f"llvm.ctpop.{ty}", ty, [ty])
     if ty != "i8":
         intr(f"llvm.bswap.{ty}", ty, [ty])

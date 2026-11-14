@@ -1532,11 +1532,13 @@ fn lowered(
         realign_to: Some(realign_of(&procedure.body)).filter(|&align| align != 0).map(|align| align as u64),
         has_var_sized_objects: !omit && framed && moves_stack(&procedure.body),
     };
-    // A one-slot frame is `push rax` / `pop rcx` where no return is a sibling
-    // call (`emitSPUpdate` with `findDeadCallerSavedReg`), after the saved
-    // registers as before them.
-    let scratch =
-        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    // A one-slot frame is `push rax` / `pop rcx` (`emitSPUpdate` with
+    // `findDeadCallerSavedReg`), after the saved registers as before them; at a
+    // sibling call only where the register was chosen dead there
+    // (`Registers::slot_dead_checked`).
+    let scratch = procedure.registers.slot_scratch.filter(|_| {
+        omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body))
+    });
     let register = |reg_number: u32| match reg_number {
         FP => reg(FRAME),
         DEAD => reg(scratch.expect("a dead register is popped for a scratch frame").1),
@@ -1729,12 +1731,13 @@ fn parts(
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
     let moved = !omit && framed && moves_stack(&procedure.body);
-    // A one-slot adjustment of a 64-bit frame is `push rax` / `pop rcx` where
-    // no return is a sibling call (rcx may carry its argument):
-    // X86FrameLowering's emitSPUpdate, with the register
-    // findDeadCallerSavedReg gives a `ret`.
-    let scratch =
-        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    // A one-slot adjustment of a 64-bit frame is `push rax` / `pop rcx`:
+    // X86FrameLowering's emitSPUpdate, with the register findDeadCallerSavedReg
+    // gives a `ret` or, where the register was chosen dead
+    // (`Registers::slot_dead_checked`), a sibling call.
+    let scratch = procedure.registers.slot_scratch.filter(|_| {
+        omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body))
+    });
     let one_slot = scratch.is_some();
     let (accumulator, dead_at_return) = scratch.map_or((STACK, None), |(push, pop)| (push, Some(pop)));
     let mut leave: Vec<Semantics> = Vec::new();
@@ -5009,6 +5012,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: Some((RegId::EAX, RegId::ECX)),
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5064,6 +5068,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5123,6 +5128,7 @@ mod tests {
                 object_aligned: false,
                 red_zone: 0,
                 slot_scratch: None,
+                slot_dead_checked: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,
@@ -5201,6 +5207,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5381,6 +5388,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5571,6 +5579,7 @@ mod tests {
                 wrap_split_size: false,
                 object_aligned: false,
                 slot_scratch: None,
+                slot_dead_checked: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,

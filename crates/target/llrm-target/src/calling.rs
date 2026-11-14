@@ -172,6 +172,10 @@ pub struct Convention {
     /// push may not read, the popped one is a caller-saved register no result
     /// or tail call argument is in.
     pub frame_slot_scratch: Option<(String, String)>,
+    /// A sibling call may end a one-slot frame: its `pop` register is chosen among those its
+    /// arguments are not in (`findDeadCallerSavedReg` of a `TCRETURN`). The target's other frames
+    /// keep the `sub`/`add` where a return is a sibling call.
+    pub frame_slot_sibling: bool,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
     pub preserved: Vec<Kept>,
@@ -303,6 +307,7 @@ const KEYS: &[&str] = &[
     "frame_red_zone",
     "frame_slot_push",
     "frame_slot_pop",
+    "frame_slot_sibling",
     "stack",
     "preserved",
     "clobbered",
@@ -790,6 +795,7 @@ impl Convention {
                 .then(|| integer("frame_red_zone"))
                 .transpose()?
                 .unwrap_or(0),
+            frame_slot_sibling: flag("frame_slot_sibling")?,
             frame_slot_scratch: table
                 .contains_key("frame_slot_push")
                 .then(|| Ok::<_, String>((text("frame_slot_push")?, text("frame_slot_pop")?)))

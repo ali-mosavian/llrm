@@ -310,6 +310,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(reassociated) = self.reassociate_ops(ISD::Or, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
         }
+        // `(op (hand x...), (hand y...))` is `(hand (op x, y))`.
+        if self.dag.opcode(n0) == self.dag.opcode(n1) {
+            if let Some(hoisted) = self.hoist_logic_op_with_same_opcode_hands(node) {
+                return Some(hoisted);
+            }
+        }
         if let Some(rotated) = self.match_rotate(n0, n1) {
             return Some(rotated);
         }

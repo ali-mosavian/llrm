@@ -1943,7 +1943,10 @@ pub fn recorded(
     {
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
-    if applied.options.at_o1() && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_o1()) {
+    if applied.options.optimize
+        && !applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_speed())
+    {
         manager.add_program(crate::mergefunc::MergeLocalFunctions);
     }
     if applied.options.optimize {

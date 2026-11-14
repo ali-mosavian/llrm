@@ -1599,9 +1599,10 @@ pub trait Tti {
         false
     }
 
-    /// Drop the local functions that are the same code at -O1
-    /// (`MergeLocalFunctions`); no thunk is written.
-    fn merge_local_functions_at_o1(&self) -> bool {
+    /// Drop the local functions that are the same code at the levels that
+    /// allow no trade between bytes and clocks, and at speed (`MergeLocalFunctions`);
+    /// no thunk is written.
+    fn merge_local_functions_at_speed(&self) -> bool {
         false
     }
 
