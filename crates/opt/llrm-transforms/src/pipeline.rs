@@ -141,8 +141,8 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
-    inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
+    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
@@ -1115,8 +1115,9 @@ pub(crate) fn llvm_order(
             // are `simplifycfg::Options::{L1438, L1682}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             // SLPVectorizerPass (l.1455): the compares of adjacent bytes
-            // against constants, on a target with vector registers.
-            slot("slp@1455", Box::new(crate::slpcompares::SlpCompares)),
+            // against constants and the store chains, on a target with vector
+            // registers.
+            slot("slp@1455", Box::new(crate::slpvectorize::SlpVectorize)),
             combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
             // before LoopUnrollPass; the nest is in simplify form and LCSSA.
@@ -1878,7 +1879,8 @@ pub fn recorded(
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
     }
-    // After gepoffset, which leaves the constant part of an address in its own `gep`.
+    // After gepoffset, which leaves the constant part of an address in its own
+    // `gep`.
     if applied.options.wanted("gepbyteindex") {
         manager.add(gepbyteindex::GepByteIndex);
     }
