@@ -9,10 +9,11 @@ use llrm_m68k::dagisel::hooks::Cpu;
 
 const SIEVE: &str = include_str!("fixtures/sieve_pin_o2.ll");
 
+// -Os: the trial keeps the shared stage where it is smaller; -O1..-O3 keep it where clocks fall.
 fn text(shared_cse: bool) -> String {
     let mut module = llrm_mir::parse::module(SIEVE).expect("parses");
     llrm_mir::parse::upgrade_lifetimes(&mut module);
-    text_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, ..Options::default() }).expect("compiles")
+    text_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, size: true, ..Options::default() }).expect("compiles")
 }
 
 /// A `moveq #0,%d0` that only returns: followed by a branch to the exit, or (since #9565 lays the exit out next) by
@@ -24,7 +25,7 @@ fn zero_exits(asm: &str) -> usize {
 fn bytes(shared_cse: bool) -> usize {
     let mut module = llrm_mir::parse::module(SIEVE).expect("parses");
     llrm_mir::parse::upgrade_lifetimes(&mut module);
-    items_bytes(&items_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, ..Options::default() }).expect("compiles"))
+    items_bytes(&items_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, size: true, ..Options::default() }).expect("compiles"))
 }
 
 /// The premise: without the stage the early return of 0 is a block of its own.

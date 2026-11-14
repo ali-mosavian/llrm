@@ -1729,9 +1729,15 @@ fn _stored(
 
 /// `TLI->has(LibFunc_memset_pattern16)` of the unit's target: a target stating
 /// no library has the pin's defaults for an unknown OS, which lack it.
+/// DEVIATE MEMSET-PATTERN-ISEL (owner w10, exit 2026-11-24): or one whose isel
+/// lowers the pattern fill to `rep stosw`/`rep stosd` itself
+/// (`Machine::fills_by_pattern`, x86-m16) instead of the pre-ISel store loop.
 fn _has_memset_pattern(unit: &Unit) -> bool {
     use llrm_mir::libfunc::{Generic, LibFunc, TargetLibraryInfo};
     let Some(outer) = unit.outer else { return false };
+    if outer.target().fills_by_pattern() || outer.target().tti().is_some_and(|tti| tti.fills_pattern_at_speed()) {
+        return true;
+    }
     match outer.target().library() {
         Some(library) => TargetLibraryInfo::new(&*library).has(LibFunc::MemsetPattern16),
         None => TargetLibraryInfo::new(&Generic { int_bits: 32, size_t_bits: 32 }).has(LibFunc::MemsetPattern16),

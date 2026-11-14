@@ -721,6 +721,14 @@ pub trait Tti {
         None
     }
 
+    /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
+    /// step the pin's `ExpandReductions` or the target's lowering makes). A
+    /// port that does not yet lowers none, and no loop with a reduction is
+    /// widened.
+    fn lowers_vector_reductions(&self) -> bool {
+        true
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
@@ -1477,6 +1485,13 @@ pub trait Tti {
     /// `computePeelCount` would at the `unroll_trial_at_size` bar (the pin's
     /// optsize threshold of 0 never does).
     fn peels_on_trial_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): whether the driver compiles the module again under
+    /// unroll variants at -O2 and -O3 (`llrm_transforms::trial::SpeedUnroll`), so the pass notes which of its
+    /// decisions a variant would change.
+    fn unroll_speed_trial(&self) -> bool {
         false
     }
 
@@ -2405,6 +2420,13 @@ pub trait Tti {
     /// instruction loop) says false.
     fn memory_idioms_at_optsize(&self) -> bool {
         true
+    }
+
+    /// `Tuning::fills_pattern_at_speed`: isel fills a word or dword pattern
+    /// itself (`rep stosw`/`rep stosd`), so the pass forms it and no pre-ISel
+    /// store loop is made.
+    fn fills_pattern_at_speed(&self) -> bool {
+        false
     }
 
     /// Beyond the pin: whether a shift by a variable amount needs the count

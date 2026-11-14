@@ -64,11 +64,11 @@ fn a_68020_multiply_by_any_constant_costs_one() {
 }
 
 #[test]
-fn a_68000_multiply_costs_one_only_as_chains() {
-    for constant in [Some(2), Some(3), Some(5), Some(9), Some(15), Some(-8), Some(-3), Some(100), Some(1 << 40)] {
+fn a_68000_multiply_by_a_constant_is_a_chain_and_by_a_variable_a_call() {
+    for constant in [Some(2), Some(3), Some(5), Some(9), Some(15), Some(-8), Some(-3), Some(100), Some(1 << 40), Some(100_000), Some(1431655765)] {
         assert_eq!(mul64(Cpu::M68000, constant), Cost::of(1), "mul i64 by {constant:?}");
     }
-    for constant in [Some(100_000), Some(1431655765), None] {
+    for constant in [None] {
         assert_eq!(mul64(Cpu::M68000, constant), Cost::EXPENSIVE, "mul i64 by {constant:?}");
     }
 }

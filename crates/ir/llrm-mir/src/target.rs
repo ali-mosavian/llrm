@@ -59,6 +59,13 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): isel fills a
+    /// word or dword pattern with `rep stosw`/`rep stosd`, so
+    /// `LoopIdiomRecognize` forms the fill with no `memset_pattern16` and the
+    /// pre-ISel store loop is not made, at the speeds the fill's price pays
+    /// (`Machine::fills_by_pattern` is the same at -Os for m16). false: the
+    /// pin's loop.
+    pub fills_pattern_at_speed: bool,
     /// DEVIATE PO1 (owner x86-m32-b, exit 2026-11-24 for the targets that keep it):
     /// at -Os the arguments of a call are popped into a dead register in place
     /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
@@ -660,6 +667,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        fills_pattern_at_speed: false,
         libc_memcpy: false,
         pops_arguments_at_size: true,
         keeps_sahf_where_bytes_are_held: false,
