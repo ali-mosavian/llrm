@@ -133,7 +133,7 @@ pub(crate) fn cast_cost(
     src: VectorTy,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if cost_kind != CostKind::RecipThroughput {
+    if cost_kind == CostKind::Latency {
         return None;
     }
     if let Some(&(.., cost)) = CONVERSIONS.iter().find(|&&(one, to, from, _)| one == kind && to == dst && from == src) {
@@ -334,7 +334,7 @@ pub(crate) fn cmp_sel_cost(
     predicate: Option<Predicate>,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if cost_kind != CostKind::RecipThroughput {
+    if cost_kind == CostKind::Latency {
         return None;
     }
     let (registers, lane) = vector_pieces(ty)?;
