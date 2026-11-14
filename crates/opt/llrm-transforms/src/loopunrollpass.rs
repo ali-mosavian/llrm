@@ -121,6 +121,9 @@ pub struct Options {
     /// (inlining is on and the function is not `noinline`): its loops are
     /// then left to be priced in the context of each site.
     pub inliner_follows: bool,
+    /// The byte price at speed counts (`Options::prices_bytes`): -O2 and -O3,
+    /// and -O1 where the target asks (`speed_rate_at_o1`).
+    pub speed_rate: bool,
 }
 
 /// What the pass reads and changes.
@@ -1088,8 +1091,11 @@ fn should_full_unroll(
     // unroll). A loop this refuses goes to the trial (DEVIATE
     // UNROLL-O1-TRIAL, `note_for_trial`): the driver compiles again with it
     // unrolled and keeps that only if bytes and work do not grow.
+    // Where the byte price at speed counts (`speed_rate_at_o1`) the copies are
+    // priced against their clocks below, as at -O2.
     if run.options.opt_level == 1
         && !run.options.opt_size
+        && !run.options.speed_rate
         && run.tti.unroll_never_grows_at_o1()
         && trial::active().is_none()
     {
@@ -2857,6 +2863,8 @@ pub struct LoopFullUnroll {
     pub target_unrolling: bool,
     /// `Options::inliner_follows`.
     pub inliner_follows: bool,
+    /// `Options::speed_rate`.
+    pub speed_rate: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -2913,6 +2921,7 @@ impl FunctionPass for LoopFullUnroll {
                 prepare_for_lto: false,
                 target_unrolling: self.target_unrolling,
                 inliner_follows: self.inliner_follows,
+                speed_rate: self.speed_rate,
             },
         };
         let changed = unroll_loops(&mut run);

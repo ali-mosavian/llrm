@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 const PRIMES: &str = "long f(int n)\n{\n    int i, d, count = 0;\n    for (i = 2; i < n; ++i) { for (d = 2; d * d <= i; ++d) if (i % d == 0) break; if (d * d > i) ++count; }\n    return count;\n}\n";
+const FIR: &str = "static short x[512], coef[16];\nlong f(long n)\n{\n    long i, k, sum = 0; unsigned long s = 17;\n    for (i = 0; i < 16; ++i) coef[i] = (short)(i * 100 - 700);\n    for (i = 0; i < n + 16; ++i) { s = s * 1103515245ul + 12345ul; x[i] = (short)((s >> 16) & 0xFFF); }\n    for (i = 0; i < n; ++i) { long acc = 0; for (k = 0; k < 16; ++k) acc += (long)x[i + k] * coef[k]; sum += acc >> 8; }\n    return sum;\n}\n";
 const MASKED: &str = "long f(int n)\n{\n    int i, x = 1;\n    long s = 0;\n    for (i = 0; i < n; ++i) { x = (x * 5 + i) & 0xFFFF; s += x; }\n    return s;\n}\n";
 const SOURCE: &str = "long f(long n)\n{\n    long i, y1 = 0, y2 = 0, sum = 0;\n    for (i = 0; i < n; ++i) {\n        long y = (i * 1024 + y1 * 1600 - y2 * 700) >> 10;\n        y2 = y1; y1 = y; sum += y;\n    }\n    return sum;\n}\n";
 
@@ -65,4 +66,16 @@ fn at_o1_the_first_trip_of_a_loop_with_constant_entry_values_is_peeled() {
 fn at_o1_a_word_mask_is_an_and_not_a_movzx() {
     let text = compile(MASKED, &[]);
     assert!(!text.contains("movzx"), "a movzx of 3 clk is left where `and` takes 1:\n{text}");
+}
+
+/// x_fir -O1: the 16-trip tap loop stayed rolled (its copies were larger than
+/// the loop), so each trip paid an `imul` of 24 clk by a coefficient read from
+/// memory: 220,085 clk against gcc's 212,662. Priced by its clocks, as at -O2,
+/// the copies fold the coefficients to constants.
+#[test]
+fn at_o1_a_loop_of_sixteen_trips_is_unrolled_when_the_clocks_pay() {
+    let pin = compile(FIR, &["-fno-llrm-speed-rate"]);
+    assert!(pin.contains("imul"), "premise: the loop stays rolled without the rate:\n{pin}");
+    let text = compile(FIR, &[]);
+    assert!(!text.contains("imul"), "the rolled loop's imul is left at -O1:\n{text}");
 }
