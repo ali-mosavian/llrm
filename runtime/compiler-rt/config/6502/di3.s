@@ -1,6 +1,6 @@
 ; 64-bit shifts for the 6502: u64 __ashldi3(u64 a, int n), __lshrdi3, i64 __ashrdi3 (libgcc signatures).
-; ABI (llrm-target-6502): a as words low first, w0 in rc2:rc3, w1 in rc4:rc5, w2 in rc6:rc7, w3 and the 16-bit count n
-; on the caller's stack at (rc0:rc1)+0..1 and +2..3, read only here. Result A:X:rc2..rc7, low byte first.
+; ABI (llrm-target-6502): a as words low first, w0 in A:X, w1 in rc2:rc3, w2 in rc4:rc5, w3 in rc6:rc7, the 16-bit count n
+; on the caller's stack at (rc0:rc1)+0..1, read only here. Result A:X:rc2..rc7, low byte first.
 ; A count of 64 or more (as unsigned) gives 0, or the sign for the arithmetic shift. Scratch rc16..rc24.
 
 .setcpu "6502"
@@ -15,18 +15,14 @@ cnt = $98               ; rc24
 .segment "CODE"
 
 load:                   ; a into rc16..rc23, count into cnt; carry set when the count is 64 or more
-    ldy #0
-    lda (rc0),y
-    sta rc16+6
-    iny
-    lda (rc0),y
-    sta rc16+7
+    sta rc16
+    stx rc16+1
     ldx #5
 :   lda rc2,x
-    sta rc16,x
+    sta rc16+2,x
     dex
     bpl :-
-    ldy #2
+    ldy #0
     lda (rc0),y
     sta cnt
     iny

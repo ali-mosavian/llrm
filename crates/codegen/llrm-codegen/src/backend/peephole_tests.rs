@@ -6811,3 +6811,39 @@ fn test_a_price_is_asked_only_for_a_rule_the_target_has() {
     assert!(doubled(rules(), &body, &cpu).is_err(), "a rule that needs the clock still names its absence");
     assert!(zeroed_loads(rules(), &body, &cpu).is_err(), "a rule that needs the clock still names its absence");
 }
+
+/// x_funcptr -O1: `movzx eax, ax` (3 clk on the i486) is `and eax, 0xffff`
+/// (1 clk) where no later instruction reads a flag it would clobber, as
+/// gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND` has it; a branch that reads the
+/// flags keeps the `movzx`.
+#[test]
+fn test_a_register_zero_extended_into_itself_is_an_and_where_its_flags_are_dead() {
+    for (reads_flags, name) in [(false, "and"), (true, "movzx")] {
+        let first = Arc::new(insn(
+            0,
+            Some((0, 3)),
+            Some(sem(Operation::Extend, "movzx", vec![rl(RegId::EAX, 4)], vec![rl(RegId::AX, 2)])),
+            vec![],
+            vec![],
+        ));
+        let last = if reads_flags {
+            Arc::new(insn(3, Some((3, 5)), Some(sem(Operation::Branch, "jne", vec![], vec![])), vec![], vec![]))
+        } else {
+            Arc::new(insn(
+                3,
+                Some((3, 5)),
+                Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EAX, 4), im(1, 4)])),
+                vec![],
+                vec![],
+            ))
+        };
+        let result = zero_extended_with_and(&body(
+            "zext",
+            0,
+            crate::model::lir::shared(vec![block(0, vec![first, last], vec![])]),
+        ))
+        .insns()[0]
+            .clone();
+        assert_eq!(result.what.as_ref().unwrap().name.as_deref(), Some(name), "reads_flags {reads_flags}");
+    }
+}

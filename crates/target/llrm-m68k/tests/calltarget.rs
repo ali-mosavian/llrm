@@ -34,16 +34,15 @@ fn a_callee_called_six_times_is_called_through_a_register() {
     assert_eq!(through, 6, "calls stay absolute:\n{}", out.join("\n"));
 }
 
-/// `-O1` priced the call target strictly (no larger, no slower): the `lea` and the saved register
-/// are ~12 static clk in straight-line code, so six `jsr g` stayed absolute (float_bits, 18 cells +10..+20 B
-/// over gcc). The bytes decide there.
+/// `-O1` is judged by clocks (user ruling 2026-11-14): the `lea` and the saved register are ~12 static
+/// clk in straight-line code, so six `jsr g` stay absolute; -Os, above, takes the register for its bytes.
 #[test]
-fn a_callee_called_six_times_is_called_through_a_register_at_o1() {
+fn a_callee_called_six_times_stays_absolute_at_o1() {
     let plain = calls(6, "g").replace(" optsize", "");
     for cpu in ["68000", "68020"] {
         let out = lines(&plain, cpu, Level::O1);
         let through = out.iter().filter(|line| line.starts_with("jsr") && line.contains("(%a")).count();
-        assert_eq!(through, 6, "{cpu}: calls stay absolute:\n{}", out.join("\n"));
+        assert_eq!(through, 0, "{cpu}: calls went through a register:\n{}", out.join("\n"));
     }
 }
 

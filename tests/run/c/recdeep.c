@@ -1,4 +1,5 @@
 // flags: -O1 -m32 | -O1
+// bar: none (SDCC wrong value)
 // 1500 levels of recursion kept at -O1: the flat target's stack held about 100 of them (DOS/32A exception 06h).
 extern void report(long value);
 

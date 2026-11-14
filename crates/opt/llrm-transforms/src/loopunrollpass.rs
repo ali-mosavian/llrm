@@ -121,6 +121,9 @@ pub struct Options {
     /// (inlining is on and the function is not `noinline`): its loops are
     /// then left to be priced in the context of each site.
     pub inliner_follows: bool,
+    /// The byte price at speed counts (`Options::prices_bytes`): -O2 and -O3,
+    /// and -O1 where the target asks (`speed_rate_at_o1`).
+    pub speed_rate: bool,
 }
 
 /// What the pass reads and changes.
@@ -491,6 +494,10 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
+    // DEVIATE UNROLL-SPEED-TRIAL: the trial compile's own threshold.
+    if let Some(trial::SpeedUnroll::Wide(wide)) = trial::speed_unroll() {
+        up.threshold = wide;
+    }
     // Apply size attributes.
     if run.options.opt_size {
         up.threshold = up.opt_size_threshold;
@@ -1088,8 +1095,11 @@ fn should_full_unroll(
     // unroll). A loop this refuses goes to the trial (DEVIATE
     // UNROLL-O1-TRIAL, `note_for_trial`): the driver compiles again with it
     // unrolled and keeps that only if bytes and work do not grow.
+    // Where the byte price at speed counts (`speed_rate_at_o1`) the copies are
+    // priced against their clocks below, as at -O2.
     if run.options.opt_level == 1
         && !run.options.opt_size
+        && !run.options.speed_rate
         && run.tti.unroll_never_grows_at_o1()
         && trial::active().is_none()
     {
@@ -1131,10 +1141,12 @@ fn should_full_unroll(
     // DEVIATE UNROLL-TRIAL: while a trial runs, every loop under the trial
     // size is unrolled; the function is priced whole afterwards.
     if let Some(limit) = trial::active() {
-        // UNROLL-NEST-TRIAL takes the loops with a subloop only
-        let nests_only = nest_trial(run) && lp.is_innermost();
+        // UNROLL-NEST-TRIAL takes the loops with a subloop by the pin's
+        // threshold; an innermost loop is held to the analyzed cost by the
+        // target's size bar (UNROLL-SPEED-TRIAL), where it states one
+        let bar = if speed_innermost(run, lp) { run.tti.unroll_trial_at_size() } else { Some(limit) };
         let held = trial_size(run, se, analyzed, lp, eph, full_unroll_trip_count, unrolled_size);
-        if held < u64::from(limit) && !nests_only {
+        if bar.is_some_and(|bar| held < u64::from(bar)) {
             why(run, lp, "trial unroll");
             return Some(full_unroll_trip_count);
         }
@@ -1206,6 +1218,18 @@ fn nest_trial(run: &Run) -> bool {
     run.options.opt_level >= 2 && !run.options.opt_size && run.tti.unroll_trial_nests_at_speed()
 }
 
+/// DEVIATE UNROLL-SPEED-TRIAL (owner x87-b, exit 2026-11-24): an innermost loop
+/// at -O2/-O3 of a target that runs the nest trial and prices a trial by the
+/// analyzed cost is also taken by it, the finished code priced at the CPU's
+/// byte rate (gcc's `try_unroll_loop_completely` weighs the size after the
+/// folding the same way; the pin's analysis gives up on a call).
+fn speed_innermost(
+    run: &Run,
+    lp: Loop,
+) -> bool {
+    nest_trial(run) && lp.is_innermost() && run.tti.unroll_trial_by_analyzed_cost()
+}
+
 /// DEVIATE UNROLL-OS-TRIAL-ANALYZED: the size the -Os and -O1 trials hold a
 /// loop to: the copies' size, or where that is over the bar and the target says
 /// so, the cost the analysis finds once the trips' constants fold, if that is
@@ -1221,11 +1245,16 @@ fn trial_size(
     trips: u32,
     unrolled_size: u64,
 ) -> u64 {
-    if !(run.options.opt_size || run.options.opt_level == 1) || !run.tti.unroll_trial_by_analyzed_cost() {
+    let speed = speed_innermost(run, lp);
+    if !(run.options.opt_size || run.options.opt_level == 1 || speed) || !run.tti.unroll_trial_by_analyzed_cost() {
         return unrolled_size;
     }
-    let bar = if run.options.opt_size { run.tti.unroll_trial_at_size() } else { run.tti.unroll_trial_threshold() };
-    let Some(limit) = trial::active().or(bar) else { return unrolled_size };
+    let bar = if run.options.opt_level == 1 && !run.options.opt_size {
+        run.tti.unroll_trial_threshold()
+    } else {
+        run.tti.unroll_trial_at_size()
+    };
+    let Some(limit) = (if speed { bar } else { trial::active().or(bar) }) else { return unrolled_size };
     if unrolled_size < u64::from(limit) {
         return unrolled_size;
     }
@@ -1245,7 +1274,11 @@ fn note_for_trial(
     // one, else the -O1 trial's; at -O2 and -O3 the pin's own threshold,
     // for a loop with a subloop (UNROLL-NEST-TRIAL).
     let threshold = if nest_trial(run) {
-        (!lp.is_innermost()).then(|| pin_full_unroll_threshold(run.options.opt_level))
+        if lp.is_innermost() {
+            speed_innermost(run, lp).then(|| run.tti.unroll_trial_at_size()).flatten()
+        } else {
+            Some(pin_full_unroll_threshold(run.options.opt_level))
+        }
     } else if run.options.opt_size {
         run.tti.unroll_trial_at_size().or_else(|| run.tti.unroll_trial_threshold())
     } else {
@@ -1430,15 +1463,15 @@ fn peels_folded_entry(
     loop_size: u32,
     up: &UnrollingPreferences,
 ) -> bool {
-    // The late pass only: the pin counts peels in loop metadata
-    // (`llvm.loop.peeled.count`), which this port keeps for one run (PL1),
-    // and the entry constants of the residual loop fold again (x_primes: d
-    // = 2, then d = 3).
+    // Where bytes are priced at speed (the rate below is 0 at -O1 unless the
+    // target asks, `speed_rate_at_o1`). The late pass only: the pin counts
+    // peels in loop metadata (`llvm.loop.peeled.count`), which this port
+    // keeps for one run (PL1), and the entry constants of the residual loop
+    // fold again (x_primes: d = 2, then d = 3).
     if !run.tti.peels_folded_entry()
         || !run.options.target_unrolling
         || run.options.opt_size
         || run.options.min_size
-        || run.options.opt_level < 2
         || loop_size.saturating_mul(2) > up.threshold
     {
         return false;
@@ -1915,6 +1948,49 @@ fn try_to_unroll_loop(
         &mut se,
         &mut pp,
     );
+    if run.tti.unroll_speed_trial()
+        && run.options.opt_level >= 2
+        && !run.options.opt_size
+        && trial::speed_unroll().is_none()
+        && (count > 0 || trip_count > 0)
+    {
+        // DEVIATE UNROLL-SPEED-TRIAL: the same question asked under each variant; a driver compiles a variant only
+        // where an answer differs.
+        let variant = if count > 0 {
+            Some(trial::SpeedUnroll::NoGrow)
+        } else if run.options.opt_level == 2 && up.threshold < trial::WIDE_THRESHOLD {
+            Some(trial::SpeedUnroll::Wide(trial::WIDE_THRESHOLD))
+        } else {
+            None
+        };
+        if let Some(variant) = variant {
+            let mut asked = up.clone();
+            if let trial::SpeedUnroll::Wide(wide) = variant {
+                asked.threshold = wide;
+            }
+            let mut peeling = PeelingPreferences::default();
+            let again = trial::with_speed_unroll(Some(variant), || {
+                compute_unroll_count(
+                    run,
+                    analyzed,
+                    lp,
+                    &eph,
+                    &pinfo,
+                    trip_count,
+                    max_trip_count,
+                    max_or_zero,
+                    trip_multiple,
+                    &uce,
+                    &mut asked,
+                    &mut se,
+                    &mut peeling,
+                )
+            });
+            if again != count {
+                trial::note_speed_unroll(count > 0);
+            }
+        }
+    }
     // Nothing has changed the function yet.
     run.scev = se;
     if count == 0 {
@@ -2834,6 +2910,8 @@ pub struct LoopFullUnroll {
     pub target_unrolling: bool,
     /// `Options::inliner_follows`.
     pub inliner_follows: bool,
+    /// `Options::speed_rate`.
+    pub speed_rate: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -2890,6 +2968,7 @@ impl FunctionPass for LoopFullUnroll {
                 prepare_for_lto: false,
                 target_unrolling: self.target_unrolling,
                 inliner_follows: self.inliner_follows,
+                speed_rate: self.speed_rate,
             },
         };
         let changed = unroll_loops(&mut run);

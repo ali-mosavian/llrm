@@ -1,4 +1,4 @@
-; 64-bit remainder for the 6502: u64 __umoddi3(u64 a, u64 b) and __moddi3, llrm-6502 rc2-first layout (as di64.s).
+; 64-bit remainder for the 6502: u64 __umoddi3(u64 a, u64 b) and __moddi3, llrm-6502 A:X-first layout (as di64.s).
 ; Its own member, so only remainder users pay for it: the step loop does not roll a quotient. Division by zero leaves the dividend.
 
 .setcpu "6502"

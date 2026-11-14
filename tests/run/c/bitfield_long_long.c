@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 -march=i486 | -O0 -m32 | -O2 -march=i486 -m32 -mabi=sysv
+// bar: none (SDCC error 31: bit-field wider than 16 bits)
 /* Bit fields of a long long unit read and write the bytes they cover: a packed struct of 5 bytes had its fields read and written
    as 8, past the struct, and a copy of it on the stack overwrote the frame (gcc.c-torture/930126-1 on -m16 at -O0). */
 extern void report(long value);

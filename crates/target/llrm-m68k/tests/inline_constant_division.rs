@@ -18,9 +18,9 @@ fn count_calls(asm: &str) -> usize {
 }
 
 #[test]
-fn a_speed_caller_keeps_a_call_to_a_callee_of_constant_remainders() {
+fn a_speed_caller_inlines_a_callee_of_constant_remainders() {
     let asm = assembly(THREE_REMAINDERS, cpu_of("68020").unwrap(), Level::O2).unwrap_or_else(|why| panic!("{why}"));
-    assert_eq!(count_calls(&asm), 1, "{asm}");
+    assert_eq!(count_calls(&asm), 0, "{asm}");
 }
 
 #[test]

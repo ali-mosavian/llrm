@@ -3229,6 +3229,15 @@ pub fn take_phi_problem() -> Option<String> {
     PHI_PROBLEM.with(|problem| problem.borrow_mut().take())
 }
 
+/// `OptNoneInstrumentation::shouldRun`: `pass` does not run over `function`
+/// when it has `optnone`, unless the pass is required.
+pub fn skipped_for_optnone(
+    pass: &dyn FunctionPass,
+    function: &Function,
+) -> bool {
+    function.has_opt_none() && !pass.is_required()
+}
+
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
     /// The names of the passes that run under `name` (a slot that stands for
@@ -3261,6 +3270,13 @@ pub trait FunctionPass {
     /// global's initializer names, once before the pass runs over the module
     /// and again for each of them the pass changes (`Declared::size_of`).
     fn wants_sizes(&self) -> bool {
+        false
+    }
+
+    /// `isRequired`: the pass runs over a function with `optnone`. The
+    /// manager skips every other function pass there
+    /// (`OptNoneInstrumentation::shouldRun`).
+    fn is_required(&self) -> bool {
         false
     }
 
@@ -3654,6 +3670,7 @@ impl PassManager {
                 let GlobalKind::Function(function) = &mut global.kind else { continue };
                 if function.is_declaration()
                     || function.is_deleted()
+                    || skipped_for_optnone(&**pass, function)
                     || !bisected(name, global.name.as_deref().unwrap_or_default())
                 {
                     continue;

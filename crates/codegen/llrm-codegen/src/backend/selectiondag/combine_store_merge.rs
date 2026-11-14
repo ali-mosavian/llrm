@@ -4,10 +4,11 @@
 //! integer type that covers a run of them.
 //!
 //! DEVIATE SD217: only the stores of constants and of loads (no vector element
-//! extracts as the source, no vector store, a truncating store for a type that
-//! promotes only where the target opts in (`merge_stores_via_trunc_store`), no rotate of two loads in reverse order), the base of an address
-//! is a frame index, a global or one node plus constant offsets
-//! (`BaseIndexOffset::match` without the index register), and
+//! extracts as the source, no vector constant, a truncating store for a type
+//! that promotes only where the target opts in
+//! (`merge_stores_via_trunc_store`), no rotate of two loads in reverse order),
+//! the base of an address is a frame index, a global or one node plus constant
+//! offsets (`BaseIndexOffset::match` without the index register), and
 //! `allowsMemoryAccess` is true for every scalar the target holds (x86 assumes
 //! up to 8 bytes fast), and the argument stores of a constant to a call
 //! sequence (chained off `CALLSEQ_START`) are not merged: they are pushes, and
@@ -29,7 +30,7 @@ use super::dag::{MemBase, MemInfo, MemLocation, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
 use super::lowering::TypeAction;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// The most nodes the candidate search looks at (`MaxSearchNodes`).
 const MAX_SEARCH_NODES: usize = 1024;
@@ -263,7 +264,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             .filter(|&bits| tli.types.is_type_legal(EVT::integer(bits)))
             .max()
             .unwrap_or(0);
-        if info.volatile || !mem.is_integer() || mem.size_in_bits() % 8 != 0 || mem.size_in_bits() * 2 > widest {
+        let widest_vector = if self.hooks.merge_stores_to_vectors() {
+            tli.types.legal_vectors().iter().map(|vt| EVT::Simple(*vt).size_in_bits()).max().unwrap_or(0)
+        } else {
+            0
+        };
+        if info.volatile
+            || !mem.is_integer()
+            || mem.size_in_bits() % 8 != 0
+            || mem.size_in_bits() * 2 > widest.max(widest_vector)
+        {
             return false;
         }
         let Some(source) = self.store_source(self.dag.operand(st, 1), info) else { return false };
@@ -548,6 +558,29 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
     }
 
+    /// `EVT::getVectorVT(Context, MemVT, Elts)`: `lanes` cells of `cell`.
+    fn vector_of(
+        &self,
+        cell: EVT,
+        lanes: u32,
+    ) -> Option<EVT> {
+        let EVT::Simple(element) = cell else { return None };
+        MVT::vector(element, lanes).map(EVT::Simple)
+    }
+
+    /// `TLI.isTypeLegal(Ty) && allowsMemoryAccess(Ty)` for the vector of
+    /// `lanes` cells of `cell`: a legal vector type is held in a register
+    /// and moved whole, aligned or not (x86 `movups`).
+    fn legal_vector_of(
+        &self,
+        cell: EVT,
+        lanes: u32,
+    ) -> bool {
+        let tli = self.tli.expect("a merge has a target");
+        self.hooks.merge_stores_to_vectors()
+            && self.vector_of(cell, lanes).is_some_and(|vt| tli.types.is_type_legal(vt))
+    }
+
     /// `tryStoreMergeOfLoads`: the stores of loads from consecutive addresses
     /// off one chain, as many as one legal integer type holds, become a wide
     /// load and a wide store.
@@ -570,7 +603,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let first_store_align = self.store_align(stores[0].store);
             let load_chain = self.dag.operand(first_load, 0);
             let start = self.match_address(self.dag.operand(first_load, 1)).1;
-            let (mut last_consecutive, mut last_legal) = (1, 1);
+            let (mut last_consecutive, mut last_legal, mut last_vector) = (1, 1, 1);
             for i in 1..consecutive {
                 let load = self.stored_load(&stores[i]);
                 // "All loads must share the same chain."
@@ -581,9 +614,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     break;
                 }
                 last_consecutive = i + 1;
+                // "Find a legal type for the vector store."
+                if self.legal_vector_of(mem, i as u32 + 1) {
+                    last_vector = i + 1;
+                }
                 let bits = (i as u32 + 1) * element_bits;
                 if bits > widest {
-                    break;
+                    continue;
                 }
                 if tli.types.is_type_legal(EVT::integer(bits)) {
                     truncating = false;
@@ -597,7 +634,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     last_legal = i + 1;
                 }
             }
-            let count = last_consecutive.min(last_legal);
+            // "Only use vector types if the vector type is larger than the
+            // integer type. If they are the same, use integers."
+            let vector = last_vector > last_legal;
+            let count = last_consecutive.min(last_legal.max(last_vector));
             if count < 2 {
                 // "Drop as many candidates as we can here."
                 let mut skip = 1;
@@ -616,7 +656,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 consecutive -= count;
                 continue;
             }
-            changed |= self.merge_store_loads(&stores[..count], truncating);
+            changed |= self.merge_store_loads(&stores[..count], truncating, vector);
             stores.drain(..count);
             consecutive -= count;
         }
@@ -629,6 +669,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         stores: &[Link],
         truncating: bool,
+        vector: bool,
     ) -> bool {
         let first_load = self.stored_load(&stores[0]);
         let NodeData::Mem(load_info) = self.dag.node(first_load).data else { return false };
@@ -643,7 +684,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     NodeData::Mem(info) if info.base == load_info.base && info.base != MemBase::Unknown
                 )
             });
-        let joint = EVT::integer(total);
+        let joint = if vector {
+            self.vector_of(load_info.mem_vt, stores.len() as u32).expect("a vector run is of a legal type")
+        } else {
+            EVT::integer(total)
+        };
         let base = if same_object { self.joined_base(load_info.base, total) } else { MemBase::Unknown };
         let wide = MemInfo { mem_vt: joint, ext: None, base, ..load_info };
         let (chain_in, ptr) = (self.dag.operand(first_load, 0), self.dag.operand(first_load, 1));

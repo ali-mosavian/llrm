@@ -1572,10 +1572,47 @@ fn execute(
     for inst in erased.iter().rev() {
         function.erase(*inst).expect("an instruction nothing uses");
     }
+    keep_scalar_step_for_addresses(function, widening);
     // The induction steps by VF x IC (down, if it counts down).
     let lanes = i128::from(plan.vf) * i128::from(plan.ic);
     let step = Operand::Constant(context.int(widening.index_ty, if widening.reverse { -lanes } else { lanes }));
     function.set_operand(widening.step, widening.step_operand, step);
+}
+
+/// The widened accesses keep the scalar loop's addresses, which may be built on
+/// the induction's update (`dst[i - 1]` of a loop that counts down: the update
+/// `i - 1` is the index). The update is about to step by VF x IC, so an address
+/// that reads it would sit VF x IC - 1 elements off the lane-0 address the
+/// parts count from. Those users read a copy that keeps the scalar step
+/// (`InnerLoopVectorizer` makes the widened pointer from the scalar index, not
+/// from the stepped induction); the phi and the exit test read the stepped one.
+fn keep_scalar_step_for_addresses(
+    function: &mut Function,
+    widening: &Widening,
+) {
+    let step = function.instruction(widening.step);
+    let Some(updated) = step.result else { return };
+    let (opcode, operands, flags) = (step.opcode.clone(), step.operands.clone(), step.flags);
+    let ty = function.value(updated).ty;
+    let others: Vec<(InstId, u32)> = function
+        .users(updated)
+        .iter()
+        .filter(|one| {
+            one.user != widening.shape.primary
+                && one.user != widening.shape.compare
+                && function.parent(one.user) == Some(widening.shape.header)
+        })
+        .map(|one| (one.user, one.index))
+        .collect();
+    if others.is_empty() {
+        return;
+    }
+    let scalar = function.create_instruction(opcode, ty, operands, flags, Some("scalar.step"));
+    function.insert(scalar, Position::Before(widening.step)).expect("the update's block");
+    let scalar = Operand::Value(function.instruction(scalar).result.expect("an update"));
+    for (user, index) in others {
+        function.set_operand(user, index as usize, scalar);
+    }
 }
 
 impl FunctionPass for LoopVectorize {
@@ -1679,6 +1716,14 @@ impl FunctionPass for LoopVectorize {
                             has_reductions: !legality.reductions.is_empty(),
                         };
                         match plan(&*tti, &facts) {
+                            // DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR): the pin's
+                            // x86 expands `llvm.vector.reduce.*` to shuffles
+                            // (`ExpandReductions`), which this backend does
+                            // not select yet.
+                            Ok(_) if !widening.reductions.is_empty() && !tti.lowers_vector_reductions() => {
+                                why(unit, &outer, header, "plan: The target does not lower a vector reduction");
+                                None
+                            }
                             Ok(chosen)
                                 if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits(), widen_compares) =>
                             {

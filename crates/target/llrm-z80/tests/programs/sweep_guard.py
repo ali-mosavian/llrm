@@ -40,6 +40,20 @@ def incomparable(source):
     return None
 
 
+def no_bar(source):
+    """`WHY` for a program SDCC cannot bar (it miscompiles or rejects it), from its `// bar: none (SDCC WHY)` line, or None. The sweep
+    does not run SDCC for it and lists it apart from the programs whose bar is missing for an unknown reason."""
+    for line in source.splitlines():
+        if line.startswith("// bar: none"):
+            return line.removeprefix("// bar: none").strip().removeprefix("(").rstrip(")")
+    return None
+
+
+def unmeasured(results, reasons):
+    """The programs of `results` with no bar and no `bar: none` marker: a bar missing for a reason nobody wrote down."""
+    return [name for name, rows in results if not has_bar(rows) and not any(why.startswith("NOBAR") for why in reasons.get(name, {}).values())]
+
+
 def dropped(expected, results, required=lambda tag: tag == "ours", excused=()):
     """`{program: reason}` for every program of `expected` without a row whose column `required` accepts (`ours`).
 

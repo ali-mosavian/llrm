@@ -1,4 +1,5 @@
 // flags: -O1 -march=i486 | -O1 -march=i486 -m32
+// bar: none (SDCC wrong value)
 extern void report(long value);
 
 /* Six values carried round the recursion, more than any target keeps across a call. */
