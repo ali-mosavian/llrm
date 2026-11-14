@@ -560,6 +560,8 @@ fn a_memory_check_keeps_the_remainder_of_a_divisible_constant_trip() {
 const INDUCTION_TRUNC: &str = include_str!("../tests/lv/induction_trunc.ll");
 const INDUCTION_VALUE: &str = include_str!("../tests/lv/induction_value.ll");
 const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");
+const INDUCTION_VALUE_REVERSE: &str = include_str!("../tests/lv/induction_value_reverse.ll");
+const INDUCTION_VALUE_REVERSE_STORE: &str = include_str!("../tests/lv/induction_value_reverse_store.ll");
 
 /// `a[i] = ((i * 7) & 255) | 0x700` over `i16` (scroll's init loop) stayed
 /// scalar ("A value the loop computes that is not widened": the `trunc` of the
@@ -568,10 +570,7 @@ const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");
 #[test]
 fn a_truncated_induction_is_widened_to_a_vec_ind() {
     let text = run(INDUCTION_TRUNC);
-    assert!(
-        text.contains("<i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>"),
-        "{text}"
-    );
+    assert!(text.contains("<i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>"), "{text}");
     assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
     assert_eq!(count(&text, "step.add = add <8 x i16>"), 1, "{text}");
     assert_eq!(count(&text, "vec.ind.next = add <8 x i16>"), 1, "{text}");
@@ -599,6 +598,29 @@ fn an_induction_that_starts_at_a_run_time_value_is_widened() {
     assert!(text.contains("induction = add <8 x i16>"), "{text}");
     assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
     assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+}
+
+/// A count-down loop that reads its induction as a value (recsum's
+/// `(n * 3) % 11`) stayed scalar ("The induction is read as a value in a loop
+/// that counts down"); the pin takes VF 4, IC 4 on a `<4 x i32>` `vec.ind`
+/// that starts at `<1999, 1998, 1997, 1996>` and steps by -4 a part.
+#[test]
+fn a_count_down_induction_read_as_a_value_is_widened() {
+    let text = run(INDUCTION_VALUE_REVERSE);
+    assert!(text.contains("<i32 1999, i32 1998, i32 1997, i32 1996>"), "{text}");
+    assert_eq!(count(&text, "step.add = add <4 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "vec.ind.next = add <4 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "mul <4 x i32>"), 4, "{text}");
+}
+
+/// `a[i] = i` counting down: a `vec.ind` in iteration order stored at the
+/// lowest address first would write each lane to the wrong element (the pin
+/// reverses it); the loop stays scalar until LV-R1.
+#[test]
+fn a_count_down_induction_stored_through_a_reverse_access_stays_scalar() {
+    let text = run(INDUCTION_VALUE_REVERSE_STORE);
+    assert_eq!(count(&text, "vec.ind"), 0, "{text}");
+    assert_eq!(count(&text, "store <"), 0, "{text}");
 }
 
 const REVERSE_COPY: &str = include_str!("../tests/lv/reverse_copy.ll");
