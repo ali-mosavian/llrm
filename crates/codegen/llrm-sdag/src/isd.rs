@@ -480,6 +480,32 @@ impl ISD {
         name.to_string()
     }
 
+    /// `TargetLowering::isBinOp` for the generic opcodes: the commutative
+    /// ones and the non-commutative arithmetic, shift and rotate nodes.
+    pub fn is_binop(self) -> bool {
+        use ISD::*;
+        self.is_commutative_binop()
+            || matches!(
+                self,
+                Sub | Shl
+                    | Srl
+                    | Sra
+                    | Rotl
+                    | Rotr
+                    | SDiv
+                    | UDiv
+                    | SRem
+                    | URem
+                    | SSubSat
+                    | USubSat
+                    | FSub
+                    | FDiv
+                    | FRem
+                    | PseudoFMin
+                    | PseudoFMax
+            )
+    }
+
     /// `TargetLowering::isCommutativeBinOp` for the generic opcodes.
     pub fn is_commutative_binop(self) -> bool {
         use ISD::*;
