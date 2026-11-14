@@ -587,6 +587,20 @@ fn vector_float_compare_select_cast_and_scalarization_costs_are_the_pins() {
             (Some(0), Some(0), Some(0)),
             "{cpu}"
         );
+        // Conversions of one lane width past the table's rows are their
+        // halves' (`opt -passes=print<cost-model>`: 2, 4, 2, 2, 2); they had no
+        // price, so a loop with one (jpeg_single's clamp, VF 8) was not planned.
+        assert_eq!(
+            (
+                cast(FPToSI, i(32, 8), f(8)),
+                cast(FPToSI, i(32, 16), f(16)),
+                cast(SIToFP, f(8), i(32, 8)),
+                cast(FPToUI, i(32, 8), f(8)),
+                cast(FPToSI, i(64, 4), d(4))
+            ),
+            (Some(2), Some(4), Some(2), Some(2), Some(2)),
+            "{cpu}"
+        );
         // `sitofp <N x i64> to <N x float>` scalarizes (double rounding): a
         // conversion per lane, the lanes taken out and put in (`opt
         // -passes=print<cost-model>`: 8, 18, 36, and the same for `uitofp`).
