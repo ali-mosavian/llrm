@@ -508,7 +508,10 @@ fn test_an_odd_width_promoted_is_selected() {
     assert!(got.is_ok(), "{:?}", got.err());
 }
 
-/// A shift counts from cl: the count as a word printed `shl ax, cx`.
+/// A shift counts from cl: the count as a word printed `shl ax, cx`. The sum
+/// of the quotient and the remainder (a copy out of dx, #9857) is an `add`
+/// then a copy, as the pin's `addl %edx, %esi; shll %cl, %esi; movl %esi, %eax`,
+/// not a `lea` the walk no longer converts it to.
 #[test]
 fn test_division_and_variable_shifts() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
@@ -527,17 +530,18 @@ fn test_division_and_variable_shifts() {
             "mov bp, sp",
             "push si",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
+            "mov si, word ptr [bp+6]",
             "mov cx, word ptr [bp+8]",
-            "mov ax, bx",
+            "mov ax, si",
             "cwd",
             "idiv cx",
-            "mov si, ax",
-            "mov ax, bx",
+            "mov bx, ax",
+            "mov ax, si",
             "xor dx, dx",
             "div cx",
-            "lea ax, [edx+esi]",
-            "shl ax, cl",
+            "add bx, dx",
+            "shl bx, cl",
+            "mov ax, bx",
             "pop si",
             "pop bp",
             "retf",
@@ -3814,14 +3818,14 @@ b1:
             "sar ecx, 31",
             "imul esi, eax",
             "sub ebx, esi",
-            "xor esi, esi",
-            "sub esi, ebx",
-            "or esi, ebx",
-            "sar esi, 31",
-            "and esi, ecx",
-            "add esi, eax",
-            "shld edx, esi, 16",
-            "mov ax, si",
+            "xor edx, edx",
+            "sub edx, ebx",
+            "or edx, ebx",
+            "sar edx, 31",
+            "and ecx, edx",
+            "add ecx, eax",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop si",
             "pop bp",
             "retf",
