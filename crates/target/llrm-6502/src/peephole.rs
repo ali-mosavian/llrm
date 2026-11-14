@@ -280,6 +280,7 @@ fn run_suffix(
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
     drop_empty_save(asm);
+    crate::peephole_cells::drop_unused_saves(asm);
     // a transfer that fed an `or` of zero is gone: the load is next to its
     // store
     drop_reloads(asm);

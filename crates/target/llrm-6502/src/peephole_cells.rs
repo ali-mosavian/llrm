@@ -213,6 +213,74 @@ fn dead_from_pushed(
     false
 }
 
+/// `lda rc8; pha` on entry and `pla; sta rc8` before each return of a
+/// callee-saved cell nothing else in the function names: the uses were dead
+/// stores [`drop_dead_stores`] removed after the allocator chose the cell, and
+/// the save of the caller's value guards nothing (6 B in `main` of
+/// `memmove_overlap`).
+///
+/// The pin saves the callee-saved registers the function modifies after
+/// allocation (`PrologEpilogInserter`, `calculateSavedRegisters`).
+pub fn drop_unused_saves(asm: &mut Asm) {
+    let shared = asm
+        .lines
+        .iter()
+        .any(
+            |line| matches!(
+                line,
+                Line::Inst(Inst { op: Op::Jsr, operand: Operand::Direct(n), .. }) if n.contains("csave") || n.contains("crest")
+            ),
+        );
+    if shared {
+        return;
+    }
+    for n in 8..=15u8 {
+        let cell = format!("rc{n}");
+        let (mut saves, mut restores, mut other) = (Vec::new(), Vec::new(), false);
+        let mut at = 0;
+        while at < asm.lines.len() {
+            match &asm.lines[at] {
+                Line::Raw(text) => other |= text.contains(&cell),
+                Line::Label(_) => {}
+                Line::Inst(inst) => {
+                    let next = asm.lines.get(at + 1).and_then(Line::inst);
+                    if inst.op == Op::Lda
+                        && inst.operand == Operand::Direct(cell.clone())
+                        && next.is_some_and(|next| next.op == Op::Pha)
+                    {
+                        saves.push(at);
+                        at += 1;
+                    } else if inst.op == Op::Pla
+                        && next.is_some_and(|next| next.op == Op::Sta && next.operand == Operand::Direct(cell.clone()))
+                    {
+                        restores.push(at);
+                        at += 1;
+                    } else {
+                        other |= match &inst.operand {
+                            Operand::Direct(c) => *c == cell,
+                            Operand::Indexed(c, _) => cell_number(c).is_some(),
+                            Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) => {
+                                cell_number(c).is_some_and(|m| m == n || m + 1 == n)
+                            }
+                            _ => false,
+                        };
+                    }
+                }
+            }
+            at += 1;
+        }
+        if other || saves.is_empty() || restores.is_empty() {
+            continue;
+        }
+        let mut gone: Vec<usize> = saves.iter().flat_map(|at| [*at, *at + 1]).collect();
+        gone.extend(restores.iter().flat_map(|at| [*at, *at + 1]));
+        gone.sort_unstable();
+        for at in gone.into_iter().rev() {
+            asm.lines.remove(at);
+        }
+    }
+}
+
 pub fn drop_dead_stores(asm: &mut Asm) {
     let mut at = 0;
     while at < asm.lines.len() {
