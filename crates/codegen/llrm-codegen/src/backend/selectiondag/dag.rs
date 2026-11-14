@@ -1562,28 +1562,6 @@ impl SelectionDAG {
             })
     }
 
-    /// `isConstOrConstSplat` of an integer: the constant, or the one value of
-    /// every defined lane of a `BUILD_VECTOR`.
-    pub fn const_or_splat(
-        &self,
-        value: SDValue,
-    ) -> Option<u128> {
-        if self.opcode(value) != ISD::BuildVector {
-            return self.constant(value);
-        }
-        let mut splat = None;
-        for &lane in &self.node(value).ops {
-            if self.is_undef(lane) {
-                continue;
-            }
-            let bits = self.constant(lane)?;
-            if *splat.get_or_insert(bits) != bits {
-                return None;
-            }
-        }
-        splat
-    }
-
     pub fn get_all_ones_constant(
         &mut self,
         vt: EVT,
