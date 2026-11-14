@@ -1270,9 +1270,6 @@ impl Emitter<'_> {
         let Some(desc) = u16::try_from(code).ok().and_then(llrm_dagisel::generated::aarch64::instrinfo::desc) else {
             return;
         };
-        if desc.is_pseudo() {
-            return;
-        }
         let values: Vec<SDValue> = node
             .ops
             .iter()

@@ -376,6 +376,7 @@ pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
 mod noaliasscopes;
+pub mod pagecount;
 pub mod pageindex;
 pub mod rangesplit;
 #[cfg(test)]
