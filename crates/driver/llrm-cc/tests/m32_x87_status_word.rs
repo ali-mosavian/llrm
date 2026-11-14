@@ -76,6 +76,37 @@ fn test_float_equality_is_one_masked_compare_of_the_word() {
     assert_eq!(count(&equal, "fcompp"), 0, "load not folded into the compare:\n{}", equal.join("\n"));
 }
 
+/// `acc += c ? K : 0` is a branch around `add acc, K` (SELB; gcc), not a
+/// constant load, a branch over `xor r, r` and an `add` of the register: that
+/// held six registers and two spills across the sum (sfm16_float_cmp 29220 ->
+/// 22268 clk, gcc 22943).
+#[test]
+fn test_a_conditional_constant_is_added_inside_its_branch() {
+    for level in ["-O2", "-O3"] {
+        let asm = compiled(level);
+        let six = function(&asm, "six");
+        let loads: Vec<_> = six
+            .iter()
+            .filter(|line| {
+                ["mov eax, ", "mov ebx, ", "mov ecx, ", "mov edx, ", "mov esi, ", "mov edi, ", "mov ebp, "]
+                    .iter()
+                    .any(|prefix| line.strip_prefix(prefix).is_some_and(|rest| rest.parse::<u32>().is_ok()))
+            })
+            .collect();
+        assert!(loads.is_empty(), "{level}: constant loads {loads:?}:\n{}", six.join("\n"));
+        assert!(
+            six.iter().all(|line| !(line.starts_with("mov ") && line.contains("ptr [esp") && line.contains("], "))),
+            "{level}: a spill:\n{}",
+            six.join("\n")
+        );
+        assert!(
+            six.iter().any(|line| line.starts_with("add ") && line.ends_with(", 32")),
+            "{level}: no add 32:\n{}",
+            six.join("\n")
+        );
+    }
+}
+
 #[test]
 fn test_size_keeps_sahf() {
     let asm = compiled("-Os");

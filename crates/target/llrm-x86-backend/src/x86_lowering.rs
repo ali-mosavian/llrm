@@ -572,7 +572,7 @@ impl CombineHooks for X86Lowering<'_> {
                 combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile)
             }
             ISD::SetCC => combine_integer_setcc(dag, node, level),
-            ISD::Add => combine_add(dag, node),
+            ISD::Add => combine_add(dag, node, self.branch_constants()),
             ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free)
                 .or_else(|| combine_or_xor_with_setcc(dag, node))
                 .or_else(|| combine_or(dag, node)),
@@ -1964,6 +1964,7 @@ fn combine_add_of_carry(
 fn push_add_into_cmov_of_consts(
     dag: &mut SelectionDAG,
     node: SDValue,
+    identity_only: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     let bits = vt.size_in_bits();
@@ -1979,7 +1980,7 @@ fn push_add_into_cmov_of_consts(
             let signed = ((c << shift) as i128) >> shift;
             i32::try_from(signed).is_ok()
         };
-        a == 0 || b == 0 || (fits(a) && fits(b))
+        a == 0 || b == 0 || (!identity_only && fits(a) && fits(b))
     };
     let (mut cmov, mut other) = (dag.operand(node, 0), dag.operand(node, 1));
     if !suitable(dag, cmov) {
@@ -2027,6 +2028,7 @@ fn push_add_into_cmov_of_consts(
 fn combine_add(
     dag: &mut SelectionDAG,
     node: SDValue,
+    branch_constants: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 && vt != EVT::I64 {
@@ -2035,8 +2037,11 @@ fn combine_add(
     // The pin's `visitADD` has already made an or-disjoint of the adds that
     // share no bits: without that, the push is not the pin's and
     // word_compare_branches grows +14 B.
-    if dag.config().add_to_or_disjoint
-        && let Some(pushed) = push_add_into_cmov_of_consts(dag, node)
+    // Under SELB the select is a branch, and `x + (c ? K : 0)` is `c ? x + K :
+    // x`: the add runs only in the taken arm (gcc's `test ah, mask; je; add
+    // acc, K`).
+    if (dag.config().add_to_or_disjoint || branch_constants)
+        && let Some(pushed) = push_add_into_cmov_of_consts(dag, node, !dag.config().add_to_or_disjoint)
     {
         return Some(pushed);
     }
