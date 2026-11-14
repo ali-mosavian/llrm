@@ -165,8 +165,20 @@ fn links_callees(found: &mut std::collections::BTreeSet<String>) {
     let mut pending: Vec<String> = found.iter().cloned().collect();
     while let Some(routine) = pending.pop() {
         for line in routine_code(&routine).lines() {
-            let callee = line.split(';').next().unwrap_or("").trim().strip_prefix("jsr ").map(str::trim);
-            if let Some(callee) = callee.filter(|one| crate::RUNTIME.contains(&format!("\n{one}:"))) {
+            let code = line.split(';').next().unwrap_or("").trim();
+            // a routine that branches into another one (`udivmod16`: `bne
+            // udivmod16c`) links it too
+            let callee = code
+                .strip_prefix("jsr ")
+                .or_else(|| {
+                    ["bne ", "beq ", "bcc ", "bcs ", "bmi ", "bpl ", "bvc ", "bvs "]
+                        .iter()
+                        .find_map(|op| code.strip_prefix(op))
+                })
+                .map(str::trim);
+            if let Some(callee) =
+                callee.filter(|one| !one.starts_with('@') && crate::RUNTIME.contains(&format!("\n{one}:")))
+            {
                 if found.insert(callee.to_owned()) {
                     pending.push(callee.to_owned());
                 }
@@ -251,9 +263,10 @@ pub fn widen_when_it_pays(
     Ok(())
 }
 
-/// Whether a module, of `clocks` and `bytes` by the static estimate, takes a speed routine at size that
-/// saves `saved` clocks for `growth` bytes: when the share of its clocks it saves is at least
-/// `[share] percent_per_percent` times the share of its bytes it adds.
+/// Whether a module, of `clocks` and `bytes` by the static estimate, takes a
+/// speed routine at size that saves `saved` clocks for `growth` bytes: when the
+/// share of its clocks it saves is at least `[share] percent_per_percent` times
+/// the share of its bytes it adds.
 pub fn pays_by_share(
     (saved, growth): (u64, i64),
     clocks: u64,
@@ -263,7 +276,8 @@ pub fn pays_by_share(
     growth <= 0 || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
 }
 
-/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones those call.
+/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones
+/// those call.
 pub fn image_of_texts(
     names: &[String],
     texts: &[String],

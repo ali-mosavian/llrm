@@ -488,6 +488,11 @@ fn ours_row(
     let priced = llrm_6502::timing::estimate(cpu, &format!("{function}{runtime}"))?;
     assert_eq!(i64::from(priced.bytes), row.bytes, "{name} {tag}: timing.rs against the linked size");
     let alone = llrm_6502::timing::estimate(cpu, &function)?;
+    // BENCH_ESTIMATE: the static clocks the driver's pricing reads, beside the
+    // simulator's for the bench's input (the whole call, runtime included).
+    if std::env::var_os("BENCH_ESTIMATE").is_some() {
+        eprintln!("estimate {name} {tag}: static {} cy, measured {} cy", priced.cycles, row.cycles);
+    }
     Ok(Row { body: i64::from(alone.bytes), ..row })
 }
 
@@ -631,20 +636,26 @@ fn table4() {
         Err(why) => format!("n/a ({why})"),
     };
     let only = std::env::var("BENCH_ONLY").ok();
+    let ours_only = std::env::var_os("BENCH_OURS_ONLY").is_some();
     // (kernel, [bytes, cycles] of cc65, hand, ours)
     let mut measured: Vec<(&str, [Option<(i64, i64)>; 3])> = Vec::new();
     let kernels = hand_kernels();
     for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
+        // BENCH_OURS_ONLY: skip the other compilers' columns (ours is the
+        // one under study); the table then shows `-` for them.
+        let other = |row: &dyn Fn() -> Result<Row, String>| {
+            if ours_only { Err("no hand: skipped".to_owned()) } else { row() }
+        };
         let rows = [
-            cc65_row(kernel, &[cc65_optimize()], "c1"),
-            hand_row(kernel),
+            other(&|| cc65_row(kernel, &[cc65_optimize()], "c1")),
+            other(&|| hand_row(kernel)),
             ours_row(kernel, ours_level("-O2"), "o2"),
-            ours_row(kernel, ours_level("-O2"), "o2m"),
-            sdcc::row(kernel, false),
-            sdcc::row(kernel, true),
-            llvmmos::row(kernel, "-O2", false),
-            llvmmos::row(kernel, "-Os", false),
-            llvmmos::row(kernel, "-O2", true),
+            other(&|| ours_row(kernel, ours_level("-O2"), "o2m")),
+            other(&|| sdcc::row(kernel, false)),
+            other(&|| sdcc::row(kernel, true)),
+            other(&|| llvmmos::row(kernel, "-O2", false)),
+            other(&|| llvmmos::row(kernel, "-Os", false)),
+            other(&|| llvmmos::row(kernel, "-O2", true)),
         ];
         for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
             eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());
