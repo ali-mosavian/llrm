@@ -4,10 +4,11 @@
 //! integer type that covers a run of them.
 //!
 //! DEVIATE SD217: only the stores of constants and of loads (no vector element
-//! extracts as the source, no vector constant, a truncating store for a type that
-//! promotes only where the target opts in (`merge_stores_via_trunc_store`), no rotate of two loads in reverse order), the base of an address
-//! is a frame index, a global or one node plus constant offsets
-//! (`BaseIndexOffset::match` without the index register), and
+//! extracts as the source, no vector constant, a truncating store for a type
+//! that promotes only where the target opts in
+//! (`merge_stores_via_trunc_store`), no rotate of two loads in reverse order),
+//! the base of an address is a frame index, a global or one node plus constant
+//! offsets (`BaseIndexOffset::match` without the index register), and
 //! `allowsMemoryAccess` is true for every scalar the target holds (x86 assumes
 //! up to 8 bytes fast), and the argument stores of a constant to a call
 //! sequence (chained off `CALLSEQ_START`) are not merged: they are pushes, and
