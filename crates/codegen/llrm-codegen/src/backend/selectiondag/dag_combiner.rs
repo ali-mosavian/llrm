@@ -3514,13 +3514,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     /// `!canCreateUndefOrPoison(Op, UndefOrPoison, ConsiderFlags=false)`, for
     /// the integer nodes `visitFREEZE` pushes a freeze through: the bitwise,
-    /// add, subtract and multiply nodes, the extensions and the truncation,
-    /// an integer `setcc`, and a shift by a constant below the width. `srl`
-    /// is left out as `visitFREEZE` does (an `assert ext` under it blocks its
-    /// folds).
+    /// add, subtract and multiply nodes, the extensions, the truncation, an
+    /// integer `setcc`, and an arithmetic right shift by a constant below the
+    /// width. `srl` is left out as `visitFREEZE` does (an `assert ext` under
+    /// it blocks its folds).
     ///
-    /// DEVIATE SD213: any other node is taken to create poison. Exit: the
-    /// rest of the pin's list. Owner wasm-3, review 2026-12-10.
+    /// DEVIATE SD213: a left shift is not pushed through, and any node not
+    /// listed is taken to create poison. With `shl` pushed, a frozen
+    /// `x << 8` over `sub nuw a, select(c, 0, b)` left the freeze on the
+    /// `sub`, which arm64's `performConditionalSubCombine` then no longer
+    /// turned into `subs; csel` (sfm16_float* +4 B). Exit: that combine
+    /// reads through the freeze, then `shl`. Owner wasm-3, review 2026-12-10.
     fn cannot_create_undef_or_poison_without_flags(
         &self,
         op: SDValue,
@@ -3538,7 +3542,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             | ISD::SignExtend
             | ISD::Truncate
             | ISD::SignExtendInReg => vt.is_integer(),
-            ISD::Shl | ISD::Sra => {
+            ISD::Sra => {
                 vt.is_integer()
                     && self
                         .dag
