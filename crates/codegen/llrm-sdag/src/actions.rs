@@ -936,7 +936,19 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_64_sse2(), features, ptr, true)
+        let mut t = Self::x86(TargetLoweringInfo::x86_64_sse2(), features, ptr, true);
+        // A `BUILD_VECTOR` is selected by no pattern: the legalizer expands a
+        // constant one to a pool load (`ExpandBUILD_VECTOR`) and any other
+        // through the stack (`ExpandVectorBuildThroughStack`). DEVIATE X86V3
+        // (exit with the C2 PR): the pin's `LowerBUILD_VECTOR` makes a splat
+        // `movd` + `pshufd` and the rest `punpck`/`pinsr`; the stack form is
+        // correct and slower.
+        t.set_ops(
+            &[ISD::BuildVector],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Expand,
+        );
+        t
     }
 
     /// m16: the same constructor calls over the 386 register file, with `i16`
