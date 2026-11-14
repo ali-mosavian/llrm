@@ -385,6 +385,8 @@ impl fmt::Display for Inst {
                     VectorShift::Shl => "shl",
                     VectorShift::Ushr => "ushr",
                     VectorShift::Sshr => "sshr",
+                    VectorShift::Usra => "usra",
+                    VectorShift::Ssra => "ssra",
                 };
                 let suffix = lanes.suffix();
                 write!(out, "{name} v{}.{suffix}, v{}.{suffix}, #{amount}", rd.0, rn.0)

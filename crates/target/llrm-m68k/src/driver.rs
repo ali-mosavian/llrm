@@ -175,7 +175,43 @@ pub fn lowered_for(
     cpu: Cpu,
     level: Level,
 ) -> Result<Module, String> {
-    lowered(text, cpu, level, None, &Policy::default())
+    lowered(text, cpu, level, None, &Policy::default(), default_backend(level)).map(|lowered| lowered.module)
+}
+
+/// The backend options the assembly and object paths build for `level`.
+fn default_backend(level: Level) -> Options {
+    Options {
+        size: matches!(level, Level::Os | Level::Oz),
+        strict: level == Level::O1,
+        mid_end: false,
+        ..Options::default()
+    }
+}
+
+thread_local! {
+    static LOWERINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many functions this thread has lowered to items since it began: what a
+/// test counts to see that the trial's winner is not lowered again.
+pub fn lowerings() -> usize {
+    LOWERINGS.with(std::cell::Cell::get)
+}
+
+/// A module the mid-end finished, and the items of the functions the -Os/-O1/
+/// nest trial already lowered for the side it kept: lowered once, for the
+/// price, and not again for the output.
+struct Lowered {
+    module: Module,
+    kept: Option<Kept>,
+}
+
+/// The items of the trial's differing functions, as `function_items` builds
+/// them for `module` (pc-relative calls) under `backend`: used only where the
+/// output is built from the same module with the same options and libcalls.
+struct Kept {
+    libcalls: u8,
+    items: Vec<(String, Vec<Item>)>,
 }
 
 /// The unrolled size, in the unroll units, of the refused loops of a module
@@ -198,7 +234,8 @@ fn lowered(
     level: Level,
     dump: Option<&std::path::Path>,
     policy: &Policy,
-) -> Result<Module, String> {
+    backend: Options,
+) -> Result<Lowered, String> {
     use llrm_transforms::trial;
     let _ = trial::take();
     let base = lowered_once(text, cpu, level, dump, policy)?;
@@ -213,32 +250,38 @@ fn lowered(
             .filter(|tti| tti.unroll_trial_nests_at_speed())
             .map(|_| llrm_transforms::loopunrollpass::pin_full_unroll_threshold(if level == Level::O3 { 3 } else { 2 }))
     };
-    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(base) };
-    let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(base) };
+    let plain = |module: Module| Lowered { module, kept: None };
+    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(plain(base)) };
+    let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(plain(base)) };
     let _ = trial::take();
     let cut = trial::differing(&base, &other);
     if cut.is_empty() {
-        return Ok(base);
+        return Ok(plain(base));
     }
     let small = matches!(level, Level::Os | Level::Oz);
-    let backend = Options { size: small, strict: level == Level::O1, mid_end: false, ..Options::default() };
-    let items = |module: &Module| -> Option<Vec<Item>> {
-        Some(
-            function_items(&trial::only(module, &cut), cpu, backend)
-                .ok()?
-                .into_iter()
-                .flat_map(|(_, items)| items)
-                .collect(),
-        )
+    // Each side's differing functions are lowered in the side's own module,
+    // the build the output makes of them: what the price sees is what is
+    // printed, and the kept side's items are not built twice.
+    let lower = |module: &Module| -> Result<Kept, String> {
+        let libcalls = backend.libcalls.unwrap_or_else(|| crate::compile::libcalls_for(module, cpu, backend));
+        // `differing` also names globals and a function one side lost
+        let defined: Vec<String> = module
+            .functions()
+            .filter(|(_, _, function)| !function.is_declaration())
+            .filter_map(|(_, global, _)| global.name.owned().filter(|name| cut.contains(name)))
+            .collect();
+        let items = lower_functions(module, &defined, cpu, Options { libcalls: Some(libcalls), ..backend }, true)?;
+        Ok(Kept { libcalls, items })
     };
-    let pays = matches!(
-        (items(&other), items(&base)),
-        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::of(small))
-    );
+    let flat = |kept: &Kept| -> Vec<Item> { kept.items.iter().flat_map(|(_, items)| items.iter().cloned()).collect() };
+    // A lowering that fails is the compile's error, not a verdict: it was once
+    // swallowed here and every trial put the unroll back.
+    let (with, without) = (lower(&other)?, lower(&base)?);
+    let pays = crate::trial::keeps(&flat(&with), &flat(&without), cpu, crate::timing::Price::of(small));
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }
-    Ok(if pays { other } else { base })
+    Ok(if pays { Lowered { module: other, kept: Some(with) } } else { Lowered { module: base, kept: Some(without) } })
 }
 
 /// `text` through the shared mid-end, the expansions m68k needs, and the
@@ -310,6 +353,7 @@ fn function_items(
     module: &Module,
     cpu: Cpu,
     backend: Options,
+    kept: Option<&Kept>,
 ) -> Result<Vec<(String, Vec<Item>)>, String> {
     let mut names = Vec::new();
     for (_, global, function) in module.functions() {
@@ -318,30 +362,59 @@ fn function_items(
         }
     }
     // chosen once for the module, not per function (M68K-SIZE-LIBCALL)
-    let backend = Options {
-        libcalls: backend.libcalls.or_else(|| Some(crate::compile::libcalls_for(module, cpu, backend))),
-        ..backend
+    let libcalls = backend.libcalls.unwrap_or_else(|| crate::compile::libcalls_for(module, cpu, backend));
+    let backend = Options { libcalls: Some(libcalls), ..backend };
+    // The trial's items stand for the functions they were built for: the same
+    // module, options and libcalls, pc-relative calls.
+    let kept = kept.filter(|one| one.libcalls == libcalls);
+    let near = match kept {
+        Some(kept) => {
+            let rest: Vec<String> =
+                names.iter().filter(|name| !kept.items.iter().any(|(held, _)| held == *name)).cloned().collect();
+            let mut built = lower_functions(module, &rest, cpu, backend, true)?;
+            built.extend(kept.items.iter().cloned());
+            names
+                .iter()
+                .map(|name| {
+                    built
+                        .iter()
+                        .position(|(held, _)| held == name)
+                        .map(|at| built.swap_remove(at))
+                        .ok_or_else(|| format!("@{name}: lost"))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        None => lower_functions(module, &names, cpu, backend, true)?,
     };
-    let compile = |pc_calls: bool| -> Result<Vec<(String, Vec<Item>)>, String> {
-        names
-            .iter()
-            .map(|name| {
-                // `LLRM_DEBUG=time` charges the function by name (the largest
-                // functions are the first to look at)
-                llrm_support::debug::timed_by(
-                    || format!("m68k fn {name}"),
-                    || items_with(module, name, cpu, Options { pc_calls, ..backend }),
-                )
-                .map(|items| (name.clone(), items))
-                .map_err(|why| format!("@{name}: {why}"))
-            })
-            .collect()
-    };
-    let near = compile(true)?;
     let calls =
         near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
     let bytes: usize = near.iter().map(|(_, items)| crate::compile::items_bytes(items)).sum();
-    if calls && bytes > crate::pccall::REACH { compile(false) } else { Ok(near) }
+    if calls && bytes > crate::pccall::REACH { lower_functions(module, &names, cpu, backend, false) } else { Ok(near) }
+}
+
+/// The items of the functions `names` of `module`, in that order, with
+/// pc-relative calls to the module's own functions or absolute ones.
+fn lower_functions(
+    module: &Module,
+    names: &[String],
+    cpu: Cpu,
+    backend: Options,
+    pc_calls: bool,
+) -> Result<Vec<(String, Vec<Item>)>, String> {
+    names
+        .iter()
+        .map(|name| {
+            LOWERINGS.with(|count| count.set(count.get() + 1));
+            // `LLRM_DEBUG=time` charges the function by name (the largest
+            // functions are the first to look at)
+            llrm_support::debug::timed_by(
+                || format!("m68k fn {name}"),
+                || items_with(module, name, cpu, Options { pc_calls, ..backend }),
+            )
+            .map(|items| (name.clone(), items))
+            .map_err(|why| format!("@{name}: {why}"))
+        })
+        .collect()
 }
 
 /// [`assembly_in`] with the mid-end flags in `policy`.
@@ -354,18 +427,11 @@ pub fn assembly_flagged(
     model: CodeModel,
     policy: &Policy,
 ) -> Result<String, String> {
-    let optimized = lowered(text, cpu, level, dump, policy)?;
-    let module = &optimized;
-    let backend = Options {
-        size: matches!(level, Level::Os | Level::Oz),
-        strict: level == Level::O1,
-        debug,
-        mid_end: false,
-        code_model: model,
-        ..Options::default()
-    };
+    let backend = Options { debug, code_model: model, ..default_backend(level) };
+    let optimized = lowered(text, cpu, level, dump, policy, backend)?;
+    let module = &optimized.module;
     let mut out = String::new();
-    for (name, items) in function_items(module, cpu, backend)? {
+    for (name, items) in function_items(module, cpu, backend, optimized.kept.as_ref())? {
         let global = module.global(module.named(&name).ok_or("a function with no global")?);
         match llrm_mir::image::Export::of(global.linkage) {
             llrm_mir::image::Export::Public => out.push_str(&format!("\t.globl\t{name}\n")),
@@ -423,17 +489,12 @@ pub fn object_flagged(
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
     }
-    let module = lowered(text, cpu, level, dump, policy)?;
-    let backend = Options {
-        size: matches!(level, Level::Os | Level::Oz),
-        strict: level == Level::O1,
-        mid_end: false,
-        code_model: model,
-        ..Options::default()
-    };
+    let backend = Options { code_model: model, ..default_backend(level) };
+    let lowered = lowered(text, cpu, level, dump, policy, backend)?;
+    let module = lowered.module;
     let mut items = Vec::new();
     let mut exports = llrm_support::hash::HashMap::default();
-    for (function_name, one) in function_items(&module, cpu, backend)? {
+    for (function_name, one) in function_items(&module, cpu, backend, lowered.kept.as_ref())? {
         let global = module.global(module.named(&function_name).ok_or("a function with no global")?);
         exports.insert(function_name, llrm_mir::image::Export::of(global.linkage));
         items.extend(one);

@@ -575,6 +575,9 @@ pub struct SelectionDAG {
     /// negative frame indices the builder makes for stack arguments):
     /// `MachineFrameInfo::getObjectOffset`.
     pub fixed_offsets: std::collections::BTreeMap<i32, i64>,
+    /// The size in bytes and the immutability (`byval` objects are not) of the
+    /// fixed objects a target made through `FixedObject`, by frame index.
+    pub fixed_objects: std::collections::BTreeMap<i32, (u32, bool)>,
     /// The loads and stores the program marks volatile: the LIR instructions
     /// they become keep the mark (`MachineMemOperand::isVolatile`).
     pub volatile_accesses: HashSet<u32>,
@@ -655,6 +658,7 @@ impl SelectionDAG {
             invariant_loads: HashSet::default(),
             got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
+            fixed_objects: Default::default(),
             volatile_accesses: HashSet::default(),
             direct_copies: HashSet::default(),
         };
@@ -1306,6 +1310,19 @@ impl SelectionDAG {
         }
     }
 
+    /// `isConstOrConstSplat`: the value of a constant, or the one value of
+    /// every lane of a build vector of equal constants.
+    pub fn const_or_splat(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        if self.opcode(value) != ISD::BuildVector {
+            return self.constant(value);
+        }
+        let first = self.constant(self.operand(value, 0))?;
+        (1..self.value_type(value).lanes()).all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first)).then_some(first)
+    }
+
     pub fn is_opaque(
         &self,
         value: SDValue,
@@ -1543,28 +1560,6 @@ impl SelectionDAG {
                         .or_else(|| self.fp_constant(lane))
                         .is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
             })
-    }
-
-    /// `isConstOrConstSplat` of an integer: the constant, or the one value of
-    /// every defined lane of a `BUILD_VECTOR`.
-    pub fn const_or_splat(
-        &self,
-        value: SDValue,
-    ) -> Option<u128> {
-        if self.opcode(value) != ISD::BuildVector {
-            return self.constant(value);
-        }
-        let mut splat = None;
-        for &lane in &self.node(value).ops {
-            if self.is_undef(lane) {
-                continue;
-            }
-            let bits = self.constant(lane)?;
-            if *splat.get_or_insert(bits) != bits {
-                return None;
-            }
-        }
-        splat
     }
 
     pub fn get_all_ones_constant(

@@ -1549,8 +1549,10 @@ impl Builder<'_> {
             self.live_ins.push((reg, vreg));
             vreg
         };
-        let mut make_object = |_size: u32, offset: i64, _immutable: bool| {
+        let mut objects: Vec<(u32, bool)> = Vec::new();
+        let mut make_object = |size: u32, offset: i64, immutable: bool| {
             offsets.push(offset);
+            objects.push((size, immutable));
             -(offsets.len() as i32)
         };
         let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
@@ -1584,6 +1586,7 @@ impl Builder<'_> {
         }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
+            self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
         }
         let mut next = 0;
         for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
@@ -3429,6 +3432,29 @@ impl Builder<'_> {
                         _ => Err(Refused("a vector constant lane that is not an integer or a float")),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.dag.get_build_vector(vt, &ops))
+            }
+            // A vector the folder made out of an integer (`bitcast (i128 N to <4 x i32>)`): its lanes are the
+            // integer's slices, the first in the low bits (little-endian lane order).
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::BitCast, value }) => {
+                let ConstantKind::Int(image) = self.module.context.get(value).kind else {
+                    return Err(Refused("a vector constant cast from something other than an integer"));
+                };
+                let lane_bits = lane_vt.size_in_bits();
+                if lane_bits == 0 || lane_bits * vt.lanes() > 128 {
+                    return Err(Refused("a vector constant image wider than 128 bits"));
+                }
+                let mask = u128::MAX >> (128 - lane_bits);
+                let ops: Vec<SDValue> = (0..vt.lanes())
+                    .map(|at| {
+                        let bits = (image >> (at * lane_bits)) & mask;
+                        if lane_vt.is_floating_point() {
+                            self.dag.get_constant_fp(bits, lane_vt)
+                        } else {
+                            self.dag.get_constant(bits, lane_vt)
+                        }
+                    })
+                    .collect();
                 Ok(self.dag.get_build_vector(vt, &ops))
             }
             _ => Err(Refused("a vector constant that is not a list of integers")),

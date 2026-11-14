@@ -81,9 +81,11 @@ pub(super) fn full_unroll_pays(
     // alone and kept rolled, +38,016).
     // Only where nests are priced: at -O3 the pin prices these copies (matmul
     // -O3 700 B; unpriced 1,208 B).
-    let carried = run.decided.contains(&lp.get_header())
-        && run.tti.unroll_prices_nest_loops_without_outer_counter()
-        && run.options.opt_level < 3;
+    // The no-growth variant of UNROLL-SPEED-TRIAL prices every nest, at any level and on any target: it keeps no
+    // unroll that adds bytes, where the pin's threshold decides a nest unpriced.
+    let prices_nest_here = no_grow
+        || (run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3);
+    let carried = run.decided.contains(&lp.get_header()) && prices_nest_here;
     if !run.first.contains(&lp.get_header()) || carried {
         why(run, lp, "unpriced unroll: a copy of this run");
         return true;
@@ -97,7 +99,7 @@ pub(super) fn full_unroll_pays(
     // 857 at 6) for 700 -> 292 B, and no rate keeps shellsort and jpeg at the
     // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves the
     // rows slower than gcc and clang at the pin's value.
-    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
+    let prices_nest = prices_nest_here;
     // DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 the
     // pin decides a loop inside a loop of known trips by its size alone, as it
     // decides the nest (below). Priced, the inner loop was vetoed while the

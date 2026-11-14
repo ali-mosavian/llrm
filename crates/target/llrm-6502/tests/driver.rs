@@ -2488,12 +2488,12 @@ fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
     assert!(size(&twice) * 2 < size(&once), "{} instructions against {}", size(&twice), size(&once));
 }
 
-/// The start-up zeroing of the new BSS costs 15 clocks a byte, once: a
-/// function called once, outside any loop, with a 24-byte array it touches
-/// twice, gave `tail_calls` 360 clocks for 46 saved. It keeps the stack where
-/// clocks count (-O2) and goes static where bytes do (-Os).
+/// k_itoa -O2 kept `tmp[16]` on the soft stack because the start-up zeroing of
+/// 16 bytes (240 clocks, once) outweighed the 190 clocks a call saves: 312 B
+/// against 291 B at -Os, which was also faster per call. Bytes come first at
+/// every level, so a function that cannot be re-entered goes static at -O2 too.
 #[test]
-fn a_static_array_pays_for_the_zeroing_of_its_bytes() {
+fn a_static_array_goes_static_at_every_level_where_it_saves_bytes() {
     let ir = module(
         r#"define i8 @once(i8 %n) noinline norecurse {
   %a = alloca [24 x i8]
@@ -2508,12 +2508,11 @@ define i8 @t() {
   ret i8 %r
 }"#,
     );
-    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(!speed.contains("_local"), "-O2 zeroes 24 bytes to save 46 clocks:\n{speed}");
-    assert_eq!(exit_code_of(&speed, "t"), 7, "{speed}");
-    let size = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    assert!(size.contains("_local0"), "-Os counts bytes:\n{size}");
-    assert_eq!(exit_code_of(&size, "t"), 7, "{size}");
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("_local0"), "{level:?} keeps the array on the soft stack:\n{text}");
+        assert_eq!(exit_code_of(&text, "t"), 7, "{level:?}: {text}");
+    }
 }
 
 /// call_keeps (tests/run/c): `churn` is settled after the first walk, and
