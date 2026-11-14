@@ -92,6 +92,9 @@ pub struct TwoAddress {
     /// `tryInstructionTransform` returns at `CodeGenOptLevel::None`,
     /// TwoAddressInstructionPass.cpp#L1352-L1354).
     pub unoptimized: bool,
+    /// The register file, whose pins (`mul`'s AX and DX) are copies the walk
+    /// reads.
+    pub classes: Option<std::rc::Rc<crate::backend::classes::RegisterClasses>>,
 }
 
 impl TwoAddress {
@@ -114,7 +117,12 @@ impl LIRTransform for TwoAddress {
         Ok(if self.unoptimized {
             untied_only(&body)
         } else {
-            tied_with(&body, self.lea, self.loop_carried, self.loop_carried_flow, self.to_known_register)
+            tied_with_classes(
+                &body,
+                self.lea,
+                (self.loop_carried, self.loop_carried_flow, self.to_known_register),
+                self.classes.as_deref(),
+            )
         })
     }
 }
@@ -171,6 +179,16 @@ pub fn tied_with(
     loop_carried_flow: bool,
     to_known_register: bool,
 ) -> LirBody {
+    tied_with_classes(body, lea, (loop_carried, loop_carried_flow, to_known_register), None)
+}
+
+/// [`tied_with`] (TA-LC, TA-LC2, TA-11), reading `classes`' pins as copies.
+pub fn tied_with_classes(
+    body: &LirBody,
+    lea: crate::twoaddress::ThreeAddress,
+    (loop_carried, loop_carried_flow, to_known_register): (bool, bool, bool),
+    classes: Option<&crate::backend::classes::RegisterClasses>,
+) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
     let mut counter = body.next_value();
@@ -199,7 +217,8 @@ pub fn tied_with(
         let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len())
             .with_loop_carried(loop_carried)
             .with_loop_carried_flow(loop_carried_flow)
-            .with_to_known_register(to_known_register);
+            .with_to_known_register(to_known_register)
+            .with_classes(classes);
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;

@@ -54,28 +54,30 @@ fn compare(cpu: Cpu) -> (usize, u32) {
     sum([one(cpu, "cmpi.l #200, %d0", 6), one(cpu, "beq .L1", 2)])
 }
 
-/// The table's dispatch: the bias, the bound check, the scaled index, the
-/// table's address, the indexed load and the jump. The 68020 scales the index
-/// in the load; before it, a shift.
+/// The table's dispatch (M68K-WORD-TABLE, [`crate::wordtable`]): the bias, the
+/// bound check, the index doubled, the word load from the table and the jump
+/// through it. The same from the 68000 on: no scaled index to save a step.
 fn dispatch(cpu: Cpu) -> (usize, u32) {
-    let mut parts = vec![
+    sum([
         one(cpu, "moveq #64, %d1", 2),
         one(cpu, "add.l %d1, %d0", 2),
         one(cpu, "moveq #27, %d1", 2),
         one(cpu, "cmp.l %d1, %d0", 2),
         one(cpu, "bhi .L1", 2),
-        one(cpu, "lea (.LJTI,%pc), %a0", 4),
-        one(cpu, "move.l (0,%a0,%d0), %a0", 4),
-        one(cpu, "jmp (%a0)", 2),
-    ];
-    if !cpu.at_least(Cpu::M68020) {
-        parts.push(one(cpu, "lsl.l #2, %d0", 2));
-    }
-    sum(parts)
+        one(cpu, "add.l %d0, %d0", 2),
+        one(cpu, "move.w (.LJTI,%pc,%d0), %d0", 4),
+        one(cpu, "jmp (.LJTI,%pc,%d0)", 4),
+    ])
 }
 
-/// A table slot: a `.long`.
-const SLOT: usize = 4;
+/// A table slot: a `.word`.
+const SLOT: usize = 2;
+
+/// The slot the density limit counts: the `.long` of the pin's table, kept so
+/// a sparse switch stays a chain (the jpeg cells: a 14% table was +90..140 B
+/// and no faster). The word slot lowers the limit of entries alone; the
+/// density is retuned by its own A/B.
+const DENSITY_SLOT: usize = 4;
 
 /// The compares a balanced tree of `cases` makes to find one (the pin's
 /// `splitWorkItem`).
@@ -116,7 +118,8 @@ pub fn limits(
             compare_bytes as i64 * byte_milliclocks(cpu) + 1000 * saved.max(0) / wide as i64
         }
     };
-    let slot = if price == Price::Rate { SLOT as i64 * byte_milliclocks(cpu) } else { SLOT as i64 * 1000 };
+    let slot =
+        if price == Price::Rate { DENSITY_SLOT as i64 * byte_milliclocks(cpu) } else { DENSITY_SLOT as i64 * 1000 };
     Limits { min_entries, min_density: (100 * slot + case - 1).div_euclid(case).clamp(1, 100) as u64 }
 }
 
@@ -124,19 +127,18 @@ pub fn limits(
 mod tests {
     use super::*;
 
-    /// A table needs enough cases to pay for its dispatch, and a dense one
-    /// pays sooner on the 68020 (no shift).
+    /// A table needs enough cases to pay for its dispatch.
     #[test]
     fn the_entries_are_what_the_dispatch_costs() {
         for price in [Price::Size, Price::Strict, Price::Rate] {
             let old = limits(Cpu::M68000, price).min_entries;
             let new = limits(Cpu::M68020, price).min_entries;
-            assert!((4..=12).contains(&old) && new <= old, "{price:?}: {old} {new}");
+            assert!((4..=12).contains(&old) && (4..=12).contains(&new), "{price:?}: {old} {new}");
         }
     }
 
-    /// A slot is 4 B against a case's 8: half at `-Os`, less where the chain's
-    /// clocks count.
+    /// A density slot is 4 B against a case's 8: half at `-Os`, less where the
+    /// chain's clocks count.
     #[test]
     fn the_density_is_a_slot_against_a_case() {
         for cpu in [Cpu::M68000, Cpu::M68020] {

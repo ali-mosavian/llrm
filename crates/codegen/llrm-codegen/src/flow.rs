@@ -311,6 +311,7 @@ pub fn machine_with<'a>(
             loop_carried_flow: target.commutes_loop_carried_flow(),
             to_known_register: target.converts_three_address_to_known_register(),
             unoptimized: !target.optimized,
+            classes: Some(Rc::clone(classes)),
         }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
