@@ -18,13 +18,20 @@ fn named(
     text: &str,
     pick: impl Fn(&Decisions) -> Vec<super::Hoisted>,
 ) -> Vec<String> {
+    named_on(text, llrm_mir::target::Neutral, pick)
+}
+
+/// [`named`] on `machine`.
+fn named_on(
+    text: &str,
+    machine: impl llrm_mir::target::Machine + 'static,
+    pick: impl Fn(&Decisions) -> Vec<super::Hoisted>,
+) -> Vec<String> {
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.add(Licm { apply: false, speculate: true });
-    passes
-        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
-        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut module, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     let hoisted = DECIDED.with(|all| pick(&all.borrow()));
     hoisted
@@ -2307,11 +2314,12 @@ b2:
     assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
 }
 
-/// mul_constants m64 -O2: `sum = sum * 31 + x * K` unrolled four times is a chain of
-/// products of sums. The pin reassociates the instruction it has just made, in the
-/// same walk, until one multiply of `sum` is left (31, 961, 29791, 923521); llrm
-/// left alone whatever an earlier reassociation of the loop had replaced, so
-/// two `mul 31` of the chain stayed in the body (+931 B over the pin's whole file).
+/// mul_constants m64 -O2: `sum = sum * 31 + x * K` unrolled four times is a
+/// chain of products of sums. The pin reassociates the instruction it has just
+/// made, in the same walk, until one multiply of `sum` is left (31, 961, 29791,
+/// 923521); llrm left alone whatever an earlier reassociation of the loop had
+/// replaced, so two `mul 31` of the chain stayed in the body (+931 B over the
+/// pin's whole file).
 #[test]
 fn test_a_chain_of_products_of_sums_is_reassociated_until_no_multiply_by_the_factor_is_left() {
     let text = "define i64 @f() {
@@ -2352,7 +2360,8 @@ b2:
 ";
     let after = licm_printed(text);
     let body = block_of(&after, "b1");
-    let left: Vec<_> = body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
+    let left: Vec<_> =
+        body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
     assert!(left.is_empty(), "{left:?}\n{after}");
 }
 
@@ -2602,5 +2611,164 @@ b3:
         let (_, after) = applied(&text, &trips());
         let kept = block_of(&after, "b2").iter().any(|line| line.starts_with("store i16") && line.contains("@g"));
         assert_eq!(kept, stays, "{volatile}: {after}");
+    }
+}
+
+/// DEVIATE LM2: `@a[o]` read behind a guard of the inner loop is invariant
+/// there and in bounds because the outer loop counts `o` below 6; with `o`
+/// unbounded the guarded load stays. Cost before the fix: the load was redone
+/// on every inner trip (nbody_fixed arm64 -O3: 723,134 instructions against
+/// 645,136).
+#[test]
+fn test_a_guarded_load_indexed_by_an_outer_counter_is_hoisted_when_it_stays_in_the_object() {
+    let nest = |bound: &str| {
+        format!(
+            "@a = global [6 x i64] zeroinitializer\n\
+             define i64 @f(i64 %n, i64 %k) {{\n\
+             entry:\n  br label %outer\n\
+             outer:\n  %o = phi i64 [ 0, %entry ], [ %o.next, %outer.latch ]\n  %acc = phi i64 [ 0, %entry ], [ %acc.in, %outer.latch ]\n  br label %inner\n\
+             inner:\n  %j = phi i64 [ 0, %outer ], [ %j.next, %inner.latch ]\n  %s = phi i64 [ %acc, %outer ], [ %s.next, %inner.latch ]\n  %guard = icmp ne i64 %j, %k\n  br i1 %guard, label %then, label %inner.latch\n\
+             then:\n  %p = getelementptr i64, ptr @a, i64 %o\n  %v = load i64, ptr %p\n  %t = add i64 %s, %v\n  br label %inner.latch\n\
+             inner.latch:\n  %s.next = phi i64 [ %s, %inner ], [ %t, %then ]\n  %j.next = add nuw i64 %j, 1\n  %again = icmp ult i64 %j.next, %n\n  br i1 %again, label %inner, label %outer.latch\n\
+             outer.latch:\n  %acc.in = phi i64 [ %s.next, %inner.latch ]\n  %o.next = add nuw nsw i64 %o, 1\n  %more = icmp ult i64 %o.next, {bound}\n  br i1 %more, label %outer, label %exit\n\
+             exit:\n  ret i64 %acc.in\n}}\n"
+        )
+    };
+    let on = |bound: &str| named_on(&nest(bound), RangeDeref(llrm_mir::target::Neutral), |all| all.hoisted.clone());
+    assert_eq!(on("6"), ["p", "v"]);
+    assert_eq!(on("7"), ["p"]);
+    // The pin's rule, the default: the load stays.
+    assert_eq!(decided(&nest("6")), ["p"]);
+}
+
+/// A machine that opts in to `licm_range_deref`.
+struct RangeDeref(llrm_mir::target::Neutral);
+
+struct RangeTti;
+
+use llrm_mir::tti::Tti as _;
+
+impl llrm_mir::tti::Tti for RangeTti {
+    fn licm_range_deref(&self) -> bool {
+        true
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        op: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(op, ty, kind)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        stored_constant: bool,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.memory_op_cost(op, ty, kind, stored_constant)
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(imm, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        op: llrm_mir::tti::ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
+    fn cast_cost(
+        &self,
+        op: llrm_mir::tti::CastKind,
+        dst: llrm_mir::tti::Ty,
+        src: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(op, dst, src, kind)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        first: llrm_mir::tti::OperandInfo,
+        second: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, kind, first, second)
+    }
+}
+
+impl llrm_mir::target::Machine for RangeDeref {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(RangeTti))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
     }
 }
