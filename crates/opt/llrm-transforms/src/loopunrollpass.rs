@@ -1131,10 +1131,12 @@ fn should_full_unroll(
     // DEVIATE UNROLL-TRIAL: while a trial runs, every loop under the trial
     // size is unrolled; the function is priced whole afterwards.
     if let Some(limit) = trial::active() {
-        // UNROLL-NEST-TRIAL takes the loops with a subloop only
-        let nests_only = nest_trial(run) && lp.is_innermost();
+        // UNROLL-NEST-TRIAL takes the loops with a subloop by the pin's
+        // threshold; an innermost loop is held to the analyzed cost by the
+        // target's size bar (UNROLL-SPEED-TRIAL), where it states one
+        let bar = if speed_innermost(run, lp) { run.tti.unroll_trial_at_size() } else { Some(limit) };
         let held = trial_size(run, se, analyzed, lp, eph, full_unroll_trip_count, unrolled_size);
-        if held < u64::from(limit) && !nests_only {
+        if bar.is_some_and(|bar| held < u64::from(bar)) {
             why(run, lp, "trial unroll");
             return Some(full_unroll_trip_count);
         }
@@ -1206,6 +1208,18 @@ fn nest_trial(run: &Run) -> bool {
     run.options.opt_level >= 2 && !run.options.opt_size && run.tti.unroll_trial_nests_at_speed()
 }
 
+/// DEVIATE UNROLL-SPEED-TRIAL (owner x87-b, exit 2026-11-24): an innermost loop
+/// at -O2/-O3 of a target that runs the nest trial and prices a trial by the
+/// analyzed cost is also taken by it, the finished code priced at the CPU's
+/// byte rate (gcc's `try_unroll_loop_completely` weighs the size after the
+/// folding the same way; the pin's analysis gives up on a call).
+fn speed_innermost(
+    run: &Run,
+    lp: Loop,
+) -> bool {
+    nest_trial(run) && lp.is_innermost() && run.tti.unroll_trial_by_analyzed_cost()
+}
+
 /// DEVIATE UNROLL-OS-TRIAL-ANALYZED: the size the -Os and -O1 trials hold a
 /// loop to: the copies' size, or where that is over the bar and the target says
 /// so, the cost the analysis finds once the trips' constants fold, if that is
@@ -1221,11 +1235,16 @@ fn trial_size(
     trips: u32,
     unrolled_size: u64,
 ) -> u64 {
-    if !(run.options.opt_size || run.options.opt_level == 1) || !run.tti.unroll_trial_by_analyzed_cost() {
+    let speed = speed_innermost(run, lp);
+    if !(run.options.opt_size || run.options.opt_level == 1 || speed) || !run.tti.unroll_trial_by_analyzed_cost() {
         return unrolled_size;
     }
-    let bar = if run.options.opt_size { run.tti.unroll_trial_at_size() } else { run.tti.unroll_trial_threshold() };
-    let Some(limit) = trial::active().or(bar) else { return unrolled_size };
+    let bar = if run.options.opt_level == 1 && !run.options.opt_size {
+        run.tti.unroll_trial_threshold()
+    } else {
+        run.tti.unroll_trial_at_size()
+    };
+    let Some(limit) = (if speed { bar } else { trial::active().or(bar) }) else { return unrolled_size };
     if unrolled_size < u64::from(limit) {
         return unrolled_size;
     }
@@ -1245,7 +1264,11 @@ fn note_for_trial(
     // one, else the -O1 trial's; at -O2 and -O3 the pin's own threshold,
     // for a loop with a subloop (UNROLL-NEST-TRIAL).
     let threshold = if nest_trial(run) {
-        (!lp.is_innermost()).then(|| pin_full_unroll_threshold(run.options.opt_level))
+        if lp.is_innermost() {
+            speed_innermost(run, lp).then(|| run.tti.unroll_trial_at_size()).flatten()
+        } else {
+            Some(pin_full_unroll_threshold(run.options.opt_level))
+        }
     } else if run.options.opt_size {
         run.tti.unroll_trial_at_size().or_else(|| run.tti.unroll_trial_threshold())
     } else {

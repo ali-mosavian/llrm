@@ -160,7 +160,12 @@ fn ours_level(default: &'static str) -> &'static str {
 /// level and `BENCH_PAD`: two runs sharing `bench/<name>` raced on `pad.c` and
 /// the link files, and external-compiler cells came out n/a at random
 /// (2026-11-08: 22 of them in one Os log, the pad merge refused the logs).
-fn work_dir(root: &Path, level: &str, pad: &str, name: &str) -> PathBuf {
+fn work_dir(
+    root: &Path,
+    level: &str,
+    pad: &str,
+    name: &str,
+) -> PathBuf {
     root.join(format!("bench{level}-pad{pad}")).join(name)
 }
 
@@ -213,7 +218,7 @@ fn driver(
     s.push_str(&format!("  lda #{calls}\n  sta cnt\nloop:\n"));
     let last = kernel.args.len().wrapping_sub(1);
     // ours: a byte takes the first free of a, x, rc2.., a word or pointer the
-    // first free pair of rc2.. (`backfill`); a and x are loaded last
+    // first free pair of a:x, rc2:rc3.. (`backfill`); a and x are loaded last
     let mut used = [false; 8];
     let (mut in_a, mut in_x) = (String::new(), String::new());
     for (i, &arg) in kernel.args.iter().enumerate() {
@@ -232,14 +237,19 @@ fn driver(
             }
             Abi::Ours => {
                 let at = if wide {
-                    (1..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
+                    (0..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
                 } else {
                     (0..8).find(|&p| !used[p]).expect("a free byte")
                 };
                 used[at] = true;
                 if wide {
                     used[at + 1] = true;
-                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", at, at + 1));
+                    if at == 0 {
+                        in_a = format!("  lda {lo}\n");
+                        in_x = format!("  ldx {hi}\n");
+                    } else {
+                        s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", at, at + 1));
+                    }
                 } else if at == 0 {
                     in_a = format!("  lda {lo}\n");
                 } else if at == 1 {

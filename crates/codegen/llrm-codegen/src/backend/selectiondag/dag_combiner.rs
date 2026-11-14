@@ -222,6 +222,16 @@ pub trait CombineHooks {
         false
     }
 
+    /// `tryStoreMergeOfLoads`' vector arm: a run of loads and stores of
+    /// adjacent cells is one vector load and store where the vector type is
+    /// legal. DEVIATE SD217: off by default so the targets with vector types
+    /// (arm64, wasm) keep their output until judged; x86 opts in. The pin
+    /// also needs `!noimplicitfloat` and a fast `allowsMemoryAccess`, both
+    /// taken as true. Exit 2026-12-01.
+    fn merge_stores_to_vectors(&self) -> bool {
+        false
+    }
+
     /// `DataLayout::isLittleEndian`: whether the first of several merged
     /// stores is the least significant part of the joined value.
     fn little_endian(&self) -> bool {
@@ -411,6 +421,17 @@ pub trait CombineHooks {
             return false;
         }
         !(dag.opcode(operand) == ISD::SignExtend && !dag.has_one_use(dag.operand(operand, 0).node))
+    }
+
+    /// Whether `combineShiftOfShiftedLogic` may split `shift` over its one-use
+    /// logic operand. The pin always does; DEVIATE 6502-PAIR-SHIFT: a target
+    /// whose word is two byte registers keeps a shift of a joined pair whole.
+    fn wants_shift_of_shifted_logic(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+    ) -> bool {
+        true
     }
 
     /// `visitSRL`'s `shift (shift x, c1), c2` as one shift by the sum, and
@@ -2329,8 +2350,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
-        if self.dag.opcode(node) != ISD::ZeroExtend
-            || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+        if self.dag.opcode(node) != ISD::ZeroExtend || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
         {
             return None;
         }
@@ -2352,7 +2372,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &self,
         ptr: SDValue,
     ) -> Option<u64> {
-        let common = |align: u64, offset: u64| if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) };
+        let common =
+            |align: u64, offset: u64| if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) };
         if let Some((symbol, offset)) = self.global_plus_offset(ptr) {
             if let Some(&align) = self.dag.global_alignments.get(&symbol) {
                 if align > 1 {
@@ -2384,7 +2405,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         ptr: SDValue,
     ) -> Option<(u32, i64)> {
         match (self.dag.opcode(ptr), self.dag.node(ptr).data) {
-            (ISD::GlobalAddress | ISD::TargetGlobalAddress, NodeData::Global { symbol, offset }) => Some((symbol, offset)),
+            (ISD::GlobalAddress | ISD::TargetGlobalAddress, NodeData::Global { symbol, offset }) => {
+                Some((symbol, offset))
+            }
             (ISD::Add, _) => {
                 let (a, b) = (self.dag.operand(ptr, 0), self.dag.operand(ptr, 1));
                 let signed = |c: SDValue| {
@@ -3283,7 +3306,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let logic_op = self.dag.opcode(logic);
-        if !matches!(logic_op, ISD::And | ISD::Or | ISD::Xor) {
+        if !matches!(logic_op, ISD::And | ISD::Or | ISD::Xor)
+            || !self.hooks.wants_shift_of_shifted_logic(self.dag, node)
+        {
             return None;
         }
         // "Do not turn a 'not' into a regular xor."
@@ -4585,7 +4610,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));
             }
         }
-        // x * c with x and c in the half: the half multiply, before a chain or the full multiply.
+        // x * c with x and c in the half: the half multiply, before a chain or
+        // the full multiply.
         if let (Some(c), false) = (c1, opaque) {
             if let Some(half) = self.hooks.mul_of_halves(vt).filter(|half| half.constant) {
                 if let Some(product) = self.half_multiply_by_constant(n0, c, vt, half) {
@@ -4680,7 +4706,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let high = super::fold::mask(width) & !super::fold::mask(narrow);
         let signed = if super::known_bits::masked_value_is_zero(self.dag, x, high) && c & high == 0 {
             false
-        } else if super::known_bits::num_sign_bits(self.dag, x) > width - narrow && matches!(c >> (narrow - 1), 0) | (c >> (narrow - 1) == super::fold::mask(width) >> (narrow - 1)) {
+        } else if super::known_bits::num_sign_bits(self.dag, x) > width - narrow
+            && matches!(c >> (narrow - 1), 0) | (c >> (narrow - 1) == super::fold::mask(width) >> (narrow - 1))
+        {
             true
         } else {
             return None;
