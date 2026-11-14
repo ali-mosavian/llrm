@@ -781,6 +781,11 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     worklist: Vec<u32>,
     /// The last sweep of an after-legalize combine (`pack_word_pairs`).
     pub(super) late: bool,
+    /// The node count a run may not pass (`RUNAWAY_GROWTH` times the nodes it
+    /// started with, and `RUNAWAY_FLOOR`): set by `run_bounded`.
+    node_limit: usize,
+    runaway: bool,
+    last_combined: Option<u32>,
     queued: NodeSet,
     /// `CombinedNodes`: the nodes already visited, whose operands are not
     /// queued again by a visit of their user.
@@ -810,6 +815,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             level,
             worklist: Vec::new(),
             late: false,
+            node_limit: usize::MAX,
+            runaway: false,
+            last_combined: None,
             queued: NodeSet::default(),
             combined: NodeSet::default(),
             tli: None,
@@ -885,7 +893,34 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     /// `Run`.
+    /// [`Self::run_bounded`] where a loop is a bug to stop at: tests and the
+    /// helpers that have no way to refuse.
     pub fn run(&mut self) {
+        if let Err(why) = self.run_bounded() {
+            panic!("{why}");
+        }
+    }
+
+    /// `Run`, with a guard the pin has not: two combines that undo each other
+    /// make a node a visit, for ever, and the arena grows until the machine is
+    /// out of memory (the z80 `or (trunc a), (trunc b)` that took 10 GB). A run
+    /// that makes more than `RUNAWAY_GROWTH` times the nodes it started with
+    /// (and `RUNAWAY_FLOOR`) is an error naming the last node it combined.
+    pub fn run_bounded(&mut self) -> Result<(), CombineRunaway> {
+        self.node_limit = self.dag.node_count().saturating_mul(RUNAWAY_GROWTH).max(RUNAWAY_FLOOR);
+        self.run_unbounded();
+        if self.runaway {
+            let last = self.last_combined;
+            return Err(CombineRunaway {
+                level: self.level,
+                opcode: last.map(|node| self.dag.opcode(SDValue { node, res: 0 })),
+                nodes: self.dag.node_count(),
+            });
+        }
+        Ok(())
+    }
+
+    fn run_unbounded(&mut self) {
         // `RemoveDeadNodes`: what an earlier phase replaced no longer counts as
         // a user. Newest first, so a user goes before the nodes it reads.
         for node in self.dag.node_ids().rev() {
@@ -938,6 +973,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
             self.combined.insert(n);
+            self.last_combined = Some(n);
+            if self.dag.node_count() > self.node_limit {
+                self.runaway = true;
+                self.worklist.clear();
+                return;
+            }
             // `SDLoc(N)`: what the combine makes takes the node's order.
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
@@ -4950,6 +4991,33 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let _ = node;
         Some(extended)
+    }
+}
+
+/// How many times the nodes a run started with it may make before it is
+/// stopped, and the least it may make (see [`DagCombiner::run_bounded`]).
+const RUNAWAY_GROWTH: usize = 64;
+const RUNAWAY_FLOOR: usize = 1 << 17;
+
+/// A combine run that did not end: the nodes it made passed its limit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CombineRunaway {
+    pub level: CombineLevel,
+    /// The opcode of the last node the run combined.
+    pub opcode: Option<ISD>,
+    pub nodes: usize,
+}
+
+impl std::fmt::Display for CombineRunaway {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            out,
+            "the DAG combiner does not end at {:?}: {} nodes made, last combined {:?}",
+            self.level, self.nodes, self.opcode
+        )
     }
 }
 

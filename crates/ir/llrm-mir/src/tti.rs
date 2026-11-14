@@ -1008,6 +1008,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver may compile the module again with
+    /// the copies of a loop-holding callee at several sites of a loop refused, and keep the form it prices
+    /// cheaper after allocation. The pin's InlineCost has no price for the registers the merged loops lose
+    /// (its `LoopPenalty` is added at minsize callers alone). False: the cost decides.
+    fn inline_loop_copy_trial(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
