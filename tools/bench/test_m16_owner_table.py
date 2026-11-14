@@ -38,7 +38,7 @@ def test_a_nib_program_without_a_twin_source_keeps_the_plain_bar():
     """sieve has no bench/sieve/twin: its Nib row is judged on the plain source."""
     only = {"sieve/nib/O1": cell(120, 5000), "sieve/c/O1": cell(110, 4900), **refs("sieve", "O1", 111, 4800)}
     row = by_row(only)[("sieve", "nib", "O1")]
-    assert row[10] == "WORSE" and "code 120>111(ow)" in row[11], row
+    assert row[10] == "WORSE" and "clocks 5000>4800(ow)" in row[11], row
 
 
 def test_a_nib_program_whose_twin_is_not_measured_is_not_judged_on_the_plain_source():
@@ -110,3 +110,23 @@ def test_the_stored_skeleton_is_refused_once_the_skeleton_program_changed(tmp_pa
         assert "measure again" in str(error)
     else:
         raise AssertionError("an edited skeleton program kept its stored bytes")
+
+
+def test_at_o1_a_cell_over_the_bar_in_bytes_only_is_ok_and_reports_the_bytes():
+    """Ruling 2026-11-14: O1/O2/O3 are judged on clocks. A Nib cell 10 B over the best bar and 100 clocks under it was WORSE (strict code); it is OK with the bytes reported."""
+    only = {"sieve/nib/O1": cell(121, 4700), "sieve/c/O1": cell(110, 4900), **refs("sieve", "O1", 111, 4800)}
+    row = by_row(only)[("sieve", "nib", "O1")]
+    assert row[10] == "OK" and "bytes +10 (reported)" in row[11], row
+
+
+def test_at_o2_a_clock_gain_no_longer_buys_bytes_and_a_clock_loss_is_worse():
+    """The 1 clk = 2 B pricing is gone: O2 over the bar in clocks is WORSE however many bytes it saves."""
+    only = {"sieve/nib/O2": cell(90, 4900), "sieve/c/O2": cell(110, 4900), **refs("sieve", "O2", 111, 4800)}
+    row = by_row(only)[("sieve", "nib", "O2")]
+    assert row[10] == "WORSE" and row[11].startswith("clocks 4900>4800(ow)"), row
+
+
+def test_at_os_both_bytes_and_clocks_must_match_the_bar():
+    only = {"sieve/nib/Os": cell(112, 4700), "sieve/c/Os": cell(110, 4900), **refs("sieve", "Os", 111, 4800)}
+    row = by_row(only)[("sieve", "nib", "Os")]
+    assert row[10] == "WORSE" and "code 112>111(ow)" in row[11] and "clocks" not in row[11], row
