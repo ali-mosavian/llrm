@@ -1,5 +1,7 @@
 #include <stdio.h>
 static unsigned char buf[200];
+__attribute__((noinline)) int sum_array(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) int xor_array(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t ^= a[i] * 3; return t; }
 __attribute__((noinline)) void fwd(unsigned char *dst, const unsigned char *src, unsigned long n) {
     unsigned long i;
     for (i = 0; i < n; i++) dst[i] = src[i];
@@ -23,6 +25,13 @@ int main(void) {
             bwd(got + 8 + shift, got + 8, n);
         }
         for (int i = 0; i < 200; i++) if (got[i] != want[i]) { bad++; printf("dir %d shift %d n %lu at %d\n", dir, shift, n, i); break; }
+    }
+    static int ints[300];
+    for (int i = 0; i < 300; i++) ints[i] = i * 7919 - 1000;
+    for (int n = 0; n < 300; n++) {
+        int s = 0, x = 0;
+        for (int i = 0; i < n; i++) { s += ints[i]; x ^= ints[i] * 3; }
+        if (sum_array(ints, n) != s || xor_array(ints, n) != x) bad++;
     }
     printf("bad %d\n", bad);
 }

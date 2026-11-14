@@ -948,6 +948,25 @@ impl TargetLowering {
             &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
             Action::Expand,
         );
+        // `ExpandReductions` makes a reduction shuffles and `extractelement`; no
+        // shuffle is selected here, so the DAG folds the spilled lanes
+        // (`expandVecReduce`). DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit
+        // 2026-11-24, the C3 PR: shuffle selection).
+        t.set_ops(
+            &[
+                ISD::VecReduceAdd,
+                ISD::VecReduceMul,
+                ISD::VecReduceAnd,
+                ISD::VecReduceOr,
+                ISD::VecReduceXor,
+                ISD::VecReduceSMax,
+                ISD::VecReduceSMin,
+                ISD::VecReduceUMax,
+                ISD::VecReduceUMin,
+            ],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Expand,
+        );
         t
     }
 

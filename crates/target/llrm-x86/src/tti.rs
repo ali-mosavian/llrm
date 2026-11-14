@@ -1270,12 +1270,6 @@ impl Tti for X86 {
         if self.vector_values() { 16 } else { 0 }
     }
 
-    /// The pin expands a reduction to shuffles (`ExpandReductions`); the
-    /// backend has no vector shuffle yet. DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR).
-    fn lowers_vector_reductions(&self) -> bool {
-        false
-    }
-
     /// `X86TTIImpl::getMaxInterleaveFactor`: a scalar loop is left to the
     /// unroller; a vector one is interleaved twice (4 needs AVX).
     fn max_interleave_factor(

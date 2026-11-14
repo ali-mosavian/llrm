@@ -66,15 +66,15 @@ fn the_32_bit_target_and_o1_keep_every_loop_scalar() {
 }
 
 /// A sum reached `llvm.vector.reduce.add` and the backend refused it (`CannotSelect("VecReduceAdd")`, no output at
-/// all): the loop stays scalar until the horizontal step is lowered.
+/// all), so reductions were kept scalar. The total is now folded from the spilled lanes (`expandVecReduce`).
 #[test]
-fn a_sum_loop_compiles_scalar_until_the_reduction_is_lowered() {
+fn a_sum_loop_is_vector_with_a_folded_total() {
     let text = assembly("x86_64-linux", "-O2");
     let sum = body(&text, "sum_array");
-    assert!(!sum.contains("xmm"), "{sum}");
+    assert!(sum.contains("paddd"), "{sum}");
 }
 
-/// The widened loops compute what the scalar ones do: forward and backward copies that overlap by 1 to 5 bytes, every
+/// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]
 fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
