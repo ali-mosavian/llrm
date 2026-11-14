@@ -742,6 +742,10 @@ impl Tti for X86 {
         self.tuning.inline_threshold
     }
 
+    fn fills_pattern_at_speed(&self) -> bool {
+        self.tuning.fills_pattern_at_speed
+    }
+
     fn speed_milliclocks_per_byte(&self) -> i64 {
         self.tuning.speed_milliclocks_per_byte
     }
