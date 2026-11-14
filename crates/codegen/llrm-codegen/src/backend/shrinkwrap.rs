@@ -684,12 +684,16 @@ impl<'a> Uses<'a> {
         }
     }
 
+    /// `useOrDefCSROrFI`: any frame index is a use, an incoming argument's
+    /// included, so a function whose entry block reads a stack argument keeps
+    /// its Save there, framed or not (x_collatz -O3: the saves were wrapped past
+    /// the early exit and the epilogue paid a `jmp` to the shared bare `ret`).
     fn insn_needs(
         &self,
         one: &Insn,
     ) -> bool {
         let regs = self.body.regs();
-        (self.framed && touches_frame(one))
+        touches_frame(one)
             || any_named(regs, one, |register| {
                 (self.framed && self.frame_registers.contains(&register)) || self.kept.contains(&register)
             })
