@@ -389,6 +389,12 @@ impl Tti for Z80Tti {
         if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): `compile::effective` compiles the module under the unroll
+    /// variants at -O2 and -O3 and keeps the one smaller in bytes, then clocks.
+    fn unroll_speed_trial(&self) -> bool {
+        true
+    }
+
     /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
     /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {

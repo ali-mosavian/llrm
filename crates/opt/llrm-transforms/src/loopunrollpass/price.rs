@@ -48,7 +48,10 @@ pub(super) fn full_unroll_pays(
     uce: &UnrollCostEstimator,
     up: &UnrollingPreferences,
 ) -> bool {
-    let rate = run.tti.unroll_milliclocks_per_byte();
+    // DEVIATE UNROLL-SPEED-TRIAL: the compile that unrolls only what adds no bytes prices every loop, an inlinable
+    // callee's too.
+    let no_grow = trial::speed_unroll() == Some(trial::SpeedUnroll::NoGrow);
+    let rate = if no_grow { 1 << 40 } else { run.tti.unroll_milliclocks_per_byte() };
     // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
     // (the pin's order): a veto in a function the inliner can take leaves a
     // small rolled helper that is then inlined, and unrolled, at every site
@@ -57,7 +60,8 @@ pub(super) fn full_unroll_pays(
     // (`-fno-inline-functions` with called-once off, or `noinline`) there is
     // no late pass for it: the loop is priced here (huffman_decode -O3: 17
     // calls of getbit unrolled unpriced, +915 B over gcc).
-    let inlinable = !run.options.target_unrolling
+    let inlinable = !no_grow
+        && !run.options.target_unrolling
         && run.options.inliner_follows
         && llrm_mir::facts::Facts::of(&run.function.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
         && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
