@@ -28,7 +28,7 @@ fn instructions(
 #[test]
 fn a_word_shifted_right_by_seven_shifts_its_bytes_in_place() {
     let lines = instructions("define i16 @k_shr7(i16 %x) {\n  %r = lshr i16 %x, 7\n  ret i16 %r\n}\n", "k_shr7");
-    // 6502-AX-CELLS: the word arrives in A:X and is stored to its cells to
+    // 6502-AX-WORD-OPS: the word arrives in A:X and is stored to its cells to
     // rotate in place (+4 B on the 11 B the cells gave); by hand through A
     // it is `asl a; txa; rol a; tay; lda #0; rol a; tax; tya` (9 B)
     assert_eq!(
@@ -42,7 +42,7 @@ fn a_word_shifted_right_by_seven_shifts_its_bytes_in_place() {
 fn a_long_shifted_right_by_seven_is_no_longer_than_it_was() {
     let lines = instructions("define i32 @k_shr7l(i32 %x) {\n  %r = lshr i32 %x, 7\n  ret i32 %r\n}\n", "k_shr7l");
     assert!(
-        lines.len() <= 40, // was 35: 6502-AX-CELLS, the A:X entry
+        lines.len() <= 40, // was 35: 6502-AX-WORD-OPS, the A:X entry
         "{} instructions: {lines:?}",
         lines.len()
     );

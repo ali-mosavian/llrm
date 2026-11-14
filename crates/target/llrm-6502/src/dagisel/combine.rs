@@ -111,12 +111,20 @@ fn keeps_pair_shift_whole(
     shift: SDValue,
 ) -> bool {
     let logic = dag.operand(shift, 0);
-    dag.value_type(shift) == EVT::I16
-        && dag.opcode(logic) == ISD::Or
-        && (0..2).any(|at| {
-            let part = dag.operand(logic, at);
-            dag.opcode(part) == ISD::Shl && dag.constant(dag.operand(part, 1)) == Some(8)
-        })
+    if dag.value_type(shift) != EVT::I16 || dag.opcode(logic) != ISD::Or {
+        return false;
+    }
+    // exactly the legalizer's `BuildPair`: `zext lo | (anyext hi << 8)`, both pieces bytes
+    let byte_extended = |value: SDValue, ops: &[ISD]| {
+        ops.contains(&dag.opcode(value)) && dag.value_type(dag.operand(value, 0)) == EVT::I8
+    };
+    let high = |value: SDValue| {
+        dag.opcode(value) == ISD::Shl
+            && dag.constant(dag.operand(value, 1)) == Some(8)
+            && byte_extended(dag.operand(value, 0), &[ISD::AnyExtend, ISD::ZeroExtend])
+    };
+    let (a, b) = (dag.operand(logic, 0), dag.operand(logic, 1));
+    (byte_extended(a, &[ISD::ZeroExtend]) && high(b)) || (byte_extended(b, &[ISD::ZeroExtend]) && high(a))
 }
 
 /// A word shift by 1 to 4 is a chain of that many steps for both bytes, and

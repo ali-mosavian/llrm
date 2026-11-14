@@ -79,7 +79,7 @@ fn a_word_arithmetic_shift_right_by_one_to_four_is_the_chain_through_a() {
 /// keeping the inner shift of `(x >> 7) >> 8` for the other half made `x >> 7`
 /// seven `lsr; ror` pairs, 18 bytes against 12.
 ///
-/// 6502-AX-CELLS: shl 5..7 take +2 B, the A:X entry stored to the cells the
+/// 6502-AX-WORD-OPS: shl 5..7 take +2 B, the A:X entry stored to the cells the
 /// shift runs on.
 const CEILING: [(&str, [u32; 11], [u32; 11]); 3] = [
     // O2, Os

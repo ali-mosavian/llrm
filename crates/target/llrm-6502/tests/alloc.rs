@@ -1847,7 +1847,7 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
 fn three_saved_cells_are_shared_helpers_at_the_size_level_only() {
     // the word is read from a global: an argument in A:X is live at entry,
     // where `__csave` (which changes a, x and y) cannot run, and the
-    // function then pushes the cells inline (6502-AX-CSAVE)
+    // function then pushes the cells inline (6502-AX-PROGRAMS)
     let ir = "@g = external global i16
 define i8 @digits() {
 entry:
