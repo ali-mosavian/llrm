@@ -134,6 +134,12 @@ fn test_the_llrm_runtime_keeps_zero_variables_in_an_unstored_bss() {
     assert!(omf::groups(&llrm)["DGROUP"].len() >= 2, "DGROUP holds the BSS segments");
 }
 
+/// The bytes of the module's code, from its listing's object.
+fn code_bytes(program: &model::Program) -> usize {
+    let records = records(program, "bss.bas");
+    omf::segments(&records).iter().flatten().filter(|(name, _)| name.contains("CODE") || name.ends_with("_TEXT")).map(|(_, size)| *size as usize).sum()
+}
+
 fn microsoft_program(source: &std::path::Path) -> model::Program {
     let frontend = qb_driver::Frontend { zero_bss: true, ..qb_driver::Frontend::new("qb45", "qb45") };
     qb_driver::parsed(source, &frontend, None).expect("parses")
@@ -152,6 +158,8 @@ fn test_the_microsoft_runtimes_get_a_module_that_zeroes_its_own_bss() {
     let text = listing(&program);
     assert!(text.contains("call far ptr $QB$ZBSS"), "the entry zeroes it:\n{text}");
     assert!(text.contains("$QB$ZBSS proc far"), "the routine is the module's:\n{text}");
+    let bare = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    assert_eq!(code_bytes(&program) - code_bytes(&bare), llrm_codegen::driver::basic::ZEROING_COST, "the threshold is what the routine and its call weigh");
     let small = written(&tmp, "small.bas", b"DEFINT A-Z\r\nDIM SHARED a(0 TO 3)\r\nDIM SHARED k AS INTEGER\r\nREAD k\r\na(k) = k\r\nPRINT a(k + 1)\r\nDATA 1\r\n");
     let little = microsoft_program(&small);
     assert!(!omf::segments(&records(&little, "small.bas")).iter().flatten().any(|(name, _)| name == "_BSS"), "ten bytes cost less stored");

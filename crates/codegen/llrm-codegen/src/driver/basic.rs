@@ -724,8 +724,14 @@ pub fn finalized(
 /// The routine a module calls where its runtime does not zero `_BSS` (the Microsoft ones): at its
 /// entry and after each CLEAR, whose B$SCLR zeroes BC_DATA only.
 pub const ZERO_BSS: &str = "$QB$ZBSS";
-/// The bytes the routine and one call to it cost (measured at -O2): `_BSS` smaller than this stays stored.
-pub const ZEROING_COST: usize = 30;
+/// The routine's code around its two `_BSS` offsets: `push di; push es; push ds; pop es; mov di, start`,
+/// then `mov cx, end` and `sub cx, di; shr cx, 1; xor ax, ax; cld; rep stosw; pop es; pop di`.
+const ZEROING_ENTER: [u8; 5] = [0x57, 0x06, 0x1E, 0x07, 0xBF];
+const ZEROING_COUNT: [u8; 1] = [0xB9];
+const ZEROING_FINISH: [u8; 11] = [0x2B, 0xCF, 0xD1, 0xE9, 0x33, 0xC0, 0xFC, 0xF3, 0xAB, 0x07, 0x5F];
+/// What zeroing costs: the routine (its code, two offset words, a frame of `push bp; mov bp, sp` and `pop bp`, a
+/// `ret`) and one call to it (`push cs; call near`). Zero data of at most this many bytes is cheaper stored.
+pub const ZEROING_COST: usize = ZEROING_ENTER.len() + ZEROING_COUNT.len() + ZEROING_FINISH.len() + 2 * 2 + (1 + 2 + 1) + 1 + (1 + 3);
 /// The two ends of `_BSS`, which the routine zeroes between.
 const BSS_START: &str = "$QB$BSS";
 const BSS_END: &str = "$QB$BSSE";
@@ -738,13 +744,11 @@ fn zeroing_routine(
 ) -> masm::Procedure {
     use masm::InlinePart::{Bytes, Fixup};
     let parts = vec![
-        // push di; push es; push ds; pop es; mov di, start
-        Bytes(vec![0x57, 0x06, 0x1E, 0x07, 0xBF]),
+        Bytes(ZEROING_ENTER.to_vec()),
         Fixup("offset".into(), BSS_START.into(), 0),
-        // mov cx, end; sub cx, di; shr cx, 1; xor ax, ax; cld; rep stosw; pop es; pop di
-        Bytes(vec![0xB9]),
+        Bytes(ZEROING_COUNT.to_vec()),
         Fixup("offset".into(), BSS_END.into(), 0),
-        Bytes(vec![0x2B, 0xCF, 0xD1, 0xE9, 0x33, 0xC0, 0xFC, 0xF3, 0xAB, 0x07, 0x5F]),
+        Bytes(ZEROING_FINISH.to_vec()),
     ];
     masm::Procedure { far: true, ..masm::routine_of_parts(ZERO_BSS, parts, registers, regs) }
 }
