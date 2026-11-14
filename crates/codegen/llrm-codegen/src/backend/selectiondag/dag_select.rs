@@ -91,19 +91,21 @@ pub fn legalized_with<L: CombineHooks + legalize_dag::Hooks>(
 ) -> Result<(), Refusal> {
     let combiner = |dag: &mut SelectionDAG, lowering: &mut L, level| {
         let combiner = DagCombiner::new(dag, lowering, level).with_tli(tli);
-        if opt_none { combiner.with_opt_none() } else { combiner }.run();
+        if opt_none { combiner.with_opt_none() } else { combiner }
+            .run_bounded()
+            .map_err(|runaway| Refusal::Legalize(runaway.to_string()))
     };
-    combiner(dag, lowering, CombineLevel::BeforeLegalizeTypes);
+    combiner(dag, lowering, CombineLevel::BeforeLegalizeTypes)?;
     let mut types = TypeLegalizer::new(dag, tli);
     if let Some(arch) = arch {
         types = types.with_target(arch);
     }
     let types = types.with_hooks(lowering).run();
     types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
-    combiner(dag, lowering, CombineLevel::AfterLegalizeTypes);
+    combiner(dag, lowering, CombineLevel::AfterLegalizeTypes)?;
     let legal = DagLegalizer::new(dag, tli, lowering).run();
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
-    combiner(dag, lowering, CombineLevel::AfterLegalizeDag);
+    combiner(dag, lowering, CombineLevel::AfterLegalizeDag)?;
     // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
     if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("legalized:\n{}", dag.dump());
