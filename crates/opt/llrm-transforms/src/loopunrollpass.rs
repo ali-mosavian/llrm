@@ -121,6 +121,9 @@ pub struct Options {
     /// (inlining is on and the function is not `noinline`): its loops are
     /// then left to be priced in the context of each site.
     pub inliner_follows: bool,
+    /// The byte price at speed counts (`Options::prices_bytes`): -O2 and -O3,
+    /// and -O1 where the target asks (`speed_rate_at_o1`).
+    pub speed_rate: bool,
 }
 
 /// What the pass reads and changes.
@@ -491,6 +494,10 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
+    // DEVIATE UNROLL-SPEED-TRIAL: the trial compile's own threshold.
+    if let Some(trial::SpeedUnroll::Wide(wide)) = trial::speed_unroll() {
+        up.threshold = wide;
+    }
     // Apply size attributes.
     if run.options.opt_size {
         up.threshold = up.opt_size_threshold;
@@ -1088,8 +1095,11 @@ fn should_full_unroll(
     // unroll). A loop this refuses goes to the trial (DEVIATE
     // UNROLL-O1-TRIAL, `note_for_trial`): the driver compiles again with it
     // unrolled and keeps that only if bytes and work do not grow.
+    // Where the byte price at speed counts (`speed_rate_at_o1`) the copies are
+    // priced against their clocks below, as at -O2.
     if run.options.opt_level == 1
         && !run.options.opt_size
+        && !run.options.speed_rate
         && run.tti.unroll_never_grows_at_o1()
         && trial::active().is_none()
     {
@@ -1938,6 +1948,49 @@ fn try_to_unroll_loop(
         &mut se,
         &mut pp,
     );
+    if run.tti.unroll_speed_trial()
+        && run.options.opt_level >= 2
+        && !run.options.opt_size
+        && trial::speed_unroll().is_none()
+        && (count > 0 || trip_count > 0)
+    {
+        // DEVIATE UNROLL-SPEED-TRIAL: the same question asked under each variant; a driver compiles a variant only
+        // where an answer differs.
+        let variant = if count > 0 {
+            Some(trial::SpeedUnroll::NoGrow)
+        } else if run.options.opt_level == 2 && up.threshold < trial::WIDE_THRESHOLD {
+            Some(trial::SpeedUnroll::Wide(trial::WIDE_THRESHOLD))
+        } else {
+            None
+        };
+        if let Some(variant) = variant {
+            let mut asked = up.clone();
+            if let trial::SpeedUnroll::Wide(wide) = variant {
+                asked.threshold = wide;
+            }
+            let mut peeling = PeelingPreferences::default();
+            let again = trial::with_speed_unroll(Some(variant), || {
+                compute_unroll_count(
+                    run,
+                    analyzed,
+                    lp,
+                    &eph,
+                    &pinfo,
+                    trip_count,
+                    max_trip_count,
+                    max_or_zero,
+                    trip_multiple,
+                    &uce,
+                    &mut asked,
+                    &mut se,
+                    &mut peeling,
+                )
+            });
+            if again != count {
+                trial::note_speed_unroll(count > 0);
+            }
+        }
+    }
     // Nothing has changed the function yet.
     run.scev = se;
     if count == 0 {
@@ -2857,6 +2910,8 @@ pub struct LoopFullUnroll {
     pub target_unrolling: bool,
     /// `Options::inliner_follows`.
     pub inliner_follows: bool,
+    /// `Options::speed_rate`.
+    pub speed_rate: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -2913,6 +2968,7 @@ impl FunctionPass for LoopFullUnroll {
                 prepare_for_lto: false,
                 target_unrolling: self.target_unrolling,
                 inliner_follows: self.inliner_follows,
+                speed_rate: self.speed_rate,
             },
         };
         let changed = unroll_loops(&mut run);

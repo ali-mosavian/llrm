@@ -188,12 +188,7 @@ pub fn decomposes(
     }
     let c = (c & u128::from(u32::MAX)) as u32;
     let Some(chain) = chain(cpu, c) else { return false };
-    // -O1 stands on the pin's answer: the chain is the incumbent and the
-    // multiply replaces it only where it is no worse in bytes and in
-    // clocks, which `crate::trial` decides for the function (a lone `x * 9`
-    // is 6 B against 4 but 12 clocks against 43: each wins one axis,
-    // the chain stands, as the pin's clang has it).
-    if !cpu.at_least(Cpu::M68020) || price == Price::Strict {
+    if !cpu.at_least(Cpu::M68020) {
         return true;
     }
     price.beats(cpu, chain, multiply(cpu))

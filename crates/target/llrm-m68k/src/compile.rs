@@ -345,7 +345,7 @@ pub fn items_with(
     };
     let options = Options { mid_end: false, global_copies: options.global_copies, ..options };
     let wants_size = size_build(module, name, options);
-    let price = crate::timing::Price::of(wants_size, options.strict);
+    let price = crate::timing::Price::of(wants_size);
     // The relaxation is the last choice of a build, so it is made before the
     // two builds of the shared `MachineCSE` are compared.
     let prefixes = Prefixes::default();
@@ -416,7 +416,7 @@ fn items_trials(
         return Ok((kept, saved, options, touched.shared_cse));
     }
     let wants_size = size_build(module, name, options);
-    let price = crate::timing::Price::of(wants_size, options.strict);
+    let price = crate::timing::Price::of(wants_size);
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
     if touched.mul_trial {
@@ -830,7 +830,7 @@ fn items_once(
                         selection.absolute_data,
                         selection.wants_size,
                         selection.carry_chain,
-                        crate::timing::Price::of(selection.wants_size, selection.strict),
+                        crate::timing::Price::of(selection.wants_size),
                         &chain,
                         &selection.libcalls,
                     )?
@@ -882,7 +882,7 @@ fn items_once(
                     crate::sextacc::sign_extended_words(
                         &mut function,
                         cpu,
-                        crate::timing::Price::of(wants_size, options.strict),
+                        crate::timing::Price::of(wants_size),
                     );
                 }
                 if options.class_split {
@@ -997,7 +997,7 @@ fn items_once(
             &mut function,
             &assignment,
             cpu,
-            crate::timing::Price::of(wants_size, options.strict),
+            crate::timing::Price::of(wants_size),
         );
     }
     preserve_flags(&mut function, &assignment)?;
@@ -1026,7 +1026,7 @@ fn items_once(
             epilogue_begin: false,
         }));
     }
-    let price = crate::timing::Price::of(wants_size, options.strict);
+    let price = crate::timing::Price::of(wants_size);
     let expand = |function: &crate::mfunc::MFunction| {
         finish_with(
             function,

@@ -92,11 +92,15 @@ pub struct Request {
     /// loop at several sites of a loop of its caller (`llrm_transforms::trial::with_refused_loop_copies`): the
     /// compile `compile::effective` weighs the default one against.
     pub refuse_loop_copies: bool,
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): the full unroll the mid-end makes at -O2 and -O3 under
+    /// this variant (`llrm_transforms::trial::SpeedUnroll`); `None`: the pin's decisions. `compile::effective` keeps
+    /// the variant whose module is smaller in bytes, then in clocks.
+    pub unroll_variant: Option<llrm_transforms::trial::SpeedUnroll>,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false, refuse_loop_copies: false }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false, refuse_loop_copies: false, unroll_variant: None }
     }
 }
 
@@ -115,17 +119,111 @@ pub fn program(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {
+    MID_END_RUNS.with(|runs| runs.set(runs.get() + 1));
+    let unrolled = || llrm_transforms::trial::with_speed_unroll(request.unroll_variant, || program_of(text, request));
     let made = if request.refuse_loop_copies {
-        llrm_transforms::trial::with_refused_loop_copies(|| program_of(text, request))
+        llrm_transforms::trial::with_refused_loop_copies(unrolled)
     } else {
-        program_of(text, request)
+        unrolled()
     };
     LOOP_COPIES.with(|count| count.set(llrm_transforms::trial::take_loop_copies()));
+    let decisions = llrm_transforms::trial::take_speed_unrolls();
+    SPEED_UNROLLS.with(|count| count.set(decisions));
+    // The mid-end's module as printed, hashed: kept for a compile that made unroll decisions (what a variant could
+    // change), and compared by a variant's compile (`with_unroll_base`).
+    let base = UNROLL_BASE.with(std::cell::Cell::get);
+    let wanted = base.is_some()
+        || (request.unroll_variant.is_none()
+            && matches!(request.level, Level::O2 | Level::O3)
+            && decisions.made + decisions.refused > 0);
+    let printed = made.as_ref().ok().filter(|_| wanted).map(|program| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        program.modules.iter().for_each(|module| llrm_mir::print::module(module).hash(&mut hasher));
+        let instructions = program
+            .modules
+            .iter()
+            .flat_map(|module| &module.globals)
+            .filter_map(|global| global.function())
+            .map(|function| function.instruction_count())
+            .sum();
+        Fingerprint { hash: hasher.finish(), instructions }
+    });
+    FINGERPRINT.with(|held| held.set(printed));
+    if let (Some(variant), Some(base), Some(now)) = (request.unroll_variant, base, printed) {
+        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
+            eprintln!("unroll {variant:?}: {} instructions against {}", now.instructions, base.instructions);
+        }
+        if now.hash == base.hash {
+            return Err(UNCHANGED.to_owned());
+        }
+        if now.instructions > base.instructions + UNROLL_TRIAL_GROWTH {
+            return Err(GROWN.to_owned());
+        }
+    }
     made
 }
 
+/// What a mid-end module is, for comparing a variant's to the base compile's: its text hashed, and its instructions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fingerprint {
+    pub hash: u64,
+    pub instructions: usize,
+}
+
+/// What [`program`] says of a variant whose mid-end made the module the base compile's made.
+pub const UNCHANGED: &str = "the unroll variant leaves the module as it is";
+
+/// What [`program`] says of a variant whose mid-end made a module of more than [`UNROLL_TRIAL_GROWTH`] instructions
+/// beyond the base compile's: its selection, the bulk of a compile, is not run.
+pub const GROWN: &str = "the unroll variant makes a module of far more instructions";
+
+/// The instructions a variant's module may have beyond the base compile's and still be selected: a compile-time
+/// budget of UNROLL-SPEED-TRIAL. The variants that won on the corpus add at most 518 (byval_struct -O2, 76 B to 31 B);
+/// fcmp_all and div_constants_short -O2 add 2076 and 1549 and their wide variants are 90% and 16% bigger in bytes.
+pub const UNROLL_TRIAL_GROWTH: usize = 1000;
+
+/// Runs `body` with `fingerprint` (a compile's [`mid_end_fingerprint`]) as the module a variant's compile must differ
+/// from: a variant that comes out the same fails with [`UNCHANGED`], one that comes out bigger with [`GROWN`], both
+/// before the selection.
+pub fn with_unroll_base<T>(
+    fingerprint: Option<Fingerprint>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = UNROLL_BASE.with(|held| held.replace(fingerprint));
+    let value = body();
+    UNROLL_BASE.with(|held| held.set(before));
+    value
+}
+
+/// The data text of the module the last [`selections_with_alternatives`] made.
+pub fn data_of_last_selection() -> Option<Result<String, String>> {
+    DATA_OF_LAST.with(|held| held.borrow_mut().take())
+}
+
+/// The mid-end runs on this thread since the last call.
+pub fn take_mid_end_runs() -> usize {
+    MID_END_RUNS.with(std::cell::Cell::take)
+}
+
+/// The hash of the module the last [`program`] made, kept where it made unroll decisions at -O2 and up.
+pub fn mid_end_fingerprint() -> Option<Fingerprint> {
+    FINGERPRINT.with(std::cell::Cell::get)
+}
+
 thread_local! {
+    static DATA_OF_LAST: std::cell::RefCell<Option<Result<String, String>>> = const { std::cell::RefCell::new(None) };
+    static MID_END_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FINGERPRINT: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
+    static UNROLL_BASE: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
     static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SPEED_UNROLLS: std::cell::Cell<llrm_transforms::trial::UnrollDecisions> =
+        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0 }) };
+}
+
+/// The full-unroll decisions the last [`program`] made at -O2 and up: what an `unroll_variant` could change.
+pub fn speed_unrolls_made() -> llrm_transforms::trial::UnrollDecisions {
+    SPEED_UNROLLS.with(std::cell::Cell::get)
 }
 
 /// The inlines of a loop-holding callee at several sites of a loop that the last [`program`] made (they are what
@@ -224,6 +322,8 @@ pub fn selections_with_alternatives(
     request: &Request,
 ) -> Result<(Vec<Selected>, Vec<Selected>), String> {
     let mut program = program(text, request)?;
+    // the module's data text, from the mid-end this compile ran: `compile::kept_data_text` is not made to run it again
+    DATA_OF_LAST.with(|held| *held.borrow_mut() = Some(crate::data::text_of(&program)));
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
     let module = &program.modules[0];
     let names: Vec<String> = module
