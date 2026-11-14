@@ -830,7 +830,7 @@ fn lowering_for(
     features: Features,
     build: impl FnOnce() -> TargetLowering,
 ) -> TargetLowering {
-    type Key = (u32, [bool; 9]);
+    type Key = (u32, [bool; 10]);
     thread_local! {
         static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -846,6 +846,7 @@ fn lowering_for(
             features.sse2,
             features.vector128,
             features.soft_float,
+            features.fp_status,
         ],
     );
     TABLES.with(|tables| {
@@ -1090,7 +1091,7 @@ fn selected_in(
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
         let cmov = machine.tti().is_some_and(|tti| tti.has_cmov());
-        let features = Features { cmov, ..Features::default() };
+        let features = Features { cmov, fp_status: cpu.tests_status_word(), ..Features::default() };
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
     tli.set_small_divide(cpu.bytes_strict() && (cpu.size || arch.small_divide_at_o1()));
@@ -1585,7 +1586,7 @@ fn selected_in(
                     i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
-                    status_word_tests: std::env::var_os("LLRM_X87_STATUS").is_some(),
+                    status_word_tests: !m16 && !m64 && cpu.tests_status_word(),
                     branch_constant_selects: select_branch > 0
                         && frequencies.as_ref().is_some_and(|frequencies| {
                             frequencies.relative_to_entry(parent) >= f64::from(select_branch)

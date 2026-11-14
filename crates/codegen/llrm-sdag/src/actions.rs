@@ -71,6 +71,9 @@ pub struct Features {
     /// `useSoftFloat()`: `f32` and `f64` have no register class; their
     /// arithmetic is a call (m16).
     pub soft_float: bool,
+    /// x87 compares read the status word as a value (DEVIATE X87-STATUS): `oeq` and `une` are
+    /// one masked compare of it, so the target lowers them (`Custom`) instead of expanding them.
+    pub fp_status: bool,
 }
 
 /// The CPU features the AArch64 constructor's scalar arms test.
@@ -1187,8 +1190,9 @@ impl TargetLowering {
             t.set_trunc_store_action(vt, mem, Expand);
         }
         for vt in FLOATS {
-            t.set_cond_code_action(CondCode::SetOEq, vt, Expand);
-            t.set_cond_code_action(CondCode::SetUNe, vt, Expand);
+            let action = if features.fp_status { Custom } else { Expand };
+            t.set_cond_code_action(CondCode::SetOEq, vt, action);
+            t.set_cond_code_action(CondCode::SetUNe, vt, action);
         }
         // L205..L240
         if features.cmov {

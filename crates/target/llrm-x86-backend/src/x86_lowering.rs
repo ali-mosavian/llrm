@@ -938,6 +938,10 @@ fn status_word_pays(
     dag: &SelectionDAG,
     setcc: SDValue,
 ) -> bool {
+    // `==` and `!=` are one mask and one compare of the word (two `setcc` and a join otherwise).
+    if matches!(cond_of(dag, dag.operand(setcc, 2)), CondCode::SetOEq | CondCode::SetUNe) {
+        return true;
+    }
     let (lhs, rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
     let readers: usize = dag
         .users(lhs)
