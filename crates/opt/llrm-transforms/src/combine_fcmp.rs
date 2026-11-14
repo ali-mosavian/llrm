@@ -10,7 +10,7 @@
 //! phi, sitofp, fptrunc, fabs, sqrt, floor/ceil, the min/max-select exit) are
 //! not. Exit: the next PR on `combine_fcmp.rs`.
 //!
-//! DEVIATE 2: MIR has no vectors.
+//! DEVIATE 2: only the null value of a vector compare is vector-aware.
 //!
 //! # Example
 //! ```text
@@ -173,8 +173,13 @@ fn zero_of(
     c: &Combiner,
     ty: llrm_mir::types::TypeId,
 ) -> Operand {
-    let Type::Float(kind) = *c.context.types.get(ty) else { unreachable!("an fcmp compares floats") };
-    Operand::Constant(c.context.constant(Constant { ty, kind: ConstantKind::float_zero(kind) }))
+    // `Constant::getNullValue`: `zeroinitializer` for a vector of floats.
+    let kind = match *c.context.types.get(ty) {
+        Type::Float(kind) => ConstantKind::float_zero(kind),
+        Type::Vector { .. } => ConstantKind::Zero,
+        _ => unreachable!("an fcmp compares floats"),
+    };
+    Operand::Constant(c.context.constant(Constant { ty, kind }))
 }
 
 fn is_pos_zero(
