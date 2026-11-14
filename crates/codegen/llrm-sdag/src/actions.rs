@@ -940,7 +940,7 @@ impl TargetLowering {
         // A `BUILD_VECTOR` is selected by no pattern: the legalizer expands a
         // constant one to a pool load (`ExpandBUILD_VECTOR`) and any other
         // through the stack (`ExpandVectorBuildThroughStack`). DEVIATE X86V3
-        // (exit with the C2 PR): the pin's `LowerBUILD_VECTOR` makes a splat
+        // (owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR): the pin's `LowerBUILD_VECTOR` makes a splat
         // `movd` + `pshufd` and the rest `punpck`/`pinsr`; the stack form is
         // correct and slower.
         t.set_ops(

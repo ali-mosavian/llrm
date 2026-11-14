@@ -1267,7 +1267,7 @@ impl Tti for X86 {
     }
 
     /// The pin expands a reduction to shuffles (`ExpandReductions`); the
-    /// backend has no vector shuffle yet. DEVIATE X86V4, exit with the C3 PR.
+    /// backend has no vector shuffle yet. DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR).
     fn lowers_vector_reductions(&self) -> bool {
         false
     }
@@ -1285,7 +1285,7 @@ impl Tti for X86 {
     /// `X86TTIImpl::getMemoryOpCost` of a contiguous vector access of whole XMM
     /// registers (`movups`): one per register. A type that is not a multiple of
     /// 128 bits, or a lane that is not an integer of 8 to 64 bits, is not priced
-    /// (DEVIATE X86V1: the pin widens or scalarizes it; isel here takes none).
+    /// (DEVIATE X86V1, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR: the pin widens or scalarizes it; isel here takes none).
     fn vector_memory_op_cost(
         &self,
         _op: MemoryOp,
@@ -1303,7 +1303,7 @@ impl Tti for X86 {
     /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
     /// cost one per register. Shifts (a variable count is not selectable), the
     /// multiplies and the divisions are not priced, so a loop holding one stays
-    /// scalar (DEVIATE X86V2, exit with the C2 PR).
+    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR).
     fn vector_arithmetic_cost(
         &self,
         op: ArithOp,

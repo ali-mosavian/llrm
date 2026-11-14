@@ -1607,7 +1607,7 @@ impl FunctionPass for LoopVectorize {
                             has_reductions: !legality.reductions.is_empty(),
                         };
                         match plan(&*tti, &facts) {
-                            // DEVIATE X86V4 (exit with the C3 PR): the pin's
+                            // DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR): the pin's
                             // x86 expands `llvm.vector.reduce.*` to shuffles
                             // (`ExpandReductions`), which this backend does
                             // not select yet.
