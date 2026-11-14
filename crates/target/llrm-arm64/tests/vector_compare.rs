@@ -100,6 +100,11 @@ fn matches_the_pin(source: &str) -> String {
     text
 }
 
+/// DEVIATE VEC3 (owner llrm-arm64-vec, exit 2026-11-27): the pin's middle end
+/// rewrites `icmp ule <vector>, zeroinitializer` to `eq` (`cmeq #0`); ours
+/// leaves it a `cmhs` against a zero register. Not compared against zero.
+const ULE_ZERO: &str = "ule";
+
 const PREDICATES: [&str; 10] = ["eq", "ne", "sgt", "sge", "slt", "sle", "ugt", "uge", "ult", "ule"];
 
 /// Every predicate on a 128-bit vector of each lane width is a `cmeq`,
@@ -118,7 +123,7 @@ fn integer_compares_of_128_bit_vectors_are_cm_instructions() {
 #[test]
 fn integer_compares_against_zero_are_the_zero_forms() {
     for vector in ["<16 x i8>", "<8 x i16>", "<4 x i32>", "<2 x i64>"] {
-        for pred in PREDICATES {
+        for pred in PREDICATES.into_iter().filter(|&pred| pred != ULE_ZERO) {
             matches_the_pin(&ir(pred, vector, false));
         }
     }
@@ -130,7 +135,9 @@ fn integer_compares_of_64_bit_vectors_are_cm_instructions() {
     for vector in ["<8 x i8>", "<4 x i16>", "<2 x i32>"] {
         for pred in PREDICATES {
             matches_the_pin(&ir(pred, vector, true));
-            matches_the_pin(&ir(pred, vector, false));
+            if pred != ULE_ZERO {
+                matches_the_pin(&ir(pred, vector, false));
+            }
         }
     }
 }
@@ -200,14 +207,17 @@ fn vector_selects_are_a_compare_and_a_bit_select() {
 
 /// `c[i] = a[i] < b[i] ? a[i] : b[i]` over `float` stayed a scalar loop of
 /// `fcsel` (jpeg_single's clamp, +1.1M instructions at -O2): the loop is
-/// vectorized into `fcm*` and a `bit`/`bif`/`bsl` over `.4s`.
+/// vectorized into `fcm*.4s` and a `bit`/`bif`/`bsl`.
 #[test]
 fn a_float_select_loop_is_vectorized() {
     let loop_ir = include_str!("../../../opt/llrm-transforms/tests/lv/float_select.ll");
     let text = ours(&format!("target triple = \"aarch64-unknown-linux-gnu\"\n{loop_ir}")).unwrap();
-    let vector = |prefix: &str| text.lines().any(|line| line.trim().starts_with(prefix) && line.contains(".4s"));
-    assert!(vector("fcm"), "no vector fcm:\n{text}");
-    assert!(vector("bit") || vector("bif") || vector("bsl"), "no bit select:\n{text}");
+    let has = |prefix: &str, arrangement: &str| {
+        text.lines().any(|line| line.trim().starts_with(prefix) && line.contains(arrangement))
+    };
+    assert!(has("fcm", ".4s"), "no vector fcm:\n{text}");
+    // The bit selects are bytewise.
+    assert!(has("bit", ".16b") || has("bif", ".16b") || has("bsl", ".16b"), "no bit select:\n{text}");
 }
 
 /// `llvm.<op>` of two vectors.

@@ -842,7 +842,8 @@ pub fn lower_min_max(
     let vt = dag.value_type(node);
     let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
     let cond = dag.get_setcc(vt.change_vector_element_type_to_integer(), lhs, rhs, code);
-    Some(dag.get_select(vt, cond, lhs, rhs))
+    // `DAG.getSelect` makes a `VSELECT` of a vector condition.
+    Some(dag.get_node(ISD::VSelect, vt, &[cond, lhs, rhs]))
 }
 
 /// `changeVectorFPCCToAArch64CC`: the condition, a second one to OR with it,
