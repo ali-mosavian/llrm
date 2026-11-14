@@ -234,6 +234,16 @@ pub fn routine_procedure(
     registers: llrm_target::FrameRegisters,
     regs: Regs,
 ) -> Procedure {
+    routine_of_parts(name, vec![InlinePart::Bytes(code)], registers, regs)
+}
+
+/// `routine_procedure` of parts, which may name a symbol: an offset the linker fills.
+pub fn routine_of_parts(
+    name: &str,
+    code: Vec<InlinePart>,
+    registers: llrm_target::FrameRegisters,
+    regs: Regs,
+) -> Procedure {
     let what = Semantics { name: Some(name.into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     // The return is an instruction, so the frame the printer opens is closed
@@ -256,7 +266,7 @@ pub fn routine_procedure(
         reserve: 0,
         callees: IndexMap::from_iter([(
             1,
-            Callee { name: name.into(), far: false, pops: 0, code: vec![InlinePart::Bytes(code)], tail: false },
+            Callee { name: name.into(), far: false, pops: 0, code, tail: false },
         )]),
         interrupt: None,
         size: false,
