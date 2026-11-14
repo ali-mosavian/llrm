@@ -224,6 +224,8 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         "MOV64toSDrr" => "Movq_xmm_rm64",
         "MOVSS2DIrr" => "Movd_rm32_xmm",
         "MOVDI2SSrr" => "Movd_xmm_rm32",
+        "MOVDI2PDIrr" => "Movd_xmm_rm32",
+        "MOV64toPQIrr" => "Movq_xmm_rm64",
         _ => return None,
     })
 }
@@ -234,11 +236,11 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 36] = [
+    const ARITHMETIC: [&str; 47] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
         "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
-        "PXOR",
+        "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ",
     ];
     const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [
@@ -287,6 +289,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     }
     found.map(|(mnemonic, width, result, letters)| {
         let letters = if mnemonic.starts_with("sqrt") && letters.len() == 1 { vec!['r', 'r'] } else { letters };
+        // `PSHUFDri` names its source and the immediate; the destination is not tied to the source.
+        let letters = if mnemonic == "pshufd" { std::iter::once('r').chain(letters).collect() } else { letters };
         (mnemonic, width, result, letters)
     })
 }

@@ -45,6 +45,7 @@ fn legalized_add(tli: &TargetLowering) -> (SelectionDAG, SDValue) {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -89,6 +90,7 @@ fn an_i64_select_is_a_cmov() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -133,6 +135,7 @@ fn legalized_float_op(
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -218,6 +221,7 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -256,6 +260,7 @@ fn an_f32_to_f64_extend_survives_legalization() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -298,6 +303,7 @@ fn int_to_float_at_sse2_is_a_register_convert() {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
         )
@@ -341,6 +347,7 @@ fn float_to_int_at_sse2_is_a_register_convert() {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
         )
@@ -379,6 +386,7 @@ fn a_float_compare_at_sse2_is_fcmp_and_setcc() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -415,6 +423,7 @@ fn a_float_constant_at_sse2_is_a_pool_load() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -454,6 +463,7 @@ fn a_dynamic_alloca_moves_the_stack_pointer() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -496,6 +506,7 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )

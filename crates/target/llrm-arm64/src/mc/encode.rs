@@ -438,6 +438,8 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 VectorShift::Shl => (0, 0b01010, esize + amount),
                 VectorShift::Ushr => (1, 0b00000, 2 * esize - amount),
                 VectorShift::Sshr => (0, 0b00000, 2 * esize - amount),
+                VectorShift::Usra => (1, 0b00010, 2 * esize - amount),
+                VectorShift::Ssra => (0, 0b00010, 2 * esize - amount),
             };
             0x4F00_0400 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
