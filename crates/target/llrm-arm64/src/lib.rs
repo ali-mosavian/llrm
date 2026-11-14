@@ -40,6 +40,7 @@ pub mod sinkfold;
 pub mod taildup;
 pub mod trial;
 pub mod tti;
+mod tti_sink;
 #[cfg(test)]
 mod tti_tests;
 mod tti_vector;

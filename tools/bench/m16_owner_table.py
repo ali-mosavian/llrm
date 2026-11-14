@@ -55,6 +55,13 @@ def findings(level: str, ours: dict, refs: dict) -> list[str]:
     return found
 
 
+def net_code(ours: dict | None, language: str, program: str, level: str) -> int | str:
+    """A Nib cell that does file I/O: its code less the std.io skeleton's fixed bytes (bench.net_code), the measure the plain-C bar is read against; "" for any other cell."""
+    if not ours or language != "nib" or program not in bench.io_programs([]) or level not in bench.fixed_io_skeleton():
+        return ""
+    return bench.net_code(ours["code"], level)
+
+
 def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
     """(rows, counts per level and verdict) of a bench run's {"NAME/LANG/LEVEL": counts}."""
     present = {key.rsplit("/", 2)[0] for key in table}
@@ -88,7 +95,9 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             note = ";".join(found) + (f" [bar {bar}]" if bar != program else "")
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), verdict, note)
         tally[(level, row[10])] += 1
-        out.append((*row, min((r["code"] for r in plain.values()), default=""), min((r["clocks"] for r in plain.values()), default="")))
+        plain_code = min((r["code"] for r in plain.values()), default="")
+        net = net_code(ours, language, program, level)
+        out.append((*row, plain_code, min((r["clocks"] for r in plain.values()), default=""), net, net - plain_code if net != "" and plain_code != "" else ""))
     return out, tally
 
 
@@ -102,12 +111,13 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         f"# x86-m16 owner table {now:%Y-%m-%dT%H:%MZ} (date -u)",
         f"# dist {dist}; md5: {md5_lines(dist)}",
         f"# harness commit {harness}; bench.py --opt O1 O2 Os --references --no-judge; flags -march=i386",
+        "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
         "# bytes: code (CODE), data (initialised), static (data+bss); judged per axis: O1/Os strict on code/clocks/data/static; O2 priced (1 clk = 2 B) plus strict data/static;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
         "# verdicts: OK, WORSE, WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
     ]
-    columns = "prog\tlang\tlevel\tcode_B\tdata_B\tstatic_B\tclk\tbest_ext_code\tbest_ext_clk\trefs_missing\tverdict\tfindings\tplain_ext_code\tplain_ext_clk\tours_isa\trefs_isa"
+    columns = "prog\tlang\tlevel\tcode_B\tdata_B\tstatic_B\tclk\tbest_ext_code\tbest_ext_clk\trefs_missing\tverdict\tfindings\tplain_ext_code\tplain_ext_clk\tnet_code\tnet_vs_plain_code\tours_isa\trefs_isa"
     lines = ["\t".join(str(x) for x in (*row, "i386", "ow486/bcc386/tc186/tcpp286" if row[1] in ("c", "nib") else "bc86/pds86/vbdos86")) for row in body]
     return "\n".join(header) + "\n" + columns + "\n" + "\n".join(lines) + "\n"
 

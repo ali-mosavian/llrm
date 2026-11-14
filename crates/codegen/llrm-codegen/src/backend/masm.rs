@@ -2095,7 +2095,9 @@ const FOLDABLE: [&str; 16] =
 /// `exits_inserted`) that a conditional branch goes to becomes that branch,
 /// `jcc callee`, and the block goes where nothing else enters it
 /// (`canMakeTailCallConditional`: a direct call, no stack adjustment, not in
-/// 16-bit code).
+/// 16-bit code). A branch that falls into such a block, to the block after it,
+/// is reversed first: OptimizeBlock moves a block with no successor to the end
+/// of the function (L1612), which makes the branch go to it.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L3752>
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1642>
 pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
@@ -2126,32 +2128,54 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
     }
     let mut callees = procedure.callees.clone();
     let mut folded = false;
-    let blocks: Vec<lir::Block> = procedure
-        .body
-        .blocks
+    let layout = &procedure.body.blocks;
+    let entered = |at: i64| layout.iter().filter(|block| block.succ.contains(&at)).count();
+    // `IsBetterFallthrough(next, tail)` where the block after the tail call is
+    // the last: the tail call is a call, so fall into the other unless it is
+    // one.
+    let better_fallthrough = |next: &lir::LirBlock| {
+        !next.insns.last().and_then(|one| one.what.as_ref()).is_some_and(|what| what.is_sibling_call())
+    };
+    let blocks: Vec<lir::Block> = layout
         .iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(index, block)| {
             let Some(last) = block.insns.last() else { return block.clone() };
             let Some(what) = last.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect) else {
                 return block.clone();
             };
-            let (Some(target), Some(_)) = (what.target, what.name.as_deref().filter(|name| FOLDABLE.contains(name)))
+            let (Some(target), Some(name)) = (what.target, what.name.as_deref().filter(|name| FOLDABLE.contains(name)))
             else {
                 return block.clone();
             };
-            let Some(callee) = tails.get(&target) else { return block.clone() };
-            if block.succ.iter().filter(|one| **one == target).count() != 1 {
-                return block.clone();
-            }
+            // `jcc T` falling into a tail call that `T` follows: the branch is
+            // reversed and the tail call, moved to the end, folded into it.
+            let reversed = || {
+                let (tail, next) = (layout.get(index + 1)?, layout.get(index + 2)?);
+                let callee = tails.get(&tail.at).filter(|_| next.at == target)?;
+                let opposite = crate::backend::layout::_OPPOSITE.get(name)?;
+                let last_block = index + 3 == layout.len();
+                let enters = entered(tail.at) == 1 && block.succ.contains(&tail.at);
+                (enters && (!last_block || better_fallthrough(next))).then_some((callee, *opposite, tail.at))
+            };
+            let (callee, name, gone) = match tails.get(&target) {
+                Some(callee) if block.succ.iter().filter(|one| **one == target).count() == 1 => (callee, name, target),
+                _ => match reversed() {
+                    Some(found) => found,
+                    None => return block.clone(),
+                },
+            };
             callees.insert(last.at, callee.clone());
             folded = true;
             let mut made = lir::LirBlock::clone(block);
             let mut insns = block.insns.to_vec();
             let at = insns.len() - 1;
-            insns[at] =
-                Arc::new(lir::Insn { what: Some(Semantics { target: None, ..what.clone() }), ..(**last).clone() });
+            insns[at] = Arc::new(lir::Insn {
+                what: Some(Semantics { target: None, name: Some(name.into()), ..what.clone() }),
+                ..(**last).clone()
+            });
             made.insns = insns.into();
-            made.succ = block.succ.iter().copied().filter(|one| *one != target).collect::<Vec<_>>().into();
+            made.succ = block.succ.iter().copied().filter(|one| *one != gone).collect::<Vec<_>>().into();
             made.into()
         })
         .collect();
@@ -2159,7 +2183,9 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
         return procedure;
     }
     let body = crate::backend::jumps::_reachable(&procedure.body, blocks);
-    Procedure { body, callees, ..procedure }
+    // A folded block leaves the layout, which can put another tail call right
+    // before the block its branch falls past: `OptimizeBranches` repeats.
+    tail_calls_folded(Procedure { body, callees, ..procedure })
 }
 
 /// What a procedure sets up and takes back, and where: the frame and each

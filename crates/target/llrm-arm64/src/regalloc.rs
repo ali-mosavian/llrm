@@ -345,7 +345,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             // are both narrow.
             Op::I(Inst::VectorLong { op, rd, rn, rm, high, .. }) => {
                 wide.insert(Reg::Fpr(*rd));
-                let adds = matches!(op, VectorLongOp::Uaddw | VectorLongOp::Saddw);
+                let adds = op.adds_wide();
                 if adds {
                     wide.insert(Reg::Fpr(*rn));
                 }
@@ -354,6 +354,15 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
                     if !adds {
                         wide.insert(Reg::Fpr(*rn));
                     }
+                }
+            }
+            Op::I(Inst::VectorUnzip { rd, rn, rm, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
+            }
+            Op::I(Inst::VectorNarrow { high, rd, rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+                if *high {
+                    wide.insert(Reg::Fpr(*rd));
                 }
             }
             Op::I(Inst::VectorInsGpr { rd, .. }) => {
@@ -368,6 +377,9 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorInsLane { rd, rn, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
             }
+            Op::I(Inst::VectorDupScalar { rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+            }
             Op::I(Inst::VectorDupLane { rd, .. }) => {
                 wide.insert(Reg::Fpr(*rd));
             }
@@ -378,7 +390,8 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             | Op::I(Inst::VectorFpBinary { rd, rn, rm, .. })
             | Op::I(Inst::VectorFma { rd, rn, rm, .. })
             | Op::I(Inst::VectorFmaLane { rd, rn, rm, .. })
-            | Op::I(Inst::VectorFmulLane { rd, rn, rm, .. }) => {
+            | Op::I(Inst::VectorFmulLane { rd, rn, rm, .. })
+            | Op::I(Inst::VectorMulLane { rd, rn, rm, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
             Op::Copy { dst: dst @ Reg::Fpr(_), src } => copies.push((*dst, *src)),
@@ -1038,10 +1051,10 @@ mod tests {
         assert_eq!(eight_byte_fp_accesses(&function), 0, "{ops:?}");
     }
 
-    /// A `movi d` / `movi .2s` made a 64-bit value that the allocator treated as
-    /// 128-bit: across a call it could not take `d8` and was spilled as a `q`
-    /// (jpeg_single -O3: two 16-byte slots and a reload per iteration, +192
-    /// instructions).
+    /// A `movi d` / `movi .2s` made a 64-bit value that the allocator treated
+    /// as 128-bit: across a call it could not take `d8` and was spilled as
+    /// a `q` (jpeg_single -O3: two 16-byte slots and a reload per
+    /// iteration, +192 instructions).
     #[test]
     fn a_narrow_fill_across_a_call_stays_in_a_callee_saved_register() {
         let fill = Op::I(Inst::VectorFill { rd: Vreg(100), fill: Fill::MaskD(0x55) });
@@ -1056,7 +1069,12 @@ mod tests {
         let ops = &function.blocks[0].ops;
         let spills = ops
             .iter()
-            .filter(|op| matches!(op, Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, .. }) if *slot != 0))
+            .filter(|op| {
+                matches!(
+                    op,
+                    Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, .. }) if *slot != 0
+                )
+            })
             .count();
         assert_eq!(spills, 0, "{ops:?}");
     }

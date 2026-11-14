@@ -17,6 +17,16 @@
 //! the chain, the and/or-mask form, the variable-index forms and the
 //! one-element vector are not made. Exit: the vector shuffle combines.
 //!
+//! `visitVECTOR_SHUFFLE`
+//! ([DAGCombiner.cpp#L29412](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L29412)):
+//! the canonical forms (a shuffle of undefs, of one vector twice, of an undef
+//! first operand, with references to an undef second operand) and a splat of
+//! a `SCALAR_TO_VECTOR` or of an `INSERT_VECTOR_ELT` into the lane is a
+//! `BUILD_VECTOR` of the scalar. DEVIATE VEC7 (owner llrm-arm64-vec, exit
+//! 2026-11-27): the commuted undef first operand, `replaceShuffleOfInsert`,
+//! `combineShuffleOfSplatVal`, `formSplatFromShuffles`, the splat of a binary
+//! operation, of a bitcast, and the rest of the function are not translated.
+//!
 //! # Used by
 //! `DagCombiner::visit`.
 
@@ -103,5 +113,54 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             return None;
         }
+    }
+}
+
+impl<H: CombineHooks> DagCombiner<'_, H> {
+    pub(super) fn visit_vector_shuffle(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let lanes = vt.lanes() as i32;
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let mask = self.dag.shuffle_mask(node).to_vec();
+        // "Canonicalize shuffle undef, undef -> undef"
+        if self.dag.is_undef(n0) && self.dag.is_undef(n1) {
+            return Some(self.dag.get_undef(vt));
+        }
+        // "Canonicalize shuffle v, v -> v, poison"
+        if n0 == n1 {
+            let unary: Vec<i32> = mask.iter().map(|&at| if at >= lanes { at - lanes } else { at }).collect();
+            let poison = self.dag.get_poison(vt);
+            return Some(self.dag.get_vector_shuffle(vt, n0, poison, &unary));
+        }
+        // "Remove references to rhs if it is undef"
+        if self.dag.is_undef(n1) && mask.iter().any(|&at| at >= lanes) {
+            let kept: Vec<i32> = mask.iter().map(|&at| if at >= lanes { -1 } else { at }).collect();
+            return Some(self.dag.get_vector_shuffle(vt, n0, n1, &kept));
+        }
+        // "If it is a splat, check if the argument vector is another splat or
+        // a build_vector."
+        let lane = mask.iter().copied().find(|&at| at >= 0)?;
+        if lane >= lanes || !mask.iter().all(|&at| at < 0 || at == lane) {
+            return None;
+        }
+        let build_vector_legal = self.tli.is_some_and(|tli| tli.is_operation_legal(ISD::BuildVector, vt));
+        if (!self.legal_operations() || build_vector_legal) && self.dag.has_one_use(n0.node) {
+            // "splat(scalar_to_vector(x), 0) -> build_vector(x,...,x)"
+            if self.dag.opcode(n0) == ISD::ScalarToVector && lane == 0 {
+                let scalar = self.dag.operand(n0, 0);
+                return Some(self.dag.get_splat_build_vector(vt, scalar));
+            }
+            // "splat(insert_vector_elt(v, x, c), c) -> build_vector(x,...,x)"
+            if self.dag.opcode(n0) == ISD::InsertVectorElt
+                && self.dag.constant(self.dag.operand(n0, 2)) == Some(lane as u128)
+            {
+                let scalar = self.dag.operand(n0, 1);
+                return Some(self.dag.get_splat_build_vector(vt, scalar));
+            }
+        }
+        None
     }
 }

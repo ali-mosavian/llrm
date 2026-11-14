@@ -78,7 +78,7 @@ fn is_extend(op: ISD) -> bool {
 fn is_conversion(op: ISD) -> bool {
     matches!(
         op,
-        ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend | ISD::FpRound
+        ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend | ISD::FpRound | ISD::Truncate
     )
 }
 
@@ -217,10 +217,11 @@ impl TypeLegalizer<'_> {
             // operand's, and the operand splits too.
             op if is_conversion(op) => {
                 let ops = self.dag.node(value).ops.clone();
-                if self.action(self.dag.value_type(ops[0])) != TypeAction::SplitVector {
-                    return Err(unsupported("split conversion of an operand that does not split"));
-                }
-                let (lo, hi) = self.split_vector(ops[0]);
+                let (lo, hi) = if self.action(self.dag.value_type(ops[0])) == TypeAction::SplitVector {
+                    self.split_vector(ops[0])
+                } else {
+                    self.split_vector_of(ops[0]).ok_or_else(|| unsupported("split conversion of a lone lane"))?
+                };
                 let (mut los, mut his) = (vec![lo], vec![hi]);
                 los.extend_from_slice(&ops[1..]);
                 his.extend_from_slice(&ops[1..]);
@@ -257,6 +258,57 @@ impl TypeLegalizer<'_> {
             op if is_extend(op) => {
                 self.split_extend(value, lo_vt, hi_vt).ok_or_else(|| unsupported("split extension"))?
             }
+            // `SplitVecRes_VECTOR_SHUFFLE`: the four halves of the two inputs;
+            // each result half is a shuffle of the (at most two) of them its
+            // lanes read, or else a `BUILD_VECTOR` of extracted lanes.
+            //
+            // DEVIATE VL2 (owner llrm-arm64-vec, exit 2026-11-27): the pin's
+            // `ProcessShuffleMasks` and its peeking through input shuffles and
+            // `CONCAT_VECTORS` are not translated; a half that reads three or
+            // four of the inputs is built lane by lane.
+            ISD::VectorShuffle => {
+                let (n0, n1) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let (a_lo, a_hi) = self.split_vector(n0);
+                let (b_lo, b_hi) = self.split_vector(n1);
+                let inputs = [a_lo, a_hi, b_lo, b_hi];
+                let mask = self.dag.shuffle_mask(value).to_vec();
+                let new_elts = lo_vt.lanes() as i32;
+                let mut halves = Vec::new();
+                for (half, vt) in [(0usize, lo_vt), (1, hi_vt)] {
+                    let part = &mask[half * new_elts as usize..(half + 1) * new_elts as usize];
+                    let mut used: Vec<i32> = Vec::new();
+                    for &lane in part.iter().filter(|&&lane| lane >= 0) {
+                        if !used.contains(&(lane / new_elts)) {
+                            used.push(lane / new_elts);
+                        }
+                    }
+                    let node = if used.len() <= 2 {
+                        let slot = |source: i32| used.iter().position(|&seen| seen == source).expect("a used source") as i32;
+                        let local: Vec<i32> = part
+                            .iter()
+                            .map(|&lane| if lane < 0 { -1 } else { slot(lane / new_elts) * new_elts + lane % new_elts })
+                            .collect();
+                        let first = used.first().map_or_else(|| self.dag.get_undef(vt), |&source| inputs[source as usize]);
+                        let second = used.get(1).map_or_else(|| self.dag.get_undef(vt), |&source| inputs[source as usize]);
+                        self.dag.get_vector_shuffle(vt, first, second, &local)
+                    } else {
+                        let element = vt.element();
+                        let lanes: Vec<SDValue> = part
+                            .iter()
+                            .map(|&lane| {
+                                if lane < 0 {
+                                    return self.dag.get_undef(element);
+                                }
+                                let index = self.dag.get_constant((lane % new_elts) as u128, EVT::I64);
+                                self.dag.get_node(ISD::ExtractElement, element, &[inputs[(lane / new_elts) as usize], index])
+                            })
+                            .collect();
+                        self.dag.get_build_vector(vt, &lanes)
+                    };
+                    halves.push(node);
+                }
+                (halves[0], halves[1])
+            }
             _ => return Err(unsupported("split result")),
         };
         self.set_split_vector(value, lo, hi);
@@ -285,6 +337,17 @@ impl TypeLegalizer<'_> {
         let chains = self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
         self.replace_value_with(SDValue { node: load.node, res: 1 }, chains);
         Some((lo, hi))
+    }
+
+    /// The truncation whose result lane is under half its operand's: the pin
+    /// does it in two steps (`SplitVecOp_TruncateHelper`).
+    fn truncates_by_more_than_half(
+        &self,
+        node: SDValue,
+        operand: SDValue,
+    ) -> bool {
+        let (result, source) = (self.dag.value_type(node), self.dag.value_type(operand));
+        result.is_vector() && source.is_vector() && result.element().size_in_bits() * 2 < source.element().size_in_bits()
     }
 
     /// `SplitVectorOperand`: an operand `at` of node `n` is a vector to split.
@@ -321,6 +384,26 @@ impl TypeLegalizer<'_> {
             }
             // `SplitVecOp_UnaryOp`: the result is legal, the operand splits:
             // each half converted to half the result, then joined.
+            // `SplitVecOp_TruncateHelper`: a truncation to less than half the
+            // lane is two: each half to half the lane (a legal result
+            // type), joined, then the rest.
+            ISD::Truncate if at == 0 && self.truncates_by_more_than_half(node, operand) => {
+                let result_vt = self.dag.value_type(node);
+                let (lo, hi) = self.split_vector(operand);
+                let lanes = self.dag.value_type(lo).lanes();
+                let half_bits = self.dag.value_type(operand).element().size_in_bits() / 2;
+                let half = MVT::integer(half_bits)
+                    .and_then(|element| MVT::vector(element, lanes))
+                    .map(EVT::Simple)
+                    .ok_or_else(|| unsupported("split truncation with no half-lane type"))?;
+                let inter = MVT::integer(half_bits)
+                    .and_then(|element| MVT::vector(element, lanes * 2))
+                    .map(EVT::Simple)
+                    .ok_or_else(|| unsupported("split truncation with no half-lane type"))?;
+                let (lo, hi) = (self.dag.get_node(ISD::Truncate, half, &[lo]), self.dag.get_node(ISD::Truncate, half, &[hi]));
+                let joined = self.dag.get_node(ISD::ConcatVectors, inter, &[lo, hi]);
+                self.dag.get_node(ISD::Truncate, result_vt, &[joined])
+            }
             op if at == 0 && is_conversion(op) => {
                 let result_vt = self.dag.value_type(node);
                 let (lo, hi) = self.split_vector(operand);

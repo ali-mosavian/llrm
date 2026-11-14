@@ -94,6 +94,26 @@ pub struct VectorTy {
     pub count: u32,
 }
 
+/// An operand that is a `sext` or a `zext` of `src` lanes, as the pin's `Args`
+/// (the operand values of the instruction priced) show it to the widening
+/// rules of `getArithmeticInstrCost` and `getCastInstrCost`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtOperand {
+    pub kind: CastKind,
+    pub src: Ty,
+}
+
+/// A user of an extension, for `GetUserAbsorbedCastCost`: `op` is the user's
+/// operation if it is an `add`, `sub` or `mul` (none: a user that cannot
+/// absorb the extension), `operands` what its two operands are, `index` the
+/// one that is the extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtUser {
+    pub op: Option<ArithOp>,
+    pub operands: [Option<ExtOperand>; 2],
+    pub index: usize,
+}
+
 /// `TargetTransformInfo::RegisterClass`, by the pin's class id: 0 scalar, 1
 /// vector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -715,6 +735,34 @@ pub trait Tti {
         None
     }
 
+    /// `getArithmeticInstrCost` of a vector operation whose operands `args` are
+    /// extensions (the widening forms: `smull`, `uaddl`, ...). `Err(())`: the
+    /// pin's cost depends on known bits this port does not compute. The
+    /// default is the cost with no operand information.
+    fn vector_arithmetic_cost_ext(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _args: [Option<ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Result<Option<Cost>, ()> {
+        Ok(self.vector_arithmetic_cost(op, ty, kind))
+    }
+
+    /// `getCastInstrCost` of an extension between fixed vectors whose users
+    /// are `users`: free where every user absorbs it
+    /// (`GetUserAbsorbedCastCost`), else as [`Tti::vector_cast_cost`].
+    fn vector_ext_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        _users: &[ExtUser],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_cast_cost(kind, dst, src, cost_kind)
+    }
+
     /// `getCastInstrCost` between fixed vectors of one lane count. `None`: not
     /// priced, which is not scalarized: the pin's cost is one this port does
     /// not know.
@@ -1005,6 +1053,14 @@ pub trait Tti {
     /// dead globals and loops are gone, repricing a callee the folds emptied
     /// (`Options::second_inline`, which a driver may turn on at every level).
     fn inline_second_round_at_o1(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver may compile the module again with
+    /// the copies of a loop-holding callee at several sites of a loop refused, and keep the form it prices
+    /// cheaper after allocation. The pin's InlineCost has no price for the registers the merged loops lose
+    /// (its `LoopPenalty` is added at minsize callers alone). False: the cost decides.
+    fn inline_loop_copy_trial(&self) -> bool {
         false
     }
 
@@ -2615,6 +2671,20 @@ pub trait Tti {
         _inst: crate::module::InstId,
     ) -> bool {
         true
+    }
+
+    /// `TargetTransformInfo::isProfitableToSinkOperands`: the uses of `inst`'s
+    /// operands (and of theirs, dominating ones first) the target folds into
+    /// `inst` when they sit in its block; pushed onto `ops`. Asked by
+    /// CodeGenPrepare's `tryToSinkFreeOperands`.
+    fn is_profitable_to_sink_operands(
+        &self,
+        _context: &crate::context::Context,
+        _function: &crate::module::Function,
+        _inst: crate::module::InstId,
+        _ops: &mut Vec<crate::module::Use>,
+    ) -> bool {
+        false
     }
 
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.

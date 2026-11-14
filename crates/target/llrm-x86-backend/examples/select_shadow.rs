@@ -71,6 +71,7 @@ fn main() {
         shld_slow: false,
         sse2: false,
         soft_float: false,
+        vector128: false,
     };
     let (target, tli, arch, cpu, address_mode): (_, _, &dyn llrm_target::Target, _, _) = if m16 {
         (

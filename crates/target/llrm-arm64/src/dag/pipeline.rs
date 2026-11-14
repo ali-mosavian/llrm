@@ -299,7 +299,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress | ISD::Truncate
         )
     }
 
@@ -323,6 +323,18 @@ impl CombineHooks for Aarch64Lowering {
             ISD::Mul => super::vector::perform_vector_ext_combine(dag, node)
                 .or_else(|| super::combine::combine_mul(dag, node, level, self.opt_for_size)),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
+            ISD::Truncate => super::vector::truncate_combine(dag, node),
+            ISD::Target(aarch64_isd::DUP) => {
+                super::vector::dup_combine(dag, node, level == CombineLevel::AfterLegalizeDag)
+            }
+            ISD::Target(aarch64_isd::SMULL | aarch64_isd::UMULL) => super::vector::mull_combine(
+                dag,
+                node,
+                matches!(
+                    level,
+                    CombineLevel::BeforeLegalizeTypes | CombineLevel::AfterLegalizeTypes
+                ),
+            ),
             ISD::Add => super::vector::perform_vector_ext_combine(dag, node)
                 .or_else(|| super::combine::add_combine_for_shifted_operands(dag, node)),
             ISD::Sub => super::vector::perform_vector_ext_combine(dag, node)
