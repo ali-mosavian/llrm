@@ -279,6 +279,7 @@ fn run_suffix(
     }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
+    drop_empty_save(asm);
     // a transfer that fed an `or` of zero is gone: the load is next to its
     // store
     drop_reloads(asm);
@@ -726,6 +727,26 @@ pub fn drop_dead_writes(asm: &mut Asm) {
             && (!writes.nz || nz_dead_from(&asm.lines, at + 1, &mut HashSet::default()));
         if dead {
             asm.lines.remove(at);
+        }
+    }
+}
+
+/// `pha; pla` with nothing between: what a save of `a` leaves once the copies
+/// it bracketed are dead (`drop_dead_stores`, `drop_dead_writes`). `pla` sets
+/// the zero and sign flags from `a`, so the pair goes only where nothing reads
+/// them.
+pub fn drop_empty_save(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 1 < asm.lines.len() {
+        let pair = matches!(
+            (&asm.lines[at], &asm.lines[at + 1]),
+            (Line::Inst(Inst { op: Op::Pha, .. }), Line::Inst(Inst { op: Op::Pla, .. }))
+        );
+        if pair && nz_dead_from(&asm.lines, at + 2, &mut HashSet::default()) {
+            asm.lines.drain(at..at + 2);
+            at = at.saturating_sub(1);
+        } else {
+            at += 1;
         }
     }
 }

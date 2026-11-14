@@ -103,10 +103,12 @@ fn straight(op: Op) -> bool {
 /// every `rts`, and a call neither reads nor changes it (the callee saves it on
 /// entry and restores it), so the scan goes on past a `jsr`.
 /// `float_conversions_loop` kept a `ldy #0; sty rc10` that only the restore
-/// ever followed. A `pla` is straight (the epilogue's restore); a `pha` is not:
-/// `pha; pha; rts` is a call through a pointer, and the `rts` there reads the
-/// argument cells (`function_table`, `static_pointers` miscompiled by 3 B of
-/// stores).
+/// ever followed. A `pla` is straight (the epilogue's restore); a `pha` is
+/// straight too, and counts a byte on the stack: `pha; pha; rts` is a call
+/// through a pointer, and an `rts` with a byte pushed reads the argument cells
+/// (`function_table`, `static_pointers` miscompiled by 3 B of stores). A save
+/// of `a` around a dead copy (`pha; lda rc4; sta rc7; pla`) no longer hides the
+/// store from this scan.
 ///
 /// The pin's analogue is the liveness of a physical register at a return
 /// (`DeadMachineInstructionElim.cpp`, `LivePhysRegs`): a def with no use on any
@@ -117,6 +119,20 @@ fn cell_dead_from(
     cell: &str,
     results: &BTreeSet<String>,
     seen: &mut BTreeSet<usize>,
+) -> bool {
+    dead_from_pushed(lines, from, cell, results, seen, 0)
+}
+
+/// [`cell_dead_from`] with `pushed` bytes on the stack above where it began: a
+/// `pha` is straight while a `pla` of the same function pulls it back, but an
+/// `rts` with a byte still pushed is a jump through it.
+fn dead_from_pushed(
+    lines: &[Line],
+    from: usize,
+    cell: &str,
+    results: &BTreeSet<String>,
+    seen: &mut BTreeSet<usize>,
+    mut pushed: u32,
 ) -> bool {
     let Some(n) = cell_number(cell) else { return false };
     // the soft stack pointer is read by every frame access
@@ -136,7 +152,18 @@ fn cell_dead_from(
             Line::Inst(inst) => inst,
         };
         if inst.op == Op::Rts {
-            return !callee_saved && !results.contains(cell);
+            return pushed == 0 && !callee_saved && !results.contains(cell);
+        }
+        if inst.op == Op::Jsr && pushed > 0 {
+            return false;
+        }
+        if inst.op == Op::Pha {
+            pushed += 1;
+            continue;
+        }
+        if inst.op == Op::Pla {
+            pushed = pushed.saturating_sub(1);
+            continue;
         }
         if inst.op == Op::Jsr && callee_saved {
             continue;
@@ -160,10 +187,10 @@ fn cell_dead_from(
             lines.iter().position(|l| *l == Line::Label(name.to_owned()))
         };
         if inst.op == Op::Jmp || inst.op == Op::Bra {
-            return label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen));
+            return label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, results, seen, pushed));
         }
         if inst.op.opposite().is_some() {
-            if !label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen)) {
+            if !label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, results, seen, pushed)) {
                 return false;
             }
             continue;

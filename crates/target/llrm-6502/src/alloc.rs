@@ -3446,11 +3446,13 @@ pub fn parallel_move_with(
     let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
     // a move reading what another writes, or a cycle, goes through `a` and
     // the stack
-    let independent = pending.iter().enumerate().all(|(i, (d, _))| {
-        pending.iter().enumerate().all(|(j, (_, s))| i == j || *s != Some(*d))
-    });
+    let independent = pending
+        .iter()
+        .enumerate()
+        .all(|(i, (d, _))| pending.iter().enumerate().all(|(j, (_, s))| i == j || *s != Some(*d)));
     let spare = spare.filter(|name| {
-        independent && pending.iter().all(|(d, s)| register_name(*d) != *name && s.is_none_or(|s| register_name(s) != *name))
+        independent
+            && pending.iter().all(|(d, s)| register_name(*d) != *name && s.is_none_or(|s| register_name(s) != *name))
     });
     let a_is_dest = pending.iter().any(|(d, _)| *d == reg::A);
     let scratch_a = |d: RegId, s: Option<RegId>| match s {
@@ -4283,12 +4285,19 @@ fn emit_with<const STACK: bool>(
                         r if r == reg::Y => out.push_str("  tya\n"),
                         r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                     };
-                    load(&mut out, regs[2]);
+                    let index = |r: RegId| r == reg::X || r == reg::Y;
+                    // both bytes zero is `ora` of the two, one loaded: the byte
+                    // in an index register is the one to load, `txa; ora lo`
+                    // (3 B) and not `lda lo; bne; txa` (5 B)
+                    let swap =
+                        matches!((low, high), (Operand::Imm(0), Operand::Imm(0))) && !index(regs[2]) && index(regs[3]);
+                    let (first, second) = if swap { (regs[3], regs[2]) } else { (regs[2], regs[3]) };
+                    load(&mut out, first);
                     match (low, high) {
                         // against zero the loads set the flag: both bytes zero
                         // is `lda lo; ora hi`
-                        (Operand::Imm(0), Operand::Imm(0)) if regs[3] != reg::X && regs[3] != reg::Y => {
-                            writeln!(out, "  ora {}", register_name(regs[3])).unwrap();
+                        (Operand::Imm(0), Operand::Imm(0)) if !index(second) => {
+                            writeln!(out, "  ora {}", register_name(second)).unwrap();
                         }
                         (Operand::Imm(0), Operand::Imm(0)) => {
                             writeln!(out, "  bne _cz{made}").unwrap();
