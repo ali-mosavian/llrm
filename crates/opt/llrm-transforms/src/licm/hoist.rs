@@ -334,7 +334,10 @@ fn hoist_min_max(
     let function = &*unit.function;
     let logic = function.instruction(inst);
     // Only these can be `m_LogicalAnd` or `m_LogicalOr`.
-    if !matches!(logic.opcode, Opcode::Binary(BinaryOp::And | BinaryOp::Or) | Opcode::Select) {
+    if !matches!(
+        logic.opcode,
+        Opcode::Binary(BinaryOp::And | BinaryOp::Or) | Opcode::Select
+    ) {
         return None;
     }
     llrm_mir::counts::bump(llrm_mir::counts::Event::HoistMinMaxQueries);
@@ -447,8 +450,9 @@ fn hoist_gep(
 
 /// [`hoistBOAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2686):
 /// `(LV op C1) op C2` and its commuted forms, the integer `add`, `mul`, `and`,
-/// `or` and `xor`. The pin edits `bo` in place ([`LICM.cpp#L2718`-`L2740`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2718-L2740)), so
-/// the next link of a chain reads `lv op (c1 op c2)`: `State::chained`
+/// `or` and `xor`. The pin edits `bo` in place
+/// ([`LICM.cpp#L2718`-`L2740`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2718-L2740)),
+/// so the next link of a chain reads `lv op (c1 op c2)`: `State::chained`
 /// carries that edit to it. DEVIATE: an instruction another kind of
 /// reassociation of the loop has replaced, or one reading a value it erased,
 /// is left alone, where LLVM would reassociate the new one in turn (a later
@@ -836,8 +840,51 @@ fn is_safe_to_execute_unconditionally(
         return true;
     }
     safety.allow_speculation()
-        && is_safe_to_speculatively_execute(unit, outer, inst)
+        && (is_safe_to_speculatively_execute(unit, outer, inst) || load_in_range(unit, outer, ctx, inst))
         && !speculation_would_hold_the_frame(unit, outer, ctx, preheader)
+}
+
+/// DEVIATE LM2 (`range_deref`): a load whose offset SCEV keeps inside its
+/// object.
+fn load_in_range(
+    unit: &passes::Unit,
+    outer: &Outer,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> bool {
+    let function = &*unit.function;
+    let load = function.instruction(inst);
+    let optsize = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            ),
+        );
+    if optsize
+        || !crate::looprotate::target_tti(outer.target()).licm_range_deref()
+        || !matches!(load.opcode, Opcode::Load { volatile: false, .. })
+    {
+        return false;
+    }
+    let bytes = unit.layout.store_size(&unit.context.types, load.ty);
+    let session = ctx
+        .state
+        .scev
+        .get_or_init(
+            || std::cell::RefCell::new(llrm_analysis::scev::analysis::ScevSession::of(unit.context, function, outer)),
+        );
+    session
+        .borrow_mut()
+        .ask(
+            unit.context,
+            unit.layout,
+            function,
+            outer,
+            |se, cx| super::range_deref::dereferenceable_by_range(se, cx, load.operands[0], bytes),
+        )
 }
 
 /// DEVIATE LICM-FRAME (see `Tti::licm_speculation_keeps_frame_late`): a
@@ -851,14 +898,27 @@ fn speculation_would_hold_the_frame(
 ) -> bool {
     let function = &*unit.function;
     if function.entry() != Some(preheader)
-        || !function.attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"))
+        || !function.attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            )
+        })
         || !crate::looprotate::target_tti(outer.target()).licm_speculation_keeps_frame_late()
     {
         return false;
     }
-    ctx.loop_.body.iter().any(|&block| {
-        function.iter_block(cfg::block(block)).any(|inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)))
-    })
+    ctx.loop_
+        .body
+        .iter()
+        .any(
+            |&block| function
+                .iter_block(cfg::block(block))
+                .any(|inst| matches!(
+                    function.instruction(inst).opcode,
+                    Opcode::Call(_) | Opcode::Invoke(_)
+                )),
+        )
 }
 
 /// [`isSafeToSpeculativelyExecuteWithOpcode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7575).

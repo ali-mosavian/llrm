@@ -569,6 +569,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE LM2 (owner w11, exit 2026-11-24): nbody_fixed -O3 723,134
+    /// instructions against 645,136; the pos[body] loads of the unrolled pair
+    /// loop were redone in every copy.
+    fn licm_range_deref(&self) -> bool {
+        true
+    }
+
     /// A loop is rotated at -Os only if the copied exit test folds in the
     /// preheader (gcc's `copy_headers`): an unfolded guard also leaves a second
     /// exit block (recsum, recfloat -Os: `mov x0, xzr; ret` beside the loop's).
