@@ -47,6 +47,11 @@ fn an_outer_loop_over_a_constant_table_is_unrolled_when_that_shrinks_the_code() 
     }
 }
 
+/// The nest's table is a global the unrolled side drops, so the trial's set of
+/// differing names holds a global as well as the function: lowering it as a
+/// function failed, the failure was swallowed and every trial put the unroll
+/// back. Such a failure is now the compile's error.
+///
 /// The trial lowers the nest's function once with the unroll and once without,
 /// to price them; the side it keeps was printed from those items. Lowering the
 /// winner again for the output cost 1.5x the compile (matmul -O2 68000: 4466 M

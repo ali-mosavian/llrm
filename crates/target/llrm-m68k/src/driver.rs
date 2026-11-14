@@ -262,7 +262,7 @@ fn lowered(
     // Each side's differing functions are lowered in the side's own module,
     // the build the output makes of them: what the price sees is what is
     // printed, and the kept side's items are not built twice.
-    let lower = |module: &Module| -> Option<Kept> {
+    let lower = |module: &Module| -> Result<Kept, String> {
         let libcalls = backend.libcalls.unwrap_or_else(|| crate::compile::libcalls_for(module, cpu, backend));
         // `differing` also names globals and a function one side lost
         let defined: Vec<String> = module
@@ -270,20 +270,18 @@ fn lowered(
             .filter(|(_, _, function)| !function.is_declaration())
             .filter_map(|(_, global, _)| global.name.owned().filter(|name| cut.contains(name)))
             .collect();
-        let items =
-            lower_functions(module, &defined, cpu, Options { libcalls: Some(libcalls), ..backend }, true).ok()?;
-        Some(Kept { libcalls, items })
+        let items = lower_functions(module, &defined, cpu, Options { libcalls: Some(libcalls), ..backend }, true)?;
+        Ok(Kept { libcalls, items })
     };
     let flat = |kept: &Kept| -> Vec<Item> { kept.items.iter().flat_map(|(_, items)| items.iter().cloned()).collect() };
-    let (with, without) = (lower(&other), lower(&base));
-    let pays = matches!(
-        (&with, &without),
-        (Some(with), Some(without)) if crate::trial::keeps(&flat(with), &flat(without), cpu, crate::timing::Price::of(small))
-    );
+    // A lowering that fails is the compile's error, not a verdict: it was once
+    // swallowed here and every trial put the unroll back.
+    let (with, without) = (lower(&other)?, lower(&base)?);
+    let pays = crate::trial::keeps(&flat(&with), &flat(&without), cpu, crate::timing::Price::of(small));
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }
-    Ok(if pays { Lowered { module: other, kept: with } } else { Lowered { module: base, kept: without } })
+    Ok(if pays { Lowered { module: other, kept: Some(with) } } else { Lowered { module: base, kept: Some(without) } })
 }
 
 /// `text` through the shared mid-end, the expansions m68k needs, and the
