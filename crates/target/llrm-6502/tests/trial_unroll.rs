@@ -145,3 +145,30 @@ fn a_four_trip_loop_is_priced_at_four_trips() {
     let calls = asm.lines().filter(|line| line.trim() == "jsr report").count();
     assert_eq!(calls, 1, "the loop was unrolled to {calls} calls:\n{asm}");
 }
+
+/// A full unroll that repaid its bytes at 3 clocks each was made at -O2/-O3:
+/// eight stores of `v + i` were 8 `clc; txa; adc` and a 22 B body, against a 12
+/// B loop; bytes come first (2026-11-14).
+#[test]
+fn a_full_unroll_that_adds_bytes_is_not_made_at_speed() {
+    let body = "@g = global [8 x i8] zeroinitializer
+define void @f(i8 %v) {
+entry:
+  br label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %n, %loop ]
+  %p = getelementptr [8 x i8], ptr @g, i16 0, i8 %i
+  %w = add i8 %v, %i
+  store i8 %w, ptr %p
+  %n = add i8 %i, 1
+  %c = icmp ult i8 %n, 8
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}";
+    for level in [Level::O2, Level::O3] {
+        let text = assembly(&module(body), &Request::new(level)).unwrap();
+        let adds = text.lines().filter(|line| line.trim_start().starts_with("adc")).count();
+        assert!(adds < 4 && text.contains("bne"), "{level:?}: {adds} adds, the loop was copied out:\n{text}");
+    }
+}
