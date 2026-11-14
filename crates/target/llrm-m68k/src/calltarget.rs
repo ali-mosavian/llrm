@@ -135,17 +135,35 @@ pub fn through_registers(
     Ok(())
 }
 
+/// What each instruction costs on a cpu, by instruction: an instruction
+/// that comes up again in another candidate's expansion is priced once.
+type Prices = HashMap<mc::Inst, (usize, u32)>;
+
+thread_local! {
+    static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// What `lines` cost on `cpu`: bytes and clocks, each instruction once.
 fn price_of(
     lines: &[Line],
     cpu: Cpu,
+    seen: &mut Prices,
 ) -> Result<(usize, u32), String> {
     let (mut bytes, mut clocks) = (0, 0);
     for line in lines {
         let Line::Inst(inst) = line else { continue };
-        let size = crate::encode::encode(inst)?.bytes.len();
+        let (size, time) = match seen.get(inst) {
+            Some(&priced) => priced,
+            None => {
+                PRICED.with(|count| count.set(count.get() + 1));
+                let size = crate::encode::encode(inst)?.bytes.len();
+                let priced = (size, crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks);
+                seen.insert(inst.clone(), priced);
+                priced
+            }
+        };
         bytes += size;
-        clocks += crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks;
+        clocks += time;
     }
     Ok((bytes, clocks))
 }
@@ -170,7 +188,10 @@ pub fn choose(
         return Ok(chosen);
     }
     // a price the tables cannot give keeps the calls as they are
-    let Some(mut best) = lines(function).and_then(|lines| price_of(&lines, cpu)).ok() else { return Ok(chosen) };
+    let mut seen = Prices::new();
+    let Some(mut best) = lines(function).and_then(|lines| price_of(&lines, cpu, &mut seen)).ok() else {
+        return Ok(chosen);
+    };
     // A callee that does not pay alone may pay with the ones tried before it:
     // the register's save and restore is paid once for them all.
     let mut pending: Vec<String> = Vec::new();
@@ -195,7 +216,7 @@ pub fn choose(
             }) {
                 continue;
             }
-            let Some(cost) = price_of(&expanded, cpu).ok() else { continue };
+            let Some(cost) = price_of(&expanded, cpu, &mut seen).ok() else { continue };
             if price.beats(cpu, cost, best) {
                 best = cost;
                 taken = Some((targets, set.len()));
@@ -214,4 +235,31 @@ pub fn choose(
         }
     }
     Ok(chosen)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(
+        opcode: &'static str,
+        imm: i64,
+    ) -> Line {
+        Line::Inst(mc::Inst { opcode, operands: vec![mc::Operand::Imm(imm)] })
+    }
+
+    /// Every candidate callee re-expanded the whole function and priced every
+    /// line again (`choose`: 17% of matmul's -O2 compile, 31% of grep's); the
+    /// lines two expansions share are priced once.
+    #[test]
+    fn a_line_two_expansions_share_is_priced_once() {
+        let first = [line("NOP", 0), line("RTS", 0)];
+        let second = [line("NOP", 0), line("RTS", 0), line("NOP", 0)];
+        let before = PRICED.with(std::cell::Cell::get);
+        let mut seen = Prices::new();
+        let one = price_of(&first, Cpu::M68000, &mut seen).expect("priced");
+        let two = price_of(&second, Cpu::M68000, &mut seen).expect("priced");
+        assert_eq!(PRICED.with(std::cell::Cell::get) - before, 2, "NOP and RTS, once each");
+        assert_eq!(two.0, one.0 + 2, "the third line is the NOP again");
+    }
 }
