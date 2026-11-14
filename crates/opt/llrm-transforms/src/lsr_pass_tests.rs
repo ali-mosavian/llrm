@@ -2198,3 +2198,14 @@ fn an_edge_split_makes_lsr_count_only_the_loop_it_touched_again() {
     session.forget_since_through_edges(context, &data, &outer.globals, &outer.metadata, function, mark);
     assert_eq!(session_counts(&mut session, &mut module, 3), 1, "only the loop whose edge was split is counted again");
 }
+
+/// x_sf_add -O3 m32 (`V[i % 100]` read twice, nine and more other values live in the body): the
+/// pin's tie between the loop as written and its rewrite took the rewrite, which holds a pointer
+/// walk per field and a counter down to zero beside `i`, across a body that already fills the
+/// registers: 41,235 clocks against 37,986 with the loop left alone.
+#[test]
+fn a_rewrite_no_cheaper_than_the_loop_is_not_made_where_the_registers_are_full() {
+    let text = "@V = internal global [1100 x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %acc = phi i32 [ 0, %entry ], [ %s9, %loop ]\n  %r = urem i32 %i, 100\n  %p0 = getelementptr [11 x i32], ptr @V, i32 %r, i32 0\n  %a = load i32, ptr %p0\n  %p1 = getelementptr [11 x i32], ptr @V, i32 %r, i32 1\n  %b = load i32, ptr %p1\n  %m0 = mul i32 %a, 3\n  %x0 = xor i32 %m0, %b\n  %m1 = mul i32 %a, 4\n  %x1 = xor i32 %m1, %b\n  %m2 = mul i32 %a, 5\n  %x2 = xor i32 %m2, %b\n  %m3 = mul i32 %a, 6\n  %x3 = xor i32 %m3, %b\n  %m4 = mul i32 %a, 7\n  %x4 = xor i32 %m4, %b\n  %m5 = mul i32 %a, 8\n  %x5 = xor i32 %m5, %b\n  %m6 = mul i32 %a, 9\n  %x6 = xor i32 %m6, %b\n  %m7 = mul i32 %a, 10\n  %x7 = xor i32 %m7, %b\n  %m8 = mul i32 %a, 11\n  %x8 = xor i32 %m8, %b\n  %m9 = mul i32 %a, 12\n  %x9 = xor i32 %m9, %b\n  %s0 = add i32 %acc, %x0\n  %s1 = add i32 %s0, %x1\n  %s2 = add i32 %s1, %x2\n  %s3 = add i32 %s2, %x3\n  %s4 = add i32 %s3, %x4\n  %s5 = add i32 %s4, %x5\n  %s6 = add i32 %s5, %x6\n  %s7 = add i32 %s6, %x7\n  %s8 = add i32 %s7, %x8\n  %s9 = add i32 %s8, %x9\n  %next = add nuw nsw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %exit, label %loop\nexit:\n  ret i32 %s9\n}\n";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[8]]);
+    assert_eq!(after.matches("phi ").count(), 2, "the counter and the sum stay the loop's only recurrences: {after}");
+}

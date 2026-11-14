@@ -512,6 +512,8 @@ pub struct Collection<'a, 'b> {
     /// Interesting use types, to reuse by truncation.
     pub types: IndexSet<Ty>,
     pub baseline_cost: Cost,
+    /// The formulae `baseline_cost` rates, by use: the loop as written.
+    pub baseline_formulae: Vec<(Use, Formula)>,
     pub changed: bool,
     /// The equality compares whose operands the caller is to swap, so the
     /// operand to replace is the left one.
@@ -561,6 +563,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: self.factors.clone(),
             types: self.types.clone(),
             baseline_cost: self.baseline_cost.clone(),
+            baseline_formulae: self.baseline_formulae.clone(),
             changed: self.changed,
             swapped_compares: self.swapped_compares.clone(),
             insert_attempts: self.insert_attempts,
@@ -602,6 +605,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: IndexSet::default(),
             types: IndexSet::default(),
             baseline_cost: Cost::new(),
+            baseline_formulae: Vec::new(),
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
@@ -992,6 +996,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     across_call: self.across_call,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
+                self.baseline_formulae.push((self.uses[lu_idx].clone(), f));
                 visited_uses.insert(lu_idx);
             }
 

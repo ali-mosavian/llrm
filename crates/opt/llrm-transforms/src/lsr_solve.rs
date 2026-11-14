@@ -52,7 +52,7 @@ use llrm_analysis::scev::expr::Scev;
 use llrm_support::hash::HashSet;
 
 use crate::lsr_collect::Collection;
-use crate::lsr_use::{Cost, Kind};
+use crate::lsr_use::{Cost, Kind, Rating};
 
 impl Collection<'_, '_> {
     /// `SolveRecurse`: decide use `workspace.len()`, then the rest.
@@ -244,6 +244,32 @@ impl Collection<'_, '_> {
         (by_use, solution_cost)
     }
 
+    /// The loop as written, rated without the pressure of its other values.
+    fn baseline_unpressured(
+        &self,
+        se: &mut ScalarEvolution,
+    ) -> Cost {
+        let mut cost = Cost::new();
+        let mut regs = HashSet::default();
+        let visited = HashSet::default();
+        for (lu, f) in &self.baseline_formulae {
+            let mut rating = Rating {
+                se,
+                cx: self.cx,
+                tti: self.tti,
+                l: self.l,
+                hardware_loop_profitable: self.hardware_loop_profitable,
+                as_written: true,
+                other_register_units: 0,
+                size: self.size,
+                bytes_counted: self.bytes_counted,
+                across_call: self.across_call,
+            };
+            cost.rate_formula(&mut rating, f, &mut regs, &visited, lu, None);
+        }
+        cost
+    }
+
     /// `solve`, and what the solution it returns costs (nothing to compare for
     /// the empty one).
     pub fn solve_with_cost(
@@ -301,7 +327,15 @@ impl Collection<'_, '_> {
             return (solution, solution_cost);
         }
         assert_eq!(solution.len(), self.uses.len(), "Malformed solution!");
-        llrm_support::debug!("lsr", "chosen {:?} against {:?} as it stands", solution_cost.c, self.baseline_cost.c);
+        // DEVIATE LU3b: a solution searched without the loop's pressure is
+        // compared with the loop as written on the same footing: priced with
+        // the pressure, the loop paid fills no solution did, and any rewrite
+        // "saved" them (x_sf_add -O3 m32: nine other registers live, the
+        // rewrite kept as 1 instruction against 4, and it held three more
+        // induction registers across a 600-byte body).
+        let honest = self.ignore_pressure.get() && self.tti.lsr_tie_keeps_loop_under_pressure();
+        let baseline = if honest { self.baseline_unpressured(se) } else { self.baseline_cost.clone() };
+        llrm_support::debug!("lsr", "chosen {:?} against {:?} as it stands", solution_cost.c, baseline.c);
         for (at, &chosen) in solution.iter().enumerate() {
             llrm_support::debug!("lsr", "  use {at} {:?}: {:?}", self.uses[at].kind, self.uses[at].formulae[chosen]);
         }
@@ -309,14 +343,16 @@ impl Collection<'_, '_> {
         // than the target has, and costs two instructions more, is dropped.
         let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());
         let spills = solution_cost.c.num_regs > budget
-            && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
-            && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
+            && solution_cost.c.num_regs > baseline.c.num_regs
+            && solution_cost.c.insns >= baseline.c.insns + 2;
         // DEVIATE LU15: a loop with an address keeps the solution that
         // reduces it, where the target says so.
         let spared = self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
-        if self.baseline_cost.is_less(self.tti, &solution_cost)
+        let tie = honest && !solution_cost.is_less(self.tti, &baseline);
+        if baseline.is_less(self.tti, &solution_cost)
             && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
                 || spills && self.tti.lsr_drops_spilling_solution())
+            || tie
         {
             solution.clear();
         }

@@ -2631,6 +2631,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU3d: where the loop's other values fill the registers (LU3b
+    /// searches without the pressure), the loop as written is rated on the same
+    /// footing, and a rewrite no cheaper than it is dropped. The pin takes the
+    /// rewrite on a tie, which holds more induction registers across the body.
+    fn lsr_tie_keeps_loop_under_pressure(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU5: whether a formula whose base register is a non-affine
     /// addrec of an enclosing loop is charged the induction variables its
     /// expansion keeps live across that loop (one for each order past the

@@ -1939,6 +1939,10 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    fn lsr_tie_keeps_loop_under_pressure(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     fn address_registers(&self) -> u32 {
         self.real_mode
             .as_ref()
