@@ -129,4 +129,12 @@ def test_at_o2_a_clock_gain_no_longer_buys_bytes_and_a_clock_loss_is_worse():
 def test_at_os_both_bytes_and_clocks_must_match_the_bar():
     only = {"sieve/nib/Os": cell(112, 4700), "sieve/c/Os": cell(110, 4900), **refs("sieve", "Os", 111, 4800)}
     row = by_row(only)[("sieve", "nib", "Os")]
-    assert row[10] == "WORSE" and "code 112>111(ow)" in row[11] and "clocks" not in row[11], row
+    assert row[10] == "WORSE" and "total 112>111(ow)" in row[11] and "clocks" not in row[11], row
+
+
+def test_at_os_a_data_table_that_replaces_code_is_total_bytes_not_a_data_miss():
+    """switch at -Os: 288 B of code and a 12 B lookup table against bcc's 559 B of code and no data. Graded per axis the 12 > 0 data made four cells WORSE; the ruling's bytes are
+    code + data (oversight, 2026-11-14): 300 <= 559, OK."""
+    only = {"sieve/c/Os": cell(288, 500000, 12), **refs("sieve", "Os", 559, 960000)}
+    row = by_row(only)[("sieve", "c", "Os")]
+    assert row[10] == "OK", row
