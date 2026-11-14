@@ -1321,6 +1321,10 @@ impl Tti for X86 {
         let _ = kind;
         match op {
             ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            // `psllX`/`psrlX`/`psraX` by an immediate (a constant splat amount, the only one the lowering takes);
+            // there is no 64-bit arithmetic shift before AVX-512.
+            ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
+            ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
             // `pmullw`: the one SSE2 integer multiply that keeps the lane (a 32- or 64-bit lane needs `pmuludq`).
             ArithOp::Mul if ty.lane == Ty::Int(16) => xmm_pieces(ty).map(Cost::of),
             _ => None,

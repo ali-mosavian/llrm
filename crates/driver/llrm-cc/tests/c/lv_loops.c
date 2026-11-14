@@ -31,3 +31,7 @@ int square_sum(int n) {
 
 short sa[1024], sb[1024];
 void multiply_shorts(void) { for (int i = 0; i < 1024; ++i) sa[i] *= sb[i]; }
+
+int si[1024];
+unsigned ui[1024];
+void shift_ints(void) { for (int i = 0; i < 1024; ++i) si[i] = (si[i] << 3) + (si[i] >> 2) + (int)(ui[i] >> 5); }

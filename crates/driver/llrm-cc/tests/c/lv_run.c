@@ -12,6 +12,9 @@ __attribute__((noinline)) void bwd(unsigned char *dst, const unsigned char *src,
 }
 void multiply_shorts(void);
 extern short sa[1024], sb[1024];
+void shift_ints(void);
+extern int si[1024];
+extern unsigned ui[1024];
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -41,5 +44,12 @@ int main(void) {
     for (int i = 0; i < 1024; i++) { sa[i] = (short)(i * 31 - 7000); sb[i] = (short)(i * 17 + 3); }
     multiply_shorts();
     for (int i = 0; i < 1024; i++) if (sa[i] != (short)((short)(i * 31 - 7000) * (short)(i * 17 + 3))) bad++;
+    for (int i = 0; i < 1024; i++) { si[i] = i * 100003 - 51200000; ui[i] = (unsigned)i * 2654435761u; }
+    {
+        static int want[1024];
+        for (int i = 0; i < 1024; i++) want[i] = (int)((unsigned)si[i] << 3) + (si[i] >> 2) + (int)(ui[i] >> 5);
+        shift_ints();
+        for (int i = 0; i < 1024; i++) if (si[i] != want[i]) bad++;
+    }
     printf("bad %d\n", bad);
 }

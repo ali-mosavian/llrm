@@ -130,3 +130,12 @@ fn a_short_multiply_loop_uses_pmullw() {
     let multiply = body(&text, "multiply_shorts");
     assert!(multiply.contains("pmullw"), "{multiply}");
 }
+
+/// A shift by a constant is `pslld`/`psrad`/`psrld` (`VSHLI`, `VSRAI`, `VSRLI`): a loop with one stayed scalar, its
+/// shift unpriced.
+#[test]
+fn a_loop_of_constant_shifts_uses_the_immediate_forms() {
+    let text = assembly("x86_64-linux", "-O2");
+    let shifts = body(&text, "shift_ints");
+    assert!(shifts.contains("pslld") && shifts.contains("psrad") && shifts.contains("psrld"), "{shifts}");
+}
