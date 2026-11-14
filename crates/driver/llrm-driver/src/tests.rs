@@ -4628,6 +4628,36 @@ fn a_128_bit_vector_is_loaded_stored_and_kept_in_an_xmm_register_at_m64() {
     assert!(slot == 2 && !kept.contains("dword ptr [rsp+4]"), "spilled and reloaded whole: {kept}");
 }
 
+/// Eight loads and stores of adjacent `i16` cells were eight 2-byte moves each way (32 B), and a run of `i64` cells
+/// one 8-byte pair per cell: the pin's `mergeConsecutiveStores` joins them into 16-byte `movaps` pairs where a vector
+/// type is legal (copy_runs O2 808 B against clang's 645 B).
+#[test]
+fn adjacent_cell_copies_are_16_byte_moves_at_m64() {
+    let copy = |cell: &str, bytes: u32| {
+        let count = 16 / bytes;
+        let mut body = String::new();
+        for at in 0..count {
+            body += &format!(
+                "  %p{at} = getelementptr {cell}, ptr @s, i64 {at}\n  %v{at} = load {cell}, ptr %p{at}, align {bytes}\n  \
+                 %q{at} = getelementptr {cell}, ptr @d, i64 {at}\n  store {cell} %v{at}, ptr %q{at}, align {bytes}\n"
+            );
+        }
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+             @s = global [16 x i8] zeroinitializer, align 16\n@d = global [16 x i8] zeroinitializer, align 16\n\
+             define void @copy() {{\n{body}  ret void\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "copy").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    for (cell, bytes) in [("i16", 2), ("i32", 4), ("i64", 8)] {
+        let listing = copy(cell, bytes);
+        let moves = listing.lines().filter(|l| l.trim().starts_with("movaps")).count();
+        let scalar = listing.lines().filter(|l| l.trim().starts_with("mov ") && l.contains(" ptr ")).count();
+        assert_eq!((moves, scalar), (2, 0), "{cell}: {listing}");
+    }
+}
+
 /// A target without the vector forms keeps refusing a vector value: `-m32` and
 /// `-m16` objects do not move.
 #[test]

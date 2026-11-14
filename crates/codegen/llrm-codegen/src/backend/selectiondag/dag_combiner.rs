@@ -222,6 +222,16 @@ pub trait CombineHooks {
         false
     }
 
+    /// `tryStoreMergeOfLoads`' vector arm: a run of loads and stores of
+    /// adjacent cells is one vector load and store where the vector type is
+    /// legal. DEVIATE SD217: off by default so the targets with vector types
+    /// (arm64, wasm) keep their output until judged; x86 opts in. The pin
+    /// also needs `!noimplicitfloat` and a fast `allowsMemoryAccess`, both
+    /// taken as true. Exit 2026-12-01.
+    fn merge_stores_to_vectors(&self) -> bool {
+        false
+    }
+
     /// `DataLayout::isLittleEndian`: whether the first of several merged
     /// stores is the least significant part of the joined value.
     fn little_endian(&self) -> bool {
