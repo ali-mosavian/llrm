@@ -284,9 +284,13 @@ fn branches() {
         VectorOp::Eor,
         VectorOp::Ushl,
         VectorOp::Sshl,
+        VectorOp::Smax,
+        VectorOp::Smin,
+        VectorOp::Umax,
+        VectorOp::Umin,
     ] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
-            if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+            if !op.has_lanes(lanes) {
                 continue;
             }
             all.push(Inst::VectorBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });

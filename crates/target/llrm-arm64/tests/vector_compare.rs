@@ -90,10 +90,11 @@ fn shapes(text: &str) -> BTreeMap<String, usize> {
     counts
 }
 
-/// Ours selects what the pin selects.
+/// Ours selects what the pin's `opt -O2 | llc` selects (ours runs the middle end too:
+/// a compare against zero that is always true is a constant there).
 fn matches_the_pin(source: &str) -> String {
     let text = ours(source).unwrap_or_else(|why| panic!("refused: {why}\n{source}"));
-    if let Some(pinned) = pin(source) {
+    if let Some(pinned) = pin_optimized(source) {
         assert_eq!(shapes(&text), shapes(&pinned), "ours:\n{text}\npin:\n{pinned}");
     }
     text
@@ -207,4 +208,36 @@ fn a_float_select_loop_is_vectorized() {
     let vector = |prefix: &str| text.lines().any(|line| line.trim().starts_with(prefix) && line.contains(".4s"));
     assert!(vector("fcm"), "no vector fcm:\n{text}");
     assert!(vector("bit") || vector("bif") || vector("bsl"), "no bit select:\n{text}");
+}
+
+/// `llvm.<op>` of two vectors.
+fn min_max_ir(
+    op: &str,
+    vector: &str,
+) -> String {
+    let mut parts = vector.trim_matches(['<', '>']).split(' ');
+    let lanes = parts.next().unwrap();
+    let lane = parts.nth(1).unwrap();
+    format!(
+        "{HEAD}declare {vector} @llvm.{op}.v{lanes}{lane}({vector}, {vector})\n\
+         define void @f(ptr %a, ptr %b, ptr %d) {{\n\
+         \x20 %x = load {vector}, ptr %a, align 16\n\
+         \x20 %y = load {vector}, ptr %b, align 16\n\
+         \x20 %m = call {vector} @llvm.{op}.v{lanes}{lane}({vector} %x, {vector} %y)\n\
+         \x20 store {vector} %m, ptr %d, align 16\n\
+         \x20 ret void\n}}\n"
+    )
+}
+
+/// `llvm.smax` and the other three were refused ("machine opcode SMAXv4i32 has
+/// no arm64 instruction yet"; `CannotSelect("SMax")` for `<2 x i64>`). The
+/// pin selects `smax v.4s` and, for `<2 x i64>`, `LowerMinMax`'s `cmgt` and
+/// `bif`.
+#[test]
+fn vector_min_and_max_are_neon_instructions() {
+    for op in ["smin", "smax", "umin", "umax"] {
+        for vector in ["<16 x i8>", "<8 x i16>", "<4 x i32>", "<2 x i64>"] {
+            matches_the_pin(&min_max_ir(op, vector));
+        }
+    }
 }

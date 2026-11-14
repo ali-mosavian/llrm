@@ -424,6 +424,11 @@ pub enum VectorOp {
     /// `ushl`/`sshl`: a shift by each lane's own (signed) amount.
     Ushl,
     Sshl,
+    /// `smax`, `smin`, `umax`, `umin`: no `2d` form.
+    Smax,
+    Smin,
+    Umax,
+    Umin,
 }
 
 impl VectorOp {
@@ -440,6 +445,10 @@ impl VectorOp {
             VectorOp::Orr => (0, 0b00011, Some(2)),
             VectorOp::Orn => (0, 0b00011, Some(3)),
             VectorOp::Eor => (1, 0b00011, Some(0)),
+            VectorOp::Smax => (0, 0b01100, None),
+            VectorOp::Smin => (0, 0b01101, None),
+            VectorOp::Umax => (1, 0b01100, None),
+            VectorOp::Umin => (1, 0b01101, None),
         }
     }
 
@@ -455,7 +464,24 @@ impl VectorOp {
             VectorOp::Eor => "eor",
             VectorOp::Ushl => "ushl",
             VectorOp::Sshl => "sshl",
+            VectorOp::Smax => "smax",
+            VectorOp::Smin => "smin",
+            VectorOp::Umax => "umax",
+            VectorOp::Umin => "umin",
         }
+    }
+
+    /// Whether the encoding has these lanes: the bitwise forms are `.16b`,
+    /// `mul` and the min/max have no `2d`.
+    pub fn has_lanes(
+        self,
+        lanes: Arrangement,
+    ) -> bool {
+        if self.is_logical() {
+            return lanes == Arrangement::B16;
+        }
+        let no_doubles = matches!(self, VectorOp::Mul | VectorOp::Smax | VectorOp::Smin | VectorOp::Umax | VectorOp::Umin);
+        !(no_doubles && lanes == Arrangement::D2)
     }
 
     /// Whether the operation is the bitwise `.16b` form whatever the lanes.

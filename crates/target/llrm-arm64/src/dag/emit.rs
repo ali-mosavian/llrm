@@ -918,11 +918,15 @@ fn vector_inst(
         ("EOR", VectorOp::Eor),
         ("USHL", VectorOp::Ushl),
         ("SSHL", VectorOp::Sshl),
+        ("SMAX", VectorOp::Smax),
+        ("SMIN", VectorOp::Smin),
+        ("UMAX", VectorOp::Umax),
+        ("UMIN", VectorOp::Umin),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
         };
-        if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+        if !op.has_lanes(lanes) {
             continue;
         }
         return Some(match operands {

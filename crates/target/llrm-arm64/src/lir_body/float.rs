@@ -597,7 +597,7 @@ fn vector_op_name(
     format!("{stem}v{lanes}")
 }
 
-const VECTOR_OPS: [VectorOp; 10] = [
+const VECTOR_OPS: [VectorOp; 14] = [
     VectorOp::Add,
     VectorOp::Sub,
     VectorOp::Mul,
@@ -608,6 +608,10 @@ const VECTOR_OPS: [VectorOp; 10] = [
     VectorOp::Eor,
     VectorOp::Ushl,
     VectorOp::Sshl,
+    VectorOp::Smax,
+    VectorOp::Smin,
+    VectorOp::Umax,
+    VectorOp::Umin,
 ];
 const ARRANGEMENTS: [Arrangement; 4] = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2];
 
@@ -769,10 +773,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     }
     for op in VECTOR_OPS {
         for lanes in ARRANGEMENTS {
-            if name == vector_op_name(op, lanes)
-                && (!op.is_logical() || lanes == Arrangement::B16)
-                && !(op == VectorOp::Mul && lanes == Arrangement::D2)
-            {
+            if name == vector_op_name(op, lanes) && op.has_lanes(lanes) {
                 return Some(Inst::VectorBinary {
                     op,
                     lanes,

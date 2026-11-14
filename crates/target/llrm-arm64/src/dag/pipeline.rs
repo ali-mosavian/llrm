@@ -493,6 +493,7 @@ impl LegalizeHooks for Aarch64Lowering {
             | ISD::VecReduceUMax
             | ISD::VecReduceUMin => super::vector::lower_vec_reduce(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
+            ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => super::vector::lower_min_max(dag, node),
             // Declined for a `v2i64` that is no widening multiply: the
             // legalizer unrolls it.
             ISD::Mul => return super::vector::lower_mul(dag, node),
