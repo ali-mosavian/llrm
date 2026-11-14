@@ -1830,6 +1830,9 @@ impl FunctionPass for LoopVectorize {
                     let kind = if forced.is_some() { "epilogue vectorized" } else { "vectorized" };
                     why(unit, &outer, header, &format!("{kind} VF {} IC {}", chosen.vf, chosen.ic));
                     execute(unit.context, unit.function, unit.declared, &widening, chosen, &skeleton);
+                    if forced.is_some() {
+                        skeleton::check_epilogue_first(unit.context, unit.function, shape.preheader, header, &skeleton);
+                    }
                     if let (Some(vf), Some((remainder, _))) = (epilogue, &skeleton.remainder) {
                         worklist.push((*remainder, Some(vf)));
                     }
