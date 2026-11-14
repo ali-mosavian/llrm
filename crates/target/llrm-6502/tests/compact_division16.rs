@@ -1,8 +1,8 @@
 //! At -O2 the 16-bit divisions were the speed routine, 31 B over the compact
 //! one, whatever the module ran: k_tosudivax linked 101 B against the bytes bar
-//! of 64 (2026-11-14, bytes first on this target at every level). A module whose
-//! divisions are the clocks of its run takes the compact one: the speed routine
-//! saves 215 clocks a call on average, and costs 31 B.
+//! of 64 (2026-11-14, bytes first on this target at every level). A module
+//! whose divisions are the clocks of its run takes the compact one: the speed
+//! routine saves 215 clocks a call on average, and costs 31 B.
 
 mod common;
 

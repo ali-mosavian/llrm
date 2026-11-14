@@ -44,25 +44,27 @@ pub fn hot(module: &Module) -> bool {
     runs(module) >= hot_runs()
 }
 
-/// What a call saves at size, in clocks, when the compact `__divsi3` family (32 bits a call whatever the
-/// quotient) becomes the speed family with the small wide path, averaged over six shapes: `__modsi3`
-/// 4333/984, 4159/964, 4072/1531, 4072/1436, 3898/934, 4793/3249 (sim65).
+/// What a call saves at size, in clocks, when the compact `__divsi3` family (32
+/// bits a call whatever the quotient) becomes the speed family with the small
+/// wide path, averaged over six shapes: `__modsi3` 4333/984, 4159/964,
+/// 4072/1531, 4072/1436, 3898/934, 4793/3249 (sim65).
 pub const SAVED_AT_SIZE: f64 = 2700.0;
 
-/// The static runs of the 32-bit divisions of `module` that are not by a known byte: 10 per level of loop
-/// depth, times the runs of the function.
+/// The static runs of the 32-bit divisions of `module` that are not by a known
+/// byte: 10 per level of loop depth, times the runs of the function.
 pub fn runs(module: &Module) -> f64 {
     runs_of_width(module, 32)
 }
 
-/// What a call saves at speed, in clocks, when the speed 16-bit division (a byte divisor takes a short path)
-/// is called and not the compact one (the 16-step bit loop), over four shapes (sim65, `k_tosudivax`):
-/// 60707 / 37 saves 352, 40000 / 300 saves -6, 65535 / 2 saves 522, 9999 / 1000 saves -6; the mean is 215.
-/// The speed routine is 31 bytes over the compact one.
+/// What a call saves at speed, in clocks, when the speed 16-bit division (a
+/// byte divisor takes a short path) is called and not the compact one (the
+/// 16-step bit loop), over four shapes (sim65, `k_tosudivax`): 60707 / 37 saves
+/// 352, 40000 / 300 saves -6, 65535 / 2 saves 522, 9999 / 1000 saves -6; the
+/// mean is 215. The speed routine is 31 bytes over the compact one.
 pub const SAVED_AT_SPEED_16: f64 = 215.0;
 
-/// What a call of the compact 16-bit division costs on average over the same four shapes: 866, 818, 1106 and
-/// 794 clocks.
+/// What a call of the compact 16-bit division costs on average over the same
+/// four shapes: 866, 818, 1106 and 794 clocks.
 pub const CLOCKS_COMPACT_16: f64 = 896.0;
 
 /// [`runs`] of the 16-bit divisions.
