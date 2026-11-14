@@ -1471,11 +1471,13 @@ fn execute(
     function.set_operand(widening.step, widening.step_operand, step);
 }
 
-/// The widened accesses keep the scalar loop's addresses, which may be built on the induction's update
-/// (`dst[i - 1]` of a loop that counts down: the update `i - 1` is the index). The update is about to step by VF x IC,
-/// so an address that reads it would sit VF x IC - 1 elements off the lane-0 address the parts count from. Those
-/// users read a copy that keeps the scalar step (`VPWidenIntOrFpInductionRecipe`'s scalar steps); the phi and the exit
-/// test read the stepped one.
+/// The widened accesses keep the scalar loop's addresses, which may be built on
+/// the induction's update (`dst[i - 1]` of a loop that counts down: the update
+/// `i - 1` is the index). The update is about to step by VF x IC, so an address
+/// that reads it would sit VF x IC - 1 elements off the lane-0 address the
+/// parts count from. Those users read a copy that keeps the scalar step
+/// (`InnerLoopVectorizer` makes the widened pointer from the scalar index, not
+/// from the stepped induction); the phi and the exit test read the stepped one.
 fn keep_scalar_step_for_addresses(
     function: &mut Function,
     widening: &Widening,
