@@ -1289,6 +1289,19 @@ impl SelectionDAG {
         }
     }
 
+    /// `isConstOrConstSplat`: the value of a constant, or the one value of
+    /// every lane of a build vector of equal constants.
+    pub fn const_or_splat(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        if self.opcode(value) != ISD::BuildVector {
+            return self.constant(value);
+        }
+        let first = self.constant(self.operand(value, 0))?;
+        (1..self.value_type(value).lanes()).all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first)).then_some(first)
+    }
+
     pub fn is_opaque(
         &self,
         value: SDValue,

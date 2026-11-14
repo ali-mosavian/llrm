@@ -1076,6 +1076,13 @@ impl TargetLowering {
         t.set_ops(&[FShr, FShl], &words, Custom);
         t.set_ops(&[Rotl], &words, Expand);
         t.set_ops(&[MulHU, MulHS], &[MVT::I32], Expand);
+        // `addTypeForNEON`'s loop ([L1465][pin]): the 128-bit vectors of 8 to
+        // 32-bit lanes multiply high by `umull`/`umull2` and `uzp2`.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1465
+        t.set_ops(&[MulHU, MulHS], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Legal);
+        t.set_ops(&[MulHU, MulHS], &[MVT::V2I64], Expand);
         t.set_ops(&[UMulLoHi, SMulLoHi], &words, Expand);
         if features.cssc {
             t.set_ops(&[CtPop, CtTz, Abs, SMax, UMax, SMin, UMin], &words, Legal);

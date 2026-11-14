@@ -245,7 +245,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             out.push(Inst::VectorBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         }
     }
-    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
+    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr, VectorShift::Usra, VectorShift::Ssra] {
         out.push(Inst::VectorShift { op, lanes: Arrangement::H8, rd: v(0), rn: v(1), amount: 3 });
     }
     for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
