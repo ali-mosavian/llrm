@@ -10,12 +10,13 @@
 //! forms of the pin's block: no `2^N +- 2^M`. Exit: the hook in the shared
 //! `visit_mul`.
 
-use super::lowering::mosisd;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
+
+use super::lowering::mosisd;
 
 /// `sized`: the function is tuned for size (`optsize`, `minsize`).
 /// `synthesize`: the module-level re-selection of `mulimage` is running, which
@@ -42,6 +43,15 @@ impl CombineHooks for MosLateCombines {
         narrow: EVT,
     ) -> bool {
         wide == EVT::I16 && narrow == EVT::I8
+    }
+
+    /// DEVIATE 6502-PAIR-SHIFT: see [`keeps_pair_shift_whole`].
+    fn wants_shift_of_shifted_logic(
+        &self,
+        dag: &SelectionDAG,
+        shift: SDValue,
+    ) -> bool {
+        !keeps_pair_shift_whole(dag, shift)
     }
 
     /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
@@ -88,6 +98,35 @@ impl CombineHooks for MosLateCombines {
     }
 }
 
+/// A word shift by a constant of two bytes joined into the word (`lo | hi <<
+/// 8`, the form a `BuildPair` of an A:X argument or result takes): the pin's
+/// `combineShiftOfShiftedLogic` splits it into a shift of each byte and an
+/// `or` (`x << 1` of an argument: 22 B against 8), where the word shift is one
+/// chain of `asl; rol` through A.
+///
+/// DEVIATE 6502-PAIR-SHIFT (owner llrm-target-6502, exit 2026-11-24): the pin
+/// legalizes the word into byte lanes before this fold sees it.
+fn keeps_pair_shift_whole(
+    dag: &SelectionDAG,
+    shift: SDValue,
+) -> bool {
+    let logic = dag.operand(shift, 0);
+    if dag.value_type(shift) != EVT::I16 || dag.opcode(logic) != ISD::Or {
+        return false;
+    }
+    // exactly the legalizer's `BuildPair`: `zext lo | (anyext hi << 8)`, both pieces bytes
+    let byte_extended = |value: SDValue, ops: &[ISD]| {
+        ops.contains(&dag.opcode(value)) && dag.value_type(dag.operand(value, 0)) == EVT::I8
+    };
+    let high = |value: SDValue| {
+        dag.opcode(value) == ISD::Shl
+            && dag.constant(dag.operand(value, 1)) == Some(8)
+            && byte_extended(dag.operand(value, 0), &[ISD::AnyExtend, ISD::ZeroExtend])
+    };
+    let (a, b) = (dag.operand(logic, 0), dag.operand(logic, 1));
+    (byte_extended(a, &[ISD::ZeroExtend]) && high(b)) || (byte_extended(b, &[ISD::ZeroExtend]) && high(a))
+}
+
 /// A word shift by 1 to 4 is a chain of that many steps for both bytes, and
 /// the other half reads it; from 5 a byte shift or a bit trick is cheaper
 /// than the chain whoever else reads it.
@@ -110,6 +149,15 @@ impl CombineHooks for MosCombines {
         narrow: EVT,
     ) -> bool {
         wide == EVT::I16 && narrow == EVT::I8
+    }
+
+    /// DEVIATE 6502-PAIR-SHIFT: see [`keeps_pair_shift_whole`].
+    fn wants_shift_of_shifted_logic(
+        &self,
+        dag: &SelectionDAG,
+        shift: SDValue,
+    ) -> bool {
+        !keeps_pair_shift_whole(dag, shift)
     }
 
     /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
@@ -136,7 +184,10 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Shl | ISD::Truncate | ISD::Or | ISD::SetCC)
+        matches!(
+            op,
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Shl | ISD::Truncate | ISD::Or | ISD::SetCC
+        )
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -191,7 +242,10 @@ fn range_on_low_byte(
     let (sum, bound) = (dag.operand(node, 0), dag.operand(node, 1));
     if dag.value_type(sum) != EVT::I16
         || dag.opcode(sum) != ISD::Add
-        || !matches!(dag.node(dag.operand(node, 2)).data, NodeData::CondCode(CondCode::SetULt))
+        || !matches!(
+            dag.node(dag.operand(node, 2)).data,
+            NodeData::CondCode(CondCode::SetULt)
+        )
     {
         return None;
     }
@@ -303,9 +357,9 @@ fn low_bit_in_carry(
     Some(SDValue { node: sum.node, res: 0 })
 }
 
-/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
-/// borrow of `a - b`, subtracted from `x` by a subtract with borrow. A split
-/// 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
+/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes:
+/// the borrow of `a - b`, subtracted from `x` by a subtract with borrow. A
+/// split 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
 /// compare was a chain of its own and its result a byte.
 ///
 /// The pin's analogue is the target's `combineAddOrSubToADCOrSBB`
@@ -328,14 +382,15 @@ fn borrow_of_ult(
             .into_iter()
             .map(|(x, e)| (dag.operand(node, x), dag.operand(node, e)))
             .find(|&(_, e)| dag.opcode(e) == ISD::SignExtend)?,
-        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => {
-            (dag.operand(node, 0), dag.operand(node, 1))
-        }
+        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => (dag.operand(node, 0), dag.operand(node, 1)),
         _ => return None,
     };
     let compare = dag.operand(extended, 0);
     if dag.opcode(compare) != ISD::SetCC
-        || !matches!(dag.node(dag.operand(compare, 2)).data, NodeData::CondCode(CondCode::SetULt))
+        || !matches!(
+            dag.node(dag.operand(compare, 2)).data,
+            NodeData::CondCode(CondCode::SetULt)
+        )
     {
         return None;
     }
@@ -435,18 +490,18 @@ fn is_any_extended_byte(
     }
 }
 
-/// `x + zext(*p)` and `x - zext(*p)` in a word, the byte loaded by nothing else:
-/// the low bytes add or subtract with the load as the operand, the high byte
-/// takes the carry (`adc #0`), as the pin's legalizer expands the word of an
-/// 8-bit target (`ExpandIntRes_ADDSUB`,
+/// `x + zext(*p)` and `x - zext(*p)` in a word, the byte loaded by nothing
+/// else: the low bytes add or subtract with the load as the operand, the high
+/// byte takes the carry (`adc #0`), as the pin's legalizer expands the word of
+/// an 8-bit target (`ExpandIntRes_ADDSUB`,
 /// [LegalizeIntegerTypes.cpp#L3725](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3725),
 /// the operand's half a zero). Left a word op, the byte was loaded into a cell
 /// for the word's second operand (`a - *p`: `lda (p); sta t; sec; lda a; sbc t`
 /// where `sec; lda a; sbc (p)` is the byte op: 17 B, 13 B).
 ///
 /// DEVIATE 6502-ZBYTE: the word is legal here (a pair of byte cells), so the
-/// pin's legalizer never splits it. An address (`p + zext(*q)` read by a load or
-/// a store) stays a word add, which `MOSIdx` matches as `(p),y`. Owner:
+/// pin's legalizer never splits it. An address (`p + zext(*q)` read by a load
+/// or a store) stays a word add, which `MOSIdx` matches as `(p),y`. Owner:
 /// llrm-6502-a. Exit: 2026-12-01, when the word add and subtract expand as the
 /// pin's do.
 fn word_with_loaded_byte(

@@ -11,7 +11,7 @@ ptr = $a0
 cntr = $a2
 fail = $a4
 .bss
-stk: .res 6
+stk: .res 4
 lo: .res 4
 hi: .res 4
 .code
@@ -27,25 +27,14 @@ _main:
     lda #0
     sta fail
 loop:
-    ldy #5                  ; a, b0, b1
-:   lda (ptr),y
-    sta rc2,y
-    dey
-    bpl :-
-    ldy #6
-    lda (ptr),y
+    lda #<hi                ; hi and lo, the pointers on the stack
     sta stk
-    iny
-    lda (ptr),y
-    sta stk+1
-    lda #<hi
-    sta stk+2
     lda #>hi
-    sta stk+3
+    sta stk+1
     lda #<lo
-    sta stk+4
+    sta stk+2
     lda #>lo
-    sta stk+5
+    sta stk+3
     lda #<stk
     sta rc0
     lda #>stk
@@ -56,6 +45,16 @@ loop:
     sta rc8,x
     dex
     bpl :-
+    ldy #7                  ; a2:a3 in rc2:rc3, b in rc4..rc7, a0:a1 in A:X
+:   lda (ptr),y
+    sta rc2-2,y
+    dey
+    cpy #1
+    bne :-
+    lda (ptr),y
+    tax
+    dey
+    lda (ptr),y
     jsr __mul32x32
     ldx #7
 :   txa

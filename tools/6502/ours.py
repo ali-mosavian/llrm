@@ -100,16 +100,15 @@ d3:
   jmp $FFF9
 report:
   ldy #0
+  sta (lp),y
+  iny
+  txa
+  sta (lp),y
+  iny
   lda rc2
   sta (lp),y
   iny
   lda rc3
-  sta (lp),y
-  iny
-  lda rc4
-  sta (lp),y
-  iny
-  lda rc5
   sta (lp),y
   lda lp
   clc
@@ -120,7 +119,8 @@ report:
 r1:
   rts
 """ % (LOG >> 8, LOG >> 8)
-    return s
+    # a dist from before the A:X convention reads the first word from rc2
+    return s if os.environ.get("OURS_ABI") != "cells" else s.replace('  sta (lp),y\n  iny\n  txa\n  sta (lp),y\n  iny\n  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y\n', '  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y\n  iny\n  lda rc4\n  sta (lp),y\n  iny\n  lda rc5\n  sta (lp),y\n')
 def sh(cmd, cwd, timeout=300, text=True):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=text, timeout=timeout)
 def expected(p):

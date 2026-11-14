@@ -31,7 +31,7 @@ fn a_lane_moved_into_a_live_pair_is_moved() {
     let selection = select_function(&module, "lanes", Cpu::Mos6502).expect("selects");
     let code = function_text(&module, "lanes", &selection).expect("emits");
     let data = ".segment \"DATA\"\nbuf: .res 1024\n.segment \"CODE\"\n";
-    let setup = "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  lda #1\n  sta rc4\n  lda #0\n  sta rc5\n  \
-                 lda #1\n  sta rc6\n  lda #0\n  sta rc7\n  jsr lanes\n  lda buf+770\n";
+    let setup = "  lda #1\n  sta rc2\n  lda #0\n  sta rc3\n  lda #1\n  sta rc4\n  lda #0\n  sta rc5\n  \
+                 lda #<buf\n  ldx #>buf\n  jsr lanes\n  lda buf+770\n";
     assert_eq!(common::run_with("lane-pointer", setup, &format!("{code}{data}")), 125);
 }

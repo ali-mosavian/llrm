@@ -148,9 +148,9 @@ fn a_byte_through_a_pointer_uses_the_unindexed_mode_on_the_65c02() {
     assert!(nmos.contains("  ldy #0\n  lda (rc2),y\n") && nmos.contains("  sta (rc2),y\n"), "{nmos}");
     assert!(cmos.contains("  lda (rc2)\n") && cmos.contains("  sta (rc2)\n"), "{cmos}");
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let point = "  lda #<g\n  sta rc2\n  lda #>g\n  sta rc3\n";
+    let point = "  lda #<g\n  ldx #>g\n";
     let get = format!("{point}  jsr getp\n");
-    let put = format!("{point}  lda #9\n  sta rc4\n  jsr putp\n  lda g\n");
+    let put = format!("  lda #9\n  sta rc2\n{point}  jsr putp\n  lda g\n");
     for (name, main, want) in [("cmos-getp", get, 7), ("cmos-putp", put, 9)] {
         for (target, cpu) in [("sim6502", Cpu::Mos6502), ("sim65c02", Cpu::W65c02)] {
             let got = common::run_on(target, name, &main, &format!("{}{G_DATA}", text(cpu))).0;
@@ -212,7 +212,7 @@ fn a_step_of_one_is_done_in_place() {
             assert_eq!(got, want, "{function}({arg}) on {target}");
         }
         for (function, want) in [("bumpp", 8), ("dropp", 6)] {
-            let main = format!("  lda #<g\n  sta rc2\n  lda #>g\n  sta rc3\n  jsr {function}\n  lda g\n");
+            let main = format!("  lda #<g\n  ldx #>g\n  jsr {function}\n  lda g\n");
             let got = common::run_on(target, &format!("step-{function}"), &main, &format!("{text}{G_DATA}")).0;
             assert_eq!(got, want, "{function} on {target}");
         }
@@ -253,8 +253,8 @@ fn an_indirect_call_pushes_x_directly_on_the_65c02() {
     assert!(nmos.contains("  txa\n  pha\n  tya\n  rts") && !nmos.contains("phx"), "{nmos}");
     assert!(cmos.contains("  phx\n  tya\n  rts") && !cmos.contains("  txa\n  pha\n  tya\n  rts"), "{cmos}");
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let main = "  lda #<twice\n  sta rc2\n  lda #>twice\n  sta rc3\n  lda #3\n  jsr thrice\n";
-    let two = "  lda #<plus\n  sta rc2\n  lda #>plus\n  sta rc3\n  ldx #7\n  lda #5\n  jsr both\n";
+    let main = "  lda #3\n  sta rc2\n  lda #<twice\n  ldx #>twice\n  jsr thrice\n";
+    let two = "  lda #5\n  sta rc2\n  lda #7\n  sta rc3\n  lda #<plus\n  ldx #>plus\n  jsr both\n";
     for (target, text, text2) in [("sim6502", nmos, nmos2), ("sim65c02", cmos, cmos2)] {
         assert_eq!(common::run_on(target, "cmos-thrice", main, &text).0, 24, "{target}");
         assert_eq!(common::run_on(target, "cmos-both", two, &text2).0, 19, "{target}");
