@@ -260,6 +260,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: as combine@1242 (the same translated families), a late InstCombine of the pin's default pipeline that cleans what SimplifyCFG@1438 and the unroll leave; exit: as combine@1242",
     ),
+    // DEVIATE late-loop-deletion: not a pin slot, a second LoopDeletion after the late unroll.
+    entry("loopsimplify@1499", Late, "loop-simplify", Old, "loopsimplify-port"),
+    entry("lcssa@1499", Late, "lcssa", Translated, ""),
+    entry("latedeletion@1499", Late, "late-loop-deletion (DEVIATE, not a pin slot)", Translated, ""),
     entry("licm@1508", Late, "licm<allowspeculation>", Translated, ""),
     partial(
         "decide@832",

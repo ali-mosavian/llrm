@@ -1163,6 +1163,16 @@ pub(crate) fn llvm_order(
             // InferAlignmentPass (l.1498), after the unroll and SROA.
             slot("infer-alignment@1498", Box::new(crate::inferalignment::InferAlignment)),
             combine("combine@1499"),
+            // DEVIATE (late-loop-deletion): LoopDeletionPass again, after the late
+            // unroll and the cleanup behind it. The pin runs it once in this
+            // round, before the unroll (l.1628); the unroll's peeled
+            // iterations can leave a loop that only counts (a byte copied onto
+            // itself, once combine drops the store), and nothing after the
+            // unroll deletes it. The loop pass manager takes loop-simplify
+            // and LCSSA form for granted; the two slots make them.
+            slot("loopsimplify@1499", Box::new(loopsimplify::LoopSimplify)),
+            slot("lcssa@1499", Box::new(lcssa::LoopClosedSSA)),
+            slot("latedeletion@1499", Box::new(loopdeletion::LateLoopDeletion)),
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),

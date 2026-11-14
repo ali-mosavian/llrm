@@ -689,6 +689,8 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("unroll@753", "loopunrollpass"),
     ("jumpthreading@809", "jumpthreading"),
     ("rotate@1621", "looprotate"),
+    ("lcssa@1499", "lcssa"),
+    ("latedeletion@1499", "loopdeletion"),
     ("loop-interchange@1631", "loopinterchange"),
     ("loop-unroll-and-jam@1474", "loopunrollandjam"),
     ("cmpsub@1", "codegen:backend/cmpsub"),
