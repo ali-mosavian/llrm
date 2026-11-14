@@ -23,6 +23,7 @@ fn main() {
                 Item::Inst(inst) => Item::Inst(inst.clone()),
                 Item::Bytes(bytes) => Item::Bytes(bytes.clone()),
                 Item::Table(labels) => Item::Table(labels.clone()),
+                Item::WordTable(labels) => Item::WordTable(labels.clone()),
                 Item::Loc(row) => Item::Loc(*row),
             }))
             .collect::<Vec<_>>()

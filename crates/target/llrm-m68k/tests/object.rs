@@ -47,7 +47,7 @@ fn a_call_encodes_as_llvm_mc_does() {
         .iter()
         .filter_map(|item| match item {
             Item::Inst(inst) => Some(encode(inst).unwrap().bytes),
-            Item::Label(_) | Item::Bytes(_) | Item::Table(_) | Item::Loc(_) => None,
+            Item::Label(_) | Item::Bytes(_) | Item::Table(_) | Item::WordTable(_) | Item::Loc(_) => None,
         })
         .flatten()
         .collect();

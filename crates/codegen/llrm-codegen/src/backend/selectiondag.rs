@@ -115,6 +115,7 @@ pub mod bswap_combine;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
+pub mod combine_hoist_logic;
 mod combine_avg;
 pub mod combine_funnel;
 pub mod combine_lifetime_end;
@@ -126,6 +127,7 @@ pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;
 pub mod combine_urem_eq;
+pub mod combine_extract;
 pub mod combine_vector;
 pub mod ctcount_combine;
 pub mod dag;
@@ -250,6 +252,8 @@ mod dagisel_tests;
 #[cfg(test)]
 #[cfg(test)]
 mod exact_shift_tests;
+#[cfg(test)]
+mod infer_ptr_align_tests;
 #[cfg(test)]
 mod extload_tests;
 #[cfg(test)]

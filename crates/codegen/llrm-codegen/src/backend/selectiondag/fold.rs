@@ -314,6 +314,8 @@ impl SelectionDAG {
         let n2_const = self.constant(n2);
         let is_i1 = vt == EVT::I1;
         match opcode {
+            // `getNode` of `EXTRACT_SUBVECTOR`: "Trivial extraction."
+            ISD::ExtractSubvector if vt == self.value_type(n1) => return Folded::Done(n1),
             ISD::TokenFactor => {
                 if self.opcode(n1) == ISD::EntryToken || n1 == n2 {
                     return Folded::Done(if self.opcode(n1) == ISD::EntryToken { n2 } else { n1 });
@@ -369,6 +371,53 @@ impl SelectionDAG {
                 };
                 if from == vt {
                     return Folded::Done(n1);
+                }
+            }
+            // `EXTRACT_VECTOR_ELT` of a vector (`getNode`,
+            // [SelectionDAG.cpp#L8733](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8733)):
+            // of undef, of a lane past the end, of a `BUILD_VECTOR` and of an
+            // `INSERT_VECTOR_ELT`, "often formed while vector operations are
+            // lowered to scalars". DEVIATE EV1:
+            // the `CONCAT_VECTORS`, `SPLAT_VECTOR` and
+            // one-lane `EXTRACT_SUBVECTOR` cases are not made.
+            ISD::ExtractElement if self.value_type(n1).is_vector() => {
+                if self.is_undef(n1) || self.is_undef(n2) {
+                    return Folded::Done(self.get_undef(vt));
+                }
+                if let Some(lane) = n2_const {
+                    if lane >= u128::from(self.value_type(n1).lanes()) {
+                        return Folded::Done(self.get_poison(vt));
+                    }
+                    if self.opcode(n1) == ISD::BuildVector {
+                        let element = self.operand(n1, lane as usize);
+                        return Folded::Done(self.get_any_ext_or_trunc(element, vt));
+                    }
+                    if self.opcode(n1) == ISD::InsertVectorElt
+                        && let Some(at) = self.constant(self.operand(n1, 2))
+                    {
+                        let value = self.operand(n1, 1);
+                        if at != lane {
+                            let vector = self.operand(n1, 0);
+                            return Folded::Done(self.get_node(ISD::ExtractElement, vt, &[vector, n2]));
+                        } else if self.value_type(value) == vt {
+                            return Folded::Done(value);
+                        }
+                    }
+                }
+            }
+            // `EXTRACT_SUBVECTOR` (`getNode`, SelectionDAG.cpp#L8840): the
+            // whole vector, a piece of undef, a piece of a `CONCAT_VECTORS` of
+            // pieces that size.
+            ISD::ExtractSubvector => {
+                if vt == self.value_type(n1) {
+                    return Folded::Done(n1);
+                }
+                if self.is_undef(n1) {
+                    return Folded::Done(self.get_undef(vt));
+                }
+                if self.opcode(n1) == ISD::ConcatVectors && self.value_type(self.operand(n1, 0)) == vt {
+                    let at = n2_const.expect("EXTRACT_SUBVECTOR index") / u128::from(vt.lanes());
+                    return Folded::Done(self.operand(n1, at as usize));
                 }
             }
             ISD::ExtractElement => {

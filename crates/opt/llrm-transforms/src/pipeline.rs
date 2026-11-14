@@ -141,7 +141,7 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
+    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
@@ -516,7 +516,7 @@ impl Options {
             "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => {
                 self.strength && self.lsr
             }
-            "indvars" | "window" | "gepoffset" | "narrowrange" => self.strength,
+            "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
@@ -650,6 +650,10 @@ impl FunctionPass for Slot {
 
     fn wants_sizes(&self) -> bool {
         self.inner.wants_sizes()
+    }
+
+    fn is_required(&self) -> bool {
+        self.inner.is_required()
     }
 
     fn run(
@@ -1878,6 +1882,10 @@ pub fn recorded(
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
     }
+    // After gepoffset, which leaves the constant part of an address in its own `gep`.
+    if applied.options.wanted("gepbyteindex") {
+        manager.add(gepbyteindex::GepByteIndex);
+    }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
     // The pin's `addIRPasses` slot for SelectOptimize, before CodeGenPrepare;
@@ -1939,7 +1947,10 @@ pub fn recorded(
     {
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
-    if applied.options.at_o1() && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_o1()) {
+    if applied.options.optimize
+        && !applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_speed())
+    {
         manager.add_program(crate::mergefunc::MergeLocalFunctions);
     }
     if applied.options.optimize {
@@ -2055,6 +2066,12 @@ fn rerun(
     fixed: &mut Fixed,
     globals_aa_held: bool,
 ) -> Result<(), String> {
+    // It does not go through the manager's loop, which skips an `optnone` body.
+    if let GlobalKind::Function(function) = &module.global(id).kind
+        && llrm_mir::passes::skipped_for_optnone(&*fixed, function)
+    {
+        return Ok(());
+    }
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
@@ -2437,6 +2454,9 @@ impl Run {
         analyses: &mut Analyses,
     ) -> bool {
         if !self.promotes && matches!(base(pass.name()), "sroa" | "promote") {
+            return false;
+        }
+        if llrm_mir::passes::skipped_for_optnone(&*pass, unit.function) {
             return false;
         }
         let name = pass.name();

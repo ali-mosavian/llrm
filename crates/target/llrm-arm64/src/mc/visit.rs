@@ -301,7 +301,46 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorDupLane { rd, rn, .. } => {
+            Inst::VectorInsGpr { rd, rn, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(G(rn), Role::Use);
+            }
+            Inst::VectorFmaLane { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorNarrow { high: false, rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorUnzip { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorNarrow { high: true, rd, rn, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorFmulLane { rd, rn, rm, .. } | Inst::VectorMulLane { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorStoreLane { rt, base, .. } => {
+                f(Fpr(rt), Role::Use);
+                f(G(base), Role::Use);
+            }
+            Inst::VectorUmov { rd, rn, .. } => {
+                f(G(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorInsLane { rd, rn, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorDupLane { rd, rn, .. } | Inst::VectorDupScalar { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
@@ -310,7 +349,16 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorShift { rd, rn, .. } | Inst::VectorNot { rd, rn } | Inst::VectorFpUnary { rd, rn, .. } => {
+            Inst::VectorLong { op, rd, rn, rm, .. } => {
+                f(Fpr(rd), if op.accumulates() { Role::UseDef } else { Role::Def });
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorLongShift { rd, rn, .. }
+            | Inst::VectorShift { rd, rn, .. }
+            | Inst::VectorNot { rd, rn }
+            | Inst::VectorFpUnary { rd, rn, .. }
+            | Inst::VectorReduce { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }

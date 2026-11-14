@@ -1372,6 +1372,129 @@ b0:
     assert!(checked - plain < crate::inlinecost::CALL_PENALTY, "checked {checked} against plain {plain}");
 }
 
+/// x_jpeg_fixed -O2 (arm64): `emit(out, data, n)` with `out` a constant IPSCCP
+/// left unread. `deadargelim` removes it after the walk, so the guard prices
+/// the call it will contain: the callee is held exactly as the same callee
+/// without the parameter. Priced with it, the call read 3 units, growth fell
+/// under the call and the cold site inlined (+72 B, +151 k instructions).
+#[test]
+fn test_the_speed_guard_prices_a_call_without_the_arguments_nothing_reads() {
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let held = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&arm), params.clone(), (2, true));
+        cost >= threshold
+    };
+    // A body of `ops` instructions: the parameter that is unread flips no verdict at any size.
+    for ops in 2..16 {
+        let mut body = String::from("  %v0 = load i32, ptr @g\n");
+        for at in 1..ops {
+            body += &format!("  %v{at} = add i32 %v{}, %x\n", at - 1);
+        }
+        body += &format!("  store i32 %v{}, ptr @g\n  ret void\n}}\n", ops - 1);
+        let with = format!(
+            "{GLOBAL}define internal void @callee(i32 %unread, i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 1, i32 %y)\n  call void @callee(i32 1, i32 3)\n  ret void\n}}\n"
+        );
+        let without = format!(
+            "{GLOBAL}define internal void @callee(i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee(i32 3)\n  ret void\n}}\n"
+        );
+        assert_eq!(held(&with), held(&without), "{ops} instructions");
+    }
+}
+
+/// `PolicyOnly` with a byte-priced call sequence (8 B and 4 B an argument), as m68k and 6502 state theirs.
+struct Sequenced(PolicyOnly);
+
+impl llrm_mir::tti::Tti for Sequenced {
+    fn inline_policy(&self) -> llrm_mir::tti::InlinePolicy {
+        self.0.inline_policy()
+    }
+
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: llrm_mir::tti::CostKind,
+    ) -> Option<llrm_mir::tti::Cost> {
+        (kind == llrm_mir::tti::CostKind::CodeSize).then(|| llrm_mir::tti::Cost::of(8 + 4 * shape.arguments.len() as i64))
+    }
+
+    fn cmp_sel_cost(&self, kind: llrm_mir::tti::CmpSel, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cmp_sel_cost(kind, ty, cost)
+    }
+
+    fn memory_op_cost(&self, op: llrm_mir::tti::MemoryOp, ty: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind, volatile: bool) -> llrm_mir::tti::Cost {
+        self.0.memory_op_cost(op, ty, cost, volatile)
+    }
+
+    fn cf_instr_cost(&self, phi: bool, kind: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(&self, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+        self.0.int_imm_cost(value, bits)
+    }
+
+    fn int_imm_cost_inst(&self, user: llrm_mir::tti::ImmUser, index: u32, value: i128, bits: u32) -> llrm_mir::tti::Cost {
+        self.0.int_imm_cost_inst(user, index, value, bits)
+    }
+
+    fn is_truncate_free(&self, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty) -> bool {
+        self.0.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(&self, global: bool, offset: i64, base: bool, scale: i64) -> bool {
+        self.0.is_legal_addressing_mode(global, offset, base, scale)
+    }
+
+    fn cast_cost(&self, kind: llrm_mir::tti::CastKind, from: llrm_mir::tti::Ty, to: llrm_mir::tti::Ty, cost: llrm_mir::tti::CostKind) -> llrm_mir::tti::Cost {
+        self.0.cast_cost(kind, from, to, cost)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        lhs: llrm_mir::tti::OperandInfo,
+        rhs: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        self.0.arithmetic_cost(op, ty, cost, lhs, rhs)
+    }
+}
+
+/// m68k x_idioms 68000 -Os: `sumlong(L, 40)` twice kept its out-of-line copy until `deadargelim` ran after the walk,
+/// then its unread `n` was priced as an argument push (call 18 B against 8), the -Os guard saw the inline as no growth
+/// and the program grew +10 B. A target with a call sequence must price the call without the unread argument.
+#[test]
+fn test_the_size_guard_prices_a_call_sequence_without_the_arguments_nothing_reads() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false }), by_rate: 0 };
+    let tti = Sequenced(PolicyOnly(policy, None, false));
+    let params = InlineParams { compute_full_inline_cost: true, opt_size_threshold: 100_000, ..InlineParams::from_level(2) };
+    let held = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&tti), params.clone(), (2, true));
+        cost >= threshold
+    };
+    for ops in 2..48 {
+        let mut body = String::from("  %v0 = load i32, ptr @g\n");
+        for at in 1..ops {
+            body += &format!("  %v{at} = add i32 %v{}, %x\n", at - 1);
+        }
+        body += &format!("  store i32 %v{}, ptr @g\n  ret void\n}}\n", ops - 1);
+        let with = format!(
+            "{GLOBAL}define internal void @callee(i32 %unread, i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 1, i32 %y)\n  call void @callee(i32 1, i32 3)\n  ret void\n}}\n"
+        );
+        let without = format!(
+            "{GLOBAL}define internal void @callee(i32 %x) {{\nb0:\n{body}
+define void @f(i32 %y) {{\nb0:\n  call void @callee(i32 %y)\n  call void @callee(i32 3)\n  ret void\n}}\n"
+        );
+        assert_eq!(held(&with), held(&without), "{ops} instructions");
+    }
+}
+
 /// jpeg_fixed -O1 (arm64): `tmul`, a 5-instruction static callee with 6 sites,
 /// stayed a call in the idct loops (frequency 29,791 times the caller's
 /// entry): 6.9M of the kernel's 25.5M instructions against clang's 19.8M.
@@ -1386,7 +1509,10 @@ entry:
   %s = ashr i64 %m, 63
   %l = lshr i64 %s, 54
   %t = add i64 %m, %l
-  %r = ashr i64 %t, 10
+  %u = xor i64 %t, %a
+  %v = add i64 %u, %b
+  %z = lshr i64 %v, 3
+  %r = ashr i64 %z, 10
   ret i64 %r
 }
 define i64 @f(i64 %x, i64 %y) {
@@ -1408,4 +1534,36 @@ entry:
     assert!(!at(&arm, 1.0), "cold: held");
     let x86 = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
     assert!(at(&x86, 29_791.0), "a target with no guard: the pin's verdict");
+}
+
+/// A float operation or cast on a target with no legal `FADD` is a library
+/// call: `visitBinaryOperator` and `visitCastInst` add `CALL_PENALTY` where
+/// `getFPOpCost` is `TCC_Expensive` (InlineCost.cpp:1959, :2317). Before, the
+/// m68k priced a soft-float `fadd` at 5 like an add, so a float-heavy callee
+/// was inlined at sites where the pin refuses it.
+#[test]
+fn test_a_float_operation_on_a_soft_float_target_costs_a_call() {
+    let text = format!(
+        "{GLOBAL}define internal double @callee(double %x, double %y) {{
+b0:
+  %a = fadd double %x, %y
+  %b = sitofp i32 3 to double
+  %c = fmul double %a, %y
+  ret double %c
+}}
+
+define double @f(double %p, double %q) {{
+b0:
+  %r = call double @callee(double %p, double %q)
+  %s = call double @callee(double %r, double %q)
+  ret double %s
+}}
+"
+    );
+    let hard = crate::testing::Flagged::default();
+    let soft = crate::testing::Flagged { soft_float: true, ..Default::default() };
+    let (hard_cost, _) = priced_with(&text, 0, false, CallerSize::Speed, Some(&hard));
+    let (soft_cost, _) = priced_with(&text, 0, false, CallerSize::Speed, Some(&soft));
+    // the fadd, the fmul (the constant sitofp folds)
+    assert_eq!(soft_cost - hard_cost, 2 * crate::inlinecost::CALL_PENALTY, "hard {hard_cost}, soft {soft_cost}");
 }

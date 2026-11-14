@@ -17,6 +17,8 @@ for ty in ["i8", "i16", "i32", "i64"]:
         intr(f"llvm.{m}.{ty}", ty, [ty, ty])
     for m in ["sadd", "uadd", "ssub", "usub", "smul", "umul"]:
         intr(f"llvm.{m}.with.overflow.{ty}", "{ " + ty + ", i1 }", [ty, ty])
+    for m in ["sadd", "uadd", "ssub", "usub", "sshl", "ushl"]:
+        intr(f"llvm.{m}.sat.{ty}", ty, [ty, ty])
     intr(f"llvm.ctpop.{ty}", ty, [ty])
     if ty != "i8":
         intr(f"llvm.bswap.{ty}", ty, [ty])
@@ -26,6 +28,10 @@ for ty in ["i8", "i16", "i32", "i64"]:
     intr(f"llvm.fshl.{ty}", ty, [ty, ty, ty])
     intr(f"llvm.fshr.{ty}", ty, [ty, ty, ty])
     intr(f"llvm.bitreverse.{ty}", ty, [ty])
+for w in ["i32", "i64"]:
+    intr(f"llvm.memset.p0.{w}", "void", ["ptr", "i8", w, "i1"])
+    intr(f"llvm.memcpy.p0.p0.{w}", "void", ["ptr", "ptr", w, "i1"])
+    intr(f"llvm.memmove.p0.p0.{w}", "void", ["ptr", "ptr", w, "i1"])
 for f, t in [("f64", "double"), ("f32", "float")]:
     for m in ["fabs", "sqrt", "sin", "cos", "log", "log2", "exp", "exp2", "pow", "floor", "ceil", "trunc", "rint",
               "nearbyint", "round", "roundeven", "minnum", "maxnum", "copysign", "fma", "fmuladd", "minimum", "maximum"]:
@@ -34,7 +40,7 @@ for f, t in [("f64", "double"), ("f32", "float")]:
     for r in ["i32", "i64"]:
         intr(f"llvm.lrint.{r}.{f}", r, [t])
         intr(f"llvm.lround.{r}.{f}", r, [t])
-VALS = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "i1": "false"}
+VALS = {"ptr": "null", "i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "i1": "false"}
 body, decls = [], []
 for n, (name, ret, args) in enumerate(INTRINSICS):
     cargs = ", ".join(f"{t} {VALS[t]}" for t in args)

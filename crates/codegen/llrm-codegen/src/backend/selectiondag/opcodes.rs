@@ -56,6 +56,8 @@ pub struct OpcodeMap {
     forms: std::sync::Arc<Vec<Form>>,
     /// [`Self::scalar_sse`], asked per operand width: found once.
     scalar_sse: bool,
+    /// [`Self::vector128`]: found once.
+    vector128: bool,
     /// The answer for each name asked: every machine node of a function asks,
     /// and a name has one answer.
     asked: std::sync::Mutex<llrm_support::hash::HashMap<String, Result<usize, Unmapped>>>,
@@ -71,13 +73,21 @@ impl OpcodeMap {
     /// The map of forms read once (`llrm_target::instr::shared`).
     pub fn shared(forms: std::sync::Arc<Vec<Form>>) -> OpcodeMap {
         let scalar_sse = forms.iter().any(|form| form.name == "addsd");
-        OpcodeMap { forms, scalar_sse, asked: Default::default(), sized: Default::default() }
+        let vector128 = forms.iter().any(|form| form.name == "movups");
+        OpcodeMap { forms, scalar_sse, vector128, asked: Default::default(), sized: Default::default() }
     }
 
     /// Whether this target does scalar floating point in xmm registers (it has
     /// `addsd`): a floating value is then 4 or 8 bytes, not the x87's 10.
     pub fn scalar_sse(&self) -> bool {
         self.scalar_sse
+    }
+
+    /// Whether this target holds the 128-bit integer vectors in xmm registers
+    /// (it has `movups`): `v16i8`, `v8i16`, `v4i32` and `v2i64` are then legal
+    /// types.
+    pub fn vector128(&self) -> bool {
+        self.vector128
     }
 
     /// [`memory_bytes`] of `name`, memoized: every machine node asks.
@@ -224,10 +234,11 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 24] = [
+    const ARITHMETIC: [&str; 36] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
-        "CMPSD",
+        "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
+        "PXOR",
     ];
     const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [

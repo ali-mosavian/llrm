@@ -225,6 +225,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT | ISD::VAArg => EVT::OTHER,
             ISD::SIntToFp | ISD::UIntToFp | ISD::LRint | ISD::LLRint => self.dag.value_type(self.dag.operand(node, 0)),
+            // `VectorLegalizer::LegalizeOp`: a reduction is asked of its
+            // vector's type.
+            op if op.vec_reduce_base_opcode().is_some() => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
                 NodeData::ValueType(inner) => inner,
                 _ => self.dag.value_type(node),
@@ -372,9 +375,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         } else {
             self.dag.get_ext_load(kind, vt, chain, ptr, narrow)
         };
+        let ty = self.dag.get_value_type_node(info.mem_vt);
         let value = if ext == super::actions::LoadExt::SExtLoad {
-            let ty = self.dag.get_value_type_node(info.mem_vt);
             self.dag.get_node(ISD::SignExtendInReg, vt, &[byte, ty])
+        } else if ext == super::actions::LoadExt::ZExtLoad || vt == EVT::I8 {
+            // `ExtType == ISD::ZEXTLOAD || NVT == Result.getValueType()`: all
+            // the top bits are zero, which the optimizers are told.
+            self.dag.get_node(ISD::AssertZext, vt, &[byte, ty])
         } else {
             byte
         };
@@ -399,6 +406,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         let vt = self.dag.value_type(node);
         let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        // A memory type a register holds (`isTypeLegal(SrcVT)`): a plain load
+        // and the extension of it.
+        if info.mem_vt.is_vector() && self.tli.types.is_type_legal(info.mem_vt) {
+            let load = self.dag.get_load(info.mem_vt, chain, ptr, MemInfo { ext: None, ..info });
+            let op = if ext == super::actions::LoadExt::SExtLoad { ISD::SignExtend } else { ISD::ZeroExtend };
+            let value = self.dag.get_node(op, vt, &[load]);
+            return Some((value, SDValue { node: load.node, res: 1 }));
+        }
         let any =
             self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, ptr, MemInfo { ext: None, ..info });
         let value = if ext == super::actions::LoadExt::SExtLoad {
@@ -492,8 +507,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Int(_) => Action::Expand,
         };
         // `EXTRACT_ELEMENT` lies about being legal: when it claims to be, it is
-        // expanded.
-        if self.dag.opcode(node) == ISD::ExtractElement && action == Action::Legal {
+        // expanded. The same node taking a vector is `EXTRACT_VECTOR_ELT`.
+        if self.dag.opcode(node) == ISD::ExtractElement
+            && action == Action::Legal
+            && !self.dag.value_type(self.dag.operand(node, 0)).is_vector()
+        {
             action = Action::Expand;
         }
         if self.dag.opcode(node) == ISD::SetCC
@@ -549,8 +567,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
-        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds CTTZ_ZERO_POISON): the value as is, the
-        // routine's `int` result sign-extended or truncated to the node's type.
+        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds
+        // CTTZ_ZERO_POISON): the value as is, the routine's `int`
+        // result sign-extended or truncated to the node's type.
         if matches!(op, ISD::CtLzZeroPoison | ISD::CtPop | ISD::CtTzZeroPoison) {
             let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
             let int = EVT::integer(self.tli.types.int_size());
@@ -953,7 +972,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let (src, dst) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let src_vt = self.dag.value_type(src);
         let EVT::Simple(src_mvt) = src_vt else { return None };
-        if !matches!(self.tli.operation_action(ISD::SIntToFp, src_vt), Action::Legal | Action::Custom) {
+        if !matches!(
+            self.tli.operation_action(ISD::SIntToFp, src_vt),
+            Action::Legal | Action::Custom
+        ) {
             return None;
         }
         if self.dag.node(node).flags.0 & SDNodeFlags::NON_NEG.0 != 0 {
@@ -977,6 +999,121 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
     }
 
+    /// `ExpandVectorBuildThroughStack`: each defined lane stored to its place in
+    /// a 16-byte stack slot, the slot loaded as the vector. The pin's
+    /// `LowerBUILD_VECTOR` of an x86 splat is a `movd` and a `pshufd`; this is
+    /// the target-independent fallback every lane shape takes.
+    fn expand_build_vector_through_stack(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let element = vt.element();
+        let lane_bytes = element.size_in_bits() / 8;
+        let size = vt.size_in_bits() / 8;
+        if lane_bytes == 0 || self.dag.config().big_endian {
+            return None;
+        }
+        let cell = self.dag.create_stack_temporary(size, 16);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let lane_info = MemInfo {
+            mem_vt: element,
+            align: lane_bytes.min(16),
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let entry = self.dag.entry_node();
+        let mut stores = Vec::new();
+        for (at, lane) in self.dag.node(node).ops.clone().into_iter().enumerate() {
+            if self.dag.is_undef(lane) {
+                continue;
+            }
+            let value =
+                if self.dag.value_type(lane) == element { lane } else { self.dag.get_sext_or_trunc(lane, element) };
+            let to = self.dag.get_object_ptr_offset(slot, (at as u32 * lane_bytes) as i64);
+            stores.push(self.dag.get_store(entry, value, to, lane_info));
+        }
+        let chain = if stores.is_empty() { entry } else { self.dag.get_token_factor(&stores) };
+        let info = MemInfo { mem_vt: vt, align: 16, ..lane_info };
+        Some(self.dag.get_load(vt, chain, slot, info))
+    }
+
+    /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
+    /// constants or undefined is loaded from the constant pool, its lanes laid
+    /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
+    /// is left to the target (`ExpandVectorBuildThroughStack` is not
+    /// translated).
+    fn expand_build_vector(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let bits = vt.size_in_bits();
+        if !vt.is_vector() || bits > 128 {
+            return None;
+        }
+        let lane_bits = vt.element().size_in_bits();
+        let mask = u128::MAX >> (128 - lane_bits);
+        let mut image = 0u128;
+        for (at, lane) in self.dag.node(node).ops.clone().into_iter().enumerate() {
+            if self.dag.is_undef(lane) {
+                continue;
+            }
+            // A float lane is its bits; the operand may be wider than the
+            // lane (an implicit truncation).
+            let Some(value) = self.dag.constant(lane).or_else(|| self.dag.fp_constant(lane)) else {
+                return self.expand_build_vector_through_stack(node);
+            };
+            image |= (value & mask) << (at as u32 * lane_bits);
+        }
+        let pointer = self.dag.config().pointer;
+        let index = self.dag.get_constant_pool(pointer, image, vt, false);
+        let NodeData::PoolIndex(entry, _) = self.dag.node(index).data else {
+            unreachable!("a pool node has its entry")
+        };
+        let info = MemInfo {
+            mem_vt: vt,
+            align: bits / 8,
+            volatile: false,
+            base: MemBase::ConstantPool(entry),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let chain = self.dag.entry_node();
+        let loaded = self.dag.get_load(vt, chain, index, info);
+        // The pool is read-only memory: `isDereferenceableInvariantLoad`.
+        self.dag.invariant_loads.insert(loaded.node);
+        Some(loaded)
+    }
+
+    /// `SelectionDAG::UnrollVectorOp` for the lane-wise operations: each lane
+    /// of the operands extracted, the scalar operation on each, a
+    /// `BUILD_VECTOR` of the results.
+    fn unroll_vector_op(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let (op, flags) = (self.dag.opcode(node), self.dag.node(node).flags);
+        let operands = self.dag.node(node).ops.clone();
+        let lanes: Vec<SDValue> = (0..vt.lanes())
+            .map(|lane| {
+                let index = self.dag.get_constant(u128::from(lane), EVT::I64);
+                let scalars: Vec<SDValue> = operands
+                    .iter()
+                    .map(|operand| self.dag.get_node(ISD::ExtractElement, vt.element(), &[*operand, index]))
+                    .collect();
+                self.dag.get_node_flags(op, vt.element(), &scalars, flags)
+            })
+            .collect();
+        self.dag.get_build_vector(vt, &lanes)
+    }
+
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
     fn expand_node(
@@ -987,6 +1124,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
         match op {
+            // `VectorLegalizer::Expand`: a lane-wise operation the target has
+            // not is done a lane at a time.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor if vt.is_vector() => {
+                Some(vec![self.unroll_vector_op(node)])
+            }
+            ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::SignExtendInReg => {
                 // An in-register sign extension of a boolean is a negation of
                 // the masked bit; any other width is a shift pair.
@@ -1174,8 +1317,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             // `expandVAArg`: load the list pointer, round it up to the
             // type's ABI alignment when that exceeds the minimum stack
-            // argument alignment (`getMinStackArgumentAlignment`), step it by the
-            // type's allocation size, store it back and load the value.
+            // argument alignment (`getMinStackArgumentAlignment`), step it by
+            // the type's allocation size, store it back and load the value.
             ISD::VAArg => {
                 let vt = self.dag.value_type(node);
                 let (chain, list) = (self.dag.operand(node, 0), self.dag.operand(node, 1));

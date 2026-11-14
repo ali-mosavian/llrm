@@ -24,7 +24,7 @@
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
 //! intrinsics, and the 16-bit immediate widening in `EmitCmp`. Reason: each
 //! needs known-bits or use queries the DAG lacks. Exit: with the combiner
-//! (B2). Owner sdag-b. Review 2026-11-13.
+//! (B2). Owner llrm-target-x86-m64-c. Review 2026-11-24.
 //!
 //! # See also
 //! LLVM's `LowerSETCC`
@@ -222,12 +222,23 @@ impl CombineHooks for X86Lowering<'_> {
         self.cmov
     }
 
+    /// DEVIATE: off at m16 (`i16_mul_chains`), see the trait.
+    fn select_cc_to_shift_and(&self) -> bool {
+        !self.i16_mul_chains
+    }
+
     /// `convertSelectOfConstantsToMath`: false where SELB keeps the select.
     fn convert_select_of_constants_to_math(
         &self,
         _vt: EVT,
     ) -> bool {
         !self.branch_constants()
+    }
+
+    /// `tryStoreMergeOfLoads`' vector arm: the vector types the target holds
+    /// are the 128-bit ones of `x86_64_vectors`, empty elsewhere.
+    fn merge_stores_to_vectors(&self) -> bool {
+        true
     }
 
     /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
@@ -774,8 +785,8 @@ impl Hooks for X86Lowering<'_> {
             // not describe; so the scalar op is selected by pattern.
             ISD::FAdd | ISD::FSub => Some(node),
             ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
-            ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
-            ISD::CtTz => Some(lower_cttz(dag, node)),
+            ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node, self.zext_free)),
+            ISD::CtTz => Some(lower_cttz(dag, node, self.zext_free)),
             ISD::Parity => Some(lower_parity(dag, node)),
             ISD::CtPop => lower_ctpop(dag, node),
             _ => None,
@@ -971,6 +982,12 @@ fn emit_test(
         ISD::Xor => x86isd::XOR,
         x86isd::ADD | x86isd::SUB | x86isd::OR | x86isd::XOR | x86isd::AND => {
             return SDValue { node: op.node, res: 1 };
+        }
+        // `USUBO`/`SSUBO` will become an `X86ISD::SUB`, and its flags are the compare's.
+        ISD::USubO | ISD::SSubO => {
+            let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
+            let sub = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[lhs, rhs]);
+            return SDValue { node: sub.node, res: 1 };
         }
         _ => return test(dag),
     };
@@ -1842,9 +1859,68 @@ fn combine_add_of_carry(
     None
 }
 
+/// `pushAddIntoCmovOfConsts` (X86ISelLowering.cpp#L60561): `add (cmov C1, C2), x` is
+/// `cmov (add x, C1), (add x, C2)`: two `lea`s for two constant moves and an `add`. The
+/// constants fit 32 bits or one is zero; a load `x` stays unfolded, and `x = add (X, Y)`
+/// used only as the address of memory operations keeps `Y` out of the cmov.
+fn push_add_into_cmov_of_consts(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let bits = vt.size_in_bits();
+    let suitable = |dag: &SelectionDAG, value: SDValue| {
+        if dag.opcode(value) != x86isd::CMOV || !dag.has_one_use(value.node) {
+            return false;
+        }
+        let (Some(a), Some(b)) = (dag.constant(dag.operand(value, 0)), dag.constant(dag.operand(value, 1))) else {
+            return false;
+        };
+        let fits = |c: u128| {
+            let shift = 128 - bits;
+            let signed = ((c << shift) as i128) >> shift;
+            i32::try_from(signed).is_ok()
+        };
+        a == 0 || b == 0 || (fits(a) && fits(b))
+    };
+    let (mut cmov, mut other) = (dag.operand(node, 0), dag.operand(node, 1));
+    if !suitable(dag, cmov) {
+        std::mem::swap(&mut cmov, &mut other);
+    }
+    if !suitable(dag, cmov) || may_fold_load(dag, other) {
+        return None;
+    }
+    let (false_op, true_op) = (dag.operand(cmov, 0), dag.operand(cmov, 1));
+    let (code, flags) = (dag.operand(cmov, 2), dag.operand(cmov, 3));
+    // Only the address of the memory operations that read it.
+    let address_only = dag.users(SDValue { node: node.node, res: 0 }).all(|user| {
+        let user = SDValue { node: user, res: 0 };
+        let at = match dag.opcode(user) {
+            ISD::Load => 1,
+            ISD::Store => 2,
+            _ => return false,
+        };
+        dag.operand(user, at) == SDValue { node: node.node, res: 0 }
+    });
+    if dag.opcode(other) == ISD::Add
+        && dag.has_one_use(other.node)
+        && dag.constant(dag.operand(other, 0)).is_none()
+        && address_only
+    {
+        let (x, y) = (dag.operand(other, 0), dag.operand(other, 1));
+        let false_sum = dag.get_node(ISD::Add, vt, &[x, false_op]);
+        let true_sum = dag.get_node(ISD::Add, vt, &[x, true_op]);
+        let pushed = dag.get_node(x86isd::CMOV, vt, &[false_sum, true_sum, code, flags]);
+        return Some(dag.get_node(ISD::Add, vt, &[pushed, y]));
+    }
+    let false_sum = dag.get_node(ISD::Add, vt, &[other, false_op]);
+    let true_sum = dag.get_node(ISD::Add, vt, &[other, true_op]);
+    Some(dag.get_node(x86isd::CMOV, vt, &[false_sum, true_sum, code, flags]))
+}
+
 /// `combineAdd`, the hidden LEA pattern: `(add (sub (shl x, c), y), z)` with
 /// `c < 4` is `(sub (add (shl x, c), z), y)`, so the `shl` and the `add` are
-/// one `lea` (`y * 7 + z` is `lea z + y*8; sub y`). (The vector, `cmov`,
+/// one `lea` (`y * 7 + z` is `lea z + y*8; sub y`). (The vector,
 /// `psadbw` and `sbb` folds are not translated.)
 fn combine_add(
     dag: &mut SelectionDAG,
@@ -1853,6 +1929,13 @@ fn combine_add(
     let vt = dag.value_type(node);
     if vt != EVT::I32 && vt != EVT::I64 {
         return combine_add_of_carry(dag, node).or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node));
+    }
+    // The pin's `visitADD` has already made an or-disjoint of the adds that share no bits: without that,
+    // the push is not the pin's and word_compare_branches grows +14 B.
+    if dag.config().add_to_or_disjoint
+        && let Some(pushed) = push_add_into_cmov_of_consts(dag, node)
+    {
+        return Some(pushed);
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
@@ -3309,14 +3392,17 @@ fn lower_ssubsat(
     dag.get_select(vt, overflow, saturated, difference)
 }
 
-/// `LowerCTLZ` ([L29730][pin]): `bsr`, a `cmov` for a zero source, and
-/// `xor bits-1`. No pass-through `bsr` (a tuning of newer CPUs).
+/// `LowerCTLZ` ([L29730][pin]): `bsr` and `xor bits-1`. A zero source is `bits` through the
+/// pass-through operand of `bsr` (`hasBitScanPassThrough`, `is64Bit`: `bsr` leaves its
+/// destination alone for a zero source, so `mov eax, 2*bits-1; bsr eax, src`), or through a
+/// `cmov` where there is no pass-through.
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29730
 fn lower_ctlz(
     dag: &mut SelectionDAG,
     node: SDValue,
+    bit_scan_pass_through: bool,
 ) -> SDValue {
     let vt = dag.value_type(node);
     let bits = u128::from(vt.size_in_bits());
@@ -3327,12 +3413,17 @@ fn lower_ctlz(
         op_vt = EVT::I32;
         op = dag.get_node(ISD::ZeroExtend, op_vt, &[op]);
     }
-    let pass_through = dag.get_undef(op_vt);
+    let is_ctlz = dag.opcode(node) == ISD::CtLz;
+    let zero_answer = bits + bits - 1;
+    // Check if we can safely pass a result though BSR for zero sources.
+    let passes = is_ctlz && bit_scan_pass_through && !is_known_never_zero(dag, op);
+    let pass_through = if passes { dag.get_constant(zero_answer, op_vt) } else { dag.get_undef(op_vt) };
     let scan = dag.get_node_multi(x86isd::BSR, &[op_vt, EVT::I32], &[pass_through, op]);
     let mut result = SDValue { node: scan.node, res: 0 };
-    if dag.opcode(node) == ISD::CtLz {
+    // Skip the CMOV where a pass-through value is used.
+    if is_ctlz && !passes {
         // A zero source sets ZF: the answer is `bits`, which the xor leaves.
-        let zero_answer = dag.get_constant(bits + bits - 1, op_vt);
+        let zero_answer = dag.get_constant(zero_answer, op_vt);
         let code = cond_code(dag, cond::E);
         let flags = SDValue { node: scan.node, res: 1 };
         result = dag.get_node(x86isd::CMOV, op_vt, &[result, zero_answer, code, flags]);
@@ -3342,20 +3433,25 @@ fn lower_ctlz(
     if vt == EVT::I8 { dag.get_node(ISD::Truncate, EVT::I8, &[result]) } else { result }
 }
 
-/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, then a `cmov` of `bits`
-/// for a zero source unless the source cannot be zero.
+/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, with `bits` for a zero source passed through
+/// it (`hasBitScanPassThrough`) or selected by a `cmov`, unless the source cannot be zero.
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29776
 fn lower_cttz(
     dag: &mut SelectionDAG,
     node: SDValue,
+    bit_scan_pass_through: bool,
 ) -> SDValue {
     let vt = dag.value_type(node);
     let src = dag.operand(node, 0);
-    let pass_through = dag.get_undef(vt);
+    let non_zero = is_known_never_zero(dag, src);
+    // Check if we can safely pass a result though BSF for zero sources.
+    let passes = !non_zero && bit_scan_pass_through;
+    let pass_through = if passes { dag.get_constant(u128::from(vt.size_in_bits()), vt) } else { dag.get_undef(vt) };
     let scan = dag.get_node_multi(x86isd::BSF, &[vt, EVT::I32], &[pass_through, src]);
-    if is_known_never_zero(dag, src) {
+    // Skip the CMOV if the source is never zero or a pass-through value is used.
+    if non_zero || passes {
         return SDValue { node: scan.node, res: 0 };
     }
     let zero_answer = dag.get_constant(u128::from(vt.size_in_bits()), vt);

@@ -5,7 +5,7 @@
 cd "$(dirname "$0")/.." || exit 2
 D=${LLRM_CC_DIR:-$HOME/scratch/sf-fp128-target/debug}; T=$(mktemp -d); trap 'rm -rf "${T:?}"' EXIT; bad=0
 chk() { [ "$2" -le "$3" ] || { echo "FAIL: $1 fix_si.c is $2 B (bound $3)"; bad=1; }; }
-sz() { size -A "$1" | awk '$1==".text"||$1~/^\.rodata/{s+=$2}END{print s+0}'; }
+sz() { size -A "$1" | awk '$1~/^\.text/||$1~/^\.rodata/{s+=$2}END{print s+0}'; }
 for O in O2 Os; do
   LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -march=i486 -DSF_INTABI=1 -include stdint.h -include config/x86_m32/config.h -$O -c -Iinclude lib/fp/f32/fix_si.c -o $T/a.o || exit 2
   chk "m32 -$O" "$(sz $T/a.o)" 75

@@ -28,8 +28,9 @@
 //! `tryMergingIntoMemset`, `processStore`, `processMemSet`,
 //! `iterateOnFunction`, `runImpl`.
 //!
-//! DEVIATE 1: `getPointerOffsetFrom` is `MemRef`'s root and displacement: two
-//! pointers of one root with no variable index, no segment. Exit: none needed.
+//! DEVIATE 1: `getPointerOffsetFrom` is `MemRef`'s root, variable index and
+//! displacement: two pointers of one root and the same variable index (the
+//! pin: one value and a constant offset), no segment. Exit: none needed.
 //! DEVIATE 2: a call that only accesses inaccessible memory ends the scan
 //! (LLVM steps over it); `memory::of` has no such effect. Exit: model the
 //! effect.
@@ -358,7 +359,7 @@ fn try_merging_into_memset(
         let widest = i64::from(layout.largest_legal_integer() / 8);
         let reference = |ptr: Operand, size: i64| -> Option<MemRef> {
             let found = MemRef::at(&unit, ptr, size as u32);
-            (found.root.is_some() && found.base.is_none() && found.segment.is_none()).then_some(found)
+            (found.root.is_some() && found.segment.is_none()).then_some(found)
         };
         let (start_size, start_inst) = match simple_store(function, start) {
             Some((value, _)) => (stored_bytes(&unit, value)?, (start, true)),
@@ -391,7 +392,13 @@ fn try_merging_into_memset(
             };
             let Some((pointer, size, is_store)) = found else { break at };
             let Some(next) = reference(pointer, size) else { break at };
-            if next.root != base.root {
+            // `getPointerOffsetFrom`: one value and a constant between them. The variable index
+            // is the same one on both sides, so only the displacements differ.
+            if next.root != base.root
+                || next.base != base.base
+                || next.scale != base.scale
+                || next.base_width != base.base_width
+            {
                 break at;
             }
             add_range(&mut ranges, next.disp - base.disp, size, pointer, alignment(&unit, at), (at, is_store));

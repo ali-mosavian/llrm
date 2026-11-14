@@ -95,16 +95,15 @@ d3:
   jmp $FFF9
 report:
   ldy #0
+  sta (lp),y
+  iny
+  txa
+  sta (lp),y
+  iny
   lda rc2
   sta (lp),y
   iny
   lda rc3
-  sta (lp),y
-  iny
-  lda rc4
-  sta (lp),y
-  iny
-  lda rc5
   sta (lp),y
   lda lp
   clc
@@ -115,7 +114,8 @@ report:
 r1:
   rts
 """ % (LOG >> 8, LOG >> 8)
-    return s
+    # a dist from before the A:X convention reads the first word from rc2
+    return s if os.environ.get("OURS_ABI") != "cells" else s.replace('  sta (lp),y\n  iny\n  txa\n  sta (lp),y\n  iny\n  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y\n', '  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y\n  iny\n  lda rc4\n  sta (lp),y\n  iny\n  lda rc5\n  sta (lp),y\n')
 def sh(cmd, cwd, timeout=300, text=True):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=text, timeout=timeout)
 def expected(p):
@@ -193,7 +193,7 @@ def one(job):
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
     WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
-    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    import atexit, signal; signal.signal(signal.SIGTERM, lambda *_: sys.exit(143)); atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
     BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]

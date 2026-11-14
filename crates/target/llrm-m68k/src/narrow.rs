@@ -63,6 +63,13 @@ pub fn narrow_logic_immediates(
             }
             let Some(desc) = local::code_of(target).and_then(local::desc) else { continue };
             let word = i64::from(value as u32 & 0xFFFF);
+            // `and.w #0` is `clr.w`: 2 B for 4, 4 clk for 8, the same codes
+            if ones && word == 0 {
+                if let (Some(clear), Some(low)) = (local::code_of("CLR16dd").and_then(local::desc), REGISTER_INFO.view(register(&def), 16)) {
+                    block.insts[at] = op_inst("CLR16dd", clear, vec![Operand::Def(Reg::Phys(low))]);
+                    continue;
+                }
+            }
             block.insts[at] = op_inst(target, desc, vec![Operand::Def(def), Operand::Use(base), Operand::Imm(word)]);
         }
     }

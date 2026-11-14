@@ -159,9 +159,9 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
-    /// -O1 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`).
-    fn merge_local_functions_at_o1(&self) -> bool {
+    /// DEVIATE Z80-MERGEFUNC-LOCAL (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
+    /// -O1, -O2 and -O3 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`, signbit_idioms `bit_i16`).
+    fn merge_local_functions_at_speed(&self) -> bool {
         true
     }
 
@@ -423,6 +423,13 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the module is compiled again with the copies of a
+    /// loop-holding callee at several sites of a loop refused, and the cheaper after allocation is kept
+    /// (`compile::effective`).
+    fn inline_loop_copy_trial(&self) -> bool {
+        true
+    }
+
     /// DEVIATE Z80-ROT (owner z80, exit 2026-11-21): -Oz keeps a counted loop proven to run bottom-tested (`djnz`, no
     /// test above the body), as the gcc tail rotate did until its deletion (#8017): 27 -Oz cells grew, sum4 +4 B.
     fn rotation_free_guard_at_minsize(&self) -> bool {
@@ -546,15 +553,16 @@ impl Tti for Z80Tti {
         false
     }
 
-    // The long routines `__udivremsi4` and `__divremsi4` and the word ones
-    // (`__udivhi3` leaves the remainder in `hl`, `__divremhi4`) give both: a
-    // pair is one call. The byte routines do not.
+    // The long routines `__udivremsi4` and `__divremsi4`, the long long ones
+    // (`__udivmddi4`, `__divmddi4`) and the word ones (`__udivhi3` leaves
+    // the remainder in `hl`, `__divremhi4`) give both: a pair is one call. The
+    // byte routines do not.
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        matches!(bits, 16 | 32)
+        matches!(bits, 16 | 32 | 64)
     }
 
     fn cast_cost(

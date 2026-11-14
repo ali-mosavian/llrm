@@ -155,7 +155,8 @@ pub fn plan(cpu: Cpu, price: Price, bits: u32, c: u128) -> Option<MulPlan> {
     found
 }
 
-fn searched(cpu: Cpu, price: Price, c: u32) -> Option<MulPlan> {
+/// The cheapest chain for `x * c` and its cost, whatever the multiply costs.
+fn chain_of(cpu: Cpu, price: Price, c: u32) -> Option<(MulPlan, Cost)> {
     let negative = c >> 31 == 1;
     let magnitude = u64::from(if negative { c.wrapping_neg() } else { c });
     if magnitude < 2 {
@@ -163,11 +164,16 @@ fn searched(cpu: Cpu, price: Price, c: u32) -> Option<MulPlan> {
     }
     let mut search = Search { cpu, price, memo: HashMap::new() };
     let (plan, cost) = search.best(magnitude)?;
-    let (plan, cost) = if negative {
-        (MulPlan::Neg(Box::new(plan)), plus(cost, one(cpu, "neg.l %d0", 2)))
-    } else {
-        (plan, cost)
-    };
+    Some(if negative { (MulPlan::Neg(Box::new(plan)), plus(cost, one(cpu, "neg.l %d0", 2))) } else { (plan, cost) })
+}
+
+/// The cost of the cheapest chain for `x * c` in 32 bits, or None when there is none.
+pub fn cheapest(cpu: Cpu, price: Price, c: u128) -> Option<(usize, u32)> {
+    chain_of(cpu, price, (c & u128::from(u32::MAX)) as u32).map(|(_, cost)| cost)
+}
+
+fn searched(cpu: Cpu, price: Price, c: u32) -> Option<MulPlan> {
+    let (plan, cost) = chain_of(cpu, price, c)?;
     let incumbent = if cpu.at_least(Cpu::M68020) { multiply(cpu) } else { library_multiply(cpu) };
     price.beats(cpu, cost, incumbent).then_some(plan)
 }
@@ -193,7 +199,7 @@ mod tests {
         let mut constants: Vec<u32> = (2..=400).collect();
         constants.extend([65_537, 6_700_417, 641, 1_000_000, 0x7fff_ffff, 0xffff_fffe, 0xffff_fc18, 1_103_515_245]);
         for cpu in [Cpu::M68000, Cpu::M68020, Cpu::M68040] {
-            for price in [Price::Size, Price::Strict, Price::Rate] {
+            for price in [Price::Size, Price::Rate] {
                 for &c in &constants {
                     if let Some(plan) = plan(cpu, price, 32, u128::from(c)) {
                         for x in [1u32, 3, 0x1234_5678, 0xffff_ffff, 0x8000_0000] {

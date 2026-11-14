@@ -188,8 +188,10 @@ const TRIAL_MAX_UNITS: u64 = 700;
 /// [`lowered_once`], then at -Os DEVIATE UNROLL-OS-TRIAL (the shared
 /// `llrm_transforms::trial`, as x86's driver): the module compiled again with
 /// the loops the -Os threshold refused unrolled, kept if its functions that
-/// differ are smaller, bytes then clocks (`Price::Size`). A module with no
-/// refused loop is compiled once.
+/// differ are smaller, bytes then clocks (`Price::Size`). At -O1 the same
+/// trial (DEVIATE UNROLL-O1-TRIAL, `Tti::unroll_trial_threshold`) keeps them
+/// where the functions are cheaper in clocks (`Price::Rate`). A module
+/// with no refused loop is compiled once.
 fn lowered(
     text: &str,
     cpu: Cpu,
@@ -201,10 +203,15 @@ fn lowered(
     let _ = trial::take();
     let base = lowered_once(text, cpu, level, dump, policy)?;
     let (noted, units) = trial::take();
-    let limit = if matches!(level, Level::Os | Level::Oz) {
+    let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
         M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
     } else {
-        None
+        // DEVIATE UNROLL-NEST-TRIAL (-O2, -O3): the pin's threshold, for the
+        // loops with a subloop
+        M68kMachine { cpu }
+            .tti()
+            .filter(|tti| tti.unroll_trial_nests_at_speed())
+            .map(|_| llrm_transforms::loopunrollpass::pin_full_unroll_threshold(if level == Level::O3 { 3 } else { 2 }))
     };
     let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(base) };
     let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(base) };
@@ -213,7 +220,8 @@ fn lowered(
     if cut.is_empty() {
         return Ok(base);
     }
-    let backend = Options { size: true, mid_end: false, ..Options::default() };
+    let small = matches!(level, Level::Os | Level::Oz);
+    let backend = Options { size: small, strict: level == Level::O1, mid_end: false, ..Options::default() };
     let items = |module: &Module| -> Option<Vec<Item>> {
         Some(
             function_items(&trial::only(module, &cut), cpu, backend)
@@ -225,10 +233,10 @@ fn lowered(
     };
     let pays = matches!(
         (items(&other), items(&base)),
-        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::Size)
+        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::of(small))
     );
     if llrm_support::debug::enabled("trial") {
-        eprintln!("trial unroll-os: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
+        eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }
     Ok(if pays { other } else { base })
 }
@@ -264,7 +272,11 @@ fn lowered_once(
     crate::compile::mid_end_for_narrowing(
         &program.modules[0],
         cpu,
-        matches!(level, Level::O2 | Level::O3 | Level::Omax),
+        crate::compile::NarrowMultiplies::of(
+            cpu,
+            level != Level::O0,
+            matches!(level, Level::O2 | Level::O3 | Level::Omax),
+        ),
     )
 }
 

@@ -33,7 +33,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             .then(|| self.dag.operand(value, 0))
     }
 
-    fn has_and_not(
+    pub(super) fn has_and_not(
         &self,
         value: SDValue,
     ) -> bool {

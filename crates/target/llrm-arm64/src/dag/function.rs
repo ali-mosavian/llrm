@@ -42,6 +42,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
         },
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
+        legal_vectors: llrm_sdag::lowering::TargetLoweringInfo::aarch64().legal_vectors().to_vec(),
         soft_float: false,
         stack_align: Some(16),
         max_alloca_align: Some(16),
@@ -142,8 +143,11 @@ pub struct PhiCopy {
     pub to: u32,
     pub dst: u32,
     pub src: u32,
-    /// The phi is a float: its registers are of the float class.
+    /// The phi is a float or a vector: its registers are of the float class.
     pub float: bool,
+    /// The phi holds 128 bits (a `q` vector): the allocator spills and copies
+    /// the register whole.
+    pub quad: bool,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -269,11 +273,11 @@ pub fn select_function_in(
                 // k-th register.
                 let part = updates[..at].iter().filter(|(one, _)| *one == phi).count();
                 let dst = if part == 0 { reg } else { info.part_regs(reg, part + 1)[part] };
-                let float = matches!(
-                    module.context.types.get(function.value(phi).ty),
-                    llrm_mir::types::Type::Float(_)
-                );
-                Ok(PhiCopy { to, dst, src, float })
+                let ty = function.value(phi).ty;
+                let vector = matches!(module.context.types.get(ty), llrm_mir::types::Type::Vector { .. });
+                let float = vector || matches!(module.context.types.get(ty), llrm_mir::types::Type::Float(_));
+                let quad = vector && layout.size_bits(&module.context.types, ty) == 128;
+                Ok(PhiCopy { to, dst, src, float, quad })
             })
             .collect::<Result<Vec<_>, String>>()?;
         let in_block: llrm_mir::dense::IdSet<llrm_mir::module::InstId> =

@@ -302,7 +302,25 @@ fn branches() {
             }
         }
     }
+    for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+        for high in [false, true] {
+            for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
+                for amount in [0, 1, lane.bits() as u8 - 1] {
+                    all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(4), rn: Vreg(27), amount });
+                }
+            }
+            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+                all.push(Inst::VectorLong { op, lane, high, rd: Vreg(4), rn: Vreg(27), rm: Vreg(19) });
+            }
+        }
+    }
     all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
+    for op in [VectorReduce::Addv, VectorReduce::Smaxv, VectorReduce::Sminv, VectorReduce::Umaxv, VectorReduce::Uminv] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4] {
+            all.push(Inst::VectorReduce { op, lanes, rd: Vreg(3), rn: Vreg(28) });
+        }
+    }
+    all.push(Inst::VectorReduce { op: VectorReduce::Addp, lanes: Arrangement::D2, rd: Vreg(3), rn: Vreg(28) });
     for (op, lanes) in [
         (VectorFma::Add, Arrangement::S4),
         (VectorFma::Add, Arrangement::D2),
@@ -310,6 +328,52 @@ fn branches() {
         (VectorFma::Sub, Arrangement::D2),
     ] {
         all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+        all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
+        all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
+    }
+    for (lanes, index) in [(Arrangement::D2, 1), (Arrangement::S4, 3), (Arrangement::H8, 7), (Arrangement::B16, 15)] {
+        all.push(Inst::VectorDupScalar { lanes, rd: Vreg(5), rn: Vreg(17), index });
+    }
+    for (high, wide) in [
+        (false, Arrangement::H8),
+        (true, Arrangement::H8),
+        (false, Arrangement::S4),
+        (true, Arrangement::S4),
+        (false, Arrangement::D2),
+        (true, Arrangement::D2),
+    ] {
+        let lane = match wide {
+            Arrangement::H8 => NarrowLane::B,
+            Arrangement::S4 => NarrowLane::H,
+            _ => NarrowLane::S,
+        };
+        for (op, amount) in [(VectorLongOp::Sshll, 0), (VectorLongOp::Ushll, 0), (VectorLongOp::Sshll, 3)] {
+            all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(5), rn: Vreg(17), amount });
+        }
+        all.push(Inst::VectorNarrow { high, wide, rd: Vreg(6), rn: Vreg(30) });
+        for op in [VectorLongOp::Smull, VectorLongOp::Umull, VectorLongOp::Smlal, VectorLongOp::Umlal] {
+            all.push(Inst::VectorLong { op, lane, high, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        all.push(Inst::VectorUnzip { second: false, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        all.push(Inst::VectorUnzip { second: true, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+    }
+    for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
+        all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
+        all.push(Inst::VectorMulLane { rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
+    }
+    for (lanes, index, src) in [
+        (Arrangement::B16, 3, 9),
+        (Arrangement::H8, 5, 2),
+        (Arrangement::S4, 0, 3),
+        (Arrangement::S4, 3, 1),
+        (Arrangement::D2, 1, 0),
+    ] {
+        all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
+        all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
+        all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
+        all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for (lanes, index) in
         [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)]

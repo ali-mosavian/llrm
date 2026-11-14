@@ -17,12 +17,11 @@
 //! of `_text_eq`, 325 instructions against 55).
 //!
 //! # Deviations
-//! - W1: `deadargelim` runs before the Simplify list, LLVM's after the CGSCC
-//!   walk (`PassBuilderPipelines.cpp` l.1335). Fact: nothing here cleans a body
-//!   after the walk (LLVM's later module optimization pipeline does), and the
-//!   argument a dropped parameter leaves behind is dead code only the list
-//!   removes. Issue: it sees bodies simplified by Early only. Exit: a post-walk
-//!   cleanup stage, then `deadargelim` after the walk.
+//! - W1: `deadargelim` runs after the walk (`ipa-deadargs.`), as LLVM's
+//!   (`PassBuilderPipelines.cpp` l.1335), except for a function that calls
+//!   itself, which loses its unread parameters before the walk: the recursion
+//!   copier works on the body gcc's IPA-SRA leaves. Exit: the copier prices a
+//!   body with its unread parameters dropped.
 //! - W2a: the walk is per function in callee-first order, not per SCC with the
 //!   inliner's own updates; the clocks inliner still runs afterwards;
 //!   `inlinecost::sites` stands for `decide` until it lands. Exit: W2.
@@ -169,9 +168,16 @@ impl ProgramPass for ModuleIpo {
                 modules[at].changed(id);
             }
         }
+        // DEVIATE W1 (narrowed, owner w10, exit 2026-11-24): the pin's
+        // `deadargelim` follows the CGSCC walk, so the inliner prices a call
+        // with the arguments nothing reads (x_idioms -Os `sumlong`, cost -10).
+        // A function that calls itself loses them first: the recursion copier
+        // (gcc's `-finline-recursive`) works on the body gcc's IPA-SRA leaves,
+        // and with them in place the copies merge no calls (hanoi: a switch of
+        // nine copies and a closed form, against 23..2358 B more without).
         for at in 0..count {
             let ((removed, unsound), before) =
-                reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_with);
+                reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_from_recursions);
             vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
             changed |= !removed.is_empty();
         }
@@ -534,8 +540,13 @@ impl ProgramPass for Walk {
                         } else if let Some(tti) = tti.as_deref() {
                             let kept = function_mut(module, id).1.clone();
                             let before = sized(module, &program.layout, tti, id, false);
+                            let globals = module.globals.len();
                             (self.simplify)(module, &mut modules[at], id, "walk.again.");
-                            if sized(module, &program.layout, tti, id, false) + GUARD >= before {
+                            // The units count code, not the data a rerun makes: a CRC table
+                            // (crc16 -O1, 64 -> 580 B) was "smaller". Where -O1 prices bytes
+                            // the old body stays; `globaldce` drops the table.
+                            let grew_data = tti.inline_trials_at_o1() && module.globals.len() > globals;
+                            if grew_data || sized(module, &program.layout, tti, id, false) + GUARD >= before {
                                 *function_mut(module, id).1 = kept;
                                 modules[at].changed(id);
                                 modules[at]
@@ -576,6 +587,16 @@ impl ProgramPass for Walk {
                                 let goes = crate::inlinecost::local_linkage(global.linkage)
                                     && !addressed.contains(&callee)
                                     && left == calls.len() as i64;
+                                // DEVIATE OS-INLINE-GROWTH: the by-size guard has already priced the callee over every call it
+                                // has left, the copies against the body that goes with the last (gcc's `estimate_growth`);
+                                // a trial of one site measures one caller alone and, accepting, lowers the count the next
+                                // caller's guard reads.
+                                let shared = crate::inlinecost::local_linkage(global.linkage)
+                                    && !addressed.contains(&callee)
+                                    && live.references().get(&callee).copied().unwrap_or(0) >= 2;
+                                if !goes && shared && size != crate::inlinecost::CallerSize::Speed && tti.inline_trial_defers_to_shared_growth() {
+                                    continue;
+                                }
                                 if goes {
                                     units.push((calls, body_size(module, &program.layout, tti, callee, size == crate::inlinecost::CallerSize::Speed)));
                                 } else if tti.inline_trial_groups_sites() && calls.len() > 1 {
@@ -868,7 +889,7 @@ impl ProgramPass for Walk {
                                         .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
                                         .collect(),
                                 });
-                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes);
+                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes, size == crate::inlinecost::CallerSize::Speed);
                                 let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
@@ -1751,6 +1772,7 @@ fn trial_accepted(
     growth: i64,
     rate: i64,
     kept_bytes: i64,
+    strict: bool,
 ) -> bool {
     if priced {
         // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
@@ -1761,7 +1783,16 @@ fn trial_accepted(
         // Bytes decide; clocks only where they tie exactly.
         return growth < 0 || (growth == 0 && saved > 0);
     }
-    (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
+    // -O1 is strict per axis: bytes decide, and the model's error is a few bytes a copy, so only a shrink of an
+    // eighth of the caller stays (switch_peeled_table: 17 against 17 and 0 B, built +44; sfm16_dbg: -5 B, built +18).
+    let counted = if byte_gate && strict {
+        -growth * 8 >= kept_bytes
+    } else if byte_gate {
+        tried <= best || (tried <= best + credit && growth <= 0)
+    } else {
+        tried <= best + credit
+    };
+    counted
         || (saved > 0 && growth * rate <= saved * 1000)
         || (rate == 0 && credit == 0 && -growth * 8 >= kept_bytes)
 }
@@ -1870,6 +1901,31 @@ fn trial_clocks(
 /// kept on the corpus, 14 save one unit and the rest more.
 const GUARD: i64 = 1;
 
+/// What the arguments of parameters nothing reads add to the units of the call `inst`: `deadargelim` removes them after
+/// the walk (the pin's order), so the size trial counts the call it ships. Nothing for a callee that stays visible.
+fn unread_argument_units(
+    module: &Module,
+    tti: &dyn llrm_mir::tti::Tti,
+    function: &llrm_mir::module::Function,
+    inst: llrm_mir::module::InstId,
+) -> i64 {
+    use llrm_mir::module::{GlobalKind, Linkage};
+    if !matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_) | llrm_mir::opcode::Opcode::Invoke(_)) {
+        return 0;
+    }
+    let Some(callee) = llrm_mir::memory::callee(&module.context, function, inst) else { return 0 };
+    let global = module.global(callee);
+    let (GlobalKind::Function(body), true) = (&global.kind, matches!(global.linkage, Linkage::Internal | Linkage::Private)) else { return 0 };
+    let all = body.parameters().len() as i64;
+    let unread = crate::inlinecost::unread_parameters_of(module, callee).iter().filter(|&&one| one).count() as i64;
+    if unread == 0 {
+        return 0;
+    }
+    let with = tti.direct_call_cost(all, llrm_mir::tti::CostKind::CodeSize);
+    let without = tti.direct_call_cost(all - unread, llrm_mir::tti::CostKind::CodeSize);
+    if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
+}
+
 /// SZ2: the code size of body `id`, by the target's cost model for bytes (its
 /// size view, in encoded bytes, where it has one).
 fn body_size(
@@ -1913,7 +1969,8 @@ fn sized(
                 inst,
                 llrm_mir::tti::CostKind::CodeSize,
             )
-            .value;
+            .value
+                - unread_argument_units(module, tti, function, inst);
             let moves = matches!(
                 operation.opcode,
                 llrm_mir::opcode::Opcode::Load { .. }

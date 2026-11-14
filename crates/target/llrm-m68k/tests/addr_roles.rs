@@ -44,7 +44,8 @@ fn options() -> Options {
 fn the_pointer_is_the_base_and_the_counter_the_index() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let out = text_with(&module(), "f", cpu, options()).expect("compiles");
-        // the array is addressed from the stack pointer (`frameindexed`) or a register holding its `lea`
+        // the array is addressed from the stack pointer (`frameindexed`) or a
+        // register holding its `lea`
         let store = out
             .lines()
             .find(|line| line.starts_with("\tmove.b\t%d") && (line.contains("(0,%a") || line.contains(",%sp,%d")))
@@ -68,5 +69,43 @@ fn the_loop_still_fills_the_array_under_qemu() {
         let code = support::run(&qemu, &["-cpu", "m68020"], &path);
         std::fs::remove_file(&path).ok();
         assert_eq!(code, Some(k as i32), "element {k}");
+    }
+}
+
+/// Two sign-extended halfword loads at `t[i]` and `t[i] + 2`: selection copied
+/// the frame `lea` to the second load's index slot, so the counter stayed the
+/// base: the `lea` was made in the loop, and `move.l %a1, %d1; addq.l #4, %d1;
+/// move.l %d1, %a1` stepped the counter (parity at -Os, +24 B).
+const PAIR_LOOP: &str = "
+define i32 @g(i16 %z) {
+  %t = alloca [16 x i16], align 2
+  br label %l
+l:
+  %i = phi i32 [ 0, %0 ], [ %n, %l ]
+  %s = phi i32 [ 0, %0 ], [ %a, %l ]
+  %p = getelementptr inbounds i8, ptr %t, i32 %i
+  %q = getelementptr inbounds i8, ptr %p, i32 2
+  store volatile i16 %z, ptr %p
+  %x = load i16, ptr %p
+  %y = load i16, ptr %q
+  %xe = sext i16 %x to i32
+  %ye = sext i16 %y to i32
+  %m = mul i32 %xe, %ye
+  %a = add i32 %s, %m
+  %n = add nuw nsw i32 %i, 4
+  %c = icmp eq i32 %n, 32
+  br i1 %c, label %x2, label %l
+x2:
+  ret i32 %a
+}";
+
+#[test]
+fn a_copied_frame_address_is_the_base_of_the_second_load() {
+    let module =
+        llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{PAIR_LOOP}")).expect("parses");
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text_with(&module, "g", cpu, options()).expect("compiles");
+        assert!(!out.contains("move.l\t%a"), "{cpu:?}: the counter goes through a copy:\n{out}");
+        assert!(!out.contains("\tlea\t(0,%sp)"), "{cpu:?}: the frame address is made in the loop:\n{out}");
     }
 }

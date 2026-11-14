@@ -218,3 +218,68 @@ fn a_divide_in_a_hot_block_keeps_the_sequence_the_bytes_would_drop() {
     assert_eq!(priced(ISD::SRem, EVT::I32, 5, Some(at(1.0))), ISD::SRem, "once: the divide");
     assert_ne!(priced(ISD::SRem, EVT::I32, 5, Some(at(16.0))), ISD::SRem, "sixteen times: the sequence");
 }
+
+fn weighed_prices() -> DivPrices {
+    let bytes = DivBytes {
+        prefix: 1,
+        add: 4,
+        shift: 6,
+        extend: 6,
+        multiply: 6,
+        multiply_long: 8,
+        multiply_high: 8,
+        divide: 6,
+        divide_long: 8,
+        milliclocks_per_byte: 500,
+        frequency: 1.0,
+    };
+    DivPrices { bytes: Some(bytes), ..I486_REAL_MODE }
+}
+
+/// The DAG after combining, for `x / 5` and, beside it, `x % 5` of the same
+/// `i32` operand.
+fn combined_pair(with_remainder: bool) -> (SelectionDAG, SDValue) {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = SelectionDAG::new(DagConfig { div_prices: Some(weighed_prices()), ..DagConfig::default() });
+    let x = dag.get_register(EVT::I32, 5);
+    let five = dag.get_constant(5, EVT::I32);
+    let quotient = dag.get_node(ISD::SDiv, EVT::I32, &[x, five]);
+    let root = if with_remainder {
+        let remainder = dag.get_node(ISD::SRem, EVT::I32, &[x, five]);
+        dag.get_node(ISD::Add, EVT::I32, &[quotient, remainder])
+    } else {
+        quotient
+    };
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    let root = dag.get_root();
+    (dag, root)
+}
+
+fn reaches(
+    dag: &SelectionDAG,
+    v: SDValue,
+    ops: &[ISD],
+) -> bool {
+    ops.contains(&dag.opcode(v)) || (0..dag.node(v).ops.len()).any(|i| reaches(dag, dag.operand(v, i), ops))
+}
+
+/// qlight (`ls_scale_byte`: floor division, `x / 120` and `x % 120` of one
+/// `i32`) at m16 -O2 ran a multiply-high quotient and an `idiv` for the
+/// remainder, both: 736 clocks against 561 at -O1 and the bar's 617. The divide
+/// alone is the sequence and the remainder alone the `idiv` (the test above); a
+/// pair is priced once, as the remainder's, and both stay divides.
+#[test]
+fn a_divide_beside_its_remainder_is_priced_as_the_pair() {
+    let (dag, root) = combined_pair(false);
+    assert!(!reaches(&dag, root, &[ISD::SDiv, ISD::SDivRem]), "the premise: the divide alone is the sequence");
+    let (dag, root) = combined_pair(true);
+    assert!(
+        !reaches(&dag, root, &[ISD::MulHS, ISD::SMulLoHi]),
+        "no multiply-high sequence beside the `idiv` that already leaves the quotient"
+    );
+    assert!(
+        reaches(&dag, root, &[ISD::SDiv]) && reaches(&dag, root, &[ISD::SRem]),
+        "both stay divides, which selection pairs"
+    );
+}

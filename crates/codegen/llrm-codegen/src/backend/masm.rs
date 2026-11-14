@@ -234,6 +234,16 @@ pub fn routine_procedure(
     registers: llrm_target::FrameRegisters,
     regs: Regs,
 ) -> Procedure {
+    routine_of_parts(name, vec![InlinePart::Bytes(code)], registers, regs)
+}
+
+/// `routine_procedure` of parts, which may name a symbol: an offset the linker fills.
+pub fn routine_of_parts(
+    name: &str,
+    code: Vec<InlinePart>,
+    registers: llrm_target::FrameRegisters,
+    regs: Regs,
+) -> Procedure {
     let what = Semantics { name: Some(name.into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     // The return is an instruction, so the frame the printer opens is closed
@@ -256,7 +266,7 @@ pub fn routine_procedure(
         reserve: 0,
         callees: IndexMap::from_iter([(
             1,
-            Callee { name: name.into(), far: false, pops: 0, code: vec![InlinePart::Bytes(code)], tail: false },
+            Callee { name: name.into(), far: false, pops: 0, code, tail: false },
         )]),
         interrupt: None,
         size: false,
@@ -469,6 +479,9 @@ pub struct Module {
     /// The code segment of a procedure that is not in `code` (`#pragma
     /// code_seg`), by its name.
     pub code_segments: std::collections::BTreeMap<String, String>,
+    /// Read-only data that follows a procedure in its code segment (read
+    /// through `cs:`), by the procedure's name.
+    pub code_data: std::collections::BTreeMap<String, Vec<Datum>>,
     /// The COMDAT each function or global of the module is in (`$f = comdat
     /// any`, `comdat($f)`), by the symbol's name. COFF writes each as a
     /// section of its own; the other formats ignore them.
@@ -562,6 +575,7 @@ fn text_listed(
     out.push(format!(".code {}", module.code));
     for (number, procedure) in module.procedures.iter().enumerate() {
         out.extend(_procedure_of(procedure, listed(procedure, number)?, &module.names, number)?);
+        out.extend(module.code_data.get(&procedure.name).into_iter().flatten().flat_map(datum));
     }
     out.push("end".into());
     Ok(out.join("\n") + "\n")
@@ -1277,7 +1291,9 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
             || moves_stack(&procedure.body)
             || procedure.registers.saved_first
             || !procedure.body.vector_saves.is_empty())
-        && procedure.callees.values().all(|one| one.code.is_empty())
+        // Inline code that cannot address the frame (a wide divide's register
+        // bytes) moves nothing with it.
+        && procedure.callees.values().all(|one| !may_address_frame(&one.code))
         && [false, true].iter().all(|omit| {
             // Nothing wrapped, or the frame and every register at the one Save
             // (the pin saves them together); a register saved later than the
@@ -1516,11 +1532,13 @@ fn lowered(
         realign_to: Some(realign_of(&procedure.body)).filter(|&align| align != 0).map(|align| align as u64),
         has_var_sized_objects: !omit && framed && moves_stack(&procedure.body),
     };
-    // A one-slot frame is `push rax` / `pop rcx` where no return is a sibling
-    // call (`emitSPUpdate` with `findDeadCallerSavedReg`), after the saved
-    // registers as before them.
-    let scratch =
-        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    // A one-slot frame is `push rax` / `pop rcx` (`emitSPUpdate` with
+    // `findDeadCallerSavedReg`), after the saved registers as before them; at a
+    // sibling call only where the register was chosen dead there
+    // (`Registers::slot_dead_checked`).
+    let scratch = procedure.registers.slot_scratch.filter(|_| {
+        omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body))
+    });
     let register = |reg_number: u32| match reg_number {
         FP => reg(FRAME),
         DEAD => reg(scratch.expect("a dead register is popped for a scratch frame").1),
@@ -1713,12 +1731,13 @@ fn parts(
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
     let moved = !omit && framed && moves_stack(&procedure.body);
-    // A one-slot adjustment of a 64-bit frame is `push rax` / `pop rcx` where
-    // no return is a sibling call (rcx may carry its argument):
-    // X86FrameLowering's emitSPUpdate, with the register
-    // findDeadCallerSavedReg gives a `ret`.
-    let scratch =
-        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    // A one-slot adjustment of a 64-bit frame is `push rax` / `pop rcx`:
+    // X86FrameLowering's emitSPUpdate, with the register findDeadCallerSavedReg
+    // gives a `ret` or, where the register was chosen dead
+    // (`Registers::slot_dead_checked`), a sibling call.
+    let scratch = procedure.registers.slot_scratch.filter(|_| {
+        omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body))
+    });
     let one_slot = scratch.is_some();
     let (accumulator, dead_at_return) = scratch.map_or((STACK, None), |(push, pop)| (push, Some(pop)));
     let mut leave: Vec<Semantics> = Vec::new();
@@ -2076,7 +2095,9 @@ const FOLDABLE: [&str; 16] =
 /// `exits_inserted`) that a conditional branch goes to becomes that branch,
 /// `jcc callee`, and the block goes where nothing else enters it
 /// (`canMakeTailCallConditional`: a direct call, no stack adjustment, not in
-/// 16-bit code).
+/// 16-bit code). A branch that falls into such a block, to the block after it,
+/// is reversed first: OptimizeBlock moves a block with no successor to the end
+/// of the function (L1612), which makes the branch go to it.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L3752>
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1642>
 pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
@@ -2107,32 +2128,54 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
     }
     let mut callees = procedure.callees.clone();
     let mut folded = false;
-    let blocks: Vec<lir::Block> = procedure
-        .body
-        .blocks
+    let layout = &procedure.body.blocks;
+    let entered = |at: i64| layout.iter().filter(|block| block.succ.contains(&at)).count();
+    // `IsBetterFallthrough(next, tail)` where the block after the tail call is
+    // the last: the tail call is a call, so fall into the other unless it is
+    // one.
+    let better_fallthrough = |next: &lir::LirBlock| {
+        !next.insns.last().and_then(|one| one.what.as_ref()).is_some_and(|what| what.is_sibling_call())
+    };
+    let blocks: Vec<lir::Block> = layout
         .iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(index, block)| {
             let Some(last) = block.insns.last() else { return block.clone() };
             let Some(what) = last.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect) else {
                 return block.clone();
             };
-            let (Some(target), Some(_)) = (what.target, what.name.as_deref().filter(|name| FOLDABLE.contains(name)))
+            let (Some(target), Some(name)) = (what.target, what.name.as_deref().filter(|name| FOLDABLE.contains(name)))
             else {
                 return block.clone();
             };
-            let Some(callee) = tails.get(&target) else { return block.clone() };
-            if block.succ.iter().filter(|one| **one == target).count() != 1 {
-                return block.clone();
-            }
+            // `jcc T` falling into a tail call that `T` follows: the branch is
+            // reversed and the tail call, moved to the end, folded into it.
+            let reversed = || {
+                let (tail, next) = (layout.get(index + 1)?, layout.get(index + 2)?);
+                let callee = tails.get(&tail.at).filter(|_| next.at == target)?;
+                let opposite = crate::backend::layout::_OPPOSITE.get(name)?;
+                let last_block = index + 3 == layout.len();
+                let enters = entered(tail.at) == 1 && block.succ.contains(&tail.at);
+                (enters && (!last_block || better_fallthrough(next))).then_some((callee, *opposite, tail.at))
+            };
+            let (callee, name, gone) = match tails.get(&target) {
+                Some(callee) if block.succ.iter().filter(|one| **one == target).count() == 1 => (callee, name, target),
+                _ => match reversed() {
+                    Some(found) => found,
+                    None => return block.clone(),
+                },
+            };
             callees.insert(last.at, callee.clone());
             folded = true;
             let mut made = lir::LirBlock::clone(block);
             let mut insns = block.insns.to_vec();
             let at = insns.len() - 1;
-            insns[at] =
-                Arc::new(lir::Insn { what: Some(Semantics { target: None, ..what.clone() }), ..(**last).clone() });
+            insns[at] = Arc::new(lir::Insn {
+                what: Some(Semantics { target: None, name: Some(name.into()), ..what.clone() }),
+                ..(**last).clone()
+            });
             made.insns = insns.into();
-            made.succ = block.succ.iter().copied().filter(|one| *one != target).collect::<Vec<_>>().into();
+            made.succ = block.succ.iter().copied().filter(|one| *one != gone).collect::<Vec<_>>().into();
             made.into()
         })
         .collect();
@@ -2140,7 +2183,9 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
         return procedure;
     }
     let body = crate::backend::jumps::_reachable(&procedure.body, blocks);
-    Procedure { body, callees, ..procedure }
+    // A folded block leaves the layout, which can put another tail call right
+    // before the block its branch falls past: `OptimizeBranches` repeats.
+    tail_calls_folded(Procedure { body, callees, ..procedure })
 }
 
 /// What a procedure sets up and takes back, and where: the frame and each
@@ -4951,6 +4996,7 @@ mod tests {
             far_bss: BTreeSet::new(),
             weak: BTreeSet::new(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             requests: BTreeSet::new(),
@@ -4992,6 +5038,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: Some((RegId::EAX, RegId::ECX)),
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5047,6 +5094,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5106,6 +5154,7 @@ mod tests {
                 object_aligned: false,
                 red_zone: 0,
                 slot_scratch: None,
+                slot_dead_checked: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,
@@ -5184,6 +5233,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5364,6 +5414,7 @@ mod tests {
             object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5554,6 +5605,7 @@ mod tests {
                 wrap_split_size: false,
                 object_aligned: false,
                 slot_scratch: None,
+                slot_dead_checked: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,

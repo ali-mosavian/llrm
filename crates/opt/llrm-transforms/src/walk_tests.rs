@@ -3037,14 +3037,16 @@ fn test_m32_copies_no_recursion_at_os() {
     assert!(calls <= 3, "a recursion was copied into itself at -Os, {calls} calls of it");
 }
 
-/// gcc rejects the recursive edge of quicksort and bintree at -O2
-/// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
-/// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
+/// A tree recursion whose edge grows past 12 `gcc_insns` was copied at -O3
+/// only (the -O2 bar, gcc's 15 against its 30), so recchop -O2 stayed 7183
+/// clocks against 5818 for gcc, which copies it; with the bar at 22 at both
+/// levels it is 5397 (m32, 121 programs: 5 -O2 programs change, all faster,
+/// -O3 none).
 #[test]
-fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
+fn test_m32_copies_a_recursion_whose_edge_grows_past_12_at_o2_too() {
     let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
     let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
-    assert!(o2 <= 3, "copied at -O2, {o2} calls");
+    assert!(o2 >= 8, "not copied at -O2, {o2} calls");
     assert!(o3 >= 8, "not copied at -O3, {o3} calls");
 }
 
@@ -3135,25 +3137,27 @@ fn test_the_default_build_links_no_gcc_derived_crate() {
     }
 }
 
-/// The bar of the recursive edge (DEVIATE REC-2) as the 12 self-recursive
-/// functions of the corpus meet it: gcc 15 copies fib, hanoi, recpow and
-/// rectwo into themselves at -O2 (edge growth <= 15) and at -O3 (<= 30) also
-/// bintree `walk`, recchop `chop`, x_hanoi2 `mv`, quicksort `sort` and queens
-/// `place`, never x_mergesort `msort` (growth 67). Fitted on these, `gcc_insns`
-/// of queens 22 sits on the m32 O3 edge.
+/// The bar of the recursive edge (DEVIATE REC-2) as the 10 self-recursive
+/// functions of the corpus meet it. gcc copies fib, hanoi, recpow and rectwo
+/// at -O2 (edge growth <= 15) and recchop `chop` (its dump: size 21), and at
+/// -O3 (<= 30) also bintree `walk`, x_hanoi2 `mv`, quicksort `sort` and queens
+/// `place`; never x_mergesort `msort` (growth 67). m32 deviates at -O2: the
+/// five copy there too, because each is faster (A/B, 121 programs; recchop
+/// 14 and bintree `walk` 14 cannot be told apart by size). `gcc_insns` of
+/// queens 22 sits on the edge at both levels.
 #[test]
-fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
+fn test_the_m32_edge_bar_decides_every_corpus_recursion_as_the_ab_measured() {
     // (module, function, copied at -O2, copied at -O3)
     let table: [(&str, &str, &str, bool, bool); 10] = [
         ("fib", include_str!("testdata/rec2/fib.ll"), "fib_", true, true),
         ("hanoi", include_str!("testdata/rec2/hanoi.ll"), "hanoi_", true, true),
         ("recpow", include_str!("testdata/rec2/recpow.ll"), "power_", true, true),
         ("rectwo", include_str!("testdata/rec2/rectwo.ll"), "paths_", true, true),
-        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", false, true),
-        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", false, true),
-        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", false, true),
-        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", false, true),
-        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", false, true),
+        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", true, true),
+        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", true, true),
+        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", true, true),
+        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", true, true),
+        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", true, true),
         ("x_mergesort", include_str!("testdata/rec2/x_mergesort.ll"), "msort_", false, false),
     ];
     let m32 = crate::indvars::tests::m32();
@@ -3204,14 +3208,26 @@ b1:
     assert_eq!(three, one, "the callee goes once");
 }
 
+/// m68k qmove -O1: the count said 21 against 23 for `pl_ground_accel` into `bench_qmove` (an external callee that
+/// stays), the byte model +213 B; the trial kept the copy and the object grew 126 B. sfm16_dbg: -5 B by the model,
+/// +18 B built.
+#[test]
+fn test_an_o1_trial_that_does_not_shrink_the_caller_by_an_eighth_is_refused() {
+    assert!(!super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, true));
+    assert!(!super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, -4, 0, 600, true), "a shrink within the model's error is refused");
+    assert!(!super::trial_accepted(true, false, true, false, false, 17, 17, 0, 0, 0, 0, 600, true), "a tie at 0 B gains nothing at -O1");
+    assert!(super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, -80, 0, 600, true), "a shrink of an eighth of the caller stays");
+    assert!(super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, false), "-Os keeps the count's verdict");
+}
+
 /// m68k sfm16_float -Os: five calls to `canon`, 60 instructions against 57 and a credit of 4, so the count accepted the
 /// copies; the byte estimate said +28 B (built +28). A callee that goes with its last calls must not grow the bytes.
 #[test]
 fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it() {
-    assert!(!super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, 28, 0, 756));
-    assert!(super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, -4, 0, 756), "a copy that shrinks the code stays");
-    assert!(super::trial_accepted(false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756), "off the gate's targets the count decides");
-    assert!(super::trial_accepted(true, false, true, false, false, 57, 57, 4, 0, 12, 0, 756), "copies no larger than the caller are decided by the count");
+    assert!(!super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false));
+    assert!(super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, -4, 0, 756, false), "a copy that shrinks the code stays");
+    assert!(super::trial_accepted(false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false), "off the gate's targets the count decides");
+    assert!(super::trial_accepted(true, false, true, false, false, 57, 57, 4, 0, 12, 0, 756, false), "copies no larger than the caller are decided by the count");
 }
 
 /// z80 frame_address_stack_args -O2: `kernel` (external, so it stays) copied into `line` saved 123 clocks and 63 B, and
@@ -3219,17 +3235,17 @@ fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it(
 /// and the clocks stays; one that grows it without a callee going is still refused (jpeg `decode`, +441k instructions).
 #[test]
 fn test_a_priced_trial_that_shrinks_the_module_stays_without_a_dying_callee() {
-    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756));
-    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, 10, 3000, 756));
-    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756), "no clocks saved, no copy");
+    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, 10, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756, false), "no clocks saved, no copy");
 }
 
 /// arm64 -O3 jpeg: a priced trial kept copies that left the module no larger without a callee
 /// going, 5,828 -> 7,324 B and +1.2M instructions. Only a target that asks keeps them.
 #[test]
 fn test_a_shrinking_copy_without_a_dying_callee_stays_only_where_the_target_asks() {
-    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756));
-    assert!(!super::trial_accepted(true, false, false, true, false, 72, 79, 0, 123, -63, 3000, 756));
+    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, false, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
 }
 
 /// Whether `self_calls` takes `name` of `text` as a tree recursion.
@@ -3541,18 +3557,18 @@ b0:
 /// (78 against 62 + 13 for the callee) while a byte model said the copies shrink the module.
 #[test]
 fn a_trial_decided_by_bytes_keeps_the_copies_that_shrink_the_module() {
-    assert!(super::trial_accepted(false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400), "smaller: kept whatever the units say");
-    assert!(!super::trial_accepted(false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400), "larger: refused whatever the units say");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400), "no gain: refused");
+    assert!(super::trial_accepted(false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400, false), "smaller: kept whatever the units say");
+    assert!(!super::trial_accepted(false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400, false), "larger: refused whatever the units say");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "no gain: refused");
 }
 
 /// Two Os trials that tie to the byte were both refused, whatever the copies save: a tied pair is
 /// decided by the clocks, and a tie that saves none stays as written. Bytes never lose to clocks.
 #[test]
 fn a_trial_whose_bytes_tie_is_decided_by_the_clocks_it_saves() {
-    assert!(super::trial_accepted(false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400), "tied, faster: kept");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400), "tied, no faster: refused");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400), "larger by a byte: refused however fast");
+    assert!(super::trial_accepted(false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400, false), "tied, faster: kept");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "tied, no faster: refused");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400, false), "larger by a byte: refused however fast");
 }
 
 /// DEVIATE INL-SPEED-OS: jpeg_fixed -Os `receive` and `extend` (two sites each, 200,699 runs a call, +1 and -1 bytes):
@@ -3567,4 +3583,146 @@ fn a_hot_copy_the_model_prices_at_nothing_is_kept_for_the_call_it_drops() {
     assert!(!speed_keeps_at_size(16, 1.0, 0, 2, 1), "a cold site");
     assert!(!speed_keeps_at_size(16, 200_699.5, 0, 2, 9), "9 B for two sites");
     assert!(!speed_keeps_at_size(16, 200_699.5, -4, 2, 1), "the copy costs clocks");
+}
+
+fn m32_costs() -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+    use llrm_target::Target;
+    let prices = llrm_target::CpuPrices {
+        costs: Vec::new(),
+        prefix: 1,
+        address_stall: 0,
+        registers: 6,
+        call_registers: 3,
+        float_registers: 0,
+        address_forms: Vec::new(),
+        operations: llrm_mir::target::OperationCosts::default(),
+        spaces: llrm_x86_m32::layout().spaces.roles,
+        private: None,
+        calling: None,
+        foreign: llrm_target::Foreign::none(),
+        ports: llrm_x86_m32::M32.flat_ports(),
+    };
+    (llrm_x86_m32::M32.cost_model())(&prices)
+}
+
+/// x_idioms -Os (m32): `sumlong(L, 40)` called twice. IPSCCP leaves both
+/// parameters unread and `deadargelim` drops them after the walk (the pin's
+/// order), so the -Os byte trial must price the calls as they ship: priced
+/// with the pushes it inlined both (+5 B at m32, +10 B at m68k 68000; gcc
+/// keeps two calls).
+#[test]
+fn test_the_size_trial_prices_calls_without_the_parameters_nothing_reads() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@L = global [40 x i32] zeroinitializer
+define internal i32 @sumlong(ptr %p, i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %s = phi i32 [ 0, %b0 ], [ %s1, %body ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %body, label %out
+body:
+  %x = sext i16 %i to i32
+  %w = add i32 %x, 1
+  %a = getelementptr i32, ptr %p, i32 %x
+  %v = load i32, ptr %a
+  %m = mul i32 %w, %v
+  %s1 = add i32 %s, %m
+  %i1 = add i16 %i, 1
+  br label %head
+out:
+  ret i32 %s
+}
+
+define i32 @run() {
+b0:
+  %a = call i32 @sumlong(ptr @L, i16 40)
+  store i32 7, ptr @L
+  %b = call i32 @sumlong(ptr @L, i16 40)
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        m32_costs(),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    let run = printed.split("define").find(|one| one.contains("@run(")).expect("run");
+    assert_eq!(run.matches("@sumlong(").count(), 2, "{printed}");
+}
+
+/// hanoi -O2: its three pegs are permuted and never read. The recursion
+/// copier works on the body without them, as gcc's IPA-SRA leaves it: copies
+/// merge the two calls into one and the function becomes a closed form (261 B
+/// at m32). With the pegs in place through the walk it kept two calls to
+/// itself (+23 B at m32, +2358 B at 6502).
+#[test]
+fn test_a_recursion_loses_its_unread_parameters_before_it_is_copied() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define internal i32 @hanoi(i32 %n, i32 %a, i32 %b, i32 %c) {
+b0:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %out, label %rec
+rec:
+  %m = sub i32 %n, 1
+  %x = call i32 @hanoi(i32 %m, i32 %a, i32 %c, i32 %b)
+  %y = call i32 @hanoi(i32 %m, i32 %c, i32 %b, i32 %a)
+  %s = add i32 %x, %y
+  %t = add i32 %s, 1
+  ret i32 %t
+out:
+  ret i32 0
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @hanoi(i32 %n, i32 1, i32 3, i32 2)
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::standard(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        m32_costs(),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    let top = printed.split("define").find(|one| one.contains("@top(")).expect("top");
+    assert!(top.matches("call ").count() <= 1, "{printed}");
+}
+
+/// arm64 queens -O2: `place` was cloned per constant `row` and the clones
+/// inlined (252 -> 2,260 B; -O3 308 -> 832 B), 18/20 cells at or below the
+/// bars against 19/19 without, and the clone made frames worse on both axes.
+/// The target states no default clones: the output is what `-fno-ipa-cp-clone`
+/// gives.
+#[test]
+fn test_arm64_makes_no_ipa_cp_clones_unless_asked() {
+    let run = |cp_clone: Option<bool>| {
+        let mut module = parsed(ROW_RECURSION);
+        let mut options = crate::pipeline::Options::standard();
+        options.inline.cp_clone = cp_clone;
+        let applied = crate::pipeline::Applied { options, ..Default::default() };
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux }),
+            |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+        )
+        .and_then(|done| done)
+        .expect("the pipeline runs");
+        llrm_mir::print::module(&module)
+    };
+    let asked_not = run(Some(false));
+    assert_eq!(run(None), asked_not);
+    assert_ne!(run(Some(true)), asked_not, "the premise: the clones change this module");
 }

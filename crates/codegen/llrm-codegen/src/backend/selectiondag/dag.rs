@@ -289,14 +289,19 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// `isIntDivCheap` for a type of at most this many bits where
+    /// `int_div_cheap` is off: a target with a narrow divide instruction and a
+    /// libcall for the wide one (the 68000's `divs.w` against `__divsi3`).
+    /// DEVIATE: the pin's hooks answer for every width at once. Owner m68k.
+    pub int_div_cheap_narrow: u32,
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
     pub div_live_limit: u32,
     /// The widest divide `div_live_limit` governs.
     pub div_live_max_bits: u32,
     /// The values live across the narrow divides of the block this DAG is of.
     pub div_live: u32,
-    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0 where none was
-    /// computed. DEVIATE DIV-HOT reads it.
+    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0
+    /// where none was computed. DEVIATE DIV-HOT reads it.
     pub block_frequency: f64,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
@@ -348,8 +353,10 @@ pub struct DagConfig {
     /// arm64 leaves it off (no `AliasOracle` is wired for it, as wasm's is).
     /// Exit: 2026-11-12, owner w15.
     pub use_aa: bool,
-    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the pin always does). DEVIATE: off by
-    /// default so the other targets' output stays as it was until their owners judge it. Exit: all targets judged.
+    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the
+    /// pin always does). DEVIATE: off by default so the other targets'
+    /// output stays as it was until their owners judge it. Exit: all targets
+    /// judged.
     pub known_bits_of_build_pair: bool,
 }
 
@@ -373,6 +380,7 @@ impl Default for DagConfig {
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            int_div_cheap_narrow: 0,
             div_live_limit: 0,
             div_live_max_bits: 31,
             div_live: 0,
@@ -513,6 +521,10 @@ pub struct SelectionDAG {
     /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
     /// address say. Empty where the layout may place an object lower.
     pub frame_alignments: Vec<u64>,
+    /// The alignment of each global the DAG addresses, by symbol
+    /// (`Value::getPointerAlignment`): what `computeKnownBits` of the global
+    /// says in `InferPtrAlign`.
+    pub global_alignments: HashMap<u32, u64>,
     /// The bytes of each static alloca's frame object, by frame index
     /// (`MachineFrameInfo::getObjectSize`), set where a `lifetime` marker names
     /// it; 0 where not known. The group of allocas that share an index (stack
@@ -616,6 +628,7 @@ impl SelectionDAG {
             shuffle_masks: Vec::new(),
             first_temporary: 0,
             frame_alignments: Vec::new(),
+            global_alignments: HashMap::default(),
             frame_object_bytes: Vec::new(),
             mem_locations: Vec::new(),
             var_args_frame_index: None,
@@ -1120,6 +1133,25 @@ impl SelectionDAG {
             }
         }
         events
+    }
+
+    /// `refineAlignment` of a load's or store's memory operand: `node` is
+    /// accessed `align`-aligned, as the pin's `getLoad` of an existing node
+    /// with a better alignment records it.
+    pub fn refine_mem_alignment(
+        &mut self,
+        node: u32,
+        align: u32,
+    ) {
+        let NodeData::Mem(info) = self.nodes[node as usize].data else { return };
+        if align <= info.align {
+            return;
+        }
+        self.cse_forget(node);
+        self.nodes[node as usize].data = NodeData::Mem(MemInfo { align, ..info });
+        if let Some(hash) = self.key_of(node) {
+            self.cse_link(hash, node);
+        }
     }
 
     /// `UpdateNodeOperands`: `node` reads `ops` instead. If that equals an
@@ -2250,7 +2282,8 @@ impl SelectionDAG {
         vt: EVT,
     ) -> Option<SDValue> {
         let bits = bits & super::fold::mask(vt.size_in_bits());
-        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false }).map(|node| SDValue { node, res: 0 })
+        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false })
+            .map(|node| SDValue { node, res: 0 })
     }
 
     /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.

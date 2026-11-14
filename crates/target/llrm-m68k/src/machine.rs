@@ -216,7 +216,8 @@ impl M68k {
                         forms.push((clocks + copy_clocks, 2 + copy_bytes));
                     }
                 }
-                if let Some(clocks) = self.clocks(&format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 }) {
+                if let Some(clocks) = self.clocks(&format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 })
+                {
                     forms.push((clocks + copy_clocks, if long { 6 } else { 4 } + copy_bytes));
                 }
                 let signed = if long { value as u32 as i32 } else { 0 };
@@ -245,8 +246,33 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
-    /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
+    /// The pin's M68k has no FP register class: `FADD` is not legal on `float`
+    /// or `double`, so `getFPOpCost` is `TCC_Expensive` (every float
+    /// operation is a soft-float call).
+    fn fp_op_expensive(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Float | Ty::Double)
+    }
+
+    /// A pair of `i64` divide and remainder is one call (`__divmoddi4`) where
+    /// the multiply back is not the 68020's `muls.l`: the pin's
+    /// `DivRemPairs` would divide and then multiply the quotient by the divisor
+    /// with two `__mulsi3` calls (DEVIATE M68K-DIVMOD64: the pin's M68k has no
+    /// such routine; exit: none).
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        bits == 64 && !self.cpu.has_wide_multiply()
+    }
+
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it):
+    /// `va_list` is `char *`, so `va_start` is a store of the first
+    /// variadic argument's address and the list lives in a register, as gcc has
+    /// it.
     fn promote_va_list(&self) -> bool {
         true
     }
@@ -261,10 +287,11 @@ impl Tti for M68k {
         true
     }
 
-    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k runs:
-    /// legal 1, custom 2, expanded `SingleCallCost`, by the table the lowering itself
-    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An intrinsic
-    /// that translation does not reach keeps the trait's price.
+    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k
+    /// runs: legal 1, custom 2, expanded `SingleCallCost`, by the table the
+    /// lowering itself
+    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An
+    /// intrinsic that translation does not reach keeps the trait's price.
     fn intrinsic_cost(
         &self,
         name: &str,
@@ -382,21 +409,24 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
-    /// DEVIATE M68K-INLINE-RATE (owner m68k, exit 2026-11-27): an inline into a
-    /// speed caller (-O2, -O3) that grows the code is refused when its bytes at
-    /// the CPU's `timings.times` rate cost more clocks than the call saves at
-    /// the site's frequency; the rate is the one the O2/O3 verdicts are judged
-    /// at (0.5 B per clk on the 68000, 1.33 on the 68020, 3.2 from the 68030).
-    /// The pin inlines to its threshold (225) alone; the flat 50 this replaces
-    /// kept a loop's call to a 100-instruction callee (a call per trip).
-    /// No exemption for a callee loop with a constant bound: it admitted
-    /// growth with no gain (`switch`, `sieve` 68020).
+    /// -O1, -O2 and -O3 are judged by clocks (user ruling 2026-11-14): a byte
+    /// of growth costs nothing there, so an inline into a speed caller stops
+    /// at the pin's threshold (225) alone. The rate that held a growing inline
+    /// to its clocks at -O2/-O3 (M68K-INLINE-RATE, 0.5 B per clk on the
+    /// 68000) is gone; -Os keeps its size rule (`inline_policy`).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        crate::timing::byte_milliclocks(self.cpu)
+        0
     }
 
-    /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond (`EmitLoweredSelect`); the 68000 family has no conditional move. The
-    /// speculation of a branch into selects then takes the limit of targets without one (condtocond D3).
+    /// -O1 takes the same threshold-alone verdict as -O2.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
+    }
+
+    /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond
+    /// (`EmitLoweredSelect`); the 68000 family has no conditional move. The
+    /// speculation of a branch into selects then takes the limit of targets
+    /// without one (condtocond D3).
     fn has_cmov(&self) -> bool {
         false
     }
@@ -427,10 +457,29 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE INL-O1-TRIAL-M68K (owner m68k, exit 2026-11-24): at -O1 a callee
+    /// the growth bound refused is tried in the caller and kept where the
+    /// caller comes out smaller (uint64_to_float: `classify` x6 folds `main`
+    /// to constants, 368 B and 1514 B of routines against clang's 92 B).
+    fn inline_trials_at_o1(&self) -> bool {
+        true
+    }
+
+    /// -O1 walks the call graph a second time once the dead globals are gone,
+    /// as m32 does: `bar` stored a sum nothing reads, ends as a `ret`, and
+    /// `foo` drops its call (byvalue_struct_address -O1, 24 B above clang).
+    fn inline_second_round_at_o1(&self) -> bool {
+        true
+    }
+
     /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
     /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
     /// range check, the dispatch and a word a case.
-    fn switch_code_size(&self, clusters: u64, table: u64) -> i64 {
+    fn switch_code_size(
+        &self,
+        clusters: u64,
+        table: u64,
+    ) -> i64 {
         if !self.code_size_bytes {
             return 0;
         }
@@ -445,8 +494,9 @@ impl Tti for M68k {
         true
     }
 
-    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the CPU has no 32-bit divide
-    /// instruction (68000, 68010) the divide is a libcall, and `divu.w` (16 bits) is one instruction.
+    /// DEVIATE NRW-1 (`narrowrange`, owner m68k, exit 2026-12-05): where the
+    /// CPU has no 32-bit divide instruction (68000, 68010) the divide is a
+    /// libcall, and `divu.w` (16 bits) is one instruction.
     fn range_narrowing_width(&self) -> Option<u32> {
         let has_long_divide = self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020);
         (!has_long_divide).then_some(16)
@@ -460,6 +510,34 @@ impl Tti for M68k {
         Some(100)
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): the -Os
+    /// trial's bar is met by a loop whose copies fold to under it
+    /// (switch_jump_table: ten trips of a switch on a constant counter are
+    /// ten calls), not only by one whose copies are that small.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at
+    /// -O1, where the pin does not unroll past its threshold and gcc does:
+    /// the driver keeps the unrolled module where its finished functions are
+    /// no larger and no slower (float_in_memory_loop: 16 `fadd`s on a constant
+    /// fold to one, 100 B and 1264 B of soft-float routines against gcc's 70
+    /// B).
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        Some(100)
+    }
+
+    /// DEVIATE UNROLL-NEST-TRIAL (owner m68k, exit 2026-11-27): the -O2 and -O3
+    /// trial that unrolls, by the pin's threshold, the loops with a subloop
+    /// the threshold override (32) refused: an outer loop over a
+    /// constant table folds its loads (shift_int64_variable -O2: 328 B and
+    /// 248818 clk to 56 B and 10016), a bigger one costs bytes the clocks
+    /// do not repay (fcmp_all +5.5 KB), so the finished code decides.
+    fn unroll_trial_nests_at_speed(&self) -> bool {
+        true
+    }
+
     /// DEVIATE PEEL-OS-TRIAL: the same trial peels (`loopunrollpass`).
     fn peels_on_trial_at_size(&self) -> bool {
         true
@@ -470,7 +548,10 @@ impl Tti for M68k {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
     }
 
-    fn inline_size_view_at(&self, speed: bool) -> Option<Rc<dyn Tti>> {
+    fn inline_size_view_at(
+        &self,
+        speed: bool,
+    ) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, speed_lowering: speed, ..*self }))
     }
 
@@ -546,19 +627,19 @@ impl Tti for M68k {
     ///
     /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
     /// index-versus-pointer cost via Tti (no per-program patch):
-    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
-    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
-    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
-    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
-    ///   cost the same clocks.
-    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12): pin-faithful.
-    ///   The pin's LSR picks the single IV with a compare for double_to_uint64's
-    ///   loops (`llc -print-after=loop-reduce`); our earlier two-IV
-    ///   end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os, 68020 O1
-    ///   +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B against
-    ///   gcc 330 and clang 386, so below the bar. Closes through the LSR size
-    ///   model (the exit compare's `moveq`+`cmp` is in `insns`, which the
-    ///   registers-first order ignores).
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`. O1
+    ///   cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000 +68
+    ///   (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless cost the
+    ///   same clocks.
+    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12):
+    ///   pin-faithful. The pin's LSR picks the single IV with a compare for
+    ///   double_to_uint64's loops (`llc -print-after=loop-reduce`); our earlier
+    ///   two-IV end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os,
+    ///   68020 O1 +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B
+    ///   against gcc 330 and clang 386, so below the bar. Closes through the
+    ///   LSR size model (the exit compare's `moveq`+`cmp` is in `insns`, which
+    ///   the registers-first order ignores).
     fn frame_address_is_free(&self) -> bool {
         true
     }
@@ -726,7 +807,13 @@ impl Tti for M68k {
         right: OperandInfo,
     ) -> Cost {
         if kind == CostKind::CodeSize && self.code_size_bytes {
-            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020), self.speed_lowering);
+            return crate::sizes::arithmetic(
+                op,
+                ty,
+                right,
+                self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020),
+                self.speed_lowering,
+            );
         }
         // A quotient by a constant is the magic multiply the DAG makes of it:
         // its clocks, not one operation's (SZ2-TRIPS: the unsigned and the
@@ -783,13 +870,16 @@ impl M68k {
         if matches!(wide, Action::Legal | Action::Custom | Action::Promote) {
             return true;
         }
-        [left, right].into_iter().any(|operand| {
-            operand.power_of_two
-                || operand.negated_power_of_two
-                || operand.value.and_then(|value| i64::try_from(value).ok()).is_some_and(|value| {
-                    self.constant_product_is_chains(value)
-                })
-        })
+        [left, right]
+            .into_iter()
+            .any(
+                |operand| operand.power_of_two
+                    || operand.negated_power_of_two
+                    || operand
+                        .value
+                        .and_then(|value| i64::try_from(value).ok())
+                        .is_some_and(|value| self.constant_product_is_chains(value)),
+            )
     }
 }
 

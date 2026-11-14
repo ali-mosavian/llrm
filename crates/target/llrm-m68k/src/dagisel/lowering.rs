@@ -97,6 +97,7 @@ pub fn target_lowering_with(
     tl.init_actions();
     // no FPU at any CPU: every float operation is a compiler-rt call
     tl.set_soft_float_libcall_names();
+    tl.set_signed_conversion_of_nonneg();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -205,6 +206,15 @@ pub fn target_lowering_with(
     // `RTLIB::SDIV_I64` and the others: no CPU divides 64 bits
     for (op, name) in [(SDiv, "__divdi3"), (UDiv, "__udivdi3"), (SRem, "__moddi3"), (URem, "__umoddi3")] {
         tl.set_libcall_name(op, MVT::I64, name);
+    }
+    // a divide and a remainder of the same operands are one call where the remainder is not a multiply back
+    // that is cheap: the 68020's `muls.l` makes it three instructions, the 68000's and 68060's is two
+    // `__mulsi3` calls and a subtract (`has_div_rem_op`, the pin's `useDivRem` over `SDIVREM_I64`)
+    if !cpu.has_wide_multiply() {
+        for (op, name) in [(SDivRem, "__divmoddi4"), (UDivRem, "__udivmoddi4")] {
+            tl.set_operation_action(op, MVT::I64, Action::Custom);
+            tl.set_libcall_name(op, MVT::I64, name);
+        }
     }
     tl
 }
@@ -320,7 +330,34 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
             unsigned: u32::from(opcode::UMULd32d16),
             signed: u32::from(opcode::SMULd32d16),
             has_full_multiply: !matches!(self.cpu, Cpu::M68000 | Cpu::M68010),
+            constant: true,
         })
+    }
+
+    /// DEVIATE M68K-HALF-MUL-CONST (owner m68k, exit 2026-11-24):
+    /// the pin has no half multiply, so `(short n) * 1000` is `ext.l` and
+    /// `muls.l` or `__mulsi3`; gcc has `muls.w #1000,%d1` (4 B). A multiply by a
+    /// constant that fits the half is `muls.w` / `mulu.w` with the constant as
+    /// the immediate unless the level's price takes a chain under it.
+    fn half_multiply_by_constant(
+        &self,
+        vt: EVT,
+        c: u128,
+        signed: bool,
+        x_dies: bool,
+    ) -> bool {
+        if !self.half_mul || vt != EVT::I32 {
+            return false;
+        }
+        let text = if signed { format!("muls.w #{},%d0", c as u32 as i32 as i16) } else { format!("mulu.w #{},%d0", c as u16) };
+        let mut half = super::mulprice::one(self.cpu, &text, 4);
+        if !x_dies {
+            // the half multiply overwrites its operand, a copy the chain's own moves already include
+            half = super::mulprice::sum([half, super::mulprice::one(self.cpu, "move.l %d0,%d1", 2)]);
+        }
+        // a chain the price takes over the full multiply stays unless the half multiply beats it (at -O1 the two
+        // are each better on one axis: the chain keeps the pin's choice)
+        super::synth::plan(self.cpu, self.price, 32, c).is_none() || super::synth::cheapest(self.cpu, self.price, c).is_none_or(|chain| self.price.beats(self.cpu, half, chain))
     }
 
     fn is_indexed_legal(
@@ -390,6 +427,7 @@ impl Hooks for M68kLowering {
             ISD::JumpTable => Some(super::call::lower_jump_table(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
+            ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I64 => lower_divrem_wide(dag, node),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             ISD::AddC | ISD::AddE | ISD::SubC | ISD::SubE => lower_carry_chain(dag, node),
             _ => None,
@@ -490,6 +528,64 @@ impl Hooks for M68kLowering {
     fn little_endian(&self) -> bool {
         false
     }
+}
+
+/// `ExpandDivRemLibCall` of an `i64`: one call of `__divmoddi4` (`__udivmoddi4`), the quotient back in
+/// `d0:d1` and the remainder stored through the address of a stack cell, the third argument; the remainder is
+/// loaded back after the call.
+fn lower_divrem_wide(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use super::call::{Ext, In, Out};
+    let signed = dag.opcode(node) == ISD::SDivRem;
+    let name = if signed { "__divmoddi4" } else { "__udivmoddi4" };
+    let ext = if signed { Ext::Sign } else { Ext::Zero };
+    let cell = dag.create_stack_temporary(8, 4);
+    let word = |value: SDValue| Out {
+        value,
+        ext,
+        pointer: false,
+        arg_vt: EVT::I32,
+        split: false,
+        variadic: false,
+        sret: false,
+        byval: None,
+    };
+    let mut outs = Vec::new();
+    for at in 0..2 {
+        // a 64-bit argument is two words, the high one first
+        let [low, high] = split_words(dag, dag.operand(node, at));
+        outs.extend([word(high), word(low)]);
+    }
+    outs.push(Out {
+        value: dag.get_frame_index(EVT::I32, cell),
+        ext: Ext::Any,
+        pointer: true,
+        arg_vt: EVT::I32,
+        split: false,
+        variadic: false,
+        sret: false,
+        byval: None,
+    });
+    let result = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
+    let callee = dag.get_target_external_symbol(EVT::I32, name);
+    let root = dag.entry_node();
+    let (chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[result, result]);
+    let [high, low] = values[..] else { return None };
+    let quotient = dag.get_node(ISD::BuildPair, EVT::I64, &[low, high]);
+    let address = dag.get_frame_index(EVT::I32, cell);
+    let info = MemInfo {
+        mem_vt: EVT::I64,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(cell),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let remainder = dag.get_load(EVT::I64, chain, address, info);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I64, EVT::I64], &[quotient, remainder]))
 }
 
 /// The low and the high word of a 64-bit value.
@@ -679,6 +775,28 @@ fn has_non_flags_use(
     })
 }
 
+/// `combineSetCCEFLAGS` / `LowerBRCOND`'s test of a `setcc` through its
+/// extends: a `SETCC` is 0 or 1, so `(and (zext (setcc cc, flags)), 1)` is the
+/// `setcc`, and a branch on it reads `cc` of `flags`. DEVIATE M68K-SETCC-AND:
+/// the pin's M68k tests the byte (`sge; and.b #1; bne`, 6 B and 22 clk more
+/// than `bge`). Owner: x87-b. Exit 2026-12-05, when a second target needs it or
+/// the pin gains it.
+fn through_setcc(
+    dag: &SelectionDAG,
+    cond_value: SDValue,
+) -> SDValue {
+    let mut value = cond_value;
+    while matches!(
+        dag.opcode(value),
+        ISD::Truncate | ISD::ZeroExtend | ISD::AnyExtend
+    )
+        || (dag.opcode(value) == ISD::And && dag.constant(dag.operand(value, 1)) == Some(1))
+    {
+        value = dag.operand(value, 0);
+    }
+    if dag.opcode(value) == m68kisd::SETCC { value } else { cond_value }
+}
+
 /// `LowerBRCOND` and `LowerSELECT` look past the extension of a boolean to the
 /// value it extends (`(and (setcc_carry ...), 1)`, a truncate with zero high
 /// bits). A promoted `i1` condition is `sign_extend_inreg x, i1`, which is
@@ -703,6 +821,19 @@ fn look_past_boolean(
     {
         flipped ^= mask & 1 == 1;
         value = dag.operand(value, 0);
+    }
+    // a `setcc` is 0 or 1 already: the branch reads its own condition (DEVIATE
+    // M68K-SETCC-AND, above)
+    if dag.opcode(value) == ISD::SetCCCarry {
+        value = lower_setcc_carry(dag, value);
+    }
+    if dag.opcode(value) == m68kisd::SETCC {
+        if !flipped {
+            return value;
+        }
+        let code = opposite(dag.constant(dag.operand(value, 0)).unwrap_or(cond::NE));
+        let (code, flags) = (cc_operand(dag, code), dag.operand(value, 1));
+        return dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]);
     }
     let vt = dag.value_type(value);
     if vt == EVT::I32 {
@@ -946,6 +1077,42 @@ fn lower_setcc(
     Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `combineCarryThroughADD` (X86ISelLowering.cpp, pin d1106deb71cc): a borrow
+/// that is a `setcc cs` of flags (through extends, truncates and `and 1`) is
+/// those flags, so the byte round trip (`scs`, then `add.b #-1` to make the
+/// extend flag again) is not made. DEVIATE M68K-CARRY-THROUGH: the pin's M68k
+/// has no such combine and makes the round trip (`scs; add.b #-1; subx`, 10 B
+/// and 20 clk over gcc's `subx`). Owner: x87-b. Exit 2026-12-05, when a second
+/// target needs it or the pin gains it.
+fn carry_from_flags(
+    dag: &mut SelectionDAG,
+    carry: SDValue,
+) -> Option<SDValue> {
+    let mut carry = carry;
+    while matches!(
+        dag.opcode(carry),
+        ISD::Truncate | ISD::ZeroExtend | ISD::AnyExtend
+    )
+        || (dag.opcode(carry) == ISD::And && dag.constant(dag.operand(carry, 1)) == Some(1))
+    {
+        carry = dag.operand(carry, 0);
+    }
+    match dag.opcode(carry) {
+        m68kisd::SETCC if dag.constant(dag.operand(carry, 0)) == Some(cond::CS) => Some(dag.operand(carry, 1)),
+        // the carry out of the low halves, not yet lowered: the `sub` or `add`
+        // that `lower_xalu` makes (the same node, so the low half and the carry
+        // are the one instruction)
+        opcode @ (ISD::USubO | ISD::UAddO) if carry.res == 1 => {
+            let value_vt = dag.value_type(SDValue { node: carry.node, res: 0 });
+            let (lhs, rhs) = (dag.operand(carry, 0), dag.operand(carry, 1));
+            let base = if opcode == ISD::USubO { m68kisd::SUB } else { m68kisd::ADD };
+            let arith = dag.get_node_multi(base, &[value_vt, EVT::I8], &[lhs, rhs]);
+            Some(SDValue { node: arith.node, res: 1 })
+        }
+        _ => None,
+    }
+}
+
 /// `LowerSETCCCARRY`: the comparison of `lhs` and `rhs` with a borrow in, as
 /// `subx` over the carry turned into the extend flag (`carry + -1`).
 fn lower_setcc_carry(
@@ -957,13 +1124,15 @@ fn lower_setcc_carry(
     let mut unchanged = rhs;
     let code = translate_cc(dag, cc, &mut unchanged);
     let carry_vt = dag.value_type(carry);
-    let minus_one = dag.get_constant(u128::MAX >> (128 - carry_vt.size_in_bits()), carry_vt);
-    let carry = dag.get_node_multi(m68kisd::ADD, &[carry_vt, EVT::I8], &[carry, minus_one]);
-    let compared = dag.get_node_multi(
-        m68kisd::SUBX,
-        &[dag.value_type(lhs), EVT::I8],
-        &[lhs, rhs, SDValue { node: carry.node, res: 1 }],
-    );
+    let flags = match carry_from_flags(dag, carry) {
+        Some(flags) => flags,
+        None => {
+            let minus_one = dag.get_constant(u128::MAX >> (128 - carry_vt.size_in_bits()), carry_vt);
+            let carry = dag.get_node_multi(m68kisd::ADD, &[carry_vt, EVT::I8], &[carry, minus_one]);
+            SDValue { node: carry.node, res: 1 }
+        }
+    };
+    let compared = dag.get_node_multi(m68kisd::SUBX, &[dag.value_type(lhs), EVT::I8], &[lhs, rhs, flags]);
     let code = cc_operand(dag, code);
     dag.get_node(m68kisd::SETCC, EVT::I8, &[code, SDValue { node: compared.node, res: 1 }])
 }
@@ -1054,7 +1223,12 @@ fn lower_select(
         if let Some(lowered) = lower_setcc(dag, cond_value, cpu) {
             cond_value = lowered;
         }
+    } else if dag.opcode(cond_value) == ISD::SetCCCarry {
+        // the wide compare reads its own flags, as `LowerBRCOND` does of the
+        // `SETCC` it lowers to
+        cond_value = lower_setcc_carry(dag, cond_value);
     }
+    cond_value = through_setcc(dag, cond_value);
     cond_value = look_past_boolean(dag, cond_value);
     let (code, flags) = if dag.opcode(cond_value) == m68kisd::SETCC {
         (dag.operand(cond_value, 0), dag.operand(cond_value, 1))
@@ -1082,7 +1256,12 @@ fn lower_brcond(
         if let Some(lowered) = lower_setcc(dag, cond_value, cpu) {
             cond_value = lowered;
         }
+    } else if dag.opcode(cond_value) == ISD::SetCCCarry {
+        // the wide compare reads its own flags, as `LowerBRCOND` does of the
+        // `SETCC` it lowers to
+        cond_value = lower_setcc_carry(dag, cond_value);
     }
+    cond_value = through_setcc(dag, cond_value);
     cond_value = look_past_boolean(dag, cond_value);
     let (code, flags) = if dag.opcode(cond_value) == m68kisd::SETCC {
         let (code, cmp) = (dag.operand(cond_value, 0), dag.operand(cond_value, 1));

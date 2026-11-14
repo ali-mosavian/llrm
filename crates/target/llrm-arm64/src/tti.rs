@@ -436,7 +436,7 @@ fn vector_memory_op_cost(
 /// `mul` of `<2 x i64>` (14 in the pin: no `mul.2d`) and the integer divisions
 /// are not priced, so a loop that has one is not vectorized; `frem` of a vector
 /// (24 to 52 in the pin: libcalls) is not priced either.
-fn vector_arithmetic_cost(
+pub(crate) fn vector_arithmetic_cost(
     op: ArithOp,
     ty: VectorTy,
     kind: CostKind,
@@ -460,10 +460,28 @@ fn vector_arithmetic_cost(
 }
 
 impl Tti for AArch64 {
-    /// DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): gcc's ipa-cp copies
-    /// at speed; queens -O3 113741 -> 106011 instructions.
+    /// `isProfitableToSinkOperands`: see [`crate::tti_sink`].
+    fn is_profitable_to_sink_operands(
+        &self,
+        context: &llrm_mir::context::Context,
+        function: &llrm_mir::module::Function,
+        inst: llrm_mir::module::InstId,
+        ops: &mut Vec<llrm_mir::module::Use>,
+    ) -> bool {
+        match function.instruction(inst).opcode {
+            llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Mul) => {
+                crate::tti_sink::mul_operands_to_sink(context, function, inst, ops)
+            }
+            _ => false,
+        }
+    }
+
+    /// No default ipa-cp clones (IPACP-O2 is x86's): arm64 queens -O2 252 ->
+    /// 2,260 B, cells at or below both bars 18/20 with clones against 19/19
+    /// without (-O3 26/16 against 27/16), frames worse on both axes.
+    /// `-fipa-cp-clone` still clones.
     fn ipa_cp_clones_at_speed(&self) -> bool {
-        true
+        false
     }
 
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
@@ -472,8 +490,8 @@ impl Tti for AArch64 {
         true
     }
 
-    /// `Tti::opt_size_inline_guard_yields_to_negative_cost`: where the pin's own
-    /// cost is below zero it counts the inline as shrinking the caller.
+    /// `Tti::opt_size_inline_guard_yields_to_negative_cost`: where the pin's
+    /// own cost is below zero it counts the inline as shrinking the caller.
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
@@ -811,6 +829,16 @@ impl Tti for AArch64 {
         vector_arithmetic_cost(op, ty, kind)
     }
 
+    fn vector_reduction_cost(
+        &self,
+        kind: llrm_mir::intrinsics::ReduceKind,
+        ty: VectorTy,
+        ordered: bool,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::reduction_cost(kind, ty, ordered, cost_kind)
+    }
+
     fn vector_cast_cost(
         &self,
         kind: CastKind,
@@ -819,6 +847,30 @@ impl Tti for AArch64 {
         cost_kind: CostKind,
     ) -> Option<Cost> {
         crate::tti_vector::cast_cost(kind, dst, src, cost_kind)
+    }
+
+    fn vector_arithmetic_cost_ext(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        args: [Option<llrm_mir::tti::ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Result<Option<Cost>, ()> {
+        crate::tti_vector::arithmetic_cost_ext(op, ty, args, |op, ty| vector_arithmetic_cost(op, ty, kind))
+    }
+
+    fn vector_ext_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        users: &[llrm_mir::tti::ExtUser],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if cost_kind != CostKind::RecipThroughput {
+            return None;
+        }
+        crate::tti_vector::ext_cost(kind, dst, src, users)
     }
 
     fn vector_cmp_sel_cost(

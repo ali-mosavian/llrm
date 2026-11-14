@@ -371,7 +371,7 @@ fn call_info(
 /// `getAttributeBasedInliningDecision` (InlineCost.cpp:3191): some verdict the
 /// callee's and call's attributes settle, or none.
 ///
-/// D4: no coroutine, target-feature, strict FP, `optnone`, `flatten` checks.
+/// D4: no coroutine, target-feature, strict FP, `flatten` checks.
 pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     let call = call_info(site.caller, site.call)?;
     let callee_attrs = &site.callee.attrs;
@@ -390,6 +390,10 @@ pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     }
     if has_flag(&call.attrs, "noinline") {
         return Some(Err("noinline call site attribute".into()));
+    }
+    // Don't inline into a function that has the optnone attribute.
+    if site.caller.has_opt_none() {
+        return Some(Err("optnone attribute".into()));
     }
     // Don't inline what can be interposed at link time: the body is not the
     // definition that runs.
@@ -1306,17 +1310,21 @@ impl<'a> Analyzer<'a> {
             Opcode::Cast(
                 CastOp::FPTrunc | CastOp::FPExt | CastOp::UIToFP | CastOp::SIToFP | CastOp::FPToUI | CastOp::FPToSI
             )
-        ) && self.fp_expensive()
+        ) && self.fp_expensive(operation.ty)
         {
             self.add_cost(CALL_PENALTY);
         }
         self.free_instruction(inst)
     }
 
-    /// `getFPOpCost == TCC_Expensive` (D2): the generic answer, an FP type the
-    /// hardware does not have; x86 with an x87 has them all.
-    fn fp_expensive(&self) -> bool {
-        false
+    /// `getFPOpCost(ty) == TCC_Expensive` (D2): an FP type the target has no
+    /// legal `FADD` on (`Tti::fp_op_expensive`); none: generic, legal.
+    fn fp_expensive(
+        &self,
+        ty: llrm_mir::types::TypeId,
+    ) -> bool {
+        let Some(tti) = self.site.tti else { return false };
+        Ty::of(&self.context.types, ty).is_some_and(|ty| tti.fp_op_expensive(ty))
     }
 
     /// `visitCmpInst` (:2206).
@@ -1431,7 +1439,7 @@ impl<'a> Analyzer<'a> {
         }
         self.disable_sroa(operation.operands[0]);
         self.disable_sroa(operation.operands[1]);
-        if matches!(self.context.types.get(operation.ty), Type::Float(_)) && self.fp_expensive() {
+        if matches!(self.context.types.get(operation.ty), Type::Float(_)) && self.fp_expensive(operation.ty) {
             self.add_cost(CALL_PENALTY);
         }
         false
@@ -2149,8 +2157,37 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
+        let size = size - self.unread_arguments_cost(llrm_mir::tti::CostKind::CodeSize);
         let percent = if self.measured() { view.as_deref().unwrap_or(tti).call_code_size_percent() } else { tti.call_code_size_percent() };
         (size * percent + 50) / 100 + self.byval_copy_size()
+    }
+
+    /// What the arguments of parameters the callee never reads add to the
+    /// call's price: `deadargelim` removes them after the walk (the pin's
+    /// order), so the code the inline replaces has no setup for them. The
+    /// pin's own cost keeps them; the guards below price the call the code
+    /// will contain, so an inline's verdict does not turn on a parameter that
+    /// is about to go (x_jpeg_fixed -O2: `emit`'s constant `out`).
+    fn unread_arguments_cost(&self, kind: llrm_mir::tti::CostKind) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let linkage = self.site.module.global(self.site.callee_id).linkage;
+        if !matches!(linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private) {
+            return 0;
+        }
+        let parameters = self.callee.parameters();
+        let unread = self.unread_parameters().iter().filter(|&&one| one).count() as i64;
+        if unread == 0 {
+            return 0;
+        }
+        let all = parameters.len() as i64;
+        let with = tti.direct_call_cost(all, kind);
+        let without = tti.direct_call_cost(all - unread, kind);
+        if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
+    }
+
+    /// Per parameter: nothing reads it and `deadargelim` will drop it (an internal or private callee).
+    fn unread_parameters(&self) -> Vec<bool> {
+        unread_parameters_of(self.site.module, self.site.callee_id)
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
@@ -2167,7 +2204,10 @@ impl<'a> Analyzer<'a> {
         let call = self.site.caller.instruction(self.site.call);
         let info = call_info(self.site.caller, self.site.call)?;
         let arguments = call.operands.len().saturating_sub(1);
+        // an argument for a parameter nothing reads is gone once `deadargelim` runs after the walk
+        let unread = self.unread_parameters();
         let arguments = (0..arguments)
+            .filter(|&index| !unread.get(index).copied().unwrap_or(false))
             .map(|index| {
                 let byval = info
                     .argument_attrs
@@ -2501,6 +2541,15 @@ impl<'a> Analyzer<'a> {
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
+}
+
+/// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it (an internal or private callee). The one
+/// rule the inline guard and the size trial price a call by.
+pub(crate) fn unread_parameters_of(module: &Module, callee: GlobalId) -> Vec<bool> {
+    let global = module.global(callee);
+    let GlobalKind::Function(body) = &global.kind else { return Vec::new() };
+    let droppable = matches!(global.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private);
+    body.parameters().iter().map(|&value| droppable && body.users(value).is_empty()).collect()
 }
 
 /// The stores of `function` through `value` (a pointer), directly or through
@@ -3160,9 +3209,32 @@ pub fn sites_with_trials(
             }
         }
     }
+    // DEVIATE LOOP-COPY-TRIAL (`Tti::inline_loop_copy_trial`): the sites of each callee here, for the copies a
+    // trial compile may refuse
+    let mut sites: llrm_support::hash::IndexMap<GlobalId, i64> = Default::default();
+    if tti.is_some_and(|tti| tti.inline_loop_copy_trial()) {
+        for (_, inst) in caller.walk() {
+            if let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) {
+                *sites.entry(callee).or_default() += 1;
+            }
+        }
+    }
     let mut planned = IdSet::<InstId>::new();
     for (_, inst) in caller.walk() {
         let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies, Some(&planned)) else { continue };
+        // a callee that holds a loop, at one of several sites of a loop of the caller: the registers its copy
+        // needs next to the caller's are not in the cost
+        if decision.inline && sites.get(&decision.callee).is_some_and(|&here| here >= 2) {
+            let in_loop = caller.parent(inst).is_some_and(|block| frequencies.relative_to_entry(block) >= 2.0);
+            let holds_loop =
+                module.global(decision.callee).function().is_some_and(|callee| !loop_headers(callee).is_empty());
+            if in_loop && holds_loop {
+                if crate::trial::refusing_loop_copies() {
+                    continue;
+                }
+                crate::trial::note_loop_copy();
+            }
+        }
         if decision.inline {
             planned.insert(inst);
         }

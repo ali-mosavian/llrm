@@ -103,8 +103,18 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): fill_nest
+        // -O2 filled 4096 words by a loop, 5 clk a word, where `rep stosw` is 4.
+        fills_pattern_at_speed: true,
         libc_memcpy: true,
         pops_arguments_at_size: false,
+        // DEVIATE X87-FCMP-AH at -O1 (owner x87-c, exit 2026-11-24): `sahf`,
+        // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16 O1
+        // keeps the test until its counted cells are judged.
+        keeps_sahf_where_bytes_are_held: true,
+        // DEVIATE RL-EXITING-LATCH (owner x87, exit 2026-11-24): `LoopRotate` also rotates a loop whose latch exits
+        // when its header copy folds away in the preheader, as gcc's header copy does (mandel -O1: 2 `imul` a pixel).
+        rotate_exiting_latch_when_guard_folds: true,
         // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop
         // header of at most 4 instructions, not the pin's 16 (the copy is a
         // compare and a branch, more than the jump rotation removes). m32 -Os
@@ -196,8 +206,13 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
         lsr_size_order: true,
+        // DEVIATE IU1-M32 (owner w12, exit 2026-11-24): the m64 entry at m32; see
+        // `Tti::lsr_users_in_use_list_order`. x_transpose -O1 139,335 -> 122,886 clk, 237 -> 217 B.
+        lsr_users_in_use_list_order: true,
         // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
         lsr_phi_operand_uses: true,
+        // DEVIATE LU14 (owner x86-m32, exit 2026-11-30): see `Tuning::lsr_both_use_orders`.
+        lsr_both_use_orders: true,
         // DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): see
         // `Tti::splits_invariant_fmuladd`.
         splits_invariant_fmuladd: true,
@@ -273,11 +288,15 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
-        // DEVIATE REC-2 bar: gcc's 15/30 size units in our `gcc_insns`, fitted
-        // to the 10 corpus recursions (insns = 1.6 x gcc size less 5.5; queens
-        // 22 sits on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10:
-        // the estimate becomes gcc's own size count (translated, not fitted).
-        recursive_edge_growth: Some((12, 22)),
+        // DEVIATE REC-2/REC-10 bar: 22 `gcc_insns` at -O2 and -O3, fitted to
+        // the corpus (gcc's own is 15 at -O2, 30 at -O3, in its size units).
+        // At 12 at -O2 recchop (14) was refused where gcc copies it; at 22
+        // five -O2 programs copy and all get faster (recchop 7183 -> 5397 clk,
+        // x_hanoi2 219202 -> 160540); the other 116 and every -O3 cell are
+        // unchanged. recchop and bintree's `walk` are both 14 and gcc takes
+        // one: no bar matches it. Owner x86-m32; exit 2026-12-10: the
+        // estimate becomes gcc's own size count.
+        recursive_edge_growth: Some((22, 22)),
         // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 ->
         // 99687 clk, x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are
         // worse with 450; their O3 card is open). Owner x86-m32, exit

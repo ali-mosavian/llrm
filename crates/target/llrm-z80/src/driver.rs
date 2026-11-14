@@ -88,11 +88,15 @@ pub struct Request {
     /// attribute names a per-function level of its own (no peeled switch case, no balanced tree), so an -Os compile
     /// of a module clang built at -Oz was not -Os, and the best of the two never saw what -Os makes.
     pub optsize_only: bool,
+    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the mid-end refuses the copies of a callee that holds a
+    /// loop at several sites of a loop of its caller (`llrm_transforms::trial::with_refused_loop_copies`): the
+    /// compile `compile::effective` weighs the default one against.
+    pub refuse_loop_copies: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false, refuse_loop_copies: false }
     }
 }
 
@@ -108,6 +112,29 @@ fn without_triple(text: &str) -> String {
 
 /// `text` through the mid-end at the request's level.
 pub fn program(
+    text: &str,
+    request: &Request,
+) -> Result<Program, String> {
+    let made = if request.refuse_loop_copies {
+        llrm_transforms::trial::with_refused_loop_copies(|| program_of(text, request))
+    } else {
+        program_of(text, request)
+    };
+    LOOP_COPIES.with(|count| count.set(llrm_transforms::trial::take_loop_copies()));
+    made
+}
+
+thread_local! {
+    static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The inlines of a loop-holding callee at several sites of a loop that the last [`program`] made (they are what
+/// a compile with `refuse_loop_copies` would not).
+pub fn loop_copies_made() -> usize {
+    LOOP_COPIES.with(std::cell::Cell::get)
+}
+
+fn program_of(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {
@@ -155,7 +182,7 @@ pub fn program(
         program.modules.iter_mut().for_each(crate::prepare::mark_constant_fills);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_shifts);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_divides);
-        if matches!(request.level, Level::O1 | Level::Os | Level::Oz) {
+        if request.level != Level::O0 {
             program.modules.iter_mut().for_each(crate::prepare::mark_word_chains);
         }
     }
@@ -273,10 +300,9 @@ pub fn selections_with_alternatives(
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
-            // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
-            // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
-            // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
-            let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
+            // The all-calls form is priced bytes first at every level (it was -O1 only: at 1 B = 3 T the static loop
+            // weights, about 5x under the measured ones, made -368 B for +5970 T look like a gain on call_keeps).
+            let muls = calls_the_routine(name).filter(|sized| *sized || request.level != Level::O0);
             let fills = has_fills(name);
             let shifts = has_shifts(name);
             let divides = has_divides(name);
@@ -383,8 +409,8 @@ impl llrm_mir::target::Machine for Z80Machine {
         llrm_mir::target::Tuning {
             max_stores_per_memcpy: MEMCPY_STORES,
             max_stores_per_memcpy_opt_size: MEMCPY_STORES,
-            max_stores_per_memset: memset_stores(llrm_mir::target::Tuning::PIN.max_stores_per_memset),
-            max_stores_per_memset_opt_size: memset_stores(llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size),
+            max_stores_per_memset: memset_stores(),
+            max_stores_per_memset_opt_size: memset_stores(),
             ..llrm_mir::target::Tuning::PIN
         }
     }
@@ -400,17 +426,17 @@ impl llrm_mir::target::Machine for Z80Machine {
 /// is the target's price, as m16's `Dos::tuning` is.
 const MEMCPY_STORES: usize = 1;
 
-/// `MaxStoresPerMemset` where the level allows no trade between bytes and clocks (-O1, -Os, -Oz): one store of the widest
-/// width, then the fill is an `ldir`. The pin's x86 limits (16 at speed, 8 at size) count 4-byte stores, which are two
-/// word stores of 3 B each through IX here: a 34 B zero fill was 102 B against an `ldir` fill of 13 B for 1.1% of its
-/// clocks (huffman_decode -O1 +70 B over the -Os form). Where bytes are priced at 3 T (-O2, -O3) the two forms are within
-/// the noise of that rate and the pin's limit stays.
+/// `MaxStoresPerMemset` at every level (the pin's X86 values: 16, 8 at size): one store of the widest width, then the fill is an `ldir`. The pin's x86 limits
+/// (16 at speed, 8 at size) count 4-byte stores, which are two word stores of 3 B each through IX here: a 34 B zero fill
+/// was 102 B against an `ldir` fill of 13 B for 1.1% of its clocks (huffman_decode -O1 +70 B over the -Os form). At
+/// -O2/-O3 too: a 64 B row fill stored inline was 224 B and slower than its `ldir` (fill_nest 601 B against 348 B, +5 k T;
+/// 3 T a byte does not pay for 213 B), and memory_expansion -4576 B, rep_count -409 B, +18 k T in all.
 ///
 /// DEVIATE Z80-MEMSET-LIMIT (owner z80-pf, exit 2026-11-24), as Z80-MEMCPY-LIMIT.
 const MEMSET_STORES: usize = 1;
 
-fn memset_stores(pin: usize) -> usize {
-    if crate::dagisel::pipeline::STRICT_LEVEL.with(std::cell::Cell::get) { MEMSET_STORES } else { pin }
+fn memset_stores() -> usize {
+    MEMSET_STORES
 }
 
 thread_local! {
