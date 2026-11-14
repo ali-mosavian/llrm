@@ -509,6 +509,24 @@ fn m68k_m32_and_arm64_rows_thread_jumps_at_o1_unless_told_otherwise() {
     }
 }
 
+/// DEVIATE SPEED-O1: the x86-32 rows give their backend `-fllrm-speed-rate` at
+/// -O1 (x_iir kept three `imul` of 24 clk a trip against gcc's lea chains,
+/// 130,528 clk to gcc's 60,034), unless the command line states either
+/// spelling; no other row, and no other level, does.
+#[test]
+fn x86_32_rows_price_bytes_at_speed_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-fllrm-speed-rate");
+    for row in table.keys() {
+        let at_o1 = row.starts_with("x86_32-");
+        assert_eq!(has(&llc(row, "-O1 -c x.c")), at_o1, "{row}");
+        for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-llrm-speed-rate -c x.c"] {
+            assert!(!has(&llc(row, line)), "{row} {line}");
+        }
+    }
+}
+
 /// A dist read the description files from the checkout it was built in, so
 /// deleting or moving the checkout failed every compile (2345 of 3911 cells of
 /// a post-merge A/B). Every description targets.toml names is embedded: the
