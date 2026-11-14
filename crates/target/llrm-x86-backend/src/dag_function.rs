@@ -1585,6 +1585,7 @@ fn selected_in(
                     i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
+                    status_word_tests: std::env::var_os("LLRM_X87_STATUS").is_some(),
                     branch_constant_selects: select_branch > 0
                         && frequencies.as_ref().is_some_and(|frequencies| {
                             frequencies.relative_to_entry(parent) >= f64::from(select_branch)

@@ -173,6 +173,9 @@ pub struct X86Lowering<'a> {
     /// DEVIATE SELB: a select of two constants without a `cmov` stays a select
     /// (a branch), not `setcc` arithmetic.
     pub branch_constant_selects: bool,
+    /// DEVIATE X87-STATUS: an x87 compare's conditions test its status word
+    /// (`LLRM_FSTATUS`, `LLRM_STATUS_TEST`) where the pin `sahf`s it.
+    pub status_word_tests: bool,
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
@@ -749,9 +752,9 @@ impl Hooks for X86Lowering<'_> {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::SetCC => lower_setcc(dag, node, self.min_size),
-            ISD::Select => lower_select(dag, node, self.cmov, self.min_size),
-            ISD::BrCond => lower_brcond(dag, node, self.min_size),
+            ISD::SetCC => lower_setcc(dag, node, self.min_size, self.status_word_tests),
+            ISD::Select => lower_select(dag, node, self.cmov, self.min_size, self.status_word_tests),
+            ISD::BrCond => lower_brcond(dag, node, self.min_size, self.status_word_tests),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
@@ -910,11 +913,45 @@ fn translate_fp_cc(
 fn float_flags(
     dag: &mut SelectionDAG,
     setcc: SDValue,
+    status: bool,
 ) -> Option<(SDValue, SDValue)> {
     let (mut lhs, mut rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
     let code = translate_fp_cc(dag, cond_of(dag, dag.operand(setcc, 2)), &mut lhs, &mut rhs)?;
-    let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
-    Some((flags, cond_code(dag, code)))
+    Some(fp_flags(dag, lhs, rhs, code, status))
+}
+
+/// The flags of `lhs` against `rhs` for the `sahf` condition `code` and the code that reads them: `FCMP`
+/// and `code`; with `status`, the compare's status word tested for that condition
+/// (DEVIATE X87-STATUS: gcc's `ix86_expand_fp_compare`, the `IX86_FPCMP_ARITH` strategy). The word
+/// is one value for every reader of the pair; each reader tests it where it needs the
+/// flags, so no `setcc` byte is held across an instruction that kills them.
+fn fp_flags(
+    dag: &mut SelectionDAG,
+    lhs: SDValue,
+    rhs: SDValue,
+    code: u128,
+    status: bool,
+) -> (SDValue, SDValue) {
+    // `sahf` copies C0 (bit 0 of `ah`) to CF, C2 (bit 2) to PF and C3 (bit 6) to ZF.
+    let test = match code {
+        cond::A => Some((0x41, cond::E)),
+        cond::AE => Some((0x01, cond::E)),
+        cond::B => Some((0x01, cond::NE)),
+        cond::BE => Some((0x41, cond::NE)),
+        cond::E => Some((0x40, cond::NE)),
+        cond::NE => Some((0x40, cond::E)),
+        cond::P => Some((0x04, cond::NE)),
+        cond::NP => Some((0x04, cond::E)),
+        _ => None,
+    };
+    let Some((mask, code)) = test.filter(|_| status) else {
+        let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
+        return (flags, cond_code(dag, code));
+    };
+    let word = dag.get_node(crate::x86isd::LLRM_FSTATUS, EVT::I16, &[lhs, rhs]);
+    let (mask, zero) = (dag.get_constant(mask, EVT::I8), dag.get_constant(0, EVT::I8));
+    let flags = dag.get_node(crate::x86isd::LLRM_STATUS_TEST, EVT::I32, &[word, mask, zero]);
+    (flags, cond_code(dag, code))
 }
 
 /// `hasNonFlagsUse`: whether `op` has a reader other than a branch, a compare
@@ -1138,10 +1175,11 @@ fn lower_setcc(
     dag: &mut SelectionDAG,
     node: SDValue,
     min_size: bool,
+    status: bool,
 ) -> Option<SDValue> {
     let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
     if dag.value_type(op0).is_floating_point() {
-        let (flags, code) = float_flags(dag, node)?;
+        let (flags, code) = float_flags(dag, node, status)?;
         return Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]));
     }
     if !dag.value_type(op0).is_integer() {
@@ -1270,6 +1308,7 @@ fn lower_select(
     node: SDValue,
     can_cmov: bool,
     min_size: bool,
+    status: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if !vt.is_integer() && !vt.is_floating_point() {
@@ -1277,7 +1316,7 @@ fn lower_select(
     }
     let (mut cond, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond, min_size) {
+        if let Some(lowered) = lower_setcc(dag, cond, min_size, status) {
             cond = lowered;
         }
     }
@@ -1325,10 +1364,11 @@ fn lower_brcond(
     dag: &mut SelectionDAG,
     node: SDValue,
     min_size: bool,
+    status: bool,
 ) -> Option<SDValue> {
     let (chain, cond, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_floating_point() {
-        if let Some(branches) = lower_float_brcond(dag, node, cond) {
+        if let Some(branches) = lower_float_brcond(dag, node, cond, status) {
             return Some(branches);
         }
     }
@@ -1459,18 +1499,19 @@ fn lower_float_brcond(
     dag: &mut SelectionDAG,
     node: SDValue,
     cond: SDValue,
+    status: bool,
 ) -> Option<SDValue> {
     let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 2));
     let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
-    let branch = |dag: &mut SelectionDAG, chain, dest, code, flags| {
-        let code = cond_code(dag, code);
+    let branch_on = |dag: &mut SelectionDAG, chain, dest, code, flags| {
         dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
     };
     match cond_of(dag, dag.operand(cond, 2)) {
         CondCode::SetUNe => {
-            let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
-            let first = branch(dag, chain, dest, cond::NE, flags);
-            Some(branch(dag, first, dest, cond::P, flags))
+            let (ne_flags, ne) = fp_flags(dag, lhs, rhs, cond::NE, status);
+            let first = branch_on(dag, chain, dest, ne, ne_flags);
+            let (p_flags, p) = fp_flags(dag, lhs, rhs, cond::P, status);
+            Some(branch_on(dag, first, dest, p, p_flags))
         }
         CondCode::SetOEq => {
             let users: Vec<u32> = dag.users(node).collect();
@@ -1481,12 +1522,13 @@ fn lower_float_brcond(
             }
             let false_block = dag.operand(user, 1);
             dag.update_node_operands(user.node, &[dag.operand(user, 0), dest]);
-            let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
-            let first = branch(dag, chain, false_block, cond::NE, flags);
-            Some(branch(dag, first, false_block, cond::P, flags))
+            let (ne_flags, ne) = fp_flags(dag, lhs, rhs, cond::NE, status);
+            let first = branch_on(dag, chain, false_block, ne, ne_flags);
+            let (p_flags, p) = fp_flags(dag, lhs, rhs, cond::P, status);
+            Some(branch_on(dag, first, false_block, p, p_flags))
         }
         _ => {
-            let (flags, code) = float_flags(dag, cond)?;
+            let (flags, code) = float_flags(dag, cond, status)?;
             Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
         }
     }
