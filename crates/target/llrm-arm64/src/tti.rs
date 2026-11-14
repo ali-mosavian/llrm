@@ -441,11 +441,21 @@ pub(crate) fn vector_arithmetic_cost(
     ty: VectorTy,
     kind: CostKind,
 ) -> Option<Cost> {
-    if kind != CostKind::RecipThroughput {
+    if kind == CostKind::Latency {
         return None;
     }
     let (first, lane) = vector_pieces(ty)?;
     let float = ty.lane.is_float();
+    // L5233-5306: only the throughput kind is priced further (`BaseT` for a
+    // floating-point operation, 1); an integer operation is `LT.first` in
+    // every kind.
+    if kind != CostKind::RecipThroughput && float {
+        return matches!(
+            op,
+            ArithOp::FAdd | ArithOp::FSub | ArithOp::FMul | ArithOp::FDiv | ArithOp::FNeg
+        )
+            .then_some(Cost::BASIC);
+    }
     match op {
         ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor if !float => Some(Cost::of(first)),
         ArithOp::Shl | ArithOp::LShr | ArithOp::AShr if !float => Some(Cost::of(first)),
@@ -914,7 +924,7 @@ impl Tti for AArch64 {
         users: &[llrm_mir::tti::ExtUser],
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        if cost_kind != CostKind::RecipThroughput {
+        if cost_kind == CostKind::Latency {
             return None;
         }
         crate::tti_vector::ext_cost(kind, dst, src, users)
@@ -1658,7 +1668,6 @@ impl Lowering for AArch64Lowering {
         op == llrm_mir::lowering::OverflowOp::UAdd && llrm_mir::lowering::simple_int(bits)
     }
 }
-
 
 /// The instructions of `x * m` as `performMulCombine` leaves it (dag/combine.rs
 /// `combine_mul`): `2^N + 1` is one shifted add, `2^N - 1` a shift and a `sub`,
