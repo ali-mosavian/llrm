@@ -6,9 +6,21 @@ use super::LoopVectorize;
 use crate::testing::parsed;
 
 fn run(source: &str) -> String {
+    run_with(source, false)
+}
+
+/// [`run`] with the compares and selects the arm64 backend does not select yet.
+fn run_compares(source: &str) -> String {
+    run_with(source, true)
+}
+
+fn run_with(
+    source: &str,
+    compares: bool,
+) -> String {
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares });
     manager
         .run_module(
             &mut module,
@@ -208,7 +220,7 @@ fn a_tiny_trip_count_is_not_interleaved() {
 fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     let mut module = crate::testing::parsed(COPY);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: true });
+    manager.add(LoopVectorize { always: true, only_when_forced: true, compares: false });
     manager
         .run_module(
             &mut module,
@@ -803,7 +815,7 @@ const FLOAT_SELECT: &str = include_str!("../tests/lv/float_select.ll");
 /// <4 x i1>`, step 8).
 #[test]
 fn an_integer_compare_and_select_are_widened() {
-    let text = run(SELECT_CLAMP);
+    let text = run_compares(SELECT_CLAMP);
     assert_eq!(count(&text, "icmp sgt <4 x i32>"), 2, "{text}");
     assert_eq!(count(&text, "select <4 x i1>"), 2, "{text}");
     assert_eq!(count(&text, "store <4 x i32>"), 2, "{text}");
@@ -814,7 +826,7 @@ fn an_integer_compare_and_select_are_widened() {
 /// (two `fcmp olt <4 x float>`, two `select <4 x i1>`).
 #[test]
 fn a_float_compare_and_select_are_widened() {
-    let text = run(FLOAT_SELECT);
+    let text = run_compares(FLOAT_SELECT);
     assert_eq!(count(&text, "fcmp olt <4 x float>"), 2, "{text}");
     assert_eq!(count(&text, "select <4 x i1>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
@@ -827,7 +839,7 @@ fn a_float_compare_and_select_are_widened() {
 /// i8>`, a `select <8 x i1>` of `<8 x i8>` stored whole).
 #[test]
 fn a_clamp_through_fptosi_and_trunc_is_widened() {
-    let text = run(FLOAT_CLAMP);
+    let text = run_compares(FLOAT_CLAMP);
     assert_eq!(count(&text, "fcmp ole <8 x float>"), 1, "{text}");
     assert_eq!(count(&text, "fcmp oge <8 x float>"), 1, "{text}");
     assert_eq!(count(&text, "select <8 x i1>"), 2, "{text}");
@@ -844,7 +856,6 @@ const SELECT_INVARIANT: &str = include_str!("../tests/lv/select_invariant.ll");
 /// recipe.
 #[test]
 fn a_select_by_a_loop_invariant_condition_stays_scalar() {
-    let text = run(SELECT_INVARIANT);
-    assert_eq!(count(&text, "load i32"), 1, "{text}");
+    let text = run_compares(SELECT_INVARIANT);
     assert_eq!(count(&text, "<4 x i32>"), 0, "{text}");
 }

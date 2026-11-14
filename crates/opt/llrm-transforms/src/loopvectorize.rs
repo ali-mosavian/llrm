@@ -46,12 +46,12 @@
 //!   (`VPWidenIntOrFpInductionRecipe`): the integer induction read as a value,
 //!   or its `trunc`; a floating-point induction is not.
 //! - LVP7 recipes also include `icmp`, `fcmp` (read only by the condition of a
-  select) and `select` by such a compare (`VPWidenRecipe`,
-  `VPWidenSelectRecipe`), where the backend selects vector compares
-  (`Tti::selects_vector_compares`). A select by a loop-invariant condition
-  (a scalar `i1` in the pin) and a compare read otherwise (an `i1` vector
-  `and`/`zext`) stay scalar. Exit: LV-S1 (owner llrm-arm64-vec, 2026-11-27).
-- LVP4 the new instructions carry no metadata (`!tbaa`, `!alias.scope`).
+//!   select) and `select` by such a compare (`VPWidenRecipe`,
+//!   `VPWidenSelectRecipe`), where the backend selects vector compares
+//!   (`Tti::selects_vector_compares`). A select by a loop-invariant condition
+//!   (a scalar `i1` in the pin) and a compare read otherwise (an `i1` vector
+//!   `and`/`zext`) stay scalar. Exit: LV-S1 (owner llrm-arm64-vec, 2026-11-27).
+//! - LVP4 the new instructions carry no metadata (`!tbaa`, `!alias.scope`).
 //!
 //! # Runs
 //! At `loop-vectorize` (l.1354 of `PassBuilderPipelines.cpp`), only where the
@@ -94,6 +94,9 @@ pub struct LoopVectorize {
     /// frontend of llrm emits that hint, so a forced loop is not looked
     /// for. Owner arm64-vec, exit 2026-11-24.
     pub only_when_forced: bool,
+    /// Widen compares and selects whatever the target says of its backend
+    /// (the unit tests').
+    pub compares: bool,
 }
 
 /// What an operand of a widened instruction is.
@@ -219,19 +222,21 @@ fn element_ty(
 }
 
 /// Whether every vector of the widened loop is a whole number of registers
-/// (`VF` lanes of its element type, of each operand's too); an integer vector
-/// of half a register is the D-register type. A compare's `i1` result has no
-/// register: the target's compare makes it.
+/// (`VF` lanes of its element type, of each operand's too). `d_registers`: an
+/// integer vector of half a register is the D-register type, which the
+/// backend selects where it selects vector compares. A compare's `i1` result
+/// has no register: the target's compare makes it.
 fn fills_registers(
     cx: &Cx,
     widening: &Widening,
     vf: u32,
     register_bits: u32,
+    d_registers: bool,
 ) -> bool {
     let whole = |ty: TypeId| {
         let bits = u64::from(vf) * u64::from(cx.layout.size_bits(&cx.context.types, ty));
         bits % u64::from(register_bits) == 0
-            || (matches!(cx.context.types.get(ty), Type::Int(_)) && bits == u64::from(register_bits) / 2)
+            || (d_registers && matches!(cx.context.types.get(ty), Type::Int(_)) && bits == u64::from(register_bits) / 2)
     };
     widening
         .steps
@@ -1659,7 +1664,7 @@ impl FunctionPass for LoopVectorize {
                 let memory_checks = rtc.need.then(|| rtc.clone());
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
                 let dep = lai.dep_checker();
-                let widen_compares = self.always || tti.selects_vector_compares();
+                let widen_compares = self.compares || tti.selects_vector_compares();
                 let vector = match extract(&cx, se, found, &legality, widen_compares) {
                     Ok((recipes, widening)) => {
                         let facts = LoopFacts {
@@ -1674,7 +1679,9 @@ impl FunctionPass for LoopVectorize {
                             has_reductions: !legality.reductions.is_empty(),
                         };
                         match plan(&*tti, &facts) {
-                            Ok(chosen) if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits()) => {
+                            Ok(chosen)
+                                if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits(), widen_compares) =>
+                            {
                                 // DEVIATE LV-D6 (owner llrm-arm64-vec, exit
                                 // LV-W4): a
                                 // vector of lanes of two widths has one of them
