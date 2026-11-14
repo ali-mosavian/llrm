@@ -3455,17 +3455,19 @@ mod post_ra {
     }
 }
 
-/// `x * 9` at the size level was `lda lo; sta t; ...; ldx #3; loop; ...; lda
-/// t`: a copy of the shifted byte and its reload, 30 bytes and 100 clocks,
-/// against 26 and 69 for the shifts kept in `a` (k_mulax9; the loop was larger
-/// and slower than the speed level's code). `shift_loop_in_a` takes the run in
-/// `a` where the final text is shorter; a shift where it is not stays the loop.
+/// `x * 9` at the size level: the word arrives in A:X and is stored to its
+/// cells, which the counted loop shifts in place (23 B); three steps kept in
+/// `a` were 26. Before the A:X entry the loop needed a copy of the shifted byte
+/// and a reload (30 B against 26 for the run in `a`, k_mulax9), and
+/// `shift_loop_in_a` took the run; the pass still decides the shapes that keep
+/// that copy.
 #[test]
-fn a_short_word_shift_stays_in_a_where_that_is_shorter() {
+fn a_short_word_shift_is_the_loop_where_that_is_shorter() {
     let ir = "define i16 @m9(i16 %x) {\n  %p = mul i16 %x, 9\n  ret i16 %p\n}";
     let text = compile_at(ir, "m9", 16, Tuning::SIZE);
-    assert!(!text.contains("dex") && !text.contains("dey"), "a loop for three shifts:\n{text}");
-    assert!(text.matches("asl a").count() == 3, "{text}");
+    assert!(text.contains("dey") || text.contains("dex"), "no loop for three shifts:\n{text}");
+    let size = llrm_6502::timing::estimate(llrm_6502::dagisel::hooks::Cpu::Mos6502, &text).unwrap().bytes;
+    assert!(size <= 24, "{size} B:\n{text}");
     for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
         let want = x.wrapping_mul(9);
         let setup = args(&[w16(x)]);
