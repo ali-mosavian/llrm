@@ -2498,7 +2498,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        let op = self.dag.opcode(node);
+        let mut op = self.dag.opcode(node);
+        // `tryToFoldExtOfLoad`'s `NonNegZExt`: a `zext nneg` of a plain load
+        // that a signed compare reads is a `sextload`, so the compare needs
+        // no mask.
+        if op == ISD::ZeroExtend
+            && info.ext.is_none()
+            && self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+            && self.dag.users(load).any(|user| {
+                let user = SDValue { node: user, res: 0 };
+                self.dag.opcode(user) == ISD::SetCC
+                    && matches!(
+                        self.dag.node(self.dag.operand(user, 2)).data,
+                        NodeData::CondCode(cc) if cc.is_signed_int()
+                    )
+            })
+        {
+            op = ISD::SignExtend;
+        }
         let wanted = match op {
             ISD::ZeroExtend => LoadExt::ZExtLoad,
             ISD::SignExtend => LoadExt::SExtLoad,
