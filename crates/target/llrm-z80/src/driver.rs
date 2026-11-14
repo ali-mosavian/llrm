@@ -170,6 +170,9 @@ fn program_of(
         // +2 B and Oz +82k T, compound_assignment_types Os/Oz +2 B. Layout
         // and allocation noise after the pin's own plan; no pass is wrong.
         options.lower_switches = false;
+        // Bytes first at every level (2026-11-14): no byte is priced in clocks at -O2/-O3, so the inliner, the
+        // unroller and the idiom pass hold to the pin's thresholds as at -O1.
+        options.speed_rate = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
         // and `memcmp` (SDCC's libc has no `bcmp`).
         options.library = llrm_mir::libfunc::Routine::stated(["strlen", "memcmp"], |name| format!("_{name}"), 0);
