@@ -30,7 +30,8 @@ fn a_stack_argument_read_at_entry_keeps_the_saves_at_entry() {
     let text = std::fs::read_to_string(dir.join("d.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let at = |what: &str| lines.iter().position(|line| line.starts_with(what));
-    let (push, load) = (at("push").expect("a saved register"), at("mov ecx, dword ptr [esp").expect("the argument load"));
+    let (push, load) =
+        (at("push").expect("a saved register"), at("mov ecx, dword ptr [esp").expect("the argument load"));
     assert!(push < load, "the saves wait for a later block while the entry reads the argument:\n{text}");
     let popped_then_jumped = lines.windows(2).any(|pair| pair[0].starts_with("pop") && pair[1].starts_with("jmp"));
     assert!(!popped_then_jumped, "an epilogue that jumps to a shared bare ret:\n{text}");
