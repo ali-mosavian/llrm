@@ -241,7 +241,7 @@ fn program(
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
             for module in &mut program.modules {
-                crate::staticlocals::applied(module, request.level != Level::Os)?;
+                crate::staticlocals::applied(module)?;
             }
         }
     }

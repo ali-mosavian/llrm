@@ -1854,6 +1854,12 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
+    /// (gcc's `ipa-cp-max-recursive-depth` is 8).
+    fn ipa_cp_max_clones(&self) -> usize {
+        4
+    }
+
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
     /// constants fold enough of it to pay the copy at the speed rate.
     fn peels_folded_entry(&self) -> bool {
