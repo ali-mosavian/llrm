@@ -4,7 +4,7 @@ use llrm_wasm::driver::{Level, assembly};
 
 const IR: &str = "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
 target triple = \"wasm32-unknown-unknown\"
-@table = global [3 x i64] [i64 1099511627776, i64 -2, i64 77], align 16
+@table = hidden global [3 x i64] [i64 1099511627776, i64 -2, i64 77], align 16
 declare void @report(i32)
 define i32 @f() {
   %b = load i64, ptr getelementptr inbounds nuw (i8, ptr @table, i32 8), align 8

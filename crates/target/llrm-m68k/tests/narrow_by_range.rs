@@ -39,8 +39,14 @@ fn a_quotient_times_a_counter_is_a_half_multiply_at_o2() {
     assert!(asm.lines().any(|line| line.trim_start().starts_with("mulu")), "{asm}");
 }
 
+/// #9726 narrows a proven 16-bit multiply at every level: a `mulu` (2 B) where the call is two pushes, a `jsr` and a
+/// pop. The kernel calls `sink` each trip: without it -Os evaluates the whole loop to a constant (8 B) and no
+/// multiply is left to look at.
 #[test]
-fn the_multiply_libcall_stays_at_size_and_o1() {
-    assert_eq!(calls("68000", Level::Os, "__mulsi3"), 1);
-    assert_eq!(calls("68000", Level::O1, "__mulsi3"), 1);
+fn a_proven_halfword_multiply_is_a_mulu_at_size_and_o1() {
+    for level in [Level::Os, Level::O1] {
+        assert_eq!(calls("68000", level, "__mulsi3"), 0, "{level:?}");
+        let asm = assembly(KERNEL, cpu_of("68000").unwrap(), level).unwrap();
+        assert!(asm.lines().any(|line| line.trim_start().starts_with("mulu")), "{level:?}:\n{asm}");
+    }
 }

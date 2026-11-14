@@ -47,6 +47,13 @@ latch if they are joined by a jump.
   sits in a preheader whose analyses the rotation is changing.
 - R6 A target with no cost model (`Machine::tti`) is priced by the generic
   profile, `llrm_mir::tti::Basic`: a pass names no target crate.
+- RL-EXITING-LATCH (target opt-in, owner x87, exit 2026-11-24): a loop whose latch
+  already exits is also rotated when the copy of its header folds away in the
+  preheader, guard and all (`Tti::rotation_of_exiting_latch_when_guard_folds`,
+  m32). The pin rotates it only if a header phi dies or the exit count becomes
+  computable; gcc's `ch_base::copy_headers` copies any loop header that holds
+  the exit test. mandel -O1 m32: `x * x` with `x = 0` ran on the first
+  iteration, 2 `imul` a pixel.
 
 ## Example
 Before:

@@ -938,6 +938,10 @@ impl Tti for X86 {
         self.tuning.speed_inline_rate_at_o1
     }
 
+    fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
+        self.tuning.rotate_exiting_latch_when_guard_folds
+    }
+
     fn inline_trials_at_o1(&self) -> bool {
         self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
@@ -1226,6 +1230,12 @@ impl Tti for X86 {
 
     fn add_to_or_disjoint(&self) -> bool {
         self.tuning.add_to_or_disjoint
+    }
+
+    /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
+    /// vectors plan, PR-A).
+    fn vector_values(&self) -> bool {
+        self.sse2 && self.quad
     }
 
     fn opt_size_inline_chain_trial(&self) -> bool {

@@ -3203,6 +3203,30 @@ pub fn price_emitted(
     price_in_loops(&relax(lines.to_vec(), speed))
 }
 
+/// [`price_emitted`] with the functions its lines call: each by name with how often it runs for one entry of
+/// this function (the frequency of the block the call is in, and the trips of a loop of an expansion). A call
+/// to a runtime routine (`__mulsi3`) is priced by [`price_in_loops`] already; the callees named here are the
+/// module's own, whose clocks the caller does not hold.
+pub fn price_emitted_calls(
+    lines: &[Line],
+    speed: bool,
+) -> ((u32, u64), Vec<(String, f64)>) {
+    let lines = relax(lines.to_vec(), speed);
+    let price = price_in_loops(&lines);
+    let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
+    let trips = local_loop_trips(&lines);
+    let mut calls = Vec::new();
+    for ((line, weight), trips) in weighted(&lines, &frequencies).iter().zip(&trips) {
+        let Line::Inst(text) = line else { continue };
+        let Some(name) = text.strip_prefix("call ").or_else(|| text.strip_prefix("jp ")) else { continue };
+        let name = name.trim();
+        if name.starts_with('_') && !name.starts_with("__") {
+            calls.push((name.to_owned(), weight * trips));
+        }
+    }
+    (price, calls)
+}
+
 /// The bytes of one printed line, jumps being the three-byte form.
 fn bytes_of(line: &Line) -> u32 {
     let Line::Inst(text) = line else { return 0 };

@@ -1568,3 +1568,44 @@ declare i32 @llvm.cttz.i32(i32, i1)
     assert!(names.iter().any(|n| n == "bsf"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("cmov")), "{names:?}");
 }
+
+/// `xor (zext i32 a), (zext i32 b)` stayed two zero-extending loads and a 64-bit `xor` of registers: the pin's
+/// `hoistLogicOpWithSameOpcodeHands` makes it `zext (xor a, b)`, a 32-bit `xor` with a memory operand
+/// (merge_icmps_fields `same` m64 -O1, 22 B against the pin's 19).
+#[test]
+fn an_xor_of_two_zero_extended_words_is_a_word_xor_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define zeroext i1 @same(ptr %0, ptr %1) {
+  %3 = load i64, ptr %0, align 4
+  %4 = load i64, ptr %1, align 4
+  %5 = xor i64 %3, %4
+  %6 = getelementptr i8, ptr %0, i64 8
+  %7 = load i32, ptr %6, align 4
+  %8 = getelementptr i8, ptr %1, i64 8
+  %9 = load i32, ptr %8, align 4
+  %10 = zext i32 %7 to i64
+  %11 = zext i32 %9 to i64
+  %12 = xor i64 %10, %11
+  %13 = or i64 %5, %12
+  %14 = icmp ne i64 %13, 0
+  %15 = zext i1 %14 to i32
+  %16 = icmp eq i32 %15, 0
+  ret i1 %16
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "same", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let widths: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("xor"))
+        .filter_map(|w| match w.dests.first() {
+            Some(crate::model::ir::Loc::Held(h)) => Some(h.width),
+            _ => None,
+        })
+        .collect();
+    assert!(widths.contains(&4), "one xor is a word: {widths:?}");
+}

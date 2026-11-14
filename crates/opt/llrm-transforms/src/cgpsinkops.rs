@@ -19,9 +19,8 @@
 //! # Runs
 //! In `cgpaddr`'s run, before `SinkCast`.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::Context;
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, Use, ValueDef};
 use llrm_mir::opcode::Opcode;
@@ -85,7 +84,7 @@ fn operands_sunk(
         to_replace.push(at);
     }
     let mut changed = false;
-    let mut made: HashMap<InstId, InstId> = HashMap::new();
+    let mut made: IdMap<InstId, InstId> = IdMap::new();
     let mut maybe_dead: Vec<InstId> = Vec::new();
     for at in to_replace {
         let original = function.instruction(at.user).operands[at.index as usize];

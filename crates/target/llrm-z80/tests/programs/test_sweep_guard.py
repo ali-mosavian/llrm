@@ -36,6 +36,17 @@ class NotABar(unittest.TestCase):
         self.assertIsNone(guard.incomparable((corpus / "volatile_bitfield_aligned.c").read_text()))
 
 
+    def test_a_program_that_names_long_double_is_not_a_bar(self):
+        """long_double_arguments read 7801 B / 241,900 T against SDCC's 3167 / 87,501 (x2.76 on both axes at every level): SDCC's
+        long double is 32 bits, ours the x87's 80 (f64 library). Every program the z80 sweep selects that names `long double` in code
+        says so with a `// bar: not comparable` line, or its SDCC columns grade a different program."""
+        import re
+        corpus = run.ROOT / "tests" / "run" / "c"
+        code = lambda text: re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", text, flags=re.S))
+        unmarked = [p.stem for p in run.selected(corpus) if re.search(r"\blong\s+double\b", code(p.read_text())) and guard.incomparable(p.read_text()) is None]
+        self.assertEqual(unmarked, [])
+
+
 class RowCount(unittest.TestCase):
     def test_a_program_with_no_row_fails_the_run_and_is_named(self):
         """The sweep printed `112 programs 0 failed` with 3 rows missing (2026-11-09): a program that left neither an
@@ -234,6 +245,17 @@ class LibraryChecks(unittest.TestCase):
 
     def test_the_run_checks_are_the_three_scripts_that_hid_it(self):
         self.assertEqual([Path(s).name for s in guard.LIBRARY_CHECKS], ["f64_div_clk.sh", "f64_mul_clk.sh", "mul64_check.sh", "z80_f64_split_test.sh"])
+
+
+class Selection(unittest.TestCase):
+    def test_no_selected_program_includes_a_header_the_z80_has_not_got(self):
+        """bench_io, os_console and os_exit include `llrm_os.h` / `bench_io.h` (x86 OS layer): selected for the z80, each failed
+        'file not found' in every sweep and read as a cell with no bar."""
+        src = Path(__file__).resolve().parents[5] / "tests" / "run" / "c"
+        for program in run.selected(src):
+            text = program.read_text()
+            self.assertNotIn("llrm_os.h", text, program.name)
+            self.assertNotIn("bench_io.h", text, program.name)
 
 
 class GccColumn(unittest.TestCase):

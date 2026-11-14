@@ -97,9 +97,10 @@ type Selections = std::rc::Rc<
 >;
 
 thread_local! {
-    /// The three modules most recently run through the mid-end and selection (three: -Oz compiles a module three ways, as -Oz and as
-    /// -Os twice, then reads the one it keeps), most recent first, with what each was run for.
-    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
+    /// The six modules most recently run through the mid-end and selection (-Oz compiles a module three ways, as
+    /// -Oz and as -Os twice, and each may be compiled again with its loop copies refused), most recent first, with
+    /// what each was run for.
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, usize)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
     /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
@@ -107,6 +108,9 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
     /// The request `effective` chose for the module most recently asked about.
     static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Request)>> = const { std::cell::RefCell::new(None) };
+    /// The request `effective` chose between the module's compile and its loop-copies-refused twin.
+    static COPY_CHOICE: std::cell::RefCell<Option<(String, SelectionKey, Request)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
@@ -115,14 +119,14 @@ fn selection_key(request: &Request) -> SelectionKey {
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only)),
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only, request.refuse_loop_copies)),
         environment,
     )
 }
 
 /// The request `ir` is compiled with. DEVIATE z80-oz-best-of (see `Request::oz_best_of`): at -Oz, the -Os one where
 /// the module is smaller in bytes (the runtime it reaches included), else the request itself.
-pub fn effective(
+fn effective_level(
     ir: &str,
     request: &Request,
 ) -> Result<Request, String> {
@@ -166,6 +170,130 @@ pub fn effective(
     Ok(chosen)
 }
 
+/// The request `ir` is compiled with: [`effective_level`]'s, or its twin that refuses the copies of a loop-holding
+/// callee at several sites of a loop where the module comes out cheaper after allocation. DEVIATE
+/// LOOP-COPY-TRIAL (`Tti::inline_loop_copy_trial`; owner z80, exit 2026-11-24): the pin's InlineCost prices the
+/// call away and the callee's body, not the registers the merged loop needs; idioms -O2 inlined `sum` at 13
+/// sites and `init` at 10: 4555 B / 25.58M T against 1993 B / 24.49M T with the calls. The second compile is made
+/// only where the first made such an inline.
+pub fn effective(
+    ir: &str,
+    request: &Request,
+) -> Result<Request, String> {
+    let base = effective_level(ir, request)?;
+    if base.level == Level::O0 || base.refuse_loop_copies {
+        return Ok(base);
+    }
+    let key = selection_key(&base);
+    let held = COPY_CHOICE.with(|held| {
+        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., chosen)| chosen.clone())
+    });
+    if let Some(chosen) = held {
+        return Ok(chosen);
+    }
+    let (_, _, copies) = cached_with_copies(ir, &base)?;
+    let chosen = if copies == 0 {
+        base
+    } else {
+        let other = Request { refuse_loop_copies: true, ..base.clone() };
+        let sizes = (module_priced(ir, &base), module_priced(ir, &other));
+        if std::env::var_os("LLRM_DEBUG_LOOP_COPIES").is_some() {
+            eprintln!("loop copies {copies}: with {:?}, refused {:?}", sizes.0, sizes.1);
+        }
+        let chosen = match sizes {
+            (Ok(with), Ok(without)) if refuses_loop_copies(base.level, with, without) => other,
+            _ => base,
+        };
+        // keep only the lines of the module that stays
+        let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+        KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
+        chosen
+    };
+    COPY_CHOICE.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+    Ok(chosen)
+}
+
+/// Whether the module made without the loop copies (`without`: bytes, clocks) is kept over the one with them,
+/// by the rule that picks the other variants (`prefers`): idioms -O2 4555 B / 25.58M T with, 1993 B / 24.49M T
+/// without; a tie keeps the copies.
+pub fn refuses_loop_copies(
+    level: Level,
+    with: (u32, u64),
+    without: (u32, u64),
+) -> bool {
+    prefers(level, without, with)
+}
+
+/// The module's bytes and clocks at `request.level`: its functions as emitted, each run as often as the calls to
+/// it say (a function nothing in the module calls runs once; a call runs its callee as many times as the block it
+/// is in runs), and the runtime routines they reach, each once.
+fn module_priced(
+    ir: &str,
+    request: &Request,
+) -> Result<(u32, u64), String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let speed = !matches!(request.level, Level::Os | Level::Oz);
+    let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
+    let at = std::rc::Rc::as_ptr(&selected) as usize;
+    let names: Vec<&str> = selected.iter().map(|(name, ..)| name.as_str()).collect();
+    let mut own = vec![0u64; names.len()];
+    let mut calls: Vec<Vec<(usize, f64)>> = vec![Vec::new(); names.len()];
+    for (number, (name, ..)) in selected.iter().enumerate() {
+        let lines = lines_in(&selected, &alternatives, name, number, request)?;
+        let ((one_bytes, one_clocks), called) = expand::price_emitted_calls(&lines, speed);
+        bytes += one_bytes;
+        own[number] = one_clocks;
+        for (callee, times) in called {
+            if let Some(to) = names.iter().position(|one| format!("_{one}") == callee || *one == callee) {
+                calls[number].push((to, times));
+            }
+        }
+        reached.extend(crate::runtime_size::referenced(&lines));
+        KEPT_LINES.with(|kept| kept.borrow_mut().insert((at, name.clone(), number), lines));
+    }
+    // the runs of each function from the roots down, a back edge of a recursion ignored
+    let mut called = vec![false; names.len()];
+    for list in &calls {
+        list.iter().for_each(|(to, _)| called[*to] = true);
+    }
+    let mut runs = vec![0.0f64; names.len()];
+    let mut state = vec![0u8; names.len()];
+    let mut order = Vec::new();
+    for root in (0..names.len()).filter(|&one| !called[one]) {
+        runs[root] = 1.0;
+        let mut stack = vec![(root, 0usize)];
+        state[root] = 1;
+        while let Some((function, next)) = stack.last_mut() {
+            match calls[*function].get(*next).copied() {
+                Some((to, _)) => {
+                    *next += 1;
+                    if state[to] == 0 {
+                        state[to] = 1;
+                        stack.push((to, 0));
+                    }
+                }
+                None => {
+                    state[*function] = 2;
+                    order.push(*function);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    let mut position = vec![usize::MAX; names.len()];
+    order.iter().rev().enumerate().for_each(|(at, function)| position[*function] = at);
+    for &function in order.iter().rev() {
+        for &(to, times) in &calls[function] {
+            if position[to] > position[function] {
+                runs[to] += runs[function] * times;
+            }
+        }
+    }
+    let clocks = own.iter().zip(&runs).map(|(own, runs)| *own as f64 * runs.max(1.0)).sum::<f64>().round() as u64;
+    let image = crate::data::image_bytes(&crate::data::text_at(ir, request)?);
+    Ok((bytes + crate::runtime_size::reached(&reached) + image, clocks))
+}
+
 /// The module's code bytes at `request.level`: its functions as emitted and the runtime routines they reach, each
 /// once.
 fn module_bytes(
@@ -201,26 +329,39 @@ fn cached_both(
     ir: &str,
     request: &Request,
 ) -> Result<(Selections, Selections), String> {
+    cached_with_copies(ir, request).map(|(one, other, _)| (one, other))
+}
+
+/// [`cached_both`] and the inlines of a loop-holding callee at several sites of a loop its mid-end made
+/// (`driver::loop_copies_made`).
+fn cached_with_copies(
+    ir: &str,
+    request: &Request,
+) -> Result<(Selections, Selections, usize), String> {
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
     let key = selection_key(request);
     let held = SELECTED.with(|held| {
-        held.borrow().iter().find(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
+        held.borrow()
+            .iter()
+            .find(|(text, was, ..)| text == ir && *was == key)
+            .map(|(_, _, one, other, copies)| (one.clone(), other.clone(), *copies))
     });
     if let Some(one) = held {
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (main, alternatives) = selections_with_alternatives(ir, request)?;
+    let copies = crate::driver::loop_copies_made();
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
-        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
-        held.truncate(3);
+        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies));
+        held.truncate(6);
     });
-    Ok((one, other))
+    Ok((one, other, copies))
 }
 
 /// [`machine_function`], with or without the return blocks copied into their

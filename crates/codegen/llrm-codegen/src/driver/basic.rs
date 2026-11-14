@@ -528,13 +528,15 @@ fn written_basic_inner(
     for (name, _items) in &module.data {
         if named.insert(name.clone()) {
             let private = module.private.contains(name);
-            segments.push(objbuild::Segment::new(name, Role::Data, !private));
+            segments.push(objbuild::Segment::new(name, uninitialised_role(name), !private));
         }
     }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.code_model());
+        let role = segments[index].role;
+        let held = if role == Role::Bss { holes(items) } else { items.clone() };
+        objbuild::_data(&mut segments[index], index, &held, &mut symbols, module.object.code_model());
     }
     if module.stack > 0 {
         let mut stack = objbuild::Segment::new("STACK", Role::Stack, true);
@@ -717,6 +719,38 @@ pub fn finalized(
         blocks.push(block.with_insns(instructions));
     }
     Ok(Finalized { body: body.with_blocks(blocks), callees: sites })
+}
+
+/// The routine a module calls where its runtime does not zero `_BSS` (the Microsoft ones): at its
+/// entry and after each CLEAR, whose B$SCLR zeroes BC_DATA only.
+pub const ZERO_BSS: &str = "$QB$ZBSS";
+/// The routine's code around its two `_BSS` offsets: `push di; push es; push ds; pop es; mov di, start`,
+/// then `mov cx, end` and `sub cx, di; shr cx, 1; xor ax, ax; cld; rep stosw; pop es; pop di`.
+const ZEROING_ENTER: [u8; 5] = [0x57, 0x06, 0x1E, 0x07, 0xBF];
+const ZEROING_COUNT: [u8; 1] = [0xB9];
+const ZEROING_FINISH: [u8; 11] = [0x2B, 0xCF, 0xD1, 0xE9, 0x33, 0xC0, 0xFC, 0xF3, 0xAB, 0x07, 0x5F];
+/// What zeroing costs: the routine (its code, two offset words, a frame of `push bp; mov bp, sp` and `pop bp`, a
+/// `ret`) and one call to it (`push cs; call near`). Zero data of at most this many bytes is cheaper stored.
+pub const ZEROING_COST: usize = ZEROING_ENTER.len() + ZEROING_COUNT.len() + ZEROING_FINISH.len() + 2 * 2 + (1 + 2 + 1) + 1 + (1 + 3);
+/// The two ends of `_BSS`, which the routine zeroes between.
+const BSS_START: &str = "$QB$BSS";
+const BSS_END: &str = "$QB$BSSE";
+
+/// `ZERO_BSS`: `rep stosw` over `_BSS` with the registers it uses kept (x86-16, as every module of a
+/// Microsoft runtime is). A far routine, called as the runtime's are.
+fn zeroing_routine(
+    registers: llrm_target::FrameRegisters,
+    regs: Regs,
+) -> masm::Procedure {
+    use masm::InlinePart::{Bytes, Fixup};
+    let parts = vec![
+        Bytes(ZEROING_ENTER.to_vec()),
+        Fixup("offset".into(), BSS_START.into(), 0),
+        Bytes(ZEROING_COUNT.to_vec()),
+        Fixup("offset".into(), BSS_END.into(), 0),
+        Bytes(ZEROING_FINISH.to_vec()),
+    ];
+    masm::Procedure { far: true, ..masm::routine_of_parts(ZERO_BSS, parts, registers, regs) }
 }
 
 /// The main body's symbol.
@@ -1043,6 +1077,21 @@ pub fn assembled(
     for segment in &object.segments {
         data.push((segment.name.clone(), timed("data layout", || laid_out(module, segment, &names))?));
     }
+    // A module whose `_BSS` holds nothing needs no zeroing: its calls lay down no code.
+    let bss = data
+        .iter()
+        .any(|(name, datums)| name == "_BSS" && datums.iter().any(|one| !matches!(one, masm::Datum::Label(_) | masm::Datum::Align(_))));
+    if referenced.remove(ZERO_BSS).is_some() {
+        if bss {
+            // The statement table stays the final code procedure.
+            let last = procedures.len() - 1;
+            procedures.insert(last, zeroing_routine(options.arch.frame_registers(), Regs(options.arch.registers())));
+        } else {
+            for callee in procedures.iter_mut().flat_map(|one| one.callees.values_mut()).filter(|one| one.name == ZERO_BSS) {
+                callee.code = vec![masm::InlinePart::Bytes(Vec::new())];
+            }
+        }
+    }
     let mut pooled = Vec::new();
     if main_frame > 0 {
         pooled.extend([
@@ -1251,6 +1300,24 @@ fn procedure(
     Ok((procedure, machined.landing, statics))
 }
 
+/// The BSS class's segments: the start-up zeroes them and the linker stores none of them.
+fn uninitialised_role(name: &str) -> Role {
+    if matches!(name, "_BSS" | "BSSB") { Role::Bss } else { Role::Data }
+}
+
+/// `items` with each run of zero bytes a hole: a zero byte in the image would make the linker store the segment up to it.
+fn holes(items: &[masm::Datum]) -> Vec<masm::Datum> {
+    items
+        .iter()
+        .map(|item| match item {
+            masm::Datum::Bytes(bytes) if bytes.iter().all(|byte| *byte == 0) => {
+                masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None })
+            }
+            other => other.clone(),
+        })
+        .collect()
+}
+
 /// `segment`'s data: a segment the module header names starts with its
 /// label, and each global lies where the frontend states. Refuses data
 /// naming the code past the header, which the recompile moves.
@@ -1263,6 +1330,9 @@ fn laid_out(
     let mut out = Vec::new();
     if let Some(&(_, _, label)) = NAMED.iter().find(|(_, one, _)| one == name) {
         out.push(masm::Datum::Label(masm::Label { name: label.to_owned() }));
+    }
+    if name == "_BSS" {
+        out.push(masm::Datum::Label(masm::Label { name: BSS_START.to_owned() }));
     }
     let mut offset = 0;
     for item in &segment.items {
@@ -1310,6 +1380,11 @@ fn laid_out(
     }
     if segment.size.is_some_and(|size| size != offset) {
         return Err(format!("{name} holds {offset:#x} of its {:#x} bytes", segment.size.unwrap_or_default()));
+    }
+    // The routine zeroes words: the end is even.
+    if name == "_BSS" {
+        out.push(masm::Datum::Align(masm::Align { to: 2 }));
+        out.push(masm::Datum::Label(masm::Label { name: BSS_END.to_owned() }));
     }
     Ok(out)
 }

@@ -204,8 +204,11 @@ pub fn optimized_with(
     // `BranchFolder` ahead of placement: in the order the blocks were made,
     // where a block falling into the common successor takes any tail.
     let hoisted = _hoisted(body);
-    let (early, any_early) = tails_merged(hoisted.clone(), size, calls, false, cpu.tail_merge_pin_faithful)?;
-    let start = if any_early { early.with_blocks(_explicit(&early)?) } else { hoisted };
+    // `OptimizeBranches` changes the function whether or not a tail merged: the
+    // placement sees a select's empty `copy0MBB` gone, not a block to fall
+    // into.
+    let (early, _) = tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?;
+    let start = early.with_blocks(_explicit(&early)?);
     let mut placed = threaded(&_placed_ext(
         &start,
         size,

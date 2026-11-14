@@ -74,7 +74,7 @@ impl Ast<'_> {
             }
             from = at + 1;
         }
-        self.out.push(Statement::Data { values, span: self.span(keyword) });
+        self.out.push(Statement::Data { values, text: raw.clone(), span: self.span(keyword) });
         Ok(())
     }
 
