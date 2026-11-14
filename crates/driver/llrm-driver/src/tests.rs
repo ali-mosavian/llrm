@@ -4587,6 +4587,62 @@ fn an_unaligned_16_byte_copy_is_movups_at_m64() {
     assert_eq!(count, 2, "{listing}");
 }
 
+/// IR holding 128-bit vector values: a copy, a zero store, and a value live
+/// across a call.
+const VECTOR_COPIES: &str = "target datalayout = \"@m64-datalayout@\"\n\
+    target triple = \"x86_64-unknown-linux-gnu\"\n\
+    declare void @k(ptr)\n\
+    define void @bytes(ptr %d, ptr %s) {\n  %v = load <16 x i8>, ptr %s, align 1\n  store <16 x i8> %v, ptr %d, align 1\n  ret void\n}\n\
+    define void @words(ptr %d, ptr %s) {\n  %v = load <4 x i32>, ptr %s, align 16\n  store <4 x i32> %v, ptr %d, align 16\n  ret void\n}\n\
+    define void @zero(ptr %d) {\n  store <4 x i32> zeroinitializer, ptr %d, align 1\n  ret void\n}\n\
+    define void @kept(ptr %d, ptr %s) {\n  %v = load <16 x i8>, ptr %s, align 1\n  call void @k(ptr %d)\n  store <16 x i8> %v, ptr %d, align 1\n  ret void\n}\n";
+
+/// A `<16 x i8>` or `<4 x i32>` value was refused ("a <16 x i8> value") at m64.
+/// With `VR128` legal the pin's moves are `movups` for unaligned memory and
+/// `movaps` for 16-byte aligned, a zero is `xorps`, and a value held across a
+/// call is spilled to a 16-byte slot and reloaded whole.
+#[test]
+fn a_128_bit_vector_is_loaded_stored_and_kept_in_an_xmm_register_at_m64() {
+    let one = |name: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), VECTOR_COPIES, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    // The listing holds every function: take the lines of one.
+    let body = |listing: String, name: &str| -> String {
+        let start = listing.find(&format!("{name} proc near")).expect("the function is listed");
+        let end = listing[start..].find(&format!("{name} endp")).expect("the function ends");
+        listing[start..start + end].to_string()
+    };
+    let one = |name: &str| body(one(name), name);
+    let count = |listing: &str, mnemonic: &str| listing.lines().filter(|l| l.trim().starts_with(mnemonic)).count();
+    let bytes = one("bytes");
+    assert_eq!(count(&bytes, "movups"), 2, "{bytes}");
+    let words = one("words");
+    assert_eq!(count(&words, "movaps"), 2, "{words}");
+    let zero = one("zero");
+    assert!(zero.contains("xorps") && count(&zero, "movups") == 1, "{zero}");
+    let kept = one("kept");
+    // Not `mov dword ptr [rsp+4], xmm0`: the 4 bytes the width of a vector fell
+    // to.
+    let slot = kept.lines().filter(|l| l.contains("xmmword ptr [rsp]")).count();
+    assert!(slot == 2 && !kept.contains("dword ptr [rsp+4]"), "spilled and reloaded whole: {kept}");
+}
+
+/// A target without the vector forms keeps refusing a vector value: `-m32` and
+/// `-m16` objects do not move.
+#[test]
+fn a_128_bit_vector_is_still_refused_where_the_target_has_no_vector_forms() {
+    let body = VECTOR_COPIES.split_once("declare").map(|(_, rest)| format!("declare{rest}")).unwrap();
+    for (target, header) in [
+        ("-m32", "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i386-unknown-linux-gnu\"\n"),
+        ("-m16", "target datalayout = \"@m16-datalayout@-ni:2:3\"\ntarget triple = \"i386-unknown-unknown-code16\"\n"),
+    ] {
+        let error = compiled(&flags(&[target, "-O2", "--isel=dag"]), &format!("{header}{body}"), "bytes").err();
+        let error = format!("{error:?}");
+        assert!(error.contains("a <16 x i8> value"), "{target}: {error}");
+    }
+}
+
 /// A one-slot frame before a sibling call was `sub rsp, 8` ... `add rsp, 8` (8 B) where the pin's `emitSPUpdate` with
 /// `findDeadCallerSavedReg` of the tail call is `push rax` ... `pop` (2 B): shl_long_by_one `four` O1 +4 B.
 #[test]
