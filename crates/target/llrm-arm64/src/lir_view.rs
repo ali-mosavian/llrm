@@ -803,7 +803,8 @@ fn callee_saved_fpr(id: RegId) -> bool {
 }
 
 fn fpr_order() -> Vec<RegId> {
-    (16..=31u32).chain(0..=7).chain(8..=15).map(|n| id(Class::Fpr, n)).collect()
+    // The pin's `D0..D31` (AArch64RegisterInfo.td), callee-saved d8..d15 last as `RegisterClassInfo` puts them.
+    (0..=7u32).chain(16..=31).chain(8..=15).map(|n| id(Class::Fpr, n)).collect()
 }
 
 impl AllocTarget for Arm64 {
@@ -822,6 +823,13 @@ impl AllocTarget for Arm64 {
 
     fn any() -> Class {
         Class::Gpr
+    }
+
+    /// `canJoinPhys` (RegisterCoalescer.cpp#L2080): the pin joins a copy with a
+    /// physical register only if it is reserved. Argument and result registers
+    /// are not, so their copies are left to the allocator, which hints them.
+    fn joins_pinned_copies() -> bool {
+        false
     }
 
     fn schedules_before_allocation() -> bool {
