@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// bar: none (SDCC links ___fs2slonglong: no 64-bit float conversion)
 // A double or float converted to a signed 64-bit integer (gcc.c-torture 930622-2, pr49218: "FPToSI to an i64"), truncating
 // toward zero, over values below, at and above 2^32. The unsigned conversion is #829's other half.
 #include <stdint.h>

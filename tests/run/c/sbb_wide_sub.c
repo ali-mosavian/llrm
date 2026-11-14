@@ -1,4 +1,5 @@
 // flags: -O1 | -O2
+// bar: none (SDCC wrong value)
 extern void report(long value);
 
 long long sub64(unsigned long a, unsigned long b)

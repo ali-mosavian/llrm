@@ -1,4 +1,5 @@
 // flags: -O1 | -O2 | -Os
+// bar: none (SDCC error 101: too many parameters)
 // __builtin_{add,sub,mul}_overflow of short, long and unsigned: each result and its flag, the shape clang gives
 // llvm.{u,s}{add,sub,mul}.with.overflow (a flag the legalizer promoted, or an i64 it expanded, was a refusal).
 extern void report(long value);

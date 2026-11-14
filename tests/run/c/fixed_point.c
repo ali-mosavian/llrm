@@ -1,4 +1,5 @@
 // flags: -O1 -ffixed-point | -O2 -ffixed-point | -Os -ffixed-point
+// bar: none (SDCC syntax error at _Sat)
 // clang's fixed-point types: `*` is llvm.{s,u}mul.fix (.sat for _Sat), `<<` on a _Sat type is llvm.{s,u}shl.sat. 8 to 64
 // bits, signed and unsigned, with results that saturate and that do not.
 extern void report(long value);
