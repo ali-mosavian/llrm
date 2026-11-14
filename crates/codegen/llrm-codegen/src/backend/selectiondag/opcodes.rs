@@ -56,6 +56,8 @@ pub struct OpcodeMap {
     forms: std::sync::Arc<Vec<Form>>,
     /// [`Self::scalar_sse`], asked per operand width: found once.
     scalar_sse: bool,
+    /// [`Self::vector128`]: found once.
+    vector128: bool,
     /// The answer for each name asked: every machine node of a function asks,
     /// and a name has one answer.
     asked: std::sync::Mutex<llrm_support::hash::HashMap<String, Result<usize, Unmapped>>>,
@@ -71,13 +73,21 @@ impl OpcodeMap {
     /// The map of forms read once (`llrm_target::instr::shared`).
     pub fn shared(forms: std::sync::Arc<Vec<Form>>) -> OpcodeMap {
         let scalar_sse = forms.iter().any(|form| form.name == "addsd");
-        OpcodeMap { forms, scalar_sse, asked: Default::default(), sized: Default::default() }
+        let vector128 = forms.iter().any(|form| form.name == "movups");
+        OpcodeMap { forms, scalar_sse, vector128, asked: Default::default(), sized: Default::default() }
     }
 
     /// Whether this target does scalar floating point in xmm registers (it has
     /// `addsd`): a floating value is then 4 or 8 bytes, not the x87's 10.
     pub fn scalar_sse(&self) -> bool {
         self.scalar_sse
+    }
+
+    /// Whether this target holds the 128-bit integer vectors in xmm registers
+    /// (it has `movups`): `v16i8`, `v8i16`, `v4i32` and `v2i64` are then legal
+    /// types.
+    pub fn vector128(&self) -> bool {
+        self.vector128
     }
 
     /// [`memory_bytes`] of `name`, memoized: every machine node asks.

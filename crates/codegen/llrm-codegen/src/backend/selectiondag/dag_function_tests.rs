@@ -443,6 +443,7 @@ fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
                     defining(at, vec![value], if at > 0 && k == 0 { vec![(at * 4) as u32] } else { vec![] })
                 })
                 .collect(),
+            ..EmitBlock::default()
         })
         .collect();
     let succ: Vec<Vec<i64>> = (0..4000).map(|at| if at + 1 < 4000 { vec![at + 1] } else { vec![] }).collect();
