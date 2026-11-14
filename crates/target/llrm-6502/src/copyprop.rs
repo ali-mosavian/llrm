@@ -36,6 +36,13 @@
 //! cell, a label or a raw line starts a new block, a jump or return ends one:
 //! all end every tracked value (the pin has regmasks and walks one block).
 //!
+//! DEVIATE MCP4 (owner alloc-small, exit 2026-12-15): the pin forwards a copy's
+//! source into an address operand (`MachineCopyPropagation` reads every use
+//! operand). The 6502's address is a zero-page pair read through `(rcN),y`, so
+//! the pair is forwarded as one: when `rcN` and `rcN+1` each hold what an
+//! adjacent pair `rcM`, `rcM+1` holds, the use reads `(rcM),y` and the copy
+//! dies (`tests/copyprop.rs`).
+//!
 //! # Where it runs
 //! After allocation, as the pin does twice: after the register rewrite
 //! ([`addOptimizedRegAlloc`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1546))
@@ -184,6 +191,33 @@ fn reads_cell(op: Op) -> bool {
     matches!(op, Lda | Ldx | Ldy | Adc | Sbc | And | Ora | Eor | Cmp | Cpx | Cpy | Bit)
 }
 
+/// The number of a zero-page register cell `rc<N>`.
+fn register_number(name: &str) -> Option<u32> {
+    name.strip_prefix("rc")?.parse().ok()
+}
+
+impl Tracker {
+    /// The adjacent pair `rcM`, `rcM+1` (other than `rcN`) that holds the value of the pair `rcN`, `rcN+1`.
+    fn earlier_pair(
+        &mut self,
+        n: u32,
+    ) -> Option<u32> {
+        let low = self.value(&Unit::Cell(format!("rc{n}")));
+        let high = self.value(&Unit::Cell(format!("rc{}", n + 1)));
+        let holds = |held: &HashMap<Unit, (u32, u32)>, cell: String, value: u32| {
+            held.get(&Unit::Cell(cell)).is_some_and(|(v, _)| *v == value)
+        };
+        self.held
+            .keys()
+            .filter_map(|unit| match unit {
+                Unit::Cell(name) => register_number(name),
+                _ => None,
+            })
+            .filter(|&m| m != n && holds(&self.held, format!("rc{m}"), low) && holds(&self.held, format!("rc{}", m + 1), high))
+            .min()
+    }
+}
+
 /// Whether the pass runs, given the value of `LLRM_6502_MCP`: on unless it is `0`.
 pub fn enabled(setting: Option<&OsStr>) -> bool {
     setting.is_none_or(|value| value != "0")
@@ -204,6 +238,13 @@ pub fn copy_propagation(asm: &mut Asm) {
             continue;
         };
         let mut inst = inst.clone();
+        // a pointer pair that copies another pair is read as that pair
+        if let Operand::IndirectY(name) = &inst.operand
+            && let Some(n) = register_number(name)
+            && let Some(m) = track.earlier_pair(n)
+        {
+            inst.operand = Operand::IndirectY(format!("rc{m}"));
+        }
         // what the rest of the block (from `lines`, as it stands) does with the flags
         let flags_dead = || flags_unread_after(&lines, at + 1);
         match (inst.op, cell_of(&inst.operand)) {

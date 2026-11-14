@@ -70,3 +70,30 @@ fn the_pass_runs_unless_the_kill_switch_is_zero() {
     assert!(enabled(Some(OsStr::new("1"))));
     assert!(!enabled(Some(OsStr::new("0"))));
 }
+
+/// A pointer copied out of another pair was read through its copy: `k_itoa`
+/// copied the frame pointer `rc0:rc1` into `rc4:rc5` for each `tmp[n]` access (4 B
+/// and 8 clocks apiece, 2026-11-14). The pair is read where it is, and the
+/// copy goes.
+#[test]
+fn a_pointer_pair_that_copies_another_is_read_as_that_pair() {
+    let mut asm = Asm::parse("  lda rc0\n  sta rc4\n  lda rc1\n  sta rc5\n  ldy #3\n  lda (rc4),y\n  rts\n");
+    copy_propagation(&mut asm);
+    drop_dead_stores(&mut asm);
+    llrm_6502::peephole::drop_dead_writes(&mut asm);
+    assert_eq!(asm.text(), "  ldy #3\n  lda (rc0),y\n  rts\n");
+}
+
+/// One byte of the pair copied is no copy of the pair: the high byte is another value.
+#[test]
+fn a_pointer_pair_whose_high_byte_differs_is_not_forwarded() {
+    let text = "  lda rc0\n  sta rc4\n  lda #1\n  sta rc5\n  ldy #3\n  lda (rc4),y\n  rts\n";
+    assert_eq!(run(text), text);
+}
+
+/// The source pair changes after the copy: the copy holds the old pointer.
+#[test]
+fn a_pointer_pair_is_not_forwarded_from_a_source_that_changed() {
+    let text = "  lda rc0\n  sta rc4\n  lda rc1\n  sta rc5\n  inc rc0\n  ldy #3\n  lda (rc4),y\n  rts\n";
+    assert_eq!(run(text), text);
+}
