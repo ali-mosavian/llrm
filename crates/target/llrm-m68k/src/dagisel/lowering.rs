@@ -775,6 +775,28 @@ fn has_non_flags_use(
     })
 }
 
+/// `combineSetCCEFLAGS` / `LowerBRCOND`'s test of a `setcc` through its
+/// extends: a `SETCC` is 0 or 1, so `(and (zext (setcc cc, flags)), 1)` is the
+/// `setcc`, and a branch on it reads `cc` of `flags`. DEVIATE M68K-SETCC-AND:
+/// the pin's M68k tests the byte (`sge; and.b #1; bne`, 6 B and 22 clk more
+/// than `bge`). Owner: x87-b. Exit 2026-12-05, when a second target needs it or
+/// the pin gains it.
+fn through_setcc(
+    dag: &SelectionDAG,
+    cond_value: SDValue,
+) -> SDValue {
+    let mut value = cond_value;
+    while matches!(
+        dag.opcode(value),
+        ISD::Truncate | ISD::ZeroExtend | ISD::AnyExtend
+    )
+        || (dag.opcode(value) == ISD::And && dag.constant(dag.operand(value, 1)) == Some(1))
+    {
+        value = dag.operand(value, 0);
+    }
+    if dag.opcode(value) == m68kisd::SETCC { value } else { cond_value }
+}
+
 /// `LowerBRCOND` and `LowerSELECT` look past the extension of a boolean to the
 /// value it extends (`(and (setcc_carry ...), 1)`, a truncate with zero high
 /// bits). A promoted `i1` condition is `sign_extend_inreg x, i1`, which is
@@ -799,6 +821,19 @@ fn look_past_boolean(
     {
         flipped ^= mask & 1 == 1;
         value = dag.operand(value, 0);
+    }
+    // a `setcc` is 0 or 1 already: the branch reads its own condition (DEVIATE
+    // M68K-SETCC-AND, above)
+    if dag.opcode(value) == ISD::SetCCCarry {
+        value = lower_setcc_carry(dag, value);
+    }
+    if dag.opcode(value) == m68kisd::SETCC {
+        if !flipped {
+            return value;
+        }
+        let code = opposite(dag.constant(dag.operand(value, 0)).unwrap_or(cond::NE));
+        let (code, flags) = (cc_operand(dag, code), dag.operand(value, 1));
+        return dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]);
     }
     let vt = dag.value_type(value);
     if vt == EVT::I32 {
@@ -1042,6 +1077,42 @@ fn lower_setcc(
     Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `combineCarryThroughADD` (X86ISelLowering.cpp, pin d1106deb71cc): a borrow
+/// that is a `setcc cs` of flags (through extends, truncates and `and 1`) is
+/// those flags, so the byte round trip (`scs`, then `add.b #-1` to make the
+/// extend flag again) is not made. DEVIATE M68K-CARRY-THROUGH: the pin's M68k
+/// has no such combine and makes the round trip (`scs; add.b #-1; subx`, 10 B
+/// and 20 clk over gcc's `subx`). Owner: x87-b. Exit 2026-12-05, when a second
+/// target needs it or the pin gains it.
+fn carry_from_flags(
+    dag: &mut SelectionDAG,
+    carry: SDValue,
+) -> Option<SDValue> {
+    let mut carry = carry;
+    while matches!(
+        dag.opcode(carry),
+        ISD::Truncate | ISD::ZeroExtend | ISD::AnyExtend
+    )
+        || (dag.opcode(carry) == ISD::And && dag.constant(dag.operand(carry, 1)) == Some(1))
+    {
+        carry = dag.operand(carry, 0);
+    }
+    match dag.opcode(carry) {
+        m68kisd::SETCC if dag.constant(dag.operand(carry, 0)) == Some(cond::CS) => Some(dag.operand(carry, 1)),
+        // the carry out of the low halves, not yet lowered: the `sub` or `add`
+        // that `lower_xalu` makes (the same node, so the low half and the carry
+        // are the one instruction)
+        opcode @ (ISD::USubO | ISD::UAddO) if carry.res == 1 => {
+            let value_vt = dag.value_type(SDValue { node: carry.node, res: 0 });
+            let (lhs, rhs) = (dag.operand(carry, 0), dag.operand(carry, 1));
+            let base = if opcode == ISD::USubO { m68kisd::SUB } else { m68kisd::ADD };
+            let arith = dag.get_node_multi(base, &[value_vt, EVT::I8], &[lhs, rhs]);
+            Some(SDValue { node: arith.node, res: 1 })
+        }
+        _ => None,
+    }
+}
+
 /// `LowerSETCCCARRY`: the comparison of `lhs` and `rhs` with a borrow in, as
 /// `subx` over the carry turned into the extend flag (`carry + -1`).
 fn lower_setcc_carry(
@@ -1053,13 +1124,15 @@ fn lower_setcc_carry(
     let mut unchanged = rhs;
     let code = translate_cc(dag, cc, &mut unchanged);
     let carry_vt = dag.value_type(carry);
-    let minus_one = dag.get_constant(u128::MAX >> (128 - carry_vt.size_in_bits()), carry_vt);
-    let carry = dag.get_node_multi(m68kisd::ADD, &[carry_vt, EVT::I8], &[carry, minus_one]);
-    let compared = dag.get_node_multi(
-        m68kisd::SUBX,
-        &[dag.value_type(lhs), EVT::I8],
-        &[lhs, rhs, SDValue { node: carry.node, res: 1 }],
-    );
+    let flags = match carry_from_flags(dag, carry) {
+        Some(flags) => flags,
+        None => {
+            let minus_one = dag.get_constant(u128::MAX >> (128 - carry_vt.size_in_bits()), carry_vt);
+            let carry = dag.get_node_multi(m68kisd::ADD, &[carry_vt, EVT::I8], &[carry, minus_one]);
+            SDValue { node: carry.node, res: 1 }
+        }
+    };
+    let compared = dag.get_node_multi(m68kisd::SUBX, &[dag.value_type(lhs), EVT::I8], &[lhs, rhs, flags]);
     let code = cc_operand(dag, code);
     dag.get_node(m68kisd::SETCC, EVT::I8, &[code, SDValue { node: compared.node, res: 1 }])
 }
@@ -1150,7 +1223,12 @@ fn lower_select(
         if let Some(lowered) = lower_setcc(dag, cond_value, cpu) {
             cond_value = lowered;
         }
+    } else if dag.opcode(cond_value) == ISD::SetCCCarry {
+        // the wide compare reads its own flags, as `LowerBRCOND` does of the
+        // `SETCC` it lowers to
+        cond_value = lower_setcc_carry(dag, cond_value);
     }
+    cond_value = through_setcc(dag, cond_value);
     cond_value = look_past_boolean(dag, cond_value);
     let (code, flags) = if dag.opcode(cond_value) == m68kisd::SETCC {
         (dag.operand(cond_value, 0), dag.operand(cond_value, 1))
@@ -1178,7 +1256,12 @@ fn lower_brcond(
         if let Some(lowered) = lower_setcc(dag, cond_value, cpu) {
             cond_value = lowered;
         }
+    } else if dag.opcode(cond_value) == ISD::SetCCCarry {
+        // the wide compare reads its own flags, as `LowerBRCOND` does of the
+        // `SETCC` it lowers to
+        cond_value = lower_setcc_carry(dag, cond_value);
     }
+    cond_value = through_setcc(dag, cond_value);
     cond_value = look_past_boolean(dag, cond_value);
     let (code, flags) = if dag.opcode(cond_value) == m68kisd::SETCC {
         let (code, cmp) = (dag.operand(cond_value, 0), dag.operand(cond_value, 1));

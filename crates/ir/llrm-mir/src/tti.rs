@@ -628,6 +628,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether the target's pipeline takes vector values
+    /// (`Machine::has_vector_mir`): a function holding one is refused
+    /// before the mid-end where it does not. Independent of
+    /// [`Self::vector_register_bits`]: a target may hold a vector value and not
+    /// widen loops.
+    fn vector_values(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
@@ -996,6 +1005,14 @@ pub trait Tti {
     /// dead globals and loops are gone, repricing a callee the folds emptied
     /// (`Options::second_inline`, which a driver may turn on at every level).
     fn inline_second_round_at_o1(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver may compile the module again with
+    /// the copies of a loop-holding callee at several sites of a loop refused, and keep the form it prices
+    /// cheaper after allocation. The pin's InlineCost has no price for the registers the merged loops lose
+    /// (its `LoopPenalty` is added at minsize callers alone). False: the cost decides.
+    fn inline_loop_copy_trial(&self) -> bool {
         false
     }
 
@@ -1418,6 +1435,16 @@ pub trait Tti {
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
+    }
+
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): whether
+    /// the -Os trial measures a loop by the cost `analyzeLoopUnrollCost`
+    /// finds once the trips' constants fold (a switch on the counter keeps
+    /// one arm a trip), not by the copies' size. gcc's `cunroll`
+    /// counts what folds away; the pin's optsize threshold is 0 and never
+    /// looks.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        false
     }
 
     /// `Tuning::unroll_trial_bytes_strict`.

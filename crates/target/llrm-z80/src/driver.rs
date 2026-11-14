@@ -88,11 +88,15 @@ pub struct Request {
     /// attribute names a per-function level of its own (no peeled switch case, no balanced tree), so an -Os compile
     /// of a module clang built at -Oz was not -Os, and the best of the two never saw what -Os makes.
     pub optsize_only: bool,
+    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the mid-end refuses the copies of a callee that holds a
+    /// loop at several sites of a loop of its caller (`llrm_transforms::trial::with_refused_loop_copies`): the
+    /// compile `compile::effective` weighs the default one against.
+    pub refuse_loop_copies: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false, refuse_loop_copies: false }
     }
 }
 
@@ -108,6 +112,29 @@ fn without_triple(text: &str) -> String {
 
 /// `text` through the mid-end at the request's level.
 pub fn program(
+    text: &str,
+    request: &Request,
+) -> Result<Program, String> {
+    let made = if request.refuse_loop_copies {
+        llrm_transforms::trial::with_refused_loop_copies(|| program_of(text, request))
+    } else {
+        program_of(text, request)
+    };
+    LOOP_COPIES.with(|count| count.set(llrm_transforms::trial::take_loop_copies()));
+    made
+}
+
+thread_local! {
+    static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The inlines of a loop-holding callee at several sites of a loop that the last [`program`] made (they are what
+/// a compile with `refuse_loop_copies` would not).
+pub fn loop_copies_made() -> usize {
+    LOOP_COPIES.with(std::cell::Cell::get)
+}
+
+fn program_of(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {

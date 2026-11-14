@@ -66,3 +66,47 @@ def test_the_header_names_the_dist_its_md5_the_harness_and_the_time(tmp_path):
     assert head[0] == "# x86-m16 owner table 2026-11-10T09:30Z (date -u)"
     assert head[1].startswith(f"# dist {tmp_path}; md5: ") and head[1].count("  ") == 3, head[1]
     assert head[2].startswith("# harness commit abc123;")
+
+
+def stft(level="O1", skeleton=None):
+    """stft_fixed at -O1 on the pair d7f7c5758f (2026-11-13): Nib 1592 B gross, bcc plain C 1224, the twin's own bar higher."""
+    nib = cell(1592, 149_000_000) | ({"io_skeleton_bytes": skeleton} if skeleton else {})
+    out = {f"stft_fixed/nib/{level}": nib, f"stft_fixed~init/c/{level}": cell(1250, 143_000_000)}
+    out |= {f"stft_fixed/bcc/{level}": cell(1224, 294_000_000), f"stft_fixed~init/bcc/{level}": cell(1500, 296_000_000)}
+    return out
+
+
+def test_a_nib_cell_with_file_io_is_read_net_of_the_fixed_std_io_skeleton_against_plain_c():
+    """m16-b netted stft_fixed by hand with the skeleton its own dist measured (383, 358, 203 on one pair, 391/366/202 on another): the cell moved with the
+    compiler under test. Net is the gross less the stored bytes, 1592 - 391 = 1201 against bcc's 1224: -23."""
+    row = by_row(stft())[("stft_fixed", "nib", "O1")]
+    assert (row[14], row[15]) == (1201, -23), row
+
+
+def test_inlining_a_skeleton_function_does_not_move_the_net_cell():
+    """The build's own skeleton (io_skeleton_bytes) falls from 391 to 340 when a std.io function is inlined into its callers; the net cell is gross less the
+    stored bytes either way, so only what the inlining does to the program's bytes (here none) moves it. Judging from the build's measure made it 1592 - 340."""
+    kept = by_row(stft(skeleton=391))[("stft_fixed", "nib", "O1")]
+    inlined = by_row(stft(skeleton=340))[("stft_fixed", "nib", "O1")]
+    assert kept[14] == inlined[14] == 1201
+
+
+def test_a_nib_cell_without_file_io_has_no_net():
+    measured = {"fib/nib/O1": cell(90, 1000), "fib/ow/O1": cell(80, 1000), "fib/bcc/O1": cell(70, 1000)}
+    row = by_row(measured)[("fib", "nib", "O1")]
+    assert (row[14], row[15]) == ("", "")
+
+
+def test_the_stored_skeleton_is_refused_once_the_skeleton_program_changed(tmp_path, monkeypatch):
+    """Stored bytes of a program that was edited since are another program's: re-measure, never subtract them."""
+    import shutil
+
+    shutil.copytree(table.bench.IO_SKELETON, tmp_path / "s")
+    (tmp_path / "s" / "io_skeleton.nib").write_text((tmp_path / "s" / "io_skeleton.nib").read_text() + "\n")
+    monkeypatch.setattr(table.bench, "IO_SKELETON", tmp_path / "s")
+    try:
+        table.bench.fixed_io_skeleton()
+    except ValueError as error:
+        assert "measure again" in str(error)
+    else:
+        raise AssertionError("an edited skeleton program kept its stored bytes")
