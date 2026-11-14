@@ -292,7 +292,7 @@ fn branches() {
             all.push(Inst::VectorBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
         }
     }
-    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
+    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr, VectorShift::Usra, VectorShift::Ssra] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
             let esize = lanes.lane_bits() as u8;
             // A left shift is 0..esize-1, a right one 1..esize.

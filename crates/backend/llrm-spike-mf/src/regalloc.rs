@@ -425,6 +425,18 @@ pub trait Target {
     ) -> Option<Self::Class> {
         None
     }
+    /// Whether the instruction `name` can write its result to a memory place
+    /// as it is, so a value it computes needs no move to get there.
+    fn writes_memory_in_place(_name: &str) -> bool {
+        false
+    }
+
+    /// Whether [`commute_accumulator`](crate::commute_accumulator) also
+    /// commutes where a source is read by instructions that work on memory
+    /// as it is. The caller learns when it did, to price the other choice.
+    fn commutes_beyond_one_use() -> bool {
+        false
+    }
     /// The instruction that stores `register` (of `class`) to frame `slot`;
     /// `None` when the target cannot spill.
     fn spill_store(

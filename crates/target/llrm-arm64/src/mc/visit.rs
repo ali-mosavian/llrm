@@ -354,8 +354,11 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
+            Inst::VectorShift { op, rd, rn, .. } => {
+                f(Fpr(rd), if op.accumulates() { Role::UseDef } else { Role::Def });
+                f(Fpr(rn), Role::Use);
+            }
             Inst::VectorLongShift { rd, rn, .. }
-            | Inst::VectorShift { rd, rn, .. }
             | Inst::VectorNot { rd, rn }
             | Inst::VectorFpUnary { rd, rn, .. }
             | Inst::VectorReduce { rd, rn, .. } => {

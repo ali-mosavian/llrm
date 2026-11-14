@@ -721,6 +721,19 @@ pub trait Tti {
         None
     }
 
+    /// `getArithmeticInstrCost` of a vector operation by `second` (`Op2Info`):
+    /// a divide by a constant is a few multiplies, not a division. The default
+    /// is the cost with no operand information.
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_arithmetic_cost(op, ty, kind)
+    }
+
     /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
     /// step the pin's `ExpandReductions` or the target's lowering makes). A
     /// port that does not yet lowers none, and no loop with a reduction is

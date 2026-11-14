@@ -926,7 +926,13 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    for (stem, op) in [("SHL", VectorShift::Shl), ("USHR", VectorShift::Ushr), ("SSHR", VectorShift::Sshr)] {
+    for (stem, op) in [
+        ("SHL", VectorShift::Shl),
+        ("USHR", VectorShift::Ushr),
+        ("SSHR", VectorShift::Sshr),
+        ("USRA", VectorShift::Usra),
+        ("SSRA", VectorShift::Ssra),
+    ] {
         let Some(lanes) = name
             .strip_prefix(stem)
             .and_then(|rest| rest.strip_prefix('v'))
@@ -935,8 +941,12 @@ fn vector_inst(
         else {
             continue;
         };
+        // The accumulating forms list the tied register first.
         return Some(match operands {
-            [Operand::Fpr(rn), Operand::Imm(amount)] => {
+            [Operand::Fpr(rn), Operand::Imm(amount)] if !op.accumulates() => {
+                Ok(Inst::VectorShift { op, lanes, rd, rn: *rn, amount: *amount as u8 })
+            }
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Imm(amount)] if op.accumulates() => {
                 Ok(Inst::VectorShift { op, lanes, rd, rn: *rn, amount: *amount as u8 })
             }
             _ => wrong(),
@@ -2273,6 +2283,7 @@ impl Emitter<'_> {
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
                         | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
+                        | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
                         | Inst::VectorInsGpr { .. }
                         | Inst::VectorInsLane { .. },
