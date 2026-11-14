@@ -525,6 +525,8 @@ pub fn finish_with(
                 // The table and blocks of a table jump are for the passes and
                 // the emitted table; the instruction is `jmp (An)`.
                 Operand::Symbol(..) | Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
+                // a word table's jump names its table; the blocks are the table's
+                Operand::Block(_) if inst.kind == Kind::Op(crate::dagisel::wordjump::NAME) => continue,
                 Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
                 Operand::Block(id) => {
                     let at = function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;

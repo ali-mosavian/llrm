@@ -28,6 +28,9 @@ pub enum Item {
     /// A jump table: the absolute address of each label, as 32-bit words
     /// (`EK_BlockAddress`).
     Table(Vec<String>),
+    /// A jump table of 16-bit offsets from its own start (`.word label -
+    /// table`), placed where the `jmp` through it ends (M68K-WORD-TABLE).
+    WordTable(Vec<String>),
     /// The source place of the instructions that follow (`.loc`): printed only
     /// for `-g`.
     Loc(crate::expand::Row),
@@ -116,6 +119,9 @@ pub struct Options {
     /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
     /// ([`crate::cmpshift`]).
     pub reuse_shift_flags: bool,
+    /// A table switch jumps through 16-bit offsets, gcc's `casesi` (DEVIATE
+    /// M68K-WORD-TABLE, [`crate::wordtable`]).
+    pub word_jump_tables: bool,
     /// A `tst` of the register an `add` of it to itself just doubled reads the
     /// carry the `add` left instead ([`crate::cmpcarry`]).
     pub reuse_shift_out_flags: bool,
@@ -224,6 +230,7 @@ impl Options {
         short: false,
         hoist_flag_setters: false,
         reuse_shift_flags: false,
+        word_jump_tables: false,
         reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
         slot_registers: false,
@@ -266,6 +273,7 @@ impl Default for Options {
             short: true,
             hoist_flag_setters: true,
             reuse_shift_flags: true,
+            word_jump_tables: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
             slot_registers: !llrm_support::env_flag!("LLRM_NO_SLOT_REG"),
@@ -612,6 +620,7 @@ pub fn items_bytes(items: &[Item]) -> usize {
             Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
             Item::Bytes(bytes) => bytes.len(),
             Item::Table(labels) => 4 * labels.len(),
+            Item::WordTable(labels) => 2 * labels.len(),
             _ => 0,
         })
         .sum()
@@ -879,6 +888,9 @@ fn items_once(
                 if options.class_split {
                     touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
                 }
+                if options.word_jump_tables {
+                    crate::wordtable::word_offset_tables(&mut function);
+                }
                 if cpu.at_least(Cpu::M68020) {
                     crate::scaledindex::scale_indexes(&mut function);
                 }
@@ -1034,17 +1046,57 @@ fn items_once(
         let chosen = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
         crate::calltarget::through_registers(&mut function, &chosen)?;
     }
+    let word_tables = word_table_labels(&function, number);
     for line in expand(&function)? {
+        let table = match &line {
+            Line::Inst(inst) if inst.opcode == crate::dagisel::wordjump::NAME => match inst.operands.first() {
+                Some(mc::Operand::Symbol(table, _)) => Some(table.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
             Line::Loc(place) => Item::Loc(place),
         });
+        // the table starts where the `jmp` through it ends
+        if let Some(table) = table {
+            let labels = word_tables.get(&table).ok_or("a word jump of no table")?.clone();
+            out.push(Item::Label(table));
+            out.push(Item::WordTable(labels));
+        }
     }
     out.extend(jump_tables(&function, number));
     drop(sp);
     prefixes.had_slots.set(prefixes.had_slots.get() || !slots.is_empty());
     Ok((out, touched))
+}
+
+/// The block labels of each word-offset jump table, by the table's symbol.
+fn word_table_labels(
+    function: &crate::mfunc::MFunction,
+    number: usize,
+) -> llrm_support::hash::HashMap<String, Vec<String>> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == crate::mfunc::Kind::Op(crate::dagisel::wordjump::NAME))
+        .filter_map(|inst| {
+            let Some(crate::mfunc::Operand::Symbol(table, _)) = inst.operands.first() else { return None };
+            let labels = inst
+                .operands
+                .iter()
+                .filter_map(|operand| match operand {
+                    crate::mfunc::Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+                    _ => None,
+                })
+                .map(|at| format!(".LBB{number}_{at}"))
+                .collect();
+            Some((table.clone(), labels))
+        })
+        .collect()
 }
 
 /// Each jump table the function dispatches through: its label, then the
@@ -1165,12 +1217,20 @@ pub fn printed(
 ) -> Result<String, String> {
     let mut out = String::new();
     let mut previous = None;
+    let mut table: Option<String> = None;
     for item in items {
         match item {
-            Item::Label(label) => out.push_str(&format!("{label}:\n")),
+            Item::Label(label) => {
+                out.push_str(&format!("{label}:\n"));
+                table = Some(label);
+            }
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
             Item::Table(labels) => labels.iter().for_each(|label| out.push_str(&format!("\t.long\t{label}\n"))),
+            Item::WordTable(labels) => {
+                let table = table.as_deref().ok_or("a word table with no label")?;
+                labels.iter().for_each(|label| out.push_str(&format!("\t.word\t{label}-{table}\n")))
+            }
             Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.

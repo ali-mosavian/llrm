@@ -62,6 +62,7 @@ fn relaxed_sizes(
             Item::Inst(inst) => crate::encode::encode(inst).ok().map(|encoded| encoded.bytes.len()),
             Item::Bytes(bytes) => Some(bytes.len()),
             Item::Table(labels) => Some(4 * labels.len()),
+            Item::WordTable(labels) => Some(2 * labels.len()),
             _ => Some(0),
         })
         .collect::<Option<_>>()?;
