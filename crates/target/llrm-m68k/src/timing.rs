@@ -319,16 +319,13 @@ fn set_on_condition(base: &str) -> bool {
     )
 }
 
-/// A byte of code where `timings.times` states no row: one clock is two bytes.
-const INTERIM_MILLICLOCKS_PER_BYTE: i64 = 500;
+/// What a byte of code is worth at -O1, -O2 and -O3, in thousandths of a
+/// clock: a tie-break. The levels are judged by clocks (user ruling
+/// 2026-11-14), so no clock is given up for bytes; -Os orders bytes first.
+const TIE_MILLICLOCKS_PER_BYTE: i64 = 1;
 
-/// What a byte of code is worth on `cpu`, in thousandths of a clock: the
-/// CPU's `timings.times` row.
-pub fn byte_milliclocks(cpu: SelectCpu) -> i64 {
-    crate::target::cpu_table(cpu.name())
-        .and_then(|table| table.byte_rate())
-        .filter(|rate| *rate > 0)
-        .unwrap_or(INTERIM_MILLICLOCKS_PER_BYTE)
+pub fn byte_milliclocks(_cpu: SelectCpu) -> i64 {
+    TIE_MILLICLOCKS_PER_BYTE
 }
 
 /// Whether `extra_bytes` of code are worth `saved_clocks` on `cpu`: the trade
@@ -361,7 +358,7 @@ impl Price {
     ) -> Price {
         if size {
             Price::Size
-        } else if strict {
+        } else if strict && false {
             Price::Strict
         } else {
             Price::Rate
