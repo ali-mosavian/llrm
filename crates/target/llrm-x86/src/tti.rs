@@ -1232,6 +1232,12 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
+    /// vectors plan, PR-A).
+    fn vector_values(&self) -> bool {
+        self.sse2 && self.quad
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         self.tuning.inline_chain_trial
     }

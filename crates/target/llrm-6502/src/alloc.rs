@@ -2887,13 +2887,15 @@ impl<const STACK: bool> Jump for Mos<STACK> {
 
 /// The physical registers the run of copies just before the return sets: the
 /// result. The frame is released between the copies of a result that does not
-/// need `a`, and those of the rest.
+/// need `a`, and those of the rest; the split of a word into the bytes of two
+/// of them (`UNPACK`, made at each copy) lies between the copies of an argument
+/// in a:x, and read as the end of the run it dropped `x` from the call's uses.
 fn results(insts: &[Inst]) -> Vec<RegId> {
     let mut out = Vec::new();
     for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
-            (Kind::Op("ADJSP"), _) => {}
+            (Kind::Op("ADJSP" | "UNPACK"), _) => {}
             _ => break,
         }
     }
@@ -3634,6 +3636,8 @@ fn save_preserved<const STACK: bool>(
         }
     }
     used.sort_by_key(|r| r.index());
+    // the bytes a push will save, for the entry copies below
+    let kept = used.clone();
     let mut saves = Vec::new();
     let mut restores = Vec::new();
     // Static slots: each cell goes on the hardware stack, three bytes to save
@@ -3686,12 +3690,22 @@ fn save_preserved<const STACK: bool>(
     let entry = &mut function.blocks[0].insts;
     let mut at = usize::from(entry.first().is_some_and(|inst| inst.kind == Kind::Op("ADJSP")));
     // an argument that arrives in `a` or `x` is copied out first: a push goes
-    // through `a`
+    // through `a`. Not into a cell the push is about to save: the push would
+    // keep the argument, and the caller's value of the cell would be lost.
     while let Some(Inst { kind: Kind::Copy, operands, .. }) = entry.get(at) {
         if !matches!(
             operands.get(1),
             Some(Operand::Use(Reg::Phys(r))) if [reg::A, reg::X].contains(r)
         ) {
+            break;
+        }
+        let into = match operands.first() {
+            Some(Operand::Def(Reg::Virt(v))) => Some(assignment.0[*v as usize]),
+            Some(Operand::Def(Reg::Phys(r))) => Some(*r),
+            _ => None,
+        };
+        let bytes = into.map_or_else(Vec::new, |r| if is_pair(r) { vec![lane(r, 0), lane(r, 1)] } else { vec![r] });
+        if bytes.iter().any(|byte| kept.contains(byte)) {
             break;
         }
         at += 1;

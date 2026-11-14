@@ -45,6 +45,27 @@ fn four_byte_stores_are_one_memset() {
     assert!(!after.contains("store i8 0, ptr %p1"), "{after}");
 }
 
+/// rep_count -O2 wasm32: sixteen byte stores of zero to `row + 0..15`, `row` a
+/// pointer into the array by a variable index. The pin takes the stores as
+/// offsets of the one value `row`; ours refused any pointer with a variable
+/// index, so the loop around them kept size 21 and was not unrolled (the pin
+/// sees 5, a memset): +161 instructions at -O2, +401 at -O3.
+#[test]
+fn byte_stores_from_a_variable_row_pointer_are_one_memset() {
+    let mut body = String::from("  %row = getelementptr i8, ptr @a, i16 %i
+  store i8 0, ptr %row
+");
+    for at in 1..8 {
+        body += &format!("  %p{at} = getelementptr i8, ptr %row, i16 {at}\n  store i8 0, ptr %p{at}\n");
+    }
+    let text = format!(
+        "@a = global [64 x i8] zeroinitializer\n\ndefine i16 @f(i16 %i) {{\nb0:\n{body}  %r = load i16, ptr %row\n  ret i16 %r\n}}\n"
+    );
+    let after = merged(&text, &[&[3]]);
+    assert!(after.contains("@llvm.memset.p0.i16(ptr align 1 %row, i8 0, i16 8, i1 false)"), "{after}");
+    assert!(!after.contains("store i8 0, ptr %p1"), "{after}");
+}
+
 /// Two stores are what the code generator pairs itself.
 #[test]
 fn two_word_stores_stay() {

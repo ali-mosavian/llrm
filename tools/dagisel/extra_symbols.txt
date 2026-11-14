@@ -172,7 +172,10 @@ MVT::i8
 MVT::iPTR
 MVT::v2f32
 MVT::v2f64
+MVT::v2i32
 MVT::v4f32
+MVT::v4i16
+MVT::v8i8
 TargetOpcode::ARITH_FENCE
 TargetOpcode::COPY
 TargetOpcode::EXTRACT_SUBREG

@@ -1,4 +1,4 @@
-; ca65 driver for the 64-bit shifts: rc0:rc1 points at each record's stack words (w3, count), rc2..rc7 get w0..w2
+; ca65 driver for the 64-bit shifts: rc0:rc1 points at each record's stack word (the count), A:X and rc2..rc7 get w0..w3
 .import __ashldi3, __lshrdi3, __ashrdi3
 .export _main
 .include "vec.inc"
@@ -21,18 +21,23 @@ _main:
     lda #0
     sta fail
 loop:
-    ldy #5
+    ldy #7
 :   lda (ptr),y
-    sta rc2,y
+    sta rc2-2,y
     dey
-    bpl :-
+    cpy #1
+    bne :-
     clc
     lda ptr
-    adc #6
+    adc #8
     sta rc0
     lda ptr+1
     adc #0
     sta rc0+1
+    lda (ptr),y
+    tax
+    dey
+    lda (ptr),y
     jsr OP
     sta res
     stx res+1
