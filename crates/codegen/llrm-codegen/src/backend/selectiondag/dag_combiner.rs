@@ -3524,7 +3524,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `x << 8` over `sub nuw a, select(c, 0, b)` left the freeze on the
     /// `sub`, which arm64's `performConditionalSubCombine` then no longer
     /// turned into `subs; csel` (sfm16_float* +4 B). Exit: that combine
-    /// reads through the freeze, then `shl`. Owner wasm-3, review 2026-12-10.
+    /// reads through the freeze, then `shl`. Owner wasm-3, exit 2026-11-24.
     fn cannot_create_undef_or_poison_without_flags(
         &self,
         op: SDValue,

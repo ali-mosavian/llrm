@@ -1670,7 +1670,6 @@ pub fn recorded(
     if applied.options.wanted("ports") {
         manager.add(ports::Ports);
     }
-    manager.add_program(crate::interprocedural::Stamp);
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     let mut late_stage = None;
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
@@ -1684,6 +1683,13 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
+            // What each body does to memory is stated here, as the pin's
+            // PostOrderFunctionAttrs inside the CGSCC walk: the early
+            // simplification (SROA, EarlyCSE, PromotePass, InstCombine,
+            // SimplifyCFG) ran before any callee had an attribute, so
+            // InstCombine could not sink a call of a `memory(none)` helper into
+            // one arm of an `&&`.
+            manager.add_program(crate::interprocedural::Stamp);
             // `buildInlinerPipeline` (PassBuilderPipelines.cpp:997,
             // d1106deb71cc).
             manager.compute::<GlobalsAA>();
