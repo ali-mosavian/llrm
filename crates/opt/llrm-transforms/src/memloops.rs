@@ -1,5 +1,5 @@
-//! Turns the `llvm.memcpy` calls of chosen functions into byte loops, before
-//! instruction selection.
+//! Turns the `llvm.memcpy` and `llvm.memset` calls of chosen functions into
+//! byte loops, before instruction selection.
 //!
 //! # How it works
 //! The pin's `PreISelIntrinsicLowering` expands a memory intrinsic into a loop
@@ -33,7 +33,7 @@
 //! In a target's driver, on a copy of the module, for the functions it names.
 //!
 //! # See also
-//! LLVM's `createMemCpyLoopUnknownSize`
+//! LLVM's `createMemCpyLoopUnknownSize` and `createMemSetLoop`
 //! ([LowerMemIntrinsics.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LowerMemIntrinsics.cpp#L35)).
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -69,7 +69,7 @@ fn copies(
         .walk()
         .filter_map(|(_, inst)| {
             let callee = llrm_mir::memory::callee(context, function, inst)?;
-            let copy = matches!(intrinsics[callee.0 as usize]?, Intrinsic::MemCpy);
+            let copy = matches!(intrinsics[callee.0 as usize]?, Intrinsic::MemCpy | Intrinsic::MemSet);
             (copy
                 && constant_value(context, function.instruction(inst).operands[2]).is_none()
                 && !volatile(context, function, inst))
@@ -78,8 +78,34 @@ fn copies(
         .collect()
 }
 
-/// The functions of `module` that call `llvm.memcpy` and could have it as a
-/// loop.
+/// How many functions of `module` call the library routine `routine`
+/// (`memcpy`, `memset`) with a length known only at run time: the ones that
+/// share its bytes in the linked image. Any other routine counts one.
+pub fn callers(
+    module: &Module,
+    routine: &str,
+) -> usize {
+    let wanted = match routine {
+        "memcpy" => Intrinsic::MemCpy,
+        "memset" => Intrinsic::MemSet,
+        _ => return 1,
+    };
+    let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
+    module
+        .globals
+        .iter()
+        .filter(|global| {
+            let GlobalKind::Function(function) = &global.kind else { return false };
+            copies(&module.context, &intrinsics, function).iter().any(|call| {
+                llrm_mir::memory::callee(&module.context, function, call)
+                    .is_some_and(|callee| intrinsics[callee.0 as usize] == Some(wanted))
+            })
+        })
+        .count()
+}
+
+/// The functions of `module` that call `llvm.memcpy` or `llvm.memset` and
+/// could have it as a loop.
 pub fn candidates(module: &Module) -> Vec<String> {
     let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
     module
@@ -107,7 +133,9 @@ pub fn expanded(
             continue;
         }
         for call in copies(context, &intrinsics, function).iter() {
-            loop_of(context, function, call)?;
+            let set = llrm_mir::memory::callee(context, function, call)
+                .is_some_and(|callee| matches!(intrinsics[callee.0 as usize], Some(Intrinsic::MemSet)));
+            loop_of(context, function, call, set)?;
         }
     }
     Ok(())
@@ -175,14 +203,17 @@ fn loop_of(
     context: &mut Context,
     function: &mut Function,
     call: InstId,
+    set: bool,
 ) -> Result<(), String> {
     let instruction = function.instruction(call).clone();
+    // a copy: (dst, src, len, volatile); a set: (dst, byte, len, volatile)
     let (dst, src, len) = (instruction.operands[0], instruction.operands[1], instruction.operands[2]);
     let (pointer_type, source_type, length_type) = (
         function.operand_type(context, dst).ok_or("a typed operand")?,
         function.operand_type(context, src).ok_or("a typed operand")?,
         function.operand_type(context, len).ok_or("a typed operand")?,
     );
+    let name = if set { "memset" } else { "memcpy" };
     let byte = context.types.int(8);
     let bool_type = context.types.int(1);
     let known = constant_value(context, len);
@@ -197,8 +228,8 @@ fn loop_of(
     let pre = function.parent(call).ok_or("a placed call")?;
     let at = function.next_in_block(call).ok_or("a terminated block")?;
     let post = split_block_at(function, pre, at);
-    function.set_block_name(post, "memcpy-post-expansion");
-    let main = function.create_block(Some("memcpy-expansion-main-body"));
+    function.set_block_name(post, &format!("{name}-post-expansion"));
+    let main = function.create_block(Some(&format!("{name}-expansion-main-body")));
     function.insert_block(main, Some(pre)).map_err(|why| why.to_string())?;
     let jump = function.terminator(pre).ok_or("a terminated block")?;
     let void = function.instruction(jump).ty;
@@ -213,28 +244,42 @@ fn loop_of(
         append(function, pre, Opcode::Br, void, branch, Flags::default())?;
     }
     let result = |made: (InstId, Option<Operand>)| (made.0, made.1.expect("a result"));
-    let (from, from_value) = result(append(function, main, Opcode::Phi, source_type, Vec::new(), Flags::default())?);
+    // a copy walks the source too; a set stores its byte
+    let from = (!set)
+        .then(|| append(function, main, Opcode::Phi, source_type, Vec::new(), Flags::default()))
+        .transpose()?
+        .map(result);
     let (to, to_value) = result(append(function, main, Opcode::Phi, pointer_type, Vec::new(), Flags::default())?);
     let (left, left_value) = result(append(function, main, Opcode::Phi, length_type, Vec::new(), Flags::default())?);
-    let (_, loaded) = result(append(
-        function,
-        main,
-        Opcode::Load { align: Some(src_align), volatile: false },
-        byte,
-        vec![from_value],
-        Flags::default(),
-    )?);
+    let stored = match from {
+        Some((_, from_value)) => {
+            let (_, loaded) = result(append(
+                function,
+                main,
+                Opcode::Load { align: Some(src_align), volatile: false },
+                byte,
+                vec![from_value],
+                Flags::default(),
+            )?);
+            loaded
+        }
+        None => src,
+    };
     append(
         function,
         main,
         Opcode::Store { align: Some(dst_align), volatile: false },
         void,
-        vec![loaded, to_value],
+        vec![stored, to_value],
         Flags::default(),
     )?;
     let gep = Opcode::GetElementPtr { source: byte };
-    let (_, next_from) =
-        result(append(function, main, gep.clone(), source_type, vec![from_value, one], Flags::INBOUNDS)?);
+    let next_from = match from {
+        Some((_, from_value)) => {
+            Some(result(append(function, main, gep.clone(), source_type, vec![from_value, one], Flags::INBOUNDS)?).1)
+        }
+        None => None,
+    };
     let (_, next_to) = result(append(function, main, gep, pointer_type, vec![to_value, one], Flags::INBOUNDS)?);
     let (_, next_left) = result(append(
         function,
@@ -254,7 +299,9 @@ fn loop_of(
     )?);
     let back = vec![again, Operand::Block(main), Operand::Block(post)];
     append(function, main, Opcode::Br, void, back, Flags::default())?;
-    function.set_operands(from, vec![src, Operand::Block(pre), next_from, Operand::Block(main)]);
+    if let (Some((from, _)), Some(next_from)) = (from, next_from) {
+        function.set_operands(from, vec![src, Operand::Block(pre), next_from, Operand::Block(main)]);
+    }
     function.set_operands(to, vec![dst, Operand::Block(pre), next_to, Operand::Block(main)]);
     function.set_operands(left, vec![len, Operand::Block(pre), next_left, Operand::Block(main)]);
     function.erase(call).map_err(|why| why.to_string())
