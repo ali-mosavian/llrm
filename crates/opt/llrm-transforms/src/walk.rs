@@ -540,8 +540,13 @@ impl ProgramPass for Walk {
                         } else if let Some(tti) = tti.as_deref() {
                             let kept = function_mut(module, id).1.clone();
                             let before = sized(module, &program.layout, tti, id, false);
+                            let globals = module.globals.len();
                             (self.simplify)(module, &mut modules[at], id, "walk.again.");
-                            if sized(module, &program.layout, tti, id, false) + GUARD >= before {
+                            // The units count code, not the data a rerun makes: a CRC table
+                            // (crc16 -O1, 64 -> 580 B) was "smaller". Where -O1 prices bytes
+                            // the old body stays; `globaldce` drops the table.
+                            let grew_data = tti.inline_trials_at_o1() && module.globals.len() > globals;
+                            if grew_data || sized(module, &program.layout, tti, id, false) + GUARD >= before {
                                 *function_mut(module, id).1 = kept;
                                 modules[at].changed(id);
                                 modules[at]
@@ -582,6 +587,16 @@ impl ProgramPass for Walk {
                                 let goes = crate::inlinecost::local_linkage(global.linkage)
                                     && !addressed.contains(&callee)
                                     && left == calls.len() as i64;
+                                // DEVIATE OS-INLINE-GROWTH: the by-size guard has already priced the callee over every call it
+                                // has left, the copies against the body that goes with the last (gcc's `estimate_growth`);
+                                // a trial of one site measures one caller alone and, accepting, lowers the count the next
+                                // caller's guard reads.
+                                let shared = crate::inlinecost::local_linkage(global.linkage)
+                                    && !addressed.contains(&callee)
+                                    && live.references().get(&callee).copied().unwrap_or(0) >= 2;
+                                if !goes && shared && size != crate::inlinecost::CallerSize::Speed && tti.inline_trial_defers_to_shared_growth() {
+                                    continue;
+                                }
                                 if goes {
                                     units.push((calls, body_size(module, &program.layout, tti, callee, size == crate::inlinecost::CallerSize::Speed)));
                                 } else if tti.inline_trial_groups_sites() && calls.len() > 1 {
@@ -874,7 +889,7 @@ impl ProgramPass for Walk {
                                         .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
                                         .collect(),
                                 });
-                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes);
+                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes, size == crate::inlinecost::CallerSize::Speed);
                                 let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
@@ -1757,6 +1772,7 @@ fn trial_accepted(
     growth: i64,
     rate: i64,
     kept_bytes: i64,
+    strict: bool,
 ) -> bool {
     if priced {
         // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
@@ -1767,7 +1783,16 @@ fn trial_accepted(
         // Bytes decide; clocks only where they tie exactly.
         return growth < 0 || (growth == 0 && saved > 0);
     }
-    (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
+    // -O1 is strict per axis: bytes decide, and the model's error is a few bytes a copy, so only a shrink of an
+    // eighth of the caller stays (switch_peeled_table: 17 against 17 and 0 B, built +44; sfm16_dbg: -5 B, built +18).
+    let counted = if byte_gate && strict {
+        -growth * 8 >= kept_bytes
+    } else if byte_gate {
+        tried <= best || (tried <= best + credit && growth <= 0)
+    } else {
+        tried <= best + credit
+    };
+    counted
         || (saved > 0 && growth * rate <= saved * 1000)
         || (rate == 0 && credit == 0 && -growth * 8 >= kept_bytes)
 }

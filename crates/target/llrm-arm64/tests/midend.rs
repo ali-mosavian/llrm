@@ -771,6 +771,17 @@ fn an_arm64_object_has_a_line_row_where_the_source_place_changes() {
     assert_eq!(rows, [(0, 2, 0), (8, 3, 11), (16, 3, 18), (20, 3, 16), (24, 3, 7), (28, 4, 12), (32, 4, 3)]);
 }
 
+/// The target facts of an allocation were process-wide: a Darwin compile on
+/// another thread flipped the Linux scheduler's model mid-function, so the
+/// line table and `-g` tests passed or failed with the thread timing.
+#[test]
+fn a_darwin_compile_on_another_thread_leaves_this_threads_target_alone() {
+    llrm_arm64::lir_view::set_darwin(false);
+    let linux = llrm_arm64::lir_view::gpr_caller_saved_count();
+    std::thread::spawn(|| llrm_arm64::lir_view::set_darwin(true)).join().unwrap();
+    assert_eq!(llrm_arm64::lir_view::gpr_caller_saved_count(), linux, "Darwin's registers on a Linux thread");
+}
+
 /// `-g` must not change the code: the source place each operation carries
 /// through the passes decides nothing. The fixtures (clang's -O0 and -O2
 /// output) lower to the same bytes with and without it.

@@ -59,6 +59,13 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): isel fills a
+    /// word or dword pattern with `rep stosw`/`rep stosd`, so
+    /// `LoopIdiomRecognize` forms the fill with no `memset_pattern16` and the
+    /// pre-ISel store loop is not made, at the speeds the fill's price pays
+    /// (`Machine::fills_by_pattern` is the same at -Os for m16). false: the
+    /// pin's loop.
+    pub fills_pattern_at_speed: bool,
     /// DEVIATE PO1 (owner x86-m32-b, exit 2026-11-24 for the targets that keep it):
     /// at -Os the arguments of a call are popped into a dead register in place
     /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
@@ -148,6 +155,8 @@ pub struct Tuning {
     /// refused, kept where the caller comes out smaller); the -O2 and -O3 callers keep the units.
     /// False: the bound's verdict stands.
     pub inline_trials_at_o1: bool,
+    /// DEVIATE RL-EXITING-LATCH (owner x87, exit 2026-11-24): `Tti::rotation_of_exiting_latch_when_guard_folds`.
+    pub rotate_exiting_latch_when_guard_folds: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -242,6 +251,11 @@ pub struct Tuning {
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
+    /// The largest constant fill (bytes) of less than dword alignment `rep_stos_at_size` takes; a larger one is the pin's
+    /// `memset` call (`emitConstantSizeRepstos`: `Size > MaxInlineSizeThreshold`, 128). Like
+    /// `rep_movs_at_size_max`; DEVIATE REP-STOS-OS bounds itself to the pin's limit (owner
+    /// x86-m32, exit 2026-11-30).
+    pub rep_stos_at_size_max: u64,
     /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes (value setup, count,
     /// string op and the inline tail), where the pin's unit is the destination's alignment: a
     /// `rep stosb` is a 2-byte `mov al` and a 2-byte op, a `rep stosq` of 0xEE.. is a 10-byte
@@ -250,11 +264,17 @@ pub struct Tuning {
     /// unit. Assumes ERMS/FSRM: `rep stosb` is no slower than `rep stosq` plus a tail (measured
     /// 24..4000 B, Zen 5); a target whose CPUs lack it must not set this. false: the pin's.
     pub rep_stos_priced_unit: bool,
-    /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
+    /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, up to `rep_movs_at_size_max`),
     /// not the library call: the setup is a few bytes against the call's push
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
+    /// The largest constant copy (bytes) of less than dword alignment `rep_movs_at_size` takes; a larger one is the pin's
+    /// `memcpy` call (`emitConstantSizeRepmov`: `Size > MaxInlineSizeThreshold`, 128). The
+    /// library copies by dwords, twice as fast as `rep movsw` of a 2-aligned block (scroll
+    /// -Os, 4000 B: 682,269 against 533,965 clk). DEVIATE REP-MOVS-OS bounds itself to the pin's limit
+    /// (owner x86-m32, exit 2026-11-30).
+    pub rep_movs_at_size_max: u64,
     /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`, or a `minsize` function, always).
     /// The pin expands at `-Os` (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only; clang
     /// `-Os` does not set `minsize`), so no target sets this. m32 did from #8672 to 2026-11-11: stft_fixed `-Os` 96.8M ->
@@ -436,6 +456,15 @@ pub struct Tuning {
     /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
     /// meet the constants together, as the pin's callee-first order gives. One round.
     pub inline_chain_trial: bool,
+    /// DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): the operations
+    /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit in a function built for size
+    /// (`Tti::lftr_expansion_budget`; the pin's `SCEVCheapExpansionBudget` is 4). gcc keeps `i < n` where
+    /// the zero-test form needs `smax(n, 1)` (fib `k`: cmp, mov, cmovl = 8 B before the loop).
+    pub lftr_size_budget: u32,
+    /// DEVIATE OS-INLINE-GROWTH: an -Os caller's SZ2 trial does not re-decide a site the by-size guard refused
+    /// where the callee stays and has two or more calls left: the guard's growth over all of them stands, as gcc's
+    /// `estimate_growth` at -Os. Its byte estimate was -22 B a copy where the objects grew +5.
+    pub inline_trial_defers_to_shared_growth: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
@@ -447,6 +476,10 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// `visitADD`'s `(add a, b)` -> `(or disjoint a, b)` for operands that share no bits, which runs before the
+    /// target's `combineAdd` (so `pushAddIntoCmovOfConsts` meets only the adds that stay adds). Off: x86's rows
+    /// until judged per target (DEVIATE, owner llrm-target-x86-m64 at m64, exit 2026-11-24).
+    pub add_to_or_disjoint: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as written derives from its
     /// counter in one instruction a trip (`i << 4`) pays no setup bytes. Only a target whose byte
     /// model was checked sets it: m16 grew 28 QCport modules and `huge` +27% B without (#9587).
@@ -460,6 +493,17 @@ pub struct Tuning {
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
     /// `Tti::lsr_phi_operand_uses`.
     pub lsr_phi_operand_uses: bool,
+    /// DEVIATE LU14 on a flat target (owner x86-m32, exit 2026-11-30): LSR's search also takes
+    /// the uses in the opposite order and keeps that solution where it saves an instruction.
+    /// Real mode always does (`Tti::lsr_solves_both_use_orders`). The pin's `SolveRecurse` rates
+    /// a use against the registers the uses before it chose, so which use comes first hides
+    /// cheaper combinations; with the use-list order of IU1 the first is edit history (x_dct
+    /// -Os: `sum += blk[i][i]` kept a pointer and a counter, 3 instructions, where the
+    /// count to zero over the other order is 2).
+    pub lsr_both_use_orders: bool,
+    /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+    /// `Tti::lsr_phi_users_first`.
+    pub lsr_phi_users_first: bool,
     /// `Tti::splits_invariant_fmuladd`.
     pub splits_invariant_fmuladd: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
@@ -623,6 +667,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        fills_pattern_at_speed: false,
         libc_memcpy: false,
         pops_arguments_at_size: true,
         keeps_sahf_where_bytes_are_held: false,
@@ -642,6 +687,7 @@ impl Tuning {
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
         inline_trials_at_o1: false,
+        rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -664,8 +710,10 @@ impl Tuning {
         imul_at_size: false,
         mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
+        rep_stos_at_size_max: 128,
         rep_stos_priced_unit: false,
         rep_movs_at_size: false,
+        rep_movs_at_size_max: 128,
         sdiv_pow2_stays_at_size: false,
         merge_functions_at_size: false,
         unroll_threshold: None,
@@ -697,13 +745,18 @@ impl Tuning {
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
+        lftr_size_budget: 4,
+        inline_trial_defers_to_shared_growth: false,
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        add_to_or_disjoint: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
+        lsr_both_use_orders: false,
+        lsr_phi_users_first: false,
         splits_invariant_fmuladd: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,

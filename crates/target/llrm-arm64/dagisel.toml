@@ -157,11 +157,14 @@ features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", 
 # Decided when a function is selected (the flag-gated vectors, ARM64-VEC POC): off, NEON patterns never match, as when they were pruned.
 [dynamic]
 "Subtarget->isNeonAvailable()" = "neon_available"
+# A feature the CPUs differ in (apple-m1 has SHA3, generic does not): the CPU answers at selection time, not the table.
+"Subtarget->hasSHA3()" = "has_feature(\"SHA3\")"
 
 [types]
 dead_prefixes = ["v", "nxv", "aarch64"]
-# The 128-bit integer vectors the DAG builds (ARM64-VEC POC): their loads and stores, nothing NEON-gated.
-live = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64"]
+# The vectors the DAG builds (ARM64-VEC POC): their loads and stores, nothing NEON-gated; the 64-bit integer
+# vectors are the narrow operands of the long forms (`ushll`, `uaddw`, `smull`).
+live = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64", "v2f32", "v8i8", "v4i16", "v2i32"]
 
 [node_predicate]
 # One name per predicate number is enough (the pin groups equal bodies). Names with no Dag query answer false by name (see aarch64_predicates.rs).

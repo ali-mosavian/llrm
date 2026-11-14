@@ -1201,3 +1201,96 @@ fn test_a_compare_of_a_shared_quotient_by_a_power_of_two_is_a_range_test_even_wh
     declared.place(&mut module).unwrap();
     assert!(printed(&module).contains("%v, 39"), "{}", printed(&module));
 }
+
+/// `matchSymmetricPair` in `visitICmpInst`: two selects that swap their arms
+/// compare as the arms. The pin's `icmp ne %1, %0` kept `sf_cmp_bits`'s
+/// three-way compare a select chain (cost 50, not inlined into seven wrappers);
+/// ours, comparing the selects, made `scmp` (cost 35) and inlined it: wasm
+/// sfm16_float_* -Os +418 B over the pin with the size guard off.
+#[test]
+fn a_swapped_select_pair_compares_as_its_two_arms() {
+    let params = "i1 %c, i16 %a, i16 %b";
+    let body = "  %s = select i1 %c, i16 %a, i16 %b\n  %t = select i1 %c, i16 %b, i16 %a\n  %r = icmp ne i16 %s, %t\n  ret i1 %r\n";
+    let after = "  %r = icmp ne i16 %a, %b\n  ret i1 %r\n";
+    check(params, body, after);
+}
+
+/// m16 sfm16_float: the fold turned two 16-bit selects into a 64-bit arm compare,
+/// +4 B in 24 objects. A target that keeps the selects leaves the compare as written.
+#[test]
+fn test_a_swapped_select_pair_compare_stays_where_the_target_keeps_it() {
+    let text = "define i1 @f(i1 %c, i16 %a, i16 %b) {
+  %s = select i1 %c, i16 %a, i16 %b
+  %t = select i1 %c, i16 %b, i16 %a
+  %r = icmp ne i16 %s, %t
+  ret i1 %r
+}";
+    let run = |keep: bool| {
+        let mut module = parsed(text);
+        let globals = module.globals.clone();
+        let metadata = module.metadata.clone();
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let hooks = crate::combine::TargetHooks { keeps_swapped_select_compare: keep, ..Default::default() };
+        crate::combine::combine_for(
+            context,
+            &globals,
+            &Default::default(),
+            &metadata,
+            &DataLayout::default(),
+            function,
+            visit,
+            false,
+            &mut declared,
+            hooks,
+        );
+        declared.place(&mut module).unwrap();
+        printed(&module)
+    };
+    let kept = run(true);
+    assert!(kept.contains("icmp ne i16 %s, %t"), "{kept}");
+    let pin = run(false);
+    assert!(pin.contains("icmp ne i16 %a, %b"), "{pin}");
+}
+
+fn zero_quotient_compare_on(
+    keep: bool,
+) -> String {
+    let text = "define i1 @f(i16 %u, i16 %r, ptr %p) {
+  %q = udiv i16 %u, %r
+  store i16 %q, ptr %p
+  %c = icmp ne i16 %q, 0
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: keep, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `u / radix != 0` with the quotient the next trip's `u` became `radix <= u`,
+/// keeping `u` live across the divide call (6502 k_itoa -Os: two more cells
+/// saved and copied). The pin folds it; a target that keeps the compare does not.
+#[test]
+fn test_a_zero_test_of_a_shared_quotient_stays_a_test_of_the_quotient_where_kept() {
+    let kept = zero_quotient_compare_on(true);
+    assert!(kept.contains("icmp ne i16 %q, 0"), "{kept}");
+    let pin = zero_quotient_compare_on(false);
+    assert!(pin.contains("icmp ule i16 %r, %u"), "{pin}");
+}

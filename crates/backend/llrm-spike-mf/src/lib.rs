@@ -34,7 +34,7 @@ pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, Variable, Varia
 pub use regalloc::{Allocate, Assignment, GraphColoring, Join, Side, Target};
 pub use reloads::forward_reloads;
 pub use reschedule::reschedule_kills;
-pub use sink::{Jump, machine_sink, machine_sink_in_place, split_critical_edge};
+pub use sink::{Jump, liveness_words, machine_sink, machine_sink_in_place, split_critical_edge};
 pub use tailmerge::{
     Crossing, TailMergeFunction, merge_tails, merge_tails_across_loops, merge_tails_crossing, tail_merge_blocks,
 };

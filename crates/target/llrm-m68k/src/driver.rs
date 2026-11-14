@@ -190,8 +190,8 @@ const TRIAL_MAX_UNITS: u64 = 700;
 /// the loops the -Os threshold refused unrolled, kept if its functions that
 /// differ are smaller, bytes then clocks (`Price::Size`). At -O1 the same
 /// trial (DEVIATE UNROLL-O1-TRIAL, `Tti::unroll_trial_threshold`) keeps them
-/// where the functions are no larger and no slower (`Price::Strict`). A module with no
-/// refused loop is compiled once.
+/// where the functions are cheaper in clocks (`Price::Rate`). A module
+/// with no refused loop is compiled once.
 fn lowered(
     text: &str,
     cpu: Cpu,
@@ -206,7 +206,12 @@ fn lowered(
     let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
         M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
     } else {
-        None
+        // DEVIATE UNROLL-NEST-TRIAL (-O2, -O3): the pin's threshold, for the
+        // loops with a subloop
+        M68kMachine { cpu }
+            .tti()
+            .filter(|tti| tti.unroll_trial_nests_at_speed())
+            .map(|_| llrm_transforms::loopunrollpass::pin_full_unroll_threshold(if level == Level::O3 { 3 } else { 2 }))
     };
     let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(base) };
     let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(base) };
@@ -228,7 +233,7 @@ fn lowered(
     };
     let pays = matches!(
         (items(&other), items(&base)),
-        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, if small { crate::timing::Price::Size } else { crate::timing::Price::Strict })
+        (Some(with), Some(without)) if crate::trial::keeps(&with, &without, cpu, crate::timing::Price::of(small))
     );
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
@@ -267,7 +272,11 @@ fn lowered_once(
     crate::compile::mid_end_for_narrowing(
         &program.modules[0],
         cpu,
-        matches!(level, Level::O2 | Level::O3 | Level::Omax),
+        crate::compile::NarrowMultiplies::of(
+            cpu,
+            level != Level::O0,
+            matches!(level, Level::O2 | Level::O3 | Level::Omax),
+        ),
     )
 }
 

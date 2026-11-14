@@ -1009,24 +1009,42 @@ impl<'m> Machine<'m> {
                         }
                         None
                     }
-                    Opcode::Binary(op) => Some(binary(*op, instruction.flags, value(self, 0)?, value(self, 1)?)?),
+                    // A vector operation is its scalar one on each lane.
+                    Opcode::Binary(op) => Some(match (value(self, 0)?, value(self, 1)?) {
+                        (Val::Aggregate(a), Val::Aggregate(b)) if a.len() == b.len() => Val::Aggregate(
+                            a.into_iter()
+                                .zip(b)
+                                .map(|(x, y)| binary(*op, instruction.flags, x, y))
+                                .collect::<Run<Vec<_>>>()?,
+                        ),
+                        (a, b) => binary(*op, instruction.flags, a, b)?,
+                    }),
                     Opcode::FNeg => Some(match value(self, 0)? {
                         Val::Float(kind, bits) => Val::Float(kind, bits ^ (1 << (float_bits(kind) - 1))),
                         other => other,
                     }),
                     Opcode::Cast(op) => {
                         let from = function.operand_type(&self.module.context, ops[0]).expect("a value");
-                        Some(cast(
-                            self.types(),
-                            &self.layout,
-                            *op,
-                            value(self, 0)?,
-                            from,
-                            instruction.ty,
-                            instruction.flags,
-                        )?)
+                        let (types, layout) = (self.types(), &self.layout);
+                        // A vector cast is its scalar one on each lane.
+                        Some(match (value(self, 0)?, types.get(from), types.get(instruction.ty)) {
+                            (Val::Aggregate(lanes), Type::Vector { element: src, .. }, Type::Vector { element: dst, .. }) => {
+                                Val::Aggregate(
+                                    lanes
+                                        .into_iter()
+                                        .map(|lane| cast(types, layout, *op, lane, *src, *dst, instruction.flags))
+                                        .collect::<Run<Vec<_>>>()?,
+                                )
+                            }
+                            (lane, ..) => cast(types, layout, *op, lane, from, instruction.ty, instruction.flags)?,
+                        })
                     }
-                    Opcode::ICmp(predicate) => Some(icmp(*predicate, value(self, 0)?, value(self, 1)?)),
+                    Opcode::ICmp(predicate) => Some(match (value(self, 0)?, value(self, 1)?) {
+                        (Val::Aggregate(a), Val::Aggregate(b)) if a.len() == b.len() => {
+                            Val::Aggregate(a.into_iter().zip(b).map(|(x, y)| icmp(*predicate, x, y)).collect())
+                        }
+                        (a, b) => icmp(*predicate, a, b),
+                    }),
                     Opcode::FCmp(predicate) => Some(fcmp(*predicate, value(self, 0)?, value(self, 1)?)),
                     Opcode::Select => Some(match value(self, 0)? {
                         Val::Poison => Val::Poison,

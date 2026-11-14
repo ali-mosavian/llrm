@@ -616,3 +616,14 @@ b0:
     let out = printed(&module);
     assert!(out.contains("call i8 @llvm.fshl.i8(i8 %"), "{out}");
 }
+
+/// A vector `sext`, `zext` and `trunc` (LoopVectorize makes them) panicked in
+/// `bits_of` ("an integer"): the folds are for scalars, so they stay as
+/// written.
+#[test]
+fn a_vector_cast_is_left_alone() {
+    let body = "  %e = sext <8 x i16> %x to <8 x i64>\n  %t = trunc <8 x i64> %e to <8 x i16>\n  \
+                %z = zext <8 x i16> %t to <8 x i32>\n  %u = trunc <8 x i32> %z to <8 x i16>\n  \
+                ret <8 x i16> %u\n";
+    check("<8 x i16>", "<8 x i16> %x", body, body);
+}

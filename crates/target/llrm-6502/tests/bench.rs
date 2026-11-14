@@ -160,7 +160,12 @@ fn ours_level(default: &'static str) -> &'static str {
 /// level and `BENCH_PAD`: two runs sharing `bench/<name>` raced on `pad.c` and
 /// the link files, and external-compiler cells came out n/a at random
 /// (2026-11-08: 22 of them in one Os log, the pad merge refused the logs).
-fn work_dir(root: &Path, level: &str, pad: &str, name: &str) -> PathBuf {
+fn work_dir(
+    root: &Path,
+    level: &str,
+    pad: &str,
+    name: &str,
+) -> PathBuf {
     root.join(format!("bench{level}-pad{pad}")).join(name)
 }
 
@@ -213,7 +218,7 @@ fn driver(
     s.push_str(&format!("  lda #{calls}\n  sta cnt\nloop:\n"));
     let last = kernel.args.len().wrapping_sub(1);
     // ours: a byte takes the first free of a, x, rc2.., a word or pointer the
-    // first free pair of rc2.. (`backfill`); a and x are loaded last
+    // first free pair of a:x, rc2:rc3.. (`backfill`); a and x are loaded last
     let mut used = [false; 8];
     let (mut in_a, mut in_x) = (String::new(), String::new());
     for (i, &arg) in kernel.args.iter().enumerate() {
@@ -232,14 +237,19 @@ fn driver(
             }
             Abi::Ours => {
                 let at = if wide {
-                    (1..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
+                    (0..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
                 } else {
                     (0..8).find(|&p| !used[p]).expect("a free byte")
                 };
                 used[at] = true;
                 if wide {
                     used[at + 1] = true;
-                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", at, at + 1));
+                    if at == 0 {
+                        in_a = format!("  lda {lo}\n");
+                        in_x = format!("  ldx {hi}\n");
+                    } else {
+                        s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", at, at + 1));
+                    }
                 } else if at == 0 {
                     in_a = format!("  lda {lo}\n");
                 } else if at == 1 {
@@ -478,6 +488,11 @@ fn ours_row(
     let priced = llrm_6502::timing::estimate(cpu, &format!("{function}{runtime}"))?;
     assert_eq!(i64::from(priced.bytes), row.bytes, "{name} {tag}: timing.rs against the linked size");
     let alone = llrm_6502::timing::estimate(cpu, &function)?;
+    // BENCH_ESTIMATE: the static clocks the driver's pricing reads, beside the
+    // simulator's for the bench's input (the whole call, runtime included).
+    if std::env::var_os("BENCH_ESTIMATE").is_some() {
+        eprintln!("estimate {name} {tag}: static {} cy, measured {} cy", priced.cycles, row.cycles);
+    }
     Ok(Row { body: i64::from(alone.bytes), ..row })
 }
 
@@ -621,20 +636,26 @@ fn table4() {
         Err(why) => format!("n/a ({why})"),
     };
     let only = std::env::var("BENCH_ONLY").ok();
+    let ours_only = std::env::var_os("BENCH_OURS_ONLY").is_some();
     // (kernel, [bytes, cycles] of cc65, hand, ours)
     let mut measured: Vec<(&str, [Option<(i64, i64)>; 3])> = Vec::new();
     let kernels = hand_kernels();
     for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
+        // BENCH_OURS_ONLY: skip the other compilers' columns (ours is the
+        // one under study); the table then shows `-` for them.
+        let other = |row: &dyn Fn() -> Result<Row, String>| {
+            if ours_only { Err("no hand: skipped".to_owned()) } else { row() }
+        };
         let rows = [
-            cc65_row(kernel, &[cc65_optimize()], "c1"),
-            hand_row(kernel),
+            other(&|| cc65_row(kernel, &[cc65_optimize()], "c1")),
+            other(&|| hand_row(kernel)),
             ours_row(kernel, ours_level("-O2"), "o2"),
-            ours_row(kernel, ours_level("-O2"), "o2m"),
-            sdcc::row(kernel, false),
-            sdcc::row(kernel, true),
-            llvmmos::row(kernel, "-O2", false),
-            llvmmos::row(kernel, "-Os", false),
-            llvmmos::row(kernel, "-O2", true),
+            other(&|| ours_row(kernel, ours_level("-O2"), "o2m")),
+            other(&|| sdcc::row(kernel, false)),
+            other(&|| sdcc::row(kernel, true)),
+            other(&|| llvmmos::row(kernel, "-O2", false)),
+            other(&|| llvmmos::row(kernel, "-Os", false)),
+            other(&|| llvmmos::row(kernel, "-O2", true)),
         ];
         for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
             eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());

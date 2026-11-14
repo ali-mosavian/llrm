@@ -134,6 +134,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         frame: &frame,
         address_mode: llrm_dagisel::addr::AddrMode::Flat32,
         opt_size: false,
+        stack_shares_data: false,
         call_alignment: 1,
         reserved_calls: false,
         map: &map,

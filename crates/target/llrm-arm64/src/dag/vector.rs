@@ -8,8 +8,9 @@
 //!
 //! DEVIATE VEC1: a `BUILD_VECTOR` that is a splat of a constant, the all-zeros
 //! and all-ones vectors, a splat of one value, or a value in lane 0 alone is
-//! lowered; any other (the pin loads it from a constant pool, or builds it
-//! with `INSERT_VECTOR_ELT`) is declined and the block refused. A constant
+//! lowered; a constant that is no splat is declined to the legalizer's pool
+//! load; any other (the pin builds it with `INSERT_VECTOR_ELT`) is declined
+//! and the block refused. A constant
 //! with undefined lanes is tried only as the splat of its defined lanes
 //! (`UndefBits` of `ConstantBuildVector` is not tried), and `FMOV`, the
 //! `FNEG` forms and SVE are not made. A shuffle is lowered where it is a
@@ -19,7 +20,7 @@
 use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_dagisel::generated::aarch64::ids::isd as aarch64_isd;
 
 /// `AArch64_AM::isAdvSIMDModImmType<n>`: whether the 64-bit pattern (two equal
@@ -147,6 +148,15 @@ fn constant_build_vector(
     attempt(dag, bits, false).or_else(|| attempt(dag, !bits, true))
 }
 
+/// Whether every defined lane of the `BUILD_VECTOR` is a constant.
+pub fn is_constant_build_vector(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    let lane_bits = dag.value_type(op).element().size_in_bits();
+    dag.node(op).ops.iter().all(|&lane| dag.is_undef(lane) || lane_constant(dag, lane, lane_bits).is_some())
+}
+
 /// `LowerBUILD_VECTOR`.
 pub fn lower_build_vector(
     dag: &mut SelectionDAG,
@@ -177,7 +187,7 @@ pub fn lower_build_vector(
             return constant_build_vector(dag, vt, unit)
                 .or_else(|| Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first])));
         }
-        // DEVIATE VEC1: a constant that is not a splat is loaded in the pin.
+        // Not a splat: the pin's `SDValue()`, the pool load of the legalizer.
         return None;
     }
     let low_only = lanes.iter().skip(1).all(Option::is_none);
@@ -190,7 +200,397 @@ pub fn lower_build_vector(
         // "Use DUP for non-constant splats."
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first]));
     }
+    // "If all else fails, just use a sequence of INSERT_VECTOR_ELT": lane 0 by
+    // `SCALAR_TO_VECTOR`, the others inserted. DEVIATE VEC6 (owner
+    // llrm-arm64-vec, exit 2026-11-27): the branches before it in the pin
+    // (`PreferDUPAndInsert`, a constant splat with other lanes inserted, two
+    // `DUP`s joined, `ReconstructShuffle`) are not translated.
+    let index_ty = EVT::I64;
+    let mut vec = dag.get_undef(vt);
+    let mut at = 0;
+    if lanes[0].is_some() {
+        vec = dag.get_node(ISD::ScalarToVector, vt, &[ops[0]]);
+        at = 1;
+    }
+    for lane in at..ops.len() {
+        if let Some(value) = lanes[lane] {
+            let index = dag.get_constant(lane as u128, index_ty);
+            vec = dag.get_node(ISD::InsertVectorElt, vt, &[vec, value, index]);
+        }
+    }
+    Some(vec)
+}
+
+/// `UnrollVectorOp`: one scalar operation per lane, put together by a
+/// `BUILD_VECTOR`.
+fn unroll_vector_op(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let opcode = dag.opcode(node);
+    let operand = dag.operand(node, 0);
+    let (from, to) = (dag.value_type(operand).element(), vt.element());
+    let lanes = (0..vt.lanes())
+        .map(|lane| {
+            let index = dag.get_constant(u128::from(lane), EVT::I64);
+            let element = dag.get_node(ISD::ExtractElement, from, &[operand, index]);
+            dag.get_node(opcode, to, &[element])
+        })
+        .collect::<Vec<_>>();
+    dag.get_build_vector(vt, &lanes)
+}
+
+/// `LowerVectorINT_TO_FP`. A conversion to a narrower float is unrolled when
+/// the target is `f32` (the pin: a conversion through `f64` rounds twice) and
+/// goes through the wider float otherwise; to a wider float the operand is
+/// extended first; one of the same size is as it is.
+///
+/// DEVIATE VEC7 (owner llrm-arm64-vec, exit 2026-11-27): the `f16` target of
+/// a split conversion, a conversion of a one-lane vector and the SVE forms are
+/// not translated.
+pub fn lower_vector_int_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (vt, operand) = (dag.value_type(node), dag.operand(node, 0));
+    let from = dag.value_type(operand);
+    let opcode = dag.opcode(node);
+    if vt.size_in_bits() < from.size_in_bits() {
+        if vt.element() == EVT::Simple(MVT::F32) {
+            return Some(unroll_vector_op(dag, node));
+        }
+        let wide = MVT::vector(MVT::F64, from.lanes())?;
+        let converted = dag.get_node(opcode, EVT::Simple(wide), &[operand]);
+        let exact = dag.get_constant(0, EVT::I64);
+        return Some(dag.get_node(ISD::FpRound, vt, &[converted, exact]));
+    }
+    if vt.size_in_bits() > from.size_in_bits() {
+        let extend = if opcode == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
+        let int = MVT::vector(MVT::integer(vt.element().size_in_bits())?, vt.lanes())?;
+        let extended = dag.get_node(extend, EVT::Simple(int), &[operand]);
+        return Some(dag.get_node(opcode, vt, &[extended]));
+    }
+    Some(node)
+}
+
+/// `LowerVectorFP_TO_INT`, the conversions of one size and to a wider integer
+/// the pin does with one instruction or a `fcvtl` first; anything else is
+/// declined.
+pub fn lower_vector_fp_to_int(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (vt, operand) = (dag.value_type(node), dag.operand(node, 0));
+    (vt.size_in_bits() == dag.value_type(operand).size_in_bits()).then_some(node)
+}
+
+/// `LowerMUL`, the NEON path
+/// ([L6202](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L6202)):
+/// a multiply of extended operands is `SMULL`/`UMULL` of the narrow ones. A
+/// multiply of another kind is as it is (legal) except `v2i64`, which is a
+/// shift and add (`convertMulToShlAdd`) or declined (`None`), so that the
+/// legalizer unrolls it.
+pub fn lower_mul(
+    dag: &mut SelectionDAG,
+    op: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(op);
+    let (mut n0, mut n1) = (dag.operand(op, 0), dag.operand(op, 1));
+    let mut multiplied = vt;
+    if vt.size_in_bits() == 64 {
+        // The low halves of two 128-bit operands: multiply those and take the
+        // low half.
+        let low_half = |dag: &SelectionDAG, n: SDValue| {
+            dag.opcode(n) == ISD::ExtractSubvector
+                && dag.constant(dag.operand(n, 1)) == Some(0)
+                && dag.value_type(dag.operand(n, 0)).size_in_bits() == 128
+        };
+        if !(low_half(dag, n0) && low_half(dag, n1)) {
+            // "Other vector multiplications are legal."
+            return Some(op);
+        }
+        n0 = dag.operand(n0, 0);
+        n1 = dag.operand(n1, 0);
+        multiplied = dag.value_type(n0);
+    }
+    let Some((opcode, is_mla)) = select_umull_smull(dag, &mut n0, &mut n1) else {
+        return if vt == EVT::Simple(MVT::V2I64) { convert_mul_to_shl_add(dag, op) } else { Some(op) };
+    };
+    let op1 = skip_extension_for_vector_mull(dag, n1);
+    let take_low = |dag: &mut SelectionDAG, wide: SDValue| {
+        if multiplied == vt {
+            wide
+        } else {
+            let zero = dag.get_constant(0, EVT::I64);
+            dag.get_node(ISD::ExtractSubvector, vt, &[wide, zero])
+        }
+    };
+    if !is_mla {
+        let op0 = skip_extension_for_vector_mull(dag, n0);
+        let product = dag.get_node(ISD::Target(opcode), multiplied, &[op0, op1]);
+        return Some(take_low(dag, product));
+    }
+    // "(zext A + zext B) * C, to (S/UMULL A, C) + (S/UMULL B, C)": the
+    // multiplies then accumulate back to back.
+    let n00 = skip_extension_for_vector_mull(dag, dag.operand(n0, 0));
+    let n01 = skip_extension_for_vector_mull(dag, dag.operand(n0, 1));
+    let op1_vt = dag.value_type(op1);
+    let a = dag.get_node(ISD::BitCast, op1_vt, &[n00]);
+    let b = dag.get_node(ISD::BitCast, op1_vt, &[n01]);
+    let first = dag.get_node(ISD::Target(opcode), multiplied, &[a, op1]);
+    let second = dag.get_node(ISD::Target(opcode), multiplied, &[b, op1]);
+    let sum = dag.get_node(dag.opcode(n0), multiplied, &[first, second]);
+    let zero = dag.get_constant(0, EVT::I64);
+    Some(dag.get_node(ISD::ExtractSubvector, vt, &[sum, zero]))
+}
+
+/// `selectUmullSmull`: the multiply `N0 * N1` is a `SMULL` or a `UMULL` when
+/// both operands are extended alike or the other is known to fit; the flag
+/// says it is the `(A + B) * C` form, which `n0` is the sum of.
+fn select_umull_smull(
+    dag: &mut SelectionDAG,
+    n0: &mut SDValue,
+    n1: &mut SDValue,
+) -> Option<(u16, bool)> {
+    use llrm_codegen::backend::selectiondag::known_bits::{masked_value_is_zero, num_sign_bits};
+    let (is_n0_sext, is_n1_sext) = (is_sign_extended(dag, *n0), is_sign_extended(dag, *n1));
+    if is_n0_sext && is_n1_sext {
+        return Some((aarch64_isd::SMULL, false));
+    }
+    let (is_n0_zext, is_n1_zext) = (is_zero_extended(dag, *n0), is_zero_extended(dag, *n1));
+    if is_n0_zext && is_n1_zext {
+        return Some((aarch64_isd::UMULL, false));
+    }
+    // "Select UMULL if we can replace the other operand with an extend."
+    let vt = dag.value_type(*n0);
+    let elt_size = vt.element().size_in_bits();
+    let high_half = (u128::MAX >> (128 - elt_size)) & !(u128::MAX >> (128 - elt_size / 2));
+    if is_n0_zext || is_n1_zext {
+        if masked_value_is_zero(dag, if is_n0_zext { *n1 } else { *n0 }, high_half) {
+            return Some((aarch64_isd::UMULL, false));
+        }
+    } else if vt == EVT::Simple(MVT::V2I64)
+        && masked_value_is_zero(dag, *n0, high_half)
+        && masked_value_is_zero(dag, *n1, high_half)
+    {
+        // "For v2i64 we look more aggressively at both operands being zero, to
+        // avoid scalarization."
+        return Some((aarch64_isd::UMULL, false));
+    }
+    if is_n0_sext || is_n1_sext {
+        if num_sign_bits(dag, if is_n0_sext { *n1 } else { *n0 }) > elt_size / 2 {
+            return Some((aarch64_isd::SMULL, false));
+        }
+    } else if vt == EVT::Simple(MVT::V2I64)
+        && num_sign_bits(dag, *n0) > elt_size / 2
+        && num_sign_bits(dag, *n1) > elt_size / 2
+    {
+        return Some((aarch64_isd::SMULL, false));
+    }
+    if !is_n1_sext && !is_n1_zext {
+        return None;
+    }
+    // "Look for (s/zext A + s/zext B) * (s/zext C)."
+    if is_n1_sext && is_add_sub_extended(dag, *n0, is_sign_extended) {
+        return Some((aarch64_isd::SMULL, true));
+    }
+    if is_n1_zext && is_add_sub_extended(dag, *n0, is_zero_extended) {
+        return Some((aarch64_isd::UMULL, true));
+    }
+    if is_n0_zext && is_add_sub_extended(dag, *n1, is_zero_extended) {
+        std::mem::swap(n0, n1);
+        return Some((aarch64_isd::UMULL, true));
+    }
     None
+}
+
+/// `isAddSubSExt` and `isAddSubZExt`: an add or a sub of two extended
+/// operands, each used once.
+fn is_add_sub_extended(
+    dag: &SelectionDAG,
+    n: SDValue,
+    extended: fn(&SelectionDAG, SDValue) -> bool,
+) -> bool {
+    matches!(dag.opcode(n), ISD::Add | ISD::Sub)
+        && [dag.operand(n, 0), dag.operand(n, 1)].into_iter().all(|one| dag.has_one_use(one.node) && extended(dag, one))
+}
+
+/// `isExtendedBUILD_VECTOR`: every lane a constant that fits half the lane.
+fn is_extended_build_vector(
+    dag: &SelectionDAG,
+    n: SDValue,
+    signed: bool,
+) -> bool {
+    if dag.opcode(n) != ISD::BuildVector {
+        return false;
+    }
+    let lane_bits = dag.value_type(n).element().size_in_bits();
+    let half = lane_bits / 2;
+    (0..dag.node(n).ops.len()).all(|at| {
+        let Some(bits) = dag.constant(dag.operand(n, at)) else { return false };
+        let bits = bits & (u128::MAX >> (128 - lane_bits));
+        if signed {
+            // `isIntN(HalfSize, C->getSExtValue())`
+            let value = ((bits << (128 - lane_bits)) as i128) >> (128 - lane_bits);
+            -(1i128 << (half - 1)) <= value && value < 1i128 << (half - 1)
+        } else {
+            bits < 1u128 << half
+        }
+    })
+}
+
+fn is_sign_extended(
+    dag: &SelectionDAG,
+    n: SDValue,
+) -> bool {
+    matches!(dag.opcode(n), ISD::SignExtend | ISD::AnyExtend) || is_extended_build_vector(dag, n, true)
+}
+
+fn is_zero_extended(
+    dag: &SelectionDAG,
+    n: SDValue,
+) -> bool {
+    matches!(dag.opcode(n), ISD::ZeroExtend | ISD::AnyExtend) || is_extended_build_vector(dag, n, false)
+}
+
+/// `skipExtensionForVectorMULL`: the operand truncated to half the lane (the
+/// combiner folds the extension away).
+fn skip_extension_for_vector_mull(
+    dag: &mut SelectionDAG,
+    n: SDValue,
+) -> SDValue {
+    let half = match dag.value_type(n) {
+        EVT::Simple(MVT::V8I16) => MVT::V8I8,
+        EVT::Simple(MVT::V4I32) => MVT::V4I16,
+        EVT::Simple(MVT::V2I64) => MVT::V2I32,
+        vt => unreachable!("{vt:?} is not a vector MULL operand"),
+    };
+    dag.get_node(ISD::Truncate, EVT::Simple(half), &[n])
+}
+
+/// `performTruncateCombine`, the `DUP` arm
+/// ([L23964](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L23964)):
+/// a 64-bit truncate of a splat is the splat of the truncated scalar. DEVIATE
+/// MUL2 (owner llrm-arm64-vec, exit 2026-11-27): the `ADDHN` and the
+/// `extract_vector_elt` arms are not translated.
+pub fn truncate_combine(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (vt, n0) = (dag.value_type(node), dag.operand(node, 0));
+    if !(vt.is_vector() && vt.size_in_bits() == 64)
+        || !dag.has_one_use(n0.node)
+        || dag.opcode(n0) != ISD::Target(aarch64_isd::DUP)
+    {
+        return None;
+    }
+    let mut op = dag.operand(n0, 0);
+    if vt.element() == EVT::I32 && dag.value_type(op) == EVT::I64 {
+        op = dag.get_node(ISD::Truncate, EVT::I32, &[op]);
+    }
+    Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[op]))
+}
+
+/// `performDUPCombine`, the first arm
+/// ([L22164](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L22164)):
+/// "If "v2i32 DUP(x)" and "v4i32 DUP(x)" both exist, use an extract from the
+/// 128bit vector version." DEVIATE MUL3 (owner llrm-arm64-vec, exit
+/// 2026-11-27): the `DUP` of a load, of a float compare or of an extracted
+/// lane, and `performPostLD1Combine`, are not translated.
+pub fn dup_combine(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    after_legalize: bool,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !(after_legalize && vt.is_vector() && vt.size_in_bits() == 64) {
+        return None;
+    }
+    let doubled = double_lanes(vt)?;
+    let ops = dag.node(node).ops.clone();
+    let wide = dag.find_node(dag.opcode(node), doubled, &ops)?;
+    let zero = dag.get_constant(0, EVT::I64);
+    Some(dag.get_node(ISD::ExtractSubvector, vt, &[wide, zero]))
+}
+
+/// `getDoubleNumVectorElementsVT`: the 128-bit vector of a 64-bit one's lanes.
+fn double_lanes(vt: EVT) -> Option<EVT> {
+    Some(EVT::Simple(match vt {
+        EVT::Simple(MVT::V8I8) => MVT::V16I8,
+        EVT::Simple(MVT::V4I16) => MVT::V8I16,
+        EVT::Simple(MVT::V2I32) => MVT::V4I32,
+        EVT::Simple(MVT::V2F32) => MVT::V4F32,
+        _ => return None,
+    }))
+}
+
+/// `performMULLCombine`, `tryCombineLongOpWithDup`
+/// ([L24761](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L24761)):
+/// a long multiply of the high half of a vector and a splat takes the high
+/// half of a wider splat, so that `SMULL2` matches. DEVIATE MUL4 (owner
+/// llrm-arm64-vec, exit 2026-11-27): `tryCombineMULLWithUZP1` is not
+/// translated.
+pub fn mull_combine(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    before_legalize_ops: bool,
+) -> Option<SDValue> {
+    if before_legalize_ops {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (lhs, rhs) = if is_essentially_extract_high_subvector(dag, lhs) {
+        (lhs, try_extend_dup_to_extract_high(dag, rhs)?)
+    } else if is_essentially_extract_high_subvector(dag, rhs) {
+        (try_extend_dup_to_extract_high(dag, lhs)?, rhs)
+    } else {
+        return None;
+    };
+    let vt = dag.value_type(node);
+    Some(dag.get_node(dag.opcode(node), vt, &[lhs, rhs]))
+}
+
+/// `isEssentiallyExtractHighSubvector`.
+fn is_essentially_extract_high_subvector(
+    dag: &SelectionDAG,
+    mut n: SDValue,
+) -> bool {
+    if dag.opcode(n) == ISD::BitCast {
+        n = dag.operand(n, 0);
+    }
+    dag.opcode(n) == ISD::ExtractSubvector
+        && dag.constant(dag.operand(n, 1)) == Some(u128::from(dag.value_type(dag.operand(n, 0)).lanes() / 2))
+}
+
+/// `tryExtendDUPToExtractHigh`: a splat (or an immediate vector) of 64 bits
+/// is the high half of the one of 128 bits.
+fn try_extend_dup_to_extract_high(
+    dag: &mut SelectionDAG,
+    mut n: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(n);
+    if dag.opcode(n) == ISD::ExtractSubvector && dag.constant(dag.operand(n, 1)) == Some(0) {
+        n = dag.operand(n, 0);
+    }
+    use aarch64_isd::{
+        DUP, DUPLANE8, DUPLANE16, DUPLANE32, DUPLANE64, MOVI, MOVIedit, MOVImsl, MOVIshift, MVNImsl, MVNIshift,
+    };
+    let ISD::Target(opcode) = dag.opcode(n) else { return None };
+    if ![DUP, DUPLANE8, DUPLANE16, DUPLANE32, DUPLANE64, MOVI, MOVIshift, MOVIedit, MOVImsl, MVNIshift, MVNImsl]
+        .contains(&opcode)
+        || vt.size_in_bits() != 64
+    {
+        return None;
+    }
+    let lanes = vt.lanes();
+    if dag.value_type(n).size_in_bits() == 64 {
+        let wide = double_lanes(vt)?;
+        let ops = dag.node(n).ops.clone();
+        n = dag.get_node(ISD::Target(opcode), wide, &ops);
+    }
+    let at = dag.get_constant(u128::from(lanes), EVT::I64);
+    Some(dag.get_node(ISD::ExtractSubvector, vt, &[n, at]))
 }
 
 /// `LowerVECTOR_SHUFFLE`, as far as a splat of a scalar.
@@ -214,8 +614,21 @@ pub fn lower_vector_shuffle(
     if dag.opcode(v1) == ISD::BuildVector && dag.constant(dag.operand(v1, lane as usize)).is_none() {
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[dag.operand(v1, lane as usize)]));
     }
-    // DEVIATE VEC1: `constructDup` (a lane of a vector) is not translated.
-    None
+    // `constructDup`: `DUPLANE` of the lane of the vector. DEVIATE VEC1
+    // (owner llrm-arm64-vec, exit 2026-11-27): only a 128-bit source of the
+    // result's own type; the pin also widens a 64-bit one and extracts a
+    // lane from a wider one.
+    if dag.value_type(v1) != vt || vt.size_in_bits() != 128 {
+        return None;
+    }
+    let opcode = match vt.element().size_in_bits() {
+        8 => aarch64_isd::DUPLANE8,
+        16 => aarch64_isd::DUPLANE16,
+        32 => aarch64_isd::DUPLANE32,
+        _ => aarch64_isd::DUPLANE64,
+    };
+    let index = dag.get_constant(lane as u128, EVT::I64);
+    Some(dag.get_node(ISD::Target(opcode), vt, &[v1, index]))
 }
 
 /// The constant every lane of `operand` is, at the lane's width
@@ -265,4 +678,150 @@ pub fn lower_vector_shift(
     let count = dag.get_constant_with(u128::from(amount), EVT::I32, true, false);
     let flags = dag.node(op).flags;
     Some(dag.get_node_flags(ISD::Target(opcode), vt, &[value, count], flags))
+}
+
+/// `performVectorExtCombine`
+/// ([L21463](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L21463)):
+/// an operation on two extensions of one narrow type, in a vector wider than a
+/// register, is made at half the width and extended.
+pub fn perform_vector_ext_combine(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !vt.is_vector() || vt.size_in_bits() <= 128 {
+        return None;
+    }
+    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let is_extend = |dag: &SelectionDAG, op: SDValue| matches!(dag.opcode(op), ISD::ZeroExtend | ISD::SignExtend);
+    if !is_extend(dag, op0) || !is_extend(dag, op1) {
+        return None;
+    }
+    let (n0, n1) = (dag.operand(op0, 0), dag.operand(op1, 0));
+    if dag.value_type(n0) != dag.value_type(n1) {
+        return None;
+    }
+    let opcode = dag.opcode(node);
+    if opcode == ISD::Mul && dag.opcode(op0) != dag.opcode(op1) {
+        return None;
+    }
+    let (from, to) = (dag.value_type(n0).element().size_in_bits(), vt.element().size_in_bits());
+    if !((to == 32 && from == 8) || (to == 64 && (from == 8 || from == 16))) {
+        return None;
+    }
+    let half = EVT::Simple(MVT::vector(MVT::integer(to / 2)?, vt.lanes())?);
+    let new0 = dag.get_node(dag.opcode(op0), half, &[n0]);
+    let new1 = dag.get_node(dag.opcode(op1), half, &[n1]);
+    let narrow = dag.get_node(opcode, half, &[new0, new1]);
+    let extend = if opcode == ISD::Mul { dag.opcode(op0) } else { ISD::SignExtend };
+    Some(dag.get_node(extend, vt, &[narrow]))
+}
+
+/// `convertMulToShlAdd`
+/// ([L6164](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L6164)):
+/// a multiply of a `v2i64` by a splat of `2^n` plus or minus `2^m` is shifts
+/// and an add or subtract.
+fn convert_mul_to_shl_add(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let splat = splat_constant(dag, dag.operand(node, 1))? as i64;
+    let negative = splat < 0;
+    let mut value = splat.unsigned_abs();
+    if value == 0 {
+        return None;
+    }
+    let zeros = value.trailing_zeros();
+    value >>= zeros;
+    let (math, shift) = if (value - 1).is_power_of_two() {
+        (ISD::Add, (value - 1).ilog2())
+    } else if (value + 1).is_power_of_two() {
+        (ISD::Sub, (value + 1).ilog2())
+    } else {
+        return None;
+    };
+    let lhs = dag.operand(node, 0);
+    let amount = dag.get_constant(u128::from(shift + zeros), vt);
+    let shifted = dag.get_node(ISD::Shl, vt, &[lhs, amount]);
+    let low = if zeros != 0 {
+        let amount = dag.get_constant(u128::from(zeros), vt);
+        dag.get_node(ISD::Shl, vt, &[lhs, amount])
+    } else {
+        lhs
+    };
+    let combined = dag.get_node(math, vt, &[shifted, low]);
+    Some(if negative { dag.get_negative(combined, vt) } else { combined })
+}
+
+/// `getReductionSDNode`
+/// ([L18320](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18320)):
+/// the across-lanes node on the vector, then its lane 0.
+fn reduction_node(
+    dag: &mut SelectionDAG,
+    opcode: u16,
+    node: SDValue,
+) -> SDValue {
+    let vector = dag.operand(node, 0);
+    let reduced = dag.get_node(ISD::Target(opcode), dag.value_type(vector), &[vector]);
+    let lane = dag.get_constant(0, EVT::I64);
+    dag.get_node(ISD::ExtractElement, dag.value_type(node), &[reduced, lane])
+}
+
+/// `getVectorBitwiseReduce`
+/// ([L18327](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18327)):
+/// the halves combined as one 64-bit value, whose own halves are then
+/// combined by shifts until one lane is left.
+///
+/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-11-27): the pin splits a
+/// 128-bit vector into two 64-bit vectors (`and v0.8b`); there are none here,
+/// so the two `i64` lanes are taken and combined as scalars. The same
+/// instructions, in another order and register file.
+fn bitwise_reduce(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let base = dag.opcode(node).vec_reduce_base_opcode()?;
+    let vector = dag.operand(node, 0);
+    let vector_vt = dag.value_type(vector);
+    let element = vector_vt.element();
+    let lanes = vector_vt.lanes();
+    let wide = EVT::Simple(MVT::V2I64);
+    let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
+    let lane = |dag: &mut SelectionDAG, at: u128| {
+        let index = dag.get_constant(at, EVT::I64);
+        dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+    };
+    let (low, high) = (lane(dag, 0), lane(dag, 1));
+    let mut scalar = dag.get_node(base, EVT::I64, &[low, high]);
+    // `NumElems / 2` of the 64-bit half.
+    let mut shift = lanes / 4;
+    while shift > 0 {
+        let amount = dag.get_constant(u128::from(shift * element.size_in_bits()), EVT::I64);
+        let shifted = dag.get_node(ISD::Srl, EVT::I64, &[scalar, amount]);
+        scalar = dag.get_node(base, EVT::I64, &[scalar, shifted]);
+        shift /= 2;
+    }
+    let result = dag.get_any_ext_or_trunc(scalar, element);
+    Some(dag.get_any_ext_or_trunc(result, dag.value_type(node)))
+}
+
+/// `AArch64TargetLowering::LowerVECREDUCE`
+/// ([L18443](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18443)),
+/// the NEON arm: `LowerReductionToSVE` answers none with SVE off, and there
+/// are no float reductions.
+pub fn lower_vec_reduce(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let across_lanes = match dag.opcode(node) {
+        ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => return bitwise_reduce(dag, node),
+        ISD::VecReduceAdd => aarch64_isd::UADDV,
+        ISD::VecReduceSMax => aarch64_isd::SMAXV,
+        ISD::VecReduceSMin => aarch64_isd::SMINV,
+        ISD::VecReduceUMax => aarch64_isd::UMAXV,
+        ISD::VecReduceUMin => aarch64_isd::UMINV,
+        _ => return None,
+    };
+    Some(reduction_node(dag, across_lanes, node))
 }

@@ -195,31 +195,14 @@ impl Tti for Wasm {
         "WebAssembly"
     }
 
-    /// SZ1: a size build keeps a callee that inlining would copy into
-    /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
-    /// The pin's `OptSizeThreshold` 50 allows the growth.
-    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-24): the pin inlines it.
-    /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
-    /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245). On the whole
-    /// corpus (198 rows, 2026-11-10) 20 -O1 rows were above it, +1 256 B: nine
-    /// of them held inlines the pin prices below zero (next hook).
-    /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
-    /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
-    /// Off at tip 2f41481d12 (2026-11-13, 604 tests/run/c cells): 52 cells
-    /// larger, +45 189 B; 2 smaller, -36 B; above the pin 5 -> 8 (div8_os,
-    /// pattern_fill, shrink_wrapped_frame, shrink_wrapped_saves at -O1;
-    /// memcpy_libcall -Os). Closes byvalue_struct_address (49 -> 31 B).
-    /// Next step, not "off": a trial-priced inline (`walk.rs` sized()) that counts
-    /// the dead store after main folds. Acceptance: those 8 cells at or below the pin.
+    /// SZ1 retired (2026-11-13): the pin's `OptSizeThreshold` 50 decides, as the pin does
+    /// (`tests/os_inline_growth.rs`). The bound had kept `sf_cmp_bits` (cost 35, 7 sites) a
+    /// call because our InstCombine made `scmp` of its select chain where the pin's
+    /// `matchSymmetricPair` (equality `icmp`) left it at 50; with that translated, the bound
+    /// held 17 cells above the pin at -Os and 18 at -O1 (corpus, 195 cells; 0 lost at -Os,
+    /// 1 at -O1: row WSZ-32).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        true
-    }
-
-    /// The bound stands down where the pin's own cost is below zero: the pin
-    /// counts the inline as shrinking the caller (uint64_to_float -O1: six
-    /// `classify` calls kept at cost -15..-5, 241 B against the pin's 96).
-    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
-        true
+        false
     }
 
     /// A callee the -O1 size bound refused is tried inline as at -Os, the copy staying where the
@@ -540,5 +523,28 @@ mod tests {
         assert_eq!(cost("llvm.fmuladd.f64", CostKind::CodeSize), Cost::of(2));
         assert_eq!(cost("llvm.fmuladd.f32", CostKind::RecipThroughput), Cost::of(4));
         assert_eq!(cost("llvm.lifetime.start.p0", CostKind::CodeSize), Cost::FREE);
+    }
+
+    /// The saturating add, subtract and shift had no price, so a loop that held
+    /// one could not be sized or unrolled (ssub_sat_i64_loop, sat_sub_u64_shared_compare
+    /// -O2/-O3: the pin unrolls the 3-trip loop, ours kept it, +25 and +347 instructions).
+    #[test]
+    fn a_saturating_operation_has_the_pins_price() {
+        let cost = |name, kind| Wasm.intrinsic_cost(name, None, &[], kind);
+        assert_eq!(cost("llvm.ssub.sat.i64", CostKind::CodeSize), Cost::of(7));
+        assert_eq!(cost("llvm.usub.sat.i64", CostKind::CodeSize), Cost::of(3));
+        assert_eq!(cost("llvm.uadd.sat.i8", CostKind::Latency), Cost::of(3));
+        assert!(cost("llvm.sadd.sat.i32", CostKind::RecipThroughput).valid);
+    }
+
+    /// A loop that held a `memset` could not be sized, so it was never
+    /// unrolled (rep_count -O3: the 16-trip zero nest, a `memset` of 16 once
+    /// MemCpyOpt merged its stores, stayed a loop; the pin unrolls it).
+    #[test]
+    fn a_memory_intrinsic_has_the_pins_price() {
+        let cost = |name| Wasm.intrinsic_cost(name, None, &[], CostKind::CodeSize);
+        assert_eq!(cost("llvm.memset.p0.i32"), Cost::of(1));
+        assert_eq!(cost("llvm.memcpy.p0.p0.i32"), Cost::of(4));
+        assert_eq!(cost("llvm.memmove.p0.p0.i64"), Cost::of(1));
     }
 }

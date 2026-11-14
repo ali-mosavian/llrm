@@ -52,10 +52,18 @@ tail_dup_hot_threshold  8    8
 pairing                 =    =
 # DEVIATE TA-LC (owner anyisa, exit 2026-11-27): measured on the 486 (m32 A/B, 1984 cells); P5 off until measured.
 commute_loop_carried    1    0
+# DEVIATE FB3 (owner x86-m32-b, exit 2026-11-24): see CpuTable::widen_word_immediate. 486 measured, P5 off until measured.
+widen_word_immediate    1    0
+# DEVIATE TA-11 (owner x86-m32-b, exit 2026-11-24): see CpuTable::three_address_to_known_register. 486 measured, P5 off until measured.
+three_address_to_known_register 1 0
 # DEVIATE PHI-SHARE (owner x87, exit 2026-11-29): see CpuTable::share_congruent_phis.
+# DEVIATE UNORDERED-ODDS (owner x87, exit 2026-11-24): see CpuTable::unordered_branch_odds.
+unordered_branch_odds 1 1
 share_congruent_phis   1    1
 # DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): equal literal stores share a register at -O2/-O3 outside loops; pin: `MOV32mi`s. 2026-11-08 A/B: nbody -64 B, jpeg -78 B at -O2, 0 clk.
 share_literal_stores    1    1
+# DEVIATE ZEXT-AND (owner x86-m32-b, exit 2026-11-24): gcc `X86_TUNE_ZERO_EXTEND_WITH_AND` (m_486 | m_PENT): `movzx r,r` is `and r,mask` where flags are dead at speed; pin: `movzx` (3 clk on the 486).
+zero_extend_with_and    1    1
 # Pin: MOV32r1, `OptForSize, Not64BitMode` (m64 has `mov r,1`, m16 never reaches the DAG form).
 size_one_is_xor_inc     1    1
 # DEVIATE SELB (owner x86-m32, exit 2026-11-30): a select of two constants is a branch in blocks run >= 2x per entry at -O2/-O3; pin: setcc+arithmetic.
@@ -141,6 +149,7 @@ smul_max_w4     =    =
 smul_full_w2     -   = 
 # Intel 240440-002 Table 10.1 note 3: n = 3 for a positive multiplier, 5 for a negative one (the bits floor of 10 + max(bits, n)).
 smul_negative_bits  =    -
+smul_multiplier     =    -
 sdiv_w2         =    = 
 sdiv_w4         =    = 
 udiv_w2         =    = 

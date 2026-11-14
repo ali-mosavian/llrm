@@ -49,6 +49,8 @@ use super::libcalls::{self, Cmp3, Libcall};
 use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 
+mod vector;
+
 /// The width of the C `int` the soft-float routines take for a conversion: a
 /// 32-bit integer is passed as is, a narrower one is extended to it.
 const INT_BITS: u32 = 32;
@@ -79,6 +81,8 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// A vector value and its two halves (`SplitVectors`).
+    split: HashMap<SDValue, (SDValue, SDValue)>,
     /// A float value and the integer of its width that stands for it
     /// (`SoftenedFloats`).
     softened: HashMap<SDValue, SDValue>,
@@ -136,6 +140,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            split: HashMap::default(),
             softened: HashMap::default(),
             target: None,
             hooks: None,
@@ -261,6 +266,12 @@ impl<'a> TypeLegalizer<'a> {
                     self.soften_float_result(value)?;
                     return Ok(true);
                 }
+                TypeAction::SplitVector => {
+                    if !self.custom_lower_node(n, vt) {
+                        self.split_vector_result(value)?;
+                    }
+                    return Ok(true);
+                }
                 // The builder creates a vector only where a register class
                 // holds it.
                 TypeAction::ScalarizeVector => {
@@ -290,6 +301,7 @@ impl<'a> TypeLegalizer<'a> {
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
                 TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
+                TypeAction::SplitVector => self.split_vector_operand(n, at)?,
                 TypeAction::ScalarizeVector => {
                     let op = self.dag.node(SDValue { node: n, res: 0 }).opcode;
                     return Err(LegalizeError::Unsupported {
@@ -552,6 +564,15 @@ impl<'a> TypeLegalizer<'a> {
                     )
                 } else {
                     let bits = from.size_in_bits();
+                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a value known non-negative (`nneg`, or
+                    // a clear sign bit), where the target asks (`TargetLowering::signed_conversion_of_nonneg`)
+                    let nonneg = op == ISD::UIntToFp
+                        && self.tli.signed_conversion_of_nonneg()
+                        && (self.dag.node(value).flags.0 & SDNodeFlags::NON_NEG.0 != 0
+                            || bits < INT_BITS
+                            || (bits <= INT_BITS
+                                && super::known_bits::masked_value_is_zero(self.dag, operand, 1u128 << (bits - 1))));
+                    let op = if nonneg { ISD::SIntToFp } else { op };
                     let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
                     let arg =
                         if bits < INT_BITS { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
@@ -903,6 +924,12 @@ impl<'a> TypeLegalizer<'a> {
                 let (lhs, rhs) = (self.promoted_integer(lhs), self.promoted_integer(rhs));
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
+            }
+            // `PromoteIntRes_VECREDUCE`: the result type changes, the vector
+            // does not.
+            op if op.vec_reduce_base_opcode().is_some() => {
+                let vector = self.dag.operand(value, 0);
+                self.dag.get_node(op, to, &[vector])
             }
             op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
                 // `PromoteIntRes_SimpleIntBinOp` with `SExtPromotedInteger` for

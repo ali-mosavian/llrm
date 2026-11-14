@@ -209,9 +209,12 @@ def one(job):
     w = Path(tempfile.mkdtemp(prefix=f"zp-{path.stem}-", dir=work))
     want = run.expected(path.with_suffix(".out"))
     rows, reasons = [], {}
-    not_a_bar = guard.incomparable(path.read_text(errors="replace"))
-    columns = [] if ctx.ours_only or not_a_bar else SDCC
+    source = path.read_text(errors="replace")
+    not_a_bar = guard.incomparable(source)
+    none = guard.no_bar(source)
+    columns = [] if ctx.ours_only or not_a_bar or none else SDCC
     reasons.update({tag: f"NOTCOMPARABLE {not_a_bar}" for tag, _ in SDCC if not_a_bar and not ctx.ours_only})
+    reasons.update({tag: f"NOBAR {none}" for tag, _ in SDCC if none and not not_a_bar})
     cells = ([] if ctx.sdcc_only else [("ours", lambda: ours_cell(path, w, ctx, want))]) + \
             [(tag, lambda tag=tag, flags=flags: sdcc_cell(path, w, tag, flags, ctx, want)) for tag, flags in columns]
     for column, cell in cells:
@@ -250,6 +253,7 @@ def main():
     ap.add_argument("--allow-runtime-mismatch", action="store_true")
     ap.add_argument("--gcc-column", help="the gcc-z80 fork's run at this level (run.py of the spike): its cells are a bar beside SDCC's")
     ap.add_argument("--no-library-checks", action="store_true", help="skip the soft-float library's own run checks (a full sweep runs them first)")
+    ap.add_argument("--same-width", action="store_true", help="build every source that names `double` as float with single-precision literals (SDCC's double is 32 bits): ours and SDCC run the same width")
     ap.add_argument("--no-softfloat", action="store_true", help="run without Z80_LIBC_EXTRA: the float programs will not link")
     ctx = ap.parse_args()
     ctx.gcc_column = guard.read_gcc_column(ctx.gcc_column) if ctx.gcc_column else {}
@@ -275,6 +279,10 @@ def main():
         ctx.graph = measure.runtime_calls(str(run.RUNTIME))
         ctx.harness_ours = harness(run.REPORT, run.CRT0)
         ctx.harness_sdcc = harness(REPORT_SDCC, CRT0_SDCC)
+        original = sources
+        if ctx.same_width:
+            sources = same_width.prepare(sources, Path(work) / "same-width")
+            ctx.rewritten = {made.stem for made, was in zip(sources, original) if made != was}
         with ThreadPoolExecutor(ctx.jobs) as pool:
             done = list(pool.map(one, [(s, work, ctx) for s in sources]))
     finally:
@@ -285,6 +293,8 @@ def main():
     reasons = {name: why for name, _, why in done}
     required = (lambda tag: tag.startswith("sdcc")) if ctx.sdcc_only else (lambda tag: tag == "ours")
     excused = {n for n, why in reasons.items() if why and ctx.sdcc_only}  # a recorded SDCC error is a gap in the bar
+    if ctx.same_width:  # a program whose f32 output is not the f64 one has no same-width cell: not a lost program
+        excused |= same_width.width_void(ctx.rewritten, reasons)
     lost = guard.dropped(expected, results, required, excused)
     with open(ctx.out, "w") as f:
         for name, rows in results:
@@ -294,9 +304,8 @@ def main():
     with open(ctx.out + ".failed", "w") as f:
         f.writelines(f"{n}\t{why(n)}\n" for n in sorted(lost))
     with open(ctx.out + ".nobar", "w") as f:
-        for name, rows in results:
-            if not guard.has_bar(rows):
-                f.write(f"{name}\t" + "; ".join(f"{c}: {r}" for c, r in sorted(reasons[name].items())) + "\n")
+        for name in guard.unmeasured(results, reasons):
+            f.write(f"{name}\t" + "; ".join(f"{c}: {r}" for c, r in sorted(reasons[name].items())) + "\n")
     line, ok = guard.summary(expected, results, {n: why(n) for n in lost}, required, excused)
     print(line)
     sys.exit(0 if ok else 1)

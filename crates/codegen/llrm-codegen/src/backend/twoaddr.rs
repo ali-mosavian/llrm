@@ -86,10 +86,15 @@ pub struct TwoAddress {
     pub loop_carried: bool,
     /// DEVIATE TA-LC2 (`Profile::commutes_loop_carried_flow`).
     pub loop_carried_flow: bool,
+    /// DEVIATE TA-11 (`Profile::three_address_to_known_register`).
+    pub to_known_register: bool,
     /// -O0: only the copies that untie, no liveness (the pin's
     /// `tryInstructionTransform` returns at `CodeGenOptLevel::None`,
     /// TwoAddressInstructionPass.cpp#L1352-L1354).
     pub unoptimized: bool,
+    /// The register file, whose pins (`mul`'s AX and DX) are copies the walk
+    /// reads.
+    pub classes: Option<std::rc::Rc<crate::backend::classes::RegisterClasses>>,
 }
 
 impl TwoAddress {
@@ -112,7 +117,12 @@ impl LIRTransform for TwoAddress {
         Ok(if self.unoptimized {
             untied_only(&body)
         } else {
-            tied_with(&body, self.lea, self.loop_carried, self.loop_carried_flow)
+            tied_with_classes(
+                &body,
+                self.lea,
+                (self.loop_carried, self.loop_carried_flow, self.to_known_register),
+                self.classes.as_deref(),
+            )
         })
     }
 }
@@ -158,15 +168,26 @@ pub fn tied(
     body: &LirBody,
     lea: crate::twoaddress::ThreeAddress,
 ) -> LirBody {
-    tied_with(body, lea, false, false)
+    tied_with(body, lea, false, false, false)
 }
 
-/// [`tied`], with DEVIATE TA-LC and TA-LC2 on or off.
+/// [`tied`], with DEVIATE TA-LC, TA-LC2 and TA-11 on or off.
 pub fn tied_with(
     body: &LirBody,
     lea: crate::twoaddress::ThreeAddress,
     loop_carried: bool,
     loop_carried_flow: bool,
+    to_known_register: bool,
+) -> LirBody {
+    tied_with_classes(body, lea, (loop_carried, loop_carried_flow, to_known_register), None)
+}
+
+/// [`tied_with`] (TA-LC, TA-LC2, TA-11), reading `classes`' pins as copies.
+pub fn tied_with_classes(
+    body: &LirBody,
+    lea: crate::twoaddress::ThreeAddress,
+    (loop_carried, loop_carried_flow, to_known_register): (bool, bool, bool),
+    classes: Option<&crate::backend::classes::RegisterClasses>,
 ) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
@@ -195,7 +216,9 @@ pub fn tied_with(
         };
         let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len())
             .with_loop_carried(loop_carried)
-            .with_loop_carried_flow(loop_carried_flow);
+            .with_loop_carried_flow(loop_carried_flow)
+            .with_to_known_register(to_known_register)
+            .with_classes(classes);
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;
@@ -637,6 +660,9 @@ fn profitable_to_convert(
     let Some(Loc::Held(into)) = one.what.as_ref().and_then(|what| what.dests.first()) else { return false };
     match (walk.src_register(source), walk.dst_register(into.value)) {
         (Some(from), Some(to)) => regs.root(from) != regs.root(to),
+        // DEVIATE TA-11: the pin needs both maps; a source with none (a loop
+        // phi in the exit block) leaves a copy into the known register.
+        (None, Some(_)) => walk.converts_to_known_register(),
         _ => false,
     }
 }
@@ -1059,6 +1085,46 @@ mod tests {
             .map(|what| what.sources.clone())
             .collect();
         assert_eq!(copied[0], vec![held(1, 4)], "the first add copies the operand that arrives in EAX: {first:?}");
+    }
+
+    /// fib -Os: the loop-exit sum `n + acc` has no known register for `n` (a
+    /// loop phi, copied in other blocks) and ends in EAX for the return: the
+    /// pin's `isProfitableToConv3Addr` needs both and leaves `add; mov eax`
+    /// (DEVIATE TA-11 makes it `lea eax,[a+b]`, one instruction fewer a call:
+    /// -Os fib 372157 -> 323205 clk at +2 B).
+    #[test]
+    fn test_a_dying_source_with_no_known_register_whose_sum_ends_in_eax_is_an_lea_where_ta11_is_on() {
+        use llrm_lir::registers::RegId;
+        let nothing = |at: i64| {
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
+            Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
+        };
+        let mut ret = nothing(5);
+        ret.requires = vec![(Held { value: 9, width: 4, offset: 0 }, RegId::EAX)];
+        ret.uses = vec![9];
+        let input = LirBody::new(
+            "exit_sum",
+            0,
+            vec![
+                LirBlock::new(
+                    0,
+                    vec![
+                        imm_def(0, 1),
+                        imm_def(1, 2),
+                        imm_def(2, 4),
+                        sum_into(3, 3, 1, 2),
+                        sum_into(4, 9, 3, 4),
+                        Arc::new(ret),
+                    ],
+                )
+                .into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
+        assert!(!lea(&tied_with(&input, All, false, false, false)), "the pin's rule: an add and a copy");
+        assert!(lea(&tied_with(&input, All, false, false, true)), "TA-11: no copy of the source");
     }
 
     /// The sum of four arguments in registers, the pin's tree: `(a+b)+(c+d)`.
@@ -1507,9 +1573,9 @@ mod tests {
                     _ => None,
                 })
         };
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false)), Some(8), "off is the pin's order");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false, false)), Some(8), "off is the pin's order");
         assert_eq!(copied_from(&tied(&loop_body(), Off)), Some(8), "the default is off");
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, false)), Some(7), "on ties the loop-carried source");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, false, false)), Some(7), "on ties the loop-carried source");
     }
 
     /// x_adler's `a += (i * 31 + 7) & 255` (m32 -O2, 53,972 clk against gcc's
@@ -1557,13 +1623,13 @@ mod tests {
                     _ => None,
                 })
         };
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false)), Some(7), "off is the pin's order");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false, false)), Some(7), "off is the pin's order");
         assert_eq!(
-            copied_from(&tied_with(&loop_body(), Off, true, false)),
+            copied_from(&tied_with(&loop_body(), Off, true, false, false)),
             Some(7),
             "TA-LC alone does not follow copies into other blocks (-O1)"
         );
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, true)), Some(8), "on ties the loop-carried source");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, true, false)), Some(8), "on ties the loop-carried source");
     }
 
     /// `v8 := add v7, k` with `v7` read again by the `and` that follows (so the

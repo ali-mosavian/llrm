@@ -52,6 +52,9 @@ div_r16 = 24
 lahf = 3
 sahf = 2
 lea = 1
+# rep stosd: 7 + 4n (5 if n = 0), stosd 5, rep movsd 12 + 3n, mov m32,r32 1, jcc 1 / 3 taken: 80x86 Integer Instruction Set Timings,
+# the 486 column (www2.math.uni-wuppertal.de/~fpf/Uebungen/GdR-SS02/opcode_i.html, STOS and MOVS sections), a table of the
+# Intel486 data book's counts; the data book itself is not in the repo. Checked 2026-11-14, not measured.
 rep_stos = 7
 rep_stos_cell = 4
 rep_movs = 12
@@ -83,6 +86,11 @@ smul_max_w2 = 26
 smul_min_w4 = 13
 smul_max_w4 = 42
 smul_negative_bits = 5
+# Which operand of a two- or three-operand IMUL the early-out reads (note 3's "multiplier"): 0 the destination register's
+# value, 1 the source (the immediate of the three-operand form, else the r/m), 2 the cheaper of the two. [U: Intel 240440-002
+# Table 10.1 names a multiplier only for the one-operand forms, p. 134; the 80386 reference's `multiplicand * multiplier`
+# with a memory multiplier costing three more puts it in the r/m, and gcc's i486 mult_bit prices the constant]
+smul_multiplier = 1
 sdiv_w2 = 27
 sdiv_w4 = 43
 udiv_w2 = 24

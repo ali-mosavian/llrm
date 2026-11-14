@@ -36,8 +36,8 @@ pub(crate) fn unroll_pays(
 }
 
 /// Whether the full unroll of `lp` by `trips` stays, at the target's rate
-/// (`Tti::unroll_milliclocks_per_byte`). Only at -O2/-O3: -Os and -Oz hold to
-/// the pin's bytes.
+/// (`Tti::unroll_milliclocks_per_byte`). At -O2/-O3, and -O1 where bytes are
+/// priced at speed: -Os and -Oz hold to the pin's bytes.
 pub(super) fn full_unroll_pays(
     run: &mut Run,
     se: &mut ScalarEvolution,
@@ -48,7 +48,10 @@ pub(super) fn full_unroll_pays(
     uce: &UnrollCostEstimator,
     up: &UnrollingPreferences,
 ) -> bool {
-    let rate = run.tti.unroll_milliclocks_per_byte();
+    // DEVIATE UNROLL-SPEED-TRIAL: the compile that unrolls only what adds no bytes prices every loop, an inlinable
+    // callee's too.
+    let no_grow = trial::speed_unroll() == Some(trial::SpeedUnroll::NoGrow);
+    let rate = if no_grow { 1 << 40 } else { run.tti.unroll_milliclocks_per_byte() };
     // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
     // (the pin's order): a veto in a function the inliner can take leaves a
     // small rolled helper that is then inlined, and unrolled, at every site
@@ -57,11 +60,12 @@ pub(super) fn full_unroll_pays(
     // (`-fno-inline-functions` with called-once off, or `noinline`) there is
     // no late pass for it: the loop is priced here (huffman_decode -O3: 17
     // calls of getbit unrolled unpriced, +915 B over gcc).
-    let inlinable = !run.options.target_unrolling
+    let inlinable = !no_grow
+        && !run.options.target_unrolling
         && run.options.inliner_follows
         && llrm_mir::facts::Facts::of(&run.function.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
         && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
-    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || (run.options.opt_level < 2 && !run.options.speed_rate) {
         why(run, lp, &format!("unpriced unroll: inlinable {inlinable}, rate {rate}"));
         return true;
     }
@@ -377,9 +381,13 @@ fn priced_verdict(
         (Some(cost), None) => i64::from(cost.unrolled_cost),
         (None, None) => uce.unrolled_loop_size(up, trips) as i64,
     };
+    // The analysis counts in its own unit (a latency-weighted cost, summed over the trips it
+    // simulates), not in the static size `rolled_units` is: one trip's worth of it is the unit
+    // that converts its totals to the body's bytes and clocks.
+    let unit = analysis.as_ref().map_or(rolled_units, |cost| (i64::from(cost.rolled_dynamic_cost) / i64::from(trips.max(1))).max(1));
     let added = match analysis.as_ref() {
         Some(cost) if cost.through_call => (cost.unrolled_bytes - body_bytes).max(0),
-        _ => ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units,
+        _ => ((unrolled_units - unit).max(0) * body_bytes) / unit,
     };
     let (nested_uses, known) = constant_operand_uses(run, analyzed, lp);
     // The accesses of a local array the copies make constant-indexed: the
@@ -461,12 +469,12 @@ fn priced_verdict(
         })
     };
     let (saved, bound) = match run.outer.target().throughput().filter(sees_trip) {
-        None => ((saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs, (0, 0)),
+        None => ((saved_units * body_clocks / unit + constant_clocks - spill_clocks) * runs, (0, 0)),
         Some(tp) => {
             let weight = |block: BlockId| projection.map_or(1, |projection| projection.of(block));
             let trip = throughput::trip(run, &blocks, tp, &weight);
             let (trips, be) = (i64::from(trips), i64::from(up.be_insns));
-            let units = rolled_units.max(1);
+            let units = unit;
             let removed: Vec<i64> = tp
                 .resources
                 .iter()
@@ -495,7 +503,7 @@ fn priced_verdict(
             added,
             body_bytes,
             units: unrolled_units,
-            rolled: rolled_units,
+            rolled: unit,
             promoted,
             ints,
             floats,
@@ -504,7 +512,7 @@ fn priced_verdict(
             float_file: run.outer.target().float_registers(),
             rate,
             saved_units,
-            unit_clocks: body_clocks / rolled_units,
+            unit_clocks: body_clocks / unit,
             constant_clocks,
             runs,
             resource: bound.0,

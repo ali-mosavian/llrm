@@ -38,6 +38,7 @@ fn unrolled_at(
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
@@ -126,6 +127,7 @@ b2:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     let tti = crate::testing::Flagged::default();
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
@@ -264,6 +266,7 @@ b2:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
@@ -384,6 +387,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: std::rc::Rc::clone(&created),
             decided: Default::default(),
         },
@@ -409,6 +413,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: std::rc::Rc::clone(&created),
             decided: Default::default(),
         },
@@ -550,6 +555,7 @@ exit:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
     let after = printed(&module);
@@ -864,6 +870,7 @@ fn unrolled_o1_analysing(
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
@@ -998,6 +1005,7 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1029,6 +1037,7 @@ fn test_partial_unrolls_in_sequence_build_one_dominator_tree_and_nest() {
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     let (trees, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
@@ -1068,6 +1077,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1106,6 +1116,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1147,6 +1158,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1216,6 +1228,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created,
             decided: Default::default(),
         },
@@ -1281,6 +1294,7 @@ fn runtime_unrolled_text(
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     unroll_function(&mut module, "f", &tti, options).expect("unrolls")
 }
@@ -1519,6 +1533,51 @@ done:
     !printed(&module).contains("%i = phi")
 }
 
+/// An 8-trip loop that stores `(i + 1) * 179 + 85` divided by a loaded value (the divide stays in every copy, so a
+/// trip costs more to the analysis than its static size), unrolled at -O2 on x86-64 with a clock table, at `rate`
+/// milliclocks a byte; whether the loop is gone.
+fn divide_loop_unrolled_at(rate: i64) -> bool {
+    let mut module = parsed(
+        "@stream = global [8 x i32] zeroinitializer
+@zero = global i32 1
+
+define void @f() {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %n = add i32 %i, 1
+  %m = mul i32 %n, 179
+  %c = add i32 %m, 85
+  %z = load i32, ptr @zero
+  %d = sdiv i32 %c, %z
+  %p = getelementptr [8 x i32], ptr @stream, i32 0, i32 %i
+  store i32 %d, ptr %p
+  %next = add i32 %i, 1
+  %more = icmp ne i32 %next, 8
+  br i1 %more, label %loop, label %done
+
+done:
+  ret void
+}
+",
+    );
+    let clocks = OperationCosts { add: 1, multiply: 3, divide: 25, load: 1, store: 1, branch: 3, r#move: 1, ..OperationCosts::default() };
+    unroll_on_costed_core(&mut module, false, Some(clocks), true, 2, 0, rate);
+    !printed(&module).contains("%i = phi")
+}
+
+/// The analysis counts a trip in its own unit (the divide is 3 of them, the loop's static size 12 instructions);
+/// the pricing converted its totals to clocks and bytes by the static size, so the 126 clocks saved and 126 B
+/// added of the unroll read 147 and 153: it stayed rolled at 980 milliclocks a byte, where the savings repay it.
+#[test]
+fn test_a_priced_unroll_converts_the_analysis_by_the_trip_it_counted_not_the_static_size() {
+    assert!(divide_loop_unrolled_at(900), "premise: repaid at 900 milliclocks a byte under either conversion");
+    assert!(!divide_loop_unrolled_at(1100), "premise: not repaid at 1100 under either");
+    assert!(divide_loop_unrolled_at(980), "126 clocks against 126 B: repaid at 980");
+}
+
 /// The control: a rate that no saving repays keeps the loop rolled where 600 unrolls it, so the rate is read at all.
 #[test]
 fn test_an_absurd_rate_keeps_a_loop_rolled_that_a_real_one_unrolls() {
@@ -1529,6 +1588,19 @@ fn test_an_absurd_rate_keeps_a_loop_rolled_that_a_real_one_unrolls() {
 /// The unroll pass on `@f` of `module` for x86-64 at `rate` milliclocks a byte (the test's knob), with or without
 /// the SandyBridge throughput model.
 fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool, opt_level: u32, immediate_bits: u32, rate: i64) {
+    unroll_on_costed_core(module, throughput, None, target_unrolling, opt_level, immediate_bits, rate);
+}
+
+/// `unroll_on_core` on a target that states `operations`' clocks (none: a target with no clock table).
+fn unroll_on_costed_core(
+    module: &mut Module,
+    throughput: bool,
+    operations: Option<OperationCosts>,
+    target_unrolling: bool,
+    opt_level: u32,
+    immediate_bits: u32,
+    rate: i64,
+) {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(module).expect("closes");
@@ -1542,8 +1614,9 @@ fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool,
         prepare_for_lto: false,
         target_unrolling,
         inliner_follows: true,
+        speed_rate: false,
     };
-    let target = throughput.then(|| {
+    let target = (throughput || operations.is_some()).then(|| {
         use llrm_target::Target;
         let prices = llrm_target::CpuPrices {
             costs: Vec::new(),
@@ -1553,14 +1626,14 @@ fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool,
             call_registers: 3,
             float_registers: 0,
             address_forms: Vec::new(),
-            operations: OperationCosts::default(),
+            operations: operations.unwrap_or_default(),
             spaces: llrm_x86_m32::layout().spaces.roles,
             private: None,
             calling: None,
             foreign: llrm_target::Foreign::none(),
             ports: llrm_x86_m32::M32.flat_ports(),
         };
-        llrm_target::described_throughput(&prices, None, None, None, Some(sandy_bridge_throughput()))
+        llrm_target::described_throughput(&prices, None, None, None, throughput.then(sandy_bridge_throughput))
     });
     unroll_function_on(module, "f", &tti, options, target).expect("unrolls");
 }
@@ -1686,6 +1759,7 @@ declare void @late(ptr)
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     super::unroll_function_hiding(&mut module, "f", &tti, options, None, 1).expect("unrolls without a panic");
 }
@@ -1732,6 +1806,7 @@ b2:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
 }
@@ -1771,6 +1846,7 @@ fn runtime_unroll_counts(n: usize) -> usize {
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "premise: the loops are unrolled");
     llrm_analysis::scev::trip::backedge_taken_computations() - before

@@ -686,6 +686,9 @@ mod tuning_tests {
         assert!(table.lsr_size_order, "#9352, DEVIATE LSR-SIZE: -Os LSR orders by x86 bytes");
         assert!(!table.libc_memcpy, "m16 has no libc: a run-time copy stays a loop where `rep movs` is more bytes");
         assert!(table.pops_arguments_at_size, "DEVIATE PO1: -Os pops a call's arguments; only x86-m32 is the pin's");
+        assert_eq!(table.ext_load_extra_clocks, 2, "DEVIATE EXT-LOAD-COST: a widening load costs the extend's clocks over a load");
+        assert!(table.spill_fold.is_some(), "DEVIATE SPILL-FOLD: a folded spill is priced in clocks");
+        assert!(table.read_only_in_code, "#9694: a table one procedure reads follows it into its code segment (not at -Os, #9695)");
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,
@@ -696,6 +699,7 @@ mod tuning_tests {
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
+                fills_pattern_at_speed: false,
                 divide_by_bytes: false,
                 price_pin_multiplies: false,
                 // The pin's value: m16 sets it (DEVIATE LFTR1, `target.rs`).
@@ -728,6 +732,9 @@ mod tuning_tests {
                 x87_share_negated_products: false,
                 x87_zero_fill_at_size: false,
                 unroll_promotion_fits_x87_stack: false,
+                read_only_in_code: false,
+                ext_load_extra_clocks: 0,
+                spill_fold: None,
                 ..table
             },
             Tuning::PIN

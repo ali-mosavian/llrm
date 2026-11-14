@@ -402,3 +402,16 @@ fn a_vector_operation_is_not_visited_by_the_scalar_folds() {
         check(&text, &text);
     }
 }
+
+/// A vector `zext`/`sext`/`trunc` (a widened sum of bytes) reached `too_wide`,
+/// which reads an integer width, and panicked ("an integer") the compile of an
+/// extending reduction. The vector casts are left as they are.
+#[test]
+fn a_vector_cast_is_not_visited_by_the_scalar_folds() {
+    for (op, from, to) in [("zext", "i8", "i64"), ("sext", "i16", "i32"), ("trunc", "i64", "i16")] {
+        let text = format!(
+            "define <8 x {to}> @f(<8 x {from}> %x) {{\nb0:\n  %a = {op} <8 x {from}> %x to <8 x {to}>\n  ret <8 x {to}> %a\n}}\n"
+        );
+        check(&text, &text);
+    }
+}

@@ -383,6 +383,23 @@ impl Arrangement {
         }
     }
 
+    /// The arrangement of the lanes half as wide (`xtn`'s result, `sshll`'s
+    /// source): the low half's, or the whole register's when `high`.
+    pub fn narrowed(
+        self,
+        high: bool,
+    ) -> &'static str {
+        match (self, high) {
+            (Arrangement::H8, false) => "8b",
+            (Arrangement::H8, true) => "16b",
+            (Arrangement::S4, false) => "4h",
+            (Arrangement::S4, true) => "8h",
+            (Arrangement::D2, false) => "2s",
+            (Arrangement::D2, true) => "4s",
+            (Arrangement::B16, _) => unreachable!("no lane is narrower than a byte"),
+        }
+    }
+
     pub fn suffix(self) -> &'static str {
         match self {
             Arrangement::B16 => "16b",
@@ -443,7 +460,10 @@ impl VectorOp {
 
     /// Whether the operation is the bitwise `.16b` form whatever the lanes.
     pub fn is_logical(self) -> bool {
-        matches!(self, VectorOp::And | VectorOp::Bic | VectorOp::Orr | VectorOp::Orn | VectorOp::Eor)
+        matches!(
+            self,
+            VectorOp::And | VectorOp::Bic | VectorOp::Orr | VectorOp::Orn | VectorOp::Eor
+        )
     }
 }
 
@@ -532,12 +552,163 @@ impl VectorFpUnary {
     }
 }
 
+/// The across-lanes reductions of one vector register into a scalar:
+/// `addv`, `smaxv`, `sminv`, `umaxv`, `uminv`, and `addp` of the two `d` lanes.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorReduce {
+    Addv,
+    Smaxv,
+    Sminv,
+    Umaxv,
+    Uminv,
+    Addp,
+}
+
+impl VectorReduce {
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorReduce::Addv => "addv",
+            VectorReduce::Smaxv => "smaxv",
+            VectorReduce::Sminv => "sminv",
+            VectorReduce::Umaxv => "umaxv",
+            VectorReduce::Uminv => "uminv",
+            VectorReduce::Addp => "addp",
+        }
+    }
+
+    /// `(U, opcode)` of the "across lanes" class; `addp` is the "pairwise"
+    /// scalar class, which has the `addv` opcode.
+    pub(super) fn fields(self) -> (u32, u32) {
+        match self {
+            VectorReduce::Addv | VectorReduce::Addp => (0, 0b11011),
+            VectorReduce::Smaxv => (0, 0b01010),
+            VectorReduce::Sminv => (0, 0b11010),
+            VectorReduce::Umaxv => (1, 0b01010),
+            VectorReduce::Uminv => (1, 0b11010),
+        }
+    }
+}
+
 /// The shifts of a vector by an immediate.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VectorShift {
     Shl,
     Ushr,
     Sshr,
+}
+
+/// The lane of the narrow operand of a long or wide vector operation: the
+/// result lanes are twice as wide (`8b` to `8h`, `4h` to `4s`, `2s` to `2d`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum NarrowLane {
+    B,
+    H,
+    S,
+}
+
+impl NarrowLane {
+    /// The narrow lane size in bits.
+    pub fn bits(self) -> u32 {
+        match self {
+            NarrowLane::B => 8,
+            NarrowLane::H => 16,
+            NarrowLane::S => 32,
+        }
+    }
+
+    /// `size` of the encodings.
+    pub(super) fn size(self) -> u32 {
+        match self {
+            NarrowLane::B => 0,
+            NarrowLane::H => 1,
+            NarrowLane::S => 2,
+        }
+    }
+
+    /// The arrangement of the narrow operand, `8b` or, for the `2` forms,
+    /// `16b`.
+    pub fn narrow_suffix(
+        self,
+        high: bool,
+    ) -> &'static str {
+        match (self, high) {
+            (NarrowLane::B, false) => "8b",
+            (NarrowLane::B, true) => "16b",
+            (NarrowLane::H, false) => "4h",
+            (NarrowLane::H, true) => "8h",
+            (NarrowLane::S, false) => "2s",
+            (NarrowLane::S, true) => "4s",
+        }
+    }
+
+    /// The arrangement of the result and of the wide operand.
+    pub fn wide_suffix(self) -> &'static str {
+        match self {
+            NarrowLane::B => "8h",
+            NarrowLane::H => "4s",
+            NarrowLane::S => "2d",
+        }
+    }
+}
+
+/// The vector operations whose result lanes are twice as wide as a narrow
+/// operand's: a shift left (`ushll`, `sshll`), an add of a narrow operand
+/// to a wide one (`uaddw`, `saddw`) and a multiply, with or without the
+/// accumulate (`umull`, `smull`, `umlal`, `smlal`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorLongOp {
+    Ushll,
+    Sshll,
+    Uaddw,
+    Saddw,
+    Umull,
+    Smull,
+    Umlal,
+    Smlal,
+}
+
+impl VectorLongOp {
+    /// (`U`, the base of the encoding) of the three-register forms and of the
+    /// shift.
+    pub(super) fn fields(self) -> (u32, u32) {
+        match self {
+            VectorLongOp::Ushll => (1, 0x0F00_A400),
+            VectorLongOp::Sshll => (0, 0x0F00_A400),
+            VectorLongOp::Uaddw => (1, 0x0E20_1000),
+            VectorLongOp::Saddw => (0, 0x0E20_1000),
+            VectorLongOp::Umull => (1, 0x0E20_C000),
+            VectorLongOp::Smull => (0, 0x0E20_C000),
+            VectorLongOp::Umlal => (1, 0x0E20_8000),
+            VectorLongOp::Smlal => (0, 0x0E20_8000),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorLongOp::Ushll => "ushll",
+            VectorLongOp::Sshll => "sshll",
+            VectorLongOp::Uaddw => "uaddw",
+            VectorLongOp::Saddw => "saddw",
+            VectorLongOp::Umull => "umull",
+            VectorLongOp::Smull => "smull",
+            VectorLongOp::Umlal => "umlal",
+            VectorLongOp::Smlal => "smlal",
+        }
+    }
+
+    pub fn is_shift(self) -> bool {
+        matches!(self, VectorLongOp::Ushll | VectorLongOp::Sshll)
+    }
+
+    /// `smlal`, `umlal`: the product is added to `rd`.
+    pub fn accumulates(self) -> bool {
+        matches!(self, VectorLongOp::Umlal | VectorLongOp::Smlal)
+    }
+
+    /// `uaddw`, `saddw`: the first operand is wide.
+    pub fn adds_wide(self) -> bool {
+        matches!(self, VectorLongOp::Uaddw | VectorLongOp::Saddw)
+    }
 }
 
 impl Arrangement {
@@ -590,7 +761,10 @@ impl ImmShape {
 impl Fill {
     /// Whether it writes all 128 bits; `movi d` and the `.2s` forms write 64.
     pub fn is_quad(&self) -> bool {
-        !matches!(self, Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. })
+        !matches!(
+            self,
+            Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
+        )
     }
 }
 
@@ -966,6 +1140,28 @@ pub enum Inst {
         rn: Vreg,
         amount: u8,
     },
+    /// `ushll v.8h, v.8b, #0` (`extend`), `ushll2 v.8h, v.16b, #0`: the low or
+    /// high half of the 16-byte `rn` (the 8-byte register for the low half)
+    /// shifted left, lanes twice as wide.
+    VectorLongShift {
+        op: VectorLongOp,
+        lane: NarrowLane,
+        high: bool,
+        rd: Vreg,
+        rn: Vreg,
+        amount: u8,
+    },
+    /// `uaddw v.8h, v.8h, v.8b`, `umull v.8h, v.8b, v.8b` and their `2` forms:
+    /// the narrow `rm` (the high half of it with `high`), and `rn` (narrow
+    /// too for `umull`), into wide lanes.
+    VectorLong {
+        op: VectorLongOp,
+        lane: NarrowLane,
+        high: bool,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
     /// `not v.16b` (`mvn`).
     VectorNot {
         rd: Vreg,
@@ -996,6 +1192,101 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
         index: u8,
+    },
+    /// `addv s, v.4s`: every lane of `rn` reduced into the scalar register
+    /// `rd` of the lane's size (`ADDVv4i32v`); `addp d, v.2d` for `D2`
+    /// (`ADDPv2i64p`).
+    VectorReduce {
+        op: VectorReduce,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+    },
+    /// `ins v.d[index], x`: a general register into one lane of `rd`, the
+    /// others kept (`INSvi64gpr`; a `w` register for the narrower lanes).
+    VectorInsGpr {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Gpr,
+        index: u8,
+    },
+    /// `fmla v.4s, v.4s, v.s[index]`: `rd` is read and written; `lanes` is
+    /// `S4` or `D2`.
+    VectorFmaLane {
+        op: VectorFma,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
+    /// `mov d0, v1.d[index]` (`DUPi64`; `s`, `h`, `b` for the others): one
+    /// lane of `rn` as a scalar.
+    VectorDupScalar {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        index: u8,
+    },
+    /// `uzp1 v.8h, v.8h, v.8h` (`UZP1v8i16`; `uzp2`): the even (`second`: the
+    /// odd) lanes of `rn`, then of `rm`.
+    VectorUnzip {
+        second: bool,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// `xtn{2} v.8b, v.8h`: each lane of `rn` (`wide`'s lanes) halved, into
+    /// the low half of `rd` or, `high`, its top half (`rd` is then read too).
+    VectorNarrow {
+        high: bool,
+        wide: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+    },
+    /// `fmul v.4s, v.4s, v.s[index]` (`FMULv4i32_indexed`): `lanes` is `S4` or
+    /// `D2`; nothing of `rd` is read.
+    VectorFmulLane {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
+    /// `mul v.4s, v.4s, v.s[index]` (`MULv4i32_indexed`): nothing of `rd` is
+    /// read. DEVIATE MUL5 (owner llrm-arm64-vec, exit 2026-11-27): the `.8h`
+    /// form takes `rm` from `v0`..`v15`, which the allocator does not keep to.
+    VectorMulLane {
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
+    /// `st1 { v.s }[index], [base]`: one lane of `rt` stored at `[base]`
+    /// (`ST1i32`).
+    VectorStoreLane {
+        lanes: Arrangement,
+        rt: Vreg,
+        index: u8,
+        base: Gpr,
+    },
+    /// `umov w, v.s[index]`: one lane of `rn` zero-extended into a general
+    /// register (`UMOVvi32`; an `x` register for the 64-bit lane).
+    VectorUmov {
+        lanes: Arrangement,
+        rd: Gpr,
+        rn: Vreg,
+        index: u8,
+    },
+    /// `ins v.s[index], v.s[src]`: lane `src` of `rn` into lane `index` of
+    /// `rd`, the others kept (`INSvi32lane`).
+    VectorInsLane {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        index: u8,
+        src: u8,
     },
     /// `fneg v.4s, v.4s` and `fabs`; `lanes` is `S4` or `D2`.
     VectorFpUnary {

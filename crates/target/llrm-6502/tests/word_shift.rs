@@ -24,9 +24,9 @@ fn bytes(
     (estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes, body)
 }
 
-/// The chain through A, by hand under the ABI (rc2:rc3 in, A:X out):
-/// shl `lda rc2; (asl a; rol rc3)*k; ldx rc3; rts`, shr
-/// `lda rc3; (lsr a; ror rc2)*k; tax; lda rc2; rts`, sar the same with
+/// The chain through A, by hand under the ABI (A:X in, A:X out):
+/// shl `stx rc3; (asl a; rol rc3)*k; ldx rc3; rts`, shr
+/// `sta rc2; txa; (lsr a; ror rc2)*k; tax; lda rc2; rts`, sar the same with
 /// `cmp #$80; ror a; ror rc2`.
 fn target(
     op: &str,
@@ -34,8 +34,8 @@ fn target(
 ) -> u32 {
     match op {
         "shl" => 3 * k + 5,
-        "lshr" => 3 * k + 6,
-        _ => 5 * k + 6,
+        "lshr" => 3 * k + 7,
+        _ => 5 * k + 7,
     }
 }
 
@@ -44,8 +44,9 @@ fn within_target(op: &str) {
     for level in [Level::O2, Level::Os] {
         for k in 1..=4 {
             let (got, body) = bytes(level, op, k);
-            if got > target(op, k) {
-                over.push(format!("{level:?} {op} {k}: {got} B against {}\n{body}", target(op, k)));
+            let allowed = target(op, k);
+            if got > allowed {
+                over.push(format!("{level:?} {op} {k}: {got} B against {allowed}\n{body}"));
             }
         }
     }
@@ -77,9 +78,12 @@ fn a_word_arithmetic_shift_right_by_one_to_four_is_the_chain_through_a() {
 /// the chain is not wanted there (a byte shift or a bit trick is shorter), so
 /// keeping the inner shift of `(x >> 7) >> 8` for the other half made `x >> 7`
 /// seven `lsr; ror` pairs, 18 bytes against 12.
+///
+/// 6502-AX-WORD-OPS: shl 5..7 take +2 B, the A:X entry stored to the cells the
+/// shift runs on.
 const CEILING: [(&str, [u32; 11], [u32; 11]); 3] = [
     // O2, Os
-    ("shl", [22, 19, 13, 5, 7, 8, 9, 10, 11, 12, 10], [19, 19, 13, 5, 7, 8, 9, 10, 11, 12, 10]),
+    ("shl", [24, 21, 15, 5, 7, 8, 9, 10, 11, 12, 10], [21, 21, 15, 5, 7, 8, 9, 10, 11, 12, 10]),
     ("lshr", [28, 24, 18, 5, 6, 7, 8, 9, 10, 11, 9], [24, 24, 18, 5, 6, 7, 8, 9, 10, 11, 9]),
     ("ashr", [45, 53, 61, 15, 18, 21, 24, 27, 30, 33, 22], [45, 53, 61, 15, 18, 21, 24, 27, 30, 33, 22]),
 ];

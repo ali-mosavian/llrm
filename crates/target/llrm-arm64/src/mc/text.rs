@@ -8,6 +8,16 @@ use super::inst::*;
 
 /// A general register `n` of `width` bits; number 31 is the stack pointer where
 /// `sp`, else the zero register.
+/// `b`, `h`, `s`, `d`: the lane of `v1.s[2]`.
+fn lane_letter(lanes: Arrangement) -> &'static str {
+    match lanes {
+        Arrangement::B16 => "b",
+        Arrangement::H8 => "h",
+        Arrangement::S4 => "s",
+        Arrangement::D2 => "d",
+    }
+}
+
 fn gpr(
     register: Gpr,
     width: Width,
@@ -379,6 +389,37 @@ impl fmt::Display for Inst {
                 let suffix = lanes.suffix();
                 write!(out, "{name} v{}.{suffix}, v{}.{suffix}, #{amount}", rd.0, rn.0)
             }
+            Inst::VectorLongShift { op, lane, high, rd, rn, amount } => {
+                write!(
+                    out,
+                    "{}{} v{}.{}, v{}.{}, #{amount}",
+                    op.mnemonic(),
+                    if *high { "2" } else { "" },
+                    rd.0,
+                    lane.wide_suffix(),
+                    rn.0,
+                    lane.narrow_suffix(*high)
+                )
+            }
+            Inst::VectorLong { op, lane, high, rd, rn, rm } => {
+                // `uaddw` has a wide first operand; `umull` a narrow one.
+                let first = if op.adds_wide() {
+                    lane.wide_suffix()
+                } else {
+                    lane.narrow_suffix(*high)
+                };
+                write!(
+                    out,
+                    "{}{} v{}.{}, v{}.{first}, v{}.{}",
+                    op.mnemonic(),
+                    if *high { "2" } else { "" },
+                    rd.0,
+                    lane.wide_suffix(),
+                    rn.0,
+                    rm.0,
+                    lane.narrow_suffix(*high)
+                )
+            }
             Inst::VectorNot { rd, rn } => write!(out, "mvn v{}.16b, v{}.16b", rd.0, rn.0),
             Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
                 let suffix = lanes.suffix();
@@ -388,13 +429,52 @@ impl fmt::Display for Inst {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
             }
+            Inst::VectorInsGpr { lanes, rd, rn, index } => {
+                let lane = lane_letter(*lanes);
+                let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
+                write!(out, "ins v{}.{lane}[{index}], {}", rd.0, gpr(*rn, width, false))
+            }
+            Inst::VectorFmaLane { op, lanes, rd, rn, rm, index } => {
+                let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
+                let name = if *second { "uzp2" } else { "uzp1" };
+                let s = lanes.suffix();
+                write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
+            }
+            Inst::VectorNarrow { high, wide, rd, rn } => {
+                let two = if *high { "2" } else { "" };
+                write!(out, "xtn{two} v{}.{}, v{}.{}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())
+            }
+            Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
+                let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
+                write!(out, "fmul v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", rd.0, rn.0, rm.0)
+            }
+            Inst::VectorMulLane { rd, rn, rm, index } => {
+                write!(out, "mul v{}.4s, v{}.4s, v{}.s[{index}]", rd.0, rn.0, rm.0)
+            }
+            Inst::VectorStoreLane { lanes, rt, index, base } => {
+                write!(out, "st1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
+            }
+            Inst::VectorUmov { lanes, rd, rn, index } => {
+                let lane = lane_letter(*lanes);
+                let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
+                write!(out, "umov {}, v{}.{lane}[{index}]", gpr(*rd, width, false), rn.0)
+            }
+            Inst::VectorInsLane { lanes, rd, rn, index, src } => {
+                let lane = lane_letter(*lanes);
+                write!(out, "ins v{}.{lane}[{index}], v{}.{lane}[{src}]", rd.0, rn.0)
+            }
+            Inst::VectorDupScalar { lanes, rd, rn, index } => {
+                let lane = lane_letter(*lanes);
+                write!(out, "mov {lane}{}, v{}.{lane}[{index}]", rd.0, rn.0)
+            }
+            Inst::VectorReduce { op, lanes, rd, rn } => {
+                write!(out, "{} {}{}, v{}.{}", op.mnemonic(), lane_letter(*lanes), rd.0, rn.0, lanes.suffix())
+            }
             Inst::VectorDupLane { lanes, rd, rn, index } => {
-                let lane = match lanes {
-                    Arrangement::B16 => "b",
-                    Arrangement::H8 => "h",
-                    Arrangement::S4 => "s",
-                    Arrangement::D2 => "d",
-                };
+                let lane = lane_letter(*lanes);
                 write!(out, "dup v{}.{}, v{}.{lane}[{index}]", rd.0, lanes.suffix(), rn.0)
             }
             Inst::VectorFpUnary { op, lanes, rd, rn } => {

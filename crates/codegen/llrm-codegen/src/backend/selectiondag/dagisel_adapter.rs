@@ -203,8 +203,13 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         BuildVector => pin::BUILD_VECTOR,
         ScalarToVector => pin::SCALAR_TO_VECTOR,
         InsertVectorElt => pin::INSERT_VECTOR_ELT,
+        ConcatVectors => pin::CONCAT_VECTORS,
+        ExtractSubvector => pin::EXTRACT_SUBVECTOR,
         // No pattern names it: a target lowers every shuffle first.
         VectorShuffle => u16::MAX,
+        // Lowered before selection: no pattern names them.
+        VecReduceAdd | VecReduceMul | VecReduceAnd | VecReduceOr | VecReduceXor | VecReduceSMax | VecReduceSMin
+        | VecReduceUMax | VecReduceUMin => u16::MAX,
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
@@ -245,6 +250,10 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::V2I64) => mvt::v2i64,
         EVT::Simple(MVT::V4F32) => mvt::v4f32,
         EVT::Simple(MVT::V2F64) => mvt::v2f64,
+        EVT::Simple(MVT::V2F32) => mvt::v2f32,
+        EVT::Simple(MVT::V8I8) => Vt::V8I8,
+        EVT::Simple(MVT::V4I16) => Vt::V4I16,
+        EVT::Simple(MVT::V2I32) => Vt::V2I32,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -266,6 +275,10 @@ fn our_vt(
             (mvt::v2i64, MVT::V2I64),
             (mvt::v4f32, MVT::V4F32),
             (mvt::v2f64, MVT::V2F64),
+            (mvt::v2f32, MVT::V2F32),
+            (Vt::V8I8, MVT::V8I8),
+            (Vt::V4I16, MVT::V4I16),
+            (Vt::V2I32, MVT::V2I32),
         ]
         .into_iter()
         .find(|(p, _)| *p == vt)
@@ -822,14 +835,18 @@ impl Dag for DagisAdapter<'_> {
             return false;
         }
         // `isBuildVectorAllZeros`/`AllOnes`: every defined lane is the constant
-        // (its low lane bits), and one is defined.
+        // (its low lane bits; a float's, `bitcastToAPInt`), and one is defined.
         let lane_bits = self.dag.value_type(value).element().size_in_bits();
         let mask = (1u128 << lane_bits) - 1;
         let lanes = &self.dag.node(value).ops;
         lanes.iter().any(|&lane| !self.dag.is_undef(lane))
             && lanes.iter().all(|&lane| {
                 self.dag.is_undef(lane)
-                    || self.dag.constant(lane).is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
+                    || self
+                        .dag
+                        .constant(lane)
+                        .or_else(|| self.dag.fp_constant(lane))
+                        .is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
             })
     }
     fn mem_operands(

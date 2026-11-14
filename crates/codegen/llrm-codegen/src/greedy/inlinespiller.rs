@@ -412,6 +412,7 @@ impl<'a> InlineSpiller<'a> {
         // The instruction that defines `reg`: what goes once it is made again.
         let own = Arc::clone(lis.instr(*defs.first()?));
         let mut def = Arc::clone(&own);
+        let mut live_original = false;
         if by_value_number {
             // `scanRemattable` asks the original's value number at the copy
             // (`OrigVNI`), and `isRematerializable` is of that one value
@@ -435,21 +436,42 @@ impl<'a> InlineSpiller<'a> {
             // it already.
             if !(self.tii.remat_shape(&own) && own.uses.is_empty()) {
                 let root = Arc::clone(self.tables.remat_roots.borrow().get(&self.original)?);
-                if self.tii.copy_source(&own).is_none() || !root.uses.is_empty() {
+                if self.tii.copy_source(&own).is_none() {
                     return None;
                 }
+                // A root that reads registers is not remade from the snapshot
+                // (its registers may be split since): `reMaterializeFor`'s
+                // `DefMI` is the instruction now at the original value's def.
+                live_original = !root.uses.is_empty();
                 def = root;
             }
         }
         if !self.tii.remat_shape(&def) || def.uses.contains(&reg) {
             return None;
         }
-        let what = def.what.clone()?;
-        let Loc::Held(defined) = what.dests[0] else { return None };
         let units: Vec<(usize, Vec<InstrKey>)> = Self::units(lis, reg)
             .into_iter()
             .filter(|(_, members)| !(members.len() == 1 && defs.contains(&members[0])))
             .collect();
+        if live_original {
+            let mut found: Option<Arc<Insn>> = None;
+            for (_, members) in &units {
+                let at = lis.indexes.get_instruction_index(members[0]);
+                let here = self.original_def_at(lis, &at)?;
+                if found.as_ref().is_some_and(|one| one.id() != here.id()) {
+                    return None;
+                }
+                found = Some(here);
+            }
+            def = found?;
+            if !self.tii.remat_shape(&def) || def.uses.contains(&reg) {
+                return None;
+            }
+        }
+        // After `def` is the live instruction: its operands name the registers
+        // now, not those of the snapshot it was found through.
+        let what = def.what.clone()?;
+        let Loc::Held(defined) = what.dests[0] else { return None };
         for (_, members) in &units {
             let first = lis.indexes.get_instruction_index(members[0]);
             if !def.uses.is_empty() && !vrai.all_uses_available_at(def.id(), &first, lis) {
@@ -605,6 +627,19 @@ impl<'a> InlineSpiller<'a> {
             at = found;
         }
         None
+    }
+
+    /// The instruction that defines the original register's value at `at`
+    /// (`OrigLI.getVNInfoAt(UseIdx)`, `getInstructionFromIndex(OrigVNI->def)`),
+    /// as it stands in the body now.
+    fn original_def_at(
+        &self,
+        lis: &mut LiveIntervals,
+        at: &crate::liveness::slotindex::SlotIndex,
+    ) -> Option<Arc<Insn>> {
+        let value = lis.interval_rc(self.original).query(at).value_in()?;
+        let site = lis.indexes.get_instruction_from_index(&value.def())?;
+        Some(Arc::clone(lis.instr(site)))
     }
 
     /// A parallel copy that reads the register is a load: `mov %d, %reg` as a
@@ -1777,6 +1812,54 @@ impl InlineSpiller<'_> {
         stack.merge_value_in_as_value(range, vni, &value);
     }
 
+    /// `LiveRangeEdit::foldAsLoad`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveRangeEdit.cpp#L145>):
+    /// a register with one definition, a load the target can fold, and one
+    /// reader has the load folded into the reader; the load is returned,
+    /// dead.
+    ///
+    /// A subset of the pin's test: only a load that reads no register
+    /// (`allUsesAvailableAt` holds) and is invariant (`isSafeToMove` with a
+    /// store assumed in between). Exit: loads that read a register.
+    fn fold_as_load(
+        &self,
+        lis: &mut LiveIntervals,
+        read: u32,
+    ) -> Option<InstrKey> {
+        let (mut def, mut user) = (None, None);
+        for operand in lis.operands(read) {
+            let slot = if operand.is_def { &mut def } else { &mut user };
+            if slot.is_some_and(|seen| seen != operand.instr) {
+                return None;
+            }
+            *slot = Some(operand.instr);
+        }
+        let (def, user) = (def?, user?);
+        let load = Arc::clone(lis.instr(def));
+        let what = load.what.as_ref()?;
+        let [Loc::Mem(cell)] = what.sources.as_slice() else { return None };
+        if !self.tii.can_fold_as_load(what) || !load.uses.is_empty() || !load.invariant() || load.volatile() {
+            return None;
+        }
+        let reader = Arc::clone(lis.instr(user));
+        if reader.defines.contains(&read) {
+            return None;
+        }
+        let folded = self.tii.fold_memory_operand(&reader, read, cell)?;
+        let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(user));
+        // The pin asks the value number's def instruction each time; our tables hold what the body had at the
+        // start, so a copy folded into a load is entered as a value to remake (its split pieces remake the load).
+        if self.tii.remat_shape(&folded) && folded.uses.is_empty() {
+            let mut roots = self.tables.remat_roots.borrow_mut();
+            for value in &folded.defines {
+                self.tables.remat.borrow_mut().insert(*value);
+                roots.insert(*value, Arc::clone(&folded));
+            }
+        }
+        lis.rewrite_instr(block, user, folded);
+        Some(def)
+    }
+
     /// `eliminateDeadDefs` over `DeadDefs`: the stores and copies go, and the
     /// ranges of what they read are cut back to their other reads. An
     /// assigned register that is cut back is unassigned first and queued
@@ -1800,7 +1883,17 @@ impl InlineSpiller<'_> {
                     }
                 }
             }
-            for def in lis.erase_dead_defs(&round) {
+            let sources: Vec<u32> = round.iter().flat_map(|key| lis.instr(*key).uses.clone()).collect();
+            let erased = lis.erase_dead_defs(&round);
+            for read in sources {
+                if read != self.reg
+                    && lis.has_interval(read)
+                    && let Some(load) = self.fold_as_load(lis, read)
+                {
+                    dead.push(load);
+                }
+            }
+            for def in erased {
                 let one = lis.instr(def);
                 // An instruction of the program owns bytes of the object that
                 // an erased one would leave unclaimed.

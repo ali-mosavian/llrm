@@ -531,7 +531,7 @@ pub fn assembled_by(
                     }
                     let procedure = masm::exits_inserted(masm::saved_first(procedure));
                     let procedure = if procedure.body.frame_exit.is_some() {
-                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls), cpu.tail_merge_pin_faithful)
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {
@@ -1392,6 +1392,7 @@ fn staged(
     if let Some((push, _)) = registers.slot_scratch.filter(|_| !pop_order.is_empty()) {
         // No dead register: the pin's `emitSPUpdate` adjusts with `add`.
         registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
+        registers.slot_dead_checked = entry.is_some_and(|one| one.frame_slot_sibling);
     }
     registers.align = target.facts.stack_alignment(target.arch, name);
     registers.object_align = target.facts.object_alignment(target.arch, name);

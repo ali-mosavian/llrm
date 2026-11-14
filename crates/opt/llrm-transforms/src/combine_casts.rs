@@ -273,12 +273,18 @@ fn should_change_type(
     shared::should_change_type(c.env.layout, from, to)
 }
 
-/// Whether the cast `inst` has a type wider than `u128` holds (DEVIATE 5).
+/// Whether the cast `inst` has a type wider than `u128` holds (DEVIATE 5), or
+/// is a cast of vectors, which these combines do not model.
 fn too_wide(
     c: &Combiner,
     inst: InstId,
 ) -> bool {
     let instruction = c.function.instruction(inst);
+    let types = &c.context.types;
+    let (from, to) = (c.type_of(instruction.operands[0]), instruction.ty);
+    if types.int_bits(from).is_none() || types.int_bits(to).is_none() {
+        return true;
+    }
     width(c, instruction.operands[0]).max(bits_of(c, instruction.ty)) > 128
 }
 

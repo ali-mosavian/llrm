@@ -248,6 +248,22 @@ fn sub_ov(
     }
 }
 
+/// DEVIATE ICMPDIV-1 (`Tti::keeps_icmp_of_shared_division`): a compare of a
+/// division's quotient is not turned into a compare of its dividend while the
+/// quotient has another use, so the dividend would stay live beside it across
+/// the call a divide is on this target. A divisor that is a power of two is a
+/// shift, not a call.
+fn keeps_division_compare(
+    c: &mut Combiner,
+    div: Operand,
+    divisor: Operand,
+) -> bool {
+    if !c.env.hooks.keeps_shared_division_compare || has_one_use(c, div) {
+        return false;
+    }
+    !query(c, None).int_constant(divisor).is_some_and(|(value, _)| value.is_power_of_two())
+}
+
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2857
 /// `foldICmpDivConstant`: `icmp pred ([us]div X, Y), C`. A constant divisor
 /// turns the compare into a range test of `X`; an equality with a huge
@@ -287,10 +303,7 @@ fn fold_icmp_div_constant(
     // Fold: icmp pred ([us]div X, C2), C -> range test.
     let (c2, _) = query(c, None).int_constant(y)?;
 
-    // DEVIATE ICMPDIV-1 (`Tti::keeps_icmp_of_shared_division`): the quotient
-    // is needed anyway, so the range test only keeps `X` live beside it. A
-    // power of two is a shift, not a call: nothing is held across it.
-    if c.env.hooks.keeps_shared_division_compare && !has_one_use(c, div) && !c2.is_power_of_two() {
+    if keeps_division_compare(c, div, y) {
         return None;
     }
 
@@ -679,7 +692,7 @@ fn fold_icmp_bin_op_equality_with_constant(
                     return Some(new_icmp(c, inst, pred, x, y));
                 }
             }
-            if op == BinaryOp::UDiv && value == 0 {
+            if op == BinaryOp::UDiv && value == 0 && !keeps_division_compare(c, bo, y) {
                 // (icmp eq/ne (udiv A, B), 0) -> (icmp ugt/ule B, A)
                 let new_pred = if pred == IntPredicate::Ne { IntPredicate::Ule } else { IntPredicate::Ugt };
                 return Some(new_icmp(c, inst, new_pred, y, x));

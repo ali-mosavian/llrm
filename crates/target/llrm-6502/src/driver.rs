@@ -264,15 +264,16 @@ pub fn assembly(
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
 }
 
-/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os byte model
-/// refused within its error, inlined in a second compile and kept per chain (caller and callees)
-/// if the backend writes those functions in fewer bytes. The model is within 25% of the written
-/// bytes for two functions in three, so a refusal that close is the backend's to decide.
+/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
+/// byte model refused within its error, inlined in a second compile and kept
+/// per chain (caller and callees) if the backend writes those functions in
+/// fewer bytes. The model is within 25% of the written bytes for two functions
+/// in three, so a refusal that close is the backend's to decide.
 ///
-/// Compile time: a program with no such refusal compiles once. One with some runs the mid-end
-/// twice and the backend on the functions whose bodies differ twice (`trial::differing`),
-/// never on the whole program; a chain set that is only partly kept compiles the mid-end a third
-/// time.
+/// Compile time: a program with no such refusal compiles once. One with some
+/// runs the mid-end twice and the backend on the functions whose bodies differ
+/// twice (`trial::differing`), never on the whole program; a chain set that is
+/// only partly kept compiles the mid-end a third time.
 fn trial_inlined(
     built: Program,
     text: &str,
@@ -280,19 +281,29 @@ fn trial_inlined(
 ) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
-    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions);
+    let limit = built
+        .target
+        .tti()
+        .and_then(|tti| tti.opt_size_inline_trial_limits())
+        .map_or(0, |(_, instructions)| instructions);
     if request.level != Level::Os || sites.is_empty() {
         return Ok((built, Vec::new()));
     }
     if instructions(&built) > limit {
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
-            eprintln!("trial inline: skipped, {} sites in {} instructions (limit {limit})", sites.len(), instructions(&built));
+            eprintln!(
+                "trial inline: skipped, {} sites in {} instructions (limit {limit})",
+                sites.len(),
+                instructions(&built)
+            );
         }
         return Ok((built, Vec::new()));
     }
     let kept_unroll = trial::take();
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
-    let chain = |program: &Program, cut: &std::collections::BTreeSet<String>| -> Option<std::collections::BTreeMap<String, i64>> {
+    let chain = |program: &Program,
+                 cut: &std::collections::BTreeSet<String>|
+     -> Option<std::collections::BTreeMap<String, i64>> {
         let mut only = program.clone();
         only.modules[0] = trial::only(&program.modules[0], cut);
         let rows = tail(only, request, false, true).ok()?.functions;
@@ -310,7 +321,13 @@ fn trial_inlined(
     };
     let flags = trial::accepted(&sites, &kept_bytes, &other_bytes);
     if debug {
-        eprintln!("trial inline: {} sites, {} kept; {} functions differ; {} instructions", sites.len(), flags.iter().filter(|one| **one).count(), cut.len(), instructions(&built));
+        eprintln!(
+            "trial inline: {} sites, {} kept; {} functions differ; {} instructions",
+            sites.len(),
+            flags.iter().filter(|one| **one).count(),
+            cut.len(),
+            instructions(&built)
+        );
     }
     if flags.iter().all(|one| !one) {
         trial::restore(kept_unroll);
@@ -431,6 +448,11 @@ fn tail(
         .filter(|_| request.level != Level::O0)
         .map(|bits| {
             let mut paged = program.modules[0].clone();
+            // Selection's DAG CSE merges the equal `gep`s LSR leaves (the
+            // next pointer and an unfolded `p + 1`); the pass reads the IR.
+            let mut cse = llrm_mir::passes::PassManager::default();
+            cse.add(llrm_transforms::earlycse::EarlyCse { memory_ssa: false });
+            cse.run_module(&mut paged, machine())?;
             llrm_transforms::pageindex::indexed(&mut paged, bits).map(|names| {
                 crate::prepare::split_phi_edges(&mut paged);
                 (names, paged)
@@ -438,6 +460,44 @@ fn tail(
         })
         .transpose()?
         .filter(|(names, _)| !names.is_empty());
+    // The same walks that also end a counted loop on the index and a page
+    // count: priced against the walks above.
+    let counted = paged
+        .as_ref()
+        .zip(index_bits)
+        .map(|(_, bits)| {
+            let mut counted = program.modules[0].clone();
+            let mut cse = llrm_mir::passes::PassManager::default();
+            cse.add(llrm_transforms::earlycse::EarlyCse { memory_ssa: false });
+            cse.run_module(&mut counted, machine())?;
+            llrm_transforms::pageindex::indexed_counting(&mut counted, bits).map(|names| {
+                crate::prepare::split_phi_edges(&mut counted);
+                (names, counted)
+            })
+        })
+        .transpose()?
+        .filter(|(names, _)| !names.is_empty());
+    // The range tests that two compares do better than the joined one: priced
+    // against it, below.
+    let ranged =
+        |source: &llrm_mir::module::Module| -> Result<Option<(Vec<String>, llrm_mir::module::Module)>, String> {
+            if request.level == Level::O0 {
+                return Ok(None);
+            }
+            let mut split = source.clone();
+            let names = llrm_transforms::rangesplit::unmerged(&mut split)?;
+            crate::prepare::split_phi_edges(&mut split);
+            Ok((!names.is_empty()).then_some((names, split)))
+        };
+    let ranged_base = ranged(&program.modules[0])?;
+    let ranged_paged = match &paged {
+        Some((_, paged)) => ranged(paged)?,
+        None => None,
+    };
+    let ranged_counted = match &counted {
+        Some((_, counted)) => ranged(counted)?,
+        None => None,
+    };
     llrm_6502_prepare(&mut program);
     let module = &program.modules[0];
     let names: Vec<String> = module
@@ -461,6 +521,7 @@ fn tail(
         let mut selection = select_function(module, name, request.cpu)?;
         let mut as_called = true;
         let mut paged_chosen = false;
+        let mut counted_chosen = false;
         let mut source = None;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
@@ -468,7 +529,16 @@ fn tail(
             let mut other = select_function(looped, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, looped, &selection, request)? {
+            if cheaper(
+                module,
+                name,
+                &other,
+                looped,
+                &selection,
+                request,
+                crate::routines::copy_prices().byte_clocks.0,
+                false,
+            )? {
                 selection = other;
                 as_called = false;
                 source = Some(looped);
@@ -478,15 +548,64 @@ fn tail(
             let mut other = select_function(paged, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, paged, &selection, request)? {
+            if cheaper(
+                module,
+                name,
+                &other,
+                paged,
+                &selection,
+                request,
+                crate::routines::copy_prices().page_byte_clocks,
+                true,
+            )? {
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
             }
         }
+        if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| paged_chosen && names.contains(name)) {
+            let mut other = select_function(counted, name, request.cpu)?;
+            other.zero_page = request.platform.zero_page;
+            other.tuning = request.level.tuning();
+            let kept = source.unwrap_or(module);
+            let rate = crate::routines::copy_prices().page_byte_clocks;
+            if cheaper(kept, name, &other, counted, &selection, request, rate, true)? {
+                selection = other;
+                counted_chosen = true;
+                source = Some(counted);
+            }
+        }
+        let mut range_chosen = false;
+        if as_called || paged_chosen {
+            let candidate = match (paged_chosen, counted_chosen) {
+                (true, true) => ranged_counted.as_ref(),
+                (true, false) => ranged_paged.as_ref(),
+                _ => ranged_base.as_ref(),
+            };
+            if let Some((_, split)) = candidate.filter(|(names, _)| names.contains(name)) {
+                let mut other = select_function(split, name, request.cpu)?;
+                other.zero_page = request.platform.zero_page;
+                other.tuning = request.level.tuning();
+                let kept = source.unwrap_or(module);
+                if cheaper(
+                    kept,
+                    name,
+                    &other,
+                    split,
+                    &selection,
+                    request,
+                    crate::routines::copy_prices().page_byte_clocks,
+                    true,
+                )? {
+                    selection = other;
+                    range_chosen = true;
+                    source = Some(split);
+                }
+            }
+        }
         selections.push(selection);
         sources.push(source);
-        from_module.push(as_called && !paged_chosen);
+        from_module.push(as_called && !paged_chosen && !range_chosen);
     }
     crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
@@ -623,11 +742,13 @@ fn cheaper(
     alt_module: &llrm_mir::module::Module,
     selected: &crate::dagisel::function::Selection,
     request: &Request,
+    speed_byte_clocks: u64,
+    strict_at_o1: bool,
 ) -> Result<bool, String> {
     let prices = crate::routines::copy_prices();
     let routines = [("memcpy", prices.call_clocks)];
-    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { prices.byte_clocks.0 };
-    let cost = |module: &llrm_mir::module::Module, selection| -> Option<u64> {
+    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { speed_byte_clocks };
+    let cost = |module: &llrm_mir::module::Module, selection| -> Option<(u64, u64)> {
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
         let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
@@ -639,12 +760,22 @@ fn cheaper(
         crate::weights::by_branch_weights(module, function, &mut weights);
         let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
         let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
-        Some(priced.cycles + byte * u64::from(priced.bytes))
+        Some((priced.cycles, u64::from(priced.bytes)))
     };
-    Ok(matches!(
-        (cost(alt_module, alt), cost(module, selected)),
-        (Some(looped), Some(called)) if looped < called
-    ))
+    let (alt_cost, kept_cost) = (cost(alt_module, alt), cost(module, selected));
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!(
+            "cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}, {byte} clocks a byte"
+        );
+    }
+    Ok(match (alt_cost, kept_cost) {
+        // -O1 keeps no more bytes and no more clocks (6502-UNROLL-O1)
+        (Some(alt), Some(kept)) if strict_at_o1 && request.level == Level::O1 => {
+            alt.0 <= kept.0 && alt.1 <= kept.1 && alt != kept
+        }
+        (Some(alt), Some(kept)) => alt.0 + byte * alt.1 < kept.0 + byte * kept.1,
+        _ => false,
+    })
 }
 
 fn llrm_6502_prepare(program: &mut Program) {
@@ -663,10 +794,13 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
-    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the soft stack is not realigned and the
-    /// frame keeps `STACK_ALIGN` (1); an `align 2` local from the front end is clamped to it at pipeline entry, so
-    /// `ptr & 1` is no longer folded to 0 for an object on an odd frame. The pin states what a frame keeps the same
-    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and argument areas, then 2.
+    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the
+    /// soft stack is not realigned and the frame keeps `STACK_ALIGN` (1);
+    /// an `align 2` local from the front end is clamped to it at pipeline
+    /// entry, so `ptr & 1` is no longer folded to 0 for an object on an odd
+    /// frame. The pin states what a frame keeps the same
+    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and
+    /// argument areas, then 2.
     fn kept_stack_align(&self) -> Option<u64> {
         Some(crate::frame::STACK_ALIGN as u64)
     }
@@ -887,7 +1021,8 @@ fn write_constant(
     }
 }
 
-/// The trips each block of each function runs, from the module a function was selected from.
+/// The trips each block of each function runs, from the module a function was
+/// selected from.
 fn estimate_weights(
     module: &llrm_mir::module::Module,
     names: &[String],

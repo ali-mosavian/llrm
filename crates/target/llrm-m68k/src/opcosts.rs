@@ -111,6 +111,12 @@ pub fn forms(cpu: Cpu) -> Vec<(&'static str, Vec<Inst>)> {
 pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("argument", "2: a register push, which is what the default says; also a form"),
     ("prefix", "m68k has no operand-size prefix"),
+    ("width_scaled", "false: the 32-bit word is native, one price per operation (native_bits 0)"),
+    ("constant_offsets_fold", "false: a constant GEP is priced as `address`; the displacement folds into the access, so this overprices (unmeasured, open)"),
+    ("branch_in_compare", "false: `branch` is priced each; the compare's price does not include the jump (unmeasured, open)"),
+    ("direct_load", "0: an absolute load is priced as any load (unmeasured, open)"),
+    ("direct_store", "0: an absolute store is priced as any store (unmeasured, open)"),
+    ("ext_tsp_for_size", "false: the pin ships -apply-ext-tsp-for-size off"),
     ("native_bits", "0: a price is for the operation as the type has it, as on every target but the 6502"),
     ("address_dword", "m68k states no address-size prefix; the price is `address` alone"),
     ("address_third", "same"),

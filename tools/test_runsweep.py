@@ -23,5 +23,12 @@ class Classify(unittest.TestCase):
         self.assertEqual(runsweep.report([("a.c", "-O1", "UNLINKED"), ("b.c", "-O1", "ok")]), 0)
 
 
+class Runners(unittest.TestCase):
+    def test_arm64_linux_runs_under_qemu(self):
+        """arm64-linux had no runner: tests/run/c never executed there, so a loop-vectorize miscompile (bad=8352) went unseen."""
+        self.assertEqual(runsweep.RUNNERS["arm64-linux"].launcher, ("qemu-aarch64",))
+        self.assertEqual(runsweep.RUNNERS["x86_64-linux"].launcher, ())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,7 +80,13 @@ mod tests {
         let segments = |machine: &Machine| machine.segments.clone().unwrap();
         assert_eq!(
             segments(dos),
-            Segments { data: "ds".into(), stack: "ss".into(), code: "cs".into(), stack_is_data: false }
+            Segments {
+                data: "ds".into(),
+                stack: "ss".into(),
+                code: "cs".into(),
+                stack_is_data: false,
+                stack_shares_data: false
+            }
         );
         assert!(segments(&BASIC).stack_is_data);
         assert_eq!(dos.foreign, [(0x0, 0x700), (0xA0000, 0xC0000), (0xC0000, 0xC8000), (0xF0000, 0x10FFF0)]);

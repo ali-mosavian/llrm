@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// bar: none (SDCC wrong value)
 // `a && b` and `a || b` as values, which a flat unit made a one-word place for (gcc.c-torture 20010129-1: "place n13 has
 // incomplete extent"): the place is as wide as the value it holds.
 extern void report(long value);

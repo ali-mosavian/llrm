@@ -223,6 +223,17 @@ fn interprocedural_register_use(platform: Platform) -> bool {
         && !llrm_support::env_flag!("LLRM_ARM64_NO_IPRA")
 }
 
+/// Whether `function` carries one of the attributes `names`.
+fn flagged(
+    function: &llrm_mir::module::Function,
+    names: &[&str],
+) -> bool {
+    function
+        .attrs
+        .iter()
+        .any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if names.contains(&flag.as_str())))
+}
+
 /// One defined function of `program`'s module, selected, allocated and
 /// lowered, with the registers a call to it destroys (`crate::ipra`).
 fn lower_function(
@@ -253,15 +264,8 @@ fn lower_function(
     }
     machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
     machine.unwind = crate::cfi::Unwind::of(function);
-    let optsize = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
+    let optsize = flagged(function, &["optsize", "minsize"]);
+    machine.optnone = flagged(function, &["optnone"]);
     crate::prepass::run(&mut machine, optsize);
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
@@ -272,6 +276,10 @@ fn lower_function(
     dump("CmpZero", &machine);
     crate::flagcse::run(&mut machine);
     dump("FlagCse", &machine);
+    // The pin runs it after MachineCSE and MachineCombiner, which make the
+    // value read once and the `msub` it must leave alone.
+    crate::condbrtuning::run(&mut machine);
+    dump("CondBrTuning", &machine);
     crate::memcluster::run(&mut machine);
     dump("MemCluster", &machine);
     crate::sibcall::run(&mut machine);
@@ -399,15 +407,7 @@ pub fn functions_with(
                 continue;
             }
             let name = global.name.owned().ok_or("an unnamed function")?;
-            let optnone = function
-                .attrs
-                .iter()
-                .any(
-                    |attr| matches!(
-                        attr,
-                        llrm_mir::opcode::Attribute::Flag(flag) if flag == "optnone"
-                    ),
-                );
+            let optnone = flagged(function, &["optnone"]);
             let usable = !optnone && !global.linkage.is_interposable();
             let (done, written) = lower_function(program, id, platform, lines)?;
             if usable {

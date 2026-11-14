@@ -7,6 +7,13 @@
 /// A `rep movsw` in 32-bit code is a byte longer than `rep movsb`: copies of at least this many bytes win 48 clocks for it.
 const REP_WORD_MIN_BYTES: u64 = 32;
 
+/// Encoded sizes of the fill value in the accumulator, for `cheapest_fill_unit`.
+const XOR_OR_MOV_AL: u64 = 2;
+const MOV_AX: u64 = 4;
+const MOV_EAX: u64 = 5;
+const MOV_RAX_MINUS_ONE: u64 = 7;
+const MOVABS_RAX: u64 = 10;
+
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Instruction, Operand, ValueDef};
@@ -48,6 +55,7 @@ impl Builder<'_> {
             }
             Intrinsic::MemSetPattern => self.visit_memset_pattern(instruction),
             Intrinsic::FunnelShift { left } => self.visit_funnel_shift(instruction, *left),
+            Intrinsic::VectorReduce(kind) => self.visit_vector_reduce(instruction, *kind),
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
@@ -447,7 +455,19 @@ impl Builder<'_> {
             || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
     }
 
-    /// DEVIATE REP-MOVS-OS keeps `rep movs` for any size at `-Os`, but moves the widest block the copy is a whole
+    /// `-Oz` is `rep movsb` whatever the size; REP-MOVS-OS keeps a block narrower than a dword to the
+    /// target's limit (the pin's 128 bytes on m32), past which the call copies by dwords.
+    fn rep_movs_within_limit(
+        &self,
+        bytes: u64,
+        alignment: u64,
+    ) -> bool {
+        self.has_min_size()
+            || alignment >= 4
+            || self.target.tti.as_ref().is_none_or(|tti| bytes <= tti.0.rep_movs_at_size_max())
+    }
+
+    /// DEVIATE REP-MOVS-OS keeps `rep movs` up to the target's limit at `-Os`, and moves the widest block the copy is a whole
     /// number of and the pointers are aligned to (`emitConstantSizeRepmov`'s `AVT`, without a tail): the same
     /// bytes as `rep movsb`, a block of 4 bytes for the same 3 clocks. A block of 2 carries the operand-size
     /// prefix in 32-bit code, one byte that 1.5 clocks a byte copied pay back from `REP_WORD_MIN_BYTES`.
@@ -1339,7 +1359,9 @@ impl Builder<'_> {
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
                     (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
-                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.rep_movsb_copy() => {
+                    (None, Intrinsic::MemCpy, Some(bytes))
+                        if strings_exist && self.rep_movsb_copy() && self.rep_movs_within_limit(bytes, alignment) =>
+                    {
                         self.rep_movs(root, dst, other, bytes, dst_align.min(src_align), dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
@@ -1451,7 +1473,10 @@ impl Builder<'_> {
                         if strings_exist
                             && (self.has_min_size()
                                 || (opt_size
-                                    && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_at_size()))
+                                    && self.target.tti.as_ref().is_some_and(|tti| {
+                                        tti.0.rep_stos_at_size()
+                                            && (alignment >= 4 || bytes <= tti.0.rep_stos_at_size_max())
+                                    }))
                                 || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?
@@ -2250,11 +2275,11 @@ impl Builder<'_> {
     fn cheapest_fill_unit(block: u64, size: u64, byte: u64) -> u64 {
         let bytes = |unit: u64| {
             let value = match (byte, unit) {
-                (0, _) | (_, 1) => 2,
-                (_, 2) => 4,
-                (_, 4) => 5,
-                (0xff, _) => 7,
-                _ => 10,
+                (0, _) | (_, 1) => XOR_OR_MOV_AL,
+                (_, 2) => MOV_AX,
+                (_, 4) => MOV_EAX,
+                (0xff, _) => MOV_RAX_MINUS_ONE,
+                _ => MOVABS_RAX,
             };
             let op = if unit == 1 || unit == 4 { 2 } else { 3 };
             let left = size % unit;

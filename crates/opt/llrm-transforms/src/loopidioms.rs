@@ -1197,6 +1197,9 @@ fn fill_beside_computed_stores_pays(
 pub(crate) struct InlineFills {
     pub max_stores: i64,
     pub bytes: i64,
+    /// A dword store carries the operand-size prefix: the target's word is
+    /// 16 bits (m16); flat code has none.
+    pub prefixed: bool,
 }
 
 impl InlineFills {
@@ -1212,7 +1215,8 @@ impl InlineFills {
         prices: &OperationCosts,
     ) -> i64 {
         let dwords = self.bytes / 4;
-        dwords * (prices.store_immediate + prices.prefix) + (self.stores() - dwords) * prices.store_immediate
+        let prefix = if self.prefixed { prices.prefix } else { 0 };
+        dwords * (prices.store_immediate + prefix) + (self.stores() - dwords) * prices.store_immediate
     }
 }
 
@@ -1718,15 +1722,22 @@ fn _stored(
     // target's `rep stos` takes, and isel cannot lower it.
     let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
     // Only where the target's library has the function
-    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`, LoopIdiomRecognize.cpp#L372).
+    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`,
+    // LoopIdiomRecognize.cpp#L372).
     (matches!(width, 16 | 32) && counted && _has_memset_pattern(unit)).then_some((pointer, Byte::Pattern(value), bytes))
 }
 
 /// `TLI->has(LibFunc_memset_pattern16)` of the unit's target: a target stating
 /// no library has the pin's defaults for an unknown OS, which lack it.
+/// DEVIATE MEMSET-PATTERN-ISEL (owner w10, exit 2026-11-24): or one whose isel
+/// lowers the pattern fill to `rep stosw`/`rep stosd` itself
+/// (`Machine::fills_by_pattern`, x86-m16) instead of the pre-ISel store loop.
 fn _has_memset_pattern(unit: &Unit) -> bool {
     use llrm_mir::libfunc::{Generic, LibFunc, TargetLibraryInfo};
     let Some(outer) = unit.outer else { return false };
+    if outer.target().fills_by_pattern() || outer.target().tti().is_some_and(|tti| tti.fills_pattern_at_speed()) {
+        return true;
+    }
     match outer.target().library() {
         Some(library) => TargetLibraryInfo::new(&*library).has(LibFunc::MemsetPattern16),
         None => TargetLibraryInfo::new(&Generic { int_bits: 32, size_t_bits: 32 }).has(LibFunc::MemsetPattern16),
