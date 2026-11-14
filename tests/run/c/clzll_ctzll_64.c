@@ -1,4 +1,5 @@
 // flags: -O2
+// bar: none (SDCC error 101: too many parameters)
 // __builtin_clzll and ctzll of a 64-bit value stopped the x86_64 DAG at emit (`Unmapped("BSR64rr")`, `BSF64rr`): the m64 forms had no bsf or bsr.
 extern void report(long value);
 
