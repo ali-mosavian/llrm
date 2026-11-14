@@ -130,8 +130,50 @@ pub(crate) fn cast_kind(op: CastOp) -> Option<CastKind> {
     })
 }
 
+/// The reduction a header phi is, or why the loop is left alone: a kind with an
+/// identity, whose update is in the loop and is the only value (with the phi
+/// itself, by the update) read after it.
+pub(crate) fn reduction_of(
+    function: &Function,
+    legality: &Legality,
+    header: BlockId,
+    phi: InstId,
+    used_after_loop: impl Fn(ValueId) -> bool,
+) -> Result<Reduction, Skipped> {
+    let Some((_, descriptor)) = legality.reductions.iter().find(|(one, _)| *one == phi) else {
+        return Err(Skipped("A header phi other than the induction and the reductions"));
+    };
+    if reduction_op(descriptor.kind).is_none() {
+        return Err(Skipped("A reduction that is not add, mul, and, or or xor"));
+    }
+    if descriptor.has_uses_outside_reduction_chain() || descriptor.intermediate_store.is_some() {
+        return Err(Skipped("A reduction used other than by its chain"));
+    }
+    let back = arms(function, phi).into_iter().find(|&(_, from)| from == header).map(|(value, _)| value);
+    let latch = match back {
+        Some(Operand::Value(value)) => match function.value(value).def {
+            ValueDef::Instruction(def) if function.parent(def) == Some(header) => def,
+            _ => return Err(Skipped("A reduction whose update is not in the loop")),
+        },
+        _ => return Err(Skipped("A reduction whose update is not in the loop")),
+    };
+    if descriptor.loop_exit_instr.is_some_and(|one| one != latch) {
+        return Err(Skipped("A reduction whose used value is not its update"));
+    }
+    if used_after_loop(function.instruction(phi).result.expect("a phi")) {
+        return Err(Skipped("A reduction phi used after the loop"));
+    }
+    Ok(Reduction {
+        phi,
+        kind: descriptor.kind,
+        latch,
+        start: descriptor.start_value,
+        ty: function.instruction(phi).ty,
+    })
+}
+
 /// The operation a reduction of `kind` folds with, and its identity.
-fn reduction_op(kind: RecurKind) -> Option<(BinaryOp, u128)> {
+pub(crate) fn reduction_op(kind: RecurKind) -> Option<(BinaryOp, u128)> {
     Some(match kind {
         RecurKind::Add => (BinaryOp::Add, 0),
         RecurKind::Mul => (BinaryOp::Mul, 1),
@@ -278,37 +320,8 @@ pub(crate) fn extract(
         }
         match data.opcode {
             Opcode::Phi => {
-                let Some((_, descriptor)) = legality.reductions.iter().find(|(phi, _)| *phi == inst) else {
-                    return Err(Skipped("A header phi other than the induction and the reductions"));
-                };
-                if reduction_op(descriptor.kind).is_none() {
-                    return Err(Skipped("A reduction that is not add, mul, and, or or xor"));
-                }
-                if descriptor.has_uses_outside_reduction_chain() || descriptor.intermediate_store.is_some() {
-                    return Err(Skipped("A reduction used other than by its chain"));
-                }
-                let back = arms(function, inst).into_iter().find(|&(_, from)| from == header).map(|(value, _)| value);
-                let latch = match back {
-                    Some(Operand::Value(value)) => match function.value(value).def {
-                        ValueDef::Instruction(def) if function.parent(def) == Some(header) => def,
-                        _ => return Err(Skipped("A reduction whose update is not in the loop")),
-                    },
-                    _ => return Err(Skipped("A reduction whose update is not in the loop")),
-                };
-                if descriptor.loop_exit_instr.is_some_and(|one| one != latch) {
-                    return Err(Skipped("A reduction whose used value is not its update"));
-                }
-                let result = function.instruction(inst).result.expect("a phi");
-                if outside(result, false) {
-                    return Err(Skipped("A reduction phi used after the loop"));
-                }
-                reductions.push(Reduction {
-                    phi: inst,
-                    kind: descriptor.kind,
-                    latch,
-                    start: descriptor.start_value,
-                    ty: function.instruction(inst).ty,
-                });
+                let reduction = reduction_of(function, legality, header, inst, |value| outside(value, false))?;
+                reductions.push(reduction);
                 cost += tti.cf_instr_cost(true, kind).value;
             }
             Opcode::GetElementPtr { .. } => body.push(inst),
@@ -561,7 +574,7 @@ fn int_constant(
 }
 
 /// The identity of a reduction as a constant of its type.
-fn identity(
+pub(crate) fn identity(
     context: &Context,
     reduction: &Reduction,
     value: u128,
@@ -704,9 +717,25 @@ pub(crate) fn execute(
         }
         folded.push(total);
     }
+    hand_on(function, shape, skeleton, middle, reductions, &folded);
+}
+
+/// What follows the middle block's fold of the reductions: the exit block
+/// reads each total from the middle block (and the remainder's own last value
+/// from the remainder), and the remainder resumes each reduction from its total
+/// (`bc.merge.rdx`), or from its start where the vector loop was skipped.
+/// `totals[i]` is the value of `reductions[i]` after the vector loop.
+pub(crate) fn hand_on(
+    function: &mut Function,
+    shape: &Shape,
+    skeleton: &Skeleton,
+    middle: BlockId,
+    reductions: &[Reduction],
+    totals: &[Operand],
+) {
     let exit = shape.exit;
     let remainder_block = skeleton.remainder.as_ref().map(|(block, _)| *block);
-    for (reduction, total) in reductions.iter().zip(&folded) {
+    for (reduction, total) in reductions.iter().zip(totals) {
         let original = Operand::Value(function.instruction(reduction.latch).result.expect("an update"));
         let copy_in_remainder = skeleton.remainder.as_ref().map(|(_, pairs)| {
             let phi = pairs.iter().find(|(from, _)| *from == reduction.phi).expect("the copy of the phi").1;

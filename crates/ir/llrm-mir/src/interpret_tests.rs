@@ -714,3 +714,30 @@ fn a_vector_binary_operation_works_on_each_lane() {
     assert_eq!(lanes("mul", a, "<i16 2, i16 2, i16 3, i16 2>"), int(21, 16));
     assert_eq!(lanes("xor", a, "splat (i16 1)"), int(6, 16));
 }
+
+/// `zext <4 x i8>` to `<4 x i32>`, and a vector `icmp` gave
+/// poison for the whole vector (their scalar operation of two aggregates): an
+/// extending loop could not be run to compare answers. Each lane is now its
+/// scalar operation.
+#[test]
+fn vector_casts_and_compares_work_on_each_lane() {
+    let text = |body: &str| {
+        result(&format!(
+            "define i32 @f() {{\n{body}\n  %l = extractelement <4 x i32> %r, i64 2\n  ret i32 %l\n}}\n"
+        ))
+    };
+    assert_eq!(
+        text("  %z = zext <4 x i8> <i8 1, i8 2, i8 200, i8 4> to <4 x i32>\n  %r = add <4 x i32> %z, %z"),
+        int(400, 32)
+    );
+    assert_eq!(
+        text("  %z = sext <4 x i8> <i8 1, i8 2, i8 -3, i8 4> to <4 x i32>\n  %r = add <4 x i32> %z, %z"),
+        int(0xFFFF_FFFA, 32)
+    );
+    assert_eq!(
+        text(
+            "  %c = icmp slt <4 x i32> <i32 1, i32 2, i32 -3, i32 4>, zeroinitializer\n  %r = zext <4 x i1> %c to <4 x i32>"
+        ),
+        int(1, 32)
+    );
+}

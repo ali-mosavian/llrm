@@ -9,6 +9,7 @@
 # `llc_mcmodel` (default false) says the backend takes `-mcmodel=` and clang does not (the pin's clang refuses it for m68k): the flag goes to the backend alone.
 # `unroll_at_o1` (default false) makes `-funroll-loops` the default at -O1 (DEVIATE UNROLL-O1: clang marks every loop unroll-disable there, so the pin's -O1 never unrolls).
 # `thread_jumps_at_o1` (default false) makes `-fthread-jumps` the default at -O1 for the backend (DEVIATE JUMPTHREAD-O1: the pin's -O1 pipeline has no JumpThreadingPass).
+# `speed_rate_at_o1` (default false) makes `-fllrm-speed-rate` the default at -O1 for the backend (DEVIATE SPEED-O1: the byte price at speed counts at -O1 as at -O2; user ruling 2026-11-14, O1-O3 by clocks).
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
@@ -21,6 +22,7 @@ llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # `run` (optional) is the command that runs an executable of the target, the executable last; the checks use it.
 
@@ -41,6 +43,7 @@ link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m32", "{o
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
+speed_rate_at_o1 = true
 
 # arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/targets/arm64-link.sh).
 [arm64-linux]
@@ -145,6 +148,7 @@ link = ["python3", "-I", "{root}/tools/wat_link.py", "m32", "{ow}", "{output}", 
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
+speed_rate_at_o1 = true
 
 # arm64 Linux on glibc, for qemu-aarch64: LLRM_ARM64_SYSROOT is the unpacked *-arm64-cross packages.
 [arm64-glibc]
@@ -187,6 +191,7 @@ link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
+speed_rate_at_o1 = true
 
 # 6502 on sim65: clang's msp430 is only the C front end (16-bit int and pointers, as cc65; unsigned char, packed structs),
 # its datalayout replaced by the 6502's. Stops at -S: ca65 text, which the tests assemble and link with cl65.
