@@ -175,15 +175,20 @@ fn _segment(
     }
 }
 
-/// Whether the module's zero variables go in `_BSS`: where the runtime is
-/// llrm's and a near pointer is a word, whose start-up (runtime/qb/dos/m16)
-/// zeroes the BSS class. The Microsoft runtimes' CLEAR zeroes BC_DATA whole and
-/// their start-up no BSS, so their modules keep every variable in BC_DATA.
+/// Whether the module's zero variables go in `_BSS`. The llrm runtime's start-up zeroes the BSS
+/// class, so there always. The Microsoft runtimes' do not (and CLEAR zeroes BC_DATA only): the
+/// module zeroes `_BSS` itself, a routine and its calls, which saves bytes only past what they cost.
 fn _zeroed_by_start_up(
     program: &model::Program,
     near_bytes: u32,
+    zero_bytes: usize,
 ) -> bool {
-    program.runtime == model::RuntimeProfile::Llrm && near_bytes == 2
+    match program.runtime {
+        _ if near_bytes != 2 => false,
+        model::RuntimeProfile::Freestanding => false,
+        model::RuntimeProfile::Llrm => true,
+        _ => zero_bytes > basic::ZEROING_COST,
+    }
 }
 
 /// Decode the frontend-owned DATA statement stream.
@@ -481,7 +486,8 @@ fn rich_assembled(
         let datalayout = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).map_err(CompileError::from)?;
         (datalayout.pointer(layout.spaces.near).bits / 8, datalayout.pointer(layout.spaces.far).bits / 8)
     };
-    let bss = _zeroed_by_start_up(program, near_bytes);
+    let zero_bytes = _placed(module).filter(|one| _segment(one, true) == "_BSS").map(|one| one.bytes.len()).sum();
+    let bss = _zeroed_by_start_up(program, near_bytes, zero_bytes);
     let mut placed: IndexMap<&str, Vec<basic::Item>> =
         ["BC_DATA", "BC_CN", "FSL_CONST", "COMMON", "_BSS"].into_iter().map(|name| (name, Vec::new())).collect();
     for object_ in _placed(module) {

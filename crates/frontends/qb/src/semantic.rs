@@ -606,6 +606,8 @@ pub struct Options {
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
+    /// The module zeroes its own `_BSS`, as the runtime it links does not (the Microsoft ones').
+    pub zero_bss: bool,
 }
 
 impl Options {
@@ -768,6 +770,7 @@ fn built_from(
     let mut read_data_offset = 0;
     compiler.reserve_data_labels(&module.statements, &mut read_data_offset)?;
     compiler.reserve_labels(&module.statements)?;
+    compiler.zero_bss();
     compiler.statements(module)?;
     compiler.end_statement();
     compiler.declare_procedure_shared(module)?;
@@ -4143,6 +4146,7 @@ impl Compiler {
                             operands.push(Operand::Value(table));
                         }
                         self.emit_runtime_call("B$SCLR", Vec::new(), operands);
+                        self.zero_bss();
                     }
                     "STOP" | "RESET" => {
                         if !arguments.is_empty() {
@@ -10840,6 +10844,15 @@ impl Compiler {
         bytes: usize,
     ) {
         self.calls.last_mut().expect("a call just emitted").fills.push((operand, bytes));
+    }
+
+    /// The module zeroes its own `_BSS` where its runtime does not (the Microsoft ones: the llrm
+    /// start-up does, and CLEAR's B$SCLR zeroes BC_DATA only). The driver lays the call down only
+    /// when `_BSS` holds something.
+    fn zero_bss(&mut self) {
+        if self.options.zero_bss {
+            self.emit_runtime_call("$QB$ZBSS", Vec::new(), Vec::new());
+        }
     }
 
     fn emit_runtime_call(
