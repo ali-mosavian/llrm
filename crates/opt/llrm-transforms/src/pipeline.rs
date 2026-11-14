@@ -1145,6 +1145,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     inliner_follows: true,
+                    speed_rate: applied.options.prices_bytes(),
                     created: Default::default(),
                     decided: Default::default(),
                 }),
@@ -1292,6 +1293,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
                     inliner_follows: applied.options.inline.limit > 0 || applied.options.inline.last,
+                    speed_rate: applied.options.prices_bytes(),
                     created: std::rc::Rc::clone(&created),
                     decided: std::rc::Rc::clone(&decided),
                 })
