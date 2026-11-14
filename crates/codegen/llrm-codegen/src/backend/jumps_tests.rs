@@ -1387,6 +1387,47 @@ fn test_a_loop_nothing_falls_into_is_rotated_to_end_at_its_exit_test() {
     assert_eq!(order, vec![1, 20, 8, 3, 30]);
 }
 
+/// A guarded inner loop inside an outer loop (x_ld_dot, fma_chain, sum -O2): the
+/// pin's `rotateLoop` ends the inner loop with a `jmp` to the outer latch and
+/// the latch with a `jmp` back: x_ld_dot's 9 taken jumps, 34 clk over gcc's layout
+/// on a 22,946 clk run. `rotateLoopWithProfile` (`-force-precise-rotation-cost`)
+/// has the inner loop fall into the latch.
+#[test]
+fn test_a_guarded_inner_loop_in_an_outer_loop_falls_into_the_outer_latch_when_rotated_by_cost() {
+    let source = || {
+        let mut source = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, cx()), _jump(2, 5)], vec![5]).into(),
+                // The outer tail is made before the loops it closes, as isel
+                // numbers it: gcc lays it out after them.
+                block(3, vec![_move(3, cx()), _compare(4), _branch(5, "jne", 5)], vec![5, 30]).into(),
+                block(5, vec![_compare(6), _branch(7, "jle", 3)], vec![3, 10]).into(),
+                block(10, vec![_move(10, bx()), _compare(11), _branch(12, "jne", 10)], vec![10, 3]).into(),
+                block(30, vec![_return(30)], vec![]).into(),
+            ],
+        );
+        // Eight outer trips, the guard even, the inner loop 31 in 32 back.
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        for (edge, chance) in
+            [((3, 5), 0.875), ((3, 30), 0.125), ((5, 3), 0.5), ((5, 10), 0.5), ((10, 10), 0.97), ((10, 3), 0.03)]
+        {
+            source.odds.taken.insert(edge, fixed(chance));
+        }
+        source
+    };
+    let jumps = |precise: bool| {
+        let placed = threaded(&_placed_ext(&source(), false, false, None, None, 0, false, precise).unwrap());
+        let lines = inner(listed(placed, "_f"));
+        (lines.iter().filter(|line| line.starts_with("jmp")).count(), lines)
+    };
+    let (pin, lines) = jumps(false);
+    assert!(pin > 0, "premise: `rotateLoop` leaves a jmp:\n{lines:#?}");
+    let (cost, lines) = jumps(true);
+    assert_eq!(cost, 0, "no jmp after the inner loop:\n{lines:#?}");
+}
+
 /// The block the loop leaves for follows the test.
 #[test]
 fn test_loop_test_is_followed_by_the_block_it_leaves_for() {

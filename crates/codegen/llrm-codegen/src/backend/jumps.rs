@@ -217,6 +217,7 @@ pub fn optimized_with(
         cpu.tail_dup_hot(),
         epilogue,
         cpu.operations.ext_tsp_for_size,
+        cpu.precise_loop_rotation,
     )?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
@@ -237,6 +238,7 @@ pub fn optimized_with(
             cpu.tail_dup_hot(),
             epilogue,
             cpu.operations.ext_tsp_for_size,
+            cpu.precise_loop_rotation,
         )?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
@@ -521,11 +523,11 @@ fn _placed(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
-    _placed_ext(body, size, aggressive, tail_dup, hot, epilogue, false)
+    _placed_ext(body, size, aggressive, tail_dup, hot, epilogue, false, false)
 }
 
 /// `_placed`, with the size order of `-apply-ext-tsp-for-size` where
-/// `ext_tsp` and `size`.
+/// `ext_tsp` and `size`, and `rotateLoopWithProfile` for `precise_rotation`.
 fn _placed_ext(
     body: &LirBody,
     size: bool,
@@ -534,12 +536,13 @@ fn _placed_ext(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
     ext_tsp: bool,
+    precise_rotation: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
-    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, epilogue, ext_tsp))
+    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, epilogue, ext_tsp, precise_rotation))
 }
 
 /// `_placed_ext` for blocks whose fall-throughs are already jumps: a target
@@ -554,11 +557,13 @@ pub fn placed_explicit(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
     ext_tsp: bool,
+    precise_rotation: bool,
 ) -> LirBody {
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
     let (blocks, odds) = placement::order(
         &explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, epilogue, ext_tsp,
+        precise_rotation,
     );
     _reachable(&LirBody { odds, ..body.clone() }, blocks)
 }

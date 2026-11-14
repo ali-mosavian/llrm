@@ -96,7 +96,7 @@ pub(crate) fn order(
         .collect();
     let mut body = LirBody::new("f", 0, lir.clone(), Default::default(), Default::default());
     body.odds = BlockOdds { taken: odds.iter().map(|(&(from, to), &share)| ((from as i64, to as i64), share)).collect() };
-    let placed = placed_explicit(&body, lir, size, false, None, None, 0, false);
+    let placed = placed_explicit(&body, lir, size, false, None, None, 0, false, false);
     let number = |one: &Insn| {
         one.what.as_ref().and_then(|what| what.name.as_deref()?.strip_prefix('k')?.parse::<i64>().ok()).map(|k| (k - FIRST_INSN) as usize)
     };

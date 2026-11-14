@@ -92,6 +92,11 @@ pub struct CpuTable {
     /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
     /// `MOV32mi`s.
     pub share_literal_stores: bool,
+    /// `MachineBlockPlacement::rotateLoopWithProfile`, the pin's `-force-precise-rotation-cost`, rotates
+    /// every loop chain instead of `rotateLoop`: the order with the fewest taken jumps by the odds,
+    /// as gcc's `bb-reorder` lays a guarded loop (DEVIATE LOOP-ROTATE-COST, owner x86-m32-b, exit
+    /// 2026-11-24). Off: the pin's `rotateLoop`.
+    pub precise_loop_rotation: bool,
     /// Constant-pool bytes are a strict axis of the target's ranking: a fold that makes a new pool cell is off
     /// (DEVIATE FF2, `floatfold.rs`).
     pub pool_data_strict: bool,
@@ -262,6 +267,7 @@ impl Timings {
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "precise_loop_rotation") => table.precise_loop_rotation = number()? != 0,
                     ("scalars", "pool_data_strict") => table.pool_data_strict = number()? != 0,
                     ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,
                     ("scalars", "branch_constant_selects") => table.branch_constant_selects = number()? as u32,

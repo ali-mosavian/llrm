@@ -108,6 +108,9 @@ struct Placer {
     /// Instructions of frame teardown a return block will carry: the pin
     /// places after the epilogue is in (DEVIATE: counted, not emitted yet).
     epilogue: usize,
+    /// `-force-precise-rotation-cost`: `rotateLoopWithProfile` for every loop
+    /// (DEVIATE LOOP-ROTATE-COST, owner x86-m32-b, exit 2026-11-24).
+    precise_rotation: bool,
 }
 
 fn succ_seen(
@@ -174,6 +177,7 @@ pub(super) fn order(
     hot: Option<HotTailDup>,
     epilogue: usize,
     ext_tsp: bool,
+    precise_rotation: bool,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
@@ -185,6 +189,7 @@ pub(super) fn order(
     }
     let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
     placer.epilogue = epilogue;
+    placer.precise_rotation = precise_rotation;
     for found in natural {
         let Some(&header) = index.get(&found.header) else { continue };
         for at in found.body.to_set().iter() {
@@ -276,6 +281,7 @@ impl Placer {
             latch: vec![false; n],
             rerouted: Vec::new(),
             epilogue: 0,
+            precise_rotation: false,
         }
     }
 
@@ -777,7 +783,7 @@ impl Placer {
         let top = self.best_loop_top(header);
         let mut exit_freq = 0.0;
         self.exit = None;
-        if top == header {
+        if !self.precise_rotation && top == header {
             (self.exit, exit_freq) = self.best_loop_exit(found, header, &members, natural, depth, innermost);
         }
         let chain = self.chain_of[top];
@@ -789,7 +795,11 @@ impl Placer {
         self.members = members;
         self.build_chain(top, chain, true);
         let exit = self.exit.take();
-        self.rotate(chain, exit, exit_freq);
+        if self.precise_rotation {
+            self.rotate_with_profile(chain);
+        } else {
+            self.rotate(chain, exit, exit_freq);
+        }
         self.work.clear();
         self.members.clear();
         self.active = 0;
@@ -1044,6 +1054,79 @@ impl Placer {
             }
         }
         self.chains[chain].blocks.rotate_left(at + 1);
+    }
+
+    /// `rotateLoopWithProfile` (`-force-precise-rotation-cost`): the block to
+    /// put first is the one whose rotation costs least in taken jumps, by the
+    /// odds: the missed fall-through into the header, every exit but the one
+    /// the tail makes, and the tail's break from the top.
+    fn rotate_with_profile(
+        &mut self,
+        chain: usize,
+    ) {
+        /// `MisfetchCost` and `JumpInstCost`, both 1 in the pin.
+        const MISFETCH: f64 = 1.0;
+        const JUMP: f64 = 1.0;
+        let blocks = self.chains[chain].blocks.clone();
+        let header = blocks[0];
+        if header == self.entry {
+            return;
+        }
+        let mut header_cost = 0.0_f64;
+        for &from in &self.pred[header] {
+            if self.dead[from] || self.inside(from) || !self.ends_chain(from) {
+                continue;
+            }
+            let edge = self.freq[from] * self.prob(from, header);
+            let mut cost = edge * MISFETCH;
+            // A predecessor that only jumps to the header pays that jump too.
+            if self.succ[from].len() == 1 {
+                cost += edge * JUMP;
+            }
+            header_cost = header_cost.max(cost);
+        }
+        // Each exit block with its hottest exit edge, over the edges that
+        // leave the loop for the start of a chain.
+        let mut exits: Vec<(usize, f64)> = Vec::new();
+        for &block in &blocks {
+            let mut largest = 0.0_f64;
+            for (place, &to) in self.succ[block].iter().enumerate() {
+                if !self.inside(to) && self.starts_chain(to) {
+                    largest = largest.max(self.chance[block][place]);
+                }
+            }
+            if largest > 0.0 {
+                exits.push((block, self.freq[block] * largest));
+            }
+        }
+        let n = blocks.len();
+        let (mut best, mut smallest) = (None, f64::INFINITY);
+        for (at, &top) in blocks.iter().enumerate() {
+            let tail = blocks[(at + n - 1) % n];
+            let mut cost = if at == 0 { 0.0 } else { header_cost };
+            cost += exits.iter().filter(|(block, _)| *block != tail).map(|(_, freq)| freq).sum::<f64>();
+            // The fall-through from the tail to the top the rotation breaks.
+            if self.succ[tail].contains(&top) {
+                let tail_freq = self.freq[tail];
+                match self.succ[tail].len() {
+                    1 => cost += tail_freq * (MISFETCH + JUMP),
+                    2 => {
+                        let to_top = self.prob(tail, top);
+                        let to_top_freq = tail_freq * to_top;
+                        let colder = if to_top > 0.5 { tail_freq * (1.0 - to_top) } else { to_top_freq };
+                        cost += to_top_freq * MISFETCH + colder * JUMP;
+                    }
+                    _ => {}
+                }
+            }
+            if above(smallest, cost) {
+                smallest = cost;
+                best = Some(at);
+            }
+        }
+        if let Some(at) = best {
+            self.chains[chain].blocks.rotate_left(at);
+        }
     }
 }
 
