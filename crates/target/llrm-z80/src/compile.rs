@@ -632,9 +632,7 @@ fn priced_in_loops(
     level: Level,
 ) -> Option<(u32, u64)> {
     let (function, assignment, slots, reads, frequencies) = one;
-    expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
     let lines = finish(function, assignment, 0, slots, reads.clone());
-    expand::PRICING.with(|one| one.set(false));
     let kept = frequencies.as_ref().map(|own| expand::replace_frequencies(own.clone()));
     let price = lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)));
     if let Some(kept) = kept {
@@ -643,25 +641,15 @@ fn priced_in_loops(
     price
 }
 
-/// Whether a variant is priced before the printer's peepholes. Only at -O2 and up, where the price is weighted
-/// clocks, good to a few tenths of a percent, and a peephole moved a near-tie to the worse variant (copy_runs -O2:
-/// 2 B and 600 T). Where the price is bytes (-Os, -Oz) or both axes are strict (-O1) the peephole's bytes and
-/// clocks are real: priced before them, clear -O1 chose the allocation that is larger and slower once emitted
-/// (96 B / 577 T against 95 B / 550 T at -Os).
-fn priced_before_peepholes(level: Level) -> bool {
-    matches!(level, Level::O2 | Level::O3)
-}
-
-/// Whether the price `one` beats `other`: bytes first at the size levels;
-/// otherwise weighted clocks plus 3 clocks a byte (1 B = 3 T), so a variant
-/// that is bigger and no faster by that rate does not win on a clock alone.
+/// Whether the price `one` (bytes, clocks) beats `other`: bytes first, clocks only break a tie, at every level
+/// (the 2026-11-14 ruling for the z80: always the smallest code, clocks the second goal; a clock gain never buys
+/// bytes). It was weighted clocks plus 3 T a byte at -O2 and -O3 and bytes first at -O1, -Os and -Oz.
 fn cheaper(
-    level: Level,
+    _level: Level,
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    let priced = |(bytes, clocks): (u32, u64)| clocks + u64::from(bytes) * crate::tti::SPEED_MILLICLOCKS_PER_BYTE as u64 / 1000;
-    if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
+    one < other
 }
 
 #[cfg(test)]
@@ -670,13 +658,16 @@ mod tests {
 
     /// call_keeps -O1: `churn` with the routines 920 B / 8709 T, inline 1136 B / 6922 T. The smaller relative regret
     /// picked the inline form on a 2% margin (1.235 against 1.258) and crossed SDCC's bytes bar (1610 B, bar 1535);
-    /// O1 is strict on both axes and takes no growth in bytes for clocks.
+    /// O1 is strict on both axes and takes no growth in bytes for clocks; so do -O2 and -O3 (1 B = 3 T took the inline
+    /// form there: 1787 T under the routines for 216 B over the bytes bar).
     #[test]
     fn at_o1_a_form_that_grows_bytes_for_clocks_does_not_win() {
         let (calls, inline) = ((920, 8709), (1136, 6922));
-        assert!(prefers(Level::O1, calls, inline) && !prefers(Level::O1, inline, calls));
-        // equal bytes: the clocks decide
-        assert!(prefers(Level::O1, (1000, 11000), (1000, 14300)));
+        for level in [Level::O1, Level::O2, Level::O3, Level::Os, Level::Oz] {
+            assert!(prefers(level, calls, inline) && !prefers(level, inline, calls), "{level:?}");
+            // equal bytes: the clocks decide
+            assert!(prefers(level, (1000, 11000), (1000, 14300)), "{level:?}");
+        }
     }
 
     /// The functions whose alternative is the speed routines or the shift loops keep the relative regret, at the
@@ -704,44 +695,34 @@ mod tests {
         assert!(prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
     }
 
-    /// Bytes first at the size levels, 1 B = 3 T from O2: a form that is 30% slower for 5% fewer bytes wins the
-    /// first and loses the second.
+    /// Bytes first at every level: a form that is 30% slower for 5% fewer bytes wins at -O2 and -O3 as at the size
+    /// levels (the 2026-11-14 ruling; 1 B = 3 T took the faster one).
     #[test]
-    fn the_size_levels_take_bytes_and_o2_takes_the_rate() {
+    fn every_level_takes_the_bytes_first() {
         let (small, fast) = ((1900, 14300), (2000, 11000));
-        assert!(prefers(Level::Os, small, fast) && prefers(Level::Oz, small, fast));
-        assert!(!prefers(Level::O2, small, fast) && !prefers(Level::O3, small, fast));
-        assert!(prefers(Level::O2, (1000, 11000), (1100, 11000)));
+        for level in [Level::O1, Level::O2, Level::O3, Level::Os, Level::Oz] {
+            assert!(prefers(level, small, fast) && !prefers(level, fast, small), "{level:?}");
+        }
     }
 
-    /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone
-    /// (tail_calls -O1, 4444 B to 4505 B); at 1 B = 3 T it loses.
-    #[test]
-    fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
-        assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
-        assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
-        // -O1 prices what is emitted (`clear` -O1: 96 B / 577 T priced before them, 548 T after)
-        assert!(!priced_before_peepholes(Level::O1));
-    }
-
-    /// The push and pop form is smaller and dearer in weighted clocks: kept at
-    /// the size levels (bytes first), dropped at -O2 (3 T a byte does not pay
-    /// 1000 T), kept where it is cheaper by that rate, and a tie stays framed.
+    /// The push and pop form is smaller and dearer in clocks: kept at every level (bytes first), and a tie stays
+    /// framed.
     #[test]
     fn push_and_pop_stay_only_where_they_price_lower() {
         let (framed, stacked) = (Some((1000, 50_000)), Some((960, 51_000)));
         assert!(keeps_stacked(Level::Os, framed, stacked) && keeps_stacked(Level::Oz, framed, stacked));
-        assert!(!keeps_stacked(Level::O2, framed, stacked) && !keeps_stacked(Level::O3, framed, stacked));
+        assert!(keeps_stacked(Level::O2, framed, stacked) && keeps_stacked(Level::O3, framed, stacked));
         let cheaper_stack = Some((960, 49_000));
         assert!(keeps_stacked(Level::O2, framed, cheaper_stack));
         assert!(!keeps_stacked(Level::Os, framed, framed) && !keeps_stacked(Level::O2, framed, framed));
         assert!(keeps_stacked(Level::O2, None, stacked));
-        // loop_fusion -O1 `same`: 13 B (10%) smaller for 4% more weighted clocks, so the strict level keeps it
+        // loop_fusion `same`: 13 B (10%) smaller for 4% more weighted clocks
         let (framed, stacked) = (Some((124, 6472)), Some((111, 6746)));
-        assert!(keeps_stacked(Level::O1, framed, stacked) && !keeps_stacked(Level::O2, framed, stacked));
+        assert!(keeps_stacked(Level::O1, framed, stacked) && keeps_stacked(Level::O2, framed, stacked));
         assert!(!keeps_stacked(Level::O1, stacked, framed));
     }
 
+    /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone (tail_calls -O1, 4444 B to 4505 B).
     #[test]
     fn a_bigger_variant_does_not_win_on_fewer_clocks_alone() {
         assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
@@ -3131,7 +3112,7 @@ fn decomposed_functions(
                     prefers_by_regret(price, best)
                 } else if size_first[at] {
                     prefers(Level::Os, price, best)
-                } else if level == Level::O1 {
+                } else if level != Level::O0 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
                 } else {
                     prefers(level, price, best)
@@ -3165,10 +3146,8 @@ fn decomposed_functions(
         .collect()
 }
 
-/// Whether the module price `new` (bytes, clocks) is strictly better than `old` at `level`: bytes first at the
-/// size levels and at O1, which is strict on both axes and takes no growth in bytes for clocks (call_keeps -O1:
-/// `churn` 920 B / 8709 T with the routines against 1136 B / 6922 T inline, a 2% margin of relative regret that
-/// moved with a price 19 B lower: the bytes bar crossed); 1 B = 3 T at O2 and up.
+/// Whether the module price `new` (bytes, clocks) is strictly better than `old`: bytes first at every level
+/// (call_keeps: `churn` 920 B / 8709 T with the routines against 1136 B / 6922 T inline crossed the bytes bar).
 /// DEVIATE z80-callinline-price: the pin keys a call against inline on `optsize` alone (`ForCodeSize`) and
 /// prices neither the routine's clocks nor the bytes against each other. It prices the multiply calls and the long
 /// shift calls (`size_shift_call`) by the same model (`runtime_size::routine_clocks`). Owner z80, exit 2026-11-20.
@@ -3177,10 +3156,7 @@ fn prefers(
     new: (u32, u64),
     old: (u32, u64),
 ) -> bool {
-    match level {
-        Level::Os | Level::Oz | Level::O1 => new < old,
-        _ => cheaper(level, new, old),
-    }
+    cheaper(level, new, old)
 }
 
 /// The smaller relative regret (a form's worse axis against the best of the two on that axis), so a form that
@@ -3221,12 +3197,8 @@ fn lines_of(
         (Ok(carry), Ok(generic)) => {
             let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
             let (with, without) = (price(&carry), price(&generic));
-            let strict = matches!(request.level, Level::O1 | Level::Os | Level::Oz);
-            let take = if strict {
-                without != with && without.0 <= with.0 && without.1 <= with.1
-            } else {
-                cheaper(request.level, without, with)
-            };
+            // the generic add only where it is no worse on either axis
+            let take = without != with && without.0 <= with.0 && without.1 <= with.1;
             Ok(if take { generic } else { carry })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
