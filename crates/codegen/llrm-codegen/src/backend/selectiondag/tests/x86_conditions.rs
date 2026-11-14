@@ -42,6 +42,7 @@ fn lowered(
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -169,6 +170,7 @@ fn x86_runs_the_pin_combines_the_corpus_judged_better() {
         sext_load: false,
         zext_free: false,
         branch_constant_selects: false,
+        status_word_tests: false,
         profile: None,
     };
     assert!(hooks.fold_bin_op_into_select() && hooks.fold_xor_of_and_with_mask() && hooks.canonicalize_ge_le());
@@ -199,6 +201,7 @@ fn m16_distributes_a_multiply_of_a_sum_only_for_size() {
         sext_load: false,
         zext_free: false,
         branch_constant_selects: false,
+        status_word_tests: false,
         profile: None,
     };
     let m16 = X86Lowering { share_products: false, i16_mul_chains: true, ..flat };
@@ -239,6 +242,7 @@ fn x86_narrows_a_mask_over_a_frozen_extending_load() {
         sext_load: false,
         zext_free: false,
         branch_constant_selects: false,
+        status_word_tests: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut x86, CombineLevel::BeforeLegalizeTypes).run();

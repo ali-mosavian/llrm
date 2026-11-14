@@ -105,6 +105,7 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
         )

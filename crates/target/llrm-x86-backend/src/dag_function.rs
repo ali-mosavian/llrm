@@ -830,7 +830,7 @@ fn lowering_for(
     features: Features,
     build: impl FnOnce() -> TargetLowering,
 ) -> TargetLowering {
-    type Key = (u32, [bool; 9]);
+    type Key = (u32, [bool; 10]);
     thread_local! {
         static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -846,6 +846,7 @@ fn lowering_for(
             features.sse2,
             features.vector128,
             features.soft_float,
+            features.fp_status,
         ],
     );
     TABLES.with(|tables| {
@@ -902,13 +903,17 @@ fn divide_live_limit(
     machine: &dyn llrm_mir::target::Machine,
 ) -> u32 {
     let Some(tti) = machine.tti() else { return 0 };
-    if cpu.bytes_strict() && (!cpu.size || tti.narrow_divide_live_at_size()) { tti.narrow_divide_live_limit() } else { 0 }
+    if cpu.bytes_strict() && (!cpu.size || tti.narrow_divide_live_at_size()) {
+        tti.narrow_divide_live_limit()
+    } else {
+        0
+    }
 }
 
 /// DEVIATE DIV-LIVE: for each block with a divide by a constant of a type
 /// narrower than a word, the most values live across one (a value of more
-/// than a word counts its words, the target's own). O(function) once, and only when the function
-/// has such a divide.
+/// than a word counts its words, the target's own). O(function) once, and only
+/// when the function has such a divide.
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
@@ -926,7 +931,10 @@ fn narrow_divide_live(
                 op.operands.get(1),
                 Some(llrm_mir::module::Operand::Constant(_))
             )
-            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits <= max_bits)
+            && op
+                .result
+                .and_then(|r| module.context.types.int_bits(function.value(r).ty))
+                .is_some_and(|bits| bits <= max_bits)
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
@@ -1090,7 +1098,7 @@ fn selected_in(
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
         let cmov = machine.tti().is_some_and(|tti| tti.has_cmov());
-        let features = Features { cmov, ..Features::default() };
+        let features = Features { cmov, fp_status: cpu.tests_status_word(), ..Features::default() };
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
     tli.set_small_divide(cpu.bytes_strict() && (cpu.size || arch.small_divide_at_o1()));
@@ -1139,8 +1147,9 @@ fn selected_in(
     let builder_target = builder_target
         .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
-        // `-fexcess-precision=standard` rounds what the x87 keeps wider; scalar SSE has no excess precision
-        // (FLT_EVAL_METHOD 0), so the store gcc and clang never make is not made.
+        // `-fexcess-precision=standard` rounds what the x87 keeps wider; scalar
+        // SSE has no excess precision (FLT_EVAL_METHOD 0), so the store gcc and
+        // clang never make is not made.
         .with_float_store(cpu.float_store && !arch.scalar_sse())
         // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin:
         // minsize only). Measured 2026-11-06, m32 -Os, 71 programs, pin-exact
@@ -1483,15 +1492,20 @@ fn selected_in(
     let fast_divide = tli.small_divide() && tli.fast_divide_in_loops();
     // DEVIATE MUL-HOT: see `X86Lowering::hot_chains`.
     let hot_mul = cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.mul_chains_hot_at_size());
-    // How often the function runs per run of the program, from its direct callers: a block of a function called
-    // from a loop runs more than once per call of the function. One where there is none to count.
+    // How often the function runs per run of the program, from its direct
+    // callers: a block of a function called from a loop runs more than once
+    // per call of the function. One where there is none to count.
     let entry_weight = if hot_mul {
         llrm_analysis::entryweight::entry_weight(module, &layout, id, &llrm_mir::callgraph::addressed(module))
     } else {
         1.0
     };
-    let frequencies =
-        (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0 || fast_divide || hot_mul).then(|| {
+    let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks)
+        || divide_bytes
+        || select_branch > 0
+        || fast_divide
+        || hot_mul)
+        .then(|| {
             let bpi = info
                 .bpi
                 .get_or_insert_with(
@@ -1508,7 +1522,16 @@ fn selected_in(
             llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
         });
     let div_live = divide_live_limit(cpu, &*machine);
-    let div_live = if div_live > 0 { narrow_divide_live(module, function, machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()), arch.object().bitness.min(32)) } else { llrm_mir::dense::IdMap::new() };
+    let div_live = if div_live > 0 {
+        narrow_divide_live(
+            module,
+            function,
+            machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()),
+            arch.object().bitness.min(32),
+        )
+    } else {
+        llrm_mir::dense::IdMap::new()
+    };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
@@ -1563,7 +1586,8 @@ fn selected_in(
                 &mut built.dag,
                 &tli,
                 &mut X86Lowering {
-                    multiply_early_out: multiply_early_out.then_some(address_mode != llrm_dagisel::addr::AddrMode::Real16),
+                    multiply_early_out: multiply_early_out
+                        .then_some(address_mode != llrm_dagisel::addr::AddrMode::Real16),
                     cmov: tli.can_use_cmov(),
                     share_products: machine.tti().is_some_and(|tti| tti.x87_share_negated_products()),
                     sse2,
@@ -1585,6 +1609,7 @@ fn selected_in(
                     i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
+                    status_word_tests: !m16 && !m64 && cpu.tests_status_word(),
                     branch_constant_selects: select_branch > 0
                         && frequencies.as_ref().is_some_and(|frequencies| {
                             frequencies.relative_to_entry(parent) >= f64::from(select_branch)

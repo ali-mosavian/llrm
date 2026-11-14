@@ -77,6 +77,16 @@ pub const LLRM_UDIV64BY32: ISD = ISD::Target(24593);
 /// [`LLRM_COPY128`]: the pin loads `v4i32`. Exit: vector `MVT`s land. Owner
 /// m64.
 pub const LLRM_MOVE128: ISD = ISD::Target(24594);
+/// The x87 status word of a compare, as a value: `lhs, rhs` -> `i16` (`fucom`,
+/// then `fnstsw`). The word stays live across the code between the compares'
+/// readers, each of which tests it ([`LLRM_STATUS_TEST`]). DEVIATE X87-STATUS
+/// (the pin moves it to `AH` and `sahf`s it); gcc's `ix86_expand_fp_compare`.
+/// Owner x87-b.
+pub const LLRM_FSTATUS: ISD = ISD::Target(24595);
+/// The flags of one condition of a status word: `word, mask, value, ...` ->
+/// `EFLAGS` where `word & mask == value` is `E`. `test ah, mask` for a zero or
+/// a mask value, `and` then `cmp` otherwise.
+pub const LLRM_STATUS_TEST: ISD = ISD::Target(24596);
 /// `X86ISD::VASTART_SAVE_XMM_REGS` (the pin's number): `chain, al, frame index
 /// of the register save area, offset of the first vector register's slot`,
 /// the vector argument registers not taken by named parameters stored there
@@ -115,6 +125,8 @@ pub fn private_name(code: u16) -> Option<&'static str> {
         24592 => "X86ISD::LLRM_COPY128",
         24593 => "X86ISD::LLRM_UDIV64BY32",
         24594 => "X86ISD::LLRM_MOVE128",
+        24595 => "X86ISD::LLRM_FSTATUS",
+        24596 => "X86ISD::LLRM_STATUS_TEST",
         _ => return None,
     })
 }
@@ -130,11 +142,17 @@ pub struct X86Names;
 pub static NAMES: X86Names = X86Names;
 
 impl TargetNodeNames for X86Names {
-    fn name(&self, code: u16) -> Option<&'static str> {
+    fn name(
+        &self,
+        code: u16,
+    ) -> Option<&'static str> {
         private_name(code)
     }
 
-    fn pin_id(&self, code: u16) -> Option<u16> {
+    fn pin_id(
+        &self,
+        code: u16,
+    ) -> Option<u16> {
         let name = private_name(code)?.strip_prefix("X86ISD::")?;
         Some(llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX))
     }
@@ -149,10 +167,7 @@ mod tests {
     #[test]
     fn test_names_and_pin_ids_survive_the_move() {
         assert_eq!(NAMES.name(1), Some("X86ISD::CALL"));
-        assert_eq!(
-            NAMES.pin_id(1),
-            llrm_dagisel::generated::ids::x86isd_id("CALL")
-        );
+        assert_eq!(NAMES.pin_id(1), llrm_dagisel::generated::ids::x86isd_id("CALL"));
         assert_eq!(NAMES.pin_id(9999), None);
     }
 }
