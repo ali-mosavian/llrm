@@ -719,3 +719,76 @@ exit:
     assert!(text.contains("<8 x i16>"), "the reverse loop was not widened:\n{text}");
     assert_eq!(answer(&after), answer(&before), "{text}");
 }
+
+const REDUCTION_SUM: &str = include_str!("../tests/lv/reduction_sum.ll");
+const SCROLL_CHECKSUM: &str = include_str!("../tests/lv/scroll_checksum.ll");
+
+/// `Reductions are not widened yet` left every sum of a loop scalar. The sum of
+/// 1003 words is a vector phi per part from `<start, 0, 0, 0>`, folded in the
+/// middle block and reduced by `llvm.vector.reduce.add`, with the remainder
+/// resuming from the total.
+#[test]
+fn a_sum_is_a_vector_phi_reduced_in_the_middle_block() {
+    let text = run(REDUCTION_SUM);
+    assert!(count(&text, "vec.phi") >= 1, "{text}");
+    assert_eq!(count(&text, "call i32 @llvm.vector.reduce.add.v4i32"), 1, "{text}");
+    // A constant trip count enters the vector loop for sure: no merge phi.
+    assert!(text.contains("phi i32 [ %rdx, %middle.block ]"), "{text}");
+    assert!(text.contains("insertelement <4 x i32> zeroinitializer, i32 %start, i64 0"), "{text}");
+}
+
+/// The pin leaves scroll's checksum (a sum of extended products) scalar and
+/// interleaves it ("the cost-model indicates that vectorization is not
+/// beneficial", interleaved count 4): a loop the pin declines is declined.
+#[test]
+fn the_checksum_the_pin_declines_stays_scalar() {
+    let text = run(SCROLL_CHECKSUM);
+    assert_eq!(count(&text, "x i64>"), 0, "{text}");
+    assert_eq!(count(&text, "vector.reduce"), 0, "{text}");
+}
+
+/// A sum run by the interpreter before and after widening: a wrong lane in the
+/// start, a part lost in the fold or a remainder that restarts from the start
+/// changes the answer.
+#[test]
+fn a_widened_sum_keeps_the_answer_of_the_scalar_loop() {
+    let source = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"
+@s = global [2000 x i32] zeroinitializer, align 4
+define i32 @f() {
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %t = trunc i64 %i to i32
+  %m = mul i32 %t, 7
+  %v = add i32 %m, 3
+  %p = getelementptr inbounds i32, ptr @s, i64 %i
+  store i32 %v, ptr %p, align 4
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 2000
+  br i1 %fd, label %sum, label %fill
+sum:
+  br label %loop
+loop:
+  %j = phi i64 [ 0, %sum ], [ %jn, %loop ]
+  %acc = phi i32 [ 100, %sum ], [ %next, %loop ]
+  %q = getelementptr inbounds i32, ptr @s, i64 %j
+  %x = load i32, ptr %q, align 4
+  %next = add nsw i32 %acc, %x
+  %jn = add nuw nsw i64 %j, 1
+  %done = icmp eq i64 %jn, 1003
+  br i1 %done, label %exit, label %loop
+exit:
+  %r = phi i32 [ %next, %loop ]
+  ret i32 %r
+}
+";
+    let answer = |text: &str| {
+        let module = parsed(text);
+        llrm_mir::interpret::run(&module, "f", Vec::new(), 2_000_000)
+    };
+    let before = answer(source);
+    let after_text = run(source);
+    assert!(after_text.contains("llvm.vector.reduce.add"), "the sum was not widened:\n{after_text}");
+    assert_eq!(format!("{:?}", answer(&after_text)), format!("{before:?}"), "{after_text}");
+}
