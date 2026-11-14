@@ -1,4 +1,5 @@
 // flags: -O1 | -O2 | -Os
+// bar: none (SDCC error 101: too many parameters)
 // A 64-bit saturating subtract: the low words' borrow compare is shared with the high words' order, so the carry
 // pass dropped the compare the order chain continued (the result came out 0 for 5 below 0xF000000000000000).
 extern void report(long value);

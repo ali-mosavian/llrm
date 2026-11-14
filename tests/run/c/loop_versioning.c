@@ -1,4 +1,5 @@
 // flags: -O0 | -O3 -fno-inline-functions | -O3 -m32 -fno-inline-functions
+// bar: none (SDCC wrong value)
 // A loop whose address steps by an unknown stride is copied for a stride of 1 at -O3 (gcc's
 // -fversion-loops-for-strides): each answer must be the one loop's, whichever stride it is run with.
 extern void report(long value);
