@@ -443,6 +443,23 @@ fn tail(
         })
         .transpose()?
         .filter(|(names, _)| !names.is_empty());
+    // The same walks that also end a counted loop on the index and a page
+    // count: priced against the walks above.
+    let counted = paged
+        .as_ref()
+        .zip(index_bits)
+        .map(|(_, bits)| {
+            let mut counted = program.modules[0].clone();
+            let mut cse = llrm_mir::passes::PassManager::default();
+            cse.add(llrm_transforms::earlycse::EarlyCse { memory_ssa: false });
+            cse.run_module(&mut counted, machine())?;
+            llrm_transforms::pageindex::indexed_counting(&mut counted, bits).map(|names| {
+                crate::prepare::split_phi_edges(&mut counted);
+                (names, counted)
+            })
+        })
+        .transpose()?
+        .filter(|(names, _)| !names.is_empty());
     // The range tests that two compares do better than the joined one: priced against it, below.
     let ranged = |source: &llrm_mir::module::Module| -> Result<Option<(Vec<String>, llrm_mir::module::Module)>, String> {
         if request.level == Level::O0 {
@@ -456,6 +473,10 @@ fn tail(
     let ranged_base = ranged(&program.modules[0])?;
     let ranged_paged = match &paged {
         Some((_, paged)) => ranged(paged)?,
+        None => None,
+    };
+    let ranged_counted = match &counted {
+        Some((_, counted)) => ranged(counted)?,
         None => None,
     };
     llrm_6502_prepare(&mut program);
@@ -481,6 +502,7 @@ fn tail(
         let mut selection = select_function(module, name, request.cpu)?;
         let mut as_called = true;
         let mut paged_chosen = false;
+        let mut counted_chosen = false;
         let mut source = None;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
@@ -504,9 +526,25 @@ fn tail(
                 source = Some(paged);
             }
         }
+        if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| paged_chosen && names.contains(name)) {
+            let mut other = select_function(counted, name, request.cpu)?;
+            other.zero_page = request.platform.zero_page;
+            other.tuning = request.level.tuning();
+            let kept = source.unwrap_or(module);
+            let rate = crate::routines::copy_prices().page_byte_clocks;
+            if cheaper(kept, name, &other, counted, &selection, request, rate, true)? {
+                selection = other;
+                counted_chosen = true;
+                source = Some(counted);
+            }
+        }
         let mut range_chosen = false;
         if as_called || paged_chosen {
-            let candidate = if paged_chosen { ranged_paged.as_ref() } else { ranged_base.as_ref() };
+            let candidate = match (paged_chosen, counted_chosen) {
+                (true, true) => ranged_counted.as_ref(),
+                (true, false) => ranged_paged.as_ref(),
+                _ => ranged_base.as_ref(),
+            };
             if let Some((_, split)) = candidate.filter(|(names, _)| names.contains(name)) {
                 let mut other = select_function(split, name, request.cpu)?;
                 other.zero_page = request.platform.zero_page;
