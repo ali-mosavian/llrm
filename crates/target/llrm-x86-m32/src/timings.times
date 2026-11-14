@@ -62,7 +62,7 @@ unordered_branch_odds 1 1
 share_congruent_phis   1    1
 # DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): equal literal stores share a register at -O2/-O3 outside loops; pin: `MOV32mi`s. 2026-11-08 A/B: nbody -64 B, jpeg -78 B at -O2, 0 clk.
 share_literal_stores    1    1
-# DEVIATE ZEXT-AND (owner x86-m32-b, exit 2026-11-27): gcc `X86_TUNE_ZERO_EXTEND_WITH_AND` (m_486 | m_PENT): `movzx r,r` is `and r,mask` where flags are dead at speed; pin: `movzx` (3 clk on the 486).
+# DEVIATE ZEXT-AND (owner x86-m32-b, exit 2026-11-24): gcc `X86_TUNE_ZERO_EXTEND_WITH_AND` (m_486 | m_PENT): `movzx r,r` is `and r,mask` where flags are dead at speed; pin: `movzx` (3 clk on the 486).
 zero_extend_with_and    1    1
 # Pin: MOV32r1, `OptForSize, Not64BitMode` (m64 has `mov r,1`, m16 never reaches the DAG form).
 size_one_is_xor_inc     1    1

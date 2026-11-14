@@ -94,7 +94,7 @@ pub struct CpuTable {
     pub share_literal_stores: bool,
     /// A `movzx` of a register into itself is `and r, mask` where the flags are dead and bytes
     /// are priced at speed: gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND`, set for the 486 and Pentium
-    /// (DEVIATE ZEXT-AND, owner x86-m32-b, exit 2026-11-27). Off: the pin's `movzx`.
+    /// (DEVIATE ZEXT-AND, owner x86-m32-b, exit 2026-11-24). Off: the pin's `movzx`.
     pub zero_extend_with_and: bool,
     /// Constant-pool bytes are a strict axis of the target's ranking: a fold that makes a new pool cell is off
     /// (DEVIATE FF2, `floatfold.rs`).
