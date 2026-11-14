@@ -42,6 +42,7 @@ fn unrolled_for(cpu: &str) -> (bool, String) {
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     let changed = unroll_function(&mut module, "f", &tti, options).expect("unrolls");
     let text = llrm_mir::print::module(&module);
@@ -110,6 +111,7 @@ fn test_the_i486_keeps_the_store_credit_for_an_array_read_at_run_time_indices() 
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     unroll_function(&mut module, "f", &tti, options).expect("unrolls");
     let text = llrm_mir::print::module(&module);

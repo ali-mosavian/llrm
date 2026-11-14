@@ -721,6 +721,14 @@ pub trait Tti {
         None
     }
 
+    /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
+    /// step the pin's `ExpandReductions` or the target's lowering makes). A
+    /// port that does not yet lowers none, and no loop with a reduction is
+    /// widened.
+    fn lowers_vector_reductions(&self) -> bool {
+        true
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
@@ -2412,6 +2420,13 @@ pub trait Tti {
     /// instruction loop) says false.
     fn memory_idioms_at_optsize(&self) -> bool {
         true
+    }
+
+    /// `Tuning::fills_pattern_at_speed`: isel fills a word or dword pattern
+    /// itself (`rep stosw`/`rep stosd`), so the pass forms it and no pre-ISel
+    /// store loop is made.
+    fn fills_pattern_at_speed(&self) -> bool {
+        false
     }
 
     /// Beyond the pin: whether a shift by a variable amount needs the count

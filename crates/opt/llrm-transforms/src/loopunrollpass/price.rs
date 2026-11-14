@@ -36,8 +36,8 @@ pub(crate) fn unroll_pays(
 }
 
 /// Whether the full unroll of `lp` by `trips` stays, at the target's rate
-/// (`Tti::unroll_milliclocks_per_byte`). Only at -O2/-O3: -Os and -Oz hold to
-/// the pin's bytes.
+/// (`Tti::unroll_milliclocks_per_byte`). At -O2/-O3, and -O1 where bytes are
+/// priced at speed: -Os and -Oz hold to the pin's bytes.
 pub(super) fn full_unroll_pays(
     run: &mut Run,
     se: &mut ScalarEvolution,
@@ -65,7 +65,7 @@ pub(super) fn full_unroll_pays(
         && run.options.inliner_follows
         && llrm_mir::facts::Facts::of(&run.function.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
         && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
-    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || (run.options.opt_level < 2 && !run.options.speed_rate) {
         why(run, lp, &format!("unpriced unroll: inlinable {inlinable}, rate {rate}"));
         return true;
     }
