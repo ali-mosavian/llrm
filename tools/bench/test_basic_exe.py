@@ -7,11 +7,12 @@ import bench
 FIXTURES = Path(__file__).with_name("fixtures") / "basic_exe"
 
 
-def measured_in_emulator(monkeypatch, tmp_path, program):
-    """`program` of the fixtures, built for our runtime at -O2 and run in the emulator with its output checked against its .out."""
+def measured_in_emulator(monkeypatch, tmp_path, program, language="bq16"):
+    """`program` of the fixtures, built for our runtime (`bq16`) or linked with Microsoft's (`bas`) at -O2 and run in the emulator with its output
+    checked against its .out."""
     monkeypatch.setattr(bench, "BENCH", tmp_path / "bench")
     shutil.copytree(FIXTURES / program, tmp_path / "bench" / program)
-    return bench.measure_all([program], ["O2"], tmp_path / "work")[(program, "bq16", "O2")]
+    return bench.measure_all([program], ["O2"], tmp_path / "work")[(program, language, "O2")]
 
 
 def test_clear_and_erase_zero_the_variables_llrm_keeps_in_bss(monkeypatch, tmp_path):
@@ -27,3 +28,12 @@ def test_read_parses_the_data_text_as_bc_stores_it(monkeypatch, tmp_path):
     back exactly as Microsoft's BC and runtime read them (zprobe.out is BC 4.5's own output)."""
     counts = measured_in_emulator(monkeypatch, tmp_path, "zprobe")
     assert "prints" not in counts.get("error", ""), counts
+
+
+def test_clear_zeroes_the_bss_the_microsoft_runtime_leaves(monkeypatch, tmp_path):
+    """Linked with Microsoft's runtime, whose B$SCLR zeroes BC_DATA only and whose start-up does not know `_BSS`, the module zeroes it itself: the
+    same zclear program prints 0 for variables read before any store and after CLEAR with `_BSS` (822 B) still not stored in the exe. Before the
+    zeroing the program never reached its region."""
+    counts = measured_in_emulator(monkeypatch, tmp_path, "zclear", "bas")
+    assert "error" not in counts, counts
+    assert counts["bss_bytes"] >= 800 and counts["data_bytes"] < 100, counts

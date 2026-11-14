@@ -540,8 +540,13 @@ impl ProgramPass for Walk {
                         } else if let Some(tti) = tti.as_deref() {
                             let kept = function_mut(module, id).1.clone();
                             let before = sized(module, &program.layout, tti, id, false);
+                            let globals = module.globals.len();
                             (self.simplify)(module, &mut modules[at], id, "walk.again.");
-                            if sized(module, &program.layout, tti, id, false) + GUARD >= before {
+                            // The units count code, not the data a rerun makes: a CRC table
+                            // (crc16 -O1, 64 -> 580 B) was "smaller". Where -O1 prices bytes
+                            // the old body stays; `globaldce` drops the table.
+                            let grew_data = tti.inline_trials_at_o1() && module.globals.len() > globals;
+                            if grew_data || sized(module, &program.layout, tti, id, false) + GUARD >= before {
                                 *function_mut(module, id).1 = kept;
                                 modules[at].changed(id);
                                 modules[at]
