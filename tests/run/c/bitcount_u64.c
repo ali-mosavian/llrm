@@ -1,4 +1,5 @@
 // flags: -O2
+// bar: none (SDCC error 101: too many parameters)
 // clz, ctz and popcount of a 64-bit word, the zero-poison forms and the defined-zero ones (`x ? ... : 32`), each its own function.
 extern void report(long value);
 

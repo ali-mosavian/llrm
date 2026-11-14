@@ -4,6 +4,9 @@
 //! trials held the loop to its copies' size (22 units a trip, 220), where each
 //! copy keeps one arm of the switch (the analysis finds 30). Unrolled, the
 //! table and its dispatch go.
+//!
+//! The same loop at -O2 (+36/+44 B, rate-priced): the speed analysis gave up
+//! on its call (`report`), so the 32-unit bar never saw the 30 the copies cost.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -76,5 +79,14 @@ fn a_loop_whose_copies_fold_to_a_few_calls_is_unrolled_at_size() {
             let asm = assembly(IR, cpu_of(cpu).unwrap(), level).expect("compiles");
             assert!(!asm.contains(".LJTI"), "{cpu} {level:?}: the jump table stayed:\n{asm}");
         }
+    }
+}
+
+#[test]
+fn a_loop_whose_copies_fold_to_a_few_calls_is_unrolled_at_speed() {
+    let ir = IR.replace(" optsize", "");
+    for cpu in ["68000", "68020"] {
+        let asm = assembly(&ir, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
+        assert!(!asm.contains(".LJTI"), "{cpu} O2: the jump table stayed:\n{asm}");
     }
 }

@@ -277,3 +277,17 @@ class GccColumn(unittest.TestCase):
             path = Path(d) / "gcc.tsv"
             path.write_text("builtin_expect\tgcc\t45\t776\nother\tsdcc-size\t1\t2\n")
             self.assertEqual(guard.read_gcc_column(path), {"builtin_expect": (45, 776)})
+
+
+class BarNone(unittest.TestCase):
+    def test_a_marked_program_is_read_and_a_plain_one_is_not(self):
+        text = "// flags: -O2\n// bar: none (SDCC error 101: too many parameters)\nint main(void) { return 0; }\n"
+        self.assertEqual(guard.no_bar(text), "SDCC error 101: too many parameters")
+        self.assertIsNone(guard.no_bar("// flags: -O2\nint main(void) { return 0; }\n"))
+
+    def test_a_marked_program_is_not_listed_as_unmeasured(self):
+        """34 programs had no SDCC bar and all 34 read as 'unmeasured' in the .nobar list: 19 of them are SDCC miscompiles or errors
+        that nobody will fix, so the list could not show the ones whose bar is missing for an unknown reason."""
+        results = [("known", [("ours", 10, 20)]), ("unknown", [("ours", 10, 20)]), ("barred", [("ours", 10, 20), ("sdcc-size", 9, 19)])]
+        reasons = {"known": {"sdcc-size": "NOBAR SDCC error 101"}, "unknown": {"sdcc-size": "SDCC failed"}}
+        self.assertEqual(guard.unmeasured(results, reasons), ["unknown"])

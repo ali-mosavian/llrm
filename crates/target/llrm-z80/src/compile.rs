@@ -3626,7 +3626,8 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
     Ok(())
 }
 
-/// The most instructions, `ret` included, of a block that is copied into its
+/// The most instructions, `ret` included and copies not counted (the
+/// allocator joins most of them away), of a block that is copied into its
 /// predecessors.
 const TAIL_DUPLICATION_SIZE: usize = 4;
 
@@ -3639,7 +3640,7 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
     let mut j = 1;
     while j < function.blocks.len() {
         let block = &function.blocks[j];
-        let small = block.insts.len() <= TAIL_DUPLICATION_SIZE
+        let small = block.insts.iter().filter(|inst| inst.kind != Kind::Copy).count() <= TAIL_DUPLICATION_SIZE
             && matches!(
                 block.insts.last().map(|inst| inst.kind),
                 Some(Kind::Op("RET"))
@@ -3680,14 +3681,38 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
         let tail = function.blocks[j].insts.clone();
         // highest first: a split below a predecessor moves only the blocks after it
         for &p in copy_into.iter().rev() {
-            // the phi inputs for this edge, as copies
+            // Each copy names its own virtual registers (`duplicateInstruction`'s
+            // `LocalVRMap`): one register defined in every predecessor is a
+            // single live range, placed in one register for all paths.
+            let mut fresh: std::collections::HashMap<u32, Reg> = std::collections::HashMap::new();
             let mut moves = Vec::new();
             for phi in &mut function.blocks[j].phis {
                 if let Some(at) = phi.incoming.iter().position(|(pred, _)| *pred == p) {
                     let (_, input) = phi.incoming.remove(at);
-                    moves.push(Inst::copy(phi.result, input));
+                    let result = renamed_def(&mut function.classes, &mut fresh, phi.result);
+                    moves.push(Inst::copy(result, input));
                 }
             }
+            let tail: Vec<Inst> = tail
+                .iter()
+                .map(|inst| {
+                    let mut inst = inst.clone();
+                    for operand in &mut inst.operands {
+                        match operand {
+                            Operand::Def(reg) => *reg = renamed_def(&mut function.classes, &mut fresh, *reg),
+                            Operand::Use(reg) => {
+                                if let Reg::Virt(old) = *reg {
+                                    if let Some(new) = fresh.get(&old) {
+                                        *reg = *new;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    inst
+                })
+                .collect();
             let insts = &mut function.blocks[p].insts;
             if insts.last().is_some_and(|inst| inst.barrier) {
                 insts.pop();
@@ -3732,6 +3757,20 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
             j += 1;
         }
     }
+}
+
+/// A fresh virtual register of the class of `reg` for its definition in a copy
+/// of the tail; a physical register is its own.
+fn renamed_def(
+    classes: &mut Vec<crate::mfunc::Class>,
+    fresh: &mut std::collections::HashMap<u32, Reg>,
+    reg: Reg,
+) -> Reg {
+    let Reg::Virt(old) = reg else { return reg };
+    *fresh.entry(old).or_insert_with(|| {
+        classes.push(classes[old as usize]);
+        Reg::Virt(classes.len() as u32 - 1)
+    })
 }
 
 /// `jp cc, T` over a bare `ret` that falls into `T` is `ret !cc`: the branch
