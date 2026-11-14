@@ -7,11 +7,11 @@
 //! and drop the tie copy.
 //!
 //! DEVIATE: kills come from block liveness over virtual registers, not
-//! `LiveIntervals`; `SrcRegMap`/`DstRegMap` are rebuilt per instruction from the
-//! block (a copy from a physical register not clobbered since, and the single
-//! copy of the result into one) rather than kept as the pin scans; chains
-//! follow copies only, not tied uses; `hasCommutePreference` is not asked
-//! (M68k has none). Reason: the spike has no analysis manager. Exit: the
+//! `LiveIntervals`; `SrcRegMap`/`DstRegMap` are rebuilt per instruction from
+//! the block (a copy from a physical register not clobbered since, and the
+//! single copy of the result into one) rather than kept as the pin scans;
+//! chains follow copies only, not tied uses; `hasCommutePreference` is not
+//! asked (M68k has none). Reason: the spike has no analysis manager. Exit: the
 //! neutral-LIR task.
 //!
 //! [`commute_accumulator`] makes the same choice for a commutable instruction
@@ -171,12 +171,17 @@ impl Facts {
                 }
                 Reg::Phys(phys) => {
                     let root = T::root(phys);
-                    let clobbered = insts[only + 1..at].iter().any(|inst| {
-                        (inst.call && T::caller_saved().iter().any(|&one| T::overlaps(one, root)))
-                            || inst.operands.iter().any(
-                                |o| matches!(o, Operand::Def(Reg::Phys(q)) if T::overlaps(T::root(*q), root)),
-                            )
-                    });
+                    let clobbered = insts[only + 1..at]
+                        .iter()
+                        .any(
+                            |inst| (inst.call && T::caller_saved().iter().any(|&one| T::overlaps(one, root)))
+                                || inst.operands.iter().any(|o| {
+                                    matches!(
+                                        o,
+                                        Operand::Def(Reg::Phys(q)) if T::overlaps(T::root(*q), root)
+                                    )
+                                }),
+                        );
                     return (!clobbered).then_some(phys);
                 }
             }
@@ -448,7 +453,8 @@ const MAX_BLOCKS_BACK: usize = 4;
 /// swaps those. Reason: the instruction names the register itself. Exit:
 /// 2026-11-30, when such instructions carry the register as a tied virtual
 /// operand. Owner: 6502.
-pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) {
+pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) -> bool {
+    let mut beyond = false;
     let facts = Facts::of(function);
     let mut preds = vec![Vec::new(); function.blocks.len()];
     for (from, succs) in successors(function).iter().enumerate() {
@@ -491,26 +497,55 @@ pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) {
                 continue;
             };
             let first = *first;
-            if *into != written
-                || first == second
-                || facts.use_counts[first as usize] != 1
-                || facts.use_counts[second as usize] != 1
-            {
+            if *into != written || first == second {
                 continue;
             }
             let from_first = facts.arrives_in::<T>(function, &preds, b, load, first);
             let from_second = facts.arrives_in::<T>(function, &preds, b, load, second);
             let is_p = |from: Option<RegId>| from.is_some_and(|from| T::overlaps(T::root(from), root));
-            if !is_p(from_second) || is_p(from_first) || !facts.stored_without_a_copy(function, first) {
+            // the rule: each is read here once, `second` is in `P`, `first` is
+            // not and is stored from where it arrived
+            let single = facts.use_counts[first as usize] == 1
+                && facts.use_counts[second as usize] == 1
+                && is_p(from_second)
+                && !is_p(from_first)
+                && facts.stored_without_a_copy::<T>(function, &preds, first, false);
+            // the wider rule (`T::commutes_beyond_one_use`): any other read of
+            // either is one that works on a memory place as it is
+            // (a copy, or an instruction that writes memory in place), and
+            // `second` may come from any register that moves to `P`
+            // in one transfer
+            let reads_by_ops = |reg: u32| {
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.insts)
+                    .filter(|inst| uses(inst).any(|u| u == reg))
+                    .filter(|inst| match inst.kind {
+                        Kind::Op(name) => !T::writes_memory_in_place(name),
+                        _ => false,
+                    })
+                    .count()
+            };
+            let wide = !single
+                && T::commutes_beyond_one_use()
+                && reads_by_ops(first) == 0
+                && reads_by_ops(second) == 1
+                && from_second.is_some()
+                && !is_p(from_first)
+                && facts.stored_without_a_copy::<T>(function, &preds, first, true);
+            if !single && !wide {
                 continue;
             }
             let Some(held) = T::meet(function.classes[first as usize], wanted) else { continue };
+            beyond |= wide;
             function.classes[first as usize] = held;
             function.classes[second as usize] = T::any();
             function.blocks[b].insts[load].operands[1] = Operand::Use(Reg::Virt(second));
             function.blocks[b].insts[at].operands[2] = Operand::Use(Reg::Virt(first));
         }
     }
+    beyond
 }
 
 impl Facts {
@@ -519,19 +554,26 @@ impl Facts {
     /// dies there. A value computed into the place, or a lane of a register
     /// that lives on, has to be moved there through the accumulator the other
     /// source now holds.
-    fn stored_without_a_copy<C>(
+    fn stored_without_a_copy<T: Target>(
         &self,
-        function: &MFunction<C>,
+        function: &MFunction<T::Class>,
+        preds: &[Vec<usize>],
         reg: u32,
+        wide: bool,
     ) -> bool {
         let Some(defs) = self.defs.get(&reg) else { return false };
         defs.iter().all(|&(b, at)| {
             let inst = &function.blocks[b].insts[at];
             match (inst.kind, &inst.operands[..]) {
                 (Kind::Copy, [Operand::Def(_), Operand::Use(Reg::Phys(_))]) => true,
+                // a copy of a register that lives on is stored from where it
+                // arrived
                 (Kind::Copy, [Operand::Def(_), Operand::Use(Reg::Virt(source))]) => {
                     self.plainly_killed(function, b, at, *source)
+                        || wide && self.arrives_in::<T>(function, preds, b, at, *source).is_some()
                 }
+                // a result the instruction writes to memory itself
+                (Kind::Op(name), _) => wide && T::writes_memory_in_place(name),
                 _ => false,
             }
         })
