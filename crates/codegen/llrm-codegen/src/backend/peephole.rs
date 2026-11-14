@@ -429,6 +429,11 @@ impl Peephole {
                 ),
             )),
         );
+        let body = if self.cpu.zero_extend_with_and && self.cpu.has_speed_goal() && self.cpu.speed_rate {
+            zero_extended_with_and(&body)
+        } else {
+            body
+        };
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         let body = pushed_immediates(&body, &self.cpu);
         let body = crate::backend::repbsf::marked(&body, &self.cpu);
@@ -442,6 +447,52 @@ impl Peephole {
         }
         gated(&mut seen, needs::UNHELD, body, |body| Ok(crate::backend::upperzero::established(&body)))
     }
+}
+
+/// `movzx r32, r16` (or `r8`) of a register into itself as `and r32, mask`
+/// where the arithmetic flags are dead afterwards: one clock against the 486's
+/// three. gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND`, set for the 486 and the
+/// Pentium (`ix86_tune_features`, x86-tune.def): `movzbl %al,%eax` is
+/// `andl $255,%eax`. The pin has no such tuning. Two bytes longer, so a
+/// speed-priced function only (`Profile::zero_extend_with_and`; x_funcptr -O1
+/// 1,500 `movzx eax, ax` of 3 clk, 34,525 clk against gcc's 31,529).
+pub fn zero_extended_with_and(body: &LirBody) -> LirBody {
+    let regs = body.regs();
+    let live = _flags_live_out(body);
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut flags_dead = live.entering[&block.at].is_disjoint(&_ARITHMETIC_LANES);
+        let mut insns = Vec::new();
+        for one in block.insns.iter().rev() {
+            let previous = _flags_before(regs, body.bits, one, flags_dead);
+            let mut one = Arc::clone(one);
+            if flags_dead && one.clobbers.is_empty() && one.symbol != Some(true) {
+                if let Some(what) = &one.what {
+                    if let (Operation::Extend, Some("movzx"), [Loc::Reg(dest)], [Loc::Reg(source)]) =
+                        (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
+                    {
+                        let low = regs.view(regs.root(dest.register), u32::from(source.width) * 8);
+                        if dest.width == 4
+                            && [1, 2].contains(&source.width)
+                            && regs.integer(dest.register)
+                            && low == Some(source.register)
+                        {
+                            let mask = Loc::Imm(Imm { value: low_mask(u32::from(source.width)), width: 4, address: None });
+                            one = Arc::new(with_what(
+                                &one,
+                                semantics(Operation::Binary, "and", vec![Loc::Reg(*dest)], vec![Loc::Reg(*dest), mask]),
+                            ));
+                        }
+                    }
+                }
+            }
+            flags_dead = previous;
+            insns.push(one);
+        }
+        insns.reverse();
+        blocks.push(block.with_insns(insns));
+    }
+    body.with_blocks(blocks)
 }
 
 /// `mov r32, imm8` as `push imm8; pop r`: 3 bytes against the `mov`'s 5. A

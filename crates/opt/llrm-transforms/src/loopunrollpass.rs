@@ -1453,15 +1453,15 @@ fn peels_folded_entry(
     loop_size: u32,
     up: &UnrollingPreferences,
 ) -> bool {
-    // The late pass only: the pin counts peels in loop metadata
-    // (`llvm.loop.peeled.count`), which this port keeps for one run (PL1),
-    // and the entry constants of the residual loop fold again (x_primes: d
-    // = 2, then d = 3).
+    // Where bytes are priced at speed (the rate below is 0 at -O1 unless the
+    // target asks, `speed_rate_at_o1`). The late pass only: the pin counts
+    // peels in loop metadata (`llvm.loop.peeled.count`), which this port
+    // keeps for one run (PL1), and the entry constants of the residual loop
+    // fold again (x_primes: d = 2, then d = 3).
     if !run.tti.peels_folded_entry()
         || !run.options.target_unrolling
         || run.options.opt_size
         || run.options.min_size
-        || run.options.opt_level < 2
         || loop_size.saturating_mul(2) > up.threshold
     {
         return false;

@@ -179,6 +179,11 @@ fn place(
                 pending.push((code.len(), index, encoded.fixups));
                 code.extend_from_slice(&encoded.bytes);
             }
+            Item::WordTable(labels) => {
+                let encoded = crate::encode::word_table(labels);
+                pending.push((code.len(), index, encoded.fixups));
+                code.extend_from_slice(&encoded.bytes);
+            }
             Item::Loc(_) => {}
             Item::Inst(one) => {
                 let encoded = encode(one)?;

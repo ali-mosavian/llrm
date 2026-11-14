@@ -96,6 +96,22 @@ thread_local! {
     /// Whether a long division calls the speed routine at size too (see
     /// [`with_size_fast_division`]).
     static SIZE_FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a 16-bit division calls its compact routine at speed too (see
+    /// [`with_compact_division16`]).
+    static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the 16-bit divisions calling the compact routines at speed too:
+/// a module takes them where the clocks the speed routines save are not worth
+/// their bytes (`select::module_text`).
+pub fn with_compact_division16<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = COMPACT_DIVISION16.with(|a| a.replace(allowed));
+    let result = f();
+    COMPACT_DIVISION16.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the long divisions calling the speed routines at size: a module
@@ -1524,8 +1540,9 @@ impl Builder {
         }
         let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
         if !up {
-            // the `lda lo` that tests for the borrow: a dead value in `a`, a virtual register so
-            // that the sink may move the step to the successor that reads it
+            // the `lda lo` that tests for the borrow: a dead value in `a`, a
+            // virtual register so that the sink may move the step
+            // to the successor that reads it
             let scratch = self.fresh();
             self.require(scratch, Class(Class::A))?;
             operands.push(Operand::Def(scratch));
@@ -3798,7 +3815,7 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
-    if TUNING.with(|t| t.get()) == Tuning::SIZE {
+    if TUNING.with(|t| t.get()) == Tuning::SIZE || COMPACT_DIVISION16.with(|c| c.get()) {
         call_compact_routines(&mut function);
     }
     keep_carry_in_c(&mut function);

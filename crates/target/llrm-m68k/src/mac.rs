@@ -44,6 +44,7 @@ fn position_independent(items: &[Item]) -> Vec<Item> {
             Item::Label(name) => Item::Label(name.clone()),
             Item::Bytes(bytes) => Item::Bytes(bytes.clone()),
             Item::Table(labels) => Item::Table(labels.clone()),
+            Item::WordTable(labels) => Item::WordTable(labels.clone()),
             Item::Loc(row) => Item::Loc(*row),
         })
         .collect()
