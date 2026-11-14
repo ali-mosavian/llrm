@@ -746,8 +746,9 @@ fn cheaper(
     strict_at_o1: bool,
 ) -> Result<bool, String> {
     let prices = crate::routines::copy_prices();
-    let routines = [("memcpy", prices.call_clocks)];
+    let routines = [("memcpy", prices.call_clocks), ("memset", prices.call_clocks)];
     let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { speed_byte_clocks };
+    let original = module;
     let cost = |module: &llrm_mir::module::Module, selection| -> Option<(u64, u64)> {
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
@@ -760,7 +761,23 @@ fn cheaper(
         crate::weights::by_branch_weights(module, function, &mut weights);
         let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
         let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
-        Some((priced.cycles, u64::from(priced.bytes)))
+        // a library routine the text calls is linked once for its callers: this
+        // function pays its share
+        let mut called: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("jsr ").or_else(|| line.trim().strip_prefix("jmp ")))
+            .collect();
+        called.sort_unstable();
+        called.dedup();
+        let library: u64 = called
+            .iter()
+            .filter(|routine| crate::RUNTIME.contains(&format!("\n{routine}:")))
+            .map(|routine| {
+                u64::from(crate::mulimage::library_bytes(routine))
+                    / llrm_transforms::memloops::callers(original, routine).max(1) as u64
+            })
+            .sum();
+        Some((priced.cycles, u64::from(priced.bytes) + library))
     };
     let (alt_cost, kept_cost) = (cost(alt_module, alt), cost(module, selected));
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
