@@ -284,6 +284,7 @@ fn run_suffix(
     // the dead stores left a save with nothing between its `pha` and `pla`
     drop_empty_save(asm);
     drop_repeated_test(asm);
+    fold_copy_into_store(asm);
     crate::peephole_cells::drop_unused_saves(asm);
     // a transfer that fed an `or` of zero is gone: the load is next to its
     // store
@@ -1661,6 +1662,128 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
         }
     }
     asm.lines = out;
+}
+
+/// Both paths of a branch start with `lda b; sta c`, and the straight-line code
+/// before the branch stored `b` from a register (`stx b`): the store of `c`
+/// goes beside it (`stx b; stx c`) and the two loads and stores go. A pair
+/// copied twice, to the walking and the saved pointer, was a load and a store a
+/// byte on each path (lz4: 16 B, now 4).
+///
+/// The pin's analogue is `MachineCopyPropagation` forwarding the register a
+/// copy came from to a second copy of it.
+pub fn fold_copy_into_store(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        if fold_one_copy(asm, at) {
+            // the lines moved: look again from the top
+            at = 0;
+            continue;
+        }
+        at += 1;
+    }
+}
+
+fn cell_name_number(name: &str) -> Option<u8> {
+    name.strip_prefix("rc")?.parse().ok()
+}
+
+/// Whether `inst` names the cell `name`, directly or through an index or a
+/// pointer pair.
+fn names_cell(
+    inst: &Inst,
+    name: &str,
+) -> bool {
+    let n = cell_name_number(name);
+    match &inst.operand {
+        Operand::Direct(c) => c == name,
+        Operand::Indexed(c, _) => cell_name_number(c).is_some(),
+        Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) => {
+            matches!(
+                (cell_name_number(c), n),
+                (Some(m), Some(n)) if m == n || m + 1 == n
+            )
+        }
+        _ => false,
+    }
+}
+
+fn fold_one_copy(
+    asm: &mut Asm,
+    at: usize,
+) -> bool {
+    let lines = &asm.lines;
+    let Line::Inst(branch) = &lines[at] else { return false };
+    if tested_flag(branch.op).is_none() {
+        return false;
+    }
+    let Operand::Direct(label) = &branch.operand else { return false };
+    let Some(target_label) = lines.iter().position(|line| matches!(line, Line::Label(name) if name == label)) else {
+        return false;
+    };
+    let Some(before) = target_label.checked_sub(1).and_then(|index| lines[index].inst()) else { return false };
+    if references(lines, label) != 1 || !matches!(before.op, Op::Jmp | Op::Bra | Op::Rts) {
+        return false;
+    }
+    let mut fall = at + 1;
+    while let Some(Line::Label(name)) = lines.get(fall) {
+        if references(lines, name) != 0 {
+            return false;
+        }
+        fall += 1;
+    }
+    let target = target_label + 1;
+    let unit = |from: usize| match (lines.get(from), lines.get(from + 1)) {
+        (
+            Some(Line::Inst(Inst { op: Op::Lda, operand: Operand::Direct(b), .. })),
+            Some(Line::Inst(Inst { op: Op::Sta, operand: Operand::Direct(c), .. })),
+        ) if cell_name_number(b).is_some() && cell_name_number(c).is_some() => Some((b.clone(), c.clone())),
+        _ => None,
+    };
+    let (Some((b, c)), Some(other)) = (unit(fall), unit(target)) else { return false };
+    if (b.clone(), c.clone()) != other || b == c {
+        return false;
+    }
+    // the store of `b` in the straight line before the branch, with nothing
+    // in between naming `c` or `b`
+    let mut store = None;
+    let mut look = at;
+    while look > 0 {
+        look -= 1;
+        let Line::Inst(inst) = &lines[look] else { return false };
+        if matches!(inst.op, Op::Sta | Op::Stx | Op::Sty) && inst.operand == Operand::Direct(b.clone()) {
+            store = Some((look, inst.op));
+            break;
+        }
+        if inst.op.is_branch()
+            || matches!(inst.op, Op::Jmp | Op::Jsr | Op::Rts)
+            || names_cell(inst, &c)
+            || names_cell(inst, &b)
+        {
+            return false;
+        }
+    }
+    let Some((store, op)) = store else { return false };
+    let exits = Exits::of(asm);
+    let after_unit = |from: usize| {
+        dead_from(lines, from, Registers::A, &mut HashSet::default(), exits) && !reads_nz_first(lines, from)
+    };
+    if !after_unit(fall + 2) || !after_unit(target + 2) {
+        return false;
+    }
+    let copy = Line::Inst(Inst::new(op, Operand::Direct(c)));
+    let mut out = Vec::with_capacity(asm.lines.len());
+    for (index, line) in asm.lines.drain(..).enumerate() {
+        if [fall, fall + 1, target, target + 1].contains(&index) {
+            continue;
+        }
+        out.push(line);
+        if index == store {
+            out.push(copy.clone());
+        }
+    }
+    asm.lines = out;
+    true
 }
 
 /// `pha; pla`: `a` comes back as it went, so the pair is gone when the flags
