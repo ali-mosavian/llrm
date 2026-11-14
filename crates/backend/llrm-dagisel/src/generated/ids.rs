@@ -1171,6 +1171,7 @@ pub mod mvt {
     pub const v2f32: Vt = Vt(137);
     pub const v2f64: Vt = Vt(157);
     pub const v2i1: Vt = Vt(20);
+    pub const v2i32: Vt = Vt(73);
     pub const v2i64: Vt = Vt(96);
     pub const v32f16: Vt = Vt(116);
     pub const v32i1: Vt = Vt(28);
@@ -1178,6 +1179,7 @@ pub mod mvt {
     pub const v32i8: Vt = Vt(49);
     pub const v4f32: Vt = Vt(139);
     pub const v4i1: Vt = Vt(22);
+    pub const v4i16: Vt = Vt(58);
     pub const v4i32: Vt = Vt(75);
     pub const v4i64: Vt = Vt(98);
     pub const v64i1: Vt = Vt(29);
@@ -1188,6 +1190,7 @@ pub mod mvt {
     pub const v8i16: Vt = Vt(62);
     pub const v8i32: Vt = Vt(79);
     pub const v8i64: Vt = Vt(99);
+    pub const v8i8: Vt = Vt(47);
 }
 
 /// The pin's number of the `X86ISD::<name>` node.

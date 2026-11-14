@@ -72,11 +72,13 @@ impl Cpu {
             .flatten()
             .filter_map(|p| p.as_str().map(str::to_string))
             .collect();
+        // The shared `[types] live` list, then this CPU's own `live_types`.
         let live_types = doc
             .get("types")
             .and_then(|t| t.get("live"))
-            .and_then(|p| p.as_array())
             .into_iter()
+            .chain(doc.get("cpu").and_then(|c| c.get(name)).and_then(|c| c.get("live_types")))
+            .filter_map(|p| p.as_array())
             .flatten()
             .filter_map(|p| p.as_str().map(str::to_string))
             .collect();
@@ -178,6 +180,16 @@ mod tests {
         let text = TEXT.replace("[types]", "[types]\nlive = [\"v8i16\"]");
         let cpu = Cpu::load(&text, "i486").unwrap();
         assert!(!cpu.dead_type("v8i16") && cpu.dead_type("v4i32"));
+    }
+
+    /// A CPU's own `live_types` keep the vector types of that CPU alone: x64
+    /// takes the SSE2 integer vectors, the 32-bit CPUs without SSE stay
+    /// scalar.
+    #[test]
+    fn a_cpus_live_types_do_not_reach_another_cpu() {
+        let x64 = Cpu::load(TEXT, "x64").unwrap();
+        assert!(!x64.dead_type("v4i32") && !x64.dead_type("v16i8"));
+        assert!(Cpu::load(TEXT, "i486").unwrap().dead_type("v4i32"));
     }
 
     #[test]

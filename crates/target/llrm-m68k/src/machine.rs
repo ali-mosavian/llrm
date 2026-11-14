@@ -409,17 +409,18 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
-    /// DEVIATE M68K-INLINE-RATE (owner m68k, exit 2026-11-27): an inline into a
-    /// speed caller (-O2, -O3) that grows the code is refused when its bytes at
-    /// the CPU's `timings.times` rate cost more clocks than the call saves at
-    /// the site's frequency; the rate is the one the O2/O3 verdicts are judged
-    /// at (0.5 B per clk on the 68000, 1.33 on the 68020, 3.2 from the 68030).
-    /// The pin inlines to its threshold (225) alone; the flat 50 this replaces
-    /// kept a loop's call to a 100-instruction callee (a call per trip).
-    /// No exemption for a callee loop with a constant bound: it admitted
-    /// growth with no gain (`switch`, `sieve` 68020).
+    /// -O1, -O2 and -O3 are judged by clocks (user ruling 2026-11-14): a byte
+    /// of growth costs nothing there, so an inline into a speed caller stops
+    /// at the pin's threshold (225) alone. The rate that held a growing inline
+    /// to its clocks at -O2/-O3 (M68K-INLINE-RATE, 0.5 B per clk on the
+    /// 68000) is gone; -Os keeps its size rule (`inline_policy`).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        crate::timing::byte_milliclocks(self.cpu)
+        0
+    }
+
+    /// -O1 takes the same threshold-alone verdict as -O2.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
     }
 
     /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond
@@ -464,6 +465,13 @@ impl Tti for M68k {
         true
     }
 
+    /// -O1 walks the call graph a second time once the dead globals are gone,
+    /// as m32 does: `bar` stored a sum nothing reads, ends as a `ret`, and
+    /// `foo` drops its call (byvalue_struct_address -O1, 24 B above clang).
+    fn inline_second_round_at_o1(&self) -> bool {
+        true
+    }
+
     /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
     /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
     /// range check, the dispatch and a word a case.
@@ -500,6 +508,14 @@ impl Tti for M68k {
     /// 30). The pin never unrolls at -Os past its threshold.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         Some(100)
+    }
+
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): the -Os
+    /// trial's bar is met by a loop whose copies fold to under it
+    /// (switch_jump_table: ten trips of a switch on a constant counter are
+    /// ten calls), not only by one whose copies are that small.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        true
     }
 
     /// DEVIATE UNROLL-O1-TRIAL (owner m68k, exit 2026-11-24): the same bar at

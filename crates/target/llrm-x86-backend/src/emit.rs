@@ -850,6 +850,8 @@ fn width(
         EVT::Simple(MVT::I32) => 4,
         EVT::Simple(MVT::I64) => 8,
         EVT::Simple(MVT::I128) => 16,
+        // A vector is the bytes of its xmm register (`VR128`).
+        vt if vt.is_vector() => vt.size_in_bits().div_ceil(8),
         EVT::Int(bits) => bits.div_ceil(8),
         // A floating value is one 10-byte register value of the x87 stack.
         EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
@@ -1687,6 +1689,9 @@ impl Emitter<'_, '_> {
         let target = Some(sink_at);
         let what = Semantics { target, name: Some(jump.into()), ..Semantics::new(Operation::Branch) };
         self.push_semantics(what);
+        // `thisMBB->addSuccessor(copy0MBB)` comes before
+        // `addSuccessor(sinkMBB)`.
+        self.blocks.last_mut().expect("a block").fall_first = true;
         let phi = Phi { result: result.value, incoming: vec![(false_at, when_false.value), (this, when_true.value)] };
         self.blocks.push(EmitBlock { at: false_at, ..EmitBlock::default() });
         self.blocks.push(EmitBlock { at: sink_at, phis: vec![phi], ..EmitBlock::default() });
@@ -1970,6 +1975,8 @@ impl Emitter<'_, '_> {
             // The 16-byte mask of `fabs`, `fneg` and `copysign` (the pin's
             // vector constant): the bitwise SSE instruction reads all of it.
             EVT::Simple(MVT::I128) => 16,
+            // A vector constant `ExpandBUILD_VECTOR` loads whole (`movups`).
+            EVT::Simple(MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64) => 16,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))

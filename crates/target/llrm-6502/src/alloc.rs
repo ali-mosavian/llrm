@@ -96,6 +96,22 @@ thread_local! {
     /// Whether a long division calls the speed routine at size too (see
     /// [`with_size_fast_division`]).
     static SIZE_FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a 16-bit division calls its compact routine at speed too (see
+    /// [`with_compact_division16`]).
+    static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the 16-bit divisions calling the compact routines at speed too:
+/// a module takes them where the clocks the speed routines save are not worth
+/// their bytes (`select::module_text`).
+pub fn with_compact_division16<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = COMPACT_DIVISION16.with(|a| a.replace(allowed));
+    let result = f();
+    COMPACT_DIVISION16.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the long divisions calling the speed routines at size: a module
@@ -1524,8 +1540,9 @@ impl Builder {
         }
         let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
         if !up {
-            // the `lda lo` that tests for the borrow: a dead value in `a`, a virtual register so
-            // that the sink may move the step to the successor that reads it
+            // the `lda lo` that tests for the borrow: a dead value in `a`, a
+            // virtual register so that the sink may move the step
+            // to the successor that reads it
             let scratch = self.fresh();
             self.require(scratch, Class(Class::A))?;
             operands.push(Operand::Def(scratch));
@@ -2887,13 +2904,15 @@ impl<const STACK: bool> Jump for Mos<STACK> {
 
 /// The physical registers the run of copies just before the return sets: the
 /// result. The frame is released between the copies of a result that does not
-/// need `a`, and those of the rest.
+/// need `a`, and those of the rest; the split of a word into the bytes of two
+/// of them (`UNPACK`, made at each copy) lies between the copies of an argument
+/// in a:x, and read as the end of the run it dropped `x` from the call's uses.
 fn results(insts: &[Inst]) -> Vec<RegId> {
     let mut out = Vec::new();
     for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
-            (Kind::Op("ADJSP"), _) => {}
+            (Kind::Op("ADJSP" | "UNPACK"), _) => {}
             _ => break,
         }
     }
@@ -3634,6 +3653,8 @@ fn save_preserved<const STACK: bool>(
         }
     }
     used.sort_by_key(|r| r.index());
+    // the bytes a push will save, for the entry copies below
+    let kept = used.clone();
     let mut saves = Vec::new();
     let mut restores = Vec::new();
     // Static slots: each cell goes on the hardware stack, three bytes to save
@@ -3686,12 +3707,22 @@ fn save_preserved<const STACK: bool>(
     let entry = &mut function.blocks[0].insts;
     let mut at = usize::from(entry.first().is_some_and(|inst| inst.kind == Kind::Op("ADJSP")));
     // an argument that arrives in `a` or `x` is copied out first: a push goes
-    // through `a`
+    // through `a`. Not into a cell the push is about to save: the push would
+    // keep the argument, and the caller's value of the cell would be lost.
     while let Some(Inst { kind: Kind::Copy, operands, .. }) = entry.get(at) {
         if !matches!(
             operands.get(1),
             Some(Operand::Use(Reg::Phys(r))) if [reg::A, reg::X].contains(r)
         ) {
+            break;
+        }
+        let into = match operands.first() {
+            Some(Operand::Def(Reg::Virt(v))) => Some(assignment.0[*v as usize]),
+            Some(Operand::Def(Reg::Phys(r))) => Some(*r),
+            _ => None,
+        };
+        let bytes = into.map_or_else(Vec::new, |r| if is_pair(r) { vec![lane(r, 0), lane(r, 1)] } else { vec![r] });
+        if bytes.iter().any(|byte| kept.contains(byte)) {
             break;
         }
         at += 1;
@@ -3784,7 +3815,7 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
-    if TUNING.with(|t| t.get()) == Tuning::SIZE {
+    if TUNING.with(|t| t.get()) == Tuning::SIZE || COMPACT_DIVISION16.with(|c| c.get()) {
         call_compact_routines(&mut function);
     }
     keep_carry_in_c(&mut function);

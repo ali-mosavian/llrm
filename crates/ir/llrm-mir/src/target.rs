@@ -59,6 +59,13 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): isel fills a
+    /// word or dword pattern with `rep stosw`/`rep stosd`, so
+    /// `LoopIdiomRecognize` forms the fill with no `memset_pattern16` and the
+    /// pre-ISel store loop is not made, at the speeds the fill's price pays
+    /// (`Machine::fills_by_pattern` is the same at -Os for m16). false: the
+    /// pin's loop.
+    pub fills_pattern_at_speed: bool,
     /// DEVIATE PO1 (owner x86-m32-b, exit 2026-11-24 for the targets that keep it):
     /// at -Os the arguments of a call are popped into a dead register in place
     /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
@@ -148,6 +155,8 @@ pub struct Tuning {
     /// refused, kept where the caller comes out smaller); the -O2 and -O3 callers keep the units.
     /// False: the bound's verdict stands.
     pub inline_trials_at_o1: bool,
+    /// DEVIATE RL-EXITING-LATCH (owner x87, exit 2026-11-24): `Tti::rotation_of_exiting_latch_when_guard_folds`.
+    pub rotate_exiting_latch_when_guard_folds: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -658,6 +667,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        fills_pattern_at_speed: false,
         libc_memcpy: false,
         pops_arguments_at_size: true,
         keeps_sahf_where_bytes_are_held: false,
@@ -677,6 +687,7 @@ impl Tuning {
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
         inline_trials_at_o1: false,
+        rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,

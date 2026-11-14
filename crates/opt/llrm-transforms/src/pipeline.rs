@@ -652,6 +652,10 @@ impl FunctionPass for Slot {
         self.inner.wants_sizes()
     }
 
+    fn is_required(&self) -> bool {
+        self.inner.is_required()
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
@@ -1145,6 +1149,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     inliner_follows: true,
+                    speed_rate: applied.options.prices_bytes(),
                     created: Default::default(),
                     decided: Default::default(),
                 }),
@@ -1292,6 +1297,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
                     inliner_follows: applied.options.inline.limit > 0 || applied.options.inline.last,
+                    speed_rate: applied.options.prices_bytes(),
                     created: std::rc::Rc::clone(&created),
                     decided: std::rc::Rc::clone(&decided),
                 })
@@ -1943,7 +1949,10 @@ pub fn recorded(
     {
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
-    if applied.options.at_o1() && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_o1()) {
+    if applied.options.optimize
+        && !applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_speed())
+    {
         manager.add_program(crate::mergefunc::MergeLocalFunctions);
     }
     if applied.options.optimize {
@@ -2059,6 +2068,12 @@ fn rerun(
     fixed: &mut Fixed,
     globals_aa_held: bool,
 ) -> Result<(), String> {
+    // It does not go through the manager's loop, which skips an `optnone` body.
+    if let GlobalKind::Function(function) = &module.global(id).kind
+        && llrm_mir::passes::skipped_for_optnone(&*fixed, function)
+    {
+        return Ok(());
+    }
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
@@ -2441,6 +2456,9 @@ impl Run {
         analyses: &mut Analyses,
     ) -> bool {
         if !self.promotes && matches!(base(pass.name()), "sroa" | "promote") {
+            return false;
+        }
+        if llrm_mir::passes::skipped_for_optnone(&*pass, unit.function) {
             return false;
         }
         let name = pass.name();

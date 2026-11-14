@@ -103,12 +103,18 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): fill_nest
+        // -O2 filled 4096 words by a loop, 5 clk a word, where `rep stosw` is 4.
+        fills_pattern_at_speed: true,
         libc_memcpy: true,
         pops_arguments_at_size: false,
         // DEVIATE X87-FCMP-AH at -O1 (owner x87-c, exit 2026-11-24): `sahf`,
         // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16 O1
         // keeps the test until its counted cells are judged.
         keeps_sahf_where_bytes_are_held: true,
+        // DEVIATE RL-EXITING-LATCH (owner x87, exit 2026-11-24): `LoopRotate` also rotates a loop whose latch exits
+        // when its header copy folds away in the preheader, as gcc's header copy does (mandel -O1: 2 `imul` a pixel).
+        rotate_exiting_latch_when_guard_folds: true,
         // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop
         // header of at most 4 instructions, not the pin's 16 (the copy is a
         // compare and a branch, more than the jump rotation removes). m32 -Os

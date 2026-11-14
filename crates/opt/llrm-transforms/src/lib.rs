@@ -101,6 +101,7 @@ pub mod cgpmemalign;
 mod cgpmemalign_tests;
 pub mod cgpretdup;
 pub mod cgpselect;
+pub mod cgpsinkops;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -376,7 +377,11 @@ pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
 mod noaliasscopes;
+pub mod pagecount;
 pub mod pageindex;
+pub mod rangesplit;
+#[cfg(test)]
+mod rangesplit_tests;
 #[cfg(test)]
 mod pageindex_tests;
 pub mod parity;

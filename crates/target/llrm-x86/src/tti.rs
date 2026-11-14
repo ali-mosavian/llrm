@@ -733,6 +733,18 @@ impl X86 {
     }
 }
 
+/// `getTypeLegalizationCost(<count x lane>).first` of an integer vector of whole
+/// XMM registers: the registers it takes. Lanes of 8 to 64 bits, a power-of-two
+/// count and a total that is a multiple of 128 bits only.
+fn xmm_pieces(ty: VectorTy) -> Option<i64> {
+    let lane = match ty.lane {
+        Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
+        _ => return None,
+    };
+    let total = u64::from(lane) * u64::from(ty.count);
+    (ty.count.is_power_of_two() && total >= 128 && total % 128 == 0).then(|| (total / 128) as i64)
+}
+
 impl Tti for X86 {
     fn name(&self) -> &'static str {
         "X86"
@@ -740,6 +752,10 @@ impl Tti for X86 {
 
     fn inline_threshold_override(&self) -> Option<i64> {
         self.tuning.inline_threshold
+    }
+
+    fn fills_pattern_at_speed(&self) -> bool {
+        self.tuning.fills_pattern_at_speed
     }
 
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -936,6 +952,10 @@ impl Tti for X86 {
 
     fn speed_inline_rate_at_o1(&self) -> bool {
         self.tuning.speed_inline_rate_at_o1
+    }
+
+    fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
+        self.tuning.rotate_exiting_latch_when_guard_folds
     }
 
     fn inline_trials_at_o1(&self) -> bool {
@@ -1226,6 +1246,81 @@ impl Tti for X86 {
 
     fn add_to_or_disjoint(&self) -> bool {
         self.tuning.add_to_or_disjoint
+    }
+
+    /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
+    /// vectors plan, PR-A).
+    fn vector_values(&self) -> bool {
+        self.sse2 && self.quad
+    }
+
+    /// `getRegisterBitWidth(RGK_FixedWidthVector)` of an SSE2 target: one XMM
+    /// register. Only where the 128-bit integer vectors are taken (`vector_values`):
+    /// the others stay scalar and read 0.
+    fn vector_register_bits(&self) -> u32 {
+        if self.vector_values() { 128 } else { 0 }
+    }
+
+    /// `X86TTIImpl::getNumberOfRegisters`: 16 in long mode, for the general
+    /// and the vector class.
+    fn number_of_registers(
+        &self,
+        _class: RegisterClass,
+    ) -> u32 {
+        if self.vector_values() { 16 } else { 0 }
+    }
+
+    /// The pin expands a reduction to shuffles (`ExpandReductions`); the
+    /// backend has no vector shuffle yet. DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR).
+    fn lowers_vector_reductions(&self) -> bool {
+        false
+    }
+
+    /// `X86TTIImpl::getMaxInterleaveFactor`: a scalar loop is left to the
+    /// unroller; a vector one is interleaved twice (4 needs AVX).
+    fn max_interleave_factor(
+        &self,
+        vf: u32,
+        _has_unordered_reductions: bool,
+    ) -> u32 {
+        if vf == 1 || !self.vector_values() { 1 } else { 2 }
+    }
+
+    /// `X86TTIImpl::getMemoryOpCost` of a contiguous vector access of whole XMM
+    /// registers (`movups`): one per register. A type that is not a multiple of
+    /// 128 bits, or a lane that is not an integer of 8 to 64 bits, is not priced
+    /// (DEVIATE X86V1, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR: the pin widens or scalarizes it; isel here takes none).
+    fn vector_memory_op_cost(
+        &self,
+        _op: MemoryOp,
+        ty: VectorTy,
+        _align: u64,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || kind != CostKind::RecipThroughput {
+            return None;
+        }
+        xmm_pieces(ty).map(Cost::of)
+    }
+
+    /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
+    /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
+    /// cost one per register. Shifts (a variable count is not selectable), the
+    /// multiplies and the divisions are not priced, so a loop holding one stays
+    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR).
+    fn vector_arithmetic_cost(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || kind != CostKind::RecipThroughput {
+            return None;
+        }
+        match op {
+            ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            _ => None,
+        }
     }
 
     fn opt_size_inline_chain_trial(&self) -> bool {

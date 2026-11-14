@@ -1,0 +1,3 @@
+reason = "BASIC references re-measured under the stored-bytes rule of sizes.py: BC_VARS is stored data, not bss"
+blessed = "2026-11-14"
+corpus = "4668fb60ca3f9432e16009d2349e403d"

@@ -53,7 +53,7 @@
 
 use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::basicaa::BasicAA;
-use llrm_analysis::ivdescriptors::InductionKind;
+use llrm_analysis::ivdescriptors::{InductionKind, RecurKind};
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
 use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memory;
@@ -67,7 +67,7 @@ use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use llrm_mir::tti::{ArithOp, MemoryOp, Ty};
+use llrm_mir::tti::{ArithOp, ExtOperand, ExtUser, MemoryOp, Ty};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::lcssa::from_arms;
@@ -156,6 +156,8 @@ enum Step {
     Access(Access),
     Operation(Operation),
     Induction(Induction),
+    /// A reduction's phi: one vector phi per part, from the identity.
+    Reduction(interleave::Reduction),
 }
 
 /// A widened induction (`vec.ind`): the integer induction, or its `trunc`.
@@ -184,6 +186,8 @@ struct Widening {
     shape: Shape,
     /// The induction counts down.
     reverse: bool,
+    /// The reductions, whose totals the middle block computes.
+    reductions: Vec<interleave::Reduction>,
 }
 
 /// Why a loop is left alone (LV: Not vectorizing: ...).
@@ -223,6 +227,7 @@ fn fills_registers(
                 Step::Access(access) => whole(access.element),
                 Step::Operation(operation) => whole(operation.element) && whole(operation.operand_element),
                 Step::Induction(induction) => whole(induction.element),
+                Step::Reduction(reduction) => element_ty(cx, reduction.ty).is_some() && whole(reduction.ty),
             },
         )
 }
@@ -292,9 +297,6 @@ fn extract(
     // The pin's VPlan makes its own canonical IV, so the original induction may
     // start anywhere: an integer one stepping by one is all the widening needs.
     let (primary, step, reverse) = primary_step_and_direction(se, legality)?;
-    if !legality.reductions.is_empty() {
-        return Err(Skipped("Reductions are not widened yet"));
-    }
     let primary_phi = Operand::Value(function.instruction(primary).result.expect("a phi"));
     let index_ty = function.instruction(primary).ty;
     let primary_start = legality
@@ -314,6 +316,7 @@ fn extract(
             .is_some_and(|value| function.users(value).iter().any(|one| function.parent(one.user) != Some(header)))
     };
 
+    let used_after_the_loop = |value: ValueId| function.users(value).iter().any(|one| function.parent(one.user) != Some(header));
     // Defined before the loop (a constant, an argument, an outer value).
     let invariant = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
@@ -321,6 +324,16 @@ fn extract(
             _ => true,
         },
         _ => true,
+    };
+    // An operand that is a `sext` or `zext` (wherever it is computed): what
+    // the pin's widening costs read of `Args`.
+    let ext_of = |operand: Operand| -> Option<ExtOperand> {
+        let Operand::Value(value) = operand else { return None };
+        let llrm_mir::module::ValueDef::Instruction(def) = function.value(value).def else { return None };
+        let extension = function.instruction(def);
+        let Opcode::Cast(op @ (CastOp::SExt | CastOp::ZExt)) = extension.opcode else { return None };
+        let src = function.operand_type(cx.context, extension.operands[0])?;
+        Some(ExtOperand { kind: interleave::cast_kind(op)?, src: element_ty(cx, src)? })
     };
     // Every use is a store's value or an integer binary operation of this
     // loop (the instruction itself is judged where it comes).
@@ -367,12 +380,20 @@ fn extract(
     let mut step_operand = None;
     let mut exit_compare = None;
     let mut tests_phi = false;
+    let mut reductions: Vec<interleave::Reduction> = Vec::new();
     for inst in function.iter_block(header).collect::<Vec<_>>() {
         let data = function.instruction(inst);
         match data.opcode {
             Opcode::Phi => {
                 if inst != primary {
-                    return Err(Skipped("A header phi other than the induction"));
+                    // `VPReductionPHIRecipe`: one vector phi per part.
+                    let reduction =
+                        interleave::reduction_of(function, legality, header, inst, |value| used_after_the_loop(value))?;
+                    element_ty(cx, reduction.ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                    widened.push(inst);
+                    reductions.push(reduction);
+                    steps.push(Step::Reduction(reduction));
+                    continue;
                 }
                 // The widened loop leaves the last vector iteration's value:
                 // the pin's middle block fixes it (LVP5: not translated).
@@ -524,11 +545,28 @@ fn extract(
                     _ => return Err(Skipped("A binary operation the vectorizer does not widen yet")),
                 };
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
-                if used_outside(inst) {
-                    return Err(Skipped("A binary operation used after the loop"));
-                }
-                if !widened_users(value) {
-                    return Err(Skipped("A binary result used other than by a store or a binary operation"));
+                // A reduction's update is read by its phi and after the loop,
+                // where the middle block's total replaces it.
+                let update_of = reductions.iter().find(|one| one.latch == inst).copied();
+                if let Some(reduction) = update_of {
+                    if interleave::reduction_op(reduction.kind).map(|(fold, _)| fold) != Some(op) {
+                        return Err(Skipped("A reduction whose update is not its kind's operation"));
+                    }
+                    let phi = function.instruction(reduction.phi).result.expect("a phi");
+                    let only_phi_and_exit = function.users(value).iter().all(|one| {
+                        function.parent(one.user) != Some(header)
+                            || function.instruction(one.user).result == Some(phi)
+                    });
+                    if !only_phi_and_exit {
+                        return Err(Skipped("A reduction's update used other than by its phi and after the loop"));
+                    }
+                } else {
+                    if used_outside(inst) {
+                        return Err(Skipped("A binary operation used after the loop"));
+                    }
+                    if !widened_users(value) {
+                        return Err(Skipped("A binary result used other than by a store or a binary operation"));
+                    }
                 }
                 let operands = [source_of(data.operands[0], &widened)?, source_of(data.operands[1], &widened)?];
                 // DEVIATE LVP6: a shift is widened only by a constant (a
@@ -542,7 +580,8 @@ fn extract(
                 if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
-                recipes.push(Recipe::Binary { op: arith, lane });
+                let ext = [ext_of(data.operands[0]), ext_of(data.operands[1])];
+                recipes.push(Recipe::Binary { op: arith, lane, ext });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -567,7 +606,7 @@ fn extract(
                 if matches!(operand, Source::Splat(_)) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
-                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane });
+                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane, ext: [None, None] });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -578,11 +617,6 @@ fn extract(
                     operands: [operand; 3],
                 }));
             }
-            // `VPWidenCastRecipe`: a conversion between integer and float
-            // lanes of one width. DEVIATE LV-X4 (owner llrm-arm64-vec, exit
-            // LV-W3b): the pin also widens `zext`/`sext`/`trunc` and the
-            // changes of width, which need the D-register and split
-            // legalization.
             Opcode::Cast(CastOp::Trunc)
                 if data.operands[0] == primary_phi
                     && !data.result.is_some_and(|result| address_arithmetic(function, header, result)) =>
@@ -608,9 +642,14 @@ fn extract(
                     truncated_from: Some(index_ty),
                 }));
             }
+            // `VPWidenCastRecipe`: an integer extension or truncation, and a
+            // conversion between integer and float lanes. DEVIATE LV-X4
+            // (owner llrm-arm64-vec, exit LV-W3b): the other casts are not
+            // widened.
             Opcode::Cast(op) => {
                 let kind = interleave::cast_kind(op).ok_or(Skipped("A cast the cost model does not know"))?;
-                if !matches!(
+                let integer_cast = matches!(op, CastOp::SExt | CastOp::ZExt | CastOp::Trunc);
+                if !integer_cast && !matches!(
                     op,
                     CastOp::SIToFP | CastOp::UIToFP | CastOp::FPToSI | CastOp::FPToUI
                 ) {
@@ -627,7 +666,7 @@ fn extract(
                 // exit LV-W4: `LowerVectorFP_TO_INT`).
                 let changes_width =
                     cx.layout.size_bits(&cx.context.types, source) != cx.layout.size_bits(&cx.context.types, data.ty);
-                if changes_width && !matches!(op, CastOp::SIToFP | CastOp::UIToFP) {
+                if changes_width && !integer_cast && !matches!(op, CastOp::SIToFP | CastOp::UIToFP) {
                     return Err(Skipped("A conversion to an integer that changes the lane width"));
                 }
                 if used_outside(inst) {
@@ -640,7 +679,45 @@ fn extract(
                 if matches!(operand, Source::Splat(_)) {
                     return Err(Skipped("A cast of a loop-invariant value"));
                 }
-                recipes.push(Recipe::Cast { kind, dst, src, folded: false });
+                // The scalar extension of a load is part of it (LVI1).
+                let of_load = matches!(
+                    data.operands[0],
+                    Operand::Value(loaded) if matches!(
+                        function.value(loaded).def,
+                        llrm_mir::module::ValueDef::Instruction(def)
+                            if matches!(function.instruction(def).opcode, Opcode::Load { .. })
+                    )
+                );
+                let folded = of_load && matches!(op, CastOp::SExt | CastOp::ZExt);
+                // What reads an extension may absorb it
+                // (`GetUserAbsorbedCastCost`).
+                let users = if matches!(op, CastOp::SExt | CastOp::ZExt) {
+                    function
+                        .users(value)
+                        .iter()
+                        .map(|one| {
+                            let user = function.instruction(one.user);
+                            let arith = match user.opcode {
+                                Opcode::Binary(BinaryOp::Add) => Some(ArithOp::Add),
+                                Opcode::Binary(BinaryOp::Sub) => Some(ArithOp::Sub),
+                                Opcode::Binary(BinaryOp::Mul) => Some(ArithOp::Mul),
+                                _ => None,
+                            };
+                            ExtUser {
+                                op: arith,
+                                operands: if arith.is_some() {
+                                    [ext_of(user.operands[0]), ext_of(user.operands[1])]
+                                } else {
+                                    [None, None]
+                                },
+                                index: one.index as usize,
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                recipes.push(Recipe::Cast { kind, dst, src, folded, users });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -741,7 +818,7 @@ fn extract(
         let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
         recipes.push(Recipe::DerivedIv { lane });
     }
-    Ok((recipes, Widening { steps, step, step_operand, index_ty, shape, reverse }))
+    Ok((recipes, Widening { steps, step, step_operand, index_ty, shape, reverse, reductions }))
 }
 
 /// Whether every use of `value` is the index of an address (a `gep`) of the
@@ -1143,20 +1220,137 @@ fn widen_induction(
 
 /// `VPlan::execute` for the plan: IC parts of each access, the induction
 /// stepped by VF x IC.
+/// The reductions of a widened loop, once the parts' updates exist: the phis'
+/// arms (the start in lane 0 of part 0, the identity elsewhere, the part's
+/// update on the back edge) and the middle block's total
+/// (`VPInstruction::ComputeReductionResult`: the parts folded with the
+/// reduction's operation, then `llvm.vector.reduce.*`).
+#[allow(clippy::too_many_arguments)]
+fn close_reductions(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    widening: &Widening,
+    plan: Plan,
+    skeleton: &Skeleton,
+    wide: &[(InstId, Vec<ValueId>)],
+    reduction_phis: &[Vec<InstId>],
+) {
+    let header = widening.shape.header;
+    let enter = skeleton.vector_ph;
+    let mut totals = Vec::new();
+    let mut updates_of = Vec::new();
+    for (reduction, phis) in widening.reductions.iter().zip(reduction_phis) {
+        let vector_ty = context.types.intern(Type::Vector { element: reduction.ty, count: plan.vf });
+        let (fold, neutral) = interleave::reduction_op(reduction.kind).expect("a kind with an identity");
+        let identity = interleave::identity(context, reduction, neutral);
+        let updates = &wide.iter().find(|(inst, _)| *inst == reduction.latch).expect("the widened update").1;
+        let splat = broadcast(context, function, enter, vector_ty, plan.vf, identity);
+        // The start in lane 0: the pin's `ReductionStartVector`.
+        let start = match reduction.start {
+            start if start == identity => splat,
+            Operand::Constant(c) => {
+                let mut lanes = vec![match identity {
+                    Operand::Constant(id) => id,
+                    _ => unreachable!("an integer identity"),
+                }; plan.vf as usize];
+                lanes[0] = c;
+                Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(lanes) }))
+            }
+            value => {
+                let lane = context.int(context.types.intern(Type::Int(64)), 0);
+                let made = function.create_instruction(
+                    Opcode::InsertElement,
+                    vector_ty,
+                    vec![splat, value, Operand::Constant(lane)],
+                    Flags::default(),
+                    Some("rdx.start"),
+                );
+                let before = Position::Before(function.terminator(enter).expect("a terminated preheader"));
+                function.insert(made, before).expect("the preheader");
+                Operand::Value(function.instruction(made).result.expect("an insertelement"))
+            }
+        };
+        for (part, &phi) in phis.iter().enumerate() {
+            let entry = if part == 0 { start } else { splat };
+            function.set_operands(phi, from_arms(&[(entry, enter), (Operand::Value(updates[part]), header)]));
+        }
+        updates_of.push((vector_ty, fold, updates.clone()));
+        totals.push(reduction);
+    }
+    // middle.block: fold the parts, then the lanes.
+    let Some(middle) = skeleton.middle else { unreachable!("reductions need a middle block") };
+    let before = Position::Before(function.terminator(middle).expect("a terminated middle block"));
+    let mut scalars = Vec::new();
+    for (reduction, (vector_ty, fold, updates)) in totals.iter().zip(&updates_of) {
+        let mut total = Operand::Value(updates[0]);
+        for &part in &updates[1..] {
+            let made = function.create_instruction(
+                Opcode::Binary(*fold),
+                *vector_ty,
+                vec![Operand::Value(part), total],
+                Flags::default(),
+                Some("bin.rdx"),
+            );
+            function.insert(made, before).expect("the middle block");
+            total = Operand::Value(function.instruction(made).result.expect("a binary operation"));
+        }
+        let function_type = context
+            .types
+            .intern(Type::Function { returns: reduction.ty, parameters: vec![*vector_ty], variadic: false });
+        let kind = match reduction.kind {
+            RecurKind::Add => "add",
+            RecurKind::Mul => "mul",
+            RecurKind::And => "and",
+            RecurKind::Or => "or",
+            RecurKind::Xor => "xor",
+            other => unreachable!("a reduction of kind {other:?}"),
+        };
+        let name = format!("llvm.vector.reduce.{kind}.{}", llrm_mir::intrinsics::mangle(&context.types, *vector_ty));
+        let callee = declared.declare(&name, function_type);
+        let pointer = context.types.ptr(0);
+        let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+        let call = function.create_instruction(
+            Opcode::Call(Box::new(CallInfo {
+                function_type,
+                calling_convention: 0,
+                return_attrs: Vec::new(),
+                argument_attrs: vec![Vec::new()],
+                attrs: Vec::new(),
+                tail: Tail::default(),
+            })),
+            reduction.ty,
+            vec![total, callee],
+            Flags::default(),
+            Some("rdx"),
+        );
+        function.insert(call, before).expect("the middle block");
+        scalars.push(Operand::Value(function.instruction(call).result.expect("a call")));
+    }
+    interleave::hand_on(function, &widening.shape, skeleton, middle, &widening.reductions, &scalars);
+    // The scalar phis' arms read the updates they are about to lose.
+    for reduction in &widening.reductions {
+        function.set_operands(reduction.phi, Vec::new());
+    }
+}
+
 fn execute(
     context: &mut llrm_mir::context::Context,
     function: &mut Function,
     declared: &mut llrm_mir::passes::Declared,
     widening: &Widening,
     plan: Plan,
-    splat_block: BlockId,
+    skeleton: &Skeleton,
 ) {
+    let splat_block = skeleton.vector_ph;
     let vector_of = |context: &llrm_mir::context::Context, element: TypeId| {
         context.types.intern(Type::Vector { element, count: plan.vf })
     };
     let mut wide: Vec<(InstId, Vec<ValueId>)> = Vec::new();
     let mut erased: Vec<InstId> = Vec::new();
     let mut splats: Vec<(Operand, Operand)> = Vec::new();
+    let mut reduction_phis: Vec<Vec<InstId>> = Vec::new();
+    // A loop of reductions has no store to take the type from.
     let void_ty = widening
         .steps
         .iter()
@@ -1164,7 +1358,7 @@ fn execute(
             Step::Access(access) if !access.is_load => Some(function.instruction(access.inst).ty),
             _ => None,
         })
-        .expect("a store");
+        .unwrap_or_else(|| context.types.intern(Type::Void));
     for step in &widening.steps {
         match *step {
             Step::Access(access) => {
@@ -1176,6 +1370,28 @@ fn execute(
                 if induction.truncated_from.is_some() {
                     erased.push(induction.inst);
                 }
+            }
+            // `VPReductionPHIRecipe`: one vector phi per part, closed below
+            // once the updates exist.
+            Step::Reduction(reduction) => {
+                let vector_ty = vector_of(context, reduction.ty);
+                let first = function
+                    .iter_block(widening.shape.header)
+                    .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
+                    .expect("a body");
+                let mut phis = Vec::new();
+                for _ in 0..plan.ic {
+                    let phi =
+                        function.create_instruction(Opcode::Phi, vector_ty, Vec::new(), Flags::default(), Some("vec.phi"));
+                    function.insert(phi, Position::Before(first)).expect("the header");
+                    phis.push(phi);
+                }
+                wide.push((
+                    reduction.phi,
+                    phis.iter().map(|&phi| function.instruction(phi).result.expect("a phi")).collect(),
+                ));
+                reduction_phis.push(phis);
+                erased.push(reduction.phi);
             }
             Step::Operation(operation) => {
                 let before = Position::Before(operation.inst);
@@ -1241,14 +1457,54 @@ fn execute(
             }
         }
     }
+    if !widening.reductions.is_empty() {
+        close_reductions(context, function, declared, widening, plan, skeleton, &wide, &reduction_phis);
+    }
     // The stores first (they use the loads and operations), then the rest.
     for inst in erased.iter().rev() {
         function.erase(*inst).expect("an instruction nothing uses");
     }
+    keep_scalar_step_for_addresses(function, widening);
     // The induction steps by VF x IC (down, if it counts down).
     let lanes = i128::from(plan.vf) * i128::from(plan.ic);
     let step = Operand::Constant(context.int(widening.index_ty, if widening.reverse { -lanes } else { lanes }));
     function.set_operand(widening.step, widening.step_operand, step);
+}
+
+/// The widened accesses keep the scalar loop's addresses, which may be built on
+/// the induction's update (`dst[i - 1]` of a loop that counts down: the update
+/// `i - 1` is the index). The update is about to step by VF x IC, so an address
+/// that reads it would sit VF x IC - 1 elements off the lane-0 address the
+/// parts count from. Those users read a copy that keeps the scalar step
+/// (`InnerLoopVectorizer` makes the widened pointer from the scalar index, not
+/// from the stepped induction); the phi and the exit test read the stepped one.
+fn keep_scalar_step_for_addresses(
+    function: &mut Function,
+    widening: &Widening,
+) {
+    let step = function.instruction(widening.step);
+    let Some(updated) = step.result else { return };
+    let (opcode, operands, flags) = (step.opcode.clone(), step.operands.clone(), step.flags);
+    let ty = function.value(updated).ty;
+    let others: Vec<(InstId, u32)> = function
+        .users(updated)
+        .iter()
+        .filter(|one| {
+            one.user != widening.shape.primary
+                && one.user != widening.shape.compare
+                && function.parent(one.user) == Some(widening.shape.header)
+        })
+        .map(|one| (one.user, one.index))
+        .collect();
+    if others.is_empty() {
+        return;
+    }
+    let scalar = function.create_instruction(opcode, ty, operands, flags, Some("scalar.step"));
+    function.insert(scalar, Position::Before(widening.step)).expect("the update's block");
+    let scalar = Operand::Value(function.instruction(scalar).result.expect("an update"));
+    for (user, index) in others {
+        function.set_operand(user, index as usize, scalar);
+    }
 }
 
 impl FunctionPass for LoopVectorize {
@@ -1348,8 +1604,17 @@ impl FunctionPass for LoopVectorize {
                                 .then(|| dep.store_load_forward_safe_distance_in_bits()),
                             widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                             opt_size,
+                            has_reductions: !legality.reductions.is_empty(),
                         };
                         match plan(&*tti, &facts) {
+                            // DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR): the pin's
+                            // x86 expands `llvm.vector.reduce.*` to shuffles
+                            // (`ExpandReductions`), which this backend does
+                            // not select yet.
+                            Ok(_) if !widening.reductions.is_empty() && !tti.lowers_vector_reductions() => {
+                                why(unit, &outer, header, "plan: The target does not lower a vector reduction");
+                                None
+                            }
                             Ok(chosen) if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits()) => {
                                 // DEVIATE LV-D6 (owner llrm-arm64-vec, exit
                                 // LV-W4): a
@@ -1395,6 +1660,7 @@ impl FunctionPass for LoopVectorize {
                             .then(|| dep.store_load_forward_safe_distance_in_bits()),
                         widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                         opt_size,
+                        has_reductions: !extracted.interleaving.reductions.is_empty(),
                     };
                     if extracted.widening_mul || pin_may_vectorize(&*tti, &priced) {
                         why(
@@ -1435,9 +1701,11 @@ impl FunctionPass for LoopVectorize {
             };
             let Some((planned, memory_checks)) = planned else { continue };
             let (vf, ic, shape, reduced) = match &planned {
-                Planned::Vector(chosen, widening) => (chosen.vf, chosen.ic, widening.shape, Vec::new()),
+                Planned::Vector(chosen, widening) => {
+                    (chosen.vf, chosen.ic, widening.shape, widening.reductions.iter().map(|one| one.latch).collect())
+                }
                 Planned::Interleave(ic, extracted) => {
-                    let latches = extracted.interleaving.reductions.iter().map(|one| one.latch).collect();
+                    let latches: Vec<InstId> = extracted.interleaving.reductions.iter().map(|one| one.latch).collect();
                     (1, *ic, extracted.interleaving.shape, latches)
                 }
             };
@@ -1516,7 +1784,7 @@ impl FunctionPass for LoopVectorize {
             match planned {
                 Planned::Vector(chosen, widening) => {
                     why(unit, &outer, header, &format!("vectorized VF {} IC {}", chosen.vf, chosen.ic));
-                    execute(unit.context, unit.function, unit.declared, &widening, chosen, skeleton.vector_ph);
+                    execute(unit.context, unit.function, unit.declared, &widening, chosen, &skeleton);
                 }
                 Planned::Interleave(ic, extracted) => {
                     why(unit, &outer, header, &format!("interleaved IC {ic}"));

@@ -525,6 +525,8 @@ pub fn finish_with(
                 // The table and blocks of a table jump are for the passes and
                 // the emitted table; the instruction is `jmp (An)`.
                 Operand::Symbol(..) | Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
+                // a word table's jump names its table; the blocks are the table's
+                Operand::Block(_) if inst.kind == Kind::Op(crate::dagisel::wordjump::NAME) => continue,
                 Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
                 Operand::Block(id) => {
                     let at = function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
@@ -655,6 +657,19 @@ pub fn finish_with(
             continue;
         }
         if pushes.is_down(index) {
+            continue;
+        }
+        if let Some(load) = pushes.fused_load(index) {
+            // a kept store that moves what the load read: the store's address,
+            // then the load's memory
+            let (Kind::Op(from), Kind::Op(to)) = (insts[load].kind, inst.kind) else {
+                return Err("a fused store and load are instructions".to_owned());
+            };
+            let opcode = crate::callpush::memory_store(from, to).ok_or("a fused load has a store")?;
+            let mut moved = operands;
+            moved.pop();
+            moved.extend(convert(insts[load], pushed)?.into_iter().skip(1));
+            out.push(mc::Inst { opcode, operands: moved });
             continue;
         }
         if let Some(bytes) = pushes.cleanup(index) {

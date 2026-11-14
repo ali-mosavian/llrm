@@ -94,6 +94,26 @@ pub struct VectorTy {
     pub count: u32,
 }
 
+/// An operand that is a `sext` or a `zext` of `src` lanes, as the pin's `Args`
+/// (the operand values of the instruction priced) show it to the widening
+/// rules of `getArithmeticInstrCost` and `getCastInstrCost`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtOperand {
+    pub kind: CastKind,
+    pub src: Ty,
+}
+
+/// A user of an extension, for `GetUserAbsorbedCastCost`: `op` is the user's
+/// operation if it is an `add`, `sub` or `mul` (none: a user that cannot
+/// absorb the extension), `operands` what its two operands are, `index` the
+/// one that is the extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtUser {
+    pub op: Option<ArithOp>,
+    pub operands: [Option<ExtOperand>; 2],
+    pub index: usize,
+}
+
 /// `TargetTransformInfo::RegisterClass`, by the pin's class id: 0 scalar, 1
 /// vector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -628,6 +648,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether the target's pipeline takes vector values
+    /// (`Machine::has_vector_mir`): a function holding one is refused
+    /// before the mid-end where it does not. Independent of
+    /// [`Self::vector_register_bits`]: a target may hold a vector value and not
+    /// widen loops.
+    fn vector_values(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
@@ -692,6 +721,14 @@ pub trait Tti {
         None
     }
 
+    /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
+    /// step the pin's `ExpandReductions` or the target's lowering makes). A
+    /// port that does not yet lowers none, and no loop with a reduction is
+    /// widened.
+    fn lowers_vector_reductions(&self) -> bool {
+        true
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
@@ -704,6 +741,34 @@ pub trait Tti {
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
+    }
+
+    /// `getArithmeticInstrCost` of a vector operation whose operands `args` are
+    /// extensions (the widening forms: `smull`, `uaddl`, ...). `Err(())`: the
+    /// pin's cost depends on known bits this port does not compute. The
+    /// default is the cost with no operand information.
+    fn vector_arithmetic_cost_ext(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _args: [Option<ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Result<Option<Cost>, ()> {
+        Ok(self.vector_arithmetic_cost(op, ty, kind))
+    }
+
+    /// `getCastInstrCost` of an extension between fixed vectors whose users
+    /// are `users`: free where every user absorbs it
+    /// (`GetUserAbsorbedCastCost`), else as [`Tti::vector_cast_cost`].
+    fn vector_ext_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        _users: &[ExtUser],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_cast_cost(kind, dst, src, cost_kind)
     }
 
     /// `getCastInstrCost` between fixed vectors of one lane count. `None`: not
@@ -999,6 +1064,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver may compile the module again with
+    /// the copies of a loop-holding callee at several sites of a loop refused, and keep the form it prices
+    /// cheaper after allocation. The pin's InlineCost has no price for the registers the merged loops lose
+    /// (its `LoopPenalty` is added at minsize callers alone). False: the cost decides.
+    fn inline_loop_copy_trial(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
@@ -1196,6 +1269,13 @@ pub trait Tti {
     /// and the frame could no longer start after the guard (shrink wrapping).
     /// False: the pin's rule.
     fn licm_speculation_keeps_frame_late(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE RL-EXITING-LATCH: whether `LoopRotate` also rotates a loop whose latch already exits when the copy of
+    /// its header folds away in the preheader (the pin: only when a header phi dies or the latch's exit count
+    /// becomes computable). gcc's header copy does it. False: the pin's.
+    fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
         false
     }
 
@@ -1413,6 +1493,16 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): whether
+    /// the -Os trial measures a loop by the cost `analyzeLoopUnrollCost`
+    /// finds once the trips' constants fold (a switch on the counter keeps
+    /// one arm a trip), not by the copies' size. gcc's `cunroll`
+    /// counts what folds away; the pin's optsize threshold is 0 and never
+    /// looks.
+    fn unroll_trial_by_analyzed_cost(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_trial_bytes_strict`.
     fn unroll_trial_bytes_strict(&self) -> bool {
         false
@@ -1592,9 +1682,10 @@ pub trait Tti {
         false
     }
 
-    /// Drop the local functions that are the same code at -O1
-    /// (`MergeLocalFunctions`); no thunk is written.
-    fn merge_local_functions_at_o1(&self) -> bool {
+    /// Drop the local functions that are the same code at the levels that
+    /// allow no trade between bytes and clocks, and at speed (`MergeLocalFunctions`);
+    /// no thunk is written.
+    fn merge_local_functions_at_speed(&self) -> bool {
         false
     }
 
@@ -2324,6 +2415,13 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::fills_pattern_at_speed`: isel fills a word or dword pattern
+    /// itself (`rep stosw`/`rep stosd`), so the pass forms it and no pre-ISel
+    /// store loop is made.
+    fn fills_pattern_at_speed(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a shift by a variable amount needs the count
     /// in one fixed register (x86's `cl`), which costs a move and holds the
     /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
@@ -2588,6 +2686,20 @@ pub trait Tti {
         _inst: crate::module::InstId,
     ) -> bool {
         true
+    }
+
+    /// `TargetTransformInfo::isProfitableToSinkOperands`: the uses of `inst`'s
+    /// operands (and of theirs, dominating ones first) the target folds into
+    /// `inst` when they sit in its block; pushed onto `ops`. Asked by
+    /// CodeGenPrepare's `tryToSinkFreeOperands`.
+    fn is_profitable_to_sink_operands(
+        &self,
+        _context: &crate::context::Context,
+        _function: &crate::module::Function,
+        _inst: crate::module::InstId,
+        _ops: &mut Vec<crate::module::Use>,
+    ) -> bool {
+        false
     }
 
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.

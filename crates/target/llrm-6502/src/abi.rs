@@ -5,34 +5,11 @@ use llrm_target::calling::{Calling, Convention};
 
 use crate::REGISTER_INFO;
 
-thread_local! {
-    static FIRST_WORD_IN_AX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Runs `f` with the first word argument passed in A:X (`wide_pairs` of
-/// `calling.toml` lists `a`,`x` first) or, off, in the cells like the others:
-/// the staging of the ABI change, until the day the toml's pair is the only
-/// word.
-pub fn with_first_word_in_ax<R>(
-    on: bool,
-    f: impl FnOnce() -> R,
-) -> R {
-    let before = FIRST_WORD_IN_AX.with(|flag| flag.replace(on));
-    let result = f();
-    FIRST_WORD_IN_AX.with(|flag| flag.set(before));
-    result
-}
-
 /// The `mos` convention: arguments in a, x, rc2.., results in A:X. A word
-/// takes the first free pair of `wide_pairs`; while the change is staged the
-/// pair of the byte registers is left out unless asked for.
+/// takes the first free pair of `wide_pairs`, A:X first.
 pub fn mos() -> Convention {
     let calling = Calling::parse(crate::CALLING).expect("calling.toml");
-    let mut convention = calling.conventions.into_iter().find(|one| one.name == "mos").expect("convention mos");
-    if !FIRST_WORD_IN_AX.with(std::cell::Cell::get) {
-        convention.wide_pairs.retain(|pair| pair[0] != "a");
-    }
-    convention
+    calling.conventions.into_iter().find(|one| one.name == "mos").expect("convention mos")
 }
 
 /// A register `calling.toml` names.

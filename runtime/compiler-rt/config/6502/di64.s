@@ -1,5 +1,5 @@
-; 64-bit multiply and divide for the 6502: u64 __muldi3(u64 a, u64 b) and __udivdi3 __umoddi3 __divdi3 __moddi3, llrm-6502 rc2-first layout: a0..a5 in rc2..rc7, a6:a7 at the
-; caller's stack (rc0:rc1)+0/+1, b0..b7 at (rc0:rc1)+2..9 (read only). Result A:X:rc2..rc7. Scratch rc16..rc25 and BSS.
+; 64-bit multiply and divide for the 6502: u64 __muldi3(u64 a, u64 b) and __udivdi3 __umoddi3 __divdi3 __moddi3, llrm-6502 A:X-first layout: a0:a1 in A:X, a2..a7 in rc2..rc7,
+; b0..b7 at the caller's stack (rc0:rc1)+0..7 (read only). Result A:X:rc2..rc7. Scratch rc16..rc25 and BSS.
 ; Multiply: shift and add, one multiplier byte at a time from the lowest to the highest nonzero byte of b.
 ; Divide: restoring, the divisor is shifted up to the dividend's bit length and steps down one bit at a time; the quotient bits roll into qv. Division by zero gives all ones and the dividend as remainder (lib/int/int64.c).
 
@@ -24,27 +24,35 @@ top:    .res 1
 .segment "CODE"
 
 __muldi3:
-    ldy #0
-    lda (rc0),y
-    sta a6
-    iny
-    lda (rc0),y
-    sta a7
+    ldy rc6                 ; the A:X-first layout into the cells the body shifts: a0..a5 in rc2..rc7, a6:a7 in a6:a7
+    sty a6
+    ldy rc7
+    sty a7
+    ldy rc5
+    sty rc7
+    ldy rc4
+    sty rc6
+    ldy rc3
+    sty rc5
+    ldy rc2
+    sty rc4
+    sta rc2
+    stx rc3
     lda #0
     ldx #7
 :   sta r0,x
     dex
     bpl :-
-    ldy #9                  ; highest nonzero byte of b
+    ldy #7                  ; highest nonzero byte of b
 :   lda (rc0),y
     bne found
     dey
-    cpy #1
+    cpy #$FF
     bne :-
     beq out                 ; b = 0
 found:
     sty top
-    ldy #2
+    ldy #0
 byte:
     lda (rc0),y
     sta bb

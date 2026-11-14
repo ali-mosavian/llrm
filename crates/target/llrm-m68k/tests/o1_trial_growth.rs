@@ -1,38 +1,18 @@
 //! qmove -O1: the inline trial of an external callee that stays
 //! (`pl_ground_accel` into `bench_qmove`) was kept on the unit count (21
 //! against 23) though the byte model said +213 B: the caller grew 126 B, the
-//! callee stayed. -O1 is strict per axis, so a copy that grows the code is
-//! refused.
+//! callee stayed. Since 2026-11-14 -O1 is judged by clocks and the copy stays.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
 const IR: &str = include_str!("fixtures/o1_trial_growth.ll");
 
-fn lines_of(
-    function: &str,
-    out: &str,
-) -> usize {
-    let mut inside = false;
-    let mut n = 0;
-    for line in out.lines() {
-        if line.starts_with(function) && line.trim_end().ends_with(':') {
-            inside = true;
-        } else if inside && !line.starts_with('\t') && line.ends_with(':') && !line.starts_with(".L") {
-            inside = false;
-        }
-        if inside && line.starts_with('\t') && !line.trim_start().starts_with('.') {
-            n += 1;
-        }
-    }
-    n
-}
-
+/// -O1 is judged by clocks (user ruling 2026-11-14): the copy saves the call and the kernel's frame setup.
 #[test]
-fn an_o1_caller_keeps_the_call_to_an_external_kernel_it_would_grow_by() {
+fn an_o1_caller_copies_in_an_external_kernel_for_its_clocks() {
     let out = assembly(IR, cpu_of("68000").unwrap(), Level::O1).expect("compiles");
-    let driver = lines_of("driver", &out);
-    let kernel = lines_of("kernel", &out);
-    assert!(driver * 2 < kernel, "driver {driver} instructions against kernel {kernel}: the kernel was copied in");
+    let driver = out.split("driver:").nth(1).expect("driver").split(".globl").next().unwrap();
+    assert!(!driver.contains("kernel"), "the kernel stayed a call:\n{out}");
 }
 
 const FOLDS: &str = include_str!("fixtures/o1_trial_folds.ll");

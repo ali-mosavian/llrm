@@ -371,7 +371,7 @@ fn call_info(
 /// `getAttributeBasedInliningDecision` (InlineCost.cpp:3191): some verdict the
 /// callee's and call's attributes settle, or none.
 ///
-/// D4: no coroutine, target-feature, strict FP, `optnone`, `flatten` checks.
+/// D4: no coroutine, target-feature, strict FP, `flatten` checks.
 pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     let call = call_info(site.caller, site.call)?;
     let callee_attrs = &site.callee.attrs;
@@ -390,6 +390,10 @@ pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     }
     if has_flag(&call.attrs, "noinline") {
         return Some(Err("noinline call site attribute".into()));
+    }
+    // Don't inline into a function that has the optnone attribute.
+    if site.caller.has_opt_none() {
+        return Some(Err("optnone attribute".into()));
     }
     // Don't inline what can be interposed at link time: the body is not the
     // definition that runs.
@@ -3205,9 +3209,32 @@ pub fn sites_with_trials(
             }
         }
     }
+    // DEVIATE LOOP-COPY-TRIAL (`Tti::inline_loop_copy_trial`): the sites of each callee here, for the copies a
+    // trial compile may refuse
+    let mut sites: llrm_support::hash::IndexMap<GlobalId, i64> = Default::default();
+    if tti.is_some_and(|tti| tti.inline_loop_copy_trial()) {
+        for (_, inst) in caller.walk() {
+            if let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) {
+                *sites.entry(callee).or_default() += 1;
+            }
+        }
+    }
     let mut planned = IdSet::<InstId>::new();
     for (_, inst) in caller.walk() {
         let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies, Some(&planned)) else { continue };
+        // a callee that holds a loop, at one of several sites of a loop of the caller: the registers its copy
+        // needs next to the caller's are not in the cost
+        if decision.inline && sites.get(&decision.callee).is_some_and(|&here| here >= 2) {
+            let in_loop = caller.parent(inst).is_some_and(|block| frequencies.relative_to_entry(block) >= 2.0);
+            let holds_loop =
+                module.global(decision.callee).function().is_some_and(|callee| !loop_headers(callee).is_empty());
+            if in_loop && holds_loop {
+                if crate::trial::refusing_loop_copies() {
+                    continue;
+                }
+                crate::trial::note_loop_copy();
+            }
+        }
         if decision.inline {
             planned.insert(inst);
         }

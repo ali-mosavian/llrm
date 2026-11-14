@@ -222,6 +222,16 @@ pub trait CombineHooks {
         false
     }
 
+    /// `tryStoreMergeOfLoads`' vector arm: a run of loads and stores of
+    /// adjacent cells is one vector load and store where the vector type is
+    /// legal. DEVIATE SD217: off by default so the targets with vector types
+    /// (arm64, wasm) keep their output until judged; x86 opts in. The pin
+    /// also needs `!noimplicitfloat` and a fast `allowsMemoryAccess`, both
+    /// taken as true. Exit 2026-12-01.
+    fn merge_stores_to_vectors(&self) -> bool {
+        false
+    }
+
     /// `DataLayout::isLittleEndian`: whether the first of several merged
     /// stores is the least significant part of the joined value.
     fn little_endian(&self) -> bool {
@@ -345,9 +355,10 @@ pub trait CombineHooks {
         false
     }
 
-    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another reader
-    /// takes narrow may be widened for an extension only if the truncate back is free.
-    /// The pin asks the same query as everywhere else; a target may answer it apart.
+    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another
+    /// reader takes narrow may be widened for an extension only if the
+    /// truncate back is free. The pin asks the same query as everywhere
+    /// else; a target may answer it apart.
     fn extend_uses_truncate_free(
         &self,
         from: EVT,
@@ -410,6 +421,17 @@ pub trait CombineHooks {
             return false;
         }
         !(dag.opcode(operand) == ISD::SignExtend && !dag.has_one_use(dag.operand(operand, 0).node))
+    }
+
+    /// Whether `combineShiftOfShiftedLogic` may split `shift` over its one-use
+    /// logic operand. The pin always does; DEVIATE 6502-PAIR-SHIFT: a target
+    /// whose word is two byte registers keeps a shift of a joined pair whole.
+    fn wants_shift_of_shifted_logic(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+    ) -> bool {
+        true
     }
 
     /// `visitSRL`'s `shift (shift x, c1), c2` as one shift by the sum, and
@@ -771,6 +793,11 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     worklist: Vec<u32>,
     /// The last sweep of an after-legalize combine (`pack_word_pairs`).
     pub(super) late: bool,
+    /// The node count a run may not pass (`RUNAWAY_GROWTH` times the nodes it
+    /// started with, and `RUNAWAY_FLOOR`): set by `run_bounded`.
+    node_limit: usize,
+    runaway: bool,
+    last_combined: Option<u32>,
     queued: NodeSet,
     /// `CombinedNodes`: the nodes already visited, whose operands are not
     /// queued again by a visit of their user.
@@ -800,6 +827,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             level,
             worklist: Vec::new(),
             late: false,
+            node_limit: usize::MAX,
+            runaway: false,
+            last_combined: None,
             queued: NodeSet::default(),
             combined: NodeSet::default(),
             tli: None,
@@ -875,7 +905,34 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     /// `Run`.
+    /// [`Self::run_bounded`] where a loop is a bug to stop at: tests and the
+    /// helpers that have no way to refuse.
     pub fn run(&mut self) {
+        if let Err(why) = self.run_bounded() {
+            panic!("{why}");
+        }
+    }
+
+    /// `Run`, with a guard the pin has not: two combines that undo each other
+    /// make a node a visit, for ever, and the arena grows until the machine is
+    /// out of memory (the z80 `or (trunc a), (trunc b)` that took 10 GB). A run
+    /// that makes more than `RUNAWAY_GROWTH` times the nodes it started with
+    /// (and `RUNAWAY_FLOOR`) is an error naming the last node it combined.
+    pub fn run_bounded(&mut self) -> Result<(), CombineRunaway> {
+        self.node_limit = self.dag.node_count().saturating_mul(RUNAWAY_GROWTH).max(RUNAWAY_FLOOR);
+        self.run_unbounded();
+        if self.runaway {
+            let last = self.last_combined;
+            return Err(CombineRunaway {
+                level: self.level,
+                opcode: last.map(|node| self.dag.opcode(SDValue { node, res: 0 })),
+                nodes: self.dag.node_count(),
+            });
+        }
+        Ok(())
+    }
+
+    fn run_unbounded(&mut self) {
         // `RemoveDeadNodes`: what an earlier phase replaced no longer counts as
         // a user. Newest first, so a user goes before the nodes it reads.
         for node in self.dag.node_ids().rev() {
@@ -928,6 +985,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
             self.combined.insert(n);
+            self.last_combined = Some(n);
+            if self.dag.node_count() > self.node_limit {
+                self.runaway = true;
+                self.worklist.clear();
+                return;
+            }
             // `SDLoc(N)`: what the combine makes takes the node's order.
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
@@ -1091,6 +1154,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::InsertVectorElt => self.visit_insert_vector_elt(node),
+            ISD::VectorShuffle => self.visit_vector_shuffle(node),
             ISD::ExtractElement => self.visit_extract_vector_elt(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
@@ -2009,6 +2073,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(merged) = self.unfold_masked_merge(node) {
             return Some(merged);
         }
+        // `(op (hand x...), (hand y...))` is `(hand (op x, y))`.
+        if self.dag.opcode(n0) == self.dag.opcode(n1) {
+            if let Some(hoisted) = self.hoist_logic_op_with_same_opcode_hands(node) {
+                return Some(hoisted);
+            }
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1, self.dag.node(node).flags);
         }
@@ -2118,8 +2188,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the loaded
-    /// value (its chain may have users).
+    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the
+    /// loaded value (its chain may have users).
     fn reduce_load_width(
         &mut self,
         node: SDValue,
@@ -2195,8 +2265,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         {
             let x = self.dag.operand(self.dag.operand(n0, 0), 0);
             let narrow = self.dag.value_type(n0);
-            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide, narrow) &&
-            // isZExtFree(narrow, wide)`) `ShrinkDemandedOp` makes the narrow form
+            // Where `free_narrowing` holds (the pin's `isTruncateFree(wide,
+            // narrow) && isZExtFree(narrow, wide)`)
+            // `ShrinkDemandedOp` makes the narrow form
             // this fold would undo, and the two would run in turn forever.
             let narrows_free = self.hooks.free_narrowing(vt, narrow);
             let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(x), narrow);
@@ -2279,8 +2350,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
-        if self.dag.opcode(node) != ISD::ZeroExtend
-            || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+        if self.dag.opcode(node) != ISD::ZeroExtend || !self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
         {
             return None;
         }
@@ -2302,7 +2372,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &self,
         ptr: SDValue,
     ) -> Option<u64> {
-        let common = |align: u64, offset: u64| if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) };
+        let common =
+            |align: u64, offset: u64| if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) };
         if let Some((symbol, offset)) = self.global_plus_offset(ptr) {
             if let Some(&align) = self.dag.global_alignments.get(&symbol) {
                 if align > 1 {
@@ -2334,7 +2405,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         ptr: SDValue,
     ) -> Option<(u32, i64)> {
         match (self.dag.opcode(ptr), self.dag.node(ptr).data) {
-            (ISD::GlobalAddress | ISD::TargetGlobalAddress, NodeData::Global { symbol, offset }) => Some((symbol, offset)),
+            (ISD::GlobalAddress | ISD::TargetGlobalAddress, NodeData::Global { symbol, offset }) => {
+                Some((symbol, offset))
+            }
             (ISD::Add, _) => {
                 let (a, b) = (self.dag.operand(ptr, 0), self.dag.operand(ptr, 1));
                 let signed = |c: SDValue| {
@@ -2392,14 +2465,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
         let from = self.dag.value_type(n0);
-        // DEVIATE: the known bits of a vector are not modelled (the pin asks
-        // for the sign bit of each lane).
-        if vt.is_vector() {
-            return None;
-        }
+        // `SignBitIsZero`: the sign bit of a lane, in a vector.
+        let lane_bits = if from.is_vector() { from.element().size_in_bits() } else { from.size_in_bits() };
         if self.tli?.is_sext_cheaper_than_zext(from, vt)
             || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
-            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
+            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (lane_bits - 1))
         {
             return None;
         }
@@ -2663,6 +2733,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if let Some(folded) = self.fold_bitwise_op_with_neg(node) {
             return Some(folded);
+        }
+        // `(op (hand x...), (hand y...))` is `(hand (op x, y))`.
+        if self.dag.opcode(n0) == self.dag.opcode(n1) {
+            if let Some(hoisted) = self.hoist_logic_op_with_same_opcode_hands(node) {
+                return Some(hoisted);
+            }
         }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
             // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.
@@ -3230,7 +3306,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let logic_op = self.dag.opcode(logic);
-        if !matches!(logic_op, ISD::And | ISD::Or | ISD::Xor) {
+        if !matches!(logic_op, ISD::And | ISD::Or | ISD::Xor)
+            || !self.hooks.wants_shift_of_shifted_logic(self.dag, node)
+        {
             return None;
         }
         // "Do not turn a 'not' into a regular xor."
@@ -4445,8 +4523,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let source = self.dag.operand(value, 0);
         let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
-        // `canCombineTruncStore`: `isTruncStoreLegal` after operation legalization, `isTruncStoreLegalOrCustom`
-        // before; both need the value type to be legal (a soft-float target has no `f64` to store narrowed).
+        // `canCombineTruncStore`: `isTruncStoreLegal` after operation
+        // legalization, `isTruncStoreLegalOrCustom` before; both need
+        // the value type to be legal (a soft-float target has no `f64` to store
+        // narrowed).
         let takes = if self.legal_operations() {
             tli.is_trunc_store_legal(wide, narrow)
         } else {
@@ -4530,7 +4610,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));
             }
         }
-        // x * c with x and c in the half: the half multiply, before a chain or the full multiply.
+        // x * c with x and c in the half: the half multiply, before a chain or
+        // the full multiply.
         if let (Some(c), false) = (c1, opaque) {
             if let Some(half) = self.hooks.mul_of_halves(vt).filter(|half| half.constant) {
                 if let Some(product) = self.half_multiply_by_constant(n0, c, vt, half) {
@@ -4625,7 +4706,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let high = super::fold::mask(width) & !super::fold::mask(narrow);
         let signed = if super::known_bits::masked_value_is_zero(self.dag, x, high) && c & high == 0 {
             false
-        } else if super::known_bits::num_sign_bits(self.dag, x) > width - narrow && matches!(c >> (narrow - 1), 0) | (c >> (narrow - 1) == super::fold::mask(width) >> (narrow - 1)) {
+        } else if super::known_bits::num_sign_bits(self.dag, x) > width - narrow
+            && matches!(c >> (narrow - 1), 0) | (c >> (narrow - 1) == super::fold::mask(width) >> (narrow - 1))
+        {
             true
         } else {
             return None;
@@ -4829,8 +4912,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
         }
-        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits to
-        // spare (DAGCombiner.cpp#L17478): the shifted-in zeros are all sign.
+        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits
+        // to spare (DAGCombiner.cpp#L17478): the shifted-in zeros are
+        // all sign.
         if self.dag.opcode(n0) == ISD::Srl
             && let Some(amount) = self.dag.constant(self.dag.operand(n0, 1))
             && amount <= u128::from(bits - ext_bits)
@@ -4928,6 +5012,33 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let _ = node;
         Some(extended)
+    }
+}
+
+/// How many times the nodes a run started with it may make before it is
+/// stopped, and the least it may make (see [`DagCombiner::run_bounded`]).
+const RUNAWAY_GROWTH: usize = 64;
+const RUNAWAY_FLOOR: usize = 1 << 17;
+
+/// A combine run that did not end: the nodes it made passed its limit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CombineRunaway {
+    pub level: CombineLevel,
+    /// The opcode of the last node the run combined.
+    pub opcode: Option<ISD>,
+    pub nodes: usize,
+}
+
+impl std::fmt::Display for CombineRunaway {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            out,
+            "the DAG combiner does not end at {:?}: {} nodes made, last combined {:?}",
+            self.level, self.nodes, self.opcode
+        )
     }
 }
 

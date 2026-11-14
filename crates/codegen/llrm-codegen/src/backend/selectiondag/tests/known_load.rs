@@ -108,3 +108,38 @@ fn a_shift_by_an_unknown_amount_left_keeps_no_known_zero_bits() {
     let sra = dag.get_node(ISD::Sra, EVT::I32, &[b, a]);
     assert_eq!(known_bits(&dag, sra), super::super::known_bits::KnownBits::unknown(32));
 }
+
+/// The sign bits and known bits of a vector were counted over its whole
+/// width (`v2i64` as 128 bits) and a `BUILD_VECTOR` knew nothing: the
+/// multiply of `sext <2 x i32>` by a splat of a 16-bit value kept a scalarized
+/// `v2i64` multiply where the pin has `smull`.
+#[test]
+fn the_sign_bits_of_a_vector_are_those_of_its_lanes() {
+    let v2i64 = EVT::Simple(crate::backend::selectiondag::MVT::V2I64);
+    let v2i32 = EVT::Simple(crate::backend::selectiondag::MVT::V2I32);
+    let mut dag = dag();
+    let x = dag.get_register(v2i32, 9);
+    let extended = dag.get_node(ISD::SignExtend, v2i64, &[x]);
+    assert_eq!(num_sign_bits(&dag, x), 1, "premise: a register says nothing");
+    assert_eq!(num_sign_bits(&dag, extended), 33);
+    let scalar = dag.get_register(EVT::I64, 7);
+    let from = dag.get_value_type_node(EVT::I16);
+    let narrow = dag.get_node(ISD::SignExtendInReg, EVT::I64, &[scalar, from]);
+    let splat = dag.get_build_vector(v2i64, &[narrow, narrow]);
+    assert_eq!(num_sign_bits(&dag, splat), 49);
+    let mixed = dag.get_build_vector(v2i64, &[narrow, scalar]);
+    assert_eq!(num_sign_bits(&dag, mixed), 1);
+}
+
+#[test]
+fn the_known_bits_of_a_vector_are_those_of_its_lanes() {
+    let v2i64 = EVT::Simple(crate::backend::selectiondag::MVT::V2I64);
+    let v2i32 = EVT::Simple(crate::backend::selectiondag::MVT::V2I32);
+    let mut dag = dag();
+    let x = dag.get_register(v2i32, 9);
+    let extended = dag.get_node(ISD::ZeroExtend, v2i64, &[x]);
+    assert_eq!(known_bits(&dag, extended).zero, 0xFFFF_FFFFu128 << 32);
+    let low = dag.get_constant(0xFFFF, EVT::I64);
+    let splat = dag.get_build_vector(v2i64, &[low, low]);
+    assert_eq!(known_bits(&dag, splat).zero, !0xFFFFu128 & u128::from(u64::MAX));
+}

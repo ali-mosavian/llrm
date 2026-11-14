@@ -97,9 +97,10 @@ type Selections = std::rc::Rc<
 >;
 
 thread_local! {
-    /// The three modules most recently run through the mid-end and selection (three: -Oz compiles a module three ways, as -Oz and as
-    /// -Os twice, then reads the one it keeps), most recent first, with what each was run for.
-    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
+    /// The six modules most recently run through the mid-end and selection (-Oz compiles a module three ways, as
+    /// -Oz and as -Os twice, and each may be compiled again with its loop copies refused), most recent first, with
+    /// what each was run for.
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, usize)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
     /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
@@ -107,6 +108,9 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
     /// The request `effective` chose for the module most recently asked about.
     static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Request)>> = const { std::cell::RefCell::new(None) };
+    /// The request `effective` chose between the module's compile and its loop-copies-refused twin.
+    static COPY_CHOICE: std::cell::RefCell<Option<(String, SelectionKey, Request)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
@@ -115,14 +119,14 @@ fn selection_key(request: &Request) -> SelectionKey {
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only)),
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of, request.optsize_only, request.refuse_loop_copies)),
         environment,
     )
 }
 
 /// The request `ir` is compiled with. DEVIATE z80-oz-best-of (see `Request::oz_best_of`): at -Oz, the -Os one where
 /// the module is smaller in bytes (the runtime it reaches included), else the request itself.
-pub fn effective(
+fn effective_level(
     ir: &str,
     request: &Request,
 ) -> Result<Request, String> {
@@ -166,6 +170,130 @@ pub fn effective(
     Ok(chosen)
 }
 
+/// The request `ir` is compiled with: [`effective_level`]'s, or its twin that refuses the copies of a loop-holding
+/// callee at several sites of a loop where the module comes out cheaper after allocation. DEVIATE
+/// LOOP-COPY-TRIAL (`Tti::inline_loop_copy_trial`; owner z80, exit 2026-11-24): the pin's InlineCost prices the
+/// call away and the callee's body, not the registers the merged loop needs; idioms -O2 inlined `sum` at 13
+/// sites and `init` at 10: 4555 B / 25.58M T against 1993 B / 24.49M T with the calls. The second compile is made
+/// only where the first made such an inline.
+pub fn effective(
+    ir: &str,
+    request: &Request,
+) -> Result<Request, String> {
+    let base = effective_level(ir, request)?;
+    if base.level == Level::O0 || base.refuse_loop_copies {
+        return Ok(base);
+    }
+    let key = selection_key(&base);
+    let held = COPY_CHOICE.with(|held| {
+        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., chosen)| chosen.clone())
+    });
+    if let Some(chosen) = held {
+        return Ok(chosen);
+    }
+    let (_, _, copies) = cached_with_copies(ir, &base)?;
+    let chosen = if copies == 0 {
+        base
+    } else {
+        let other = Request { refuse_loop_copies: true, ..base.clone() };
+        let sizes = (module_priced(ir, &base), module_priced(ir, &other));
+        if std::env::var_os("LLRM_DEBUG_LOOP_COPIES").is_some() {
+            eprintln!("loop copies {copies}: with {:?}, refused {:?}", sizes.0, sizes.1);
+        }
+        let chosen = match sizes {
+            (Ok(with), Ok(without)) if refuses_loop_copies(base.level, with, without) => other,
+            _ => base,
+        };
+        // keep only the lines of the module that stays
+        let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+        KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
+        chosen
+    };
+    COPY_CHOICE.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+    Ok(chosen)
+}
+
+/// Whether the module made without the loop copies (`without`: bytes, clocks) is kept over the one with them,
+/// by the rule that picks the other variants (`prefers`): idioms -O2 4555 B / 25.58M T with, 1993 B / 24.49M T
+/// without; a tie keeps the copies.
+pub fn refuses_loop_copies(
+    level: Level,
+    with: (u32, u64),
+    without: (u32, u64),
+) -> bool {
+    prefers(level, without, with)
+}
+
+/// The module's bytes and clocks at `request.level`: its functions as emitted, each run as often as the calls to
+/// it say (a function nothing in the module calls runs once; a call runs its callee as many times as the block it
+/// is in runs), and the runtime routines they reach, each once.
+fn module_priced(
+    ir: &str,
+    request: &Request,
+) -> Result<(u32, u64), String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let speed = !matches!(request.level, Level::Os | Level::Oz);
+    let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
+    let at = std::rc::Rc::as_ptr(&selected) as usize;
+    let names: Vec<&str> = selected.iter().map(|(name, ..)| name.as_str()).collect();
+    let mut own = vec![0u64; names.len()];
+    let mut calls: Vec<Vec<(usize, f64)>> = vec![Vec::new(); names.len()];
+    for (number, (name, ..)) in selected.iter().enumerate() {
+        let lines = lines_in(&selected, &alternatives, name, number, request)?;
+        let ((one_bytes, one_clocks), called) = expand::price_emitted_calls(&lines, speed);
+        bytes += one_bytes;
+        own[number] = one_clocks;
+        for (callee, times) in called {
+            if let Some(to) = names.iter().position(|one| format!("_{one}") == callee || *one == callee) {
+                calls[number].push((to, times));
+            }
+        }
+        reached.extend(crate::runtime_size::referenced(&lines));
+        KEPT_LINES.with(|kept| kept.borrow_mut().insert((at, name.clone(), number), lines));
+    }
+    // the runs of each function from the roots down, a back edge of a recursion ignored
+    let mut called = vec![false; names.len()];
+    for list in &calls {
+        list.iter().for_each(|(to, _)| called[*to] = true);
+    }
+    let mut runs = vec![0.0f64; names.len()];
+    let mut state = vec![0u8; names.len()];
+    let mut order = Vec::new();
+    for root in (0..names.len()).filter(|&one| !called[one]) {
+        runs[root] = 1.0;
+        let mut stack = vec![(root, 0usize)];
+        state[root] = 1;
+        while let Some((function, next)) = stack.last_mut() {
+            match calls[*function].get(*next).copied() {
+                Some((to, _)) => {
+                    *next += 1;
+                    if state[to] == 0 {
+                        state[to] = 1;
+                        stack.push((to, 0));
+                    }
+                }
+                None => {
+                    state[*function] = 2;
+                    order.push(*function);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    let mut position = vec![usize::MAX; names.len()];
+    order.iter().rev().enumerate().for_each(|(at, function)| position[*function] = at);
+    for &function in order.iter().rev() {
+        for &(to, times) in &calls[function] {
+            if position[to] > position[function] {
+                runs[to] += runs[function] * times;
+            }
+        }
+    }
+    let clocks = own.iter().zip(&runs).map(|(own, runs)| *own as f64 * runs.max(1.0)).sum::<f64>().round() as u64;
+    let image = crate::data::image_bytes(&crate::data::text_at(ir, request)?);
+    Ok((bytes + crate::runtime_size::reached(&reached) + image, clocks))
+}
+
 /// The module's code bytes at `request.level`: its functions as emitted and the runtime routines they reach, each
 /// once.
 fn module_bytes(
@@ -201,26 +329,39 @@ fn cached_both(
     ir: &str,
     request: &Request,
 ) -> Result<(Selections, Selections), String> {
+    cached_with_copies(ir, request).map(|(one, other, _)| (one, other))
+}
+
+/// [`cached_both`] and the inlines of a loop-holding callee at several sites of a loop its mid-end made
+/// (`driver::loop_copies_made`).
+fn cached_with_copies(
+    ir: &str,
+    request: &Request,
+) -> Result<(Selections, Selections, usize), String> {
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
     let key = selection_key(request);
     let held = SELECTED.with(|held| {
-        held.borrow().iter().find(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
+        held.borrow()
+            .iter()
+            .find(|(text, was, ..)| text == ir && *was == key)
+            .map(|(_, _, one, other, copies)| (one.clone(), other.clone(), *copies))
     });
     if let Some(one) = held {
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (main, alternatives) = selections_with_alternatives(ir, request)?;
+    let copies = crate::driver::loop_copies_made();
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
-        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
-        held.truncate(3);
+        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies));
+        held.truncate(6);
     });
-    Ok((one, other))
+    Ok((one, other, copies))
 }
 
 /// [`machine_function`], with or without the return blocks copied into their
@@ -491,9 +632,7 @@ fn priced_in_loops(
     level: Level,
 ) -> Option<(u32, u64)> {
     let (function, assignment, slots, reads, frequencies) = one;
-    expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
     let lines = finish(function, assignment, 0, slots, reads.clone());
-    expand::PRICING.with(|one| one.set(false));
     let kept = frequencies.as_ref().map(|own| expand::replace_frequencies(own.clone()));
     let price = lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)));
     if let Some(kept) = kept {
@@ -502,25 +641,15 @@ fn priced_in_loops(
     price
 }
 
-/// Whether a variant is priced before the printer's peepholes. Only at -O2 and up, where the price is weighted
-/// clocks, good to a few tenths of a percent, and a peephole moved a near-tie to the worse variant (copy_runs -O2:
-/// 2 B and 600 T). Where the price is bytes (-Os, -Oz) or both axes are strict (-O1) the peephole's bytes and
-/// clocks are real: priced before them, clear -O1 chose the allocation that is larger and slower once emitted
-/// (96 B / 577 T against 95 B / 550 T at -Os).
-fn priced_before_peepholes(level: Level) -> bool {
-    matches!(level, Level::O2 | Level::O3)
-}
-
-/// Whether the price `one` beats `other`: bytes first at the size levels;
-/// otherwise weighted clocks plus 3 clocks a byte (1 B = 3 T), so a variant
-/// that is bigger and no faster by that rate does not win on a clock alone.
+/// Whether the price `one` (bytes, clocks) beats `other`: bytes first, clocks only break a tie, at every level
+/// (the 2026-11-14 ruling for the z80: always the smallest code, clocks the second goal; a clock gain never buys
+/// bytes). It was weighted clocks plus 3 T a byte at -O2 and -O3 and bytes first at -O1, -Os and -Oz.
 fn cheaper(
-    level: Level,
+    _level: Level,
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    let priced = |(bytes, clocks): (u32, u64)| clocks + u64::from(bytes) * crate::tti::SPEED_MILLICLOCKS_PER_BYTE as u64 / 1000;
-    if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
+    one < other
 }
 
 #[cfg(test)]
@@ -529,13 +658,16 @@ mod tests {
 
     /// call_keeps -O1: `churn` with the routines 920 B / 8709 T, inline 1136 B / 6922 T. The smaller relative regret
     /// picked the inline form on a 2% margin (1.235 against 1.258) and crossed SDCC's bytes bar (1610 B, bar 1535);
-    /// O1 is strict on both axes and takes no growth in bytes for clocks.
+    /// O1 is strict on both axes and takes no growth in bytes for clocks; so do -O2 and -O3 (1 B = 3 T took the inline
+    /// form there: 1787 T under the routines for 216 B over the bytes bar).
     #[test]
     fn at_o1_a_form_that_grows_bytes_for_clocks_does_not_win() {
         let (calls, inline) = ((920, 8709), (1136, 6922));
-        assert!(prefers(Level::O1, calls, inline) && !prefers(Level::O1, inline, calls));
-        // equal bytes: the clocks decide
-        assert!(prefers(Level::O1, (1000, 11000), (1000, 14300)));
+        for level in [Level::O1, Level::O2, Level::O3, Level::Os, Level::Oz] {
+            assert!(prefers(level, calls, inline) && !prefers(level, inline, calls), "{level:?}");
+            // equal bytes: the clocks decide
+            assert!(prefers(level, (1000, 11000), (1000, 14300)), "{level:?}");
+        }
     }
 
     /// The functions whose alternative is the speed routines or the shift loops keep the relative regret, at the
@@ -563,44 +695,34 @@ mod tests {
         assert!(prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
     }
 
-    /// Bytes first at the size levels, 1 B = 3 T from O2: a form that is 30% slower for 5% fewer bytes wins the
-    /// first and loses the second.
+    /// Bytes first at every level: a form that is 30% slower for 5% fewer bytes wins at -O2 and -O3 as at the size
+    /// levels (the 2026-11-14 ruling; 1 B = 3 T took the faster one).
     #[test]
-    fn the_size_levels_take_bytes_and_o2_takes_the_rate() {
+    fn every_level_takes_the_bytes_first() {
         let (small, fast) = ((1900, 14300), (2000, 11000));
-        assert!(prefers(Level::Os, small, fast) && prefers(Level::Oz, small, fast));
-        assert!(!prefers(Level::O2, small, fast) && !prefers(Level::O3, small, fast));
-        assert!(prefers(Level::O2, (1000, 11000), (1100, 11000)));
+        for level in [Level::O1, Level::O2, Level::O3, Level::Os, Level::Oz] {
+            assert!(prefers(level, small, fast) && !prefers(level, fast, small), "{level:?}");
+        }
     }
 
-    /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone
-    /// (tail_calls -O1, 4444 B to 4505 B); at 1 B = 3 T it loses.
-    #[test]
-    fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
-        assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
-        assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
-        // -O1 prices what is emitted (`clear` -O1: 96 B / 577 T priced before them, 548 T after)
-        assert!(!priced_before_peepholes(Level::O1));
-    }
-
-    /// The push and pop form is smaller and dearer in weighted clocks: kept at
-    /// the size levels (bytes first), dropped at -O2 (3 T a byte does not pay
-    /// 1000 T), kept where it is cheaper by that rate, and a tie stays framed.
+    /// The push and pop form is smaller and dearer in clocks: kept at every level (bytes first), and a tie stays
+    /// framed.
     #[test]
     fn push_and_pop_stay_only_where_they_price_lower() {
         let (framed, stacked) = (Some((1000, 50_000)), Some((960, 51_000)));
         assert!(keeps_stacked(Level::Os, framed, stacked) && keeps_stacked(Level::Oz, framed, stacked));
-        assert!(!keeps_stacked(Level::O2, framed, stacked) && !keeps_stacked(Level::O3, framed, stacked));
+        assert!(keeps_stacked(Level::O2, framed, stacked) && keeps_stacked(Level::O3, framed, stacked));
         let cheaper_stack = Some((960, 49_000));
         assert!(keeps_stacked(Level::O2, framed, cheaper_stack));
         assert!(!keeps_stacked(Level::Os, framed, framed) && !keeps_stacked(Level::O2, framed, framed));
         assert!(keeps_stacked(Level::O2, None, stacked));
-        // loop_fusion -O1 `same`: 13 B (10%) smaller for 4% more weighted clocks, so the strict level keeps it
+        // loop_fusion `same`: 13 B (10%) smaller for 4% more weighted clocks
         let (framed, stacked) = (Some((124, 6472)), Some((111, 6746)));
-        assert!(keeps_stacked(Level::O1, framed, stacked) && !keeps_stacked(Level::O2, framed, stacked));
+        assert!(keeps_stacked(Level::O1, framed, stacked) && keeps_stacked(Level::O2, framed, stacked));
         assert!(!keeps_stacked(Level::O1, stacked, framed));
     }
 
+    /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone (tail_calls -O1, 4444 B to 4505 B).
     #[test]
     fn a_bigger_variant_does_not_win_on_fewer_clocks_alone() {
         assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
@@ -2990,7 +3112,7 @@ fn decomposed_functions(
                     prefers_by_regret(price, best)
                 } else if size_first[at] {
                     prefers(Level::Os, price, best)
-                } else if level == Level::O1 {
+                } else if level != Level::O0 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
                 } else {
                     prefers(level, price, best)
@@ -3024,10 +3146,8 @@ fn decomposed_functions(
         .collect()
 }
 
-/// Whether the module price `new` (bytes, clocks) is strictly better than `old` at `level`: bytes first at the
-/// size levels and at O1, which is strict on both axes and takes no growth in bytes for clocks (call_keeps -O1:
-/// `churn` 920 B / 8709 T with the routines against 1136 B / 6922 T inline, a 2% margin of relative regret that
-/// moved with a price 19 B lower: the bytes bar crossed); 1 B = 3 T at O2 and up.
+/// Whether the module price `new` (bytes, clocks) is strictly better than `old`: bytes first at every level
+/// (call_keeps: `churn` 920 B / 8709 T with the routines against 1136 B / 6922 T inline crossed the bytes bar).
 /// DEVIATE z80-callinline-price: the pin keys a call against inline on `optsize` alone (`ForCodeSize`) and
 /// prices neither the routine's clocks nor the bytes against each other. It prices the multiply calls and the long
 /// shift calls (`size_shift_call`) by the same model (`runtime_size::routine_clocks`). Owner z80, exit 2026-11-20.
@@ -3036,10 +3156,7 @@ fn prefers(
     new: (u32, u64),
     old: (u32, u64),
 ) -> bool {
-    match level {
-        Level::Os | Level::Oz | Level::O1 => new < old,
-        _ => cheaper(level, new, old),
-    }
+    cheaper(level, new, old)
 }
 
 /// The smaller relative regret (a form's worse axis against the best of the two on that axis), so a form that
@@ -3080,12 +3197,8 @@ fn lines_of(
         (Ok(carry), Ok(generic)) => {
             let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
             let (with, without) = (price(&carry), price(&generic));
-            let strict = matches!(request.level, Level::O1 | Level::Os | Level::Oz);
-            let take = if strict {
-                without != with && without.0 <= with.0 && without.1 <= with.1
-            } else {
-                cheaper(request.level, without, with)
-            };
+            // the generic add only where it is no worse on either axis
+            let take = without != with && without.0 <= with.0 && without.1 <= with.1;
             Ok(if take { generic } else { carry })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
@@ -3485,7 +3598,8 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
     Ok(())
 }
 
-/// The most instructions, `ret` included, of a block that is copied into its
+/// The most instructions, `ret` included and copies not counted (the
+/// allocator joins most of them away), of a block that is copied into its
 /// predecessors.
 const TAIL_DUPLICATION_SIZE: usize = 4;
 
@@ -3498,7 +3612,7 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
     let mut j = 1;
     while j < function.blocks.len() {
         let block = &function.blocks[j];
-        let small = block.insts.len() <= TAIL_DUPLICATION_SIZE
+        let small = block.insts.iter().filter(|inst| inst.kind != Kind::Copy).count() <= TAIL_DUPLICATION_SIZE
             && matches!(
                 block.insts.last().map(|inst| inst.kind),
                 Some(Kind::Op("RET"))
@@ -3539,14 +3653,38 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
         let tail = function.blocks[j].insts.clone();
         // highest first: a split below a predecessor moves only the blocks after it
         for &p in copy_into.iter().rev() {
-            // the phi inputs for this edge, as copies
+            // Each copy names its own virtual registers (`duplicateInstruction`'s
+            // `LocalVRMap`): one register defined in every predecessor is a
+            // single live range, placed in one register for all paths.
+            let mut fresh: std::collections::HashMap<u32, Reg> = std::collections::HashMap::new();
             let mut moves = Vec::new();
             for phi in &mut function.blocks[j].phis {
                 if let Some(at) = phi.incoming.iter().position(|(pred, _)| *pred == p) {
                     let (_, input) = phi.incoming.remove(at);
-                    moves.push(Inst::copy(phi.result, input));
+                    let result = renamed_def(&mut function.classes, &mut fresh, phi.result);
+                    moves.push(Inst::copy(result, input));
                 }
             }
+            let tail: Vec<Inst> = tail
+                .iter()
+                .map(|inst| {
+                    let mut inst = inst.clone();
+                    for operand in &mut inst.operands {
+                        match operand {
+                            Operand::Def(reg) => *reg = renamed_def(&mut function.classes, &mut fresh, *reg),
+                            Operand::Use(reg) => {
+                                if let Reg::Virt(old) = *reg {
+                                    if let Some(new) = fresh.get(&old) {
+                                        *reg = *new;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    inst
+                })
+                .collect();
             let insts = &mut function.blocks[p].insts;
             if insts.last().is_some_and(|inst| inst.barrier) {
                 insts.pop();
@@ -3591,6 +3729,20 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
             j += 1;
         }
     }
+}
+
+/// A fresh virtual register of the class of `reg` for its definition in a copy
+/// of the tail; a physical register is its own.
+fn renamed_def(
+    classes: &mut Vec<crate::mfunc::Class>,
+    fresh: &mut std::collections::HashMap<u32, Reg>,
+    reg: Reg,
+) -> Reg {
+    let Reg::Virt(old) = reg else { return reg };
+    *fresh.entry(old).or_insert_with(|| {
+        classes.push(classes[old as usize]);
+        Reg::Virt(classes.len() as u32 - 1)
+    })
 }
 
 /// `jp cc, T` over a bare `ret` that falls into `T` is `ret !cc`: the branch

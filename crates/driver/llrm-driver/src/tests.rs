@@ -4587,6 +4587,158 @@ fn an_unaligned_16_byte_copy_is_movups_at_m64() {
     assert_eq!(count, 2, "{listing}");
 }
 
+/// IR holding 128-bit vector values: a copy, a zero store, and a value live
+/// across a call.
+const VECTOR_COPIES: &str = "target datalayout = \"@m64-datalayout@\"\n\
+    target triple = \"x86_64-unknown-linux-gnu\"\n\
+    declare void @k(ptr)\n\
+    define void @bytes(ptr %d, ptr %s) {\n  %v = load <16 x i8>, ptr %s, align 1\n  store <16 x i8> %v, ptr %d, align 1\n  ret void\n}\n\
+    define void @words(ptr %d, ptr %s) {\n  %v = load <4 x i32>, ptr %s, align 16\n  store <4 x i32> %v, ptr %d, align 16\n  ret void\n}\n\
+    define void @zero(ptr %d) {\n  store <4 x i32> zeroinitializer, ptr %d, align 1\n  ret void\n}\n\
+    define void @kept(ptr %d, ptr %s) {\n  %v = load <16 x i8>, ptr %s, align 1\n  call void @k(ptr %d)\n  store <16 x i8> %v, ptr %d, align 1\n  ret void\n}\n";
+
+/// A `<16 x i8>` or `<4 x i32>` value was refused ("a <16 x i8> value") at m64.
+/// With `VR128` legal the pin's moves are `movups` for unaligned memory and
+/// `movaps` for 16-byte aligned, a zero is `xorps`, and a value held across a
+/// call is spilled to a 16-byte slot and reloaded whole.
+#[test]
+fn a_128_bit_vector_is_loaded_stored_and_kept_in_an_xmm_register_at_m64() {
+    let one = |name: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), VECTOR_COPIES, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    // The listing holds every function: take the lines of one.
+    let body = |listing: String, name: &str| -> String {
+        let start = listing.find(&format!("{name} proc near")).expect("the function is listed");
+        let end = listing[start..].find(&format!("{name} endp")).expect("the function ends");
+        listing[start..start + end].to_string()
+    };
+    let one = |name: &str| body(one(name), name);
+    let count = |listing: &str, mnemonic: &str| listing.lines().filter(|l| l.trim().starts_with(mnemonic)).count();
+    let bytes = one("bytes");
+    assert_eq!(count(&bytes, "movups"), 2, "{bytes}");
+    let words = one("words");
+    assert_eq!(count(&words, "movaps"), 2, "{words}");
+    let zero = one("zero");
+    assert!(zero.contains("xorps") && count(&zero, "movups") == 1, "{zero}");
+    let kept = one("kept");
+    // Not `mov dword ptr [rsp+4], xmm0`: the 4 bytes the width of a vector fell
+    // to.
+    let slot = kept.lines().filter(|l| l.contains("xmmword ptr [rsp]")).count();
+    assert!(slot == 2 && !kept.contains("dword ptr [rsp+4]"), "spilled and reloaded whole: {kept}");
+}
+
+/// Eight loads and stores of adjacent `i16` cells were eight 2-byte moves each way (32 B), and a run of `i64` cells
+/// one 8-byte pair per cell: the pin's `mergeConsecutiveStores` joins them into 16-byte `movaps` pairs where a vector
+/// type is legal (copy_runs O2 808 B against clang's 645 B).
+#[test]
+fn adjacent_cell_copies_are_16_byte_moves_at_m64() {
+    let copy = |cell: &str, bytes: u32| {
+        let count = 16 / bytes;
+        let mut body = String::new();
+        for at in 0..count {
+            body += &format!(
+                "  %p{at} = getelementptr {cell}, ptr @s, i64 {at}\n  %v{at} = load {cell}, ptr %p{at}, align {bytes}\n  \
+                 %q{at} = getelementptr {cell}, ptr @d, i64 {at}\n  store {cell} %v{at}, ptr %q{at}, align {bytes}\n"
+            );
+        }
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+             @s = global [16 x i8] zeroinitializer, align 16\n@d = global [16 x i8] zeroinitializer, align 16\n\
+             define void @copy() {{\n{body}  ret void\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "copy").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    for (cell, bytes) in [("i16", 2), ("i32", 4), ("i64", 8)] {
+        let listing = copy(cell, bytes);
+        let moves = listing.lines().filter(|l| l.trim().starts_with("movaps")).count();
+        let scalar = listing.lines().filter(|l| l.trim().starts_with("mov ") && l.contains(" ptr ")).count();
+        assert_eq!((moves, scalar), (2, 0), "{cell}: {listing}");
+    }
+}
+
+/// The high half of a widening multiply sits in DX, and the pin's TwoAddress pass knows it (the `COPY` out of DX is
+/// in the function): it commutes `add a, b` so the sum lands in the register the call wants, `mov rdi, rdx; shr rdi,
+/// 63; sar rdx, 18; add rdi, rdx`. Ours made the copies after the pass, saw no register, and ended with a `mov rdi,
+/// rdx` after the add (data_int64 main +3 B at O1/O2/O3).
+#[test]
+fn a_quotient_by_a_constant_is_summed_in_the_register_the_call_wants_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @report(i64)\n\
+                define void @f(i64 %x) {\n  %q = sdiv i64 %x, 1000000\n  call void @report(i64 %q)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let call = lines.iter().position(|l| l.starts_with("jmp") || l.starts_with("call")).unwrap();
+    assert!(!lines[call - 1].starts_with("mov rdi, rdx"), "a copy of the sum after the add: {listing}");
+    let shr = lines.iter().position(|l| l.starts_with("shr")).unwrap();
+    assert_eq!(lines[shr - 1], "mov rdi, rdx", "the sum is built in rdi: {listing}");
+}
+
+/// A target without the vector forms keeps refusing a vector value: `-m32` and
+/// `-m16` objects do not move.
+#[test]
+fn a_128_bit_vector_is_still_refused_where_the_target_has_no_vector_forms() {
+    let body = VECTOR_COPIES.split_once("declare").map(|(_, rest)| format!("declare{rest}")).unwrap();
+    for (target, header) in [
+        ("-m32", "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i386-unknown-linux-gnu\"\n"),
+        ("-m16", "target datalayout = \"@m16-datalayout@-ni:2:3\"\ntarget triple = \"i386-unknown-unknown-code16\"\n"),
+    ] {
+        let error = compiled(&flags(&[target, "-O2", "--isel=dag"]), &format!("{header}{body}"), "bytes").err();
+        let error = format!("{error:?}");
+        assert!(error.contains("a <16 x i8> value"), "{target}: {error}");
+    }
+}
+
+/// A one-slot frame before a sibling call was `sub rsp, 8` ... `add rsp, 8` (8 B) where the pin's `emitSPUpdate` with
+/// `findDeadCallerSavedReg` of the tail call is `push rax` ... `pop` (2 B): shl_long_by_one `four` O1 +4 B.
+#[test]
+fn a_one_slot_frame_before_a_sibling_call_is_a_push_and_a_pop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @twice(i32)\n\
+                define i32 @four(i32 %x) {\n  %a = call i32 @twice(i32 %x)\n  %b = tail call i32 @twice(i32 %a)\n  ret i32 %b\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "four").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push rax") && listing.contains("pop r") && !listing.contains("rsp, 8"), "{listing}");
+}
+
+/// The register the one-slot `pop` takes at a sibling call is none the call's arguments are in
+/// (`findDeadCallerSavedReg` of a `TCRETURN` skips its uses): `rcx` carries the fourth.
+#[test]
+fn the_pop_of_a_one_slot_frame_spares_a_sibling_calls_arguments_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @pick(i32)\n\
+                declare i32 @four(i32, i32, i32, i32)\n\
+                define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %p = call i32 @pick(i32 %a)\n  %r = tail call i32 @four(i32 %p, i32 %b, i32 %c, i32 %d)\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let tail = listing.lines().rev().find(|line| line.trim().starts_with("pop")).unwrap_or("");
+    assert!(tail.contains("pop"), "the frame is a push and a pop: {listing}");
+    assert!(!["rdi", "rsi", "rdx", "rcx"].iter().any(|reg| tail.contains(reg)), "{listing}");
+}
+
+/// `cmp edi, 1 / jne ret / jmp f` (+2 B) where the pin lays the return after the compare and folds the tail call into
+/// `je f`: BranchFolder moves a block with no successor to the end when its predecessor falls into it, then folds
+/// (sibling_call_callees `g` O1 +2 B).
+#[test]
+fn a_compare_chain_of_sibling_calls_is_conditional_tail_jumps_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @f()\ndeclare void @h()\n\
+                define void @g(i32 %n) {\n  switch i32 %n, label %out [i32 1, label %a\n i32 2, label %b]\n\
+                a:\n  tail call void @f()\n  ret void\n\
+                b:\n  tail call void @h()\n  ret void\n\
+                out:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "g").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let jumps = listing.lines().filter(|line| line.trim_start().starts_with('j')).map(str::trim).collect::<Vec<_>>();
+    assert!(jumps.iter().all(|jump| jump.starts_with("je ")), "a conditional jump over a tail jump: {listing}");
+    assert_eq!(jumps.len(), 2, "{listing}");
+}
+
 /// A leaf's 100-byte local paid `sub rsp, 104` / `add rsp, 104` (about 12 B);
 /// the pin keeps it in the 128-byte red zone below `rsp`. A call, `noredzone`
 /// and a frame past the zone keep their `sub`.

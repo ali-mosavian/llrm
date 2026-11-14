@@ -159,9 +159,9 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
-    /// -O1 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`).
-    fn merge_local_functions_at_o1(&self) -> bool {
+    /// DEVIATE Z80-MERGEFUNC-LOCAL (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
+    /// -O1, -O2 and -O3 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`, signbit_idioms `bit_i16`).
+    fn merge_local_functions_at_speed(&self) -> bool {
         true
     }
 
@@ -420,6 +420,13 @@ impl Tti for Z80Tti {
     }
 
     fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the module is compiled again with the copies of a
+    /// loop-holding callee at several sites of a loop refused, and the cheaper after allocation is kept
+    /// (`compile::effective`).
+    fn inline_loop_copy_trial(&self) -> bool {
         true
     }
 

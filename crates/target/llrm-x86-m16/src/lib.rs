@@ -699,6 +699,7 @@ mod tuning_tests {
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
+                fills_pattern_at_speed: false,
                 divide_by_bytes: false,
                 price_pin_multiplies: false,
                 // The pin's value: m16 sets it (DEVIATE LFTR1, `target.rs`).
