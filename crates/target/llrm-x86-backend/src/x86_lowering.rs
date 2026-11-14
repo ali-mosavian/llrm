@@ -67,6 +67,11 @@ pub mod x86isd {
     pub const CMP: ISD = ISD::Target(508);
     /// `X86ISD::MUL_IMM`: a multiply by 3, 5 or 9 that is one `lea`.
     pub const MUL_IMM: ISD = ISD::Target(694);
+    /// `X86ISD::VSHLI`, `VSRAI`, `VSRLI`: a vector shifted by an `i8` target constant (`PSLL*ri`, `PSRA*ri`,
+    /// `PSRL*ri`).
+    pub const VSHLI: ISD = ISD::Target(933);
+    pub const VSRAI: ISD = ISD::Target(937);
+    pub const VSRLI: ISD = ISD::Target(941);
     /// Real mode's `les`/`lds` (`tools/dagisel/own_ids.txt`): the offset, a
     /// chain; the segment is read back from `ES`/`DS`.
     pub const LES: ISD = ISD::Target(24576);
@@ -764,6 +769,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::Shl | ISD::Srl | ISD::Sra if dag.value_type(node).is_vector() => lower_vector_shift(dag, node),
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -3352,6 +3358,36 @@ fn lower_dynamic_stackalloc(
     let chain = SDValue { node: chain.node, res: 0 };
     let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
     Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
+}
+
+/// `LowerShift` for a vector shifted by a constant splat
+/// (`getTargetVShiftByConstNode`): `VSHLI`, `VSRLI` or `VSRAI` by the `i8`
+/// amount. An amount a lane is shifted out by is zero (a logical shift) or
+/// the sign (an arithmetic one), as the instruction does. Any other amount is
+/// left to the default expansion.
+fn lower_vector_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let amount = dag.operand(node, 1);
+    if dag.opcode(amount) != ISD::BuildVector {
+        return None;
+    }
+    let lanes = dag.node(amount).ops.clone();
+    let first = dag.constant(*lanes.first()?)?;
+    if lanes.iter().any(|lane| dag.constant(*lane) != Some(first)) {
+        return None;
+    }
+    let bits = u128::from(vt.element().size_in_bits());
+    let opcode = match dag.opcode(node) {
+        ISD::Shl => x86isd::VSHLI,
+        ISD::Srl => x86isd::VSRLI,
+        _ => x86isd::VSRAI,
+    };
+    // The immediate is one byte: the instruction clamps what is not below the lane width.
+    let by = dag.get_constant_with(first.min(bits), EVT::I8, true, false);
+    Some(dag.get_node(opcode, vt, &[dag.operand(node, 0), by]))
 }
 
 /// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -

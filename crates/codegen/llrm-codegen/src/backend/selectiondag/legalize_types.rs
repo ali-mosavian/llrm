@@ -1908,8 +1908,11 @@ impl<'a> TypeLegalizer<'a> {
                 // each half to its own type is the half).
                 self.split_integer(self.softened_float(self.dag.operand(value, 0)), half)
             }
-            ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
-                // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
+            ISD::BitCast
+                if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point()
+                    || self.dag.value_type(self.dag.operand(value, 0)).is_vector() =>
+            {
+                // `ExpandRes_BITCAST` of a float or a legal vector: stored to a stack slot, the
                 // halves loaded from it.
                 let src = self.dag.operand(value, 0);
                 let (slot, store, cell) = self.store_to_slot(src);
@@ -3589,7 +3592,8 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue, i32) {
         let vt = self.dag.value_type(src);
         let size = vt.size_in_bits().div_ceil(8);
-        let cell = self.dag.create_stack_temporary(size, 4);
+        // A vector is stored whole (`movaps` wants 16).
+        let cell = self.dag.create_stack_temporary(size, if vt.is_vector() { 16 } else { 4 });
         let pointer = self.dag.config().pointer;
         let slot = self.dag.get_frame_index(pointer, cell);
         let info = self.slot_info(src, cell);

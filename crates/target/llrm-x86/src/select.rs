@@ -2466,6 +2466,11 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
+        // `pslld xmm, 3`: a vector shifted by an immediate count.
+        (Loc::Reg(into), Loc::Imm(count)) if xmm(first) => {
+            let code = code_of!(upper, "_XMM_IMM8")?;
+            _assemble(&raised(create_reg_i32(code, into.register, count.value)), at, false)
+        }
         (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && !name.starts_with("cvtsi2") => {
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
