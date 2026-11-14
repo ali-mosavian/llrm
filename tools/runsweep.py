@@ -8,7 +8,7 @@ ok, WRONG (ran, output differs), TIMEOUT, COMPILE-FAIL, UNLINKED (compiled, the 
 says the program is not for TARGET), NO-OUT (no expected output file). Only ok and WRONG measure anything: the rest are listed by reason,
 a floor on what is unmeasured, never a ceiling on what is right. Exit 1 on WRONG or TIMEOUT.
 
-A runner per target says how objects become a process: `RUNNERS`. Native x86 (gcc -m32 / gcc) are here; a target with no runner is refused,
+A runner per target says how objects become a process: `RUNNERS`. Native x86 (gcc -m32 / gcc) and arm64-linux (qemu-aarch64) are here; a target with no runner is refused,
 not skipped (m68k qemu, wasm node and DOSBox attach as further entries). `llrm_os` programs link the host-compiled
 runtime/shared/posix/os.c; `// stdin: FILE` programs get tests/run/c/FILE on stdin; each program runs in its own empty directory.
 """
@@ -41,11 +41,13 @@ class Runner:
 
     driver: list[str]
     host_flags: list[str]
+    launcher: tuple[str, ...] = ()  # runs the linked program (an emulator for a foreign target)
 
 
 RUNNERS = {
     "x86_32-linux": Runner(["gcc", "-m32", "-no-pie"], ["-I/usr/include/x86_64-linux-gnu"]),
     "x86_64-linux": Runner(["gcc", "-no-pie"], []),
+    "arm64-linux": Runner(["aarch64-linux-gnu-gcc", "-static"], [], ("qemu-aarch64",)),  # LLRM_ARM64_SYSROOT as for llrm-cc
 }
 ABI_FLAGS = {"x86_32-linux": ["-mabi=sysv"]}
 
@@ -102,7 +104,7 @@ def cell(program: Path, level: str, target: str, dist: Path, shim: Path, posix: 
     run_dir.mkdir()
     stdin = (program.parent / given).read_bytes() if given else b""
     try:
-        done = subprocess.run([str(work / "x")], cwd=run_dir, input=stdin, capture_output=True, timeout=10)
+        done = subprocess.run([*runner.launcher, str(work / "x")], cwd=run_dir, input=stdin, capture_output=True, timeout=10)
     except subprocess.TimeoutExpired:
         return program.name, level, "TIMEOUT"
     return program.name, level, classify(done.stdout, expected.read_bytes())

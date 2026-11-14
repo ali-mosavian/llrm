@@ -38,6 +38,7 @@ fn unrolled_at(
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
@@ -126,6 +127,7 @@ b2:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     let tti = crate::testing::Flagged::default();
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
@@ -264,6 +266,7 @@ b2:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
@@ -384,6 +387,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: std::rc::Rc::clone(&created),
             decided: Default::default(),
         },
@@ -409,6 +413,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: std::rc::Rc::clone(&created),
             decided: Default::default(),
         },
@@ -550,6 +555,7 @@ exit:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
     let after = printed(&module);
@@ -864,6 +870,7 @@ fn unrolled_o1_analysing(
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
@@ -998,6 +1005,7 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1029,6 +1037,7 @@ fn test_partial_unrolls_in_sequence_build_one_dominator_tree_and_nest() {
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     let (trees, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
@@ -1068,6 +1077,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1106,6 +1116,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1147,6 +1158,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1216,6 +1228,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             inliner_follows: true,
+            speed_rate: false,
             created,
             decided: Default::default(),
         },
@@ -1281,6 +1294,7 @@ fn runtime_unrolled_text(
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     unroll_function(&mut module, "f", &tti, options).expect("unrolls")
 }
@@ -1600,6 +1614,7 @@ fn unroll_on_costed_core(
         prepare_for_lto: false,
         target_unrolling,
         inliner_follows: true,
+        speed_rate: false,
     };
     let target = (throughput || operations.is_some()).then(|| {
         use llrm_target::Target;
@@ -1744,6 +1759,7 @@ declare void @late(ptr)
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     super::unroll_function_hiding(&mut module, "f", &tti, options, None, 1).expect("unrolls without a panic");
 }
@@ -1790,6 +1806,7 @@ b2:
         prepare_for_lto: false,
         target_unrolling: false,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
 }
@@ -1829,6 +1846,7 @@ fn runtime_unroll_counts(n: usize) -> usize {
         prepare_for_lto: false,
         target_unrolling: true,
         inliner_follows: true,
+        speed_rate: false,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "premise: the loops are unrolled");
     llrm_analysis::scev::trip::backedge_taken_computations() - before
