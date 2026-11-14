@@ -280,6 +280,7 @@ fn run_suffix(
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
     drop_empty_save(asm);
+    drop_repeated_test(asm);
     crate::peephole_cells::drop_unused_saves(asm);
     // a transfer that fed an `or` of zero is gone: the load is next to its
     // store
@@ -728,6 +729,48 @@ pub fn drop_dead_writes(asm: &mut Asm) {
             && (!writes.nz || nz_dead_from(&asm.lines, at + 1, &mut HashSet::default()));
         if dead {
             asm.lines.remove(at);
+        }
+    }
+}
+
+/// `lda x; ora y; beq l` straight after the same three lines, with no branch
+/// into the second: the first fell through, so the second does too. The guard
+/// of a loop the idiom pass rewrote tests the count again at the loop's entry
+/// (`k_memset` -O2: `lda rc4; ora rc5; beq` twice, 6 B). `a` and the flags are
+/// the same after either.
+///
+/// The pin's analogue is `JumpThreading` / `BranchFolding` seeing the second
+/// branch's condition as the first's.
+pub fn drop_repeated_test(asm: &mut Asm) {
+    let test = |lines: &[Line], at: usize| -> Option<[(Op, Operand); 3]> {
+        let [Line::Inst(load), Line::Inst(or), Line::Inst(branch)] = lines.get(at..at + 3)? else { return None };
+        let direct = |inst: &Inst| matches!(inst.operand, Operand::Direct(_));
+        (load.op == Op::Lda
+            && matches!(or.op, Op::Ora | Op::And | Op::Eor)
+            && matches!(branch.op, Op::Beq | Op::Bne)
+            && direct(load)
+            && direct(or))
+        .then(|| [(load.op, load.operand.clone()), (or.op, or.operand.clone()), (branch.op, branch.operand.clone())])
+    };
+    let mut at = 0;
+    while at < asm.lines.len() {
+        let Some(first) = test(&asm.lines, at) else {
+            at += 1;
+            continue;
+        };
+        let mut next = at + 3;
+        while let Some(Line::Label(label)) = asm.lines.get(next) {
+            if references(&asm.lines, label) > 0 {
+                break;
+            }
+            next += 1;
+        }
+        if !matches!(asm.lines.get(next), Some(Line::Label(_)))
+            && test(&asm.lines, next).is_some_and(|second| second == first)
+        {
+            asm.lines.drain(next..next + 3);
+        } else {
+            at += 1;
         }
     }
 }
