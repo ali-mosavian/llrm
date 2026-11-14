@@ -53,6 +53,26 @@ pub fn table(labels: &[String]) -> Encoded {
     }
 }
 
+/// A jump table of 16-bit offsets from its start: entry `at` is `label -
+/// start`, a pc-relative fixup with the addend `2 * at` (its place is `start +
+/// 2 * at`).
+pub fn word_table(labels: &[String]) -> Encoded {
+    Encoded {
+        bytes: vec![0; 2 * labels.len()],
+        fixups: labels
+            .iter()
+            .enumerate()
+            .map(|(at, label)| Fixup {
+                offset: 2 * at,
+                symbol: label.clone(),
+                addend: 2 * at as i64,
+                size: 2,
+                pc_rel: true,
+            })
+            .collect(),
+    }
+}
+
 /// `getEncodingValue` with the `D/A` bit `getMachineOpValue` adds.
 fn register_value(id: RegId) -> Option<u64> {
     let name = REGISTER_INFO.name(id)?;
