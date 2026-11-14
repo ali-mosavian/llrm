@@ -28,6 +28,7 @@ fn selected(
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
         &llrm_x86_m32::M32,
