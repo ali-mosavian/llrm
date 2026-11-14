@@ -335,6 +335,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 160324 -> 79692 clk (gcc 94851, which has `-fipa-cp-clone` on
         // at -O3).
         ipa_cp_clones_at_speed: true,
+        // DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24): gcc's depth.
+        ipa_cp_max_clones: 8,
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a

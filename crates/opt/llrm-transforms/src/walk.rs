@@ -142,6 +142,7 @@ impl ProgramPass for ModuleIpo {
                         crate::ipacp::Tuning {
                             hint_clones: self.inline.cp_hint_clones,
                             peel_limited: self.inline.cp_peel_limited,
+                            max_clones: self.inline.cp_max_clones,
                         },
                         &mut cloning,
                     )

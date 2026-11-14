@@ -801,6 +801,7 @@ pub fn optimized_with<E: From<String>>(
                     crate::ipacp::Tuning {
                         hint_clones: threshold.cp_hint_clones,
                         peel_limited: threshold.cp_peel_limited,
+                        max_clones: threshold.cp_max_clones,
                     },
                     cloning,
                 )
