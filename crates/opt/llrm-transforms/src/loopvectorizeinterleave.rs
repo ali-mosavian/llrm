@@ -90,6 +90,24 @@ pub(crate) struct Interleaving {
     pub reductions: Vec<Reduction>,
 }
 
+/// `Op2Info` of an unsigned divide or remainder: a constant divisor is a few
+/// multiplies on a target that says so, not a division. Other operations
+/// carry none.
+pub(crate) fn divisor_info(
+    context: &Context,
+    op: BinaryOp,
+    divisor: Operand,
+    ty: Ty,
+) -> llrm_mir::tti::OperandInfo {
+    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem) = (divisor, ty, op) else {
+        return Default::default();
+    };
+    match context.get(id).kind {
+        ConstantKind::Int(bits) => llrm_mir::tti::OperandInfo::constant(bits as i128, width),
+        _ => Default::default(),
+    }
+}
+
 /// The `ArithOp` that prices an integer `BinaryOp`, if the cost model knows it.
 fn arith_of(op: BinaryOp) -> Option<ArithOp> {
     Some(match op {
@@ -382,12 +400,13 @@ pub(crate) fn extract(
             Opcode::Binary(op) => {
                 let arith = arith_of(op).ok_or(Skipped("A binary operation the cost model does not know"))?;
                 let ty = scalar_ty(cx, data.ty).ok_or(Skipped("An element type the target has no cost for"))?;
-                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), Default::default());
+                let second = divisor_info(cx.context, op, data.operands[1], ty);
+                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), second);
                 if !price.valid {
                     return Err(Skipped("An operation the target does not price"));
                 }
                 cost += price.value;
-                priced.push(Recipe::Binary { op: arith, lane: ty, ext: [None, None] });
+                priced.push(Recipe::Binary { op: arith, lane: ty, ext: [None, None], second });
                 let extended = |operand: Operand| {
                     matches!(
                         operand,

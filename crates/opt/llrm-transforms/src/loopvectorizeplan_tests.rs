@@ -18,7 +18,7 @@ fn facts(
     let align = u64::from(lane_bits / 8);
     let mut recipes = vec![Recipe::Load { lane, align }];
     if add {
-        recipes.push(Recipe::Binary { op: ArithOp::Add, lane, ext: [None, None] });
+        recipes.push(Recipe::Binary { op: ArithOp::Add, lane, ext: [None, None], second: Default::default() });
     }
     recipes.push(Recipe::Store { lane, align });
     LoopFacts {
@@ -146,11 +146,11 @@ fn a_loop_of_scattered_floats_is_priced_as_the_pin_prices_it() {
     let recipes = vec![
         Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
         Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
-        Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float, ext: [None, None] },
+        Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float, ext: [None, None], second: Default::default() },
         Recipe::Compare { op: CmpSel::FCmp, lane: Ty::Float, predicate: Predicate::Float(uno) },
         Recipe::Cast { kind: CastKind::BitCast, dst: Ty::Int(32), src: Ty::Float, folded: false, users: Vec::new() },
         Recipe::Select { lane: Ty::Int(32), predicate: Some(Predicate::Float(uno)) },
-        Recipe::Binary { op: ArithOp::Add, lane: Ty::Int(32), ext: [None, None] },
+        Recipe::Binary { op: ArithOp::Add, lane: Ty::Int(32), ext: [None, None], second: Default::default() },
     ];
     let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();
     assert_eq!((costs(1), costs(2), costs(4)), (11, 26, 48));
@@ -166,7 +166,7 @@ fn a_loop_of_consecutive_floats_is_priced_as_the_pin_prices_it() {
     let tti = AArch64::of_cpu("apple-m1").unwrap();
     let recipes = vec![
         Recipe::Load { lane: Ty::Float, align: 4 },
-        Recipe::Binary { op: ArithOp::FMul, lane: Ty::Float, ext: [None, None] },
+        Recipe::Binary { op: ArithOp::FMul, lane: Ty::Float, ext: [None, None], second: Default::default() },
         Recipe::Store { lane: Ty::Float, align: 4 },
     ];
     let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();

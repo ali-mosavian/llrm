@@ -575,6 +575,9 @@ pub struct SelectionDAG {
     /// negative frame indices the builder makes for stack arguments):
     /// `MachineFrameInfo::getObjectOffset`.
     pub fixed_offsets: std::collections::BTreeMap<i32, i64>,
+    /// The size in bytes and the immutability (`byval` objects are not) of the
+    /// fixed objects a target made through `FixedObject`, by frame index.
+    pub fixed_objects: std::collections::BTreeMap<i32, (u32, bool)>,
     /// The loads and stores the program marks volatile: the LIR instructions
     /// they become keep the mark (`MachineMemOperand::isVolatile`).
     pub volatile_accesses: HashSet<u32>,
@@ -655,6 +658,7 @@ impl SelectionDAG {
             invariant_loads: HashSet::default(),
             got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
+            fixed_objects: Default::default(),
             volatile_accesses: HashSet::default(),
             direct_copies: HashSet::default(),
         };
@@ -1304,6 +1308,19 @@ impl SelectionDAG {
             (ISD::Constant | ISD::TargetConstant, NodeData::Const { bits, .. }) => Some(bits),
             _ => None,
         }
+    }
+
+    /// `isConstOrConstSplat`: the value of a constant, or the one value of
+    /// every lane of a build vector of equal constants.
+    pub fn const_or_splat(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        if self.opcode(value) != ISD::BuildVector {
+            return self.constant(value);
+        }
+        let first = self.constant(self.operand(value, 0))?;
+        (1..self.value_type(value).lanes()).all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first)).then_some(first)
     }
 
     pub fn is_opaque(

@@ -88,3 +88,14 @@ fn a_modules_code_and_data_are_made_by_one_mid_end_run() {
     llrm_z80::data::text(LOOP_FUSION, &request).expect("data");
     assert_eq!(take_mid_end_runs(), 1);
 }
+
+/// huffman_decode -O3 (`-fno-inline-functions`): the no-growth variant left the nests to the pin's -O3 threshold and
+/// kept the unrolled `build`/`decode` loops, 1085 B in the module price where the same variant at -O2 is 698 B (the
+/// cell was 1035 B against SDCC's 719). The variant prices every nest, at any level.
+#[test]
+fn the_no_growth_variant_prices_nests_at_o3() {
+    let ir = include_str!("data/huffman_decode_o3.ll");
+    let chosen = effective(ir, &Request::new(Level::O3)).expect("chooses");
+    let bytes = module_prices(ir, &chosen).unwrap().0;
+    assert!(bytes <= 750, "{bytes} B kept at -O3 (-O2: 698)");
+}

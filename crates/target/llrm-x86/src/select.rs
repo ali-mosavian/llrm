@@ -2466,6 +2466,27 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
+        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first source.
+        (Loc::Reg(into), Loc::Imm(order)) if name == "pshufd" && sources.len() == 2 => {
+            let code = code_of!(upper, "_XMM_XMMM128_IMM8")?;
+            match &sources[0] {
+                Loc::Reg(outof) => _assemble(
+                    &raised(create_reg_reg_i32(code, into.register, outof.register, order.value)),
+                    at,
+                    true,
+                ),
+                Loc::Mem(cell) => {
+                    let (built, relocated) = operand_of(cell, at.bits)?;
+                    _assemble(&raised(create_reg_mem_i32(code, into.register, built, order.value)), at, relocated)
+                }
+                _ => None,
+            }
+        }
+        // `pslld xmm, 3`: a vector shifted by an immediate count.
+        (Loc::Reg(into), Loc::Imm(count)) if xmm(first) => {
+            let code = code_of!(upper, "_XMM_IMM8")?;
+            _assemble(&raised(create_reg_i32(code, into.register, count.value)), at, false)
+        }
         (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && !name.starts_with("cvtsi2") => {
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
