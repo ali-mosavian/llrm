@@ -40,6 +40,7 @@ use llrm_codegen::backend::selectiondag::actions::TargetLowering;
 use llrm_codegen::backend::selectiondag::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::known_bits::{known_bits, max_significant_bits};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 
@@ -67,13 +68,24 @@ pub mod x86isd {
     pub const CMP: ISD = ISD::Target(508);
     /// `X86ISD::MUL_IMM`: a multiply by 3, 5 or 9 that is one `lea`.
     pub const MUL_IMM: ISD = ISD::Target(694);
-    /// `X86ISD::VSHLI`, `VSRAI`, `VSRLI`: a vector shifted by an `i8` target constant (`PSLL*ri`, `PSRA*ri`,
-    /// `PSRL*ri`).
-    /// `X86ISD::PSHUFD`: `v4i32` lanes by an `i8` target constant (two bits a lane).
+    /// `X86ISD::VSHLI`, `VSRAI`, `VSRLI`: a vector shifted by an `i8` target
+    /// constant (`PSLL*ri`, `PSRA*ri`, `PSRL*ri`).
+    /// `X86ISD::PSHUFD`: `v4i32` lanes by an `i8` target constant (two bits a
+    /// lane).
     pub const PSHUFD: ISD = ISD::Target(714);
     /// `X86ISD::UNPCKL`: the low lanes of two vectors interleaved (`punpckl*`).
     pub const UNPCKL: ISD = ISD::Target(779);
-    /// `X86ISD::PMULUDQ`: the unsigned products of the even `i32` lanes, as `v2i64`.
+    /// `X86ISD::UNPCKH`: the high lanes of two vectors interleaved
+    /// (`punpckh*`).
+    pub const UNPCKH: ISD = ISD::Target(778);
+    /// `X86ISD::PACKSS`: the lanes of two vectors narrowed by half with signed
+    /// saturation (`packss*`).
+    pub const PACKSS: ISD = ISD::Target(698);
+    /// `X86ISD::PACKUS`: the lanes of two vectors narrowed by half with
+    /// unsigned saturation (`packus*`).
+    pub const PACKUS: ISD = ISD::Target(699);
+    /// `X86ISD::PMULUDQ`: the unsigned products of the even `i32` lanes, as
+    /// `v2i64`.
     pub const PMULUDQ: ISD = ISD::Target(710);
     pub const VSHLI: ISD = ISD::Target(933);
     pub const VSRAI: ISD = ISD::Target(937);
@@ -157,10 +169,12 @@ pub struct X86Lowering<'a> {
     /// than the pin's chain (DEVIATE MUL-OS): `min_size` then holds for the
     /// other rules, not for `combineMul`.
     pub imul_if_smaller: bool,
-    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): the block runs more than once per run of the program (its
-    /// frequency over the function's entry times how often its direct callers run it) at
-    /// `-Os`, so `combineMul` decomposes as the pin does at `-Os` (`hasMinSize` is `-Oz`'s): the
-    /// chain is bytes the module pays once and clocks it saves on every run.
+    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): the block runs more
+    /// than once per run of the program (its frequency over the function's
+    /// entry times how often its direct callers run it) at
+    /// `-Os`, so `combineMul` decomposes as the pin does at `-Os` (`hasMinSize`
+    /// is `-Oz`'s): the chain is bytes the module pays once and clocks it
+    /// saves on every run.
     pub hot_chains: bool,
     /// The target adds three-address (`lea`) and the build is for speed: flat
     /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
@@ -574,7 +588,9 @@ impl CombineHooks for X86Lowering<'_> {
                     chain_bytes(dag, body, dag.operand(node, 0)) <= imul
                 })
             }
-            ISD::Mul => combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile),
+            ISD::Mul => {
+                combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile)
+            }
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
             ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free)
@@ -764,7 +780,9 @@ impl Hooks for X86Lowering<'_> {
             ISD::Select => lower_select(dag, node, self.cmov, self.min_size),
             ISD::BrCond => lower_brcond(dag, node, self.min_size),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
-            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => Some(lower_addsub_carry(dag, node)),
+            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => {
+                Some(lower_addsub_carry(dag, node))
+            }
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
@@ -778,6 +796,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::Shl | ISD::Srl | ISD::Sra if dag.value_type(node).is_vector() => lower_vector_shift(dag, node),
             ISD::BuildVector => lower_build_vector_splat(dag, node),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V4I32) => Some(lower_mul_v4i32(dag, node)),
+            ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V16I8) => Some(lower_mul_v16i8(dag, node)),
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -997,7 +1016,8 @@ fn emit_test(
         x86isd::ADD | x86isd::SUB | x86isd::OR | x86isd::XOR | x86isd::AND => {
             return SDValue { node: op.node, res: 1 };
         }
-        // `USUBO`/`SSUBO` will become an `X86ISD::SUB`, and its flags are the compare's.
+        // `USUBO`/`SSUBO` will become an `X86ISD::SUB`, and its flags are the
+        // compare's.
         ISD::USubO | ISD::SSubO => {
             let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
             let sub = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[lhs, rhs]);
@@ -1643,10 +1663,8 @@ fn carry_through_add(
     // A check of the zero flag of an add of 1 (`getX86XALUOOp` tests `COND_E`
     // for it) is the carry flag of that add: `inc; sete; add al, -1; adc` is
     // `add 1; adc`.
-    (code == cond::E
-        && dag.opcode(tested) == x86isd::ADD
-        && dag.constant(dag.operand(tested, 1)) == Some(1))
-    .then_some(tested)
+    (code == cond::E && dag.opcode(tested) == x86isd::ADD && dag.constant(dag.operand(tested, 1)) == Some(1))
+        .then_some(tested)
 }
 
 /// `needCarryOrOverflowFlag`: whether a reader of the flags result `flags`
@@ -1748,11 +1766,11 @@ fn combine_brcond(
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
 }
 
-/// `combineCompareEqual`: `oeq` (`sete` and `setnp`) or `une` (`setne` or `setp`)
-/// of one float compare, used as a value, is `cmpeqss`/`cmpneqss`, a `movd`
-/// and an `and 1`: three instructions, no flags and no branch. A user that
-/// might want the flags (a branch, a select, anything but a register copy or
-/// an extend) keeps the `setcc` pair.
+/// `combineCompareEqual`: `oeq` (`sete` and `setnp`) or `une` (`setne` or
+/// `setp`) of one float compare, used as a value, is `cmpeqss`/`cmpneqss`, a
+/// `movd` and an `and 1`: three instructions, no flags and no branch. A user
+/// that might want the flags (a branch, a select, anything but a register copy
+/// or an extend) keeps the `setcc` pair.
 ///
 /// DEVIATE CE1: the pin's AVX-512 form (`FSETCCM`, mask register) and its
 /// 32-bit `f64` form (`SCALAR_TO_VECTOR`, a `v4f32` bitcast) are not
@@ -1784,12 +1802,14 @@ fn combine_compare_equal(
     if vt != EVT::Simple(MVT::F32) && !(vt == EVT::Simple(MVT::F64) && is_64bit) {
         return None;
     }
-    let wants_flags = dag.users(node).any(|user| {
-        !matches!(
-            dag.opcode(SDValue { node: user, res: 0 }),
-            ISD::CopyToReg | ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
-        )
-    });
+    let wants_flags = dag
+        .users(node)
+        .any(
+            |user| !matches!(
+                dag.opcode(SDValue { node: user, res: 0 }),
+                ISD::CopyToReg | ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
+            ),
+        );
     if wants_flags {
         return None;
     }
@@ -1873,10 +1893,11 @@ fn combine_add_of_carry(
     None
 }
 
-/// `pushAddIntoCmovOfConsts` (X86ISelLowering.cpp#L60561): `add (cmov C1, C2), x` is
-/// `cmov (add x, C1), (add x, C2)`: two `lea`s for two constant moves and an `add`. The
-/// constants fit 32 bits or one is zero; a load `x` stays unfolded, and `x = add (X, Y)`
-/// used only as the address of memory operations keeps `Y` out of the cmov.
+/// `pushAddIntoCmovOfConsts` (X86ISelLowering.cpp#L60561): `add (cmov C1, C2),
+/// x` is `cmov (add x, C1), (add x, C2)`: two `lea`s for two constant moves and
+/// an `add`. The constants fit 32 bits or one is zero; a load `x` stays
+/// unfolded, and `x = add (X, Y)` used only as the address of memory operations
+/// keeps `Y` out of the cmov.
 fn push_add_into_cmov_of_consts(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1907,15 +1928,19 @@ fn push_add_into_cmov_of_consts(
     let (false_op, true_op) = (dag.operand(cmov, 0), dag.operand(cmov, 1));
     let (code, flags) = (dag.operand(cmov, 2), dag.operand(cmov, 3));
     // Only the address of the memory operations that read it.
-    let address_only = dag.users(SDValue { node: node.node, res: 0 }).all(|user| {
-        let user = SDValue { node: user, res: 0 };
-        let at = match dag.opcode(user) {
-            ISD::Load => 1,
-            ISD::Store => 2,
-            _ => return false,
-        };
-        dag.operand(user, at) == SDValue { node: node.node, res: 0 }
-    });
+    let address_only = dag
+        .users(SDValue { node: node.node, res: 0 })
+        .all(
+            |user| {
+                let user = SDValue { node: user, res: 0 };
+                let at = match dag.opcode(user) {
+                    ISD::Load => 1,
+                    ISD::Store => 2,
+                    _ => return false,
+                };
+                dag.operand(user, at) == SDValue { node: node.node, res: 0 }
+            },
+        );
     if dag.opcode(other) == ISD::Add
         && dag.has_one_use(other.node)
         && dag.constant(dag.operand(other, 0)).is_none()
@@ -1944,8 +1969,9 @@ fn combine_add(
     if vt != EVT::I32 && vt != EVT::I64 {
         return combine_add_of_carry(dag, node).or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node));
     }
-    // The pin's `visitADD` has already made an or-disjoint of the adds that share no bits: without that,
-    // the push is not the pin's and word_compare_branches grows +14 B.
+    // The pin's `visitADD` has already made an or-disjoint of the adds that
+    // share no bits: without that, the push is not the pin's and
+    // word_compare_branches grows +14 B.
     if dag.config().add_to_or_disjoint
         && let Some(pushed) = push_add_into_cmov_of_consts(dag, node)
     {
@@ -3075,10 +3101,10 @@ fn combine_mul(
 /// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
 /// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
 /// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
-/// `arithmetic`'s, the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
-/// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
-/// frequency is the IR `BlockFrequencies` (the machine one does not exist at
-/// DAG time). Exit: none while the clocks decide. Owner sdag-d.
+/// `arithmetic`'s, the same as DEVIATE M1 in `arithmetic.rs`. Only where the
+/// target trades bytes for clocks at speed (m16: `speed_milliclocks_per_byte`);
+/// the block's frequency is the IR `BlockFrequencies` (the machine one does not
+/// exist at DAG time). Exit: none while the clocks decide. Owner sdag-d.
 fn priced_chain(
     dag: &mut SelectionDAG,
     x: SDValue,
@@ -3368,10 +3394,13 @@ fn lower_dynamic_stackalloc(
     Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
 }
 
-/// `LowerBUILD_VECTOR`, a splat of one scalar (`v4i32`, `v2i64`): `movd`/`movq` into the low lane, then
-/// `pshufd` (`punpcklqdq` for quadwords) copies it ([L12031][pin], `X86ISD::VBROADCAST` with AVX). Any other build is left to the expansion.
+/// `LowerBUILD_VECTOR`, a splat of one scalar (`v4i32`, `v2i64`): `movd`/`movq`
+/// into the low lane, then `pshufd` (`punpcklqdq` for quadwords) copies it
+/// ([L12031][pin], `X86ISD::VBROADCAST` with AVX). Any other build is left to
+/// the expansion.
 ///
-/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L12031
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L12031
 fn lower_build_vector_splat(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -3397,10 +3426,12 @@ fn lower_build_vector_splat(
     Some(dag.get_node(x86isd::PSHUFD, vt, &[low, by]))
 }
 
-/// `LowerMUL` for `v4i32` without `pmulld` ([L30010][pin]): `pmuludq` of the even lanes and of the odd lanes (moved
-/// down by `pshufd`), then the two products' low halves interleaved by `pshufd` and `punpckldq`.
+/// `LowerMUL` for `v4i32` without `pmulld` ([L30010][pin]): `pmuludq` of the
+/// even lanes and of the odd lanes (moved down by `pshufd`), then the two
+/// products' low halves interleaved by `pshufd` and `punpckldq`.
 ///
-/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30010
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30010
 fn lower_mul_v4i32(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -3419,9 +3450,76 @@ fn lower_mul_v4i32(
         dag.get_node(ISD::BitCast, four, &[wide])
     };
     let (evens, odds) = (product(dag, a, b), product(dag, a_odd, b_odd));
-    // The low half of each 64-bit product: {0, 2, 2, 3}, then the evens' and the odds' first two lanes interleaved.
+    // The low half of each 64-bit product: {0, 2, 2, 3}, then the evens' and
+    // the odds' first two lanes interleaved.
     let (evens, odds) = (shuffle(dag, evens, 0xE8), shuffle(dag, odds, 0xE8));
     dag.get_node(x86isd::UNPCKL, four, &[evens, odds])
+}
+
+/// `LowerMUL` for `v16i8` without SSSE3 ([L30470][pin]): each half is unpacked
+/// to `v8i16` (the high bytes are whatever the unpack leaves, the low byte of a
+/// product does not depend on them), multiplied by `pmullw`, masked to its low
+/// bytes and packed. A constant multiplier is unpacked at compile time.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30470
+fn lower_mul_v16i8(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (bytes, words) = (EVT::Simple(MVT::V16I8), EVT::Simple(MVT::V8I16));
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    // `getUnpackl/h(A, undef)`: the operand serves as its own undef half, as
+    // the pin's allocator makes it.
+    let halves = |dag: &mut SelectionDAG, value: SDValue| -> [SDValue; 2] {
+        if dag.opcode(value) == ISD::BuildVector {
+            let lanes = dag.node(value).ops.clone();
+            let widen = |dag: &mut SelectionDAG, lanes: &[SDValue]| {
+                let words_of: Vec<SDValue> = lanes
+                    .iter()
+                    .map(|lane| match dag.constant(*lane) {
+                        Some(byte) => dag.get_constant_with(byte & 0xFF, EVT::I16, false, false),
+                        None => dag.get_undef(EVT::I16),
+                    })
+                    .collect();
+                dag.get_build_vector(words, &words_of)
+            };
+            if lanes.iter().all(|lane| dag.constant(*lane).is_some() || dag.is_undef(*lane)) {
+                return [widen(dag, &lanes[..8]), widen(dag, &lanes[8..])];
+            }
+        }
+        let low = dag.get_node(x86isd::UNPCKL, bytes, &[value, value]);
+        let high = dag.get_node(x86isd::UNPCKH, bytes, &[value, value]);
+        [dag.get_node(ISD::BitCast, words, &[low]), dag.get_node(ISD::BitCast, words, &[high])]
+    };
+    let ([a_low, a_high], [b_low, b_high]) = (halves(dag, a), halves(dag, b));
+    let low = dag.get_node(ISD::Mul, words, &[a_low, b_low]);
+    let high = dag.get_node(ISD::Mul, words, &[a_high, b_high]);
+    get_pack_bytes(dag, low, high)
+}
+
+/// `getPack` of two `v8i16` into a `v16i8` (SSE2: `UsePackUS` for bytes):
+/// packed as is when both halves already fit a byte, else masked to their low
+/// bytes first.
+fn get_pack_bytes(
+    dag: &mut SelectionDAG,
+    low: SDValue,
+    high: SDValue,
+) -> SDValue {
+    let (bytes, words) = (EVT::Simple(MVT::V16I8), EVT::Simple(MVT::V8I16));
+    let active = |dag: &SelectionDAG, value: SDValue| {
+        let known = known_bits(dag, value);
+        known.width - (known.zero << (128 - known.width)).leading_ones().min(known.width)
+    };
+    if active(dag, low) <= 8 && active(dag, high) <= 8 {
+        return dag.get_node(x86isd::PACKUS, bytes, &[low, high]);
+    }
+    if max_significant_bits(dag, low) <= 8 && max_significant_bits(dag, high) <= 8 {
+        return dag.get_node(x86isd::PACKSS, bytes, &[low, high]);
+    }
+    let mask = dag.get_constant_with(0xFF, words, false, false);
+    let (low, high) = (dag.get_node(ISD::And, words, &[low, mask]), dag.get_node(ISD::And, words, &[high, mask]));
+    dag.get_node(x86isd::PACKUS, bytes, &[low, high])
 }
 
 /// `LowerShift` for a vector shifted by a constant splat
@@ -3449,7 +3547,8 @@ fn lower_vector_shift(
         ISD::Srl => x86isd::VSRLI,
         _ => x86isd::VSRAI,
     };
-    // The immediate is one byte: the instruction clamps what is not below the lane width.
+    // The immediate is one byte: the instruction clamps what is not below the
+    // lane width.
     let by = dag.get_constant_with(first.min(bits), EVT::I8, true, false);
     Some(dag.get_node(opcode, vt, &[dag.operand(node, 0), by]))
 }
@@ -3492,10 +3591,11 @@ fn lower_ssubsat(
     dag.get_select(vt, overflow, saturated, difference)
 }
 
-/// `LowerCTLZ` ([L29730][pin]): `bsr` and `xor bits-1`. A zero source is `bits` through the
-/// pass-through operand of `bsr` (`hasBitScanPassThrough`, `is64Bit`: `bsr` leaves its
-/// destination alone for a zero source, so `mov eax, 2*bits-1; bsr eax, src`), or through a
-/// `cmov` where there is no pass-through.
+/// `LowerCTLZ` ([L29730][pin]): `bsr` and `xor bits-1`. A zero source is `bits`
+/// through the pass-through operand of `bsr` (`hasBitScanPassThrough`,
+/// `is64Bit`: `bsr` leaves its destination alone for a zero source, so `mov
+/// eax, 2*bits-1; bsr eax, src`), or through a `cmov` where there is no
+/// pass-through.
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29730
@@ -3533,8 +3633,9 @@ fn lower_ctlz(
     if vt == EVT::I8 { dag.get_node(ISD::Truncate, EVT::I8, &[result]) } else { result }
 }
 
-/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, with `bits` for a zero source passed through
-/// it (`hasBitScanPassThrough`) or selected by a `cmov`, unless the source cannot be zero.
+/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, with `bits` for a zero
+/// source passed through it (`hasBitScanPassThrough`) or selected by a `cmov`,
+/// unless the source cannot be zero.
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29776
@@ -3550,7 +3651,8 @@ fn lower_cttz(
     let passes = !non_zero && bit_scan_pass_through;
     let pass_through = if passes { dag.get_constant(u128::from(vt.size_in_bits()), vt) } else { dag.get_undef(vt) };
     let scan = dag.get_node_multi(x86isd::BSF, &[vt, EVT::I32], &[pass_through, src]);
-    // Skip the CMOV if the source is never zero or a pass-through value is used.
+    // Skip the CMOV if the source is never zero or a pass-through value is
+    // used.
     if non_zero || passes {
         return SDValue { node: scan.node, res: 0 };
     }

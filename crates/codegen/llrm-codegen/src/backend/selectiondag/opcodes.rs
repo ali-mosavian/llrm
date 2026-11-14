@@ -236,11 +236,60 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 49] = [
-        "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
-        "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
-        "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
-        "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
+    const ARITHMETIC: [&str; 53] = [
+        "ADDSS",
+        "ADDSD",
+        "SUBSS",
+        "SUBSD",
+        "MULSS",
+        "MULSD",
+        "DIVSS",
+        "DIVSD",
+        "MINSS",
+        "MINSD",
+        "MAXSS",
+        "MAXSD",
+        "SQRTSS",
+        "SQRTSD",
+        "MOVSS",
+        "MOVSD",
+        "UCOMISS",
+        "UCOMISD",
+        "XORPS",
+        "ANDPS",
+        "ANDNPS",
+        "ORPS",
+        "CMPSS",
+        "CMPSD",
+        "PADDB",
+        "PADDW",
+        "PADDD",
+        "PADDQ",
+        "PSUBB",
+        "PSUBW",
+        "PSUBD",
+        "PSUBQ",
+        "PAND",
+        "PANDN",
+        "POR",
+        "PXOR",
+        "PMULLW",
+        "PSLLW",
+        "PSLLD",
+        "PSLLQ",
+        "PSRLW",
+        "PSRLD",
+        "PSRLQ",
+        "PSRAW",
+        "PSRAD",
+        "PSHUFD",
+        "PUNPCKLQDQ",
+        "PMULUDQ",
+        "PUNPCKLDQ",
+        "PUNPCKLBW",
+        "PUNPCKHBW",
+        "PACKUSWB",
+        "PACKSSWB",
     ];
     const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [
@@ -267,7 +316,11 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     let mut found = None;
     for prefix in ARITHMETIC.iter().chain(&MOVES) {
         if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
-            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") { format!("{}_x", prefix.to_ascii_lowercase()) } else { prefix.to_ascii_lowercase() };
+            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") {
+                format!("{}_x", prefix.to_ascii_lowercase())
+            } else {
+                prefix.to_ascii_lowercase()
+            };
             // The longest prefix wins (`ANDNPS` is not `ANDPS`).
             if found
                 .as_ref()
@@ -289,7 +342,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     }
     found.map(|(mnemonic, width, result, letters)| {
         let letters = if mnemonic.starts_with("sqrt") && letters.len() == 1 { vec!['r', 'r'] } else { letters };
-        // `PSHUFDri` names its source and the immediate; the destination is not tied to the source.
+        // `PSHUFDri` names its source and the immediate; the destination is not
+        // tied to the source.
         let letters = if mnemonic == "pshufd" { std::iter::once('r').chain(letters).collect() } else { letters };
         (mnemonic, width, result, letters)
     })

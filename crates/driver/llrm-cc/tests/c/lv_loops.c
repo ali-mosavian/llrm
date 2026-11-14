@@ -38,3 +38,9 @@ void shift_ints(void) { for (int i = 0; i < 1024; ++i) si[i] = (si[i] << 3) + (s
 
 void fill_value(int *a, int v, int n) { for (int i = 0; i < n; ++i) a[i] = v; }
 void fill_long_value(long *a, long v, int n) { for (int i = 0; i < n; ++i) a[i] = v; }
+
+unsigned char pa[4096], pb[4096];
+void multiply_bytes(void) { for (unsigned long i = 0; i < 4096; ++i) pa[i] = pb[i] = (unsigned char)(i * 13 + 5); }
+void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsigned char *z) {
+  for (int i = 0; i < 4096; ++i) x[i] = y[i] * z[i];
+}
