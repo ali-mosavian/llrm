@@ -1164,6 +1164,10 @@ impl Tti for X86 {
         self.tuning.ipa_cp_clones_at_speed
     }
 
+    fn ipa_cp_max_clones(&self) -> usize {
+        self.tuning.ipa_cp_max_clones
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }

@@ -99,6 +99,34 @@ thread_local! {
     /// Whether a 16-bit division calls its compact routine at speed too (see
     /// [`with_compact_division16`]).
     static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether `commute_accumulator` makes its wider choice (see
+    /// [`with_wide_commute`]).
+    static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// Whether the last allocation made a choice only the wider rule makes.
+    static WIDE_COMMUTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the wider `commute_accumulator` rule on or off. It is a guess
+/// that spares a copy of a source; `select::function_text` allocates a
+/// function that took it both ways and keeps the smaller.
+pub fn with_wide_commute<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = WIDE_COMMUTE.with(|a| a.replace(allowed));
+    let result = f();
+    WIDE_COMMUTE.with(|a| a.set(before));
+    result
+}
+
+/// Whether the allocation just made took a choice only the wider rule makes.
+pub fn wide_commuted() -> bool {
+    WIDE_COMMUTED.with(|a| a.get())
+}
+
+/// Forget what the allocations so far chose (see [`wide_commuted`]).
+pub fn forget_wide_commuted() {
+    WIDE_COMMUTED.with(|a| a.set(false));
 }
 
 /// `f` with the 16-bit divisions calling the compact routines at speed too:
@@ -247,6 +275,15 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// A shift by one steps a zero-page cell as it is (`asl rc2; rol rc3`).
+    fn writes_memory_in_place(name: &str) -> bool {
+        matches!(name, "SHL1" | "SRL1")
+    }
+
+    fn commutes_beyond_one_use() -> bool {
+        WIDE_COMMUTE.with(|a| a.get())
+    }
+
     /// The second source of a byte op on the accumulator is a zero-page cell.
     fn operand_class(
         name: &str,
@@ -3825,7 +3862,8 @@ fn emit_with<const STACK: bool>(
         remove_dead(&mut function);
     }
     reschedule_kills::<Mos<STACK>>(&mut function);
-    commute_accumulator::<Mos<STACK>>(&mut function);
+    let beyond = commute_accumulator::<Mos<STACK>>(&mut function);
+    WIDE_COMMUTED.with(|a| a.set(a.get() || beyond));
     two_address(&mut function);
     let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);

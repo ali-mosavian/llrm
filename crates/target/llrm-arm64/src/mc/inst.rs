@@ -595,6 +595,16 @@ pub enum VectorShift {
     Shl,
     Ushr,
     Sshr,
+    /// `usra`, `ssra`: the shifted lanes are added to `rd`, which is read.
+    Usra,
+    Ssra,
+}
+
+impl VectorShift {
+    /// The destination is also a source.
+    pub fn accumulates(self) -> bool {
+        matches!(self, VectorShift::Usra | VectorShift::Ssra)
+    }
 }
 
 /// The lane of the narrow operand of a long or wide vector operation: the
