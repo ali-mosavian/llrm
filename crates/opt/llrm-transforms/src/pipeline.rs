@@ -652,6 +652,10 @@ impl FunctionPass for Slot {
         self.inner.wants_sizes()
     }
 
+    fn is_required(&self) -> bool {
+        self.inner.is_required()
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
@@ -2062,6 +2066,12 @@ fn rerun(
     fixed: &mut Fixed,
     globals_aa_held: bool,
 ) -> Result<(), String> {
+    // It does not go through the manager's loop, which skips an `optnone` body.
+    if let GlobalKind::Function(function) = &module.global(id).kind
+        && llrm_mir::passes::skipped_for_optnone(&*fixed, function)
+    {
+        return Ok(());
+    }
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
@@ -2444,6 +2454,9 @@ impl Run {
         analyses: &mut Analyses,
     ) -> bool {
         if !self.promotes && matches!(base(pass.name()), "sroa" | "promote") {
+            return false;
+        }
+        if llrm_mir::passes::skipped_for_optnone(&*pass, unit.function) {
             return false;
         }
         let name = pass.name();

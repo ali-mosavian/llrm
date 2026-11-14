@@ -91,5 +91,5 @@ fn a_strict_price_does_not_trade_bytes_for_clocks() {
         found.flushes(4)
     };
     assert!(pushed(Price::Rate), "the rate price takes the faster pushes");
-    assert!(!pushed(Price::Strict), "-O1 took pushes that are larger");
+    assert!(!pushed(Price::Size), "-Os refuses pushes that are larger");
 }

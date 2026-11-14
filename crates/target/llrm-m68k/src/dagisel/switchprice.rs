@@ -110,7 +110,7 @@ pub fn limits(
     // rate the clocks beyond the table's, over a switch twice the entries
     let (compare_bytes, _) = compare(cpu);
     let case = match price {
-        Price::Size | Price::Strict => compare_bytes as i64 * 1000,
+        Price::Size => compare_bytes as i64 * 1000,
         Price::Rate => {
             let wide = 2 * min_entries;
             let (table, chain) = dense(cpu, wide);
@@ -130,7 +130,7 @@ mod tests {
     /// A table needs enough cases to pay for its dispatch.
     #[test]
     fn the_entries_are_what_the_dispatch_costs() {
-        for price in [Price::Size, Price::Strict, Price::Rate] {
+        for price in [Price::Size, Price::Rate] {
             let old = limits(Cpu::M68000, price).min_entries;
             let new = limits(Cpu::M68020, price).min_entries;
             assert!((4..=12).contains(&old) && (4..=12).contains(&new), "{price:?}: {old} {new}");
