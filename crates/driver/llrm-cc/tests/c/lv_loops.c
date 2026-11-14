@@ -13,3 +13,25 @@ void fill_rows(short t[64][64]) {
   for (int y = 0; y < 64; ++y)
     for (int x = 0; x < 64; ++x) t[y][x] = 4660;
 }
+
+/* Vectorized, they left `bitcast (<16 x i8> ... to i128)` and `bitcast (i128 N to <4 x i32>)` constants that isel refused:
+   CannotSelect("Truncate"), "a vector constant that is not a list of integers". */
+int stack_copy(int n) {
+  char a[70], b[70];
+  for (int i = 0; i < 70; i++) a[i] = (char)i;
+  for (int i = 0; i < (n & 63); i++) b[i] = a[i];
+  return b[3];
+}
+int square_sum(int n) {
+  int a[n], s = 0;
+  for (int i = 0; i < n; i++) a[i] = i * i;
+  for (int i = 0; i < n; i++) s += a[i];
+  return s;
+}
+
+short sa[1024], sb[1024];
+void multiply_shorts(void) { for (int i = 0; i < 1024; ++i) sa[i] *= sb[i]; }
+
+int si[1024];
+unsigned ui[1024];
+void shift_ints(void) { for (int i = 0; i < 1024; ++i) si[i] = (si[i] << 3) + (si[i] >> 2) + (int)(ui[i] >> 5); }

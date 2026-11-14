@@ -945,10 +945,42 @@ impl TargetLowering {
         // A `BUILD_VECTOR` is selected by no pattern: the legalizer expands a
         // constant one to a pool load (`ExpandBUILD_VECTOR`) and any other
         // through the stack (`ExpandVectorBuildThroughStack`). DEVIATE X86V3
-        // (owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR): the pin's
-        // `LowerBUILD_VECTOR` makes a splat `movd` + `pshufd` and the
-        // rest `punpck`/`pinsr`; the stack form is correct and slower.
-        t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
+        // (owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR): the pin's `LowerBUILD_VECTOR` makes a splat
+        // `movd` + `pshufd` and the rest `punpck`/`pinsr`; the stack form is
+        // correct and slower.
+        t.set_ops(
+            &[ISD::BuildVector],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Expand,
+        );
+        // `LowerShift`: a shift by a constant splat is `VSHLI`/`VSRLI`/`VSRAI`;
+        // `psraq` is AVX-512, so a 64-bit arithmetic shift is left to the
+        // expansion.
+        t.set_ops(
+            &[ISD::Shl, ISD::Srl],
+            &[MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Custom,
+        );
+        t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `ExpandReductions` makes a reduction shuffles and `extractelement`; no
+        // shuffle is selected here, so the DAG folds the spilled lanes
+        // (`expandVecReduce`). DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit
+        // 2026-11-24, the C3 PR: shuffle selection).
+        t.set_ops(
+            &[
+                ISD::VecReduceAdd,
+                ISD::VecReduceMul,
+                ISD::VecReduceAnd,
+                ISD::VecReduceOr,
+                ISD::VecReduceXor,
+                ISD::VecReduceSMax,
+                ISD::VecReduceSMin,
+                ISD::VecReduceUMax,
+                ISD::VecReduceUMin,
+            ],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Expand,
+        );
         t
     }
 

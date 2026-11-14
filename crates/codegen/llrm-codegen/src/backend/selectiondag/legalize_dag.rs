@@ -1042,6 +1042,53 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_load(vt, chain, slot, info))
     }
 
+    /// `TargetLowering::expandVecReduce`: the vector is spilled and its lanes
+    /// are folded with the reduction's scalar operation, halving the lane
+    /// count each step (lane `i` with lane `i + n / 2`), so a sum of four is
+    /// `(l0 + l2) + (l1 + l3)` as the pin's shuffle sequence makes it. The pin
+    /// moves the halves with shuffles (`ExpandReductions` then `pshufd`); a
+    /// stack lane is a load each. Little-endian, a power-of-two lane count.
+    fn expand_vec_reduce(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let base = self.dag.opcode(node).vec_reduce_base_opcode()?;
+        let vector = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(vector);
+        let element = vt.element();
+        let lane_bytes = element.size_in_bits() / 8;
+        let count = vt.lanes();
+        if lane_bytes == 0 || !count.is_power_of_two() || self.dag.config().big_endian {
+            return None;
+        }
+        let cell = self.dag.create_stack_temporary(vt.size_in_bits() / 8, 16);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let whole = MemInfo {
+            mem_vt: vt,
+            align: 16,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let entry = self.dag.entry_node();
+        let spill = self.dag.get_store(entry, vector, slot, whole);
+        let lane_info = MemInfo { mem_vt: element, align: lane_bytes.min(16), ..whole };
+        let mut lanes: Vec<SDValue> = (0..count)
+            .map(|at| {
+                let from = self.dag.get_object_ptr_offset(slot, i64::from(at * lane_bytes));
+                self.dag.get_load(element, spill, from, lane_info)
+            })
+            .collect();
+        while lanes.len() > 1 {
+            let half = lanes.len() / 2;
+            lanes = (0..half).map(|at| self.dag.get_node(base, element, &[lanes[at], lanes[at + half]])).collect();
+        }
+        Some(lanes[0])
+    }
+
     /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
     /// constants or undefined is loaded from the constant pool, its lanes laid
     /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
@@ -1130,6 +1177,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.unroll_vector_op(node)])
             }
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
+            reduction if reduction.vec_reduce_base_opcode().is_some() => {
+                self.expand_vec_reduce(node).map(|total| vec![total])
+            }
             ISD::SignExtendInReg => {
                 // An in-register sign extension of a boolean is a negation of
                 // the masked bit; any other width is a shift pair.
