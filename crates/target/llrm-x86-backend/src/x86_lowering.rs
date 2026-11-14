@@ -146,10 +146,12 @@ pub struct X86Lowering<'a> {
     /// than the pin's chain (DEVIATE MUL-OS): `min_size` then holds for the
     /// other rules, not for `combineMul`.
     pub imul_if_smaller: bool,
-    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): the block runs more than once per run of the program (its
-    /// frequency over the function's entry times how often its direct callers run it) at
-    /// `-Os`, so `combineMul` decomposes as the pin does at `-Os` (`hasMinSize` is `-Oz`'s): the
-    /// chain is bytes the module pays once and clocks it saves on every run.
+    /// DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): the block runs more
+    /// than once per run of the program (its frequency over the function's
+    /// entry times how often its direct callers run it) at
+    /// `-Os`, so `combineMul` decomposes as the pin does at `-Os` (`hasMinSize`
+    /// is `-Oz`'s): the chain is bytes the module pays once and clocks it
+    /// saves on every run.
     pub hot_chains: bool,
     /// The target adds three-address (`lea`) and the build is for speed: flat
     /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
@@ -566,7 +568,9 @@ impl CombineHooks for X86Lowering<'_> {
                     chain_bytes(dag, body, dag.operand(node, 0)) <= imul
                 })
             }
-            ISD::Mul => combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile),
+            ISD::Mul => {
+                combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile)
+            }
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
             ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free)
@@ -756,7 +760,9 @@ impl Hooks for X86Lowering<'_> {
             ISD::Select => lower_select(dag, node, self.cmov, self.min_size, self.status_word_tests),
             ISD::BrCond => lower_brcond(dag, node, self.min_size, self.status_word_tests),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
-            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => Some(lower_addsub_carry(dag, node)),
+            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => {
+                Some(lower_addsub_carry(dag, node))
+            }
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
@@ -919,10 +925,11 @@ fn float_flags(
     let (mut lhs, mut rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
     let cc = cond_of(dag, dag.operand(setcc, 2));
     if status && matches!(cc, CondCode::SetOEq | CondCode::SetUNe) {
-        // gcc: `and ah, 0x45; cmp ah, 0x40` is `==` and not unordered, one flag instead of two.
-        let word = dag.get_node(crate::x86isd::LLRM_FSTATUS, EVT::I32, &[lhs, rhs]);
+        // gcc: `and ah, 0x45; cmp ah, 0x40` is `==` and not unordered, one flag
+        // instead of two.
+        let word = dag.get_node(super::x86isd::LLRM_FSTATUS, EVT::I32, &[lhs, rhs]);
         let (mask, value) = (dag.get_constant(0x45, EVT::I8), dag.get_constant(0x40, EVT::I8));
-        let flags = dag.get_node(crate::x86isd::LLRM_STATUS_TEST, EVT::I32, &[word, mask, value]);
+        let flags = dag.get_node(super::x86isd::LLRM_STATUS_TEST, EVT::I32, &[word, mask, value]);
         let code = if cc == CondCode::SetOEq { cond::E } else { cond::NE };
         return Some((flags, cond_code(dag, code)));
     }
@@ -930,16 +937,21 @@ fn float_flags(
     Some(fp_flags(dag, lhs, rhs, code, status))
 }
 
-/// Whether the compare `setcc` is read by two or more conditions of its operand pair. One
-/// reader costs a copy and a wide `test` where `sahf` costs a byte; a shared pair needs the word,
-/// since a flag-clobbering instruction between readers kills what `sahf` set (gcc picks the
-/// strategy per compare from `ix86_fp_comparison_cost`).
+/// Whether the compare `setcc` is read by two or more conditions of its operand
+/// pair. One reader costs a copy and a wide `test` where `sahf` costs a byte; a
+/// shared pair needs the word, since a flag-clobbering instruction between
+/// readers kills what `sahf` set (gcc picks the strategy per compare from
+/// `ix86_fp_comparison_cost`).
 fn status_word_pays(
     dag: &SelectionDAG,
     setcc: SDValue,
 ) -> bool {
-    // `==` and `!=` are one mask and one compare of the word (two `setcc` and a join otherwise).
-    if matches!(cond_of(dag, dag.operand(setcc, 2)), CondCode::SetOEq | CondCode::SetUNe) {
+    // `==` and `!=` are one mask and one compare of the word (two `setcc` and a
+    // join otherwise).
+    if matches!(
+        cond_of(dag, dag.operand(setcc, 2)),
+        CondCode::SetOEq | CondCode::SetUNe
+    ) {
         return true;
     }
     let (lhs, rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
@@ -956,11 +968,14 @@ fn status_word_pays(
     readers >= 2
 }
 
-/// The flags of `lhs` against `rhs` for the `sahf` condition `code` and the code that reads them: `FCMP`
-/// and `code`; with `status`, the compare's status word tested for that condition
-/// (DEVIATE X87-STATUS: gcc's `ix86_expand_fp_compare`, the `IX86_FPCMP_ARITH` strategy). The word
-/// is one value for every reader of the pair; each reader tests it where it needs the
-/// flags, so no `setcc` byte is held across an instruction that kills them.
+/// The flags of `lhs` against `rhs` for the `sahf` condition `code` and the
+/// code that reads them: `FCMP` and `code`; with `status`, the compare's status
+/// word tested for that condition (DEVIATE X87-STATUS, owner x87-b, exit
+/// 2026-11-24, gated by `Profile::tests_status_word`: the pin keeps `sahf`;
+/// gcc's `ix86_expand_fp_compare`, the `IX86_FPCMP_ARITH` strategy). The word
+/// is one value for every reader of the pair; each reader tests it where it
+/// needs the flags, so no `setcc` byte is held across an instruction that kills
+/// them.
 fn fp_flags(
     dag: &mut SelectionDAG,
     lhs: SDValue,
@@ -968,7 +983,8 @@ fn fp_flags(
     code: u128,
     status: bool,
 ) -> (SDValue, SDValue) {
-    // `sahf` copies C0 (bit 0 of `ah`) to CF, C2 (bit 2) to PF and C3 (bit 6) to ZF.
+    // `sahf` copies C0 (bit 0 of `ah`) to CF, C2 (bit 2) to PF and C3 (bit 6)
+    // to ZF.
     let test = match code {
         cond::A => Some((0x41, cond::E)),
         cond::AE => Some((0x01, cond::E)),
@@ -984,9 +1000,9 @@ fn fp_flags(
         let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
         return (flags, cond_code(dag, code));
     };
-    let word = dag.get_node(crate::x86isd::LLRM_FSTATUS, EVT::I32, &[lhs, rhs]);
+    let word = dag.get_node(super::x86isd::LLRM_FSTATUS, EVT::I32, &[lhs, rhs]);
     let (mask, zero) = (dag.get_constant(mask, EVT::I8), dag.get_constant(0, EVT::I8));
-    let flags = dag.get_node(crate::x86isd::LLRM_STATUS_TEST, EVT::I32, &[word, mask, zero]);
+    let flags = dag.get_node(super::x86isd::LLRM_STATUS_TEST, EVT::I32, &[word, mask, zero]);
     (flags, cond_code(dag, code))
 }
 
@@ -1056,7 +1072,8 @@ fn emit_test(
         x86isd::ADD | x86isd::SUB | x86isd::OR | x86isd::XOR | x86isd::AND => {
             return SDValue { node: op.node, res: 1 };
         }
-        // `USUBO`/`SSUBO` will become an `X86ISD::SUB`, and its flags are the compare's.
+        // `USUBO`/`SSUBO` will become an `X86ISD::SUB`, and its flags are the
+        // compare's.
         ISD::USubO | ISD::SSubO => {
             let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
             let sub = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[lhs, rhs]);
@@ -1253,7 +1270,7 @@ fn is_logical_cmp(
     let op = dag.opcode(flags);
     op == x86isd::CMP
         || op == x86isd::FCMP
-        || op == crate::x86isd::LLRM_STATUS_TEST
+        || op == super::x86isd::LLRM_STATUS_TEST
         || (flags.res == 1 && [x86isd::ADD, x86isd::SUB, x86isd::OR, x86isd::XOR, x86isd::AND].contains(&op))
 }
 
@@ -1709,10 +1726,8 @@ fn carry_through_add(
     // A check of the zero flag of an add of 1 (`getX86XALUOOp` tests `COND_E`
     // for it) is the carry flag of that add: `inc; sete; add al, -1; adc` is
     // `add 1; adc`.
-    (code == cond::E
-        && dag.opcode(tested) == x86isd::ADD
-        && dag.constant(dag.operand(tested, 1)) == Some(1))
-    .then_some(tested)
+    (code == cond::E && dag.opcode(tested) == x86isd::ADD && dag.constant(dag.operand(tested, 1)) == Some(1))
+        .then_some(tested)
 }
 
 /// `needCarryOrOverflowFlag`: whether a reader of the flags result `flags`
@@ -1814,11 +1829,11 @@ fn combine_brcond(
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
 }
 
-/// `combineCompareEqual`: `oeq` (`sete` and `setnp`) or `une` (`setne` or `setp`)
-/// of one float compare, used as a value, is `cmpeqss`/`cmpneqss`, a `movd`
-/// and an `and 1`: three instructions, no flags and no branch. A user that
-/// might want the flags (a branch, a select, anything but a register copy or
-/// an extend) keeps the `setcc` pair.
+/// `combineCompareEqual`: `oeq` (`sete` and `setnp`) or `une` (`setne` or
+/// `setp`) of one float compare, used as a value, is `cmpeqss`/`cmpneqss`, a
+/// `movd` and an `and 1`: three instructions, no flags and no branch. A user
+/// that might want the flags (a branch, a select, anything but a register copy
+/// or an extend) keeps the `setcc` pair.
 ///
 /// DEVIATE CE1: the pin's AVX-512 form (`FSETCCM`, mask register) and its
 /// 32-bit `f64` form (`SCALAR_TO_VECTOR`, a `v4f32` bitcast) are not
@@ -1850,12 +1865,14 @@ fn combine_compare_equal(
     if vt != EVT::Simple(MVT::F32) && !(vt == EVT::Simple(MVT::F64) && is_64bit) {
         return None;
     }
-    let wants_flags = dag.users(node).any(|user| {
-        !matches!(
-            dag.opcode(SDValue { node: user, res: 0 }),
-            ISD::CopyToReg | ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
-        )
-    });
+    let wants_flags = dag
+        .users(node)
+        .any(
+            |user| !matches!(
+                dag.opcode(SDValue { node: user, res: 0 }),
+                ISD::CopyToReg | ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
+            ),
+        );
     if wants_flags {
         return None;
     }
@@ -1939,10 +1956,11 @@ fn combine_add_of_carry(
     None
 }
 
-/// `pushAddIntoCmovOfConsts` (X86ISelLowering.cpp#L60561): `add (cmov C1, C2), x` is
-/// `cmov (add x, C1), (add x, C2)`: two `lea`s for two constant moves and an `add`. The
-/// constants fit 32 bits or one is zero; a load `x` stays unfolded, and `x = add (X, Y)`
-/// used only as the address of memory operations keeps `Y` out of the cmov.
+/// `pushAddIntoCmovOfConsts` (X86ISelLowering.cpp#L60561): `add (cmov C1, C2),
+/// x` is `cmov (add x, C1), (add x, C2)`: two `lea`s for two constant moves and
+/// an `add`. The constants fit 32 bits or one is zero; a load `x` stays
+/// unfolded, and `x = add (X, Y)` used only as the address of memory operations
+/// keeps `Y` out of the cmov.
 fn push_add_into_cmov_of_consts(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1973,15 +1991,19 @@ fn push_add_into_cmov_of_consts(
     let (false_op, true_op) = (dag.operand(cmov, 0), dag.operand(cmov, 1));
     let (code, flags) = (dag.operand(cmov, 2), dag.operand(cmov, 3));
     // Only the address of the memory operations that read it.
-    let address_only = dag.users(SDValue { node: node.node, res: 0 }).all(|user| {
-        let user = SDValue { node: user, res: 0 };
-        let at = match dag.opcode(user) {
-            ISD::Load => 1,
-            ISD::Store => 2,
-            _ => return false,
-        };
-        dag.operand(user, at) == SDValue { node: node.node, res: 0 }
-    });
+    let address_only = dag
+        .users(SDValue { node: node.node, res: 0 })
+        .all(
+            |user| {
+                let user = SDValue { node: user, res: 0 };
+                let at = match dag.opcode(user) {
+                    ISD::Load => 1,
+                    ISD::Store => 2,
+                    _ => return false,
+                };
+                dag.operand(user, at) == SDValue { node: node.node, res: 0 }
+            },
+        );
     if dag.opcode(other) == ISD::Add
         && dag.has_one_use(other.node)
         && dag.constant(dag.operand(other, 0)).is_none()
@@ -2010,8 +2032,9 @@ fn combine_add(
     if vt != EVT::I32 && vt != EVT::I64 {
         return combine_add_of_carry(dag, node).or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node));
     }
-    // The pin's `visitADD` has already made an or-disjoint of the adds that share no bits: without that,
-    // the push is not the pin's and word_compare_branches grows +14 B.
+    // The pin's `visitADD` has already made an or-disjoint of the adds that
+    // share no bits: without that, the push is not the pin's and
+    // word_compare_branches grows +14 B.
     if dag.config().add_to_or_disjoint
         && let Some(pushed) = push_add_into_cmov_of_consts(dag, node)
     {
@@ -3141,10 +3164,10 @@ fn combine_mul(
 /// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
 /// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
 /// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
-/// `arithmetic`'s, the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
-/// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
-/// frequency is the IR `BlockFrequencies` (the machine one does not exist at
-/// DAG time). Exit: none while the clocks decide. Owner sdag-d.
+/// `arithmetic`'s, the same as DEVIATE M1 in `arithmetic.rs`. Only where the
+/// target trades bytes for clocks at speed (m16: `speed_milliclocks_per_byte`);
+/// the block's frequency is the IR `BlockFrequencies` (the machine one does not
+/// exist at DAG time). Exit: none while the clocks decide. Owner sdag-d.
 fn priced_chain(
     dag: &mut SelectionDAG,
     x: SDValue,
@@ -3472,10 +3495,11 @@ fn lower_ssubsat(
     dag.get_select(vt, overflow, saturated, difference)
 }
 
-/// `LowerCTLZ` ([L29730][pin]): `bsr` and `xor bits-1`. A zero source is `bits` through the
-/// pass-through operand of `bsr` (`hasBitScanPassThrough`, `is64Bit`: `bsr` leaves its
-/// destination alone for a zero source, so `mov eax, 2*bits-1; bsr eax, src`), or through a
-/// `cmov` where there is no pass-through.
+/// `LowerCTLZ` ([L29730][pin]): `bsr` and `xor bits-1`. A zero source is `bits`
+/// through the pass-through operand of `bsr` (`hasBitScanPassThrough`,
+/// `is64Bit`: `bsr` leaves its destination alone for a zero source, so `mov
+/// eax, 2*bits-1; bsr eax, src`), or through a `cmov` where there is no
+/// pass-through.
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29730
@@ -3513,8 +3537,9 @@ fn lower_ctlz(
     if vt == EVT::I8 { dag.get_node(ISD::Truncate, EVT::I8, &[result]) } else { result }
 }
 
-/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, with `bits` for a zero source passed through
-/// it (`hasBitScanPassThrough`) or selected by a `cmov`, unless the source cannot be zero.
+/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, with `bits` for a zero
+/// source passed through it (`hasBitScanPassThrough`) or selected by a `cmov`,
+/// unless the source cannot be zero.
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29776
@@ -3530,7 +3555,8 @@ fn lower_cttz(
     let passes = !non_zero && bit_scan_pass_through;
     let pass_through = if passes { dag.get_constant(u128::from(vt.size_in_bits()), vt) } else { dag.get_undef(vt) };
     let scan = dag.get_node_multi(x86isd::BSF, &[vt, EVT::I32], &[pass_through, src]);
-    // Skip the CMOV if the source is never zero or a pass-through value is used.
+    // Skip the CMOV if the source is never zero or a pass-through value is
+    // used.
     if non_zero || passes {
         return SDValue { node: scan.node, res: 0 };
     }

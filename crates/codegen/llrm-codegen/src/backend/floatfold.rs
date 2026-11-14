@@ -574,11 +574,7 @@ fn _refolded(
             bytes > 0 || (bytes == 0 && saved > 0)
         } else {
             let rate = cpu.speed_milliclocks_per_byte();
-            if rate == 0 {
-                saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
-            } else {
-                saved + bytes * rate > 0
-            }
+            if rate == 0 { saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0) } else { saved + bytes * rate > 0 }
         };
         if !pays {
             continue;
@@ -904,7 +900,8 @@ fn _compare_with_integer(
     uses: &HashMap<u32, usize>,
     cpu: &crate::backend::cpu::Profile,
 ) -> Option<(usize, u32, crate::model::ir::Semantics)> {
-    // A compare that defines the status word as a value (DEVIATE X87-STATUS) folds as well.
+    // A compare that defines the status word as a value (DEVIATE X87-STATUS)
+    // folds as well.
     let what = insns[at]
         .what
         .as_ref()

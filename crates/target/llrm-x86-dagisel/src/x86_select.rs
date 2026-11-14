@@ -28,7 +28,9 @@ use llrm_dagisel::interp::{Outcome, Selector};
 
 use crate::x86_arith_imm::select_arith_register_form;
 use crate::x86_divrem::select_divrem;
-use crate::x86_fcmp::{select_fcmp, select_fist16, select_fstatus, select_pop_from_x87, select_setcc_carry, select_status_test};
+use crate::x86_fcmp::{
+    select_fcmp, select_fist16, select_fstatus, select_pop_from_x87, select_setcc_carry, select_status_test,
+};
 use crate::x86_fplogic::select_fp_logic;
 use crate::x86_hooks::{Cpu, X86Hooks};
 use crate::x86_llrm::{

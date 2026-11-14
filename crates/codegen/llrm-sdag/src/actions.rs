@@ -71,8 +71,9 @@ pub struct Features {
     /// `useSoftFloat()`: `f32` and `f64` have no register class; their
     /// arithmetic is a call (m16).
     pub soft_float: bool,
-    /// x87 compares read the status word as a value (DEVIATE X87-STATUS): `oeq` and `une` are
-    /// one masked compare of it, so the target lowers them (`Custom`) instead of expanding them.
+    /// x87 compares read the status word as a value (DEVIATE X87-STATUS): `oeq`
+    /// and `une` are one masked compare of it, so the target lowers them
+    /// (`Custom`) instead of expanding them.
     pub fp_status: bool,
 }
 
@@ -159,8 +160,9 @@ pub struct TargetLowering {
     /// A float constant is canonically positive (gcc's `negate_expr_p`): only a
     /// negative one is cheap to negate.
     positive_fp_constants: bool,
-    /// DEVIATE SOFT-UITOFP-NONNEG (owner m68k, exit 2026-11-24): a soft-float `uitofp` of a value known to
-    /// be non-negative calls the signed routine (gcc's `floatunsisf` is a different, larger one), so a program
+    /// DEVIATE SOFT-UITOFP-NONNEG (owner m68k, exit 2026-11-24): a soft-float
+    /// `uitofp` of a value known to be non-negative calls the signed
+    /// routine (gcc's `floatunsisf` is a different, larger one), so a program
     /// that converts with both links one.
     signed_conversion_of_nonneg: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
@@ -943,14 +945,10 @@ impl TargetLowering {
         // A `BUILD_VECTOR` is selected by no pattern: the legalizer expands a
         // constant one to a pool load (`ExpandBUILD_VECTOR`) and any other
         // through the stack (`ExpandVectorBuildThroughStack`). DEVIATE X86V3
-        // (owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR): the pin's `LowerBUILD_VECTOR` makes a splat
-        // `movd` + `pshufd` and the rest `punpck`/`pinsr`; the stack form is
-        // correct and slower.
-        t.set_ops(
-            &[ISD::BuildVector],
-            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
-            Action::Expand,
-        );
+        // (owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR): the pin's
+        // `LowerBUILD_VECTOR` makes a splat `movd` + `pshufd` and the
+        // rest `punpck`/`pinsr`; the stack form is correct and slower.
+        t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
         t
     }
 

@@ -63,7 +63,8 @@ pub fn select_fstatus<D: AddrDag>(
         _ => return false,
     };
     let glue = SDValue::new(dag.machine_node(cmp, &[mvt::Glue], &[n0, n1]), 0);
-    // Typed `i32`: `fnstsw` writes AX, the readers mask bits 8..16 and take the register whole.
+    // Typed `i32`: `fnstsw` writes AX, the readers mask bits 8..16 and take the
+    // register whole.
     let status = SDValue::new(dag.machine_node(x86::FNSTSW16r, &[mvt::i32], &[glue]), 0);
     dag.replace_uses(SDValue::new(node, 0), status);
     dag.remove_dead_node(node);
@@ -81,7 +82,8 @@ pub fn select_status_test<D: AddrDag>(
     let (Some(mask), Some(value)) = (dag.constant(dag.operand(node, 1)), dag.constant(dag.operand(node, 2))) else {
         return false;
     };
-    // The condition bits are in the word's high byte: C0 bit 8, C2 bit 10, C3 bit 14.
+    // The condition bits are in the word's high byte: C0 bit 8, C2 bit 10, C3
+    // bit 14.
     let mask = dag.target_constant(mask << 8, mvt::i32);
     let flags = if value == 0 {
         SDValue::new(dag.machine_node(x86::TEST32ri, &[mvt::i32], &[word, mask]), 0)

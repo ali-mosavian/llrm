@@ -1057,14 +1057,20 @@ impl Fps<'_> {
         let produced: HashSet<u32> = one.defines.iter().copied().collect();
         let comparison = self.out.last().expect("a comparison was emitted");
         let mut made = (**comparison).clone();
-        // DEVIATE X87-STATUS: a compare that defines the status word as a value (`gcc`'s
-        // `ix86_expand_fp_compare` keeps the `fnstsw` word and tests it per reader) gets the
-        // `fnstsw` and a copy of AX into that value, and no `sahf`.
-        // Allocated, the word is a register (`Loc::Reg`); before, a value (`Loc::Held`).
-        let word_value = one.what.as_ref().and_then(|what| match &what.dests[..] {
-            [dest @ (Loc::Held(_) | Loc::Reg(_))] => Some(dest.clone()),
-            _ => None,
-        });
+        // DEVIATE X87-STATUS: a compare that defines the status word as a value
+        // (`gcc`'s `ix86_expand_fp_compare` keeps the `fnstsw` word and
+        // tests it per reader) gets the `fnstsw` and a copy of AX into
+        // that value, and no `sahf`. Allocated, the word is a register
+        // (`Loc::Reg`); before, a value (`Loc::Held`).
+        let word_value = one
+            .what
+            .as_ref()
+            .and_then(
+                |what| match &what.dests[..] {
+                    [dest @ (Loc::Held(_) | Loc::Reg(_))] => Some(dest.clone()),
+                    _ => None,
+                },
+            );
         made.defines = comparison.defines.iter().copied().filter(|value| !produced.contains(value)).collect();
         made.delivers =
             comparison.delivers.iter().copied().filter(|(held, _)| !produced.contains(&held.value)).collect();
@@ -1097,26 +1103,41 @@ impl Fps<'_> {
                 held
             }
         };
+        // The word's copy reads `held`: the `fnstsw` defines it. Its readers
+        // name the compare's own value, which the `fnstsw` defines
+        // where the word stays in AX, and the copy otherwise.
+        if word_value.is_some() && !word.defines.contains(&held.value) {
+            word.defines.push(held.value);
+        }
+        if matches!(
+            &word_value,
+            Some(Loc::Reg(reg)) if reg.register == self.status_word
+        ) {
+            let named: Vec<u32> = one.defines.iter().copied().filter(|value| !word.defines.contains(value)).collect();
+            word.defines.extend(named);
+        }
         self.out.push(Arc::new(word));
         if let Some(dest) = word_value {
             match dest {
                 Loc::Held(value) => {
-                    let mut copy = inserted(
-                        at,
-                        semantics(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Held(held)]),
-                    );
+                    let mut copy =
+                        inserted(at, semantics(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Held(held)]));
                     copy.defines = vec![value.value];
                     copy.uses = vec![held.value];
                     copy.widths = vec![(value.value, value.width)];
                     copy.requires = vec![(held, self.status_word)];
                     self.out.push(Arc::new(copy));
                 }
-                // `fnstsw` writes AX alone: the word is copied from there unless it stays there.
+                // `fnstsw` writes AX alone: the word is copied from there
+                // unless it stays there.
                 Loc::Reg(reg) if reg.register != self.status_word => {
-                    // A 32-bit copy reads EAX: the high half is garbage the readers never test.
+                    // A 32-bit copy reads EAX: the high half is garbage the
+                    // readers never test.
                     let source = if reg.width == 4 { self.status_word.full_register32() } else { self.status_word };
                     let from = Loc::Reg(Reg { register: source, width: reg.width });
                     let mut copy = inserted(at, semantics(Operation::Move, "mov", vec![Loc::Reg(reg)], vec![from]));
+                    copy.defines = one.defines.clone();
+                    copy.widths = one.widths.iter().copied().filter(|pair| produced.contains(&pair.0)).collect();
                     copy.uses = vec![held.value];
                     copy.requires = vec![(held, self.status_word)];
                     self.out.push(Arc::new(copy));
