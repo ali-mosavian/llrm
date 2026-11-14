@@ -28,12 +28,15 @@ use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
 use crate::mir::{Function, Inst, Operand, VReg};
 
-/// The target of `block` if it is only an unconditional branch.
+/// The target of `block` if it is only an unconditional branch, or empty and
+/// so falls into the next block (`OptimizeBlock`: "if this block is empty, make
+/// everyone use its fall-through").
 fn branch_only(
     f: &Function,
     block: usize,
 ) -> Option<usize> {
     match f.blocks[block].as_slice() {
+        [] => (block + 1 < f.blocks.len() && !f.is_eh_pad(block + 1)).then_some(block + 1),
         [only] if only.opcode == op::BR => match only.operands[..] {
             [Operand::Block(to)] if to as usize != block => Some(to as usize),
             _ => None,
@@ -632,6 +635,20 @@ mod tests {
         assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(3)])));
         remove_unreachable_blocks(&mut f);
         assert_eq!(f.blocks.len(), 2);
+    }
+
+    /// A block the coalescer emptied (its copy gone) kept its predecessors:
+    /// a branch to it jumps over the block it falls into (memcpy_libcall -Os,
+    /// a `block`, a `br` and an `end` more than the pin).
+    #[test]
+    fn a_branch_to_an_empty_block_goes_to_the_block_it_falls_into() {
+        let mut f = function(false);
+        f.blocks[1].clear();
+        f.succs[1] = vec![2];
+        assert!(forward_branch_only_blocks(&mut f));
+        // bb1 falls into bb2, which is one `br bb3`: both edges meet at bb3.
+        assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(3)])));
+        assert!(f.blocks[0].iter().all(|inst| inst.opcode != op::BR_IF));
     }
 
     /// Both arms of a branch began with the same constant, which the register

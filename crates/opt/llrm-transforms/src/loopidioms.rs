@@ -1735,7 +1735,7 @@ fn _stored(
 fn _has_memset_pattern(unit: &Unit) -> bool {
     use llrm_mir::libfunc::{Generic, LibFunc, TargetLibraryInfo};
     let Some(outer) = unit.outer else { return false };
-    if outer.target().fills_by_pattern() {
+    if outer.target().fills_by_pattern() || outer.target().tti().is_some_and(|tti| tti.fills_pattern_at_speed()) {
         return true;
     }
     match outer.target().library() {

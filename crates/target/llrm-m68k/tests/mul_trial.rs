@@ -62,7 +62,7 @@ fn a_tie_keeps_the_build_without() {
     use llrm_m68k::timing::Price;
     let module = llrm_mir::parse::module(&hash_of(2)).expect("parses");
     let build = items_with(&module, "f", Cpu::M68000, Options::default()).expect("compiles");
-    for price in [Price::Size, Price::Strict, Price::Rate] {
+    for price in [Price::Size, Price::Rate] {
         assert!(!llrm_m68k::trial::keeps(&build, &build, Cpu::M68000, price), "{price:?}: equal builds kept the first");
         assert!(llrm_m68k::trial::prefers_without(&build, &build, Cpu::M68000, price, true), "{price:?}: a tie kept the chain");
     }

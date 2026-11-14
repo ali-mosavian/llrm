@@ -450,7 +450,19 @@ impl Checker<'_> {
             Opcode::FCmp(_) if ty(0) != ty(1) || !is_float(self, ty(0)) => {
                 self.fail(format!("{at} compares {} with {}", self.show(ty(0)), self.show(ty(1))))
             }
-            Opcode::Select if ty(1) != ty(2) || ty(1) != result || !matches!(self.ty(ty(0)), Type::Int(1)) => {
+            // `SelectInst::areInvalidOperands`: an `i1` condition, or a vector
+            // of them as long as the values'.
+            Opcode::Select
+                if ty(1) != ty(2)
+                    || ty(1) != result
+                    || !match (self.ty(ty(0)), self.ty(result)) {
+                        (Type::Int(1), _) => true,
+                        (Type::Vector { element, count }, Type::Vector { count: lanes, .. }) => {
+                            count == lanes && matches!(self.ty(*element), Type::Int(1))
+                        }
+                        _ => false,
+                    } =>
+            {
                 self.fail(format!("{at} is ill-typed"))
             }
             // llvm/lib/IR/Instructions.cpp#L1728 `ExtractElementInst::isValidOperands`
