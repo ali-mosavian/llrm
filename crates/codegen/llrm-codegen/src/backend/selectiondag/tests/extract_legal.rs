@@ -30,6 +30,7 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
         )

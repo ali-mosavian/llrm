@@ -290,6 +290,14 @@ UMLALv4i16_v4i32         fmuladd  x/x,x,x       -                        fp_arit
 UMLALv8i16_v4i32         fmuladd  x/x,x,x       -                        fp_arith   - - - -/-                UMLALv8i16_v4i32
 UMLALv2i32_v2i64         fmuladd  x/x,x,x       -                        fp_arith   - - - -/-                UMLALv2i32_v2i64
 UMLALv4i32_v2i64         fmuladd  x/x,x,x       -                        fp_arith   - - - -/-                UMLALv4i32_v2i64
+USRAv16i8_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                USRAv16i8_shift
+USRAv8i16_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                USRAv8i16_shift
+USRAv4i32_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                USRAv4i32_shift
+USRAv2i64_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                USRAv2i64_shift
+SSRAv16i8_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                SSRAv16i8_shift
+SSRAv8i16_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                SSRAv8i16_shift
+SSRAv4i32_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                SSRAv4i32_shift
+SSRAv2i64_shift          binary   x/x,x,i         -                        fp_arith   - - - -/-                SSRAv2i64_shift
 XTNv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv16i8
 XTNv8i16                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv8i16
 XTNv4i32                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv4i32

@@ -139,3 +139,15 @@ fn a_loop_of_constant_shifts_uses_the_immediate_forms() {
     let shifts = body(&text, "shift_ints");
     assert!(shifts.contains("pslld") && shifts.contains("psrad") && shifts.contains("psrld"), "{shifts}");
 }
+
+/// A splat of a variable was four stores through the stack (`BUILD_VECTOR` expanded); it is `movd` + `pshufd` (and
+/// `movq` + `punpcklqdq` for 64-bit lanes), as the pin's `LowerBUILD_VECTOR` makes it.
+#[test]
+fn a_splat_of_a_variable_is_movd_and_pshufd() {
+    let text = assembly("x86_64-linux", "-O2");
+    let ints = body(&text, "fill_value");
+    assert!(ints.contains("movd xmm") && ints.contains("pshufd"), "{ints}");
+    assert!(!ints.contains("[rsp"), "{ints}");
+    let longs = body(&text, "fill_long_value");
+    assert!(longs.contains("movq xmm") && longs.contains("punpcklqdq"), "{longs}");
+}

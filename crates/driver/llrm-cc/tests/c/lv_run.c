@@ -15,6 +15,8 @@ extern short sa[1024], sb[1024];
 void shift_ints(void);
 extern int si[1024];
 extern unsigned ui[1024];
+void fill_value(int *a, int v, int n);
+void fill_long_value(long *a, long v, int n);
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -50,6 +52,15 @@ int main(void) {
         for (int i = 0; i < 1024; i++) want[i] = (int)((unsigned)si[i] << 3) + (si[i] >> 2) + (int)(ui[i] >> 5);
         shift_ints();
         for (int i = 0; i < 1024; i++) if (si[i] != want[i]) bad++;
+    }
+    {
+        static int wi[300];
+        static long wl[300];
+        for (int n = 0; n < 130; n += 3) {
+            fill_value(wi, 0x1234567 + n, n);
+            fill_long_value(wl, 0x123456789abcdefL - n, n);
+            for (int i = 0; i < n; i++) if (wi[i] != 0x1234567 + n || wl[i] != 0x123456789abcdefL - n) bad++;
+        }
     }
     printf("bad %d\n", bad);
 }

@@ -131,11 +131,17 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                     VectorShift::Shl => "SHL",
                     VectorShift::Ushr => "USHR",
                     VectorShift::Sshr => "SSHR",
+                    VectorShift::Usra => "USRA",
+                    VectorShift::Ssra => "SSRA",
                 },
                 lane_name(*lanes)
             ),
             vec![vreg_loc(*rd, 128)],
-            vec![vreg_loc(*rn, 128), imm(i64::from(*amount))],
+            if op.accumulates() {
+                vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), imm(i64::from(*amount))]
+            } else {
+                vec![vreg_loc(*rn, 128), imm(i64::from(*amount))]
+            },
             None,
         ),
         Inst::VectorLongShift { op, lane, high, rd, rn, amount } => semantics(
@@ -743,15 +749,22 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             }
         }
     }
-    for (stem, op) in [("SHL", VectorShift::Shl), ("USHR", VectorShift::Ushr), ("SSHR", VectorShift::Sshr)] {
+    for (stem, op) in [
+        ("SHL", VectorShift::Shl),
+        ("USHR", VectorShift::Ushr),
+        ("SSHR", VectorShift::Sshr),
+        ("USRA", VectorShift::Usra),
+        ("SSRA", VectorShift::Ssra),
+    ] {
         for lanes in ARRANGEMENTS {
             if name == format!("{stem}v{}_shift", lane_name(lanes)) {
+                let at = usize::from(op.accumulates());
                 return Some(Inst::VectorShift {
                     op,
                     lanes,
                     rd: vreg_of(dest?),
-                    rn: vreg_of(&s[0]),
-                    amount: value_of(&s[1]) as u8,
+                    rn: vreg_of(&s[at]),
+                    amount: value_of(&s[at + 1]) as u8,
                 });
             }
         }
