@@ -457,15 +457,18 @@ fn an_induction_step_the_body_reads_keeps_its_value() {
 
 const SUM_PLAIN: &str = include_str!("../tests/lv/sum_plain.ll");
 
-/// A sum the pin vectorizes (VF 8: the loads and the add have vector forms)
-/// is not interleaved alone: its widening is the pin's answer, and four scalar
-/// copies add a remainder and a fold the loop does not need (huge -O2 ran
-/// 12,213 more instructions).
+/// A sum the pin vectorizes (VF 8, IC 2: "Interleaving because of
+/// reductions") is widened, not interleaved alone as four scalar copies
+/// (huge -O2 ran 12,213 more instructions). Since reductions widen the loop
+/// has a `bin.rdx` of its own, the fold of the two `<8 x i64>` parts, so the
+/// test pins the vector loads and the one `vector.reduce.add.v8i64`.
 #[test]
 fn a_sum_a_vector_factor_takes_is_not_interleaved_alone() {
     let text = run(SUM_PLAIN);
-    assert_eq!(count(&text, "load i16"), 1, "{text}");
-    assert!(!text.contains("bin.rdx"), "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert_eq!(count(&text, "%bin.rdx = add <8 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v8i64"), 1, "{text}");
 }
 
 const REM_STORE: &str = include_str!("../tests/lv/rem_store.ll");
@@ -483,12 +486,18 @@ fn a_remainder_the_pin_may_vectorize_is_not_interleaved_alone() {
 const DOT_SEXT: &str = include_str!("../tests/lv/dot_sext.ll");
 
 /// A dot product of extended shorts is vectorized by the pin (dot -O2: VF 8,
-/// widening multiplies); the `i64` multiply has no vector price here, which
-/// read as scalarized and interleaved the loop alone (+160 instructions).
+/// widening multiplies; IC 2); the `i64` multiply has no vector price here,
+/// which read as scalarized and interleaved the loop alone (+160
+/// instructions). The widened loop has a `bin.rdx` (the fold of the two
+/// `<8 x i64>` parts), so the test pins the vector loads and the one
+/// `vector.reduce.add.v8i64`.
 #[test]
 fn a_dot_product_of_extended_values_is_not_interleaved_alone() {
     let text = run(DOT_SEXT);
-    assert!(!text.contains("bin.rdx"), "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 4, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert_eq!(count(&text, "%bin.rdx = add <8 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v8i64"), 1, "{text}");
 }
 
 const FP_CANON_SUM: &str = include_str!("../tests/lv/fp_canon_sum.ll");
