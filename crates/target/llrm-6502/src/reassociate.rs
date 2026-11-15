@@ -15,10 +15,11 @@
 //! ```
 //!
 //! Pass: LLVM's `DAGCombiner::visitADD` and `Reassociate` fold `(x + c1) + c2`
-//! of one value. DEVIATE REASSOC (owner 6502, exit 2026-12-15): here the two
+//! of one value. DEVIATE REASSOC (owner 6502, exit 2026-11-24): here the two
 //! sums are separate nodes (the range test's `x - 97` and the fold's `x - 32`),
-//! so the machine text is where one register holds both. Exit: the DAG combine
-//! reuses the sibling `(add x, c1)` node, then this goes.
+//! so the machine text is where one register holds both. Retired by:
+//! translating `DAGCombiner::visitADD` / `Reassociate` at the DAG level, which
+//! reuses the sibling `(add x, c1)` node.
 //!
 //! # Runs
 //! In [`crate::peephole`]'s suffix, after copy propagation.

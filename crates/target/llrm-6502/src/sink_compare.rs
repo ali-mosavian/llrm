@@ -12,11 +12,12 @@
 //! ```
 //!
 //! Pass: LLVM's `MachineSink` moves an instruction into the one successor
-//! that uses its result. DEVIATE SINK-COMPARE (owner 6502, exit 2026-12-15):
+//! that uses its result. DEVIATE SINK-COMPARE (owner 6502, exit 2026-11-24):
 //! it works on the expanded 6502 text, for the instructions that write only `a`
 //! and the flags, and the fall-through must leave the flags unread (it sees the
 //! work's, not the compare's) and the work must not read the carry it enters
-//! with. Exit: the 6502 on the shared machine pipeline (6502-a).
+//! with. Retired by: translating `MachineSink` at the pre-expansion (MIR)
+//! level, where the 6502 flags are not yet an operand of the work.
 //!
 //! # Runs
 //! In [`crate::peephole`]'s suffix, before [`crate::reassociate`], which then
