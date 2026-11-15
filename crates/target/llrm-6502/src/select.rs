@@ -322,7 +322,9 @@ pub fn module_text(
     // a module whose divisions are cold calls the speed routines with the
     // small wide path
     let wide = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}_fast\n")))
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
     if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
         for at in 0..texts.len() {
@@ -336,7 +338,9 @@ pub fn module_text(
     // module's choice by the share of its clocks it saves
     let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
     let compact_division = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
     };
     if size && texts.iter().any(|text| compact_division(text)) {
         let mut faster = texts.clone();
@@ -355,7 +359,9 @@ pub fn module_text(
     // compact one, linked once): a module takes the compact one, bytes first,
     // unless the clocks the speed one saves are worth them
     let speed_division16 = |text: &str| {
-        ["__udivhi3", "__divhi3", "__umodhi3", "__modhi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+        ["__udivhi3", "__divhi3", "__umodhi3", "__modhi3", "__divmodhi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
     };
     if !size && texts.iter().any(|text| speed_division16(text)) {
         let mut compact = texts.clone();
