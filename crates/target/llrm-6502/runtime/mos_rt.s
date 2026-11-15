@@ -352,6 +352,16 @@ __modhi3:                       ; rs1 % rs2 -> A:X
   ldx rc7
   rts
 
+.export __divmodhi4
+__divmodhi4:                    ; rs1 / rs2 -> A:X, the remainder (the dividend's sign) in rc6:rc7
+  lda rc3
+  pha                           ; the remainder's sign
+  eor rc5
+  pha                           ; the quotient's sign: the bit loop uses Y
+  jsr abs16_pair
+  jsr udivmod16
+  jmp divmod16_signs
+
 ; the compact signed variants, called at size: the same sign handling over the bit loop alone (no short-divisor path)
 .export __divhi3c
 __divhi3c:                       ; rs1 / rs2 -> A:X, compact
@@ -379,6 +389,29 @@ __modhi3c:                       ; rs1 % rs2 -> A:X, compact
 @pos:
   lda rc6
   ldx rc7
+  rts
+
+.export __divmodhi4c
+__divmodhi4c:                    ; rs1 / rs2 -> A:X, the remainder in rc6:rc7, compact
+  lda rc3
+  pha
+  eor rc5
+  pha
+  jsr abs16_pair
+  jsr __udivhi3c
+  jmp divmod16_signs
+
+divmod16_signs:                 ; the quotient's sign on the stack, then the remainder's
+  pla
+  bpl @q
+  neg16 rc2, rc3
+@q:
+  pla
+  bpl @done
+  neg16 rc6, rc7
+@done:
+  lda rc2
+  ldx rc3
   rts
 
 ; ---- shifts by a variable count: rs1 or rc2 shifted by rc4 or rc3 ---------------------------------
@@ -820,6 +853,35 @@ neg_sb:
   sta __sb+3
   rts
 
+neg_sr:
+  sec
+  lda #0
+  sbc __sr
+  sta __sr
+  lda #0
+  sbc __sr+1
+  sta __sr+1
+  lda #0
+  sbc __sr+2
+  sta __sr+2
+  lda #0
+  sbc __sr+3
+  sta __sr+3
+  rts
+
+divmod32s_signs:                ; the signs of the quotient (__sg bit 0) and the remainder (bit 1)
+  lda __sg
+  and #1
+  beq @r
+  jsr neg_sa
+@r:
+  lda __sg
+  and #2
+  beq @done
+  jmp neg_sr
+@done:
+  rts
+
 .export __udivsi3
 __udivsi3:                      ; __sa / __sb -> __sa
   jmp udivmod32
@@ -869,6 +931,11 @@ __modsi3:                       ; __sa % __sb -> __sa (signed, the sign of the d
   jsr neg_sa
 @done:
   rts
+
+.export __divmodsi4
+__divmodsi4:                    ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed, truncated toward zero)
+  jsr divmod32s
+  jmp divmod32s_signs
 
 .export __ashlsi3
 __ashlsi3:                      ; __sa << __sb (low byte) -> __sa
@@ -1403,6 +1470,16 @@ __modsi3_fast_byte:             ; __sa % __sb -> __sa (signed), a divisor of 1 t
 @done:
   rts
 
+.export __divmodsi4_fast
+__divmodsi4_fast:               ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed)
+  jsr divmod32s_fast
+  jmp divmod32s_signs
+
+.export __divmodsi4_fast_byte
+__divmodsi4_fast_byte:          ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed), a divisor of 1 to 255
+  jsr divmod32s_fast_byte
+  jmp divmod32s_signs
+
 ; ---- the speed division with the small wide path: the routines of the module that divides cold
 ; (sites that run fewer than 3 times together, `hotdivision`) are the ones of the first speed variant,
 ; byte for byte: the pin-structure wide path above is 141 bytes more and pays only where it runs ----
@@ -1572,6 +1649,11 @@ __modsi3_fast_small:                  ; __sa % __sb -> __sa (signed, the sign of
   jsr neg_sa
 @done:
   rts
+
+.export __divmodsi4_fast_small
+__divmodsi4_fast_small:         ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed)
+  jsr divmod32s_fast_small
+  jmp divmod32s_signs
 
 ; ---- the speed remainder: the quotient is never built, as in llvm-mos's `__umodsi3`. The dividend is
 ; the remainder, in place in __sa; the divisor is shifted up as far as the quotient's first bit, and each
