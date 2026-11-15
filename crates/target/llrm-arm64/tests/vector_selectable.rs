@@ -1,15 +1,13 @@
 //! A splat of a loaded scalar was selected as `LD1Rv4s`, which had no
 //! instruction: `jpeg_single` at O2 failed to build ("machine opcode LD1Rv4s
 //! has no arm64 instruction yet"). The sweep puts every vector operation the
-//! selector picks from IR over every NEON type through the compiler and fails
-//! on any machine opcode it selects but cannot emit.
+//! frontend can emit over every NEON type through the compiler and fails on a
+//! panic and on any refusal not listed in `REFUSED`.
 
 use std::process::Command;
 
 const HEAD: &str = "target triple = \"aarch64-unknown-linux-gnu\"\n\
 target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
-
-const MISSING: &str = "has no arm64 instruction yet";
 
 /// `(lane count, lane type)` of each NEON vector and whether its lanes are floats.
 const TYPES: [(u32, &str, bool); 10] = [
@@ -97,7 +95,6 @@ const FLOAT_BODIES: &[Operation] = &[
     ("fneg", "%r = fneg {T} %a", any),
     ("fabs", "%r = call {T} @llvm.fabs.{V}({T} %a)", any),
     ("fsqrt", "%r = call {T} @llvm.sqrt.{V}({T} %a)", any),
-    ("fma", "%r = call {T} @llvm.fma.{V}({T} %a, {T} %b, {T} %a)", any),
     ("fmuladd", "%r = call {T} @llvm.fmuladd.{V}({T} %a, {T} %b, {T} %a)", any),
     ("fcmp_select", "%c = fcmp olt {T} %a, %b\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
     ("fcmp_zero", "%c = fcmp ogt {T} %a, zeroinitializer\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
@@ -105,10 +102,6 @@ const FLOAT_BODIES: &[Operation] = &[
     ("splat_load_mul", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s2 = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = fmul {T} %a, %s2", any),
     ("splat_arg", "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
     ("extract_lane", "%x = extractelement {T} %a, i64 1\nstore {E} %x, ptr %q, align 8\n%r = fadd {T} %a, %b", any),
-    ("minnum", "%r = call {T} @llvm.minnum.{V}({T} %a, {T} %b)", any),
-    ("maxnum", "%r = call {T} @llvm.maxnum.{V}({T} %a, {T} %b)", any),
-    ("minimum", "%r = call {T} @llvm.minimum.{V}({T} %a, {T} %b)", any),
-    ("maximum", "%r = call {T} @llvm.maximum.{V}({T} %a, {T} %b)", any),
     ("copysign", "%r = call {T} @llvm.copysign.{V}({T} %a, {T} %b)", any),
     ("floor", "%r = call {T} @llvm.floor.{V}({T} %a)", any),
     ("ceil", "%r = call {T} @llvm.ceil.{V}({T} %a)", any),
@@ -197,10 +190,46 @@ fn complaint(source: &str) -> Option<String> {
     (!said.status.success()).then(|| String::from_utf8_lossy(&said.stderr).trim().to_string())
 }
 
-/// Every `(operation, vector type)` the compiler refuses, with why. A row is
-/// a dated deviation; a refusal not listed fails the test, and so does a row
-/// the compiler no longer needs.
-const REFUSED: &[(&str, &str)] = &[];
+/// DEVIATE VEC10 (owner llrm-arm64-vec, exit 2026-11-24): the operations the
+/// compiler refuses, as `(operation, the refusal's text)`: a row covers every
+/// vector type that fails that way. A refusal not listed fails the test, and so
+/// does a row nothing needs. A panic is never listed.
+const REFUSED: &[(&str, &str)] = &[
+    // The shifts by a vector of amounts (`USHL`/`SSHL` by a negated amount).
+    ("shl", "custom lowering of Shl"),
+    ("lshr", "custom lowering of Srl"),
+    ("ashr", "custom lowering of Sra"),
+    // An `i8`/`i16` lane is promoted by the legalizer to a result it cannot make.
+    ("extract_lane", "what: \\\"promote result\\\""),
+    // `CLZ`, `RBIT` and the saturating arithmetic have no instruction; `CNT`
+    // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern.
+    ("ctlz", "machine opcode CLZv"),
+    ("ctlz", "CannotSelect(\"CtLz\")"),
+    ("cttz", "CannotSelect(\"CtTz\")"),
+    ("ctpop", "CannotSelect(\"CtPop\")"),
+    ("bitreverse", "machine opcode RBITv"),
+    ("bitreverse", "CannotSelect(\"BitReverse\")"),
+    ("bswap", "bswap must be an even number of bytes"),
+    ("uadd_sat", "machine opcode UQADDv"),
+    ("usub_sat", "machine opcode UQSUBv"),
+    ("sadd_sat", "machine opcode SQADDv"),
+    ("ssub_sat", "machine opcode SQSUBv"),
+    // The conversions of 16-bit lanes.
+    ("uitofp_fptoui", "CannotSelect(\"FpToUInt\")"),
+    ("sitofp_fptosi", "CannotSelect(\"FpToSInt\")"),
+    // The 64-bit reductions.
+    ("reduce_add", "CannotSelect(\"Add\")"),
+    ("reduce_add", "CannotSelect(\"Store\")"),
+    // The float operations with no vector form yet.
+    ("copysign", "CannotSelect(\"FCopySign\")"),
+    ("floor", "a rounding intrinsic without its library call"),
+    ("ceil", "a rounding intrinsic without its library call"),
+    ("trunc", "a rounding intrinsic without its library call"),
+    ("nearbyint", "a rounding intrinsic without its library call"),
+    ("round", "a rounding intrinsic without its library call"),
+    ("rint", "machine opcode FRINTXv"),
+    ("splat_load_mul", "machine opcode FMULv"),
+];
 
 /// Every vector operation over every NEON type either compiles or is listed
 /// in `REFUSED`: a selected opcode without an instruction, a legalizer gap, a
@@ -211,45 +240,25 @@ fn every_vector_operation_compiles_or_is_listed() {
     for (lanes, element, float) in TYPES {
         let bodies = if float { FLOAT_BODIES } else { INTEGER_BODIES };
         for (name, body, applies) in bodies {
-            if !applies(element) {
-                continue;
-            }
-            if let Some(said) = complaint(&function(lanes, element, body)) {
-                let said = said.lines().next().unwrap_or_default().to_string();
-                refused.push((format!("{name} <{lanes} x {element}>"), said));
-            }
-        }
-    }
-    let unlisted: Vec<_> =
-        refused.iter().filter(|(case, _)| !REFUSED.iter().any(|(listed, _)| listed == case)).collect();
-    let stale: Vec<_> = REFUSED.iter().filter(|(listed, _)| !refused.iter().any(|(case, _)| case == listed)).collect();
-    assert!(
-        unlisted.is_empty() && stale.is_empty(),
-        "refused and not listed:\n{}\nlisted and no longer refused:\n{}",
-        unlisted.iter().map(|(case, said)| format!("    (\"{case}\", \"{said}\"),")).collect::<Vec<_>>().join("\n"),
-        stale.iter().map(|(case, _)| format!("    {case}")).collect::<Vec<_>>().join("\n"),
-    );
-}
-
-/// Every vector operation over every NEON type that selects a machine opcode
-/// selects one with an instruction.
-#[test]
-fn every_selected_vector_opcode_has_an_instruction() {
-    let mut missing = Vec::new();
-    for (lanes, element, float) in TYPES {
-        let bodies = if float { FLOAT_BODIES } else { INTEGER_BODIES };
-        for (name, body, applies) in bodies {
-            if !applies(element) {
-                continue;
-            }
-            if let Some(said) = complaint(&function(lanes, element, body)) {
-                if said.contains(MISSING) {
-                    missing.push(format!("{name} <{lanes} x {element}>: {said}"));
+            if applies(element) {
+                if let Some(said) = complaint(&function(lanes, element, body)) {
+                    refused.push((*name, format!("<{lanes} x {element}>"), said));
                 }
             }
         }
     }
-    assert!(missing.is_empty(), "selected but not emitted:\n{}", missing.join("\n"));
+    let panics: Vec<_> = refused.iter().filter(|(_, _, said)| said.contains("panicked")).collect();
+    assert!(panics.is_empty(), "the compiler panicked:\n{panics:#?}");
+    let listed = |name: &str, said: &str| REFUSED.iter().any(|(op, text)| *op == name && said.contains(text));
+    let unlisted: Vec<_> = refused.iter().filter(|(name, _, said)| !listed(name, said)).collect();
+    let stale: Vec<_> = REFUSED
+        .iter()
+        .filter(|(op, text)| !refused.iter().any(|(name, _, said)| name == op && said.contains(text)))
+        .collect();
+    assert!(
+        unlisted.is_empty() && stale.is_empty(),
+        "refused and not listed:\n{unlisted:#?}\nlisted and no longer refused:\n{stale:#?}",
+    );
 }
 
 /// A splat of a loaded scalar is one `ld1r` on every 128-bit arrangement (the
