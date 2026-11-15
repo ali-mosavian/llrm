@@ -113,6 +113,52 @@ thread_local! {
     static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Whether the last allocation made a choice only the wider rule makes.
     static WIDE_COMMUTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ALLOCATED: std::cell::RefCell<Option<HashMap<String, Vec<Allocated>>>> = const { std::cell::RefCell::new(None) };
+    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One allocation: the function as it went in, the inputs the allocator reads
+/// besides it, and what came out.
+struct Allocated {
+    stack: bool,
+    tuning: Tuning,
+    imaginary: u8,
+    spike: bool,
+    input: MFunction<Class>,
+    output: MFunction<Class>,
+    assignment: llrm_spike_mf::regalloc::Assignment,
+    slots: Vec<(i32, Class)>,
+}
+
+/// While it lives, [`allocate`] remembers each allocation it makes. The
+/// variants of one function (a layout, a sink, a callee-save choice, a speed
+/// routine) most often reach the allocator with the very function an earlier
+/// run gave it, and the allocator is a third of a compile.
+pub struct AllocationCache(());
+
+impl AllocationCache {
+    pub fn new() -> AllocationCache {
+        ALLOCATED.with(|all| *all.borrow_mut() = Some(HashMap::default()));
+        AllocationCache(())
+    }
+}
+
+impl Default for AllocationCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for AllocationCache {
+    fn drop(&mut self) {
+        ALLOCATED.with(|all| *all.borrow_mut() = None);
+    }
+}
+
+/// How many times this thread ran the register allocator (not found in the
+/// [`AllocationCache`]): what a test counts instead of seconds.
+pub fn allocations() -> usize {
+    ALLOCATIONS.with(std::cell::Cell::get)
 }
 
 /// `f` with the wider `commute_accumulator` rule on or off. It is a guess
@@ -5074,6 +5120,49 @@ pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
 fn allocate<const STACK: bool>(
     function: &mut MFunction<Class>
 ) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    let (tuning, imaginary, spike) = (TUNING.with(|t| t.get()), IMAGINARY.with(|n| n.get()), spike_asked());
+    let same = |one: &Allocated| {
+        one.stack == STACK
+            && one.tuning == tuning
+            && one.imaginary == imaginary
+            && one.spike == spike
+            && one.input == *function
+    };
+    let found = ALLOCATED.with(|all| {
+        let all = all.borrow();
+        let one = all.as_ref()?.get(&function.name)?.iter().find(|one| same(one))?;
+        Some((one.output.clone(), one.assignment.clone(), one.slots.clone()))
+    });
+    if let Some((output, assignment, slots)) = found {
+        *function = output;
+        return Ok((assignment, slots));
+    }
+    let remembered = ALLOCATED.with(|all| all.borrow().is_some()).then(|| function.clone());
+    let (assignment, slots) = allocate_once::<STACK>(function)?;
+    if let Some(input) = remembered {
+        let one = Allocated {
+            stack: STACK,
+            tuning,
+            imaginary,
+            spike,
+            input,
+            output: function.clone(),
+            assignment: assignment.clone(),
+            slots: slots.clone(),
+        };
+        ALLOCATED.with(|all| {
+            if let Some(all) = all.borrow_mut().as_mut() {
+                all.entry(function.name.clone()).or_default().push(one);
+            }
+        });
+    }
+    Ok((assignment, slots))
+}
+
+fn allocate_once<const STACK: bool>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    ALLOCATIONS.with(|count| count.set(count.get() + 1));
     // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
     // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
     let only = std::env::var("LLRM_6502_GREEDY_ONLY").ok();
