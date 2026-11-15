@@ -504,14 +504,15 @@ impl Tti for Mos6502 {
         }
     }
 
-    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so
-    // a pair is one call.
+    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`),
+    // the signed word one too (`__divmodhi4`), and the long one in `__sr`
+    // (`__divmodsi4` for the signed), so a pair is one call.
     fn has_div_rem_op(
         &self,
         bits: u32,
         signed: bool,
     ) -> bool {
-        !signed && bits <= 2 * self.byte_bits
+        bits == 2 * self.byte_bits || bits == 4 * self.byte_bits || (!signed && bits < 2 * self.byte_bits)
     }
 
     fn cast_cost(
