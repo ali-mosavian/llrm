@@ -1645,7 +1645,11 @@ impl<'a> TypeLegalizer<'a> {
                 // (`PromoteTargetBoolean`).
                 let (cond, then, other) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
-                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(then));
+                // The scalar condition of a vector select is one `i1`, whatever
+                // the lanes (`OpTy.getScalarType()`).
+                let value_vt = self.dag.value_type(then);
+                let value_vt = if value_vt.is_vector() { value_vt.element() } else { value_vt };
+                let bool_vt = self.tli.types.set_cc_result_type(value_vt);
                 let extend = match self.dag.config().boolean_contents {
                     BooleanContents::ZeroOrOne => ISD::ZeroExtend,
                     BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,

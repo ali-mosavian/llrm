@@ -123,8 +123,10 @@ pub fn shared(
 ) -> LirBody {
     let regs = body.regs();
     // Where the target allows it (`share_literal_stores`) a run is also shared
-    // at -O1, where bytes decide (`Profile::bytes_strict`).
-    if !cpu.size && !(cpu.share_literal_stores && (cpu.speed_rate || cpu.bytes_strict())) {
+    // where bytes decide (`Profile::bytes_strict`), and at -O1 to -O3 where it
+    // allows that too (`share_literal_stores_at_speed`).
+    let at_speed = cpu.speed_rate && cpu.share_literal_stores_at_speed;
+    if !cpu.size && !(cpu.share_literal_stores && (at_speed || cpu.bytes_strict())) {
         return body.clone();
     }
     // DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): at -O2/-O3 the load costs

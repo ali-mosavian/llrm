@@ -74,6 +74,9 @@ pub mod x86isd {
     pub const PSHUFD: ISD = ISD::Target(714);
     /// `X86ISD::UNPCKL`: the low lanes of two vectors interleaved (`punpckl*`).
     pub const UNPCKL: ISD = ISD::Target(779);
+    /// `X86ISD::VZEXT_MOVL`: lane 0 kept, the other lanes zeroed (`movd`/`movq`
+    /// from a register).
+    pub const VZEXT_MOVL: ISD = ISD::Target(951);
     /// `X86ISD::UNPCKH`: the high lanes of two vectors interleaved (`punpckh*`).
     pub const UNPCKH: ISD = ISD::Target(778);
     /// `X86ISD::PACKSS`: the lanes of two vectors narrowed by half with signed saturation (`packss*`).
@@ -798,6 +801,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
+            ISD::InsertVectorElt => lower_insert_vector_elt(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
             ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
             ISD::StackSave => {
@@ -1387,7 +1391,13 @@ fn lower_select(
     status: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if !vt.is_integer() && !vt.is_floating_point() {
+    // A vector with a scalar condition is a `CMOV` of the whole register
+    // (`CMOV_VR128`).
+    let sse_vector = matches!(
+        vt,
+        EVT::Simple(MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64)
+    );
+    if !vt.is_integer() && !vt.is_floating_point() && !sse_vector {
         return None;
     }
     let (mut cond, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
@@ -3515,6 +3525,49 @@ fn lower_build_vector_splat(
     }
     let by = dag.get_constant_with(0, EVT::I8, true, false);
     Some(dag.get_node(x86isd::PSHUFD, vt, &[low, by]))
+}
+
+/// `LowerINSERT_VECTOR_ELT`, lane 0 of an undefined or all-zero 128-bit integer
+/// vector (a scalar broadcast or a reduction seed): `movd`/`movq`, a
+/// zero-extending one when the rest is zero. Narrow lanes go through an `i32`
+/// and a `v4i32`. Other positions are not handled yet.
+fn lower_insert_vector_elt(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (vector, element, index) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let lane_vt = match vt {
+        EVT::Simple(MVT::V16I8) => EVT::I8,
+        EVT::Simple(MVT::V8I16) => EVT::I16,
+        EVT::Simple(MVT::V4I32) => EVT::I32,
+        EVT::Simple(MVT::V2I64) => EVT::I64,
+        _ => return None,
+    };
+    if dag.constant(index) != Some(0) || dag.value_type(element) != lane_vt {
+        return None;
+    }
+    let zero_rest = dag.opcode(vector) == ISD::BuildVector
+        && dag.node(vector).ops.clone().iter().all(|lane| dag.is_undef(*lane) || dag.constant(*lane) == Some(0));
+    if !zero_rest && !dag.is_undef(vector) {
+        return None;
+    }
+    let (wide_vt, wide) = match lane_vt {
+        EVT::I8 | EVT::I16 => {
+            let wide = if zero_rest {
+                dag.get_zext_or_trunc(element, EVT::I32)
+            } else {
+                dag.get_any_ext_or_trunc(element, EVT::I32)
+            };
+            (EVT::Simple(MVT::V4I32), wide)
+        }
+        _ => (vt, element),
+    };
+    let mut low = dag.get_node(ISD::ScalarToVector, wide_vt, &[wide]);
+    if zero_rest {
+        low = dag.get_node(x86isd::VZEXT_MOVL, wide_vt, &[low]);
+    }
+    Some(if wide_vt == vt { low } else { dag.get_node(ISD::BitCast, vt, &[low]) })
 }
 
 /// `LowerMUL` for `v4i32` without `pmulld` ([L30010][pin]): `pmuludq` of the even lanes and of the odd lanes (moved

@@ -897,10 +897,13 @@ impl Placer {
             }
         }
         let (gains, lost) = match self.top {
-            Some(clocks) => (
-                (back_edge + other) * clocks.saved_clocks,
-                (to_top + to_exit + from_pred) * clocks.jump_clocks,
-            ),
+            Some(clocks) => {
+                // A block placement copies into the one jump to it: the jump
+                // goes with the copy, so the fall-through lost is no clocks.
+                let copied = best.is_some_and(|best| self.succ[best].len() == 1) && self.should_tail_duplicate(new);
+                let from_pred = if copied { 0.0 } else { from_pred };
+                ((back_edge + other) * clocks.saved_clocks, (to_top + to_exit + from_pred) * clocks.jump_clocks)
+            }
             None => (back_edge + other, to_top + to_exit + from_pred),
         };
         if gains > lost { gains - lost } else { 0.0 }
