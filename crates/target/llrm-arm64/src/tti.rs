@@ -849,6 +849,10 @@ impl Tti for AArch64 {
         128
     }
 
+    fn slp_priced(&self) -> bool {
+        true
+    }
+
     /// The selector has `CMxx`, `FCMxx` and `BSL`/`BIT`/`BIF` for a vector
     /// `icmp`, `fcmp` and `select`.
     fn selects_vector_compares(&self) -> bool {

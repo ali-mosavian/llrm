@@ -290,7 +290,7 @@ impl FunctionPass for SlpVectorize {
         if tti.vector_register_bits() == 0 || !outer.target().has_vector_mir() {
             return PreservedAnalyses::all();
         }
-        let chains = run_function(unit.context, unit.layout, unit.function, &outer, &*tti);
+        let chains = tti.slp_priced() && run_function(unit.context, unit.layout, unit.function, &outer, &*tti);
         // The pin's one pass also makes the wide compare of an `and` chain.
         let compares = crate::slpcompares::SlpCompares.run(unit, analyses);
         if chains { PreservedAnalyses::none() } else { compares }

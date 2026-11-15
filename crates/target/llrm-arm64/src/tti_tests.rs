@@ -589,7 +589,8 @@ fn vector_float_compare_select_cast_and_scalarization_costs_are_the_pins() {
         );
         // Conversions of one lane width past the table's rows are their
         // halves' (`opt -passes=print<cost-model>`: 2, 4, 2, 2, 2); they had no
-        // price, so a loop with one (jpeg_single's clamp, VF 8) was not planned.
+        // price, so a loop with one (jpeg_single's clamp, VF 8) was not
+        // planned.
         assert_eq!(
             (
                 cast(FPToSI, i(32, 8), f(8)),
@@ -823,4 +824,9 @@ fn vector_costs_at_code_size_are_the_pins() {
     assert_eq!((cast(SExt, i(64, 8), i(16, 8)), cast(ZExt, i(32, 8), i(16, 8))), (Some(6), Some(2)));
     let cmp = |op, ty, predicate| tti.vector_cmp_sel_cost(op, ty, predicate, k).map(|c| c.value);
     assert_eq!((cmp(ICmp, i(32, 4), Some(Int(I::Slt))), cmp(Select, i(32, 4), Some(Int(I::Slt)))), (Some(1), Some(1)));
+}
+
+#[test]
+fn slp_runs_on_arm64() {
+    assert!(AArch64::of_cpu("generic").unwrap().slp_priced());
 }

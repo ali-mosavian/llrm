@@ -869,6 +869,14 @@ pub trait Tti {
         None
     }
 
+    /// Whether the SLP vectorizer's tree and store chains run: only where the
+    /// target's vector costs are priced against the pin (arm64). DEVIATE SLP2
+    /// (owner arm64, exit 2026-11-30): a target with vector registers and no
+    /// priced hooks keeps its scalar code.
+    fn slp_priced(&self) -> bool {
+        false
+    }
+
     /// `getMinVectorRegisterBitWidth`: the narrowest vector the SLP vectorizer
     /// forms (TargetTransformInfoImpl L654: 128).
     fn min_vector_register_bits(&self) -> u32 {
