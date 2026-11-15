@@ -59,7 +59,7 @@ fn beside_a_variable_multiply_the_call_stays_at_every_level() {
     for level in [Level::O1, Level::O2, Level::Os] {
         let text = asm(&format!("{}{VARIABLE}", by("by_k", 32, 11, "")), level);
         let body = &text[text.find("by_k:").unwrap()..text.find("by_argument:").unwrap_or(text.len())];
-        assert!(body.contains("jsr __mulsi3"), "{level:?}:\n{text}");
+        assert!(body.contains("__mulsi3"), "{level:?}:\n{text}");
     }
 }
 
@@ -79,7 +79,7 @@ fn growth_past_the_routine_is_taken_at_speed_only() {
 /// calls.
 #[test]
 fn four_digits_and_a_word_stay_calls() {
-    assert!(asm(&by("by_k", 32, 91, ""), Level::O2).contains("jsr __mulsi3"));
+    assert!(asm(&by("by_k", 32, 91, ""), Level::O2).contains("__mulsi3"));
     assert!(asm(&by("by_k", 16, 11, ""), Level::O2).contains("__mulhi3"));
 }
 

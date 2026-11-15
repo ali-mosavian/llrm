@@ -323,6 +323,35 @@ b3:
     }
 }
 
+/// Opt: a variable-length array whose count the call fixes (`vla(5)`) stayed
+/// where it was copied, after the `stacksave`, with no lifetime markers; the
+/// pin moves it to the caller's entry and marks it (vla_callee_constant -O1
+/// wasm: 619 B against the pin's 600).
+#[test]
+fn a_vla_the_call_makes_constant_goes_to_the_callers_entry_with_markers() {
+    let text = "define internal i16 @vla(i16 %n) {
+b1:
+  %a = alloca i16, i16 %n
+  store i16 %n, ptr %a
+  %v = load i16, ptr %a
+  ret i16 %v
+}
+
+define i16 @main() {
+b1:
+  %r = call i16 @vla(i16 5)
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    assert!(inline_into(&mut module, "main", 1));
+    let out = printed(&module);
+    let main = out.split("define i16 @main").nth(1).unwrap();
+    let (alloca, save) = (main.find("alloca").expect("alloca"), main.find("stacksave").expect("stacksave"));
+    assert!(alloca < save, "the static alloca is on the entry, before the save: {out}");
+    assert!(main.contains("lifetime.start"), "the moved alloca is bounded: {out}");
+}
+
 #[test]
 fn test_inlining_inside_a_loop_retargets_the_self_edge() {
     let text = "define internal i16 @step(i16 %x) {
