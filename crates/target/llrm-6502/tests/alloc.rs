@@ -377,7 +377,8 @@ fn a_pointer_live_across_a_call_survives_it() {
     let text = compile(ir, "keep");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
     let setup = &args(&[sym("vals"), byte(5)]);
-    // `__mulqi3` names `rc2`, `rc3`: the pair stays in a scratch pair it leaves alone, saved nowhere
+    // `__mulqi3` names `rc2`, `rc3`: the pair stays in a scratch pair it leaves
+    // alone, saved nowhere
     assert!(text.contains("jsr __mulqi3") && !text.contains("pha") && !text.contains("rc9"), "{text}");
     assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
 }

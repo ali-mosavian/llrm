@@ -158,9 +158,10 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
         cells.extend(cells_of(text)?);
         // the span must end in a return or a jump: a fall-through is a callee
         // the scan did not follow
-        let last = text.lines().map(|line| line.split(';').next().unwrap_or("").trim()).rfind(|code| {
-            !code.is_empty() && !code.ends_with(':') && !code.starts_with('.')
-        })?;
+        let last = text
+            .lines()
+            .map(|line| line.split(';').next().unwrap_or("").trim())
+            .rfind(|code| !code.is_empty() && !code.ends_with(':') && !code.starts_with('.'))?;
         if !(last == "rts" || last.starts_with("jmp ")) {
             return None;
         }
@@ -171,7 +172,8 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
             if runtime.macros.get(op).is_some_and(|&mentions| mentions) {
                 return None;
             }
-            // a call, a jump or a branch to another routine's label (`bne udivmod16c`)
+            // a call, a jump or a branch to another routine's label (`bne
+            // udivmod16c`)
             if let Some(target) = arg.filter(|target| runtime.routines.contains_key(target)) {
                 pending.push(target);
             } else if matches!(op, "jsr" | "jmp") && arg.is_none_or(|target| !target.starts_with('@')) {

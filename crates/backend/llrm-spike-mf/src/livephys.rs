@@ -126,7 +126,8 @@ impl LiveLanes {
             }
         }
         if inst.call {
-            let clobbered = inst.call_clobbers.as_ref().map_or_else(T::caller_saved, |known| known.iter().copied().collect());
+            let clobbered =
+                inst.call_clobbers.as_ref().map_or_else(T::caller_saved, |known| known.iter().copied().collect());
             for root in clobbered {
                 self.remove(info, root);
             }
@@ -220,8 +221,9 @@ impl PhysLiveness {
         for inst in insts[at..insts.len() - nearest * STRIDE].iter().rev() {
             live.step_backward::<T>(info, assignment, inst);
         }
-        // a change after `at` that keeps the block's length is not seen by the checkpoints: checked in full on
-        // short blocks, on every 4096th position of a long one
+        // a change after `at` that keeps the block's length is not seen by the
+        // checkpoints: checked in full on short blocks, on every 4096th
+        // position of a long one
         #[cfg(debug_assertions)]
         if insts.len() <= 512 || at % 4096 == 0 {
             let mut slow = self.live_out[b].clone();

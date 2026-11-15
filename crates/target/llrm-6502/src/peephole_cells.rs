@@ -50,8 +50,8 @@ fn caller_saved(n: u8) -> bool {
 }
 
 /// Whether `inst`, a `jsr`, leaves the scratch cell `rcn` (`n >= 16`) as it
-/// was: a runtime routine whose text names no such cell (`routines::cells_named`;
-/// the allocator keeps a value there across it).
+/// was: a runtime routine whose text names no such cell
+/// (`routines::cells_named`; the allocator keeps a value there across it).
 fn call_keeps_scratch(
     inst: &Inst,
     n: u8,
