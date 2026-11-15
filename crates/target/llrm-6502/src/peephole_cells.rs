@@ -770,16 +770,13 @@ pub fn bytes_of_text(text: &str) -> u32 {
     bytes_of(&Asm::parse(text).lines).unwrap_or(0)
 }
 
-fn bytes_of(lines: &[Line]) -> Option<u32> {
+/// The bytes of the instructions in `lines`; none when one is a form the
+/// emitter does not write.
+pub fn bytes_of(lines: &[Line]) -> Option<u32> {
     let mut total = 0;
     for line in lines {
         if let Line::Inst(inst) = line {
-            total += crate::timing::instruction(
-                crate::dagisel::hooks::Cpu::Mos6502,
-                inst.op.name(),
-                &inst.operand.to_string(),
-            )?
-            .bytes;
+            total += crate::timing::of(crate::dagisel::hooks::Cpu::Mos6502, inst)?.bytes;
         }
     }
     Some(total)

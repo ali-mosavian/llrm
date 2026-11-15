@@ -1,12 +1,13 @@
 //! DEVIATE LG3 where bytes outrank clocks: at -Os the end-biased solution is
-//! refused when the target's byte table prices it larger than the pin's, at
-//! -Os and at -O1 alike: both axes are strict at -O1, and a form that saves a
-//! loop instruction for more bytes is a trade no bar counts (quicksort -O1
-//! m32: 27 B larger, over the bytes bar, for one instruction).
+//! refused when the target's byte table prices it larger than the pin's, and at
+//! -O1 where the target does not price bytes at speed. -O1 is judged on clocks
+//! (user ruling 2026-11-14): where the byte price at speed counts it keeps a
+//! form that saves a loop instruction for a byte, as -O2 does.
 
 use std::rc::Rc;
 
 use llrm_transforms::lsr_pass::LoopStrengthReduce;
+use llrm_transforms::pipeline::{self, Applied, Options};
 
 struct Flat;
 
@@ -76,7 +77,10 @@ exit:
 }
 ";
 
-fn reduced(size: bool, bytes_strict: bool) -> String {
+fn reduced(
+    size: bool,
+    bytes_strict: bool,
+) -> String {
     let mut module = llrm_mir::parse::module(SWAP).unwrap_or_else(|why| panic!("{why:?}"));
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(LoopStrengthReduce { size, bytes_strict });
@@ -85,14 +89,29 @@ fn reduced(size: bool, bytes_strict: bool) -> String {
 }
 
 /// The swap loop's end-biased form saves a loop instruction (2 against 3) for
-/// one byte of setup (24 against 23). -O1 kept it on the instruction, as it kept
-/// quicksort's (27 B for one instruction, 286 B against a 268 B bar).
+/// one byte of setup (24 against 23). -O1 refused it on the byte even where
+/// the target prices bytes at speed (`speed_rate_at_o1`, -O1 judged on clocks):
+/// m16 grep -O1 kept the pin's three counters and spilled the scan loop (46.4M
+/// clocks against bcc's 33.9M). The pin's -O1 (no rate) still refuses it.
 #[test]
-fn o1_refuses_end_biased_that_saves_an_instruction_for_a_byte() {
-    let speed = reduced(false, false);
-    assert!(speed.contains("llrm-end-biased"), "premise: at speed the swap loop is end-biased\n{speed}");
-    let o1 = reduced(false, true);
-    assert!(!o1.contains("llrm-end-biased"), "-O1 kept a form the byte table prices larger\n{o1}");
+fn o1_keeps_end_biased_that_saves_an_instruction_for_a_byte_where_bytes_are_priced() {
+    let rated = Options { speed_rate: true, ..Options::basic() };
+    let text = in_strength_slot(rated);
+    assert!(text.contains("llrm-end-biased"), "-O1 with the byte price at speed kept the pin's form on a byte\n{text}");
+    let unrated = in_strength_slot(Options::basic());
+    assert!(!unrated.contains("llrm-end-biased"), "-O1 without the rate holds bytes\n{unrated}");
+    let os = in_strength_slot(Options::size());
+    assert!(!os.contains("llrm-end-biased"), "-Os has no clock axis\n{os}");
+}
+
+fn in_strength_slot(options: Options) -> String {
+    let mut module = llrm_mir::parse::module(SWAP).unwrap_or_else(|why| panic!("{why:?}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for pass in pipeline::strength_slot(&Applied { options, ..Applied::default() }) {
+        manager.add_boxed(pass);
+    }
+    manager.run_module(&mut module, Rc::new(Flat)).expect("runs");
+    llrm_mir::print::module(&module)
 }
 
 /// -Os has no clock axis: the same form costs a byte and is refused.
