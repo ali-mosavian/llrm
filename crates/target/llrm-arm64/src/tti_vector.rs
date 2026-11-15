@@ -126,6 +126,56 @@ const CONVERSIONS: &[(CastKind, VectorTy, VectorTy, i64)] = &[
     (CastKind::FPToUI, v(Ty::Int(8), 2), v(Ty::Double, 2), 2),
 ];
 
+/// `AArch64TTIImpl::getExtendedReductionCost`
+/// ([L6682](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6682)):
+/// an add reduction of an extension the target does natively (`uaddlv` of 8,
+/// 16 or 32 bits to at most 32; `uaddlp` of 32 to 64) costs 2 for each register
+/// but the first and 2 more. The rest is `BaseT`'s: `None`.
+pub(crate) fn extended_reduction_cost(
+    kind: ReduceKind,
+    _unsigned: bool,
+    result: Ty,
+    vec: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    if cost_kind != CostKind::RecipThroughput || kind != ReduceKind::Add {
+        return None;
+    }
+    let (first, lane) = vector_pieces(vec)?;
+    let result_bits = lane_bits(result)?;
+    // `VecVT.getSizeInBits() >= 64`; the legal type is one register's lanes.
+    if u64::from(lane) * u64::from(vec.count) < 64 {
+        return None;
+    }
+    let native = match lane {
+        8 | 16 => result_bits <= 32,
+        32 => result_bits <= 64,
+        _ => false,
+    };
+    native.then(|| Cost::of((first - 1) * 2 + 2))
+}
+
+/// `BasicTTIImplBase::getCastInstrCost`, a cast between vectors a legalization
+/// splits (wider than a register): the cast of the halves twice, and the split
+/// itself (1) unless both types split.
+fn split_cast_cost(
+    kind: CastKind,
+    dst: VectorTy,
+    src: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let (dst_pieces, _) = vector_pieces(dst)?;
+    let (src_pieces, _) = vector_pieces(src)?;
+    let (split_dst, split_src) = (dst_pieces > 1, src_pieces > 1);
+    if (!split_dst && !split_src) || dst.count != src.count || dst.count < 2 {
+        return None;
+    }
+    let half = |ty: VectorTy| VectorTy { lane: ty.lane, count: ty.count / 2 };
+    let piece = cast_cost(kind, half(dst), half(src), cost_kind)?;
+    let split = if split_dst && split_src { 0 } else { 1 };
+    Some(Cost::of(split + 2 * piece.value))
+}
+
 /// `getCastInstrCost` for fixed vectors, throughput: a row of the conversion
 /// table, or a bitcast between types of the same registers
 /// (`BasicTTIImpl::getCastInstrCost`: free).
@@ -160,6 +210,11 @@ pub(crate) fn cast_cost(
         && vector_pieces(dst).zip(vector_pieces(src)).is_some_and(|((_, to), (_, from))| to == from)
     {
         return ext_cast_cost(kind, dst, src);
+    }
+    if matches!(kind, CastKind::SExt | CastKind::ZExt | CastKind::Trunc) {
+        if let Some(cost) = split_cast_cost(kind, dst, src, cost_kind) {
+            return Some(cost);
+        }
     }
     if kind == CastKind::BitCast {
         let (to, from) = (vector_pieces(dst)?, vector_pieces(src)?);

@@ -286,15 +286,23 @@ impl FunctionPass for SlpVectorize {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        let chains = outer
-            .target()
-            .tti()
-            .is_some_and(
-                |tti| tti.slp_priced()
-                    && tti.vector_register_bits() > 0
-                    && outer.target().has_vector_mir()
-                    && run_function(unit.context, unit.layout, unit.function, &outer, &*tti),
-            );
+        let chains = outer.target().tti().is_some_and(|tti| {
+            tti.slp_priced()
+                && tti.vector_register_bits() > 0
+                && outer.target().has_vector_mir()
+                && {
+                    let stores = run_function(unit.context, unit.layout, unit.function, &outer, &*tti);
+                    let reductions = crate::slpreduction::run_function(
+                        unit.context,
+                        unit.layout,
+                        unit.function,
+                        unit.declared,
+                        &outer,
+                        &*tti,
+                    );
+                    stores || reductions
+                }
+        });
         // The pin's one pass also makes the wide compare of an `and` chain; it
         // runs wherever it did before this pass held the store chains.
         let compares = crate::slpcompares::SlpCompares.run(unit, analyses);

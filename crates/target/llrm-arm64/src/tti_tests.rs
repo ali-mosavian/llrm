@@ -830,3 +830,29 @@ fn vector_costs_at_code_size_are_the_pins() {
 fn slp_runs_on_arm64() {
     assert!(AArch64::of_cpu("generic").unwrap().slp_priced());
 }
+
+/// `opt -passes='print<cost-model>' -cost-kind=throughput` on aarch64: an
+/// extension or truncation wider than a register is `BaseT`'s split (the casts
+/// of the halves twice, 1 for the split unless both split), and a reduction of
+/// it adds `getArithmeticReductionCost`. The SLP vectorizer's tile row (40
+/// `sext i16` loads summed) read `None` for both and kept the sum scalar.
+#[test]
+fn wide_vector_casts_and_extended_reductions_are_the_pins() {
+    use llrm_mir::intrinsics::ReduceKind;
+    let i = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+    for cpu in ["generic", "apple-m1"] {
+        let tti = AArch64::of_cpu(cpu).unwrap();
+        let k = CostKind::RecipThroughput;
+        let cast = |kind, to, from| tti.vector_cast_cost(kind, to, from, k).map(|c| c.value);
+        assert_eq!(cast(CastKind::SExt, i(64, 8), i(16, 8)), Some(6), "{cpu}");
+        assert_eq!(cast(CastKind::SExt, i(64, 32), i(16, 32)), Some(24), "{cpu}");
+        assert_eq!(cast(CastKind::ZExt, i(64, 16), i(16, 16)), Some(12), "{cpu}");
+        assert_eq!(cast(CastKind::Trunc, i(16, 32), i(64, 32)), Some(12), "{cpu}");
+        let reduce = tti.vector_reduction_cost(ReduceKind::Add, i(64, 32), false, k).map(|c| c.value);
+        assert_eq!(reduce, Some(17), "{cpu}");
+        // The native `uaddlv`/`uaddlp` forms are narrower than this: `BaseT`'s.
+        assert_eq!(tti.vector_extended_reduction_cost(ReduceKind::Add, false, Ty::Int(64), i(16, 32), k), None, "{cpu}");
+        let native = tti.vector_extended_reduction_cost(ReduceKind::Add, true, Ty::Int(32), i(8, 16), k);
+        assert_eq!(native.map(|c| c.value), Some(2), "{cpu}");
+    }
+}
