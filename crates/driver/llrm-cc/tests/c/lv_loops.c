@@ -38,3 +38,5 @@ void shift_ints(void) { for (int i = 0; i < 1024; ++i) si[i] = (si[i] << 3) + (s
 
 void fill_value(int *a, int v, int n) { for (int i = 0; i < n; ++i) a[i] = v; }
 void fill_long_value(long *a, long v, int n) { for (int i = 0; i < n; ++i) a[i] = v; }
+
+void add_five(void) { for (int i = 0; i < 1024; ++i) a[i] += 5; }
