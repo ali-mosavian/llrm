@@ -49,3 +49,17 @@ fn forty_sign_extended_loads_summed_become_two_vector_loads_and_one_reduction() 
     assert_eq!(text.matches("add <8 x i64>").count(), 1, "{text}");
     assert_eq!(text.matches("add i64 %rdx, %3").count(), 1, "{text}");
 }
+
+/// jpeg_fixed/jpeg_single -Os: SLP made `store <2 x i8> <66, 77>` (a bitmap
+/// magic) that llc refuses (`vector with no register class`); a vector under
+/// 64 bits is not priced, so the stores stay scalar.
+#[test]
+fn constant_stores_that_make_less_than_a_d_register_stay_scalar() {
+    let text = run(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+@bmp = global [4 x i8] zeroinitializer\n\
+define void @f() {\nentry:\n  store i8 66, ptr @bmp, align 1\n  store i8 77, ptr getelementptr inbounds (i8, ptr @bmp, i64 1), align 1\n  \
+store i16 1, ptr getelementptr inbounds (i8, ptr @bmp, i64 2), align 2\n  ret void\n}\n",
+    );
+    assert_eq!(text.matches("x i8>").count() + text.matches("x i16>").count(), 0, "{text}");
+}

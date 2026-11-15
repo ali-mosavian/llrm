@@ -365,6 +365,47 @@ impl X86 {
     }
 }
 
+/// `SSE2ConversionTbl`'s integer rows (the pin's `X86TargetTransformInfo.cpp`, L3526): a cast, its destination and
+/// source as (lane bits, lanes), and the throughput; the other three cost kinds are 1.
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3526
+const SSE2_INTEGER_CASTS: [(CastKind, (u32, u32), (u32, u32), i64); 23] = [
+    (CastKind::ZExt, (64, 2), (8, 16), 4),
+    (CastKind::SExt, (64, 2), (8, 16), 4),
+    (CastKind::ZExt, (32, 4), (8, 16), 2),
+    (CastKind::SExt, (32, 4), (8, 16), 3),
+    (CastKind::ZExt, (16, 8), (8, 16), 1),
+    (CastKind::SExt, (16, 8), (8, 16), 2),
+    (CastKind::ZExt, (64, 2), (16, 8), 2),
+    (CastKind::SExt, (64, 2), (16, 8), 3),
+    (CastKind::ZExt, (32, 4), (16, 8), 1),
+    (CastKind::SExt, (32, 4), (16, 8), 2),
+    (CastKind::ZExt, (64, 2), (32, 4), 1),
+    (CastKind::SExt, (64, 2), (32, 4), 2),
+    (CastKind::Trunc, (8, 16), (16, 8), 2),
+    (CastKind::Trunc, (8, 16), (16, 16), 3),
+    (CastKind::Trunc, (8, 16), (32, 4), 3),
+    (CastKind::Trunc, (8, 16), (32, 16), 7),
+    (CastKind::Trunc, (16, 2), (32, 2), 1),
+    (CastKind::Trunc, (16, 8), (32, 4), 3),
+    (CastKind::Trunc, (16, 8), (32, 8), 5),
+    (CastKind::Trunc, (16, 16), (32, 16), 10),
+    (CastKind::Trunc, (8, 16), (64, 2), 4),
+    (CastKind::Trunc, (16, 8), (64, 2), 2),
+    (CastKind::Trunc, (32, 4), (64, 2), 1),
+];
+
+/// `getTypeLegalizationCost` of an integer vector of 8 to 64-bit lanes and a power-of-two lane count: a type under
+/// 128 bits is widened to a register (`X86TargetLowering::getPreferredVectorAction` widens every vector but one lane);
+/// a wider one is split to registers, each its own operation.
+fn legalized_vector(ty: VectorTy) -> Option<(i64, (u32, u32))> {
+    let Ty::Int(bits @ (8 | 16 | 32 | 64)) = ty.lane else { return None };
+    if !ty.count.is_power_of_two() || ty.count < 2 {
+        return None;
+    }
+    let total = bits * ty.count;
+    Some((i64::from(total.div_ceil(128)), (bits, 128 / bits)))
+}
+
 /// `getTypeLegalizationCost` for the scalar types: how many operations of what
 /// type a value takes, the integer registers being `native` bits wide (32, or
 /// 64 in long mode):
@@ -723,6 +764,7 @@ impl X86 {
         } else {
             "nosse"
         };
+        let cost_kind = kind;
         let kind = match kind {
             CostKind::RecipThroughput => "throughput",
             CostKind::Latency => "latency",
@@ -734,7 +776,9 @@ impl X86 {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+            None => base_intrinsic_cost(name)
+                .or_else(|| library_call_intrinsic_cost(name, cost_kind))
+                .unwrap_or(Cost::INVALID),
         }
     }
 }
@@ -816,6 +860,10 @@ impl Tti for X86 {
 
     fn inline_trial_keeps_shrinking_copy(&self) -> bool {
         self.tuning.inline_trial_keeps_shrinking_copy
+    }
+
+    fn inline_trial_cold_margin(&self) -> i64 {
+        self.tuning.inline_trial_cold_margin
     }
 
     fn second_ipsccp(&self) -> bool {
@@ -1285,6 +1333,10 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    fn vectorizes_at_size(&self) -> bool {
+        self.tuning.vectorize_at_size
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
@@ -1380,6 +1432,36 @@ impl Tti for X86 {
             }
             _ => None,
         }
+    }
+
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
+    /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
+    /// legalized, is free. Anything else (a float, a mask, a scalarized cast) is not priced.
+    fn vector_cast_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !matches!(kind, CastKind::ZExt | CastKind::SExt | CastKind::Trunc) {
+            return None;
+        }
+        let (Ty::Int(to), Ty::Int(from)) = (dst.lane, src.lane) else { return None };
+        let row = |kind: CastKind, dst: (u32, u32), src: (u32, u32)| {
+            SSE2_INTEGER_CASTS
+                .iter()
+                .find(|&&(one, to, from, _)| one == kind && to == dst && from == src)
+                .map(|&(.., throughput)| if cost_kind == CostKind::RecipThroughput { throughput } else { 1 })
+        };
+        if let Some(cost) = row(kind, (to, dst.count), (from, src.count)) {
+            return Some(Cost::of(cost));
+        }
+        let ((to_pieces, to_mvt), (from_pieces, from_mvt)) = (legalized_vector(dst)?, legalized_vector(src)?);
+        if kind == CastKind::Trunc && to_mvt == from_mvt {
+            return Some(Cost::FREE);
+        }
+        row(kind, to_mvt, from_mvt).map(|cost| Cost::of(to_pieces.max(from_pieces) * cost))
     }
 
     fn opt_size_inline_chain_trial(&self) -> bool {

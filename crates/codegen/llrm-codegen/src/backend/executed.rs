@@ -101,6 +101,9 @@ pub struct Executed {
     pub branches: f64,
     pub taken: f64,
     pub jumps: f64,
+    /// x87 `fxch`es executed: one instruction here, `x87_exchange` clocks on
+    /// the CPU.
+    pub exchanges: f64,
 }
 
 impl Executed {
@@ -113,6 +116,21 @@ impl Executed {
         Ok(self.taken * cost("jcc")?
             + (self.branches - self.taken) * cost("jcc_not_taken")?
             + self.jumps * cost("jmp_short")?)
+    }
+
+    /// What the exchanges cost over the one unit an instruction counts: a 486
+    /// `fxch` is 4 clocks, so a rotation that adds two to a loop is not
+    /// cheaper.
+    pub fn exchange_cycles(
+        &self,
+        cpu: &Profile,
+    ) -> Result<f64, String> {
+        // A CPU with no x87 states no price, and a body with no exchange
+        // needs none.
+        if self.exchanges == 0.0 {
+            return Ok(0.0);
+        }
+        Ok(self.exchanges * (cpu.cost("x87_exchange")? as f64 - 1.0))
     }
 }
 
@@ -198,6 +216,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     }
     let frequency = Frequency::counted(body);
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
+    let is_fxch = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fxch"));
     let slots: IndexSet<Addr> = body
         .blocks
         .iter()
@@ -255,6 +274,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                         (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
                 Some((Operation::Jump, _)) => out.jumps += reaching,
+                Some((Operation::Exchange, _)) if is_fxch(one) => out.exchanges += reaching,
                 _ => {}
             }
             // A remat may be built as a reload; it counts as a remat.
@@ -302,6 +322,14 @@ mod tests {
 
     /// NOTHING anchors print no bytes, yet each counted as an executed
     /// instruction: nbody.c read 144 more with its asm unchanged.
+    #[test]
+    fn test_an_fxch_costs_the_486_three_clocks_over_one_instruction() {
+        let cpu = cpu::profile("486").unwrap();
+        let done = super::Executed { exchanges: 2.0, ..Default::default() };
+        assert_eq!(done.exchange_cycles(cpu).unwrap(), 6.0);
+        assert_eq!(super::Executed::default().exchange_cycles(cpu).unwrap(), 0.0);
+    }
+
     #[test]
     fn test_anchors_that_print_nothing_do_not_execute() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
