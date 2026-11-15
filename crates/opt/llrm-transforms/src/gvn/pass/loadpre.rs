@@ -18,6 +18,9 @@
 //! pointer is not moved to the preheader.
 //! DEVIATE 22, `ImplicitControlFlowTracking` is asked by scanning the block (a
 //! block is scanned for each PRE candidate, not each instruction).
+//! DEVIATE 23, beyond LLVM (GCC `tree-ssa-pre`): a load whose unavailable
+//! predecessors all hang off one unavailable block is loaded at the end of that
+//! block (`perform_region_load_pre`).
 
 use llrm_mir::dense::IdMap;
 use llrm_mir::loopinfo::LoopInfo;
@@ -414,7 +417,14 @@ impl GvnPass<'_> {
         // PRE is only worth it when it needs one new load, the others being
         // moved.
         if num_insert_preds > 1 {
-            return false;
+            // Nothing is changed yet: a critical edge is only noted.
+            return self.perform_region_load_pre(
+                load,
+                load_bb,
+                values_per_block,
+                unavailable_blocks,
+                &mut fully_available_blocks,
+            );
         }
         // Speculating the load needs it to be safe where it lands.
         if must_ensure_safety_of_speculative_execution {
@@ -514,6 +524,123 @@ impl GvnPass<'_> {
             &available_loads,
             Some(&critical_edge_pred_and_load),
         );
+        true
+    }
+
+    /// DEVIATE 23, beyond LLVM (GCC `tree-ssa-pre`: insertion where the
+    /// expression is anticipated, not only in the predecessors of its block).
+    /// When the load's unavailable predecessors are several blocks that all
+    /// hang off one unavailable block `f` (a diamond below a loop header,
+    /// entered from the preheader), `performLoadPRE` refuses for want of one
+    /// insertion point. The region of the blocks the load can be reached
+    /// through from `f` is closed (each leaves only into the region) and free
+    /// of defs and clobbers, so the load is anticipated at the end of `f`:
+    /// it is loaded there, and the SSA construction carries it down to the
+    /// load.
+    fn perform_region_load_pre(
+        &mut self,
+        load: InstId,
+        load_bb: BlockId,
+        values_per_block: &mut Vec<AvailableValueInBlock>,
+        unavailable_blocks: &[BlockId],
+        fully_available_blocks: &mut IdMap<BlockId, Availability>,
+    ) -> bool {
+        const MAX_REGION: usize = 32;
+        if self.is_dominated_by_icf_from_same_block(load) {
+            return false;
+        }
+        let mut region: Vec<BlockId> = Vec::new();
+        let mut frontier: Vec<BlockId> = Vec::new();
+        let mut stack = vec![load_bb];
+        while let Some(block) = stack.pop() {
+            if region.contains(&block) {
+                continue;
+            }
+            region.push(block);
+            if region.len() > MAX_REGION {
+                return false;
+            }
+            for pred in self.function.edge_predecessors(block) {
+                if values_per_block.iter().any(|one| one.bb == pred) {
+                    continue;
+                }
+                if unavailable_blocks.contains(&pred) {
+                    if !frontier.contains(&pred) {
+                        frontier.push(pred);
+                    }
+                    continue;
+                }
+                if self.is_value_fully_available_in_block(pred, fully_available_blocks) {
+                    continue;
+                }
+                stack.push(pred);
+            }
+        }
+        let [f] = frontier[..] else { return false };
+        if region.contains(&f) {
+            return false;
+        }
+        let f_successors = self.function.successors(f);
+        let [entry] = f_successors[..] else { return false };
+        if !region.contains(&entry) || self.has_icf(f) {
+            return false;
+        }
+        // Closed: every way out of a region block stays in the region.
+        for &block in &region {
+            if block != load_bb && self.function.successors(block).iter().any(|next| !region.contains(next)) {
+                return false;
+            }
+            if block != load_bb && self.has_icf(block) {
+                return false;
+            }
+        }
+        // A path from `entry` to the load inside the region.
+        let mut parent: Vec<(BlockId, BlockId)> = Vec::new();
+        let mut queue = std::collections::VecDeque::from([entry]);
+        let mut seen = vec![entry];
+        while let Some(block) = queue.pop_front() {
+            for next in self.function.successors(block) {
+                if region.contains(&next) && !seen.contains(&next) {
+                    seen.push(next);
+                    parent.push((next, block));
+                    queue.push_back(next);
+                }
+            }
+        }
+        let mut hops: Vec<(BlockId, BlockId)> = Vec::new();
+        let mut cur = load_bb;
+        while cur != entry {
+            let Some(&(_, up)) = parent.iter().find(|(block, _)| *block == cur) else { return false };
+            hops.push((cur, up));
+            cur = up;
+        }
+        hops.push((entry, f));
+        let mut new_insts: Vec<InstId> = Vec::new();
+        let mut load_ptr = Some(self.function.instruction(load).operands[0]);
+        for (cur, pred) in hops {
+            let Some(pointer) = load_ptr else { break };
+            let mut address = llrm_analysis::mssa::phitrans::PhiTransAddr::new(self.function, pointer);
+            load_ptr = address.translate_with_insertion(
+                self.context,
+                self.layout,
+                self.function,
+                &self.dt,
+                cur,
+                pred,
+                &mut new_insts,
+            );
+        }
+        let Some(pointer) = load_ptr else {
+            while let Some(inst) = new_insts.pop() {
+                self.function.erase(inst).expect("nothing uses it");
+            }
+            return false;
+        };
+        for &inst in &new_insts {
+            let value = Operand::Value(self.function.instruction(inst).result.expect("a value"));
+            self.lookup_or_add(value);
+        }
+        self.eliminate_partially_redundant_load(load, values_per_block, &[(f, pointer)], None);
         true
     }
 

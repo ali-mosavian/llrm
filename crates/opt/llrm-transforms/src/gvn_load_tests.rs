@@ -515,3 +515,92 @@ b5:
     );
     assert!(!changed && !text.contains(".pre") && !text.contains("poison"), "{text}");
 }
+
+/// m32 `x_heapsort` -O3: the sift loop stores a value to `a[child]` and the
+/// next trip's `a[root]` (`root = child`) is that value, but the load sits in
+/// a merge block two levels below the header, so load PRE (which inserts only
+/// in a direct predecessor of the load) left it: one reload per trip, +761
+/// clk (2.1%) over gcc. The load must be served by the store, with one load
+/// in the preheader.
+#[test]
+fn test_a_loop_carried_store_serves_the_next_trips_load_below_a_diamond() {
+    let (text, changed) = loaded(
+        "define i16 @f(i16 %x, i16 %n) {
+pre:
+  br label %head
+
+head:
+  %root = phi i16 [ 0, %pre ], [ %child, %body ]
+  %c = icmp sgt i16 %root, %n
+  br i1 %c, label %left, label %merge
+
+left:
+  br label %merge
+
+merge:
+  %p = getelementptr i16, ptr @g, i16 %root
+  %v = load i16, ptr %p
+  %lt = icmp slt i16 %v, %x
+  br i1 %lt, label %body, label %exit
+
+body:
+  %r1 = add i16 %root, 1
+  %child = and i16 %r1, 7
+  %q = getelementptr i16, ptr @g, i16 %child
+  store i16 %x, ptr %q
+  br label %head
+
+exit:
+  ret i16 %v
+}
+",
+        &[&[3, 1], &[0, 5], &[-2, 0], &[7, 3]],
+    );
+    let in_loop = text.split("head:").nth(1).expect("the loop").split("exit:").next().expect("its exit");
+    assert!(changed && !in_loop.contains("load"), "the loop reloads a[root] every trip:\n{text}");
+}
+
+/// The region below the preheader must lead only to the load: here `head` can
+/// leave for `exit` without it, so a load in the preheader would run on a path
+/// that never loads (and may trap). The load stays where it is.
+#[test]
+fn test_a_region_that_can_leave_before_the_load_is_not_loaded_in_the_preheader() {
+    let (text, _) = loaded(
+        "define i16 @f(i16 %x, i16 %n) {
+pre:
+  br label %head
+
+head:
+  %root = phi i16 [ 0, %pre ], [ %child, %body ]
+  %c = icmp sgt i16 %root, %n
+  br i1 %c, label %left, label %mid
+
+mid:
+  %d = icmp eq i16 %root, 5
+  br i1 %d, label %exit, label %merge
+
+left:
+  br label %merge
+
+merge:
+  %p = getelementptr i16, ptr @g, i16 %root
+  %v = load i16, ptr %p
+  %lt = icmp slt i16 %v, %x
+  br i1 %lt, label %body, label %exit
+
+body:
+  %r1 = add i16 %root, 1
+  %child = and i16 %r1, 7
+  %q = getelementptr i16, ptr @g, i16 %child
+  store i16 %x, ptr %q
+  br label %head
+
+exit:
+  ret i16 %x
+}
+",
+        &[&[3, 1], &[0, 5], &[-2, 0], &[7, 3]],
+    );
+    let pre = text.split("pre:").nth(1).expect("the preheader").split("head:").next().expect("its end");
+    assert!(!pre.contains("load"), "the preheader loads on a path that never reaches the load:\n{text}");
+}
