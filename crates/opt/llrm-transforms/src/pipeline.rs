@@ -517,7 +517,7 @@ impl Options {
                 self.strength && self.lsr
             }
             "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
-            "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
+            "cgpaddr" | "cgpselectarms" | "cgpcondsplit" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
@@ -1914,6 +1914,10 @@ pub fn recorded(
         } else {
             manager.add(cgpaddr::CgpAddr);
         }
+    }
+    // DEVIATE CB1 (owner x87-b, exit 2026-11-24): clock-priced, so not -Os.
+    if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
+        manager.add(crate::cgpcondsplit::CondSplit);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
     if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
