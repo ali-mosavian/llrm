@@ -1165,6 +1165,9 @@ thread_local! {
 thread_local! {
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Forms of a function (scheduler, return block copied or kept, carry form) built since the last
+    /// [`take_forms_built`].
+    static FORMS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The request's `slot_by_conflicts`, for the allocation on this thread.
     static SLOT_BY_CONFLICTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -1182,6 +1185,11 @@ pub fn take_stack_refusals() -> Vec<(i32, StackRefusal)> {
 /// The allocations run on this thread since the last call.
 pub fn take_allocations() -> usize {
     ALLOCATIONS.with(|one| one.replace(0))
+}
+
+/// The forms of a function built on this thread since the last call: each is allocated a bounded number of times.
+pub fn take_forms_built() -> usize {
+    FORMS_BUILT.with(|one| one.replace(0))
 }
 
 /// One allocation, and whether `strict` held a byte back from `a`.
@@ -3547,6 +3555,7 @@ fn lines_of_form(
     request: &Request,
 ) -> Result<Vec<Line>, String> {
     let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
+        FORMS_BUILT.with(|one| one.set(one.get() + 1));
         let (function, assignment, slots, reads, _) = allocated_with(selected, name, request, duplicate)?;
         finish(&function, &assignment, number, &slots, reads)
     };
