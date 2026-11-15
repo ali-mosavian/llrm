@@ -504,6 +504,13 @@ impl fmt::Display for Inst {
                 let lane = lane_letter(*lanes);
                 write!(out, "dup v{}.{}, v{}.{lane}[{index}]", rd.0, lanes.suffix(), rn.0)
             }
+            Inst::VectorIntUnary { op, lanes, rd, rn } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
+            }
+            Inst::VectorLoadLane { lanes, rt, index, base } => {
+                write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
+            }
             Inst::VectorFpUnary { op, lanes, rd, rn } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
@@ -529,6 +536,7 @@ impl fmt::Display for Inst {
             Inst::VectorFill { rd, fill } => match fill {
                 Fill::Zero => write!(out, "movi.2d v{}, #0", rd.0),
                 Fill::Byte(byte) => write!(out, "movi.16b v{}, #{byte}", rd.0),
+                Fill::Byte8(byte) => write!(out, "movi.8b v{}, #{byte}", rd.0),
                 Fill::Dup(arrangement, source) => {
                     let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
                     write!(out, "dup.{} v{}, {}", arrangement.suffix(), rd.0, gpr(*source, width, false))
@@ -538,6 +546,7 @@ impl fmt::Display for Inst {
                         ImmShape::H8(shift) => ("lsl", "8h", shift),
                         ImmShape::S4(shift) => ("lsl", "4s", shift),
                         ImmShape::S2(shift) => ("lsl", "2s", shift),
+                        ImmShape::H4(shift) => ("lsl", "4h", shift),
                         ImmShape::S4Msl(shift) => ("msl", "4s", shift),
                     };
                     let mnemonic = if *invert { "mvni" } else { "movi" };

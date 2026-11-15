@@ -26,7 +26,6 @@ use llrm_dagisel::instr::{InstrDesc, OperandDesc};
 use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
-use super::generated::m68k_m68000::MACHINE_OPCODES;
 
 /// Codes of the widening multiplies, above the divide-remainders.
 pub const FIRST: u16 = 0xF300;
@@ -43,7 +42,7 @@ pub const MULTIPLICAND: usize = 2;
 pub const SOURCE: usize = 3;
 
 fn pin_code(name: &str) -> Option<u16> {
-    MACHINE_OPCODES.iter().find(|(_, one)| *one == name).map(|(code, _)| *code)
+    super::opcodes::code_of(name)
 }
 
 pub fn names() -> impl Iterator<Item = &'static str> {
