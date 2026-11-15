@@ -33,7 +33,7 @@ fn int_lanes(
     lanes: Arrangement,
     quad: bool,
 ) -> &'static str {
-    match (lanes, quad) {
+    match (lanes.full(), quad && lanes == lanes.full()) {
         (Arrangement::B16, true) => "16i8",
         (Arrangement::B16, false) => "8i8",
         (Arrangement::H8, true) => "8i16",
@@ -41,6 +41,7 @@ fn int_lanes(
         (Arrangement::S4, true) => "4i32",
         (Arrangement::S4, false) => "2i32",
         (Arrangement::D2, _) => "2i64",
+        _ => unreachable!("`full` is a 128-bit arrangement"),
     }
 }
 
@@ -49,7 +50,7 @@ fn float_lanes(
     lanes: Arrangement,
     quad: bool,
 ) -> Option<&'static str> {
-    match (lanes, quad) {
+    match (lanes.full(), quad && lanes == lanes.full()) {
         (Arrangement::S4, true) => Some("4f32"),
         (Arrangement::S4, false) => Some("2f32"),
         (Arrangement::D2, true) => Some("2f64"),

@@ -961,12 +961,13 @@ impl Arrangement {
     }
 
     /// The arrangement of a whole register (`16b`) or of the low half of it
-    /// (`8b`, `quad` false); `2d` has no half.
+    /// (`8b`, `quad` false); `2d` has no half. A 64-bit arrangement (`8b`)
+    /// is its half whatever `quad` says.
     pub fn suffix_of(
         self,
         quad: bool,
     ) -> &'static str {
-        match (self, quad) {
+        match (self.full(), quad && self == self.full()) {
             (Arrangement::B16, true) => "16b",
             (Arrangement::B16, false) => "8b",
             (Arrangement::H8, true) => "8h",
@@ -975,6 +976,7 @@ impl Arrangement {
             (Arrangement::S4, false) => "2s",
             (Arrangement::D2, true) => "2d",
             (Arrangement::D2, false) => unreachable!("a 64-bit register holds no two doubles"),
+            _ => unreachable!("`full` is a 128-bit arrangement"),
         }
     }
 
