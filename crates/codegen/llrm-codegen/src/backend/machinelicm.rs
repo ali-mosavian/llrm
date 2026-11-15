@@ -699,6 +699,8 @@ struct X86<'a> {
     classes: &'a RegisterClasses,
     regs: llrm_lir::registers::Regs,
     floating: std::collections::BTreeSet<u32>,
+    /// The `floating` values that live in an xmm register: no x87 stack slot holds them.
+    xmm: std::collections::BTreeSet<u32>,
     control_word_written: bool,
     /// The loop being walked.
     calls: bool,
@@ -922,8 +924,12 @@ impl licm::Policy<Wrapped> for X86<'_> {
         let invariant_load = loaded(one).is_some() && one.invariant();
         let limit = self.classes.available.len();
         let facts_every_trip = (facts.every_trip)(at);
+        // An invariant load into an xmm register is hoisted like any other: the stack the `floating` values wait
+        // on is the x87's, and the allocator can load the constant again where it wants it.
         let mut movable = candidate(one, self.classes, loads_here)
-            && value.is_some_and(|value| !self.floating.contains(&value))
+            && value.is_some_and(|value| {
+                !self.floating.contains(&value) || (invariant_load && self.xmm.contains(&value))
+            })
             && (if self.classes.hoist_by_pressure {
                 !self.pressure.high(facts, at, one)
             } else {
@@ -1044,6 +1050,7 @@ pub fn hoisted_sized(
         })
         .collect();
     let floating = crate::backend::regclass::floating(body);
+    let xmm = crate::backend::regclass::xmm_values(body);
     let model =
         crate::backend::machinesched::pressure_model(body, classes, segments, &|value| !floating.contains(&value));
     let mut policy = X86 {
@@ -1053,6 +1060,7 @@ pub fn hoisted_sized(
         classes,
         regs,
         floating,
+        xmm,
         control_word_written,
         calls: false,
         floats_named: 0,

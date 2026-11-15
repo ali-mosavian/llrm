@@ -42,7 +42,7 @@ fn text(
 }
 
 /// The zero-page pair a function reads memory through: the pointer arrives in
-/// a:x and is copied into the pair the first `(rcN)` names.
+/// `rc2:rc3`, and the first `(rcN)` names it.
 fn pointer_cell(text: &str) -> String {
     let at = text.find("(rc").unwrap_or_else(|| panic!("no pointer in:\n{text}")) + 1;
     text[at..].split(')').next().unwrap().to_owned()
@@ -58,7 +58,7 @@ fn run(
 ) -> i32 {
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
     let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
-    let main = format!("  lda #{x}\n  sta rc2\n  lda #<buf\n  ldx #>buf\n  jsr {name}\n");
+    let main = format!("  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  lda #{x}\n  jsr {name}\n");
     common::run_on(target, &format!("pointer-alu-{name}-{x}-{tag}"), &main, &format!("{}{DATA}", text(cpu, name))).0
 }
 
@@ -119,7 +119,7 @@ fn the_folded_ops_compute_what_the_loads_did() {
     }
 }
 
-/// A word run: `x` in rc2:rc3, the result's low byte in A and its high byte in
+/// A word run: `x` in a:x, the result's low byte in A and its high byte in
 /// X.
 fn run_word(
     cpu: Cpu,
@@ -130,7 +130,7 @@ fn run_word(
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
     let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
     let main = format!(
-        "  lda #<{x}\n  sta rc2\n  lda #>{x}\n  sta rc3\n  lda #<buf\n  ldx #>buf\n  jsr {name}\n{}",
+        "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  ldx #>{x}\n  lda #<{x}\n  jsr {name}\n{}",
         if high { "  txa\n" } else { "" }
     );
     common::run_on(
@@ -199,7 +199,7 @@ fn a_byte_at_a_pointer_plus_an_index_is_read_through_y() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
         let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
         for (i, x) in [(0u8, 3u8), (1, 250), (3, 77)] {
-            let main = format!("  lda #{i}\n  sta rc2\n  lda #{x}\n  sta rc3\n  lda #<buf\n  ldx #>buf\n  jsr addi\n");
+            let main = format!("  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  ldx #{x}\n  lda #{i}\n  jsr addi\n");
             let got = common::run_on(
                 target,
                 &format!("pointer-alu-addi-{i}-{x}-{tag}"),
@@ -244,7 +244,7 @@ fn a_constant_first_operand_keeps_the_ordinary_forms() {
         for (name, want) in
             [("and_all", 5), ("rsub", 5u8.wrapping_sub(77).into()), ("add_const", (2309u16 + 4660) as i32 & 0xFF)]
         {
-            let main = "  lda #<buf\n  ldx #>buf\n";
+            let main = "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n";
             let got = common::run_on(
                 target,
                 &format!("pointer-alu-{name}-{tag}"),
@@ -290,7 +290,7 @@ fn a_zero_extended_loaded_byte_is_the_operand_of_a_word_subtract() {
         assert!(sub.contains(&format!("  sbc ({p})")), "{cpu:?} subz:\n{sub}");
         assert!(!sub.contains(&format!("lda ({p})")), "{cpu:?} subz loads the byte first:\n{sub}");
         let diff = text(cpu, "diffz");
-        assert!(diff.contains("  sbc (rc2)"), "{cpu:?} diffz:\n{diff}");
+        assert!(diff.contains("  sbc (rc4)"), "{cpu:?} diffz:\n{diff}");
         assert!(diff.matches("sta rc").count() <= 1, "{cpu:?} diffz keeps a copy of a byte:\n{diff}");
         // `buf[0]` is 5: a word minus it borrows through both bytes
         for x in [0u16, 5, 255, 256, 0xFFFF] {

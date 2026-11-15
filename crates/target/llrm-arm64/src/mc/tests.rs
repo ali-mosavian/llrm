@@ -295,11 +295,13 @@ fn branches() {
         VectorOp::Eor,
         VectorOp::Ushl,
         VectorOp::Sshl,
+        VectorOp::Smax,
+        VectorOp::Smin,
+        VectorOp::Umax,
+        VectorOp::Umin,
     ] {
         for lanes in ALL_ARRANGEMENTS {
-            if (op.is_logical() && lanes.full() != Arrangement::B16)
-                || (op == VectorOp::Mul && lanes == Arrangement::D2)
-            {
+            if !op.has_lanes(lanes) {
                 continue;
             }
             all.push(Inst::VectorBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
@@ -327,7 +329,25 @@ fn branches() {
             }
         }
     }
-    all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
+    for quad in [true, false] {
+        all.push(Inst::VectorNot { quad, rd: Vreg(3), rn: Vreg(28) });
+    }
+    for (name, form) in crate::vector_forms::all() {
+        use crate::vector_forms::VectorForm;
+        let _ = name;
+        match form {
+            VectorForm::Compare { op, lanes, quad } => {
+                all.push(Inst::VectorCompare { op, lanes, quad, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+            }
+            VectorForm::CompareZero { op, lanes, quad } => {
+                all.push(Inst::VectorCompareZero { op, lanes, quad, rd: Vreg(1), rn: Vreg(30) });
+            }
+            VectorForm::BitSelect { op, quad } => {
+                all.push(Inst::VectorBitSelect { op, quad, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+            }
+            VectorForm::Bsp { .. } => {}
+        }
+    }
     for op in [VectorReduce::Addv, VectorReduce::Smaxv, VectorReduce::Sminv, VectorReduce::Umaxv, VectorReduce::Uminv] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4] {
             all.push(Inst::VectorReduce { op, lanes, rd: Vreg(3), rn: Vreg(28) });
