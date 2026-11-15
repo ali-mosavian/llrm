@@ -51,12 +51,13 @@ fn a_runtime_trip_count_loop_has_a_vector_body_and_a_scalar_remainder() {
     assert!(copy.contains("add ") || copy.contains("inc "), "the scalar remainder: {copy}");
 }
 
-/// A `<4 x i32>` multiply is not priced (no SSE2 `pmulld`): the loop stays scalar until the next step prices it.
+/// A `<4 x i32>` multiply has no SSE2 `pmulld`: `pmuludq` on the even and the odd lanes, then `punpckldq` (the pin's
+/// `LowerMUL`). It was unpriced, so the loop stayed scalar.
 #[test]
-fn a_loop_with_a_vector_multiply_stays_scalar_until_it_is_priced() {
+fn an_int_multiply_loop_uses_pmuludq() {
     let text = assembly("x86_64-linux", "-O2");
     let multiply = body(&text, "multiply_arrays");
-    assert!(!multiply.contains("xmm"), "{multiply}");
+    assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
 #[test]
@@ -138,4 +139,44 @@ fn a_loop_of_constant_shifts_uses_the_immediate_forms() {
     let text = assembly("x86_64-linux", "-O2");
     let shifts = body(&text, "shift_ints");
     assert!(shifts.contains("pslld") && shifts.contains("psrad") && shifts.contains("psrld"), "{shifts}");
+}
+
+/// A splat of a variable was four stores through the stack (`BUILD_VECTOR` expanded); it is `movd` + `pshufd` (and
+/// `movq` + `punpcklqdq` for 64-bit lanes), as the pin's `LowerBUILD_VECTOR` makes it.
+#[test]
+fn a_splat_of_a_variable_is_movd_and_pshufd() {
+    let text = assembly("x86_64-linux", "-O2");
+    let ints = body(&text, "fill_value");
+    assert!(ints.contains("movd xmm") && ints.contains("pshufd"), "{ints}");
+    assert!(!ints.contains("[rsp"), "{ints}");
+    let longs = body(&text, "fill_long_value");
+    assert!(longs.contains("movq xmm") && longs.contains("punpcklqdq"), "{longs}");
+}
+
+/// A `<16 x i8>` multiply is two `pmullw` of the unpacked halves, masked and packed: the loop was kept scalar (one
+/// `imul` and two byte stores a byte) because the byte multiply had no price and no lowering.
+#[test]
+fn a_byte_multiply_by_a_constant_is_pmullw_and_packuswb() {
+    let text = assembly("x86_64-linux", "-O2");
+    let pattern = body(&text, "multiply_bytes");
+    assert!(pattern.contains("pmullw") && pattern.contains("packuswb") && pattern.contains("pand"), "{pattern}");
+    assert!(!pattern.contains("imul"), "{pattern}");
+}
+
+/// A byte multiplied by a byte in memory (`mul byte ptr [..]`) stopped the compile to an object with
+/// `Semantics(op=MULTIPLY ... width=1)`: the one-operand `mul` took no memory byte.
+#[test]
+fn a_byte_multiply_from_memory_assembles() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-mulb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", llc)
+        .args(["-O2", "-w", "-c", "-o"])
+        .arg(dir.join("a.o"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/lv_loops.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }

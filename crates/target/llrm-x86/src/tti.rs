@@ -1164,6 +1164,10 @@ impl Tti for X86 {
         self.tuning.ipa_cp_clones_at_speed
     }
 
+    fn ipa_cp_max_clones(&self) -> usize {
+        self.tuning.ipa_cp_max_clones
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }
@@ -1305,9 +1309,9 @@ impl Tti for X86 {
 
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
     /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
-    /// cost one per register. Shifts (a variable count is not selectable), the
-    /// multiplies and the divisions are not priced, so a loop holding one stays
-    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR).
+    /// cost one per register; the multiplies of 8-, 16- and 32-bit lanes are the pin's rows. Byte shifts, a
+    /// variable shift count, the 64-bit multiply and the divisions are not priced, so a loop holding one stays
+    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-24).
     fn vector_arithmetic_cost(
         &self,
         op: ArithOp,
@@ -1317,16 +1321,24 @@ impl Tti for X86 {
         if !self.vector_values() {
             return None;
         }
-        // A kind other than throughput is the base's: one per legal register.
-        let _ = kind;
         match op {
             ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
             // `psllX`/`psrlX`/`psraX` by an immediate (a constant splat amount, the only one the lowering takes);
             // there is no 64-bit arithmetic shift before AVX-512.
             ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
             ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
-            // `pmullw`: the one SSE2 integer multiply that keeps the lane (a 32- or 64-bit lane needs `pmuludq`).
-            ArithOp::Mul if ty.lane == Ty::Int(16) => xmm_pieces(ty).map(Cost::of),
+            // The pin's SSE2 rows, a register each: {throughput, latency, code size, size and latency}.
+            // `v16i8`: 2*unpack/2*pmullw/2*and/pack. `v8i16`: `pmullw`, the one multiply that keeps its lane.
+            // `v4i32`: 3*pmuludq/4*shuffle.
+            ArithOp::Mul => {
+                let row = match ty.lane {
+                    Ty::Int(8) => [6, 18, 12, 12],
+                    Ty::Int(16) => [1, 5, 1, 1],
+                    Ty::Int(32) => [6, 8, 7, 7],
+                    _ => return None,
+                };
+                xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))
+            }
             _ => None,
         }
     }
