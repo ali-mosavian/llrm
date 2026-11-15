@@ -351,6 +351,14 @@ impl Line {
             _ => None,
         }
     }
+
+    /// The first line of `lines` that is the label `name`.
+    pub fn label_position(
+        lines: &[Line],
+        name: &str,
+    ) -> Option<usize> {
+        lines.iter().position(|line| matches!(line, Line::Label(label) if label == name))
+    }
 }
 
 impl fmt::Display for Line {

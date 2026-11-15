@@ -827,12 +827,8 @@ impl<'a, 'b> Collection<'a, 'b> {
         f: &Formula,
     ) -> bool {
         self.insert_attempts += 1;
-        let lu = &self.uses[lu_idx];
         // A formula that cannot be expanded is not inserted.
-        assert!(
-            is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f),
-            "Formula is illegal"
-        );
+        assert!(self.legal(lu_idx, f), "Formula is illegal");
         if !self.uses[lu_idx].insert_formula(se, f, self.l) {
             return false;
         }
@@ -1137,24 +1133,33 @@ pub fn loop_calls(
     l: BlockId,
 ) -> bool {
     let Some(lp) = cx.loops.get_loop_for(l) else { return false };
-    lp.get_blocks().iter().any(|&block| {
-        cx.function.iter_block(block).any(|inst| {
-            if !matches!(cx.function.instruction(inst).opcode, Opcode::Call(_)) {
-                return false;
-            }
-            match llrm_mir::memory::callee(cx.context, cx.function, inst) {
-                Some(callee) if (callee.0 as usize) < cx.globals.len() => {
-                    let value = &cx.globals[callee.0 as usize];
-                    !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
-                        && tti.is_lowered_to_call(
-                            value.name.as_deref(),
-                            matches!(value.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private),
-                        )
-                }
-                _ => true,
-            }
-        })
-    })
+    lp.get_blocks()
+        .iter()
+        .any(
+            |&block| cx.function
+                .iter_block(block)
+                .any(
+                    |inst| {
+                        if !matches!(cx.function.instruction(inst).opcode, Opcode::Call(_)) {
+                            return false;
+                        }
+                        match llrm_mir::memory::callee(cx.context, cx.function, inst) {
+                            Some(callee) if (callee.0 as usize) < cx.globals.len() => {
+                                let value = &cx.globals[callee.0 as usize];
+                                !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+                                    && tti.is_lowered_to_call(
+                                        value.name.as_deref(),
+                                        matches!(
+                                            value.linkage,
+                                            llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                        ),
+                                    )
+                            }
+                            _ => true,
+                        }
+                    },
+                ),
+        )
 }
 
 pub fn loop_register_units(

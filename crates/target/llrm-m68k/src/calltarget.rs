@@ -29,7 +29,6 @@ use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Kind, Operand, Reg};
 
 use crate::dagisel::generated::instrinfo;
-use crate::dagisel::generated::m68k_m68000::MACHINE_OPCODES;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::Line;
 use crate::mfunc::{MFunction, op_inst};
@@ -116,7 +115,7 @@ pub fn through_registers(
     function: &mut MFunction,
     targets: &[(String, RegId)],
 ) -> Result<(), String> {
-    let code = MACHINE_OPCODES.iter().find(|(_, name)| *name == "LEA32b").map(|(code, _)| *code).ok_or("no LEA32b")?;
+    let code = crate::dagisel::opcodes::code_of("LEA32b").ok_or("no LEA32b")?;
     let desc = instrinfo::desc(code).ok_or("no description of LEA32b")?;
     let mut loads = Vec::new();
     for (name, register) in targets {
@@ -156,8 +155,7 @@ fn price_of(
             Some(&priced) => priced,
             None => {
                 PRICED.with(|count| count.set(count.get() + 1));
-                let size = crate::encode::encode(inst)?.bytes.len();
-                let priced = (size, crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks);
+                let priced = crate::instprice::price_of(cpu, inst)?;
                 seen.insert(inst.clone(), priced);
                 priced
             }
