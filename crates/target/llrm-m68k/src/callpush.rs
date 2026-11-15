@@ -416,8 +416,9 @@ fn foldable(
             continue;
         }
         let own_store = stores.contains(&i);
-        // beyond the last store that reads it the register may be redefined (a second load into it): the folded
-        // pushes need none of it, and what reads it after is the new value's
+        // beyond the last store that reads it the register may be redefined (a
+        // second load into it): the folded pushes need none of it, and
+        // what reads it after is the new value's
         let names_root = !renamed
             && other.operands.iter().any(|operand| match operand {
                 Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
@@ -509,7 +510,9 @@ fn address_of(
     let nearest = |before: usize| {
         (0..before)
             .rev()
-            .take_while(|&i| blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP"))
+            .take_while(|&i| {
+                blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP")
+            })
             .find(|&i| defines(insts[i], src, assignment))
     };
     let add = nearest(store)?;
@@ -554,10 +557,15 @@ fn address_of(
             return None;
         }
         if i < store {
-            let names_root = other.operands.iter().any(|operand| match operand {
-                Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
-                _ => false,
-            });
+            let names_root = other
+                .operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
+                        _ => false,
+                    },
+                );
             if names_root || (other.reads_flags() && !other.call) {
                 return None;
             }
@@ -584,8 +592,7 @@ fn cost(
     inst: &mc::Inst,
     cpu: Cpu,
 ) -> Result<(usize, u32), String> {
-    let size = crate::encode::encode(inst)?.bytes.len();
-    Ok((size, crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks))
+    crate::instprice::price_of(cpu, inst)
 }
 
 fn add(
@@ -697,14 +704,19 @@ fn sequences(
                 let Some((producers, base, offset)) = address_of(insts, assignment, blocks, store, call, src) else {
                     continue;
                 };
-                let made = producers.iter().try_fold((0, 0), |sum, &i| {
-                    let operands = priced_operands(insts[i], assignment)?;
-                    let opcode = match insts[i].kind {
-                        Kind::Copy => "MOV32rr",
-                        Kind::Op(name) => name,
-                    };
-                    cost(&mc::Inst { opcode, operands }, cpu).ok().map(|one| add(sum, one))
-                });
+                let made = producers
+                    .iter()
+                    .try_fold(
+                        (0, 0),
+                        |sum, &i| {
+                            let operands = priced_operands(insts[i], assignment)?;
+                            let opcode = match insts[i].kind {
+                                Kind::Copy => "MOV32rr",
+                                Kind::Op(name) => name,
+                            };
+                            cost(&mc::Inst { opcode, operands }, cpu).ok().map(|one| add(sum, one))
+                        },
+                    );
                 if let (Some(made), Ok(pea)) = (made, cost(&address_push(base, offset), cpu))
                     && cheaper(pea, add(made, pushed), price, cpu)
                 {
@@ -719,8 +731,9 @@ fn sequences(
         let mut sorted = offsets.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
         let last_store = stores.iter().copied().max().unwrap_or(call);
-        // Several stores of one scratch register one load filled (`a + a`: both arguments are the load) are
-        // pushed from its memory together, each push reading it again, when that is cheaper than the load
+        // Several stores of one scratch register one load filled (`a + a`: both
+        // arguments are the load) are pushed from its memory together,
+        // each push reading it again, when that is cheaper than the load
         // and the stores: the load goes only if every reader goes.
         let mut group_folds: HashMap<usize, usize> = HashMap::new();
         let mut group_first: HashSet<usize> = HashSet::new();
@@ -747,10 +760,9 @@ fn sequences(
                     continue;
                 };
                 let point = if in_order { *together.last().unwrap_or(&call) } else { call - 1 };
-                if !together
-                    .iter()
-                    .all(|&store| foldable(insts, assignment, blocks, store, point, src, &stores, &together) == Some(load))
-                {
+                if !together.iter().all(|&store| {
+                    foldable(insts, assignment, blocks, store, point, src, &stores, &together) == Some(load)
+                }) {
                     continue;
                 }
                 let Kind::Op(name) = insts[load].kind else { continue };
@@ -901,7 +913,8 @@ fn sequences(
     // second call's cleanup has no call area of its own to claim it, and its
     // arguments are stored into the area the first call's sequence would have
     // pushed away. That area stays. The call may be laid out before the area's
-    // `ADJCALLSTACKDOWN` (a rotated loop), so the order of the two says nothing.
+    // `ADJCALLSTACKDOWN` (a rotated loop), so the order of the two says
+    // nothing.
     for (up, _) in insts
         .iter()
         .enumerate()
@@ -966,14 +979,18 @@ pub fn plan(
             .max()
             .unwrap_or(0)
     };
-    // Whether the cleanup of pushed sequence `earlier` is still owed when `later` pushes: nothing between them
-    // reads the stack pointer as the frame has it (`expand`'s `owed`), so one `adda` pays for both.
+    // Whether the cleanup of pushed sequence `earlier` is still owed when
+    // `later` pushes: nothing between them reads the stack pointer as the
+    // frame has it (`expand`'s `owed`), so one `adda` pays for both.
     let owed_across = |earlier: &Sequence, later: &Sequence| -> bool {
         blocks[earlier.up] == blocks[later.down]
             && insts[earlier.up + 1..later.down].iter().all(|inst| {
                 !(inst.terminator
                     || inst.barrier
-                    || matches!(inst.kind, Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN"))
+                    || matches!(
+                        inst.kind,
+                        Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
+                    )
                     || names_sp(inst, assignment))
             })
     };
@@ -986,7 +1003,8 @@ pub fn plan(
                 run = None;
                 continue;
             }
-            // a cleanup merged into the run's: the run's one `adda` is of the bytes together
+            // a cleanup merged into the run's: the run's one `adda` is of the
+            // bytes together
             if let Some((last, bytes)) = run.filter(|(last, _)| owed_across(last, one)) {
                 let merged = cost(&crate::expand::sp_adjust(bytes + one.bytes, short), cpu)?;
                 let alone = cost(&crate::expand::sp_adjust(bytes, short), cpu)?;

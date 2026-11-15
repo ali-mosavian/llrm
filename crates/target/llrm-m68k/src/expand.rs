@@ -152,9 +152,9 @@ pub fn frame_cost_with(
     ops.iter().for_each(|op| frame_op(op, &mut insts, short));
     let (mut bytes, mut clocks) = (0, 0);
     for inst in &insts {
-        let size = crate::encode::encode(inst)?.bytes.len();
+        let (size, time) = crate::instprice::price_of(cpu, inst)?;
         bytes += size;
-        clocks += crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks;
+        clocks += time;
     }
     Ok((bytes, clocks))
 }
@@ -525,7 +525,8 @@ pub fn finish_with(
                 // The table and blocks of a table jump are for the passes and
                 // the emitted table; the instruction is `jmp (An)`.
                 Operand::Symbol(..) | Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
-                // a word table's jump names its table; the blocks are the table's
+                // a word table's jump names its table; the blocks are the
+                // table's
                 Operand::Block(_) if inst.kind == Kind::Op(crate::dagisel::wordjump::NAME) => continue,
                 Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
                 Operand::Block(id) => {
