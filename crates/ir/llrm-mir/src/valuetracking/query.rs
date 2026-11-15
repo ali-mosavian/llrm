@@ -19,7 +19,8 @@ use crate::types::{Type, TypeId};
 
 #[cfg(test)]
 thread_local! {
-    /// `Query::instruction_of` calls, for a test that a pattern reads each operand once.
+    /// `Query::instruction_of` calls, for a test that a pattern reads each
+    /// operand once.
     pub(crate) static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -43,8 +44,10 @@ pub struct Query<'a> {
     pub cond_context: Option<&'a CondContext>,
     /// `CxtI`: the instruction the query is asked at.
     pub cxt: Option<InstId>,
-    /// Intrinsics a pass has declared and not yet placed in the module (`globals` ends before them): a call of one is still that
-    /// intrinsic, as it is in LLVM the moment `getOrInsertDeclaration` returns. (global index, intrinsic)
+    /// Intrinsics a pass has declared and not yet placed in the module
+    /// (`globals` ends before them): a call of one is still that intrinsic,
+    /// as it is in LLVM the moment `getOrInsertDeclaration` returns. (global
+    /// index, intrinsic)
     pub pending_intrinsics: &'a [(u32, crate::valuetracking::pattern::IntrinsicId)],
 }
 
@@ -169,12 +172,7 @@ impl<'a> Query<'a> {
         operand: Operand,
     ) -> Option<(u128, u32)> {
         let Operand::Constant(id) = operand else { return None };
-        let constant = self.context().get(id);
-        match constant.kind {
-            ConstantKind::Int(bits) => Some((bits, self.context().types.int_bits(constant.ty)?)),
-            ConstantKind::Zero | ConstantKind::Null => Some((0, self.context().types.int_bits(constant.ty)?)),
-            _ => None,
-        }
+        self.context().splat_int(id)
     }
 
     /// The instruction that defines `operand`, if one does.
@@ -215,7 +213,9 @@ impl<'a> Query<'a> {
     ) -> Option<crate::valuetracking::pattern::IntrinsicId> {
         let Some(global) = self.callee_global(inst) else { return None };
         match self.globals.get(global as usize) {
-            Some(function) => matches!(function.kind, GlobalKind::Function(_)).then(|| function.name.intrinsic_id()).flatten(),
+            Some(function) => {
+                matches!(function.kind, GlobalKind::Function(_)).then(|| function.name.intrinsic_id()).flatten()
+            }
             None => self.pending_intrinsics.iter().find(|(id, _)| *id == global).map(|&(_, intrinsic)| intrinsic),
         }
     }

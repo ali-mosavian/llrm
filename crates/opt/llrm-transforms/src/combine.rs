@@ -591,9 +591,10 @@ pub fn visit(
     {
         return Visit::None;
     }
-    // DEVIATE COMBINE-VEC: the arithmetic visitors read integer widths (MIR had
-    // no vectors), so an operation on vectors, which the loop vectorizer makes,
-    // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
+    // DEVIATE COMBINE-VEC (owner w11, exit 2026-12-05): the arithmetic visitors
+    // read integer widths, so an operation on vectors, which the loop
+    // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
+    // visitors are enabled by operation, each with its own identity sweep.
     if matches!(
         c.function.instruction(inst).opcode,
         Opcode::Binary(_) | Opcode::Cast(_)
@@ -603,6 +604,13 @@ pub fn visit(
             llrm_mir::types::Type::Vector { .. }
         )
     {
+        if let Some(result) = c.function.instruction(inst).result
+            && let Some(found) =
+                simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
+            && found != Operand::Value(result)
+        {
+            return Visit::Replace(found);
+        }
         return Visit::None;
     }
     // The table is 'static: the opcode (a clone per visit, a Box for calls) is

@@ -466,3 +466,23 @@ fn test_without_an_x87_stack_the_float_is_sunk_as_the_pin_does() {
     let text = float_sum_combined(false);
     assert!(text.find("fadd").unwrap() > text.find("br i1 %c").unwrap(), "{text}");
 }
+
+/// A widened reduction whose vector loop ran once adds its first part to a zero
+/// start: `add <8 x i64> zeroinitializer, %x` stayed (vector operations were
+/// not visited at all): an extra `saddw` and register copy per part in tile -O2
+/// (1,431 instructions, the pin's 980). `x + 0` is `x` for vectors too.
+#[test]
+fn a_vector_identity_folds_as_the_scalar_one_does() {
+    check(
+        "define <8 x i64> @f(<8 x i64> %x) {\nb0:\n  %a = add nsw <8 x i64> zeroinitializer, %x\n  ret <8 x i64> %a\n}\n",
+        "define <8 x i64> @f(<8 x i64> %x) {\nb0:\n  ret <8 x i64> %x\n}\n",
+    );
+}
+
+#[test]
+fn a_vector_multiply_by_one_and_an_and_with_all_ones_fold() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = mul <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  %b = and <4 x i32> %a, <i32 -1, i32 -1, i32 -1, i32 -1>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  ret <4 x i32> %x\n}\n",
+    );
+}
