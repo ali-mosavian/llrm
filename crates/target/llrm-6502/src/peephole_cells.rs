@@ -63,6 +63,24 @@ fn call_keeps_scratch(
         )
 }
 
+/// Whether `inst`, a `jsr`, leaves the named cell as it was: a spill slot, a
+/// callee-saved cell, or a cell the runtime routine's text does not name.
+///
+/// The pin's analogue is the call's register mask applied to the copy's source
+/// as to its destination (`MachineCopyPropagation`,
+/// `Tracker::clobberRegister`).
+fn call_keeps_source(
+    inst: &Inst,
+    source: &str,
+) -> bool {
+    let Some(n) = cell_number(source) else { return true };
+    (8..=15).contains(&n)
+        || matches!(
+            &inst.operand,
+            Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
+}
+
 fn straight(op: Op) -> bool {
     use Op::*;
     matches!(
@@ -500,6 +518,11 @@ fn spill_copy_once(
             // argument cells
             if inst.op == Op::Jsr {
                 if call_keeps_scratch(inst, n) {
+                    // the reads after the call would read `s` as the call left
+                    // it
+                    if !call_keeps_source(inst, s) {
+                        return false;
+                    }
                     continue;
                 }
                 if n <= 7 {

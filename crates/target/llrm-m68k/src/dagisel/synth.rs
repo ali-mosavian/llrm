@@ -178,6 +178,20 @@ fn searched(cpu: Cpu, price: Price, c: u32) -> Option<MulPlan> {
     price.beats(cpu, cost, incumbent).then_some(plan)
 }
 
+/// The cheapest chain for `x * c` where the library call beats it at the site
+/// but the routine it links may not be wanted: the 68000 and 68010 at `-Os`,
+/// a site costs 10 B against a chain's 12 to 24, and the routine's own bytes
+/// are charged only by the function trial ([`crate::trial::prefers_without_linking`],
+/// which has the module that links it anyway). `None` for any other CPU or price,
+/// and where [`plan`] already has the chain.
+pub fn plan_unless_linked(cpu: Cpu, price: Price, bits: u32, c: u128) -> Option<MulPlan> {
+    if bits != 32 || cpu.at_least(Cpu::M68020) || price != Price::Size {
+        return None;
+    }
+    let c = (c & u128::from(u32::MAX)) as u32;
+    chain_of(cpu, price, c).map(|(plan, _)| plan)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
