@@ -49,6 +49,8 @@ line_fill_clocks             =    =
 # DEVIATE TAILDUP-HOT (owner x86-m32): gcc copies up to 8 instructions where it optimises for speed. Stated cost:
 # x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk (a cold error tail in a loop; static frequency cannot tell). Exit: profile-fed frequencies (program PGO).
 tail_dup_hot_threshold  8    8
+# DEVIATE LOOP-TOP-JMP (owner x87-b, exit 2026-11-24): see CpuTable::loop_top_prices_jumps. 486 measured, P5 off until measured.
+loop_top_prices_jumps   1    0
 pairing                 =    =
 # DEVIATE TA-LC (owner anyisa, exit 2026-11-27): measured on the 486 (m32 A/B, 1984 cells); P5 off until measured.
 commute_loop_carried    1    0
