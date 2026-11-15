@@ -316,7 +316,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     out.push(Inst::VectorDupLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), index: 0 });
     out.push(Inst::VectorDupLane { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             out.push(Inst::VectorFpBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         }

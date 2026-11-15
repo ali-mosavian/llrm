@@ -436,7 +436,7 @@ fn branches() {
     ] {
         all.push(Inst::VectorDupLane { lanes, rd: Vreg(5), rn: Vreg(26), index });
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             all.push(Inst::VectorFpBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
         }

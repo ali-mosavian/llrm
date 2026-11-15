@@ -11,11 +11,6 @@ target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i
 
 const MISSING: &str = "has no arm64 instruction yet";
 
-/// DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the 64-bit float
-/// forms (`FADDv2f32`) are selected and not emitted: the 64-bit vector work.
-/// Any other missing opcode fails the test.
-const KNOWN_MISSING_SUFFIX: &str = "v2f32 has no";
-
 /// `(lane count, lane type)` of each NEON vector and whether its lanes are floats.
 const TYPES: [(u32, &str, bool); 10] = [
     (16, "i8", false),
@@ -30,59 +25,121 @@ const TYPES: [(u32, &str, bool); 10] = [
     (2, "float", true),
 ];
 
-/// One function over the vector type `{T}` with lane type `{E}`, lane count
-/// `{N}`, loading `%a` and `%b` and storing the result `%r` at `%d`.
-const INTEGER_BODIES: &[(&str, &str)] = &[
-    ("add", "%r = add {T} %a, %b"),
-    ("sub", "%r = sub {T} %a, %b"),
-    ("mul", "%r = mul {T} %a, %b"),
-    ("and", "%r = and {T} %a, %b"),
-    ("or", "%r = or {T} %a, %b"),
-    ("xor", "%r = xor {T} %a, %b"),
-    ("not", "%r = xor {T} %a, splat ({E} -1)"),
-    ("neg", "%r = sub {T} zeroinitializer, %a"),
-    ("shl", "%r = shl {T} %a, %b"),
-    ("lshr", "%r = lshr {T} %a, %b"),
-    ("ashr", "%r = ashr {T} %a, %b"),
-    ("shl_imm", "%r = shl {T} %a, splat ({E} 3)"),
-    ("lshr_imm", "%r = lshr {T} %a, splat ({E} 3)"),
-    ("ashr_imm", "%r = ashr {T} %a, splat ({E} 3)"),
-    ("select", "%c = icmp slt {T} %a, %b\n%r = select <{N} x i1> %c, {T} %a, {T} %b"),
-    ("icmp_zero", "%c = icmp sgt {T} %a, zeroinitializer\n%r = sext <{N} x i1> %c to {T}"),
-    ("splat_load", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer"),
-    ("splat_load_add", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = add {T} %a, %s"),
-    ("splat_arg", "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer"),
-    ("splat_const", "%r = add {T} %a, splat ({E} 7)"),
-    ("insert_lane", "%r = insertelement {T} %a, {E} %s, i64 1"),
-    ("insert_lane_load", "%x = load {E}, ptr %p, align 8\n%r = insertelement {T} %a, {E} %x, i64 1"),
-    ("extract_lane", "%x = extractelement {T} %a, i64 1\nstore {E} %x, ptr %q, align 8\n%r = add {T} %a, %b"),
-    ("abs", "%r = call {T} @llvm.abs.{V}({T} %a, i1 false)"),
-    ("smin", "%r = call {T} @llvm.smin.{V}({T} %a, {T} %b)"),
-    ("smax", "%r = call {T} @llvm.smax.{V}({T} %a, {T} %b)"),
-    ("umin", "%r = call {T} @llvm.umin.{V}({T} %a, {T} %b)"),
-    ("umax", "%r = call {T} @llvm.umax.{V}({T} %a, {T} %b)"),
-    ("reduce_add", "%x = call {E} @llvm.vector.reduce.add.{V}({T} %a)\nstore {E} %x, ptr %q, align 8\n%r = add {T} %a, %b"),
-    ("ctpop", "%r = call {T} @llvm.ctpop.{V}({T} %a)"),
+/// One operation: a name, the body over the vector type `{T}` (lane type `{E}`,
+/// lane count `{N}`, intrinsic suffix `{V}`, double-width lane `{W}`, integer
+/// lane of the same width `{I}`) loading `%a` and `%b` and leaving `%r`, and
+/// the lane types it applies to.
+type Operation = (&'static str, &'static str, fn(&str) -> bool);
+
+fn any(_: &str) -> bool {
+    true
+}
+fn not_i64(element: &str) -> bool {
+    element != "i64"
+}
+fn not_i8(element: &str) -> bool {
+    element != "i8"
+}
+fn not_i8_i64(element: &str) -> bool {
+    !matches!(element, "i8" | "i64")
+}
+
+const INTEGER_BODIES: &[Operation] = &[
+    ("add", "%r = add {T} %a, %b", any),
+    ("sub", "%r = sub {T} %a, %b", any),
+    ("mul", "%r = mul {T} %a, %b", any),
+    ("and", "%r = and {T} %a, %b", any),
+    ("or", "%r = or {T} %a, %b", any),
+    ("xor", "%r = xor {T} %a, %b", any),
+    ("not", "%r = xor {T} %a, splat ({E} -1)", any),
+    ("neg", "%r = sub {T} zeroinitializer, %a", any),
+    ("shl", "%r = shl {T} %a, %b", any),
+    ("lshr", "%r = lshr {T} %a, %b", any),
+    ("ashr", "%r = ashr {T} %a, %b", any),
+    ("shl_imm", "%r = shl {T} %a, splat ({E} 3)", any),
+    ("lshr_imm", "%r = lshr {T} %a, splat ({E} 3)", any),
+    ("ashr_imm", "%r = ashr {T} %a, splat ({E} 3)", any),
+    ("select", "%c = icmp slt {T} %a, %b\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
+    ("icmp_zero", "%c = icmp sgt {T} %a, zeroinitializer\n%r = sext <{N} x i1> %c to {T}", any),
+    ("splat_load", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
+    ("splat_load_add", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s2 = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = add {T} %a, %s2", any),
+    ("splat_arg", "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
+    ("splat_const", "%r = add {T} %a, splat ({E} 7)", any),
+    ("insert_lane", "%r = insertelement {T} %a, {E} %s, i64 1", any),
+    ("insert_lane_load", "%x = load {E}, ptr %p, align 8\n%r = insertelement {T} %a, {E} %x, i64 1", any),
+    ("extract_lane", "%x = extractelement {T} %a, i64 1\nstore {E} %x, ptr %q, align 8\n%r = add {T} %a, %b", any),
+    ("abs", "%r = call {T} @llvm.abs.{V}({T} %a, i1 false)", any),
+    ("smin", "%r = call {T} @llvm.smin.{V}({T} %a, {T} %b)", any),
+    ("smax", "%r = call {T} @llvm.smax.{V}({T} %a, {T} %b)", any),
+    ("umin", "%r = call {T} @llvm.umin.{V}({T} %a, {T} %b)", any),
+    ("umax", "%r = call {T} @llvm.umax.{V}({T} %a, {T} %b)", any),
+    ("reduce_add", "%x = call {E} @llvm.vector.reduce.add.{V}({T} %a)\nstore {E} %x, ptr %q, align 8\n%r = add {T} %a, %b", any),
+    ("ctpop", "%r = call {T} @llvm.ctpop.{V}({T} %a)", any),
+    ("ctlz", "%r = call {T} @llvm.ctlz.{V}({T} %a, i1 false)", any),
+    ("cttz", "%r = call {T} @llvm.cttz.{V}({T} %a, i1 false)", any),
+    ("bitreverse", "%r = call {T} @llvm.bitreverse.{V}({T} %a)", any),
+    ("bswap", "%r = call {T} @llvm.bswap.{V}({T} %a)", not_i8),
+    ("uadd_sat", "%r = call {T} @llvm.uadd.sat.{V}({T} %a, {T} %b)", any),
+    ("usub_sat", "%r = call {T} @llvm.usub.sat.{V}({T} %a, {T} %b)", any),
+    ("sadd_sat", "%r = call {T} @llvm.sadd.sat.{V}({T} %a, {T} %b)", any),
+    ("ssub_sat", "%r = call {T} @llvm.ssub.sat.{V}({T} %a, {T} %b)", any),
+    ("zext_trunc", "%w = zext {T} %a to <{N} x {W}>\n%r = trunc <{N} x {W}> %w to {T}", not_i64),
+    ("sext_trunc", "%w = sext {T} %a to <{N} x {W}>\n%r = trunc <{N} x {W}> %w to {T}", not_i64),
+    ("uitofp_fptoui", "%w = uitofp {T} %a to <{N} x {F}>\n%r = fptoui <{N} x {F}> %w to {T}", not_i8_i64),
+    ("sitofp_fptosi", "%w = sitofp {T} %a to <{N} x {F}>\n%r = fptosi <{N} x {F}> %w to {T}", not_i8_i64),
 ];
 
-const FLOAT_BODIES: &[(&str, &str)] = &[
-    ("fadd", "%r = fadd {T} %a, %b"),
-    ("fsub", "%r = fsub {T} %a, %b"),
-    ("fmul", "%r = fmul {T} %a, %b"),
-    ("fdiv", "%r = fdiv {T} %a, %b"),
-    ("fneg", "%r = fneg {T} %a"),
-    ("fabs", "%r = call {T} @llvm.fabs.{V}({T} %a)"),
-    ("fsqrt", "%r = call {T} @llvm.sqrt.{V}({T} %a)"),
-    ("fma", "%r = call {T} @llvm.fma.{V}({T} %a, {T} %b, {T} %a)"),
-    ("fcmp_select", "%c = fcmp olt {T} %a, %b\n%r = select <{N} x i1> %c, {T} %a, {T} %b"),
-    ("fcmp_zero", "%c = fcmp ogt {T} %a, zeroinitializer\n%r = select <{N} x i1> %c, {T} %a, {T} %b"),
-    ("splat_load", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer"),
-    ("splat_load_mul", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = fmul {T} %a, %s"),
-    ("splat_arg", "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer"),
-    ("extract_lane", "%x = extractelement {T} %a, i64 1\nstore {E} %x, ptr %q, align 8\n%r = fadd {T} %a, %b"),
-    ("minnum", "%r = call {T} @llvm.minnum.{V}({T} %a, {T} %b)"),
-    ("maxnum", "%r = call {T} @llvm.maxnum.{V}({T} %a, {T} %b)"),
+const FLOAT_BODIES: &[Operation] = &[
+    ("fadd", "%r = fadd {T} %a, %b", any),
+    ("fsub", "%r = fsub {T} %a, %b", any),
+    ("fmul", "%r = fmul {T} %a, %b", any),
+    ("fdiv", "%r = fdiv {T} %a, %b", any),
+    ("fneg", "%r = fneg {T} %a", any),
+    ("fabs", "%r = call {T} @llvm.fabs.{V}({T} %a)", any),
+    ("fsqrt", "%r = call {T} @llvm.sqrt.{V}({T} %a)", any),
+    ("fma", "%r = call {T} @llvm.fma.{V}({T} %a, {T} %b, {T} %a)", any),
+    ("fmuladd", "%r = call {T} @llvm.fmuladd.{V}({T} %a, {T} %b, {T} %a)", any),
+    ("fcmp_select", "%c = fcmp olt {T} %a, %b\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
+    ("fcmp_zero", "%c = fcmp ogt {T} %a, zeroinitializer\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
+    ("splat_load", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
+    ("splat_load_mul", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s2 = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = fmul {T} %a, %s2", any),
+    ("splat_arg", "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
+    ("extract_lane", "%x = extractelement {T} %a, i64 1\nstore {E} %x, ptr %q, align 8\n%r = fadd {T} %a, %b", any),
+    ("minnum", "%r = call {T} @llvm.minnum.{V}({T} %a, {T} %b)", any),
+    ("maxnum", "%r = call {T} @llvm.maxnum.{V}({T} %a, {T} %b)", any),
+    ("minimum", "%r = call {T} @llvm.minimum.{V}({T} %a, {T} %b)", any),
+    ("maximum", "%r = call {T} @llvm.maximum.{V}({T} %a, {T} %b)", any),
+    ("copysign", "%r = call {T} @llvm.copysign.{V}({T} %a, {T} %b)", any),
+    ("floor", "%r = call {T} @llvm.floor.{V}({T} %a)", any),
+    ("ceil", "%r = call {T} @llvm.ceil.{V}({T} %a)", any),
+    ("trunc", "%r = call {T} @llvm.trunc.{V}({T} %a)", any),
+    ("rint", "%r = call {T} @llvm.rint.{V}({T} %a)", any),
+    ("nearbyint", "%r = call {T} @llvm.nearbyint.{V}({T} %a)", any),
+    ("round", "%r = call {T} @llvm.round.{V}({T} %a)", any),
+    ("sitofp_fptosi", "%w = fptosi {T} %a to <{N} x {I}>\n%r = sitofp <{N} x {I}> %w to {T}", any),
+    ("uitofp_fptoui", "%w = fptoui {T} %a to <{N} x {I}>\n%r = uitofp <{N} x {I}> %w to {T}", any),
 ];
+
+/// The declarations of the intrinsics a body calls, read off its `call` lines.
+fn declarations(body: &str) -> String {
+    let mut seen = Vec::new();
+    for line in body.lines() {
+        let Some(call) = line.split(" = call ").nth(1).or_else(|| line.strip_prefix("call ")) else { continue };
+        let Some((result, rest)) = call.split_once(" @") else { continue };
+        let Some((name, arguments)) = rest.split_once('(') else { continue };
+        let types = arguments
+            .trim_end_matches(')')
+            .split(", ")
+            .map(|argument| argument.rsplit_once(' ').map_or(argument, |(ty, _)| ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let declaration = format!("declare {result} @{name}({types})\n");
+        if !seen.contains(&declaration) {
+            seen.push(declaration);
+        }
+    }
+    seen.concat()
+}
 
 fn function(
     lanes: u32,
@@ -95,25 +152,29 @@ fn function(
         "double" => "f64",
         other => other,
     });
-    let body = body.replace("{T}", &vector).replace("{E}", element).replace("{N}", &lanes.to_string()).replace("{V}", &tag);
-    let scalar = element;
-    let decls = ["abs", "smin", "smax", "umin", "umax", "ctpop", "fabs", "sqrt", "fma", "minnum", "maxnum", "vector.reduce.add"]
-        .into_iter()
-        .filter(|name| body.contains(&format!("@llvm.{name}.")))
-        .map(|name| {
-            let signature = match name {
-                "abs" => format!("{vector}, i1"),
-                "fma" => format!("{vector}, {vector}, {vector}"),
-                "vector.reduce.add" => vector.clone(),
-                "smin" | "smax" | "umin" | "umax" | "minnum" | "maxnum" => format!("{vector}, {vector}"),
-                _ => vector.clone(),
-            };
-            let result = if name == "vector.reduce.add" { scalar.to_string() } else { vector.clone() };
-            format!("declare {result} @llvm.{name}.{tag}({signature})\n")
-        })
-        .collect::<String>();
+    let double_width = match element {
+        "i8" => "i16",
+        "i16" => "i32",
+        "i32" => "i64",
+        other => other,
+    };
+    let (integer, float) = match element {
+        "float" => ("i32", "float"),
+        "double" => ("i64", "double"),
+        "i16" => ("i16", "float"),
+        _ => ("i32", "float"),
+    };
+    let body = body
+        .replace("{T}", &vector)
+        .replace("{E}", element)
+        .replace("{N}", &lanes.to_string())
+        .replace("{V}", &tag)
+        .replace("{W}", double_width)
+        .replace("{I}", integer)
+        .replace("{F}", float);
+    let decls = declarations(&body);
     format!(
-        "{HEAD}{decls}define void @f(ptr %d, ptr %a_p, ptr %b_p, ptr %p, ptr %q, {scalar} %s) {{\n\
+        "{HEAD}{decls}define void @f(ptr %d, ptr %a_p, ptr %b_p, ptr %p, ptr %q, {element} %s) {{\n\
          %a = load {vector}, ptr %a_p, align 16\n\
          %b = load {vector}, ptr %b_p, align 16\n\
          {body}\n\
@@ -136,18 +197,53 @@ fn complaint(source: &str) -> Option<String> {
     (!said.status.success()).then(|| String::from_utf8_lossy(&said.stderr).trim().to_string())
 }
 
+/// Every `(operation, vector type)` the compiler refuses, with why. A row is
+/// a dated deviation; a refusal not listed fails the test, and so does a row
+/// the compiler no longer needs.
+const REFUSED: &[(&str, &str)] = &[];
+
+/// Every vector operation over every NEON type either compiles or is listed
+/// in `REFUSED`: a selected opcode without an instruction, a legalizer gap, a
+/// type the target does not take.
+#[test]
+fn every_vector_operation_compiles_or_is_listed() {
+    let mut refused = Vec::new();
+    for (lanes, element, float) in TYPES {
+        let bodies = if float { FLOAT_BODIES } else { INTEGER_BODIES };
+        for (name, body, applies) in bodies {
+            if !applies(element) {
+                continue;
+            }
+            if let Some(said) = complaint(&function(lanes, element, body)) {
+                let said = said.lines().next().unwrap_or_default().to_string();
+                refused.push((format!("{name} <{lanes} x {element}>"), said));
+            }
+        }
+    }
+    let unlisted: Vec<_> =
+        refused.iter().filter(|(case, _)| !REFUSED.iter().any(|(listed, _)| listed == case)).collect();
+    let stale: Vec<_> = REFUSED.iter().filter(|(listed, _)| !refused.iter().any(|(case, _)| case == listed)).collect();
+    assert!(
+        unlisted.is_empty() && stale.is_empty(),
+        "refused and not listed:\n{}\nlisted and no longer refused:\n{}",
+        unlisted.iter().map(|(case, said)| format!("    (\"{case}\", \"{said}\"),")).collect::<Vec<_>>().join("\n"),
+        stale.iter().map(|(case, _)| format!("    {case}")).collect::<Vec<_>>().join("\n"),
+    );
+}
+
 /// Every vector operation over every NEON type that selects a machine opcode
-/// selects one with an instruction. A refusal for another reason (a legalizer
-/// gap) is not this test's business.
+/// selects one with an instruction.
 #[test]
 fn every_selected_vector_opcode_has_an_instruction() {
     let mut missing = Vec::new();
     for (lanes, element, float) in TYPES {
         let bodies = if float { FLOAT_BODIES } else { INTEGER_BODIES };
-        for (name, body) in bodies {
-            let source = function(lanes, element, body);
-            if let Some(said) = complaint(&source) {
-                if said.contains(MISSING) && !said.contains(KNOWN_MISSING_SUFFIX) {
+        for (name, body, applies) in bodies {
+            if !applies(element) {
+                continue;
+            }
+            if let Some(said) = complaint(&function(lanes, element, body)) {
+                if said.contains(MISSING) {
                     missing.push(format!("{name} <{lanes} x {element}>: {said}"));
                 }
             }
