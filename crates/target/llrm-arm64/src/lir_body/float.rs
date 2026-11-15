@@ -4,11 +4,11 @@
 
 use super::*;
 use crate::mc::inst::Cond;
-use crate::vector_forms::VectorForm;
 use crate::mc::inst::{
     Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, NarrowLane, Rounding, VectorFma,
     VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
+use crate::vector_forms::VectorForm;
 
 const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Mov, "FMOV"),
@@ -523,9 +523,13 @@ fn long_name(
     format!("{stem}v{narrow}_v{wide}")
 }
 
-const LONG_OPS: [VectorLongOp; 8] = [
+const LONG_OPS: [VectorLongOp; 12] = [
     VectorLongOp::Ushll,
     VectorLongOp::Sshll,
+    VectorLongOp::Uaddl,
+    VectorLongOp::Saddl,
+    VectorLongOp::Usubl,
+    VectorLongOp::Ssubl,
     VectorLongOp::Uaddw,
     VectorLongOp::Saddw,
     VectorLongOp::Umull,

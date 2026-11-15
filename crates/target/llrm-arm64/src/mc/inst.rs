@@ -525,7 +525,11 @@ impl VectorOp {
         if self.is_logical() {
             return lanes.full() == Arrangement::B16;
         }
-        let no_doubles = matches!(self, VectorOp::Mul | VectorOp::Smax | VectorOp::Smin | VectorOp::Umax | VectorOp::Umin);
+        let no_doubles =
+            matches!(
+                self,
+                VectorOp::Mul | VectorOp::Smax | VectorOp::Smin | VectorOp::Umax | VectorOp::Umin
+            );
         !(no_doubles && lanes == Arrangement::D2)
     }
 
@@ -938,6 +942,10 @@ impl NarrowLane {
 pub enum VectorLongOp {
     Ushll,
     Sshll,
+    Uaddl,
+    Saddl,
+    Usubl,
+    Ssubl,
     Uaddw,
     Saddw,
     Umull,
@@ -953,6 +961,10 @@ impl VectorLongOp {
         match self {
             VectorLongOp::Ushll => (1, 0x0F00_A400),
             VectorLongOp::Sshll => (0, 0x0F00_A400),
+            VectorLongOp::Uaddl => (1, 0x0E20_0000),
+            VectorLongOp::Saddl => (0, 0x0E20_0000),
+            VectorLongOp::Usubl => (1, 0x0E20_2000),
+            VectorLongOp::Ssubl => (0, 0x0E20_2000),
             VectorLongOp::Uaddw => (1, 0x0E20_1000),
             VectorLongOp::Saddw => (0, 0x0E20_1000),
             VectorLongOp::Umull => (1, 0x0E20_C000),
@@ -966,6 +978,10 @@ impl VectorLongOp {
         match self {
             VectorLongOp::Ushll => "ushll",
             VectorLongOp::Sshll => "sshll",
+            VectorLongOp::Uaddl => "uaddl",
+            VectorLongOp::Saddl => "saddl",
+            VectorLongOp::Usubl => "usubl",
+            VectorLongOp::Ssubl => "ssubl",
             VectorLongOp::Uaddw => "uaddw",
             VectorLongOp::Saddw => "saddw",
             VectorLongOp::Umull => "umull",
@@ -1661,7 +1677,8 @@ pub enum Inst {
         index: u8,
         base: Gpr,
     },
-    /// `fneg v.4s, v.4s`, `fabs`, `fsqrt` and the conversions; `lanes` is `S4` or `D2`.
+    /// `fneg v.4s, v.4s`, `fabs`, `fsqrt` and the conversions; `lanes` is `S4`
+    /// or `D2`.
     VectorFpUnary {
         op: VectorFpUnary,
         lanes: Arrangement,

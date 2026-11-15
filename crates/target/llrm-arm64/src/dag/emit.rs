@@ -727,8 +727,9 @@ fn vector_inst(
         });
     }
     // `LD1Rv4s`: the lane at the address replicated into every lane of `rd`.
-    if let Some(lanes) =
-        name.strip_prefix("LD1Rv").and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
+    if let Some(lanes) = name
+        .strip_prefix("LD1Rv")
+        .and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
     {
         return Some(match operands {
             [Operand::Reg(base)] => Ok(Inst::VectorLoadReplicate { lanes, rt: rd, base: *base }),
@@ -774,6 +775,10 @@ fn vector_inst(
     for op in [
         VectorLongOp::Ushll,
         VectorLongOp::Sshll,
+        VectorLongOp::Uaddl,
+        VectorLongOp::Saddl,
+        VectorLongOp::Usubl,
+        VectorLongOp::Ssubl,
         VectorLongOp::Uaddw,
         VectorLongOp::Saddw,
         VectorLongOp::Umull,

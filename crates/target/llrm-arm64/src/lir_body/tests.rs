@@ -13,8 +13,8 @@ use crate::mc::inst::{
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
-    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp,
-    VectorReduce, VectorShift,
+    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp,
+    VectorOp, VectorReduce, VectorShift,
 };
 use crate::mfunc::Callee;
 
@@ -237,7 +237,9 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
-    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin] {
+    for op in
+        [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin]
+    {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
             if !op.has_lanes(lanes) {
                 continue;
@@ -253,7 +255,16 @@ pub(super) fn instructions() -> Vec<Inst> {
             for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
                 out.push(Inst::VectorLongShift { op, lane, high, rd: v(0), rn: v(1), amount: 0 });
             }
-            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+            for op in [
+                VectorLongOp::Uaddl,
+                VectorLongOp::Saddl,
+                VectorLongOp::Usubl,
+                VectorLongOp::Ssubl,
+                VectorLongOp::Uaddw,
+                VectorLongOp::Saddw,
+                VectorLongOp::Umull,
+                VectorLongOp::Smull,
+            ] {
                 out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
             }
         }
@@ -264,8 +275,12 @@ pub(super) fn instructions() -> Vec<Inst> {
     for (_, form) in crate::vector_forms::all() {
         use crate::vector_forms::VectorForm;
         out.push(match form {
-            VectorForm::Compare { op, lanes, quad } => Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) },
-            VectorForm::CompareZero { op, lanes, quad } => Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) },
+            VectorForm::Compare { op, lanes, quad } => {
+                Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) }
+            }
+            VectorForm::CompareZero { op, lanes, quad } => {
+                Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) }
+            }
             VectorForm::BitSelect { op, quad } => Inst::VectorBitSelect { op, quad, rd: v(0), rn: v(1), rm: v(2) },
             VectorForm::Bsp { quad } => Inst::VectorBsp { quad, rd: v(0), mask: v(3), rn: v(1), rm: v(2) },
         });
