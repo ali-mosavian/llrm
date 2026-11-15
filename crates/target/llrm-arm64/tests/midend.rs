@@ -849,6 +849,8 @@ fn an_arm64_row_on_the_line_before_it_is_not_a_statement() {
 /// store is given: `gep [2 x i8], %p, %i` is a legal scaled address, so free.
 /// It was costed 1, which made the 40-trip loop of `tile` 162 against the
 /// -O2 bar of 150 and left it rolled (4207 instructions, clang's 2155).
+/// The 40-trip loop is marked `isvectorized`: the pin widens it at VF 8 and
+/// the unroller would count nothing.
 #[test]
 fn a_scaled_index_gep_feeding_another_gep_is_free_so_a_small_loop_unrolls_fully() {
     let text = include_str!("data/tile_unroll.ll");
