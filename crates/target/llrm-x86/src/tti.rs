@@ -818,6 +818,10 @@ impl Tti for X86 {
         self.tuning.inline_trial_keeps_shrinking_copy
     }
 
+    fn frame_slot_add_with_saved(&self) -> bool {
+        self.tuning.frame_slot_add_with_saved
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }

@@ -1602,7 +1602,9 @@ fn lowered(
         }
     }
     enter.extend(procedure.body.vector_saves.iter().map(|(register, cell)| vector(true, *register, cell, false)));
-    let dead = scratch.map(|_| DEAD);
+    // `emitEpilogue` releases the slot where the first callee-saved `pop` stands, not at the `ret`:
+    // `findDeadCallerSavedReg` answers 0 for a `pop`, so with registers to restore the slot is an `add`.
+    let dead = scratch.filter(|_| saved.is_empty() || !procedure.registers.slot_add_with_saved).map(|_| DEAD);
     let mut leave: Vec<Semantics> = Vec::new();
     for op in emit_epilogue(&info, dead) {
         if leave.is_empty() && matches!(op, Op::AddSp(_) | Op::LeaSpFp(_) | Op::MovSpFp) {
@@ -5039,6 +5041,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: Some((RegId::EAX, RegId::ECX)),
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5095,6 +5098,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5155,6 +5159,7 @@ mod tests {
                 red_zone: 0,
                 slot_scratch: None,
                 slot_dead_checked: false,
+                slot_add_with_saved: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,
@@ -5234,6 +5239,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5415,6 +5421,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5606,6 +5613,7 @@ mod tests {
                 object_aligned: false,
                 slot_scratch: None,
                 slot_dead_checked: false,
+                slot_add_with_saved: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,

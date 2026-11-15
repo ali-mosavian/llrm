@@ -181,6 +181,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
+        // DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24): see `Tti::frame_slot_add_with_saved`.
+        frame_slot_add_with_saved: true,
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
