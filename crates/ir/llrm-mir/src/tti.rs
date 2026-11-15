@@ -803,6 +803,21 @@ pub trait Tti {
         None
     }
 
+    /// `getExtendedReductionCost` of `llvm.vector.reduce.add` of `vec` extended
+    /// to the lane `result`, where the target has a native form (AArch64's
+    /// `uaddlv`, `uaddlp`). `None`: `BaseT`'s: the reduction of the extended
+    /// vector and the extension.
+    fn vector_extended_reduction_cost(
+        &self,
+        _kind: crate::intrinsics::ReduceKind,
+        _unsigned: bool,
+        _result: Ty,
+        _vec: VectorTy,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
     /// `getArithmeticInstrCost` of a vector operation whose operands `args` are
     /// extensions (the widening forms: `smull`, `uaddl`, ...). `Err(())`: the
     /// pin's cost depends on known bits this port does not compute. The
@@ -936,6 +951,19 @@ pub trait Tti {
     /// the pin does at optsize (the target's `split_merged_conditions`);
     /// false: the pin's cost rule decides.
     fn splits_merged_conditions(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-OUTER: whether an outer loop's address stepped by `size`
+    /// bytes an iteration (`g[i]` over elements of `size`) is reduced to a
+    /// counter: what the addressing mode's scale does not absorb is computed
+    /// every trip (gcc's ivopts reduces every loop). false: the pin's, which
+    /// leaves a loop with a subloop alone.
+    fn reduces_outer_address_scale(
+        &self,
+        size: u128,
+    ) -> bool {
+        let _ = size;
         false
     }
 

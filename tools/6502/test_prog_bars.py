@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""tools/6502/prog_bars.py: the external program bars. Needs cc65, sdcc, sim65 and the llvm-mos SDK (a missing tool skips its test)."""
+import os, shutil, sys, tempfile, unittest
+from pathlib import Path
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import prog_bars as pb
+
+HAVE = {"cc65": shutil.which("cc65") and shutil.which("sim65"), "sdcc": shutil.which("sdcc") and shutil.which("sim65"),
+        "llvm-mos": (pb.MOS / "bin/mos-sim-clang").exists()}
+HAVE[pb.LTO] = HAVE["llvm-mos"]
+
+
+def measure(compiler, source, want, level="O2"):
+    """(bytes, clocks, insns, note) of `source` reporting `want`, on a temporary corpus."""
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "t.c").write_text(source)
+        Path(tmp, "t.out").write_text("".join(f"{v}\n" for v in want))
+        old, pb.CORPUS = pb.CORPUS, Path(tmp)
+        try:
+            return pb.measure(compiler, level, "t")
+        finally:
+            pb.CORPUS = old
+
+
+class Counted(unittest.TestCase):
+    def test_a_tie_counts_and_a_program_without_a_bar_is_not_counted(self):
+        self.assertTrue(pb.counted(100, [100, 120]))
+        self.assertFalse(pb.counted(101, [100, None]))
+        self.assertIsNone(pb.counted(100, [None, None]))
+
+
+class Images(unittest.TestCase):
+    def test_mos_image_leaves_the_vectors_out(self):
+        seg = lambda at, n: bytes([at & 255, at >> 8, n, 0]) + bytes(n)
+        self.assertEqual(pb.image_bytes_mos(seg(0x200, 7) + seg(0xFFFA, 6)), 7)
+
+    def test_ihx_counts_data_records_only(self):
+        self.assertEqual(pb.image_bytes_ihx(":03010000AABBCC00\n:020000040000FA\n:00000001FF\n"), 3)
+
+
+class Instrument(unittest.TestCase):
+    """The harness' own faults, found building it (2026-11-15): the sdcc `report` assembled `(lp),y` as `sta abs,y`, so every sdcc cell
+    read `wrong`; sdcc and cc65 refused every program naming a clang predefine (`__INT32_TYPE__`, 16 cells n/a); the empty-main floor
+    must cancel exactly (a program that is the floor measures its own `rts`, 1 byte)."""
+    SRC = "extern void report(long v);\nint main(void)\n{\n    report(0x01020304L);\n    report(-2L);\n    return 0;\n}\n"
+
+    def each(self, f):
+        for compiler in pb.ALL:
+            if HAVE[compiler]:
+                with self.subTest(compiler=compiler):
+                    f(compiler)
+
+    def test_reported_longs_are_read_back(self):
+        def check(c):
+            self.assertIsNotNone(measure(c, self.SRC, [0x01020304, -2])[0], c)
+        self.each(check)
+
+    def test_a_wrong_or_missing_report_is_not_a_bar(self):
+        def check(c):
+            bytes_, _, _, note = measure(c, self.SRC, [0x01020304, -3])
+            self.assertIsNone(bytes_)
+            self.assertTrue(note.startswith("wrong"), note)
+            bytes_, _, _, note = measure(c, self.SRC, [0x01020304, -2, 5])
+            self.assertTrue(note.startswith("wrong"), note)
+        self.each(check)
+
+    def test_a_program_with_over_255_reports_is_checked_not_looped_on(self):
+        """The check loop indexed with `unsigned char`: overflow_builtins (324 reports) never ended on a right answer, read `no halt`
+        and dropped out of the bars (llvm-mos, 2026-11-15)."""
+        src = "extern void report(long v);\nint main(void)\n{\n    int i;\n    for (i = 0; i < 300; i++) report(i * 3L);\n    return 0;\n}\n"
+        def check(c):
+            self.assertIsNotNone(measure(c, src, [i * 3 for i in range(300)])[0], c)
+        self.each(check)
+
+    def test_a_difference_at_report_123_is_wrong_not_a_timeout(self):
+        """The driver exits 1 + index (124 for report #123) and a timeout was also 124: the cell read `no halt`, not `wrong`."""
+        src = "extern void report(long v);\nint main(void)\n{\n    int i;\n    for (i = 0; i < 130; i++) report(i);\n    return 0;\n}\n"
+        want = list(range(130))
+        want[123] = -1
+        def check(c):
+            note = measure(c, src, want)[3]
+            self.assertEqual(note, "wrong: report #123 differs", c)
+        self.each(check)
+
+    def test_a_program_that_never_halts_is_n_a(self):
+        def check(c):
+            old, pb.RUN_TIMEOUT = pb.RUN_TIMEOUT, 3
+            try:
+                note = measure(c, "volatile int v;\nint main(void)\n{\n    for (;;) v = 1;\n}\n", [])[3]
+            finally:
+                pb.RUN_TIMEOUT = old
+            self.assertTrue(note.startswith("n/a: no halt"), note)
+        self.each(check)
+
+    def test_the_floor_cancels_exactly(self):
+        self.each(lambda c: self.assertEqual(measure(c, "void main(void)\n{\n}\n", [])[0], 1, c))
+
+    def test_clang_predefines_exist_for_every_compiler(self):
+        src = ("extern void report(long v);\nint main(void)\n{\n    __INT32_TYPE__ x = 70000L;\n"
+               "    report(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ ? x : 0);\n    return 0;\n}\n")
+        self.each(lambda c: self.assertIsNotNone(measure(c, src, [70000])[0], c))
+
+
+if __name__ == "__main__":
+    unittest.main()
