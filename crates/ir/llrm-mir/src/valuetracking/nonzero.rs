@@ -1139,6 +1139,10 @@ fn is_known_non_zero_demanded(
     v: Operand,
     mut depth: u32,
 ) -> bool {
+    // DEVIATE (vectors, w11): every lane is non-zero only of a splat constant.
+    if q.int_vector_lane_bits(v).is_some() {
+        return q.int_constant(v).is_some_and(|(bits, _)| bits != 0);
+    }
     let is_constant = matches!(v, Operand::Constant(_));
     if let Operand::Constant(id) = v {
         let constant = q.context.get(id);

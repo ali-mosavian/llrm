@@ -143,6 +143,18 @@ impl<'a> Query<'a> {
         self.function.operand_type(self.context(), operand)
     }
 
+    /// The lane width of an integer vector, `None` for any other value. The
+    /// analyses here are translated for scalars: a vector is answered with
+    /// what holds of every lane (an unknown lane, a splat constant) and is not
+    /// looked through.
+    pub fn int_vector_lane_bits(
+        &self,
+        operand: Operand,
+    ) -> Option<u32> {
+        let ty = self.type_of(operand)?;
+        matches!(self.context().types.get(ty), Type::Vector { .. }).then(|| self.context().types.scalar_int_bits(ty))?
+    }
+
     /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's, 0 for anything
     /// else.
     pub fn scalar_bits(
