@@ -540,6 +540,7 @@ impl fmt::Display for Inst {
             Inst::VectorFill { rd, fill } => match fill {
                 Fill::Zero => write!(out, "movi.2d v{}, #0", rd.0),
                 Fill::Byte(byte) => write!(out, "movi.16b v{}, #{byte}", rd.0),
+                Fill::Byte8(byte) => write!(out, "movi.8b v{}, #{byte}", rd.0),
                 Fill::Dup(arrangement, source) => {
                     let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
                     write!(out, "dup.{} v{}, {}", arrangement.suffix(), rd.0, gpr(*source, width, false))
@@ -549,6 +550,7 @@ impl fmt::Display for Inst {
                         ImmShape::H8(shift) => ("lsl", "8h", shift),
                         ImmShape::S4(shift) => ("lsl", "4s", shift),
                         ImmShape::S2(shift) => ("lsl", "2s", shift),
+                        ImmShape::H4(shift) => ("lsl", "4h", shift),
                         ImmShape::S4Msl(shift) => ("msl", "4s", shift),
                     };
                     let mnemonic = if *invert { "mvni" } else { "movi" };

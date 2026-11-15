@@ -599,6 +599,7 @@ fn vector_fill(
     }
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
+        ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
         ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
         ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
         _ => {}
@@ -616,6 +617,7 @@ fn vector_fill(
             "v8i16" => Some(shaped(ImmShape::H8, 0)),
             "v4i32" => Some(shaped(ImmShape::S4, 0)),
             "v2i32" => Some(shaped(ImmShape::S2, 0)),
+            "v4i16" => Some(shaped(ImmShape::H4, 0)),
             "v4s_msl" => Some(shaped(ImmShape::S4Msl, 256)),
             _ => continue,
         };

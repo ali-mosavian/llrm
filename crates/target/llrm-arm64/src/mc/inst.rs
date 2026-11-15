@@ -1067,6 +1067,8 @@ pub enum ImmShape {
     S4(u8),
     /// `.2s`, the same shifts: a 64-bit register (`Q` clear).
     S2(u8),
+    /// `.4h`, `lsl #0` or `#8`: a 64-bit register.
+    H4(u8),
     /// `.4s`, `msl #8` or `#16`.
     S4Msl(u8),
 }
@@ -1075,7 +1077,7 @@ impl ImmShape {
     /// `cmode` of the modified-immediate encoding.
     pub(super) fn cmode(self) -> u32 {
         match self {
-            ImmShape::H8(shift) => 0b1000 | u32::from(shift / 8) << 1,
+            ImmShape::H8(shift) | ImmShape::H4(shift) => 0b1000 | u32::from(shift / 8) << 1,
             ImmShape::S4(shift) | ImmShape::S2(shift) => u32::from(shift / 8) << 1,
             ImmShape::S4Msl(shift) => 0b1100 | u32::from(shift == 16),
         }
@@ -1087,7 +1089,7 @@ impl Fill {
     pub fn is_quad(&self) -> bool {
         !matches!(
             self,
-            Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
+            Fill::MaskD(_) | Fill::Byte8(_) | Fill::Imm { shape: ImmShape::S2(_) | ImmShape::H4(_), .. }
         )
     }
 }
@@ -1096,6 +1098,8 @@ impl Fill {
 pub enum Fill {
     Zero,
     Byte(u8),
+    /// `movi v.8b, #imm8`: the byte in a 64-bit register.
+    Byte8(u8),
     /// `dup`: the low lane bits of a general register in every lane.
     Dup(Arrangement, Gpr),
     /// `movi`/`mvni v.<shape>, #imm8`: the byte placed by the shape, inverted
