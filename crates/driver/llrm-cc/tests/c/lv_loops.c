@@ -56,3 +56,11 @@ unsigned char xor_toggle_count(unsigned char n)
         x ^= 1;
     return x;
 }
+
+/* A byte table computed in 32-bit arithmetic: the narrowing to bytes (`trunc <16 x i32> to <16 x i8>`) was unpriced,
+   so the loop stayed scalar (mem_length_boundaries_m32: +70% executed instructions). */
+void pattern_bytes(unsigned char *dst, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++)
+        dst[i] = (unsigned char)((i & 3) + ((i >> 2) & 1));
+}

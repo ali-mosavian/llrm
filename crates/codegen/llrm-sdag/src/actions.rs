@@ -954,6 +954,21 @@ impl TargetLowering {
         // expansion. DEVIATE X86V3 now covers only the 8- and 16-bit
         // lanes and the non-splat builds.
         t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerEXTEND_VECTOR_INREG`, `LowerTRUNCATE`: a vector widened to more than one register (`punpck`, `psra`),
+        // or narrowed from more than one (`pand` + `packuswb`). No vector has an extending load or a truncating store
+        // of another vector's memory type without `pmovzx` (SSE4.1).
+        let wide = [MVT::V16I16, MVT::V8I32, MVT::V16I32, MVT::V4I64, MVT::V8I64, MVT::V16I64];
+        t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &wide, Action::Custom);
+        t.set_ops(&[ISD::Truncate], &wide, Action::Custom);
+        for vt in MVT::vectors() {
+            for mem in MVT::vectors() {
+                for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
+                    t.set_load_ext_action(ext, vt, mem, Action::Expand);
+                }
+                t.set_trunc_store_action(vt, mem, Action::Expand);
+            }
+        }
         // `LowerSELECT`: a scalar condition over a vector is a `CMOV` of the
         // register.
         t.set_ops(&[ISD::Select], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
