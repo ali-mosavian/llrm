@@ -8,6 +8,10 @@ use std::path::Path;
 use std::process::Command;
 
 fn assembly(target: &str, level: &str) -> String {
+    assembly_of("lv_loops.c", target, level)
+}
+
+fn assembly_of(source: &str, target: &str, level: &str) -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
     // Tests run in parallel: a directory of its own for each call.
     static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -21,7 +25,7 @@ fn assembly(target: &str, level: &str) -> String {
         .env("LLRM_LLC", llc)
         .args([level, "-w", "-S", "-o"])
         .arg(&asm)
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/lv_loops.c"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c").join(source))
         .output()
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
@@ -102,7 +106,7 @@ fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut objects = Vec::new();
-    for source in ["lv_run.c", "lv_loops.c"] {
+    for source in ["lv_run.c", "lv_loops.c", "lv_lanes.c"] {
         let object = dir.join(format!("{source}.o"));
         let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_64-linux")
@@ -219,4 +223,29 @@ fn a_vector_of_zeros_is_an_xor_and_not_a_pool_load() {
     let sum = body(&text, "sum_array");
     assert!(sum.contains("xorps xmm") || sum.contains("pxor xmm"), "{sum}");
     assert!(!sum.contains("$K"), "{sum}");
+}
+
+/// A byte loop whose accumulator starts from an argument and whose operand is a
+/// loop-invariant byte stopped the compile: `insertelement <16 x i8>` (the seed
+/// in lane 0 of a zero vector, the broadcast) had no lowering (`CannotSelect("
+/// InsertVectorElt")`), and the `i1` condition of a vector `select` was
+/// zero-extended to a vector (panic "a vector type"). The seed is now a `movd`
+/// and the select a branch around the register copy. known_loads_walks.
+#[test]
+fn a_byte_accumulator_seeded_from_an_argument_compiles_with_movd_and_a_vector_select() {
+    for level in ["-O2", "-O3"] {
+        let text = assembly("x86_64-linux", level);
+        let toggle = body(&text, "xor_toggle_count");
+        assert!(toggle.contains("movd xmm"), "{level}: {toggle}");
+    }
+}
+
+/// A lane written at a constant position (`insertelement` at 5, 3 and 2) had no lowering at all
+/// (`Unsupported { op: InsertVectorElt, .. "convert node to libcall" }`): it is a store of the vector, a store of the
+/// lane and a load (`ExpandINSERT_VECTOR_ELT`). The host run in `lv_run.c` checks the bytes.
+#[test]
+fn a_lane_written_at_a_constant_position_assembles_as_a_stack_round_trip() {
+    let text = assembly_of("lv_lanes.c", "x86_64-linux", "-O2");
+    let set = body(&text, "set_lanes");
+    assert!(set.contains("mov byte ptr [rsp") && set.contains("mov word ptr [rsp"), "{set}");
 }
