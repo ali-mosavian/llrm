@@ -583,7 +583,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         }
         Inst::VectorIntUnary { op, lanes, rd, rn } => {
             let (u, opcode) = op.fields();
-            0x0E20_0800 | lanes.q() << 30 | u << 29 | lanes.size() << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x0E20_0800 | lanes.q() << 30 | u << 29 | op.size(*lanes) << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();

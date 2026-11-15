@@ -646,9 +646,15 @@ fn vector_int_unary_name(
     format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes))
 }
 
-const VECTOR_INT_UNARY: [VectorIntUnary; 3] = [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt];
+const VECTOR_INT_UNARY: [VectorIntUnary; 5] = [
+    VectorIntUnary::Neg,
+    VectorIntUnary::Abs,
+    VectorIntUnary::Cnt,
+    VectorIntUnary::Clz,
+    VectorIntUnary::Rbit,
+];
 
-const VECTOR_OPS: [VectorOp; 14] = [
+const VECTOR_OPS: [VectorOp; 18] = [
     VectorOp::Add,
     VectorOp::Sub,
     VectorOp::Mul,
@@ -663,6 +669,10 @@ const VECTOR_OPS: [VectorOp; 14] = [
     VectorOp::Smin,
     VectorOp::Umax,
     VectorOp::Umin,
+    VectorOp::Sqadd,
+    VectorOp::Uqadd,
+    VectorOp::Sqsub,
+    VectorOp::Uqsub,
 ];
 const ARRANGEMENTS: [Arrangement; 4] = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2];
 /// The arrangements of the integer operations (three-same, shifts), which

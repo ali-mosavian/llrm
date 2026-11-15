@@ -699,7 +699,13 @@ fn vector_inst(
         });
     }
     // `NEGv4i32`, `ABSv8i8`, `CNTv16i8`: one source, integer lanes.
-    for (stem, op) in [("NEG", VectorIntUnary::Neg), ("ABS", VectorIntUnary::Abs), ("CNT", VectorIntUnary::Cnt)] {
+    for (stem, op) in [
+        ("NEG", VectorIntUnary::Neg),
+        ("ABS", VectorIntUnary::Abs),
+        ("CNT", VectorIntUnary::Cnt),
+        ("CLZ", VectorIntUnary::Clz),
+        ("RBIT", VectorIntUnary::Rbit),
+    ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
         };
@@ -980,6 +986,10 @@ fn vector_inst(
         ("SMIN", VectorOp::Smin),
         ("UMAX", VectorOp::Umax),
         ("UMIN", VectorOp::Umin),
+        ("SQADD", VectorOp::Sqadd),
+        ("UQADD", VectorOp::Uqadd),
+        ("SQSUB", VectorOp::Sqsub),
+        ("UQSUB", VectorOp::Uqsub),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;

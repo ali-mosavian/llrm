@@ -203,17 +203,11 @@ const REFUSED: &[(&str, &str)] = &[
     ("extract_lane", "what: \\\"promote result\\\""),
     // `CLZ`, `RBIT` and the saturating arithmetic have no instruction; `CNT`
     // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern.
-    ("ctlz", "machine opcode CLZv"),
     ("ctlz", "CannotSelect(\"CtLz\")"),
     ("cttz", "CannotSelect(\"CtTz\")"),
     ("ctpop", "CannotSelect(\"CtPop\")"),
-    ("bitreverse", "machine opcode RBITv"),
     ("bitreverse", "CannotSelect(\"BitReverse\")"),
     ("bswap", "bswap must be an even number of bytes"),
-    ("uadd_sat", "machine opcode UQADDv"),
-    ("usub_sat", "machine opcode UQSUBv"),
-    ("sadd_sat", "machine opcode SQADDv"),
-    ("ssub_sat", "machine opcode SQSUBv"),
     // The conversions of 16-bit lanes.
     ("uitofp_fptoui", "CannotSelect(\"FpToUInt\")"),
     ("sitofp_fptosi", "CannotSelect(\"FpToSInt\")"),
