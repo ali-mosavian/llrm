@@ -132,13 +132,7 @@ impl Query<'_> {
         &self,
         operand: Operand,
     ) -> Option<(u128, u32)> {
-        let constant = self.context.get(self.constant(operand)?);
-        let width = self.context.types.int_bits(constant.ty).filter(|&width| width <= 128)?;
-        match constant.kind {
-            ConstantKind::Int(bits) => Some((bits, width)),
-            ConstantKind::Null | ConstantKind::Zero => Some((0, width)),
-            _ => None,
-        }
+        self.context.splat_int(self.constant(operand)?).filter(|&(_, width)| width <= 128)
     }
 
     fn is_poison(
@@ -224,7 +218,7 @@ impl Query<'_> {
         &mut self,
         ty: TypeId,
     ) -> Operand {
-        let width = self.context.types.int_bits(ty).expect("an integer");
+        let width = self.context.types.scalar_int_bits(ty).expect("an integer");
         self.int(ty, mask(width))
     }
 
