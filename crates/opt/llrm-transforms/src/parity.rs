@@ -319,7 +319,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp@1455",
         Late,
         "slp-vectorizer",
-        "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
+        "slpvectorize.rs makes vector stores of runs of constant stores (arm64 only: cost-priced, VF down from the register width, DEVIATE SLP1: constants only), slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
     partial(
         "loop-vectorize@1354",
