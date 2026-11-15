@@ -67,15 +67,21 @@ const BASE_CELLS: u8 = 16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Tuning {
     pub clocks_per_byte: u32,
+    /// Whether the 32-bit multiply, divide and shift calls take the speed
+    /// routines' entries: they are bigger, linked once, and the module
+    /// trial keeps them where the clocks they save pay for it
+    /// (`select::module_text`).
+    pub fast_routines: bool,
 }
 
 impl Tuning {
-    /// Speed: a byte saved is not worth a clock.
-    pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
+    /// Speed: bytes first as at size (user ruling 2026-11-14); the speed
+    /// routines' entries stay.
+    pub const SPEED: Tuning = Tuning { clocks_per_byte: 12, fast_routines: true };
     /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits
     /// is 3 bytes and 16 clocks; three shared callee-saved cells are 9
     /// bytes and 99 clocks).
-    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12 };
+    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12, fast_routines: false };
 }
 
 thread_local! {
@@ -99,6 +105,9 @@ thread_local! {
     /// Whether a 16-bit division calls its compact routine at speed too (see
     /// [`with_compact_division16`]).
     static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The functions of the module in hand that save their cells inline (see
+    /// [`keep_saves_inline`]).
+    static INLINE_SAVES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
     /// Whether `commute_accumulator` makes its wider choice (see
     /// [`with_wide_commute`]).
     static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
@@ -117,6 +126,18 @@ pub fn with_wide_commute<R>(
     let result = f();
     WIDE_COMMUTE.with(|a| a.set(before));
     result
+}
+
+/// The module's choice that function `name` saves its callee-saved cells
+/// inline, not by `__csave`: it holds for every later compile of the function
+/// (`select::module_text`).
+pub fn keep_saves_inline(name: &str) {
+    INLINE_SAVES.with(|set| set.borrow_mut().insert(name.to_owned()));
+}
+
+/// Forget the choices [`keep_saves_inline`] made (a new module).
+pub fn forget_inline_saves() {
+    INLINE_SAVES.with(|set| set.borrow_mut().clear());
 }
 
 /// Whether the allocation just made took a choice only the wider rule makes.
@@ -182,7 +203,7 @@ pub fn with_fast_division<R>(
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
-/// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them, but the
+/// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them , but the
 /// runtime that holds them is [`SAVE_HELPERS_BYTES`] a module: only a module
 /// whose users together save more than that should link it
 /// (`select::module_text`).
@@ -199,8 +220,10 @@ pub fn with_shared_saves<R>(
 /// The bytes `__csave` and `__crest` take once linked.
 pub const SAVE_HELPERS_BYTES: i64 = 34;
 
-/// What a function that keeps `n` callee-saved cells saves by calling the
-/// helpers: six bytes a cell inline, and two for the result, against eleven.
+/// What a function that keeps `n` callee-saved cells and returns from one place
+/// saves by calling the helpers: six bytes a cell inline, and two for the
+/// result, against eleven. A guess for the function's own choice; the module's
+/// is measured (`select::module_text`).
 pub fn shared_save_gain(n: u32) -> i64 {
     6 * i64::from(n) + 2 - 11
 }
@@ -3706,6 +3729,7 @@ fn save_preserved<const STACK: bool>(
         let n = used.len() as u32;
         let (saved, slower) = (shared_save_gain(n), 57 + 14 * n);
         let shared = SHARED_SAVES.with(|a| a.get())
+            && !INLINE_SAVES.with(|set| set.borrow().contains(&function.name))
             && n >= 3
             && used.iter().enumerate().all(|(at, byte)| *byte == rc(8 + at as u8))
             && saved > 0
@@ -4161,7 +4185,7 @@ fn emit_with<const STACK: bool>(
                         Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
                         _ => (callee.as_str(), false),
                     };
-                    let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    let speed = TUNING.with(|t| t.get()).fast_routines;
                     let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
                     let entry = if !speed
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))

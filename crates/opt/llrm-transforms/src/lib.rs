@@ -113,6 +113,7 @@ pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
 pub mod combine_assume;
+pub mod combine_stack;
 pub mod combine_bitcast;
 pub mod combine_bitorder;
 pub mod combine_branch;

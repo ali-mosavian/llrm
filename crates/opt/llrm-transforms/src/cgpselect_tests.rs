@@ -213,8 +213,8 @@ b0:
     for what in ["mul i32", "add i32 %m", "lshr i32"] {
         assert!(text.find(what).expect(what) > branch, "{what} after the branch: {text}");
     }
-    // The true arm's block follows the branch, as the pin's lowered select places it
-    // (x_collatz -O3 +1196 clocks with the false arm first).
+    // The true arm's block follows the branch, as the pin's lowered select
+    // places it (x_collatz -O3 +1196 clocks with the false arm first).
     assert!(text.find("add i32 %m").unwrap() < text.find("lshr i32").unwrap(), "{text}");
 }
 
@@ -244,4 +244,49 @@ b0:
     let lower = text.find("br i1 %lo").unwrap_or_else(|| panic!("a branch on the lower limit: {text}"));
     assert!(first < lower && lower < convert, "the conversion follows both tests: {text}");
     assert_eq!(text.matches("fptosi").count(), 1, "{text}");
+}
+
+/// sfm16_float -O2 m32: the conversion's branch was made at its select, which
+/// stands before the sum of the six constant selects; the selects stayed in
+/// the block before the branch and their sum went after it, so no `add` folded
+/// into a branch. What only the join reads moves into it.
+#[test]
+fn test_what_only_the_join_reads_moves_into_it() {
+    let (changed, text) = after(
+        "define i32 @f(double %x, i32 %a, i1 %ok, i1 %k) {
+b0:
+  %m = select i1 %k, i32 8, i32 0
+  %c = fptosi double %x to i32
+  %r = select i1 %ok, i32 %c, i32 0
+  %t = add i32 %a, %m
+  %u = add i32 %t, %r
+  ret i32 %u
+}
+",
+        43,
+        3,
+    );
+    assert!(changed, "{text}");
+    let branch = text.find("br i1 %ok").unwrap_or_else(|| panic!("a branch: {text}"));
+    assert!(text.find("select i1 %k").expect("the constant select") > branch, "{text}");
+}
+
+/// Control: what the branch itself reads stays where it is.
+#[test]
+fn test_what_the_branch_reads_stays_ahead_of_it() {
+    let (changed, text) = after(
+        "define i32 @f(double %x, i32 %a, i32 %k) {
+b0:
+  %ok = icmp ult i32 %k, 9
+  %c = fptosi double %x to i32
+  %r = select i1 %ok, i32 %c, i32 0
+  %u = add i32 %a, %r
+  ret i32 %u
+}
+",
+        43,
+        3,
+    );
+    assert!(changed, "{text}");
+    assert!(text.find("icmp ult").expect("the condition") < text.find("br i1 %ok").expect("the branch"), "{text}");
 }
