@@ -29,9 +29,8 @@
 //! `MachineLICMImpl::{HoistOutOfLoop, Hoist, IsProfitableToHoist,
 //! HasLoopPHIUse, EliminateCSE, getOrCreatePreheader}`, pin d1106deb71cc.
 
-use llrm_support::hash::HashMap;
-
 use llrm_mir::module::BlockId;
+use llrm_support::hash::HashMap;
 
 use crate::cfg::Cfg;
 use crate::dagisel::generated::instrinfo::{desc, flag};
@@ -153,12 +152,10 @@ pub fn machine_licm(f: &mut Function) -> bool {
     let cfg = Cfg::of(f);
     let (tree, loops) = cfg.analyses();
     let n = f.blocks.len();
-    let mut children = vec![Vec::new(); n];
-    for b in 1..n {
-        if let Some(up) = tree.immediate_dominator(BlockId(b as u32)) {
-            children[up.0 as usize].push(b);
-        }
-    }
+    // `MachineDomTreeNode::children()`: the order the tree was built in, not
+    // the block numbers'.
+    let children: Vec<Vec<usize>> =
+        (0..n).map(|b| tree.children(Some(BlockId(b as u32))).into_iter().map(|c| c.0 as usize).collect()).collect();
     let mut replaced: HashMap<VReg, VReg> = HashMap::default();
     for l in loops.top_level_loops().collect::<Vec<_>>().into_iter().rev() {
         let header = l.get_header().0 as usize;
@@ -231,9 +228,10 @@ pub fn machine_licm(f: &mut Function) -> bool {
                     }
                 }
                 let cheap = desc(inst.opcode).is_some_and(|d| d.has(flag::CHEAP_AS_A_MOVE));
-                // The outermost loop first, then each loop around the block, inwards:
-                // `HoistOutOfLoop` retries a subloop's preheader where the outermost
-                // loop's did not take the instruction.
+                // The outermost loop first, then each loop around the block,
+                // inwards: `HoistOutOfLoop` retries a subloop's
+                // preheader where the outermost loop's did not
+                // take the instruction.
                 let mut around = Vec::new();
                 let mut cur = loops.get_loop_for(BlockId(b as u32));
                 while let Some(x) = cur {
@@ -246,7 +244,11 @@ pub fn machine_licm(f: &mut Function) -> bool {
                 around.reverse();
                 let mut target = None;
                 for (at, candidate) in std::iter::once(l).chain(around).enumerate() {
-                    let pre = if at == 0 { Some(preheader) } else { candidate.get_loop_preheader(&cfg).map(|p| p.0 as usize) };
+                    let pre = if at == 0 {
+                        Some(preheader)
+                    } else {
+                        candidate.get_loop_preheader(&cfg).map(|p| p.0 as usize)
+                    };
                     let Some(pre) = pre else { continue };
                     if !constant
                         && !inst.operands.iter().all(|o| match o {
@@ -450,8 +452,8 @@ mod tests {
     }
     /// bb0 -> bb1 (outer header: defines `v`) -> bb2 (inner loop on itself:
     /// `k = 7; a = left + k; t = a + n`) -> bb3 (outer latch) -> bb1. `left` is
-    /// `v` (bb1's division) or, for `variant`, a register bb2's own division defines. bb1 has one successor, so
-    /// it is the inner loop's preheader.
+    /// `v` (bb1's division) or, for `variant`, a register bb2's own division
+    /// defines. bb1 has one successor, so it is the inner loop's preheader.
     fn inner_add(
         variant: bool,
         shared: bool,
@@ -476,16 +478,18 @@ mod tests {
             Inst::new(op::BR_IF, &[Operand::Block(2), Operand::Use(t)]),
             Inst::new(op::BR, &[Operand::Block(3)]),
         ]);
-        // `shared`: the outer loop reads `v` and a constant 7 of its own, so the
-        // inner add ends the last use of neither operand.
-        let mut latch = vec![Inst::new(op::BR_IF, &[Operand::Block(1), Operand::Use(n)]), Inst::new(op::BR, &[Operand::Block(4)])];
+        // `shared`: the outer loop reads `v` and a constant 7 of its own, so
+        // the inner add ends the last use of neither operand.
+        let mut latch =
+            vec![Inst::new(op::BR_IF, &[Operand::Block(1), Operand::Use(n)]), Inst::new(op::BR, &[Operand::Block(4)])];
         if shared {
             let w = f.new_vreg(ValType::I32);
             latch.insert(0, Inst::new(op::ADD_I32, &[Operand::Def(w), Operand::Use(v), Operand::Use(k)]));
         }
         f.blocks = vec![
             vec![konst(n, 3), Inst::new(op::BR, &[Operand::Block(1)])],
-            // A division has an effect: it stays where it is, and `v` varies with the outer loop.
+            // A division has an effect: it stays where it is, and `v` varies
+            // with the outer loop.
             {
                 let mut outer = vec![Inst::new(op::DIV_S_I32, &[Operand::Def(v), Operand::Use(n), Operand::Use(n)])];
                 if shared {
@@ -514,8 +518,9 @@ mod tests {
     fn an_add_of_an_outer_value_and_a_last_use_constant_leaves_the_inner_loop() {
         let mut f = inner_add(false, false);
         assert!(machine_licm(&mut f));
-        // bb1 is the inner loop's preheader: both adds read only what the loop does not
-        // change, and each ends the last use of its operand, so they leave it.
+        // bb1 is the inner loop's preheader: both adds read only what the loop
+        // does not change, and each ends the last use of its operand,
+        // so they leave it.
         assert_eq!(adds(&f.blocks[1]), 2);
         assert_eq!(adds(&f.blocks[2]), 0);
     }

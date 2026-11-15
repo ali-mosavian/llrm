@@ -1480,15 +1480,12 @@ fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow(
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
 }
 
-/// switch.ll's two functions took 8 full allocations each (the return block
-/// copied or kept, constants hoisted or not, the argument copies joined or
-/// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. The choice of a
-/// byte loaded through `a` with the argument copies unjoined won on no kernel
-/// cell and none of the 105 corpus files, and was dropped: a form of a function
-/// (scheduler, return block copied or kept, carry form) is allocated at most 6
-/// times. Copied and kept differ on most functions since #9853 (tail-duplicated
-/// returns), and kept wins 2-11 B on 14 of 128 programs at -O2: both are built,
-/// lz4 -O2 takes 24 runs for its 4 forms.
+/// switch.ll's two functions took 8 full allocations each (the return block copied or kept, constants hoisted or
+/// not, the argument copies joined or not): 16 greedy runs, 51% of a 1.3 G-instruction compile. The choice of a byte
+/// loaded through `a` with the argument copies unjoined won on no kernel cell and none of the 105 corpus files, and
+/// was dropped: a form of a function (scheduler, return block copied or kept, carry form) is allocated at most 6
+/// times. Copied and kept differ on most functions since #9853 (tail-duplicated returns), and kept wins 2-11 B on
+/// 14 of 128 programs at -O2: both are built, lz4 -O2 takes 24 runs for its 4 forms.
 #[test]
 fn a_form_of_a_function_is_allocated_at_most_six_times() {
     let ir = include_str!("kernels/ir/lz4.ll");
