@@ -66,6 +66,9 @@ pub struct Convention {
     pub float_argument_registers: Vec<String>,
     /// The pairs an i64 argument takes, low register first.
     pub wide_pairs: Vec<[String; 2]>,
+    /// The pairs a pointer argument takes where they are not `wide_pairs`
+    /// (llvm-mos: a pointer is never in A:X); empty means `wide_pairs`.
+    pub pointer_pairs: Vec<[String; 2]>,
     /// The alignment of a wide argument on the stack, where it is more than a
     /// slot (SysV x86-64: an `__int128` is 16-aligned).
     pub wide_stack_align: Option<i64>,
@@ -268,6 +271,7 @@ pub struct Calling {
 const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
+    "pointer_pairs",
     "backfill",
     "positional",
     "shadow_bytes",
@@ -589,6 +593,7 @@ impl Convention {
             _ if argument.memory || argument.floating => Kind::Memory(argument.bytes),
             _ if argument.bytes <= slot => Kind::Word,
             _ if argument.bytes <= register && argument.integer => Kind::Sized(argument.bytes),
+            _ if argument.bytes == 2 * slot && argument.pointer && !self.pointer_pairs.is_empty() => Kind::Pointer,
             _ if argument.bytes == 2 * slot && (argument.integer || argument.pointer) => Kind::Wide,
             _ => Kind::Memory(argument.bytes),
         }
@@ -605,6 +610,9 @@ pub enum Kind {
     /// holds: a long in a 32-bit register on a 16-bit target.
     Sized(i64),
     Wide,
+    /// A pointer in two registers: `Wide`, from `pointer_pairs` where the
+    /// convention names them (`CCIfPtr`).
+    Pointer,
     Memory(i64),
     /// A `float` or `double`: the next vector register, else the stack in a
     /// slot of its own.
@@ -711,22 +719,26 @@ impl Convention {
                 .get(key)
                 .map_or(Ok(false), |one| one.as_bool().ok_or_else(|| format!("{} is not true or false", at(key))))
         };
-        let wide_pairs = match table.get("wide_pairs") {
-            None => Vec::new(),
-            Some(pairs) => pairs
-                .as_array()
-                .ok_or_else(|| format!("{} is not a list", at("wide_pairs")))?
-                .iter()
-                .map(|pair| {
-                    let names: Vec<Option<&str>> =
-                        pair.as_array().map_or(Vec::new(), |pair| pair.iter().map(toml::Value::as_str).collect());
-                    match names[..] {
-                        [Some(low), Some(high)] => Ok([low.to_owned(), high.to_owned()]),
-                        _ => Err(format!("{}: a pair is [low, high]", at("wide_pairs"))),
-                    }
-                })
-                .collect::<Result<Vec<_>, String>>()?,
+        let pairs = |key: &str| -> Result<Vec<[String; 2]>, String> {
+            match table.get(key) {
+                None => Ok(Vec::new()),
+                Some(pairs) => pairs
+                    .as_array()
+                    .ok_or_else(|| format!("{} is not a list", at(key)))?
+                    .iter()
+                    .map(|pair| {
+                        let names: Vec<Option<&str>> =
+                            pair.as_array().map_or(Vec::new(), |pair| pair.iter().map(toml::Value::as_str).collect());
+                        match names[..] {
+                            [Some(low), Some(high)] => Ok([low.to_owned(), high.to_owned()]),
+                            _ => Err(format!("{}: a pair is [low, high]", at(key))),
+                        }
+                    })
+                    .collect::<Result<Vec<_>, String>>(),
+            }
         };
+        let wide_pairs = pairs("wide_pairs")?;
+        let pointer_pairs = pairs("pointer_pairs")?;
         let mut symbol = BTreeMap::new();
         for (format, pattern) in table.get("symbol").map_or(Ok(&toml::Table::new()), |one| {
             one.as_table().ok_or_else(|| format!("{} is not a table", at("symbol")))
@@ -741,6 +753,7 @@ impl Convention {
             name: name.to_owned(),
             cc: table.contains_key("cc").then(|| text("cc")).transpose()?,
             wide_pairs,
+            pointer_pairs,
             backfill: flag("backfill")?,
             positional: flag("positional")?,
             serves: match table.get("serves") {
@@ -889,6 +902,17 @@ impl Convention {
         self.place_reserving(arguments, &[])
     }
 
+    /// The pairs a word of this kind may take.
+    fn pairs_of(
+        &self,
+        kind: Kind,
+    ) -> &[[String; 2]] {
+        match kind {
+            Kind::Pointer if !self.pointer_pairs.is_empty() => &self.pointer_pairs,
+            _ => &self.wide_pairs,
+        }
+    }
+
     /// `place` with `reserved` registers already taken: the hidden pointer of a
     /// struct result.
     pub fn place_reserving(
@@ -926,7 +950,7 @@ impl Convention {
             } else {
                 match kind {
                     Kind::Word | Kind::Sized(_) => free.iter().position(|&one| one).map(|first| vec![first]),
-                    Kind::Wide => self.wide_pairs.iter().find_map(|pair| {
+                    Kind::Wide | Kind::Pointer => self.pairs_of(kind).iter().find_map(|pair| {
                         let both = pair.iter().map(at).collect::<Option<Vec<_>>>()?;
                         both.iter().all(|&index| free[index]).then_some(both)
                     }),
@@ -956,14 +980,14 @@ impl Convention {
                 }
                 None => {
                     spilled = !self.skip_memory;
-                    if let (Kind::Wide, Some(align)) = (kind, self.wide_stack_align) {
+                    if let (Kind::Wide | Kind::Pointer, Some(align)) = (kind, self.wide_stack_align) {
                         stack = (stack + align - 1) / align * align;
                     }
                     places.push(Place::Stack(stack));
                     let bytes = match kind {
                         Kind::Word => self.slot_bytes,
                         Kind::Sized(bytes) => bytes.max(self.slot_bytes),
-                        Kind::Wide => self.slot_bytes * self.wide_slots,
+                        Kind::Wide | Kind::Pointer => self.slot_bytes * self.wide_slots,
                         Kind::Memory(bytes) | Kind::Float(bytes) => bytes.max(self.slot_bytes),
                     };
                     stack += (bytes + self.slot_bytes - 1) / self.slot_bytes * self.slot_bytes;
@@ -991,11 +1015,11 @@ impl Convention {
             // A wide integer is two words (the legalizer splits it): two
             // consecutive positions, both registers or both stack slots. A
             // pair across the fourth position is the caller's to refuse.
-            let width = if kind == Kind::Wide { 2 } else { 1 };
+            let width = if matches!(kind, Kind::Wide | Kind::Pointer) { 2 } else { 1 };
             let register = match kind {
                 Kind::Word | Kind::Sized(_) => self.argument_registers.get(position).map(|name| vec![name.clone()]),
                 Kind::Float(_) => self.float_argument_registers.get(position).map(|name| vec![name.clone()]),
-                Kind::Wide => (position + 1 < self.argument_registers.len())
+                Kind::Wide | Kind::Pointer => (position + 1 < self.argument_registers.len())
                     .then(|| self.argument_registers[position..position + 2].to_vec()),
                 Kind::Memory(_) => None,
             };
