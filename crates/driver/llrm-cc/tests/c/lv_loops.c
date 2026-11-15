@@ -2,6 +2,9 @@ int a[1024], b[1024];
 void add_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] += b[i]; }
 void copy_plus_one(int *d, const int *s, int n) { for (int i = 0; i < n; ++i) d[i] = s[i] + 1; }
 void multiply_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] *= b[i]; }
+void times_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 3; }
+void times_seven(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 7; }
+void times_minus_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * -3; }
 
 int sum_array(const int *a, int n) {
   int total = 0;
@@ -59,4 +62,12 @@ unsigned char xor_toggle_count(unsigned char n)
     for (unsigned char i = 0; i < n; i++)
         x ^= 1;
     return x;
+}
+
+/* A byte table computed in 32-bit arithmetic: the narrowing to bytes (`trunc <16 x i32> to <16 x i8>`) was unpriced,
+   so the loop stayed scalar (mem_length_boundaries_m32: +70% executed instructions). */
+void pattern_bytes(unsigned char *dst, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++)
+        dst[i] = (unsigned char)((i & 3) + ((i >> 2) & 1));
 }

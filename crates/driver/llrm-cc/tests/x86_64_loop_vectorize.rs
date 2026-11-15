@@ -64,6 +64,23 @@ fn an_int_multiply_loop_uses_pmuludq() {
     assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
+/// A vector multiply by `2^n + 1`, `2^n - 1` or `-(2^n - 1)` is a shift and an add or subtract (`visitMUL` through
+/// `isConstOrConstSplat`, `decomposeMulByConstant`): it read only a scalar constant, so a splat stayed `pmuludq` twice
+/// with five shuffles (`loop_countdown_sum` +24% instructions against clang).
+#[test]
+fn a_vector_multiply_by_a_near_power_of_two_is_a_shift_and_an_add() {
+    let text = assembly("x86_64-linux", "-O2");
+    for (name, shift, op) in [
+        ("times_three", "pslld", "paddd"),
+        ("times_seven", "pslld", "psubd"),
+        ("times_minus_three", "pslld", "psubd"),
+    ] {
+        let body = body(&text, name);
+        assert!(!body.contains("pmuludq"), "{name} multiplies: {body}");
+        assert!(body.contains(shift) && body.contains(op), "{name} lacks {shift} and {op}: {body}");
+    }
+}
+
 #[test]
 fn the_32_bit_target_and_o1_keep_every_loop_scalar() {
     assert!(!assembly("x86_32-linux", "-O2").contains("xmm"));
@@ -106,7 +123,7 @@ fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut objects = Vec::new();
-    for source in ["lv_run.c", "lv_loops.c", "lv_lanes.c"] {
+    for source in ["lv_run.c", "lv_loops.c", "lv_lanes.c", "lv_casts.c"] {
         let object = dir.join(format!("{source}.o"));
         let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_64-linux")
@@ -248,4 +265,24 @@ fn a_lane_written_at_a_constant_position_assembles_as_a_stack_round_trip() {
     let text = assembly_of("lv_lanes.c", "x86_64-linux", "-O2");
     let set = body(&text, "set_lanes");
     assert!(set.contains("mov byte ptr [rsp") && set.contains("mov word ptr [rsp"), "{set}");
+}
+
+/// A vector widened to or narrowed from more than one register had no lowering (`Unsupported { op: Truncate, ty:
+/// V4I16, "vector with no register class" }`, `"split extending load"`, no `punpcklwd`): `punpck` with zero or with
+/// the sign, `pand` and `packuswb`. The host run in `lv_run.c` checks every width pair on edge values.
+#[test]
+fn vectors_widened_or_narrowed_across_registers_use_unpack_and_pack() {
+    let text = assembly_of("lv_casts.c", "x86_64-linux", "-O2");
+    assert!(body(&text, "z8_32").contains("punpcklwd"), "{text}");
+    assert!(body(&text, "t32_8").contains("packuswb"), "{text}");
+    assert!(body(&text, "s32_64").contains("psrad"), "{text}");
+}
+
+/// A byte table computed in 32-bit lanes stayed a scalar loop because `trunc <16 x i32> to <16 x i8>` had no price
+/// (mem_length_boundaries_m32: 233,551 instructions to clang's 137,355): VF 16, `pand` and `packuswb`.
+#[test]
+fn a_byte_table_computed_in_32_bit_lanes_is_a_vector_loop_with_packuswb() {
+    let text = assembly("x86_64-linux", "-O2");
+    let pattern = body(&text, "pattern_bytes");
+    assert!(pattern.contains("packuswb") && pattern.contains("paddd"), "{pattern}");
 }

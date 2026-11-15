@@ -322,7 +322,9 @@ pub fn module_text(
     // a module whose divisions are cold calls the speed routines with the
     // small wide path
     let wide = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}_fast\n")))
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
     if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
         for at in 0..texts.len() {
@@ -336,7 +338,9 @@ pub fn module_text(
     // module's choice by the share of its clocks it saves
     let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
     let compact_division = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
     };
     if size && texts.iter().any(|text| compact_division(text)) {
         let mut faster = texts.clone();
@@ -351,11 +355,13 @@ pub fn module_text(
             texts = faster;
         }
     }
-    // at speed the 16-bit divisions are the speed routine (39 bytes over the
+    // at speed the 16-bit divisions are the speed routine (35 bytes over the
     // compact one, linked once): a module takes the compact one, bytes first,
     // unless the clocks the speed one saves are worth them
     let speed_division16 = |text: &str| {
-        ["__udivhi3", "__divhi3", "__umodhi3", "__modhi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+        ["__udivhi3", "__divhi3", "__umodhi3", "__modhi3", "__divmodhi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
     };
     if !size && texts.iter().any(|text| speed_division16(text)) {
         let mut compact = texts.clone();
@@ -1153,7 +1159,7 @@ fn priced(
 ///
 /// DEVIATE 6502-DIV-16 (owner llrm-target-6502, exit 2026-11-24): the pin's
 /// `__udivhi3` is one routine. Reason: bytes first on this target at every
-/// level (user ruling 2026-11-14); the compact routine is 39 bytes smaller and
+/// level (user ruling 2026-11-14); the compact routine is 35 bytes smaller and
 /// 215 clocks slower a call on average (`hotdivision::SAVED_AT_SPEED_16`).
 fn speed_division16_pays(
     module: &Module,

@@ -1396,31 +1396,36 @@ out:
     assert!(runtime_unrolled_text(text, true));
 }
 
-/// recfloat -O2: `bench_recfloat` inlined into `main` with a trip count of
-/// 1000 was unrolled by 5 (`decay`'s chain is `mulsd`, `addsd`), 209 bytes
-/// against gcc's 153 for the same clocks. A known trip count is no reason to
-/// copy a loop its own chain bounds.
+/// loop_interchange -O3 (`sum = (sum * 31 + t[i]) % 100003`, 1024 trips): the
+/// chain bounded a trip, so the partial unroll the pin makes was vetoed.
+/// Unrolled by 8, the copies after the first see a remainder in (-100003,
+/// 100003) and CVP narrows their divide to 32 bits: 49,000 instructions against
+/// the pin's 41,000 (clang).
 #[test]
-fn test_a_known_trip_loop_bound_by_its_chain_is_not_unrolled() {
-    let text = "define double @f(ptr %a) {
+fn test_a_known_trip_loop_bound_by_its_chain_is_still_partially_unrolled() {
+    let text = "define i64 @f(ptr %a) {
 entry:
   br label %loop
 
 loop:
   %i = phi i64 [ 0, %entry ], [ %next, %loop ]
-  %x = phi double [ 1.0, %entry ], [ %y, %loop ]
-  %m = fmul double %x, 0.5
-  %y = fadd double %m, 1.0
+  %x = phi i64 [ 0, %entry ], [ %y, %loop ]
+  %p = getelementptr i16, ptr %a, i64 %i
+  %v = load i16, ptr %p
+  %t = sext i16 %v to i64
+  %m = mul i64 %x, 31
+  %s = add i64 %m, %t
+  %y = srem i64 %s, 100003
   %next = add i64 %i, 1
-  %more = icmp ne i64 %next, 1000
+  %more = icmp ne i64 %next, 1024
   br i1 %more, label %loop, label %done
 
 done:
-  ret double %y
+  ret i64 %y
 }
 ";
     assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
-    assert!(!runtime_unrolled_text(text, true));
+    assert!(runtime_unrolled_text(text, true), "vetoed for a chain on a known trip count");
 }
 
 /// histo -O2/-O3 (`++counts[(data[i] * 7 + seed) & 255]`): the store of one trip

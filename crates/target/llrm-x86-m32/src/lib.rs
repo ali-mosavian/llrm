@@ -147,6 +147,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE ROTATION-HOT (owner x86-m32, exit 2026-11-24):
         // see `Tti::rotation_hot_at_size`.
         rotation_hot_at_size: true,
+        // DEVIATE ROTATION-HOT-BYTES (owner x87-b, exit 2026-11-24): a
+        // rotated loop's guard is a `test` and a `jcc` (4 B) and its closing
+        // branch changes form (floats -Os +5 B, x_list +8 B for a loop each):
+        // 8 B a loop, not the default 4.
+        rotation_hot_bytes_per_loop: 8,
         // DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01):
         // see `Tti::load_pre_off_at_size`.
         load_pre_off_at_size: true,
@@ -181,6 +186,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
+        // DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24):
+        // see `Tti::inline_trial_cold_margin`.
+        inline_trial_cold_margin: 3,
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
