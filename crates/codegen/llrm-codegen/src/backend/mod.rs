@@ -236,6 +236,7 @@ pub mod liveness;
 pub mod liverangeshrink;
 pub mod loopslots;
 pub mod lower_int64;
+pub mod knownzero;
 pub mod machinecp;
 pub mod machinedce;
 pub mod machinelicm;
