@@ -336,6 +336,27 @@ pub(crate) fn inlines(
     INLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
 }
 
+thread_local! {
+    /// Set while the compile that inlines as the pin's threshold alone says
+    /// runs.
+    static PIN_INLINES: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the byte rate that refuses a growing inline is off, for the compile
+/// of the pin's own inline decisions.
+pub fn pinning_inlines() -> bool {
+    PIN_INLINES.with(Cell::get)
+}
+
+/// Runs `body` with every inline the pin's threshold takes made, whatever it
+/// grows.
+pub fn with_pin_inlines<T>(body: impl FnOnce() -> T) -> T {
+    let before = PIN_INLINES.with(|cell| cell.replace(true));
+    let value = body();
+    PIN_INLINES.with(|cell| cell.set(before));
+    value
+}
+
 /// Whether a trial compile is running.
 pub(crate) fn inlining() -> bool {
     INLINED.with(|list| !list.borrow().is_empty())

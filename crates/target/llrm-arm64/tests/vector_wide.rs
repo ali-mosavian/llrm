@@ -462,3 +462,21 @@ fn a_shuffle_of_another_length_than_its_inputs_is_selected() {
     assert!(text.matches("stp q").count() + text.matches("str q").count() >= 2, "{text}");
     assert!(!text.contains("[sp"), "{text}");
 }
+
+/// A reduction's accumulator inserted into a zero vector, then summed with
+/// extended lanes (tile's O2 row sum): the parts that are zero add nothing, so
+/// they are `sshll2`, not `saddw2` onto a `movi` zero (8 instrs more per row).
+#[test]
+fn an_add_of_a_zero_part_is_the_other_part() {
+    let text = assembly(
+        "define void @f(ptr %p, ptr %d, i64 %a) {\n\
+         \x20 %x = load <4 x i32>, ptr %p, align 16\n\
+         \x20 %s = sext <4 x i32> %x to <4 x i64>\n\
+         \x20 %v = insertelement <4 x i64> zeroinitializer, i64 %a, i64 0\n\
+         \x20 %r = add <4 x i64> %v, %s\n\
+         \x20 store <4 x i64> %r, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count(&text, "saddw2", ".2d"), 0, "{text}");
+    assert_eq!(count(&text, "movi", ".2d"), 0, "{text}");
+}

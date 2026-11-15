@@ -1214,6 +1214,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
                 .fold_sext_setcc(node)
+                .or_else(|| self.fold_zext_setcc(node))
                 .or_else(|| self.fold_extend_of_cast(node))
                 .or_else(|| self.visit_extend(node))
                 .or_else(|| self.sext_of_non_negative(node))
@@ -2337,6 +2338,45 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
+    /// `visitZERO_EXTEND`'s vector arm for a compare
+    /// ([L16639](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16639)):
+    /// before legalization, `zext (setcc x, y)` of a vector of `i1` is the
+    /// compare made at the extension's own type, or at the matching integer
+    /// vector then resized, with the bits above the `i1` cleared. A compare
+    /// the target makes as that mask is a `cmeq` and a widening, not
+    /// the lanes read one by one.
+    fn fold_zext_setcc(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, n0) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        if self.dag.opcode(node) != ISD::ZeroExtend
+            || self.dag.opcode(n0) != ISD::SetCC
+            || !vt.is_vector()
+            || self.legal_operations()
+            || self.dag.value_type(n0).element() != EVT::I1
+        {
+            return None;
+        }
+        let tli = self.tli?;
+        let (lhs, rhs, cc) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1), self.dag.operand(n0, 2));
+        let operand_vt = self.dag.value_type(lhs);
+        if tli.types.set_cc_result_type(operand_vt) == self.dag.value_type(n0) {
+            return None;
+        }
+        let flags = self.dag.node(n0).flags;
+        let compare = if vt.size_in_bits() == operand_vt.size_in_bits() {
+            self.dag.get_node_flags(ISD::SetCC, vt, &[lhs, rhs, cc], flags)
+        } else {
+            let matching = operand_vt.change_vector_element_type_to_integer();
+            let made = self.dag.get_node_flags(ISD::SetCC, matching, &[lhs, rhs, cc], flags);
+            self.any_ext_or_trunc(made, vt)
+        };
+        // `getZeroExtendInReg(.., i1)`: the low bit.
+        let one = self.dag.get_constant(1, vt);
+        Some(self.dag.get_node(ISD::And, vt, &[compare, one]))
+    }
+
     /// `visitANY_EXTEND`, `visitZERO_EXTEND` and `visitSIGN_EXTEND`, the folds
     /// of an extension of another cast: `aext (zext x)` is `zext x`, `zext
     /// (aext x)` is `zext x`, `aext (trunc x)` is `x` made the right width,
@@ -3021,6 +3061,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        // `visitADD`: "fold (add x, 0) -> x, vector edition".
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.value_type(node).is_vector() {
+            if self.dag.is_build_vector_all(n1, false) {
+                return Some(n0);
+            }
+            if self.dag.is_build_vector_all(n0, false) {
+                return Some(n1);
+            }
+        }
         let flags = self.dag.node(node).flags;
         self.visit_add_like(node, flags)
     }
