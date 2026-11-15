@@ -314,9 +314,6 @@ fn run_suffix(
     // store
     drop_reloads(asm);
     crate::peephole_cells::store_then_index_load(asm);
-    // last of the cell passes: the choice is by the final size, after the
-    // chain passes have taken what they take from the loop's neighbours
-    crate::peephole_cells::shift_loop_in_a(asm);
     branch_on_shift_carry(asm);
     carry_made_again(asm);
     jump_to_return(asm);
