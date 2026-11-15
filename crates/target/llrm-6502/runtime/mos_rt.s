@@ -1017,70 +1017,68 @@ __ashrsi3_fast:                 ; __sa >> __sb (arithmetic) -> __sa
   rts
 
 ; ---- memory fills and copies ----------------------------------------------------------------------
-; memset(A:X = dst, rc2 = byte, rc4:rc5 = n), memcpy and memmove(A:X = dst, rc2:rc3 = src, rc4:rc5 = n);
-; each returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its
-; high byte is saved (memset in rc3, the others on the hardware stack). The destination pointer is rc6:rc7.
+; memset(rc2:rc3 = dst, A = byte, rc4:rc5 = n), memcpy and memmove(rc2:rc3 = dst, rc4:rc5 = src, A:X = n):
+; the pointers in cells (llvm-mos), n as a word; each returns dst in A:X. They walk whole pages with Y, so
+; the low byte of dst stays put and only its high byte is saved (rc6, memcpy in rc7, memmove on the
+; hardware stack).
 
 .export memset
 memset:
-  sta rc6
-  stx rc7
-  stx rc3
-  lda rc2
-  ldy #0
+  ldx rc3
+  stx rc6
   ldx rc5
+  ldy #0
+  cpx #0
   beq @tail
 @page:
-  sta (rc6),y
+  sta (rc2),y
   iny
   bne @page
-  inc rc7
+  inc rc3
   dex
   bne @page
 @tail:
   ldx rc4
   beq @done
 @byte:
-  sta (rc6),y
+  sta (rc2),y
   iny
   dex
   bne @byte
 @done:
-  ldx rc3
-  lda rc6
+  ldx rc6
+  lda rc2
   rts
 
 .export memcpy
 memcpy:
   sta rc6
-  stx rc7
-  txa
-  pha
+  lda rc3
+  sta rc7
   ldy #0
-  ldx rc5
+  cpx #0
   beq @tail
 @page:
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   iny
   bne @page
+  inc rc5
   inc rc3
-  inc rc7
   dex
   bne @page
 @tail:
-  ldx rc4
+  ldx rc6
   beq @done
 @byte:
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   iny
   dex
   bne @byte
 @done:
-  pla
-  tax
-  lda rc6
+  ldx rc7
+  lda rc2
   rts
 
 ; dst below src copies upward; otherwise downward, from the last byte, which is safe whether or not
@@ -1088,41 +1086,42 @@ memcpy:
 .export memmove
 memmove:
   sta rc6
-  stx rc7
-  cmp rc2
-  txa
-  sbc rc3
+  lda rc2
+  cmp rc4
+  lda rc3
+  sbc rc5
   bcs @down
   lda rc6
   jmp memcpy
 @down:
-  lda rc7
-  pha
-  clc
-  adc rc5
-  sta rc7
   lda rc3
+  pha
+  txa
+  clc
+  adc rc3
+  sta rc3
+  txa
   clc
   adc rc5
-  sta rc3
-  ldy rc4
+  sta rc5
+  ldy rc6
   beq @pages
 @tail:
   dey
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   cpy #0
   bne @tail
 @pages:
-  ldx rc5
+  cpx #0
   beq @done
 @page:
-  dec rc7
   dec rc3
+  dec rc5
 @byte:
   dey
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   cpy #0
   bne @byte
   dex
@@ -1130,7 +1129,7 @@ memmove:
 @done:
   pla
   tax
-  lda rc6
+  lda rc2
   rts
 
 ; ---- speed variants of the 32-bit division (after the other routines: their addresses, and the

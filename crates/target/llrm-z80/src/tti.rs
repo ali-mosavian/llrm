@@ -385,6 +385,12 @@ impl Tti for Z80Tti {
             let bytes = i64::from(bits.div_ceil(8));
             return Cost::of(skeleton + each_byte * bytes + each_word * ((bytes + 1) / 2));
         }
+        // `BasicTTIImpl::getIntrinsicInstrCost`, `Intrinsic::fmuladd`: the multiply and the add it expands to, each a
+        // call of the soft-float runtime here (x87rotate -O2: ten of them priced as nothing, `rot` inlined twice).
+        if let (Some(ty), true) = (ret, name == "llvm.fmuladd" || name.starts_with("llvm.fmuladd.")) {
+            let any = OperandInfo::ANY;
+            return self.arithmetic_cost(ArithOp::FMul, ty, kind, any, any) + self.arithmetic_cost(ArithOp::FAdd, ty, kind, any, any);
+        }
         let _ = ret;
         if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
