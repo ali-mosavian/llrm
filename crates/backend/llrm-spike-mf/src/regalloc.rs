@@ -836,7 +836,9 @@ fn effects<T: Target>(
         }
     }
     if inst.call {
-        defs.extend(T::caller_saved().iter().map(|root| nodes.of::<T>(Reg::Phys(*root))));
+        let clobbered =
+            inst.call_clobbers.as_ref().map_or_else(T::caller_saved, |known| known.iter().copied().collect());
+        defs.extend(clobbered.iter().map(|root| nodes.of::<T>(Reg::Phys(*root))));
     }
     (defs, uses)
 }
