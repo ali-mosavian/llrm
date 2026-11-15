@@ -427,7 +427,14 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::VectorBinary { op, lanes, rd, rn, rm } => {
             let (u, opcode, logical) = op.fields();
             let size = logical.unwrap_or_else(|| lanes.size());
-            0x4E20_0400 | u << 29 | size << 22 | vreg(*rm)? << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x0E20_0400
+                | lanes.q() << 30
+                | u << 29
+                | size << 22
+                | vreg(*rm)? << 16
+                | opcode << 11
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
         }
         Inst::VectorShift { op, lanes, rd, rn, amount } => {
             let esize = lanes.lane_bits();
@@ -441,7 +448,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 VectorShift::Usra => (1, 0b00010, 2 * esize - amount),
                 VectorShift::Ssra => (0, 0b00010, 2 * esize - amount),
             };
-            0x4F00_0400 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x0F00_0400 | lanes.q() << 30 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorLongShift { op, lane, high, rd, rn, amount } => {
             let (u, base) = op.fields();
@@ -459,7 +466,34 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 | vreg(*rn)? << 5
                 | vreg(*rd)?
         }
-        Inst::VectorNot { rd, rn } => 0x6E20_5800 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::VectorNot { quad, rd, rn } => 0x2E20_5800 | u32::from(*quad) << 30 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::VectorCompare { op, lanes, quad, rd, rn, rm } => {
+            let (u, bit23, opcode) = op.fields();
+            // The float forms put the lane size (`sz`) at bit 22, the
+            // integer ones in `size`.
+            let size = if op.is_float() { bit23 << 1 | u32::from(*lanes == Arrangement::D2) } else { lanes.size() };
+            0x0E20_0400
+                | u32::from(*quad) << 30
+                | u << 29
+                | size << 22
+                | vreg(*rm)? << 16
+                | opcode << 11
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
+        Inst::VectorCompareZero { op, lanes, quad, rd, rn } => {
+            let (u, opcode) = op.fields();
+            let (base, size) = if op.is_float() {
+                (0x0EA0_0800, u32::from(*lanes == Arrangement::D2))
+            } else {
+                (0x0E20_0800, lanes.size())
+            };
+            base | u32::from(*quad) << 30 | u << 29 | size << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorBitSelect { op, quad, rd, rn, rm } => {
+            0x2E20_1C00 | u32::from(*quad) << 30 | op.size() << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorBsp { .. } => return error("a bit-select pseudo is expanded after allocation"),
         Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
             let (u, a, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);
@@ -483,14 +517,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
-            let size = match lanes {
-                Arrangement::B16 => 0,
-                Arrangement::H8 => 1,
-                Arrangement::S4 => 2,
-                Arrangement::D2 => 3,
-            };
-            let base = if *second { 0x4E00_5800 } else { 0x4E00_1800 };
-            base | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+            let size = lanes.size();
+            let base = if *second { 0x0E00_5800 } else { 0x0E00_1800 };
+            base | lanes.q() << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorNarrow { high, wide, rd, rn } => {
             let size = match wide {
@@ -514,11 +543,11 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let index = u32::from(*index);
             // Q:S:size is the index, as many bits of it as the lane leaves
             // (`ST1 (single structure)`)
-            let (opcode, q, s, size) = match lanes {
+            let (opcode, q, s, size) = match lanes.full() {
                 Arrangement::B16 => (0b000, index >> 3, (index >> 2) & 1, index & 3),
                 Arrangement::H8 => (0b010, index >> 2, (index >> 1) & 1, (index & 1) << 1),
                 Arrangement::S4 => (0b100, index >> 1, index & 1, 0b00),
-                Arrangement::D2 => (0b100, index, 0, 0b01),
+                _ => (0b100, index, 0, 0b01),
             };
             0x0D00_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
         }
@@ -542,7 +571,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         }
         Inst::VectorDupLane { lanes, rd, rn, index } => {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
-            0x4E00_0400 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x0E00_0400 | lanes.q() << 30 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorDupScalar { lanes, rd, rn, index } => {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
@@ -556,7 +585,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
             Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
-            Fill::Dup(arrangement, source) => 0x4E00_0C00 | arrangement.imm5() << 16 | reg(*source)? << 5 | vreg(*rd)?,
+            Fill::Dup(arrangement, source) => {
+                0x0E00_0C00 | arrangement.q() << 30 | arrangement.imm5() << 16 | reg(*source)? << 5 | vreg(*rd)?
+            }
             // `abc` is bits 18-16 of imm8 and `defgh` bits 9-5; `op`
             // is `mvni`'s.
             Fill::Imm { invert, shape, imm8 } => {

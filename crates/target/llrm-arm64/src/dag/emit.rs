@@ -584,6 +584,9 @@ fn vector_fill(
         ("DUPv8i16gpr", Arrangement::H8),
         ("DUPv4i32gpr", Arrangement::S4),
         ("DUPv2i64gpr", Arrangement::D2),
+        ("DUPv8i8gpr", Arrangement::B8),
+        ("DUPv4i16gpr", Arrangement::H4),
+        ("DUPv2i32gpr", Arrangement::S2),
     ]
     .into_iter()
     .find(|(one, _)| *one == name)
@@ -658,6 +661,9 @@ fn vector_inst(
         "8i16" => Some(Arrangement::H8),
         "4i32" => Some(Arrangement::S4),
         "2i64" => Some(Arrangement::D2),
+        "8i8" => Some(Arrangement::B8),
+        "4i16" => Some(Arrangement::H4),
+        "2i32" => Some(Arrangement::S2),
         _ => None,
     };
     // `INSvi64gpr`, `INSvi32lane`: a general register or a lane of another
@@ -697,6 +703,7 @@ fn vector_inst(
             Arrangement::H8 => "i16",
             Arrangement::S4 => "i32",
             Arrangement::D2 => "i64",
+            Arrangement::B8 | Arrangement::H4 | Arrangement::S2 => unreachable!("listed above"),
         };
         if name == format!("DUP{suffix}") {
             return Some(match operands {
@@ -765,9 +772,13 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    if name == "NOTv16i8" {
+    if let Some(quad) = match name {
+        "NOTv16i8" => Some(true),
+        "NOTv8i8" => Some(false),
+        _ => None,
+    } {
         return Some(match operands {
-            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
+            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { quad, rd, rn: *rn }),
             _ => wrong(),
         });
     }
@@ -825,6 +836,7 @@ fn vector_inst(
             Arrangement::H8 => "v8i16",
             Arrangement::S4 => "v4i32",
             Arrangement::D2 => "v2i64",
+            Arrangement::B8 | Arrangement::H4 | Arrangement::S2 => unreachable!("listed above"),
         };
         if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
             return Some(match operands {
@@ -914,15 +926,36 @@ fn vector_inst(
         ("EOR", VectorOp::Eor),
         ("USHL", VectorOp::Ushl),
         ("SSHL", VectorOp::Sshl),
+        ("SMAX", VectorOp::Smax),
+        ("SMIN", VectorOp::Smin),
+        ("UMAX", VectorOp::Umax),
+        ("UMIN", VectorOp::Umin),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
         };
-        if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+        if !op.has_lanes(lanes) {
             continue;
         }
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    // `CMGTv4i32`, `CMLTv8i8rz`, `FCMGEv2f32`, `BSPv16i8`.
+    if let Some(form) = crate::vector_forms::parse(name) {
+        use crate::vector_forms::VectorForm;
+        return Some(match (form, operands) {
+            (VectorForm::Compare { op, lanes, quad }, [Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorCompare { op, lanes, quad, rd, rn: *rn, rm: *rm })
+            }
+            // The zero is part of the form.
+            (VectorForm::CompareZero { op, lanes, quad }, [Operand::Fpr(rn), ..]) => {
+                Ok(Inst::VectorCompareZero { op, lanes, quad, rd, rn: *rn })
+            }
+            (VectorForm::Bsp { quad }, [Operand::Fpr(mask), Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorBsp { quad, rd, mask: *mask, rn: *rn, rm: *rm })
+            }
             _ => wrong(),
         });
     }

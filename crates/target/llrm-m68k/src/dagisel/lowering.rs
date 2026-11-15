@@ -27,6 +27,7 @@ use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, TargetLowe
 
 use super::generated::ids::isd as ids;
 use super::hooks::Cpu;
+use crate::timing::Price;
 
 /// The pin's `M68kISD` numbers, as the matcher table names them.
 pub mod m68kisd {
@@ -207,9 +208,11 @@ pub fn target_lowering_with(
     for (op, name) in [(SDiv, "__divdi3"), (UDiv, "__udivdi3"), (SRem, "__moddi3"), (URem, "__umoddi3")] {
         tl.set_libcall_name(op, MVT::I64, name);
     }
-    // a divide and a remainder of the same operands are one call where the remainder is not a multiply back
-    // that is cheap: the 68020's `muls.l` makes it three instructions, the 68000's and 68060's is two
-    // `__mulsi3` calls and a subtract (`has_div_rem_op`, the pin's `useDivRem` over `SDIVREM_I64`)
+    // a divide and a remainder of the same operands are one call where the
+    // remainder is not a multiply back that is cheap: the 68020's `muls.l`
+    // makes it three instructions, the 68000's and 68060's is two
+    // `__mulsi3` calls and a subtract (`has_div_rem_op`, the pin's `useDivRem`
+    // over `SDIVREM_I64`)
     if !cpu.has_wide_multiply() {
         for (op, name) in [(SDivRem, "__divmoddi4"), (UDivRem, "__udivmoddi4")] {
             tl.set_operation_action(op, MVT::I64, Action::Custom);
@@ -264,18 +267,23 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         false
     }
 
-    /// DEVIATE M68K-EXT-USES-TRUNC-FREE (owner llrm-target-m68k, exit 2026-11-24):
-    /// `ExtendUsesToFormExtLoad` asks `isTruncateFree`, which the pin's m68k leaves
-    /// false. A data register's low byte or word is the narrow value, so a load
-    /// another reader takes narrow is still widened for a `zext`; with false
-    /// `mul_words_to_long` is +4 B and `pattern_fill` -Os +2 B. `is_truncate_free`
-    /// itself stays false: answering it true changed `shift_until_idioms`.
+    /// DEVIATE M68K-EXT-USES-TRUNC-FREE (owner llrm-target-m68k, exit
+    /// 2026-11-24): `ExtendUsesToFormExtLoad` asks `isTruncateFree`, which
+    /// the pin's m68k leaves false. A data register's low byte or word is
+    /// the narrow value, so a load another reader takes narrow is still
+    /// widened for a `zext`; with false `mul_words_to_long` is +4 B and
+    /// `pattern_fill` -Os +2 B. `is_truncate_free` itself stays false:
+    /// answering it true changed `shift_until_idioms`.
     fn extend_uses_truncate_free(
         &self,
         from: EVT,
         to: EVT,
     ) -> bool {
-        !from.is_vector() && !to.is_vector() && from.is_integer() && to.is_integer() && from.size_in_bits() > to.size_in_bits()
+        !from.is_vector()
+            && !to.is_vector()
+            && from.is_integer()
+            && to.is_integer()
+            && from.size_in_bits() > to.size_in_bits()
     }
 
     /// `getScalarShiftAmountTy`: the pin's m68k keeps the default, the pointer
@@ -300,15 +308,24 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
 
     /// DEVIATE G2: the cheapest shift/add chain for any constant, priced
     /// ([`super::synth`]).
+    ///
+    /// DEVIATE M68K-MUL-COLD (owner m68k, exit 2026-12-20): a chain beyond the
+    /// pin's shape earns its clocks only in a block that runs more than once
+    /// (as the function trial judged it), else its bytes alone decide; priced
+    /// by clocks everywhere it won a site and lost the function (`urem_eq`
+    /// -O2: +148 B, one build). Before the 68020 the multiply is a call that
+    /// the chain beats on bytes and clocks at any frequency: priced as it was.
     fn synth_mul_chain(
         &self,
+        dag: &SelectionDAG,
         vt: EVT,
         c: u128,
     ) -> Option<llrm_codegen::backend::selectiondag::dag_combiner::MulPlan> {
         if !self.mul.allows_beyond_pin() {
             return None;
         }
-        let plan = super::synth::plan(self.cpu, self.price, vt.size_in_bits(), c)?;
+        let price = if dag.config().block_frequency > 1.0 || !self.cpu.at_least(Cpu::M68020) { self.price } else { Price::Size };
+        let plan = super::synth::plan(self.cpu, price, vt.size_in_bits(), c)?;
         let taken = self.mul.allows(true).then_some(plan);
         if taken.is_some() {
             self.mul.note_synthesized();
@@ -336,9 +353,10 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
 
     /// DEVIATE M68K-HALF-MUL-CONST (owner m68k, exit 2026-11-24):
     /// the pin has no half multiply, so `(short n) * 1000` is `ext.l` and
-    /// `muls.l` or `__mulsi3`; gcc has `muls.w #1000,%d1` (4 B). A multiply by a
-    /// constant that fits the half is `muls.w` / `mulu.w` with the constant as
-    /// the immediate unless the level's price takes a chain under it.
+    /// `muls.l` or `__mulsi3`; gcc has `muls.w #1000,%d1` (4 B). A multiply by
+    /// a constant that fits the half is `muls.w` / `mulu.w` with the
+    /// constant as the immediate unless the level's price takes a chain
+    /// under it.
     fn half_multiply_by_constant(
         &self,
         vt: EVT,
@@ -349,15 +367,23 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         if !self.half_mul || vt != EVT::I32 {
             return false;
         }
-        let text = if signed { format!("muls.w #{},%d0", c as u32 as i32 as i16) } else { format!("mulu.w #{},%d0", c as u16) };
+        let text = if signed {
+            format!("muls.w #{},%d0", c as u32 as i32 as i16)
+        } else {
+            format!("mulu.w #{},%d0", c as u16)
+        };
         let mut half = super::mulprice::one(self.cpu, &text, 4);
         if !x_dies {
-            // the half multiply overwrites its operand, a copy the chain's own moves already include
+            // the half multiply overwrites its operand, a copy the chain's own
+            // moves already include
             half = super::mulprice::sum([half, super::mulprice::one(self.cpu, "move.l %d0,%d1", 2)]);
         }
-        // a chain the price takes over the full multiply stays unless the half multiply beats it (at -O1 the two
-        // are each better on one axis: the chain keeps the pin's choice)
-        super::synth::plan(self.cpu, self.price, 32, c).is_none() || super::synth::cheapest(self.cpu, self.price, c).is_none_or(|chain| self.price.beats(self.cpu, half, chain))
+        // a chain the price takes over the full multiply stays unless the half
+        // multiply beats it (at -O1 the two are each better on one
+        // axis: the chain keeps the pin's choice)
+        super::synth::plan(self.cpu, self.price, 32, c).is_none()
+            || super::synth::cheapest(self.cpu, self.price, c)
+                .is_none_or(|chain| self.price.beats(self.cpu, half, chain))
     }
 
     fn is_indexed_legal(
@@ -530,8 +556,9 @@ impl Hooks for M68kLowering {
     }
 }
 
-/// `ExpandDivRemLibCall` of an `i64`: one call of `__divmoddi4` (`__udivmoddi4`), the quotient back in
-/// `d0:d1` and the remainder stored through the address of a stack cell, the third argument; the remainder is
+/// `ExpandDivRemLibCall` of an `i64`: one call of `__divmoddi4`
+/// (`__udivmoddi4`), the quotient back in `d0:d1` and the remainder stored
+/// through the address of a stack cell, the third argument; the remainder is
 /// loaded back after the call.
 fn lower_divrem_wide(
     dag: &mut SelectionDAG,
@@ -568,7 +595,8 @@ fn lower_divrem_wide(
         sret: false,
         byval: None,
     });
-    let result = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
+    let result =
+        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
     let callee = dag.get_target_external_symbol(EVT::I32, name);
     let root = dag.entry_node();
     let (chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[result, result]);
@@ -807,7 +835,10 @@ fn look_past_boolean(
     cond_value: SDValue,
 ) -> SDValue {
     let one_bit = dag.opcode(cond_value) == ISD::SignExtendInReg
-        && matches!(dag.node(dag.operand(cond_value, 1)).data, NodeData::ValueType(vt) if vt.size_in_bits() == 1);
+        && matches!(
+            dag.node(dag.operand(cond_value, 1)).data,
+            NodeData::ValueType(vt) if vt.size_in_bits() == 1
+        );
     if !one_bit {
         return cond_value;
     }

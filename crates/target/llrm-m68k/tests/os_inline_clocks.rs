@@ -7,49 +7,67 @@ use llrm_m68k::driver::{Level, assembly, cpu_of, object};
 
 const PICK: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 declare void @report(i32)
-define internal i64 @pick(i32 %a, i32 %e) {
-  %and = and i32 %a, 8388607
-  %m32 = or i32 %and, 8388608
-  %m = zext i32 %m32 to i64
-  %c = icmp sgt i32 %e, 22
-  %s1 = add i32 %e, -23
-  %s1z = zext i32 %s1 to i64
-  %l = shl i64 %m, %s1z
-  %s2 = sub i32 23, %e
-  %s2z = zext i32 %s2 to i64
-  %r = lshr i64 %m, %s2z
-  %sel = select i1 %c, i64 %l, i64 %r
-  ret i64 %sel
-}
-define i32 @main() optsize minsize {
-  %a = alloca i32
-  %e = alloca i32
-  store volatile i32 1081081856, ptr %a
-  store volatile i32 1, ptr %e
-  %a0 = load volatile i32, ptr %a
-  %e0 = load volatile i32, ptr %e
+define dso_local i32 @main() nounwind optsize {
+  %a = alloca i32, align 2
+  %e = alloca i32, align 2
+  store volatile i32 1081081856, ptr %a, align 2
+  store volatile i32 1, ptr %e, align 2
+  %a0 = load volatile i32, ptr %a, align 2
+  %e0 = load volatile i32, ptr %e, align 2
   %p0 = call i64 @pick(i32 %a0, i32 %e0)
   %t0 = trunc i64 %p0 to i32
   call void @report(i32 %t0)
-  store volatile i32 23, ptr %e
-  %a1 = load volatile i32, ptr %a
-  %e1 = load volatile i32, ptr %e
+  store volatile i32 23, ptr %e, align 2
+  %a1 = load volatile i32, ptr %a, align 2
+  %e1 = load volatile i32, ptr %e, align 2
   %p1 = call i64 @pick(i32 %a1, i32 %e1)
   %t1 = trunc i64 %p1 to i32
   call void @report(i32 %t1)
-  store volatile i32 24, ptr %e
-  %a2 = load volatile i32, ptr %a
-  %e2 = load volatile i32, ptr %e
+  store volatile i32 24, ptr %e, align 2
+  %a2 = load volatile i32, ptr %a, align 2
+  %e2 = load volatile i32, ptr %e, align 2
   %p2 = call i64 @pick(i32 %a2, i32 %e2)
   %t2 = trunc i64 %p2 to i32
   call void @report(i32 %t2)
-  store volatile i32 0, ptr %e
-  %a3 = load volatile i32, ptr %a
-  %e3 = load volatile i32, ptr %e
+  store volatile i32 0, ptr %e, align 2
+  %a3 = load volatile i32, ptr %a, align 2
+  %e3 = load volatile i32, ptr %e, align 2
   %p3 = call i64 @pick(i32 %a3, i32 %e3)
   %t3 = trunc i64 %p3 to i32
   call void @report(i32 %t3)
   ret i32 0
+}
+define internal i64 @pick(i32 %a, i32 %e) nounwind optsize {
+  %pa = alloca i32, align 2
+  %pe = alloca i32, align 2
+  %pm = alloca i64, align 8
+  store i32 %a, ptr %pa, align 2
+  store i32 %e, ptr %pe, align 2
+  %v = load i32, ptr %pa, align 2
+  %and = and i32 %v, 8388607
+  %or = or i32 %and, 8388608
+  %m = zext i32 %or to i64
+  store i64 %m, ptr %pm, align 8
+  %ev = load i32, ptr %pe, align 2
+  %c = icmp sge i32 %ev, 23
+  br i1 %c, label %left, label %right
+left:
+  %lm = load i64, ptr %pm, align 8
+  %le = load i32, ptr %pe, align 2
+  %ls = sub nsw i32 %le, 23
+  %lz = zext i32 %ls to i64
+  %l = shl i64 %lm, %lz
+  br label %join
+right:
+  %rm = load i64, ptr %pm, align 8
+  %re = load i32, ptr %pe, align 2
+  %rs = sub nsw i32 23, %re
+  %rz = zext i32 %rs to i64
+  %r = lshr i64 %rm, %rz
+  br label %join
+join:
+  %sel = phi i64 [ %l, %left ], [ %r, %right ]
+  ret i64 %sel
 }";
 
 #[test]
@@ -58,7 +76,7 @@ fn the_faster_inline_is_kept_at_os_within_the_bytes_ceiling() {
     let asm = assembly(PICK, cpu, Level::Os).expect("compiles");
     assert!(!asm.contains("pick"), "pick is still a function at -Os (8606 clk as a call, 7704 inlined):\n{asm}");
     // the same program with the call kept: the ceiling is a half more
-    let plain = PICK.replace("define internal i64 @pick(i32 %a, i32 %e) {", "define internal i64 @pick(i32 %a, i32 %e) noinline {");
+    let plain = PICK.replace("@pick(i32 %a, i32 %e) nounwind optsize {", "@pick(i32 %a, i32 %e) nounwind optsize noinline {");
     let (kept, called) = (object(PICK, cpu, Level::Os, "t.ll").unwrap().len(), object(&plain, cpu, Level::Os, "t.ll").unwrap().len());
     assert!(kept * 2 <= called * 3, "the inline is {kept} B against {called} B with the call");
 }
@@ -120,10 +138,10 @@ fn an_inline_that_links_the_multiply_routine_pays_for_its_bytes() {
 #[test]
 fn a_unit_without_main_is_not_trialled_for_clocks() {
     let cpu = cpu_of("68000").unwrap();
-    let unit = PICK.replace("define i32 @main()", "define i32 @entry()");
+    let unit = PICK.replace("define dso_local i32 @main()", "define dso_local i32 @entry()");
     let (kept, called) = (
         object(&unit, cpu, Level::Os, "t.ll").unwrap().len(),
-        object(&unit.replace("define internal i64 @pick(i32 %a, i32 %e) {", "define internal i64 @pick(i32 %a, i32 %e) noinline {"), cpu, Level::Os, "t.ll").unwrap().len(),
+        object(&unit.replace("@pick(i32 %a, i32 %e) nounwind optsize {", "@pick(i32 %a, i32 %e) nounwind optsize noinline {"), cpu, Level::Os, "t.ll").unwrap().len(),
     );
     assert_eq!(kept, called, "a library unit grew: {kept} B against {called} B with the call kept");
 }

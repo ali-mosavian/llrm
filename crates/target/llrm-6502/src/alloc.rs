@@ -67,15 +67,21 @@ const BASE_CELLS: u8 = 16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Tuning {
     pub clocks_per_byte: u32,
+    /// Whether the 32-bit multiply, divide and shift calls take the speed
+    /// routines' entries: they are bigger, linked once, and the module
+    /// trial keeps them where the clocks they save pay for it
+    /// (`select::module_text`).
+    pub fast_routines: bool,
 }
 
 impl Tuning {
-    /// Speed: a byte saved is not worth a clock.
-    pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
+    /// Speed: bytes first as at size (user ruling 2026-11-14); the speed
+    /// routines' entries stay.
+    pub const SPEED: Tuning = Tuning { clocks_per_byte: 12, fast_routines: true };
     /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits
     /// is 3 bytes and 16 clocks; three shared callee-saved cells are 9
     /// bytes and 99 clocks).
-    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12 };
+    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12, fast_routines: false };
 }
 
 thread_local! {
@@ -99,6 +105,9 @@ thread_local! {
     /// Whether a 16-bit division calls its compact routine at speed too (see
     /// [`with_compact_division16`]).
     static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The functions of the module in hand that save their cells inline (see
+    /// [`keep_saves_inline`]).
+    static INLINE_SAVES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
     /// Whether `commute_accumulator` makes its wider choice (see
     /// [`with_wide_commute`]).
     static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
@@ -117,6 +126,18 @@ pub fn with_wide_commute<R>(
     let result = f();
     WIDE_COMMUTE.with(|a| a.set(before));
     result
+}
+
+/// The module's choice that function `name` saves its callee-saved cells
+/// inline, not by `__csave`: it holds for every later compile of the function
+/// (`select::module_text`).
+pub fn keep_saves_inline(name: &str) {
+    INLINE_SAVES.with(|set| set.borrow_mut().insert(name.to_owned()));
+}
+
+/// Forget the choices [`keep_saves_inline`] made (a new module).
+pub fn forget_inline_saves() {
+    INLINE_SAVES.with(|set| set.borrow_mut().clear());
 }
 
 /// Whether the allocation just made took a choice only the wider rule makes.
@@ -182,7 +203,7 @@ pub fn with_fast_division<R>(
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
-/// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them, but the
+/// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them , but the
 /// runtime that holds them is [`SAVE_HELPERS_BYTES`] a module: only a module
 /// whose users together save more than that should link it
 /// (`select::module_text`).
@@ -199,8 +220,10 @@ pub fn with_shared_saves<R>(
 /// The bytes `__csave` and `__crest` take once linked.
 pub const SAVE_HELPERS_BYTES: i64 = 34;
 
-/// What a function that keeps `n` callee-saved cells saves by calling the
-/// helpers: six bytes a cell inline, and two for the result, against eleven.
+/// What a function that keeps `n` callee-saved cells and returns from one place
+/// saves by calling the helpers: six bytes a cell inline, and two for the
+/// result, against eleven. A guess for the function's own choice; the module's
+/// is measured (`select::module_text`).
 pub fn shared_save_gain(n: u32) -> i64 {
     6 * i64::from(n) + 2 - 11
 }
@@ -3462,17 +3485,47 @@ pub fn parallel_move(
     moves: &[(RegId, RegId)],
     a_live: bool,
 ) {
+    parallel_move_with(out, moves, a_live, None);
+}
+
+/// `parallel_move` with `spare`, an index register nothing live holds: a move
+/// of a cell to a cell goes through it (`ldx c; stx d`) and `a` is saved only
+/// for a move that has no other way (`x` to `y`, or a cell to a cell with no
+/// spare). A move into or out of a cell or `a` leaves `a` alone.
+pub fn parallel_move_with(
+    out: &mut Asm,
+    moves: &[(RegId, RegId)],
+    a_live: bool,
+    spare: Option<&str>,
+) {
     let mut pending: Vec<(RegId, Option<RegId>)> =
         moves.iter().filter(|(d, s)| d != s).map(|(d, s)| (*d, Some(*s))).collect();
     if pending.is_empty() {
         return;
     }
+    let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
+    // a move reading what another writes, or a cycle, goes through `a` and
+    // the stack
+    let independent = pending
+        .iter()
+        .enumerate()
+        .all(|(i, (d, _))| pending.iter().enumerate().all(|(j, (_, s))| i == j || *s != Some(*d)));
+    let spare = spare.filter(|name| {
+        independent
+            && pending.iter().all(|(d, s)| register_name(*d) != *name && s.is_none_or(|s| register_name(s) != *name))
+    });
     let a_is_dest = pending.iter().any(|(d, _)| *d == reg::A);
-    let save = a_live && !a_is_dest;
+    let scratch_a = |d: RegId, s: Option<RegId>| match s {
+        Some(s) if direct(d) && direct(s) => d != reg::A && s != reg::A,
+        Some(s) if !direct(d) && !direct(s) => spare.is_none(),
+        _ => false,
+    };
+    let save = a_live && !a_is_dest && (!independent || pending.iter().any(|(d, s)| scratch_a(*d, *s)));
     if save {
         out.push_str("  pha\n");
     }
-    let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
+    // `a` is live and left alone: a cell to a cell goes through the spare
+    let through_spare = a_live && !save && !a_is_dest;
     while !pending.is_empty() {
         let a_wanted = |skip: usize, pending: &[(RegId, Option<RegId>)]| {
             pending.iter().enumerate().any(|(i, (_, s))| i != skip && *s == Some(reg::A))
@@ -3492,7 +3545,7 @@ pub fn parallel_move(
             Some(i) => {
                 let (d, s) = pending.remove(i);
                 match s {
-                    Some(s) => move_byte(out, d, s, false, None, None),
+                    Some(s) => move_byte(out, d, s, through_spare, spare, None),
                     None => {
                         out.push_str("  pla\n");
                         move_byte(out, d, reg::A, false, None, None);
@@ -3706,6 +3759,7 @@ fn save_preserved<const STACK: bool>(
         let n = used.len() as u32;
         let (saved, slower) = (shared_save_gain(n), 57 + 14 * n);
         let shared = SHARED_SAVES.with(|a| a.get())
+            && !INLINE_SAVES.with(|set| set.borrow().contains(&function.name))
             && n >= 3
             && used.iter().enumerate().all(|(at, byte)| *byte == rc(8 + at as u8))
             && saved > 0
@@ -3999,7 +4053,7 @@ fn emit_with<const STACK: bool>(
             match (inst.kind, &inst.operands[..]) {
                 (Kind::Copy, _) if is_word(regs[0]) && is_word(regs[1]) => {
                     let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
-                    parallel_move(&mut out, &moves, a_live);
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 // a word copied into a byte is its low half (`trunc`
                 // at -O0); `lane` of a byte register named a cell no pair has
@@ -4015,10 +4069,11 @@ fn emit_with<const STACK: bool>(
                         .into_iter()
                         .filter(|(to, _)| after[b][i].contains(to))
                         .collect();
-                    parallel_move(&mut out, &moves, a_live);
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 (Kind::Op("PACK"), _) => {
-                    parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
+                    let moves = [(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])];
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 // d := s + k on a pair: the low byte bumped, the high on carry
                 (Kind::Op("PADD"), [_, _, Operand::Imm(k), ..]) => {
@@ -4161,7 +4216,7 @@ fn emit_with<const STACK: bool>(
                         Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
                         _ => (callee.as_str(), false),
                     };
-                    let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    let speed = TUNING.with(|t| t.get()).fast_routines;
                     let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
                     let entry = if !speed
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
@@ -4292,12 +4347,19 @@ fn emit_with<const STACK: bool>(
                         r if r == reg::Y => out.push_str("  tya\n"),
                         r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                     };
-                    load(&mut out, regs[2]);
+                    let index = |r: RegId| r == reg::X || r == reg::Y;
+                    // both bytes zero is `ora` of the two, one loaded: the byte
+                    // in an index register is the one to load, `txa; ora lo`
+                    // (3 B) and not `lda lo; bne; txa` (5 B)
+                    let swap =
+                        matches!((low, high), (Operand::Imm(0), Operand::Imm(0))) && !index(regs[2]) && index(regs[3]);
+                    let (first, second) = if swap { (regs[3], regs[2]) } else { (regs[2], regs[3]) };
+                    load(&mut out, first);
                     match (low, high) {
                         // against zero the loads set the flag: both bytes zero
                         // is `lda lo; ora hi`
-                        (Operand::Imm(0), Operand::Imm(0)) if regs[3] != reg::X && regs[3] != reg::Y => {
-                            writeln!(out, "  ora {}", register_name(regs[3])).unwrap();
+                        (Operand::Imm(0), Operand::Imm(0)) if !index(second) => {
+                            writeln!(out, "  ora {}", register_name(second)).unwrap();
                         }
                         (Operand::Imm(0), Operand::Imm(0)) => {
                             writeln!(out, "  bne _cz{made}").unwrap();

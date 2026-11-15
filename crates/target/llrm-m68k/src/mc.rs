@@ -16,7 +16,7 @@ use crate::REGISTER_INFO;
 use crate::dagisel::local;
 
 /// One machine operand (`MCOperand`).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Operand {
     Reg(RegId),
     Imm(i64),
@@ -27,7 +27,7 @@ pub enum Operand {
 /// A machine instruction: the pin's instruction by name, and its operands as
 /// the pin's `MCInst` has them (outputs first, a memory operand taking
 /// several).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Inst {
     pub opcode: &'static str,
     pub operands: Vec<Operand>,
@@ -126,7 +126,8 @@ fn print_method(
     let kind = method.trim_end_matches("Mem").trim_start_matches("print").trim_end_matches(char::is_numeric);
     Ok(match kind {
         "Operand" => print_operand(inst, at)?,
-        // `printImmediate`: a symbol in an immediate slot is `#sym` (the address), bare `sym` is the memory at it.
+        // `printImmediate`: a symbol in an immediate slot is `#sym` (the
+        // address), bare `sym` is the memory at it.
         "Immediate" => match operand(inst, at)? {
             Operand::Symbol(name, addend) => format!("#{}", symbol(name, *addend)),
             _ => print_operand(inst, at)?,
