@@ -101,6 +101,9 @@ pub struct Executed {
     pub branches: f64,
     pub taken: f64,
     pub jumps: f64,
+    /// x87 `fxch`es executed: one instruction here, `x87_exchange` clocks on
+    /// the CPU.
+    pub exchanges: f64,
 }
 
 impl Executed {
@@ -113,6 +116,16 @@ impl Executed {
         Ok(self.taken * cost("jcc")?
             + (self.branches - self.taken) * cost("jcc_not_taken")?
             + self.jumps * cost("jmp_short")?)
+    }
+
+    /// What the exchanges cost over the one unit an instruction counts: a 486
+    /// `fxch` is 4 clocks, so a rotation that adds two to a loop is not
+    /// cheaper.
+    pub fn exchange_cycles(
+        &self,
+        cpu: &Profile,
+    ) -> Result<f64, String> {
+        Ok(self.exchanges * (cpu.cost("x87_exchange")? as f64 - 1.0))
     }
 }
 
@@ -198,6 +211,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     }
     let frequency = Frequency::counted(body);
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
+    let is_fxch = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fxch"));
     let slots: IndexSet<Addr> = body
         .blocks
         .iter()
@@ -255,6 +269,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                         (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
                 Some((Operation::Jump, _)) => out.jumps += reaching,
+                Some((Operation::Exchange, _)) if is_fxch(one) => out.exchanges += reaching,
                 _ => {}
             }
             // A remat may be built as a reload; it counts as a remat.
