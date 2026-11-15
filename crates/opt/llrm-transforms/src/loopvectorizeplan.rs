@@ -299,12 +299,13 @@ fn iteration_cost(
     // recipe's vectors (a conversion's source too) are one register or two
     // (`SplitVectorResult` of a 256-bit type). Integer vectors of half a
     // register (the D registers) and of four registers are taken too: those
-    // MVTs exist. Owner llrm-arm64-vec, exit LV-X4.
+    // MVTs exist; eight registers (a `<16 x i64>` sum of bytes) split to them
+    // (`SplitVectorResult`). Owner llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
     let taken = |lane: Ty| {
         let bits = u64::from(lane_bits(lane)) * u64::from(vf);
         [register_bits, 2 * register_bits].contains(&bits)
-            || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits].contains(&bits))
+            || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
     };
     if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
         return Err(NotTaken);
