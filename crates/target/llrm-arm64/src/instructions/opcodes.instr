@@ -160,6 +160,9 @@ DUPv2i32gpr              move     x/r           -                        fp_arit
 DUPv2i64gpr              move     x/r           -                        fp_arith   - - - -/-                DUPv2i64gpr
 MOVIv2d_ns               move     x/i           -                        fp_arith   - - - -/-                MOVIv2d_ns
 MOVID                    move     x/i           -                        fp_arith   - - - -/-                MOVID
+MOVIv8b_ns               move     x/i         -                        fp_arith   - - - -/-                MOVIv8b_ns
+MOVIv4i16                move     x/i,i         -                        fp_arith   - - - -/-                MOVIv4i16
+MVNIv4i16                move     x/i,i         -                        fp_arith   - - - -/-                MVNIv4i16
 MOVIv8i16                move     x/i,i         -                        fp_arith   - - - -/-                MOVIv8i16
 MVNIv8i16                move     x/i,i         -                        fp_arith   - - - -/-                MVNIv8i16
 MOVIv4i32                move     x/i,i         -                        fp_arith   - - - -/-                MOVIv4i32
