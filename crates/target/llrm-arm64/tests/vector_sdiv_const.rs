@@ -44,6 +44,15 @@ fn a_v2i32_signed_remainder_by_a_constant_narrows_with_shrn() {
     }
 }
 
+#[test]
+fn a_v4i32_signed_quotient_by_a_power_of_two_is_cmlt_usra_sshr() {
+    let asm = assembly("4", "%r = sdiv <4 x i32> %x, <i32 8, i32 8, i32 8, i32 8>");
+    for wanted in ["cmlt", "usra", "sshr"] {
+        assert!(asm.contains(wanted), "{wanted}: {asm}");
+    }
+    assert!(!asm.contains("smull"), "{asm}");
+}
+
 fn loop_assembly(divisor: i32) -> String {
     let ir = format!(
         r#"
@@ -83,4 +92,36 @@ fn a_loop_of_signed_divides_by_a_constant_is_vectorized() {
 fn a_loop_of_signed_divides_by_a_negative_constant_is_vectorized() {
     let asm = loop_assembly(-7);
     assert!(asm.contains("smull2"), "{asm}");
+}
+
+/// The count-down sum of `(3 * n) % 11` into an `i64` (`recsum`, 14,007
+/// instructions at -O2 against clang's 7,780) stayed scalar: at VF 2, the
+/// widest type's, the `<2 x i32>` remainder had no price, so "not beneficial".
+#[test]
+fn a_sum_of_signed_remainders_into_a_wider_accumulator_is_vectorized() {
+    let ir = r#"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu"
+define i64 @f(i32 %n) {
+entry:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %exit, label %loop
+loop:
+  %acc = phi i64 [ 0, %entry ], [ %acc1, %loop ]
+  %i = phi i32 [ %n, %entry ], [ %i1, %loop ]
+  %m = mul nsw i32 %i, 3
+  %r = srem i32 %m, 11
+  %w = sext i32 %r to i64
+  %acc1 = add i64 %acc, %w
+  %i1 = add i32 %i, -1
+  %c = icmp eq i32 %i1, 0
+  br i1 %c, label %exit, label %loop
+exit:
+  %res = phi i64 [ 0, %entry ], [ %acc1, %loop ]
+  ret i64 %res
+}
+"#;
+    let asm = driver::assembly(ir, Platform::Linux, true).expect("lowers");
+    assert!(asm.contains("smull"), "{asm}");
+    assert!(asm.contains(".4s") || asm.contains(".2s"), "{asm}");
 }
