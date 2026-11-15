@@ -72,7 +72,8 @@ fn computed_by_priced_multiply(
             let size = layout.alloc_size(&context.types, source);
             let scaled = size > 1
                 && matches!(inst.operands.get(1), Some(Operand::Value(_)))
-                && tti.reduces_outer_multiply(Some(u128::from(size)));
+                && (tti.reduces_outer_multiply(Some(u128::from(size)))
+                    || tti.reduces_outer_address_scale(u128::from(size)));
             scaled
                 || depth > 0
                     && inst

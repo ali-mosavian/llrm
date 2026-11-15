@@ -673,7 +673,7 @@ fn memory_location(
 }
 
 /// `LoopBlocksRPO`: the blocks of the loop from its header, reverse postorder.
-fn loop_blocks_rpo(
+pub(crate) fn loop_blocks_rpo(
     cx: &Cx,
     header: BlockId,
 ) -> Vec<BlockId> {
