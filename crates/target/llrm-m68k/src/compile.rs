@@ -371,6 +371,7 @@ pub fn items_with(
     if shared {
         let (without, _, without_options) = finished(Options { shared_cse: false, ..options })?;
         if !crate::trial::keeps(&kept, &without, cpu, price) {
+            trial_won(name, "shared_cse", crate::trial::keeps(&without, &kept, cpu, price));
             (kept, kept_options) = (without, without_options);
         }
     }
@@ -388,6 +389,17 @@ pub fn items_with(
 /// The trials of [`items_with`] on a module the mid-end has run on: the items,
 /// whether the first build saved a callee-saved register, and the options the
 /// trials ended on.
+/// `LLRM_DEBUG=builds`: a trial's other build beat the one kept.
+fn trial_won(
+    name: &str,
+    trial: &str,
+    strictly: bool,
+) {
+    if llrm_support::debug::enabled("builds") {
+        eprintln!("[{}] {name} {trial}", if strictly { "won" } else { "tie" });
+    }
+}
+
 fn items_trials(
     module: &Module,
     name: &str,
@@ -442,10 +454,12 @@ fn items_trials(
                 (pin, shapes)
             };
             if crate::trial::prefers_without(&kept, &base, cpu, price, false) {
+                trial_won(name, "mul", crate::trial::keeps(&base, &kept, cpu, price));
                 kept = base;
                 options = base_options;
             }
         } else if crate::trial::prefers_without(&kept, &plain, cpu, price, true) {
+            trial_won(name, "mul", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
@@ -454,6 +468,7 @@ fn items_trials(
         let without = Options { class_split: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "class_split", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
@@ -462,6 +477,7 @@ fn items_trials(
         let without = Options { tail_duplicate: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "tail_dup", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
@@ -470,6 +486,7 @@ fn items_trials(
         let without = Options { return_dup: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "return_dup", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
@@ -479,14 +496,19 @@ fn items_trials(
         let other = Options { global_copies: false, ..options };
         let (items, _) = items_once(module, name, cpu, other, prefixes)?;
         if crate::trial::keeps(&items, &kept, cpu, price) {
+            trial_won(name, "global_copies", crate::trial::keeps(&items, &kept, cpu, price));
             kept = items;
             options = other;
         }
     }
-    if touched.remat_constants {
+    // The size build does not try it: over 165 programs at -Os the build
+    // without rematerialisation was never smaller (0 of 164, same bytes with
+    // the trial off) and the trial was one build in each of them.
+    if touched.remat_constants && !wants_size {
         let without = Options { remat_constants: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "remat", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
@@ -496,6 +518,7 @@ fn items_trials(
         let without = Options { carry_chain: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "carry_chain", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
@@ -504,6 +527,7 @@ fn items_trials(
         let without = Options { compare_destinations: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "compare_destinations", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
         }
     }
