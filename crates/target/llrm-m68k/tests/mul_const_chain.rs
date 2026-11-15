@@ -15,8 +15,11 @@ fn asm(body: &str) -> String {
 
 #[test]
 fn a_constant_multiply_that_is_the_only_one_is_a_chain_not_a_call() {
-    let out = asm("define i32 @f(i32 %x) optsize nounwind {\n %r = mul i32 %x, 1000\n ret i32 %r\n}\n");
-    assert!(!out.contains("__mulsi3"), "the routine is called for x * 1000:\n{out}");
+    let out = asm(
+        "define i32 @f(i32 %x) optsize nounwind {\n %r = mul i32 %x, 1000\n ret i32 %r\n}\n\
+         define i32 @g(i32 %x) optsize nounwind {\n %r = mul i32 %x, 75\n ret i32 %r\n}\n",
+    );
+    assert!(!out.contains("__mulsi3"), "the routine is called for x * 1000 or x * 75:\n{out}");
 }
 
 #[test]
