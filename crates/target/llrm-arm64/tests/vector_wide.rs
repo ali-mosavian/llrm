@@ -394,3 +394,21 @@ fn the_reduced_wide_product_loop_matches_the_pin() {
         assert_eq!(ours, without_counter(theirs), "ours:\n{text}\npin:\n{pinned}");
     }
 }
+
+/// The sum of two sign-extended `<4 x i16>` (tile's O2 row sum) failed with
+/// "SADDLv4i16_v4i32 has no arm64 instruction yet": it is one `saddl`.
+#[test]
+fn a_sum_of_two_extended_vectors_is_saddl() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %p, ptr %q) {\n\
+         entry:\n\
+         \x20 %x = load <4 x i16>, ptr %p, align 8\n\
+         \x20 %y = load <4 x i16>, ptr %q, align 8\n\
+         \x20 %xs = sext <4 x i16> %x to <4 x i32>\n\
+         \x20 %ys = sext <4 x i16> %y to <4 x i32>\n\
+         \x20 %s = add nsw <4 x i32> %xs, %ys\n\
+         \x20 store <4 x i32> %s, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count_dest(&text, "saddl", ".4s"), 1, "{text}");
+}
