@@ -30,9 +30,9 @@
 
 use std::collections::BTreeMap;
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, InstId};
 use llrm_mir::opcode::Opcode;
-use llrm_support::hash::HashMap;
 
 use crate::loopaccess::{
     SymbolicStrideMap, block_needs_predication, get_ptr_stride, load_store_pointer_operand, load_store_type,
@@ -195,7 +195,7 @@ struct StrideDescriptor {
 pub struct InterleavedAccessInfo {
     /// The groups; a released group is `None`.
     groups: Vec<Option<InterleaveGroup>>,
-    group_of: HashMap<InstId, GroupId>,
+    group_of: IdMap<InstId, GroupId>,
     requires_scalar_epilogue: bool,
 }
 
@@ -346,15 +346,15 @@ impl InterleavedAccessInfo {
         if accesses.is_empty() {
             return;
         }
-        let at: HashMap<InstId, usize> = accesses.iter().enumerate().map(|(at, (inst, _))| (*inst, at)).collect();
+        let at: IdMap<InstId, usize> = accesses.iter().enumerate().map(|(at, (inst, _))| (*inst, at)).collect();
 
         // `collectDependences`: the source of each dependence and its
         // destinations, if LoopAccessInfo has them.
         let checker = lai.dep_checker();
-        let dependences: Option<HashMap<InstId, Vec<InstId>>> = checker.dependences().map(|deps| {
-            let mut found: HashMap<InstId, Vec<InstId>> = HashMap::default();
+        let dependences: Option<IdMap<InstId, Vec<InstId>>> = checker.dependences().map(|deps| {
+            let mut found: IdMap<InstId, Vec<InstId>> = IdMap::new();
             for dep in deps {
-                found.entry(checker.source(dep)).or_default().push(checker.destination(dep));
+                found.get_or_insert_with(checker.source(dep), Vec::new).push(checker.destination(dep));
             }
             found
         });
@@ -422,7 +422,7 @@ impl InterleavedAccessInfo {
                 // the group.
                 let dependent_member = |this: &Self, group: GroupId, ai: usize| -> Option<InstId> {
                     let group = this.groups[group].as_ref()?;
-                    (0..group.factor()).filter_map(|index| group.member(index)).find(|member| !can_reorder(ai, at[member]))
+                    (0..group.factor()).filter_map(|index| group.member(index)).find(|member| !can_reorder(ai, at[&member]))
                 };
 
                 let group_a = self.group_of.get(&a).copied();
