@@ -17,6 +17,7 @@ __udivhi3 = "__udivhi3c"
 __umodhi3 = "__umodhi3c"
 __divhi3 = "__divhi3c"
 __modhi3 = "__modhi3c"
+__divmodhi4 = "__divmodhi4c"
 
 [share]
 # Policy, for a speed routine linked at size (the speed multiply): the share of its estimated clocks a
