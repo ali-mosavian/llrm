@@ -249,7 +249,7 @@ fn min_max_ir(
 #[test]
 fn vector_min_and_max_are_neon_instructions() {
     for op in ["smin", "smax", "umin", "umax"] {
-        for vector in ["<16 x i8>", "<8 x i16>", "<4 x i32>", "<2 x i64>"] {
+        for vector in ["<16 x i8>", "<8 x i16>", "<4 x i32>", "<2 x i64>", "<8 x i8>", "<4 x i16>", "<2 x i32>"] {
             matches_the_pin(&min_max_ir(op, vector));
         }
     }

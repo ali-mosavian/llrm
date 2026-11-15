@@ -203,7 +203,7 @@ pub fn lower_build_vector(
     }
     // "If all else fails, just use a sequence of INSERT_VECTOR_ELT": lane 0 by
     // `SCALAR_TO_VECTOR`, the others inserted. DEVIATE VEC6 (owner
-    // llrm-arm64-vec, exit 2026-11-27): the branches before it in the pin
+    // llrm-arm64-vec, exit 2026-11-24): the branches before it in the pin
     // (`PreferDUPAndInsert`, a constant splat with other lanes inserted, two
     // `DUP`s joined, `ReconstructShuffle`) are not translated.
     let index_ty = EVT::I64;
@@ -247,7 +247,7 @@ fn unroll_vector_op(
 /// goes through the wider float otherwise; to a wider float the operand is
 /// extended first; one of the same size is as it is.
 ///
-/// DEVIATE VEC7 (owner llrm-arm64-vec, exit 2026-11-27): the `f16` target of
+/// DEVIATE VEC7 (owner llrm-arm64-vec, exit 2026-11-24): the `f16` target of
 /// a split conversion, a conversion of a one-lane vector and the SVE forms are
 /// not translated.
 pub fn lower_vector_int_to_fp(
@@ -473,7 +473,7 @@ fn skip_extension_for_vector_mull(
 /// `performTruncateCombine`, the `DUP` arm
 /// ([L23964](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L23964)):
 /// a 64-bit truncate of a splat is the splat of the truncated scalar. DEVIATE
-/// MUL2 (owner llrm-arm64-vec, exit 2026-11-27): the `ADDHN` and the
+/// MUL2 (owner llrm-arm64-vec, exit 2026-11-24): the `ADDHN` and the
 /// `extract_vector_elt` arms are not translated.
 pub fn truncate_combine(
     dag: &mut SelectionDAG,
@@ -497,7 +497,7 @@ pub fn truncate_combine(
 /// ([L22164](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L22164)):
 /// "If "v2i32 DUP(x)" and "v4i32 DUP(x)" both exist, use an extract from the
 /// 128bit vector version." DEVIATE MUL3 (owner llrm-arm64-vec, exit
-/// 2026-11-27): the `DUP` of a load, of a float compare or of an extracted
+/// 2026-11-24): the `DUP` of a load, of a float compare or of an extracted
 /// lane, and `performPostLD1Combine`, are not translated.
 pub fn dup_combine(
     dag: &mut SelectionDAG,
@@ -530,7 +530,7 @@ fn double_lanes(vt: EVT) -> Option<EVT> {
 /// ([L24761](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L24761)):
 /// a long multiply of the high half of a vector and a splat takes the high
 /// half of a wider splat, so that `SMULL2` matches. DEVIATE MUL4 (owner
-/// llrm-arm64-vec, exit 2026-11-27): `tryCombineMULLWithUZP1` is not
+/// llrm-arm64-vec, exit 2026-11-24): `tryCombineMULLWithUZP1` is not
 /// translated.
 pub fn mull_combine(
     dag: &mut SelectionDAG,
@@ -616,7 +616,7 @@ pub fn lower_vector_shuffle(
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[dag.operand(v1, lane as usize)]));
     }
     // `constructDup`: `DUPLANE` of the lane of the vector. DEVIATE VEC1
-    // (owner llrm-arm64-vec, exit 2026-11-27): only a 128-bit source of the
+    // (owner llrm-arm64-vec, exit 2026-11-24): only a 128-bit source of the
     // result's own type; the pin also widens a 64-bit one and extracts a
     // lane from a wider one.
     if dag.value_type(v1) != vt || vt.size_in_bits() != 128 {
@@ -774,7 +774,7 @@ fn reduction_node(
 /// the halves combined as one 64-bit value, whose own halves are then
 /// combined by shifts until one lane is left.
 ///
-/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-11-27): the pin splits a
+/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-11-24): the pin splits a
 /// 128-bit vector into two 64-bit vectors (`and v0.8b`); there are none here,
 /// so the two `i64` lanes are taken and combined as scalars. The same
 /// instructions, in another order and register file.
@@ -903,7 +903,7 @@ fn emit_vector_comparison(
 /// `CMGT`, ... fragments over `SETCC`; a float one is the `FCMEQ`, `FCMGE`,
 /// `FCMGT` masks of its condition, OR-ed and inverted as the condition needs.
 ///
-/// DEVIATE VEC2 (owner llrm-arm64-vec, exit 2026-11-27): `isKnownNeverNaN` is
+/// DEVIATE VEC2 (owner llrm-arm64-vec, exit 2026-11-24): `isKnownNeverNaN` is
 /// not asked, so `isnan(x) | isnan(never-nan)` is `x != x` only for
 /// `LHS == RHS`.
 pub fn lower_vsetcc(

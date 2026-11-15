@@ -50,7 +50,7 @@
 //!   `VPWidenSelectRecipe`), where the backend selects vector compares
 //!   (`Tti::selects_vector_compares`). A select by a loop-invariant condition
 //!   (a scalar `i1` in the pin) and a compare read otherwise (an `i1` vector
-//!   `and`/`zext`) stay scalar. Exit: LV-S1 (owner llrm-arm64-vec, 2026-11-27).
+//!   `and`/`zext`) stay scalar. Exit: LV-S1 (owner llrm-arm64-vec, 2026-11-24).
 //! - LVP4 the new instructions carry no metadata (`!tbaa`, `!alias.scope`).
 //!
 //! # Runs
@@ -510,7 +510,7 @@ fn extract(
                 // lowest address of its lanes. The pin's reverses cancel
                 // (`simplifyReverses`) when every access of the loop is one,
                 // and then no lane is permuted. DEVIATE LV-R1 (owner
-                // llrm-arm64-lv, exit 2026-11-27): any other access of such a
+                // llrm-arm64-lv, exit 2026-11-24): any other access of such a
                 // loop would keep a reverse `shufflevector`, which the arm64
                 // selector declines (VEC1).
                 let stride = match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {

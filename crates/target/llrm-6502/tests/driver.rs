@@ -776,12 +776,17 @@ fn the_copy_loop_made_from_a_call_runs() {
 }
 
 /// A copy with nothing live across it is the call: 20 bytes against 78 as a
-/// loop.
+/// loop, the linked routine shared by its two callers (a lone caller pays all
+/// of it, and the loop is the smaller).
 #[test]
 fn a_copy_with_nothing_live_across_it_stays_a_call() {
     let ir = module(
         r#"declare void @llvm.memcpy.p0.p0.i16(ptr noalias, ptr noalias, i16, i1)
 define void @copy(ptr noalias %d, ptr noalias %s, i16 %n) {
+  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
+  ret void
+}
+define void @copy_again(ptr noalias %d, ptr noalias %s, i16 %n) {
   call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
   ret void
 }"#,

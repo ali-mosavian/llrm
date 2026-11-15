@@ -8,7 +8,7 @@
 //! `unifyMaskTypes` of
 //! [LegalizeVectorTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeVectorTypes.cpp#L7408).
 //!
-//! DEVIATE VM1 (owner llrm-arm64-vec, exit 2026-11-27): a scalable vector, a
+//! DEVIATE VM1 (owner llrm-arm64-vec, exit 2026-11-24): a scalable vector, a
 //! widened (`TypeWidenVector`) select and strict compares do not exist here.
 
 use llrm_sdag::lowering::TypeAction;

@@ -23,6 +23,17 @@ pub(crate) fn pinned_mc() -> Option<String> {
 
 /// A byte as `-show-encoding` spells it: `0x91`, `0x90'A'` and `0b100101AA`
 /// where a fixup fills bits (`A` stands for a bit left zero), or `A` alone.
+/// The 128-bit arrangements and the 64-bit ones (`Q` clear).
+const ALL_ARRANGEMENTS: [Arrangement; 7] = [
+    Arrangement::B16,
+    Arrangement::H8,
+    Arrangement::S4,
+    Arrangement::D2,
+    Arrangement::B8,
+    Arrangement::H4,
+    Arrangement::S2,
+];
+
 fn fixed_byte(text: &str) -> u8 {
     if text == "A" {
         0
@@ -289,7 +300,7 @@ fn branches() {
         VectorOp::Umax,
         VectorOp::Umin,
     ] {
-        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        for lanes in ALL_ARRANGEMENTS {
             if !op.has_lanes(lanes) {
                 continue;
             }
@@ -297,7 +308,7 @@ fn branches() {
         }
     }
     for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr, VectorShift::Usra, VectorShift::Ssra] {
-        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        for lanes in ALL_ARRANGEMENTS {
             let esize = lanes.lane_bits() as u8;
             // A left shift is 0..esize-1, a right one 1..esize.
             let amounts = if op == VectorShift::Shl { [0, 3, esize - 1] } else { [1, 3, esize] };
@@ -397,9 +408,16 @@ fn branches() {
         all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
-    for (lanes, index) in
-        [(Arrangement::B16, 3), (Arrangement::H8, 5), (Arrangement::S4, 0), (Arrangement::S4, 3), (Arrangement::D2, 1)]
-    {
+    for (lanes, index) in [
+        (Arrangement::B16, 3),
+        (Arrangement::H8, 5),
+        (Arrangement::S4, 0),
+        (Arrangement::S4, 3),
+        (Arrangement::D2, 1),
+        (Arrangement::B8, 3),
+        (Arrangement::H4, 2),
+        (Arrangement::S2, 1),
+    ] {
         all.push(Inst::VectorDupLane { lanes, rd: Vreg(5), rn: Vreg(26), index });
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {
@@ -582,6 +600,9 @@ fn floating_point() {
             Fill::Dup(Arrangement::H8, Gpr(3)),
             Fill::Dup(Arrangement::S4, Gpr(3)),
             Fill::Dup(Arrangement::D2, Gpr(3)),
+            Fill::Dup(Arrangement::B8, Gpr(3)),
+            Fill::Dup(Arrangement::H4, Gpr(3)),
+            Fill::Dup(Arrangement::S2, Gpr(3)),
             Fill::Imm { invert: false, shape: ImmShape::H8(0), imm8: 1 },
             Fill::Imm { invert: false, shape: ImmShape::S4(24), imm8: 0xff },
             Fill::Imm { invert: false, shape: ImmShape::S2(24), imm8: 0x7f },
