@@ -1498,6 +1498,23 @@ impl<'a> TypeLegalizer<'a> {
                     return Ok(());
                 }
             }
+            ISD::ExtractElement => {
+                // `PromoteIntRes_EXTRACT_VECTOR_ELT`: the lane read at the
+                // promoted type; a promoted source wider than that is read at
+                // its own lane and narrowed.
+                let (vector, index) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                if self.action(self.dag.value_type(vector)) == TypeAction::PromoteInteger {
+                    let promoted = self.promoted_integer(vector);
+                    let lane = self.dag.value_type(promoted).element();
+                    if !lane.bits_lt(to) {
+                        let read = self.dag.get_node(ISD::ExtractElement, lane, &[promoted, index]);
+                        let wide = self.dag.get_any_ext_or_trunc(read, to);
+                        self.set_promoted_integer(value, wide);
+                        return Ok(());
+                    }
+                }
+                self.dag.get_node(ISD::ExtractElement, to, &[vector, index])
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
