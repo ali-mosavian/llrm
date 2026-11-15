@@ -210,11 +210,26 @@ pub fn work(body: &LirBody) -> Option<f64> {
 
 /// `None` for control flow with no finite profile-free estimate.
 pub fn executed(body: &LirBody) -> Option<Executed> {
+    executed_over(body, true)
+}
+
+/// [`executed`] with every loop at the heuristic's trips, proven or not
+/// (`MachineBlockFrequencyInfo` knows no trip count): the estimate that prices
+/// two shapes of one loop alike, where a rotation or an unrotation leaves a
+/// count provable in one and not the other.
+pub fn executed_unproven(body: &LirBody) -> Option<Executed> {
+    executed_over(body, false)
+}
+
+fn executed_over(
+    body: &LirBody,
+    proven: bool,
+) -> Option<Executed> {
     let graph = &body.blocks;
     if !loops::irreducible(graph, Some(body.entry)).is_empty() {
         return None;
     }
-    let frequency = Frequency::counted(body);
+    let frequency = if proven { Frequency::counted(body) } else { Frequency::over(body, &body.blocks) };
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
     let is_fxch = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fxch"));
     let slots: IndexSet<Addr> = body
@@ -303,7 +318,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::executed;
+    use super::{executed, executed_unproven};
     use crate::backend::cpu;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
@@ -455,6 +470,37 @@ mod tests {
         // The entry's jump, the header's six tests, five trips of two, the
         // return.
         assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 6.0 + 10.0 + 1.0);
+    }
+
+    /// ROTATION-TRIAL priced a rotated nest 3.9x heavier than its unrotated
+    /// shape because only the unrotated one had a proven trip count
+    /// (x_prefix -Os: 12,810 against 3,297): the trial's estimate
+    /// reads no proven count, so two shapes of one loop weigh alike.
+    #[test]
+    fn test_the_unproven_estimate_ignores_a_loops_proven_trips() {
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
+            block(
+                3,
+                vec![
+                    insn(3, Operation::Move, "mov", vec![ax], vec![bx]),
+                    insn(4, Operation::Jump, "jmp", vec![], vec![]),
+                ],
+                vec![2],
+            ),
+            block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body =
+            LirBody::new("counted", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let without = executed_unproven(&body).expect("a loop").instructions.round();
+        body.loop_trip_counts = vec![(2, 5)];
+        assert_eq!(executed_unproven(&body).expect("a loop").instructions.round(), without);
+        assert_ne!(executed(&body).expect("a counted loop").instructions.round(), without);
     }
 
     /// A loop whose way back runs through a block of its own, as a split
