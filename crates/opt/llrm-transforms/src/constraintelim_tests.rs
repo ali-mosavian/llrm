@@ -242,3 +242,18 @@ b3:
     let text = printed(&module);
     assert!(text.contains("br i1 %c"), "{text}");
 }
+
+/// `icmp uge <4 x i32> %x, zeroinitializer` is true in every lane; the pass
+/// built that `true` as an integer constant of the vector type and panicked.
+#[test]
+fn a_vector_compare_that_always_holds_becomes_a_splat() {
+    let text = eliminated(
+        "define <4 x i1> @f(<4 x i32> %x) {
+b0:
+  %d = icmp uge <4 x i32> %x, zeroinitializer
+  ret <4 x i1> %d
+}
+",
+    );
+    assert!(!text.contains("icmp"), "{text}");
+}

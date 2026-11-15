@@ -46,9 +46,12 @@ impl Cpu {
     /// Whether `bfffo` is a hardware instruction (DEVIATE M68K-BFFFO, see
     /// [`super::bfffo`]): the table's row for it, not decoded as emulated.
     pub fn has_bit_field_find(self) -> bool {
-        let model = crate::isa::Cpu::ALL[self as usize];
-        crate::isa::forms().iter().any(|form| {
-            form.mnemonic == "bfffo" && form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model)
+        static FOUND: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
+        *FOUND.get(self, |cpu| {
+            let model = crate::isa::Cpu::ALL[cpu as usize];
+            crate::isa::forms_of("bfffo")
+                .iter()
+                .any(|form| form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model))
         })
     }
 

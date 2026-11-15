@@ -700,6 +700,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether the backend selects a vector `icmp`, `fcmp` and `select`: the
+    /// loop vectorizer widens them only where it does. DEVIATE: the pin's
+    /// targets all do; here each backend says when its selector has them.
+    fn selects_vector_compares(&self) -> bool {
+        false
+    }
+
     /// `getNumberOfRegisters(ClassID)`: 0 where the target has no vector
     /// registers.
     fn number_of_registers(
@@ -716,6 +723,15 @@ pub trait Tti {
         _has_unordered_reductions: bool,
     ) -> u32 {
         1
+    }
+
+    /// Whether the vectorizer widens the remainder of a vector loop too
+    /// (`EpilogueVectorizerMainLoop`; `preferEpilogueVectorization`, which
+    /// every target of the pin answers true to). DEVIATE LV-E1 (owner
+    /// llrm-arm64, exit 2026-11-27): opt-in, so a target's vector backend is
+    /// shown to select the epilogue's vectors before the planner asks for them.
+    fn vectorizes_epilogues(&self) -> bool {
+        false
     }
 
     /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: size the widest
@@ -750,6 +766,19 @@ pub trait Tti {
         _kind: CostKind,
     ) -> Option<Cost> {
         None
+    }
+
+    /// `getArithmeticInstrCost` of a vector operation by `second` (`Op2Info`):
+    /// a divide by a constant is a few multiplies, not a division. The default
+    /// is the cost with no operand information.
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_arithmetic_cost(op, ty, kind)
     }
 
     /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
@@ -1150,11 +1179,22 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver may compile the module again with
-    /// the copies of a loop-holding callee at several sites of a loop refused, and keep the form it prices
-    /// cheaper after allocation. The pin's InlineCost has no price for the registers the merged loops lose
-    /// (its `LoopPenalty` is added at minsize callers alone). False: the cost decides.
+    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver
+    /// may compile the module again with the copies of a loop-holding
+    /// callee at several sites of a loop refused, and keep the form it prices
+    /// cheaper after allocation. The pin's InlineCost has no price for the
+    /// registers the merged loops lose (its `LoopPenalty` is added at
+    /// minsize callers alone). False: the cost decides.
     fn inline_loop_copy_trial(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL-CLOCKS (owner m68k, exit 2026-11-24): whether an
+    /// -Os call the target's size bound alone refused (the pin's cost
+    /// accepts it) is built inlined as well, the driver keeping the finished
+    /// code that prices better (fewer clocks within the target's bytes
+    /// ceiling). False: the bound's verdict stands.
+    fn opt_size_inline_finished_trial(&self) -> bool {
         false
     }
 
@@ -1358,9 +1398,21 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE RL-EXITING-LATCH: whether `LoopRotate` also rotates a loop whose latch already exits when the copy of
-    /// its header folds away in the preheader (the pin: only when a header phi dies or the latch's exit count
-    /// becomes computable). gcc's header copy does it. False: the pin's.
+    /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-24): LICM may hoist
+    /// a load behind a loop guard when SCEV bounds the offset of its pointer
+    /// inside the object it is based on (`licm::range_deref`), not only where
+    /// the pin's constant-offset rule proves it dereferenceable. Not at
+    /// `optsize` or `minsize`: the hoisted value costs a register for the
+    /// loop's length. False: the pin's rule.
+    fn licm_range_deref(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE RL-EXITING-LATCH: whether `LoopRotate` also rotates a loop whose
+    /// latch already exits when the copy of its header folds away in the
+    /// preheader (the pin: only when a header phi dies or the latch's exit
+    /// count becomes computable). gcc's header copy does it. False: the
+    /// pin's.
     fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
         false
     }
@@ -1401,6 +1453,16 @@ pub trait Tti {
     /// against objects (m68k, `size_calibration.rs`); the x86 model is not, and
     /// a truthful credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL (speed): whether a copy the -O2/-O3 byte rate
+    /// refused within the trial's band is built inlined as well, the driver
+    /// keeping the finished code that is smaller. The rate prices the copy
+    /// alone, not what it folds (a constant, a dead callee). Only with a
+    /// byte rate (`speed_inline_milliclocks_per_byte`) and
+    /// `opt_size_inline_trial_limits`.
+    fn speed_inline_finished_trial(&self) -> bool {
         false
     }
 
@@ -1574,9 +1636,10 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): whether the driver compiles the module again under
-    /// unroll variants at -O2 and -O3 (`llrm_transforms::trial::SpeedUnroll`), so the pass notes which of its
-    /// decisions a variant would change.
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): whether the
+    /// driver compiles the module again under unroll variants at -O2 and
+    /// -O3 (`llrm_transforms::trial::SpeedUnroll`), so the pass notes which of
+    /// its decisions a variant would change.
     fn unroll_speed_trial(&self) -> bool {
         false
     }
@@ -1712,7 +1775,7 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32,
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-24; users: x86-m32,
     /// m68k with `va_arg_slot` = 4): `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
@@ -1776,8 +1839,8 @@ pub trait Tti {
     }
 
     /// Drop the local functions that are the same code at the levels that
-    /// allow no trade between bytes and clocks, and at speed (`MergeLocalFunctions`);
-    /// no thunk is written.
+    /// allow no trade between bytes and clocks, and at speed
+    /// (`MergeLocalFunctions`); no thunk is written.
     fn merge_local_functions_at_speed(&self) -> bool {
         false
     }
@@ -1915,6 +1978,19 @@ pub trait Tti {
     /// `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
+    }
+
+    /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
+    /// (gcc's `ipa-cp-max-recursive-depth` is 8).
+    fn ipa_cp_max_clones(&self) -> usize {
+        4
+    }
+
+    /// DEVIATE LSR-SPILL-PRICE: how many registers past the target's the
+    /// loop's other values must need for LSR to keep the pressure in its cost
+    /// (`Tuning::lsr_spill_pressure_margin`); none: the pin's.
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
@@ -2439,6 +2515,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-CALL-SCALE (owner z80, exit 2026-11-24; no pin pass: GCC's
+    /// ivopts expresses a use as `candidate * ratio`,
+    /// `get_computation_cost`): in a loop with a call and
+    /// `lsr_call_clobbers_registers`, the largest shift of an induction
+    /// variable a basic use may take instead of an induction variable of its
+    /// own, which the call would leave in the frame (the pin's `isLegalUse`
+    /// takes no scale for a basic use). 0: none.
+    fn lsr_basic_use_scale_shifts(&self) -> u32 {
+        0
+    }
+
     /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::None
@@ -2648,10 +2735,12 @@ pub trait Tti {
         false
     }
 
-    /// Whether InstCombine leaves `icmp eq/ne (select c, a, b), (select c, b, a)` alone. The pin
-    /// compares the arms, `icmp eq/ne a, b` (`matchSymmetricPair`), on every target. DEVIATE
-    /// SYMPAIR-1 (owner llrm-target-wasm, exit 2026-11-24): at m16 a 64-bit arm compare is a
-    /// longer sequence than the two selects it replaces (+4 B in 24 sfm16_float objects).
+    /// Whether InstCombine leaves `icmp eq/ne (select c, a, b), (select c, b,
+    /// a)` alone. The pin compares the arms, `icmp eq/ne a, b`
+    /// (`matchSymmetricPair`), on every target. DEVIATE SYMPAIR-1 (owner
+    /// llrm-target-wasm, exit 2026-11-24): at m16 a 64-bit arm compare is a
+    /// longer sequence than the two selects it replaces (+4 B in 24 sfm16_float
+    /// objects).
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)
     fn keeps_icmp_of_swapped_selects(&self) -> bool {
         false
@@ -3206,7 +3295,7 @@ pub trait Tti {
         basic_case_clusters(cases, index_bits, for_size)
     }
 
-    /// DEVIATE (owner m68k, exit 2026-11-27): the code size, in the unit of the
+    /// DEVIATE (owner m68k, exit 2026-11-24): the code size, in the unit of the
     /// inliner's size view, of a switch's compares and jump table beyond its
     /// one branch; `clusters` and `table` as
     /// [`Self::estimated_number_of_case_clusters`]. The pin counts a switch

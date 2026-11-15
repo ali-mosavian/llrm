@@ -51,6 +51,7 @@ pub fn desc(code: u16) -> Option<&'static InstrDesc> {
 
 /// The pin's `asm` row of `name`, or the local instruction's.
 pub fn text(name: &str) -> Option<&'static (&'static str, &'static str, &'static [AsmOperand])> {
+    TEXT_LOOKUPS.with(|count| count.set(count.get() + 1));
     asm(name)
         .or_else(|| short::short_asm(name))
         .or_else(|| scaled::scaled_asm(name))
@@ -62,6 +63,17 @@ pub fn text(name: &str) -> Option<&'static (&'static str, &'static str, &'static
         .or_else(|| adda::adda_asm(name))
         .or_else(|| bfffo::bfffo_asm(name))
         .or_else(|| wordjump::wordjump_asm(name))
+}
+
+thread_local! {
+    static TEXT_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`text`] ran on this thread: a lookup misses every local
+/// table in turn, so a caller that repeats it is paying for it
+/// (`encode` took 57% of matmul -O2's compile instructions).
+pub fn text_lookups() -> usize {
+    TEXT_LOOKUPS.with(std::cell::Cell::get)
 }
 
 /// The pin's encoding of `name`, or the local instruction's.

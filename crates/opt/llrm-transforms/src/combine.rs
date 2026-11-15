@@ -37,7 +37,7 @@
 //! %b = mul i32 %a, 1   ; %a becomes %x, then %b becomes %x
 //! ```
 
-use llrm_mir::context::Context;
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::Callees;
@@ -45,7 +45,7 @@ use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Ope
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::simplify::simplify_instruction_in;
-use llrm_mir::types::TypeId;
+use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
@@ -123,6 +123,9 @@ fn try_to_sink(
         let q = crate::combine_shared::query(c, Some(inst));
         let Some(dest) = sink_block(&q, inst) else { return false };
         if !sinkable(&q, inst, dest) {
+            return false;
+        }
+        if c.env.hooks.keeps_float_off_returning_sink && crate::combine_sink::floats_across_blocks(&q, inst, dest) {
             return false;
         }
         (dest, droppable_uses(&q, inst, dest))
@@ -349,6 +352,8 @@ pub struct TargetHooks {
     pub phi_constant_chains: bool,
     /// DEVIATE SYMPAIR-1 (`Tti::keeps_icmp_of_swapped_selects`).
     pub keeps_swapped_select_compare: bool,
+    /// DEVIATE SINK-X87 (`combine_sink.rs`; the target has an x87 stack).
+    pub keeps_float_off_returning_sink: bool,
 }
 
 pub struct Env<'a> {
@@ -380,7 +385,8 @@ pub struct Combiner<'a> {
     /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
     /// dominating conditions while set (`foldICmpUsingKnownBits`).
     pub without_dom_conditions: bool,
-    /// The intrinsics this run declared that `env.globals` lacks, which a pattern must still read as intrinsics (`ValueTracking`'s
+    /// The intrinsics this run declared that `env.globals` lacks, which a
+    /// pattern must still read as intrinsics (`ValueTracking`'s
     /// `Query::pending_intrinsics`).
     pub pending_intrinsics: Vec<(u32, llrm_mir::valuetracking::pattern::IntrinsicId)>,
 }
@@ -540,6 +546,58 @@ fn simplifies_itself(opcode: &Opcode) -> bool {
     )
 }
 
+/// The operand a vector binary operation reduces to when one side is a splat
+/// of the operation's identity (`x + 0`, `x * 1`, `x & -1`, `x << 0`).
+fn vector_identity(
+    c: &Combiner<'_>,
+    inst: InstId,
+) -> Option<Operand> {
+    let instruction = c.function.instruction(inst);
+    let Opcode::Binary(op) = instruction.opcode else {
+        return None;
+    };
+    let [lhs, rhs] = instruction.operands[..] else {
+        return None;
+    };
+    let Type::Vector { element, .. } = c.context.types.get(instruction.ty) else {
+        return None;
+    };
+    let width = c.context.types.int_bits(*element)?;
+    let splat = |operand: Operand| -> Option<u128> {
+        let Operand::Constant(id) = operand else {
+            return None;
+        };
+        let constant = c.context.get(id);
+        match &constant.kind {
+            ConstantKind::Zero | ConstantKind::Null => Some(0),
+            ConstantKind::Aggregate(lanes) => {
+                let mut value = None;
+                for &lane in lanes {
+                    let ConstantKind::Int(bits) = c.context.get(lane).kind else {
+                        return None;
+                    };
+                    if *value.get_or_insert(bits) != bits {
+                        return None;
+                    }
+                }
+                value
+            }
+            _ => None,
+        }
+    };
+    let (identity, commutes) = match op {
+        BinaryOp::Add | BinaryOp::Or | BinaryOp::Xor => (0, true),
+        BinaryOp::Sub | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => (0, false),
+        BinaryOp::Mul => (1, true),
+        BinaryOp::And => (llrm_mir::context::mask(width), true),
+        _ => return None,
+    };
+    if splat(rhs) == Some(identity) {
+        return Some(lhs);
+    }
+    (commutes && splat(lhs) == Some(identity)).then_some(rhs)
+}
+
 /// `InstCombinerImpl::run`'s per-instruction step: what the instruction
 /// simplifies to, else the first `visit*` of its opcode that acts.
 pub fn visit(
@@ -587,10 +645,22 @@ pub fn visit(
     }
     // DEVIATE COMBINE-VEC: the arithmetic visitors read integer widths (MIR had
     // no vectors), so an operation on vectors, which the loop vectorizer makes,
-    // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
-    if matches!(c.function.instruction(inst).opcode, Opcode::Binary(_) | Opcode::Cast(_))
-        && matches!(c.context.types.get(c.function.instruction(inst).ty), llrm_mir::types::Type::Vector { .. })
+    // gets the lane-wise identities only (`x + 0`, `x * 1`: those of a widened
+    // reduction whose loop unrolled away), no visitor. `simplifyBinOp` reads
+    // its constants as scalars, so it is not asked.
+    // Exit: vector-aware folds (owner arm64-vec, with LV-X3).
+    if matches!(
+        c.function.instruction(inst).opcode,
+        Opcode::Binary(_) | Opcode::Cast(_)
+    )
+        && matches!(
+            c.context.types.get(c.function.instruction(inst).ty),
+            Type::Vector { .. }
+        )
     {
+        if let Some(found) = vector_identity(c, inst) {
+            return Visit::Replace(found);
+        }
         return Visit::None;
     }
     // The table is 'static: the opcode (a clone per visit, a Box for calls) is

@@ -16,7 +16,6 @@ use llrm_dagisel::instr::InstrDesc;
 use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
-use super::generated::m68k_m68000::MACHINE_OPCODES;
 
 /// Code of the row, above the `bfffo` forms.
 pub const FIRST: u16 = 0xF800;
@@ -34,7 +33,7 @@ pub fn name_of(code: u32) -> Option<&'static str> {
 
 static DESC: LazyLock<&'static InstrDesc> = LazyLock::new(|| {
     let find = |name: &str| {
-        let code = MACHINE_OPCODES.iter().find(|(_, one)| *one == name).map(|(code, _)| *code).expect("a pin row");
+        let code = super::opcodes::code_of(name).expect("a pin row");
         instrinfo::desc(code).expect("a described row")
     };
     // the `(d8,%pc,Xn)` operands of `move.w`, the control effects of `jmp (An)`

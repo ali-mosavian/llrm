@@ -517,7 +517,7 @@ impl Options {
                 self.strength && self.lsr
             }
             "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
-            "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
+            "cgpaddr" | "cgpselectarms" | "cgpcondsplit" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
@@ -1646,6 +1646,7 @@ pub fn recorded(
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
                 cp_peel_limited: applied.options.inline.cp_clone.is_none(),
+                cp_max_clones: program.target.tti().map_or(crate::ipacp::DEFAULT_MAX_CLONES, |tti| tti.ipa_cp_max_clones()),
                 ..applied.options.inline
             },
             ..applied.options.clone()
@@ -1671,7 +1672,6 @@ pub fn recorded(
     if applied.options.wanted("ports") {
         manager.add(ports::Ports);
     }
-    manager.add_program(crate::interprocedural::Stamp);
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     let mut late_stage = None;
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
@@ -1685,6 +1685,13 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
+            // What each body does to memory is stated here, as the pin's
+            // PostOrderFunctionAttrs inside the CGSCC walk: the early
+            // simplification (SROA, EarlyCSE, PromotePass, InstCombine,
+            // SimplifyCFG) ran before any callee had an attribute, so
+            // InstCombine could not sink a call of a `memory(none)` helper into
+            // one arm of an `&&`.
+            manager.add_program(crate::interprocedural::Stamp);
             // `buildInlinerPipeline` (PassBuilderPipelines.cpp:997,
             // d1106deb71cc).
             manager.compute::<GlobalsAA>();
@@ -1909,6 +1916,10 @@ pub fn recorded(
         } else {
             manager.add(cgpaddr::CgpAddr);
         }
+    }
+    // DEVIATE CB1 (owner x87-b, exit 2026-11-24): clock-priced, so not -Os.
+    if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
+        manager.add(crate::cgpcondsplit::CondSplit);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
     if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {

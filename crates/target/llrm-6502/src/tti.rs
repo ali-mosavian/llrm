@@ -199,25 +199,32 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// DEVIATE OS-INLINE-TRIAL (speed; owner 6502, exit 2026-11-24, row
+    /// 6502-INLINE-RATE): a copy the rate refused is built inlined as well
+    /// and kept where the backend writes the chain smaller (memcpy_libcall
+    /// -O2: `same` folded into `main`, 100 B).
+    fn speed_inline_finished_trial(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
 
-    // Rule 2 (user 11-04, a byte of growth must buy 3 clocks at -O2/-O3) is
-    // off: `speed_inline_milliclocks_per_byte` stays 0. DEVIATE 6502-RATE:
-    // the frequency the rule weighs with caps a loop at about 32 trips,
-    // where div_constants_long runs 1500, so it priced 6.8 KB for 4.05M
-    // clocks (600 clk/B) and tail_calls +12.6k clocks for 944 B. Owner:
-    // llrm-target-6502. Exit: a frequency that knows the trip count,
-    // 2026-11-20.
+    /// An inline at -O2/-O3 that grows the code is refused: bytes first at every level (user ruling
+    /// 2026-11-14), at the rate no clocks can repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit
+    /// 2026-11-24, row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M clocks (div_constants_long) and
+    /// tail_calls +12.6k clocks for 944 B; a price by clocks a byte weighs a loop at about 32 trips.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        1 << 40
+    }
 
-    /// A full unroll at -O2/-O3 must save 3 clocks for each code byte it adds
-    /// (the 6502 rate, `DEVIATE 6502-RATE`), on the real clock and byte tables
-    /// (`crate::opcosts`, `DEVIATE 6502-OPCOSTS`): the unit prices it used
-    /// before read a 32-bit store fill as a few instructions (220 B for 46
-    /// clocks, byval_struct). Owner: llrm-target-6502. Exit: 2026-11-20.
+    /// A full unroll at -O2/-O3 may add no byte: bytes first at every level
+    /// (user ruling 2026-11-14), on the real clock and byte tables
+    /// (`crate::opcosts`, `DEVIATE 6502-OPCOSTS`). The rate no clocks can
+    /// repay, the one the no-growth trial uses. It was 3 clocks a byte.
     fn unroll_milliclocks_per_byte(&self) -> i64 {
-        3000
+        1 << 40
     }
 
     /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the
@@ -232,8 +239,9 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
-    /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the byte model is within 25% of the written
-    /// bytes for two functions in three; a module over 512 instructions takes seconds to compile once
+    /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the byte model
+    /// is within 25% of the written bytes for two functions in three; a
+    /// module over 512 instructions takes seconds to compile once
     /// (div_constants_long -Os: 3.0 s, 13.0 s with the trial).
     fn opt_size_inline_trial_limits(&self) -> Option<(i64, usize)> {
         Some((25, 512))

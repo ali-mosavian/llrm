@@ -142,6 +142,7 @@ impl ProgramPass for ModuleIpo {
                         crate::ipacp::Tuning {
                             hint_clones: self.inline.cp_hint_clones,
                             peel_limited: self.inline.cp_peel_limited,
+                            max_clones: self.inline.cp_max_clones,
                         },
                         &mut cloning,
                     )
@@ -880,8 +881,11 @@ impl ProgramPass for Walk {
                                 let kept_bytes = function_bytes(module, &program.layout, &program.target.trial_costs(), &kept);
                                 // DEVIATE OS-INLINE-TRIAL (`trial::Site`): a copy the byte model refuses within its
                                 // error is the backend's to decide; the second compile inlines it.
-                                let by_bytes = tti.opt_size_inline_trial_by_bytes() && !priced;
-                                let site = by_bytes.then(|| crate::trial::Site {
+                                let by_bytes = tti.opt_size_inline_trial_by_bytes() && (!priced || tti.speed_inline_finished_trial());
+                                // DEVIATE OS-INLINE-TRIAL-CLOCKS: every site the size bound alone refused is the
+                                // backend's to price, whatever the model says of its bytes.
+                                let finished = tti.opt_size_inline_finished_trial() && !priced && size != crate::inlinecost::CallerSize::Speed;
+                                let site = (by_bytes || finished).then(|| crate::trial::Site {
                                     caller: module.global(id).name.as_deref().unwrap_or_default().to_owned(),
                                     callees: calls
                                         .iter()
@@ -897,8 +901,9 @@ impl ProgramPass for Walk {
                                 } else {
                                     if let Some(site) = site.filter(|_| {
                                         !crate::trial::inlining()
-                                            && growth > 0
-                                            && tti.opt_size_inline_trial_limits().is_some_and(|(band, _)| growth * 100 <= kept_bytes * band)
+                                            && (finished
+                                                || (growth > 0
+                                                    && tti.opt_size_inline_trial_limits().is_some_and(|(band, _)| growth * 100 <= kept_bytes * band)))
                                     }) {
                                         crate::trial::note_refused(site);
                                     }
@@ -1632,7 +1637,9 @@ pub fn function_bytes(
                         } else {
                             costs.wide_product()
                         };
-                        product * words(ty) + prefix
+                        // A product the table states whole (`multiply_wide`, `multiply_widening`) is not per word.
+                        let whole = wide && (costs.multiply_wide > 0 || costs.multiply_widening > 0);
+                        product * if whole { 1 } else { words(ty) } + prefix
                     }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem if constant_divisor => {
                         // The multiply-high sequence: the constant, the high
@@ -1648,6 +1655,9 @@ pub fn function_bytes(
                     }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem => {
                         (if wide { costs.divide_long } else { costs.divide }) * words(ty) + prefix
+                    }
+                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if wide && costs.shift_wide > 0 && !constant_divisor => {
+                        costs.shift_wide + prefix
                     }
                     BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift * words(ty) + prefix,
                     _ => costs.add * words(ty) + prefix,

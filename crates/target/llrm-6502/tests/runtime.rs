@@ -208,6 +208,13 @@ fn the_compact_word_division_agrees_with_the_fast_one() {
         (32768, 32768, 1, 0),
         (65535, 2, 32767, 1),
         (65535, 16385, 3, 16380),
+        (65535, 32769, 1, 32766),
+        (49151, 32768, 1, 16383),
+        (32767, 32768, 0, 32767),
+        (65535, 65534, 1, 1),
+        (65534, 65535, 0, 65534),
+        (32768, 32769, 0, 32768),
+        (40000, 32767, 1, 7233),
     ] {
         let n = format!("c{a}-{b}");
         assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
@@ -233,6 +240,16 @@ fn signed_byte_division() {
 fn signed_word_division() {
     assert_eq!(word("divhi", &two_words(64536, 7), "__divhi3"), 65394);
     assert_eq!(word("modhi", &two_words(64536, 7), "__modhi3"), 65530);
+}
+
+/// A divisor of 256 or more runs the bit loop, which uses Y: the sign the
+/// signed routines keep across it must not be there. -1000 / 300 = -3 r -100.
+#[test]
+fn signed_word_division_by_a_long_divisor_keeps_its_sign() {
+    assert_eq!(word("divhil", &two_words(64536, 300), "__divhi3"), 65533);
+    assert_eq!(word("modhil", &two_words(64536, 300), "__modhi3"), 65436);
+    assert_eq!(word("divhir", &two_words(1000, 65236), "__divhi3"), 65533);
+    assert_eq!(word("modhir", &two_words(1000, 65236), "__modhi3"), 100);
 }
 
 /// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling
@@ -509,23 +526,26 @@ fn expected(edit: impl FnOnce(&mut [u8])) -> i32 {
     i32::from(memory.iter().fold(0u8, |sum, byte| sum.rotate_left(1) ^ byte))
 }
 
-/// `routine(buf + dst, buf + src, n)` for memcpy and memmove, `routine(buf +
-/// dst, c, n)` for memset (`dst` in A:X, `c` in rc2, `n` in rc4:rc5).
+/// `routine(buf + dst, buf + src, n)` for memcpy and memmove (`dst` in rc2:rc3,
+/// `src` in rc4:rc5, `n` in A:X), `routine(buf + dst, c, n)` for memset (`c` in
+/// A, `n` in rc4:rc5). `second` loads the source or the byte.
 fn mem_call(
     routine: &str,
     dst: usize,
     second: &str,
     n: usize,
 ) -> String {
-    format!(
-        "{second}  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  lda #<(buf+{dst})\n  ldx #>(buf+{dst})\n  jsr {routine}\n",
-        n & 0xFF,
-        n >> 8
-    )
+    let (lo, hi) = (n & 0xFF, n >> 8);
+    let dst = format!("  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n");
+    if routine == "memset" {
+        format!("{dst}  lda #{lo}\n  sta rc4\n  lda #{hi}\n  sta rc5\n{second}  jsr memset\n")
+    } else {
+        format!("{dst}{second}  lda #{lo}\n  ldx #{hi}\n  jsr {routine}\n")
+    }
 }
 
 fn source(src: usize) -> String {
-    format!("  lda #<(buf+{src})\n  sta rc2\n  lda #>(buf+{src})\n  sta rc3\n")
+    format!("  lda #<(buf+{src})\n  sta rc4\n  lda #>(buf+{src})\n  sta rc5\n")
 }
 
 /// Whole pages, a partial page, one byte and none: a fill of n bytes writes
@@ -533,7 +553,7 @@ fn source(src: usize) -> String {
 #[test]
 fn memset_fills_exactly_n_bytes() {
     for (dst, n) in [(10, 0), (10, 1), (10, 255), (10, 256), (10, 257), (10, 300), (0, 768)] {
-        let call = mem_call("memset", dst, "  lda #$EE\n  sta rc2\n", n);
+        let call = mem_call("memset", dst, "  lda #$EE\n", n);
 
         let got = memory_checksum(&format!("memset-{dst}-{n}"), &call);
 
@@ -580,7 +600,7 @@ fn memmove_handles_overlap_in_both_directions() {
 #[test]
 fn the_memory_routines_return_the_destination() {
     for routine in ["memset", "memcpy", "memmove"] {
-        let second = if routine == "memset" { "  lda #1\n  sta rc2\n".to_owned() } else { source(400) };
+        let second = if routine == "memset" { "  lda #1\n".to_owned() } else { source(400) };
         let call = mem_call(routine, 10, &second, 300);
         let check = "  sec\n  sbc #<(buf+10)\n  sta rc8\n  txa\n  sbc #>(buf+10)\n  ora rc8\n";
 

@@ -811,6 +811,7 @@ impl<'a> Builder<'a> {
             call_clobbers: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
+            call_pointers: Vec::new(),
             call_result_assert: None,
             call_result_range_bits: None,
             fixed_args: 0,
@@ -876,6 +877,9 @@ struct Builder<'a> {
     call_attrs_move_arguments: bool,
     /// The arguments of the call being lowered that carry `sret`.
     call_sret: Vec<bool>,
+    /// The arguments of the call being lowered that are pointers
+    /// (`ArgFlags.isPointer()`); none listed means none are.
+    call_pointers: Vec<bool>,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -1549,8 +1553,10 @@ impl Builder<'_> {
             self.live_ins.push((reg, vreg));
             vreg
         };
-        let mut make_object = |_size: u32, offset: i64, _immutable: bool| {
+        let mut objects: Vec<(u32, bool)> = Vec::new();
+        let mut make_object = |size: u32, offset: i64, immutable: bool| {
             offsets.push(offset);
+            objects.push((size, immutable));
             -(offsets.len() as i32)
         };
         let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
@@ -1584,6 +1590,7 @@ impl Builder<'_> {
         }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
+            self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
         }
         let mut next = 0;
         for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
@@ -2271,6 +2278,7 @@ impl Builder<'_> {
             .iter()
             .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
             .collect();
+        self.call_pointers = owner.iter().map(|argument| self.is_pointer_type(arg_types[*argument])).collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -2539,6 +2547,7 @@ impl Builder<'_> {
         // call it was for a fixed one).
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
+        let pointer_args = std::mem::take(&mut self.call_pointers);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2584,7 +2593,7 @@ impl Builder<'_> {
                 outs.push(Out {
                     value: piece,
                     ext,
-                    pointer: false,
+                    pointer: pointer_args.get(at).copied().unwrap_or(false),
                     arg_vt,
                     split,
                     variadic: at >= variadic_from,
@@ -3429,6 +3438,29 @@ impl Builder<'_> {
                         _ => Err(Refused("a vector constant lane that is not an integer or a float")),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.dag.get_build_vector(vt, &ops))
+            }
+            // A vector the folder made out of an integer (`bitcast (i128 N to <4 x i32>)`): its lanes are the
+            // integer's slices, the first in the low bits (little-endian lane order).
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::BitCast, value }) => {
+                let ConstantKind::Int(image) = self.module.context.get(value).kind else {
+                    return Err(Refused("a vector constant cast from something other than an integer"));
+                };
+                let lane_bits = lane_vt.size_in_bits();
+                if lane_bits == 0 || lane_bits * vt.lanes() > 128 {
+                    return Err(Refused("a vector constant image wider than 128 bits"));
+                }
+                let mask = u128::MAX >> (128 - lane_bits);
+                let ops: Vec<SDValue> = (0..vt.lanes())
+                    .map(|at| {
+                        let bits = (image >> (at * lane_bits)) & mask;
+                        if lane_vt.is_floating_point() {
+                            self.dag.get_constant_fp(bits, lane_vt)
+                        } else {
+                            self.dag.get_constant(bits, lane_vt)
+                        }
+                    })
+                    .collect();
                 Ok(self.dag.get_build_vector(vt, &ops))
             }
             _ => Err(Refused("a vector constant that is not a list of integers")),
@@ -4314,7 +4346,9 @@ impl Builder<'_> {
         let then = self.get_value(instruction.operands[1])?;
         let other = self.get_value(instruction.operands[2])?;
         let vt = self.dag.value_type(then);
-        let node = self.dag.get_node(ISD::Select, vt, &[cond, then, other]);
+        // `visitSelect`: a vector condition picks lane by lane.
+        let opcode = if self.dag.value_type(cond).is_vector() { ISD::VSelect } else { ISD::Select };
+        let node = self.dag.get_node(opcode, vt, &[cond, then, other]);
         self.set_value(instruction.result.expect("a select has a result"), node);
         Ok(())
     }

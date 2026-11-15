@@ -26,7 +26,7 @@ use super::dag::{SDNodeFlags, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::div_const::{signed_magic, unsigned_magic};
 use super::isd::{CondCode, ISD};
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// One unit's prices for the divide-or-sequence choice (clocks or bytes).
 struct DivSet {
@@ -62,7 +62,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         shifted: EVT,
         count: u32,
     ) -> SDValue {
-        let ty = self.hooks.shift_amount_type(shifted);
+        // `getShiftAmountConstant`: a vector is shifted by a vector.
+        let ty = if shifted.is_vector() { shifted } else { self.hooks.shift_amount_type(shifted) };
         self.dag.get_constant(u128::from(count), ty)
     }
 
@@ -89,9 +90,20 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         //
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6798
-        let bits = vt.size_in_bits();
-        let wide = EVT::integer(bits * 2);
-        if (bits <= 16 || self.hooks.widen_multiply_high_any_width()) && self.can_do(ISD::Mul, wide) {
+        // The pin widens whatever the width: a vector does, a scalar does at
+        // 16 bits and below unless the target says otherwise.
+        let bits = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
+        let wide = if vt.is_vector() {
+            MVT::integer(bits * 2).and_then(|lane| MVT::vector(lane, vt.lanes())).map(EVT::Simple)?
+        } else {
+            EVT::integer(bits * 2)
+        };
+        let allowed = if vt.is_vector() {
+            self.tli?.types.is_type_legal(wide)
+        } else {
+            bits <= 16 || self.hooks.widen_multiply_high_any_width()
+        };
+        if allowed && self.can_do(ISD::Mul, wide) {
             let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
             let (x, y) = (self.dag.get_node(extend, wide, &[x]), self.dag.get_node(extend, wide, &[y]));
             let product = self.dag.get_node(ISD::Mul, wide, &[x, y]);
@@ -342,9 +354,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
-        let bits = vt.size_in_bits();
+        let bits = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
         let exact = self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0;
-        let divisor = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1));
+        let divisor = self.dag.const_or_splat(n1).filter(|_| !self.dag.is_opaque(n1));
         if let Some(c) = divisor.filter(|&c| c != 0 && !exact) {
             let negated = c.wrapping_neg() & super::fold::mask(bits);
             if c.is_power_of_two() || negated.is_power_of_two() {
@@ -383,15 +395,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(if negative { self.dag.get_negative(quotient, vt) } else { quotient });
             }
         }
-        if self.dag.constant(n1).is_some()
-            && !self.divide_stays(vt, n0, n1, true)
-            && !self.hardware_divide_wins(vt, n0, n1, true, self.has_sibling_rem(n0, n1, true))
+        if self.dag.const_or_splat(n1).is_some()
+            && (vt.is_vector()
+                || (!self.divide_stays(vt, n0, n1, true)
+                    && !self.hardware_divide_wins(vt, n0, n1, true, self.has_sibling_rem(n0, n1, true))))
         {
             // DEVIATE SD-DIVMAG: by a negative divisor the quotient is the
             // negation of the one by its magnitude, which the remainder
             // (`x % -c` is `x % c`) already multiplies by: one multiply-high.
             if self.dag.config().sdiv_by_magnitude
-                && let Some(c) = self.dag.constant(n1)
+                && let Some(c) = self.dag.const_or_splat(n1)
                 && c >> (bits - 1) & 1 == 1
                 && !Self::is_signed_min(c, bits)
                 && !self.dag.is_opaque(n1)
@@ -413,12 +426,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
-        let bits = vt.size_in_bits();
+        let bits = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
         if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
             return None;
         }
         let mask = super::fold::mask(bits);
-        let d = self.dag.constant(n1)? & mask;
+        let d = self.dag.const_or_splat(n1)? & mask;
         if d == 0 {
             return None;
         }
@@ -436,15 +449,30 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         };
         let magic = self.dag.get_constant(magic, vt);
         let high = self.multiply_high(true, vt, n0, magic)?;
-        let factor = self.dag.get_constant(factor, vt);
-        let scaled = self.dag.get_node(ISD::Mul, vt, &[n0, factor]);
-        let sum = self.dag.get_node(ISD::Add, vt, &[high, scaled]);
+        // The numerator is added or subtracted where the magic is of the
+        // other sign than the divisor (`Factor` 1 or -1); no multiply by a
+        // constant a vector would not fold.
+        let sum = if vt.is_vector() && factor == 0 {
+            high
+        } else if vt.is_vector() && factor == 1 {
+            self.dag.get_node(ISD::Add, vt, &[high, n0])
+        } else if vt.is_vector() && factor == mask {
+            self.dag.get_node(ISD::Sub, vt, &[high, n0])
+        } else {
+            let factor = self.dag.get_constant(factor, vt);
+            let scaled = self.dag.get_node(ISD::Mul, vt, &[n0, factor]);
+            self.dag.get_node(ISD::Add, vt, &[high, scaled])
+        };
         let by = self.shift_amount(vt, shift);
         let quotient = self.dag.get_node(ISD::Sra, vt, &[sum, by]);
         let top = self.shift_amount(vt, bits - 1);
         let sign = self.dag.get_node(ISD::Srl, vt, &[quotient, top]);
-        let sign_mask = self.dag.get_constant(sign_mask, vt);
-        let sign = self.dag.get_node(ISD::And, vt, &[sign, sign_mask]);
+        let sign = if vt.is_vector() && sign_mask == mask {
+            sign
+        } else {
+            let sign_mask = self.dag.get_constant(sign_mask, vt);
+            self.dag.get_node(ISD::And, vt, &[sign, sign_mask])
+        };
         Some(self.dag.get_node(ISD::Add, vt, &[quotient, sign]))
     }
 
@@ -479,7 +507,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
-        if let Some(c) = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1)) {
+        if let Some(c) = self.dag.const_or_splat(n1).filter(|_| !self.dag.is_opaque(n1)) {
             if c.is_power_of_two() {
                 let by = self.shift_amount(vt, c.trailing_zeros());
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, by]));
@@ -495,9 +523,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, total]));
             }
         }
-        if self.dag.constant(n1).is_some()
-            && !self.divide_stays(vt, n0, n1, false)
-            && !self.hardware_divide_wins(vt, n0, n1, false, self.has_sibling_rem(n0, n1, false))
+        // A vector has no divide instruction to keep: the multiply-high
+        // sequence is the only form.
+        if self.dag.const_or_splat(n1).is_some()
+            && (vt.is_vector()
+                || (!self.divide_stays(vt, n0, n1, false)
+                    && !self.hardware_divide_wins(vt, n0, n1, false, self.has_sibling_rem(n0, n1, false))))
         {
             return self.build_udiv(n0, n1, node);
         }
@@ -512,16 +543,21 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
-        let bits = vt.size_in_bits();
+        let lane_ty = if vt.is_vector() { vt.element() } else { vt };
+        let bits = lane_ty.size_in_bits();
         if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
             return None;
         }
-        let d = self.dag.constant(n1)? & super::fold::mask(bits);
+        let d = self.dag.const_or_splat(n1)? & super::fold::mask(bits);
         if d <= 1 {
             return None;
         }
-        let known = super::known_bits::known_bits(self.dag, n0);
-        let known_zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
+        let known_zeros = if vt.is_vector() {
+            0
+        } else {
+            let known = super::known_bits::known_bits(self.dag, n0);
+            (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32
+        };
         let leading = known_zeros.min(bits - (128 - d.leading_zeros()));
         // [L7031][pin]: an `i32` divisor with no cheap magic is widened
         // to `i64` when the wide high multiply exists. The even-divisor rewrite
@@ -529,7 +565,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         //
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L7031
-        let widened = self.hooks.widened_unsigned_divide_type(vt);
+        let widened = if vt.is_vector() { None } else { self.hooks.widened_unsigned_divide_type(vt) };
         let wide = widened.unwrap_or(vt);
         let has_wide_mulhu = widened.is_some() && self.can_do(ISD::MulHU, wide);
         let has_wide_lohi = widened.is_some() && self.can_do(ISD::UMulLoHi, wide);
@@ -589,7 +625,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             {
                 return Some(narrowed);
             }
-        } else if self.dag.constant(n1).is_some_and(|c| c.is_power_of_two()) {
+        } else if self.dag.const_or_splat(n1).is_some_and(|c| c.is_power_of_two()) {
             let ones = self.dag.get_all_ones_constant(vt);
             let below = self.dag.get_node(ISD::Add, vt, &[n1, ones]);
             return Some(self.dag.get_node(ISD::And, vt, &[n0, below]));
@@ -598,12 +634,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         {
             return Some(narrowed);
         }
-        if self.dag.constant(n1).is_none_or(|c| c == 0) {
+        if self.dag.const_or_splat(n1).is_none_or(|c| c == 0) {
             return None;
         }
         // "Checking cheapness here makes sense since the simplification
-        // results in fatter code."
-        if self.divide_stays(vt, n0, n1, signed) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
+        // results in fatter code." A vector has no divide to keep.
+        if !vt.is_vector()
+            && (self.divide_stays(vt, n0, n1, signed) || self.hardware_divide_wins(vt, n0, n1, signed, true))
+        {
             return None;
         }
         let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) };

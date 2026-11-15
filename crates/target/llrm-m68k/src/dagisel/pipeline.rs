@@ -221,7 +221,7 @@ pub fn select_block_with(
     let mut target = M68kTarget {
         tli: &tli,
         lowering: &mut lowering,
-        chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
+        chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false), free_any_extend: short },
         short,
     };
     select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
@@ -240,6 +240,8 @@ struct M68kTarget<'a> {
 struct M68kChooser<'a> {
     selector: &'a Selector,
     hooks: M68kHooks,
+    /// DEVIATE M68K-ANYEXT ([`super::anyext`]); false is the pin's `MOVZX`.
+    free_any_extend: bool,
 }
 
 impl Select for M68kChooser<'_> {
@@ -250,6 +252,7 @@ impl Select for M68kChooser<'_> {
     ) -> llrm_dagisel::interp::Outcome {
         super::indexed::select(adapter, node)
             .or_else(|| super::bfffo::select(adapter, node))
+            .or_else(|| if self.free_any_extend { super::anyext::select(adapter, node) } else { None })
             .unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }
 }

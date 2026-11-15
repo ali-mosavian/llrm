@@ -254,10 +254,14 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
     // The block that is only a return, where there is one: a block that
     // returns, or jumps there, ends the same way.
     let bare = |blocks: &[Lowered]| -> Option<(String, Inst)> {
-        blocks.iter().find_map(|block| match block.insts.as_slice() {
-            [ret @ Inst::Ret { .. }] => Some((block.label.clone(), ret.clone())),
-            _ => None,
-        })
+        blocks
+            .iter()
+            .find_map(
+                |block| match block.insts.as_slice() {
+                    [ret @ Inst::Ret { .. }] => Some((block.label.clone(), ret.clone())),
+                    _ => None,
+                },
+            )
     };
     let ends_alike = |blocks: &[Lowered], at: usize, bare: &Option<(String, Inst)>| -> Option<Vec<Inst>> {
         let mut insts = blocks[at].insts.clone();
@@ -265,7 +269,10 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
             (Some(Inst::Ret { .. }), None) => Some(insts),
             (Some(last), Some((label, ret)))
                 if last == ret
-                    || matches!(last, Inst::Branch { link: false, target: Target::Label(to) } if to == label) =>
+                    || matches!(
+                        last,
+                        Inst::Branch { link: false, target: Target::Label(to) } if to == label
+                    ) =>
             {
                 if blocks[at].label == *label || insts.len() < 2 {
                     return None;
@@ -281,9 +288,8 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
     };
     loop {
         let bare_block = bare(blocks);
-        let ending: Vec<(usize, Vec<Inst>)> = (0..blocks.len())
-            .filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts)))
-            .collect();
+        let ending: Vec<(usize, Vec<Inst>)> =
+            (0..blocks.len()).filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts))).collect();
         // Blocks are compared with those that end in the same instruction.
         let mut groups: HashMap<String, Vec<usize>> = HashMap::default();
         for (at, (_, insts)) in ending.iter().enumerate() {
@@ -299,19 +305,19 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
                     let length = common_tail(one_insts, other_insts);
                     let real = one_insts[one_insts.len() - length..].iter().filter(|i| counts(i)).count();
                     // Two blocks that are only a jump: `forwards` merges those.
-                    let whole = length == 1
-                        && blocks[*one].insts.len() == 1
-                        && blocks[*other].insts.len() == 1;
+                    let whole = length == 1 && blocks[*one].insts.len() == 1 && blocks[*other].insts.len() == 1;
                     let found = (*one.min(other), *one.max(other), length);
-                    // Two blocks that are the same from top to bottom and end in a
-                    // jump: `ProfitableToMerge`'s `AfterPlacement` rule merges
+                    // Two blocks that are the same from top to bottom and end
+                    // in a jump: `ProfitableToMerge`'s
+                    // `AfterPlacement` rule merges
                     // them whatever their length, since neither falls through.
-                    let identical = length == blocks[*one].insts.len()
-                        && length == blocks[*other].insts.len()
-                        && real >= 1;
+                    let identical =
+                        length == blocks[*one].insts.len() && length == blocks[*other].insts.len() && real >= 1;
                     if (real >= TAIL_MERGE_SIZE || identical)
                         && !whole
-                        && best.is_none_or(|(a, b, longest)| length > longest || (length == longest && (found.0, found.1) < (a, b)))
+                        && best.is_none_or(|(a, b, longest)| {
+                            length > longest || (length == longest && (found.0, found.1) < (a, b))
+                        })
                     {
                         best = Some(found);
                     }
@@ -324,7 +330,8 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
                 blocks[at].insts = insts;
             }
         }
-        // The tail is a block of its own, unless one of the two is only the tail.
+        // The tail is a block of its own, unless one of the two is only the
+        // tail.
         let (keep, branch) = if length == blocks[other].insts.len() {
             (other, one)
         } else if length == blocks[one].insts.len() {
@@ -341,11 +348,8 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
                     number += 1;
                 }
             };
-            let tail = Lowered {
-                label,
-                insts: blocks[other].insts.split_off(at),
-                locs: blocks[other].locs.split_off(at),
-            };
+            let tail =
+                Lowered { label, insts: blocks[other].insts.split_off(at), locs: blocks[other].locs.split_off(at) };
             let label = tail.label.clone();
             blocks[other].insts.push(Inst::Branch { link: false, target: Target::Label(label) });
             blocks[other].locs.push(None);
@@ -400,7 +404,8 @@ fn effects(inst: &Inst) -> Option<(Vec<Item>, Vec<Item>)> {
     if !sets_flags && defs.contains(&zero) {
         return None;
     }
-    let mut written: Vec<Item> = defs.into_iter().filter(|one| !(sets_flags && *one == zero)).map(Item::Register).collect();
+    let mut written: Vec<Item> =
+        defs.into_iter().filter(|one| !(sets_flags && *one == zero)).map(Item::Register).collect();
     if sets_flags {
         written.push(Item::Flags);
     }
@@ -441,7 +446,10 @@ fn lifted_order(
         let (mut read, mut written): (HashSet<Item>, HashSet<Item>) = (HashSet::default(), HashSet::default());
         let mut found = Vec::new();
         for (at, inst) in insts.iter().enumerate().take(open) {
-            if matches!(inst, Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }) {
+            if matches!(
+                inst,
+                Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }
+            ) {
                 break;
             }
             let (defs, uses) = inst.defs_and_uses();
@@ -458,7 +466,10 @@ fn lifted_order(
             }
             read.extend(uses);
             written.extend(defs);
-            if matches!(inst, Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. }) {
+            if matches!(
+                inst,
+                Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. }
+            ) {
                 break;
             }
         }
@@ -507,7 +518,8 @@ fn hoist_common_code(
     if let Some(first) = blocks.first() {
         *entering.entry(first.label.clone()).or_default() += 1;
     }
-    let index: HashMap<String, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.clone(), at)).collect();
+    let index: HashMap<String, usize> =
+        blocks.iter().enumerate().map(|(at, block)| (block.label.clone(), at)).collect();
     let mut changed = false;
     for at in 0..blocks.len() {
         changed |= hoist_in_successors(blocks, at, &entering, &index);
@@ -601,7 +613,8 @@ fn hoist_in_successors(
     let mut run = leading(&blocks[one].insts, &blocks[two].insts);
     if LIFT_NON_LEADING {
         let (order_one, order_two) = lifted_order(&blocks[one].insts, &blocks[two].insts);
-        let reorder = |insts: &[Inst], order: &[usize]| -> Vec<Inst> { order.iter().map(|&at| insts[at].clone()).collect() };
+        let reorder =
+            |insts: &[Inst], order: &[usize]| -> Vec<Inst> { order.iter().map(|&at| insts[at].clone()).collect() };
         let lifted = leading(&reorder(&blocks[one].insts, &order_one), &reorder(&blocks[two].insts, &order_two));
         if lifted > run {
             for (block, order) in [(one, order_one), (two, order_two)] {
@@ -615,11 +628,8 @@ fn hoist_in_successors(
     if run == 0 {
         return false;
     }
-    let moved: Vec<(Inst, Option<(u32, u32)>)> = blocks[one]
-        .insts
-        .drain(..run)
-        .zip(blocks[one].locs.drain(..run))
-        .collect();
+    let moved: Vec<(Inst, Option<(u32, u32)>)> =
+        blocks[one].insts.drain(..run).zip(blocks[one].locs.drain(..run)).collect();
     blocks[two].insts.drain(..run);
     blocks[two].locs.drain(..run);
     for (offset, (inst, loc)) in moved.into_iter().enumerate() {
@@ -630,14 +640,29 @@ fn hoist_in_successors(
 }
 
 pub fn fold(
-    mut blocks: Vec<Lowered>,
+    blocks: Vec<Lowered>,
     tables: &mut [Table],
     odds: &Odds,
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
+    fold_with_odds(blocks, tables, odds, optsize, exits).0
+}
+
+/// The odds of the edges between blocks by label, as placement read them.
+pub type Likelihood = HashMap<(String, String), u32>;
+
+/// [`fold`], and the probability numerators (over 2^31) of the edges it placed
+/// by; empty where the entry has a predecessor and the order is kept.
+pub fn fold_with_odds(
+    mut blocks: Vec<Lowered>,
+    tables: &mut [Table],
+    odds: &Odds,
+    optsize: bool,
+    exits: &[crate::mc::visit::Reg],
+) -> (Vec<Lowered>, Likelihood) {
     if blocks.is_empty() {
-        return blocks;
+        return (blocks, Likelihood::default());
     }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
@@ -742,7 +767,7 @@ pub fn fold(
     // DEVIATE: an entry that a branch returns to (the pin's IR never has one;
     // block forwarding can make one) keeps the layout order, as frequencies
     // need an entry that is no loop header. Exit: 11-12.
-    let mut likelihood: HashMap<(String, String), u32> = HashMap::default();
+    let mut likelihood = Likelihood::default();
     let mut copies: Option<Vec<(usize, Vec<usize>)>> = None;
     let placed: Vec<usize> = if edges.iter().any(|next| next.contains(&0)) {
         reachable.clone()
@@ -759,8 +784,9 @@ pub fn fold(
                 );
             }
         }
-        // `MachineBlockPlacement` with `TailDupPlacement`: the one translation x86 uses (`llrm_codegen`), on
-        // this function's blocks as LIR (`lir_place`). A copied tail comes back in `copies`.
+        // `MachineBlockPlacement` with `TailDupPlacement`: the one translation
+        // x86 uses (`llrm_codegen`), on this function's blocks as LIR
+        // (`lir_place`). A copied tail comes back in `copies`.
         let dense_of: HashMap<&str, usize> =
             reachable.iter().enumerate().map(|(new, &old)| (blocks[old].label.as_str(), new)).collect();
         let kept: Vec<&Lowered> = reachable.iter().map(|&old| &blocks[old]).collect();
@@ -839,7 +865,8 @@ pub fn fold(
             }
             placed
         };
-        // The comparison reads the blocks as they were: not meaningful once placement copied one.
+        // The comparison reads the blocks as they were: not meaningful once
+        // placement copied one.
         let order = if copies.is_some() || jumps(&pinned) <= jumps(&identity) {
             pinned
         } else {
@@ -848,13 +875,25 @@ pub fn fold(
         };
         order.into_iter().map(|new| reachable[new]).collect()
     };
+    let mut copied_tails: Vec<((String, String), u32)> = Vec::new();
     let mut ordered: Vec<Lowered> = if let Some(list) = copies {
         // The blocks the shared placer made: each instruction by the number
         // `lir_place` gave it, over the reachable blocks in order.
-        let flat: Vec<(&Inst, Option<(u32, u32)>)> = reachable
-            .iter()
-            .flat_map(|&old| blocks[old].insts.iter().zip(blocks[old].locs.iter().copied()))
-            .collect();
+        let flat: Vec<(&Inst, Option<(u32, u32)>)> =
+            reachable.iter().flat_map(|&old| blocks[old].insts.iter().zip(blocks[old].locs.iter().copied())).collect();
+        // A block that took a copied tail goes where the tail went, by the
+        // tail's odds.
+        let owner: Vec<usize> =
+            reachable.iter().flat_map(|&old| std::iter::repeat_n(old, blocks[old].insts.len())).collect();
+        for (at, numbers) in &list {
+            let (Some(&last), this) = (numbers.last(), &blocks[reachable[*at]].label) else { continue };
+            let tail = &blocks[owner[last]].label;
+            for ((from, to), &odds) in &likelihood {
+                if from == tail && tail != this {
+                    copied_tails.push(((this.clone(), to.clone()), odds));
+                }
+            }
+        }
         list.into_iter()
             .map(|(at, numbers)| Lowered {
                 label: blocks[reachable[at]].label.clone(),
@@ -872,8 +911,11 @@ pub fn fold(
     for (jumper, original) in crate::taildup::tail_duplicate(&mut ordered, optsize) {
         // The copy keeps the original's edge odds (`addSuccessor` with the
         // original's probabilities), which `optimizeBranches` reads below.
-        let edges: Vec<(String, u32)> =
-            likelihood.iter().filter(|((from, _), _)| *from == original).map(|((_, to), odds)| (to.clone(), *odds)).collect();
+        let edges: Vec<(String, u32)> = likelihood
+            .iter()
+            .filter(|((from, _), _)| *from == original)
+            .map(|((_, to), odds)| (to.clone(), *odds))
+            .collect();
         for (to, odds) in edges {
             likelihood.entry((jumper.clone(), to)).or_insert(odds);
         }
@@ -920,7 +962,13 @@ pub fn fold(
             insts[len - 1] = jump;
         }
     }
-    ordered
+    // Placement's odds, and the copied tails' besides: for the trial's pricing
+    // only, `optimizeBranches` above read none of them.
+    let mut priced = likelihood;
+    for (edge, odds) in copied_tails {
+        priced.entry(edge).or_insert(odds);
+    }
+    (ordered, priced)
 }
 
 #[cfg(test)]
@@ -1085,7 +1133,8 @@ mod tests {
     /// recpow -Os: `mov x11, xzr` begins the loop's preheader behind the
     /// prologue's pre-indexed `stp` (which writes register 31, the stack
     /// pointer) and is the whole guard-bypass block. `xzr` was taken for that
-    /// register: the move was held below the branch, an exit block of 8 B (gcc 4).
+    /// register: the move was held below the branch, an exit block of 8 B (gcc
+    /// 4).
     #[test]
     fn a_move_from_the_zero_register_is_not_held_by_a_write_of_the_stack_pointer() {
         use crate::mc::inst::{Addr, Memory};

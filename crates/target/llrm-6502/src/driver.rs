@@ -241,7 +241,7 @@ fn program(
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
             for module in &mut program.modules {
-                crate::staticlocals::applied(module, request.level != Level::Os)?;
+                crate::staticlocals::applied(module)?;
             }
         }
     }
@@ -260,8 +260,8 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     let built = program(text, request)?;
-    let (built, inlined) = trial_inlined(built, text, request)?;
-    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
+    let (built, inlined, assembled) = trial_inlined(built, text, request)?;
+    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, text, request))
 }
 
 /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
@@ -278,7 +278,7 @@ fn trial_inlined(
     built: Program,
     text: &str,
     request: &Request,
-) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
+) -> Result<(Program, Vec<llrm_transforms::trial::Site>, Option<Assembled>), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
     let limit = built
@@ -286,8 +286,10 @@ fn trial_inlined(
         .tti()
         .and_then(|tti| tti.opt_size_inline_trial_limits())
         .map_or(0, |(_, instructions)| instructions);
-    if request.level != Level::Os || sites.is_empty() {
-        return Ok((built, Vec::new()));
+    let at_speed = matches!(request.level, Level::O2 | Level::O3)
+        && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
+    if !(request.level == Level::Os || at_speed) || sites.is_empty() {
+        return Ok((built, Vec::new(), None));
     }
     if instructions(&built) > limit {
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
@@ -297,7 +299,7 @@ fn trial_inlined(
                 instructions(&built)
             );
         }
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), None));
     }
     let kept_unroll = trial::take();
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
@@ -311,13 +313,23 @@ fn trial_inlined(
     };
     let Ok(other) = trial::with_inlined(&sites, || program(text, request)) else {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), None));
     };
     let other_unroll = trial::take();
     let cut = trial::differing(&built.modules[0], &other.modules[0]);
-    let (Some(kept_bytes), Some(other_bytes)) = (chain(&built, &cut), chain(&other, &cut)) else {
+    // The kept side is priced from its own assembly, which the result carries
+    // to the unroll trial and the output; only the second compile's chain
+    // is assembled for the trial.
+    let Ok(kept_all) = tail(built.clone(), request, true, true) else {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), None));
+    };
+    let of = |cut: &std::collections::BTreeSet<String>| -> std::collections::BTreeMap<String, i64> {
+        kept_all.functions.iter().filter(|(name, _)| cut.contains(name)).cloned().collect()
+    };
+    let (kept_bytes, Some(other_bytes)) = (of(&cut), chain(&other, &cut)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new(), None));
     };
     let flags = trial::accepted(&sites, &kept_bytes, &other_bytes);
     if debug {
@@ -331,29 +343,26 @@ fn trial_inlined(
     }
     if flags.iter().all(|one| !one) {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), Some(kept_all)));
     }
     if flags.iter().all(|one| *one) {
         trial::restore(other_unroll);
-        return Ok((other, sites));
+        return Ok((other, sites, None));
     }
     let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
     let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), Some(kept_all)));
     };
     let third_unroll = trial::take();
     let cut = trial::differing(&built.modules[0], &third.modules[0]);
-    let pays = match (chain(&built, &cut), chain(&third, &cut)) {
-        (Some(kept), Some(third)) => third.values().sum::<i64>() < kept.values().sum::<i64>(),
-        _ => false,
-    };
+    let pays = chain(&third, &cut).is_some_and(|third| third.values().sum::<i64>() < of(&cut).values().sum::<i64>());
     if pays {
         trial::restore(third_unroll);
-        Ok((third, chosen))
+        Ok((third, chosen, None))
     } else {
         trial::restore(kept_unroll);
-        Ok((built, Vec::new()))
+        Ok((built, Vec::new(), Some(kept_all)))
     }
 }
 
@@ -406,6 +415,29 @@ thread_local! {
 /// trial's pricing doubled and then tripled (2026-11-08: +16.9% at -O2).
 pub fn selected() -> usize {
     SELECTED.with(std::cell::Cell::get)
+}
+
+/// The bytes the initialised data in `text` takes in the image: what a trial
+/// that folds a table away saves, which the functions' own bytes leave out.
+/// Zero-filled `.res` of the BSS is not in the image.
+pub fn data_bytes(text: &str) -> i64 {
+    let mut in_image = true;
+    let mut total = 0;
+    for line in text.lines().map(str::trim) {
+        if let Some(segment) = line.strip_prefix(".segment") {
+            in_image = !segment.contains("BSS");
+        } else if in_image {
+            let count = |rest: &str| rest.split(',').filter(|one| !one.trim().is_empty()).count() as i64;
+            if let Some(rest) = line.strip_prefix(".byte") {
+                total += count(rest);
+            } else if let Some(rest) = line.strip_prefix(".word").or_else(|| line.strip_prefix(".addr")) {
+                total += 2 * count(rest);
+            } else if let Some(rest) = line.strip_prefix(".res") {
+                total += rest.trim().split(',').next().and_then(|n| n.trim().parse::<i64>().ok()).unwrap_or(0);
+            }
+        }
+    }
+    total
 }
 
 /// A program's assembly and, when asked for, its price: the clocks and bytes
@@ -500,6 +532,8 @@ fn tail(
     };
     llrm_6502_prepare(&mut program);
     let module = &program.modules[0];
+    // after the modules it keys texts by: dropped before them
+    let _texts = crate::select::TextCache::new();
     let names: Vec<String> = module
         .globals
         .iter()
@@ -529,16 +563,7 @@ fn tail(
             let mut other = select_function(looped, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(
-                module,
-                name,
-                &other,
-                looped,
-                &selection,
-                request,
-                crate::routines::copy_prices().byte_clocks.0,
-                false,
-            )? {
+            if cheaper(module, name, &other, looped, &selection, request, false)? {
                 selection = other;
                 as_called = false;
                 source = Some(looped);
@@ -548,16 +573,7 @@ fn tail(
             let mut other = select_function(paged, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(
-                module,
-                name,
-                &other,
-                paged,
-                &selection,
-                request,
-                crate::routines::copy_prices().page_byte_clocks,
-                true,
-            )? {
+            if cheaper(module, name, &other, paged, &selection, request, true)? {
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
@@ -568,8 +584,7 @@ fn tail(
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
             let kept = source.unwrap_or(module);
-            let rate = crate::routines::copy_prices().page_byte_clocks;
-            if cheaper(kept, name, &other, counted, &selection, request, rate, true)? {
+            if cheaper(kept, name, &other, counted, &selection, request, true)? {
                 selection = other;
                 counted_chosen = true;
                 source = Some(counted);
@@ -587,16 +602,7 @@ fn tail(
                 other.zero_page = request.platform.zero_page;
                 other.tuning = request.level.tuning();
                 let kept = source.unwrap_or(module);
-                if cheaper(
-                    kept,
-                    name,
-                    &other,
-                    split,
-                    &selection,
-                    request,
-                    crate::routines::copy_prices().page_byte_clocks,
-                    true,
-                )? {
+                if cheaper(kept, name, &other, split, &selection, request, true)? {
                     selection = other;
                     range_chosen = true;
                     source = Some(split);
@@ -634,6 +640,9 @@ fn tail(
         let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
         (clocks, bytes) = (run as i64, size as i64);
     }
+    if price {
+        bytes += data_bytes(&data.0);
+    }
     let mut text = pieces.concat();
     for (name, label) in &data.1 {
         text = text.replace(name.as_str(), label);
@@ -656,33 +665,43 @@ fn tail(
 /// +27.7% at -Os in user-mode instructions, the median program unchanged.
 fn trial_unrolled(
     built: Program,
+    assembled: Option<Assembled>,
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
     use llrm_transforms::loopunrollpass::trial;
+    // `assembled`: `built` as the inline trial already wrote it (price and text
+    // of `tail`)
+    let kept_text = |built: Program, assembled: Option<Assembled>| match assembled {
+        Some(done) => Ok(done.text),
+        None => tail(built, request, false, false).map(|done| done.text),
+    };
     let tti = built.target.tti();
     let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else {
-        return Ok(tail(built, request, false, false)?.text);
+        return kept_text(built, assembled);
     };
     let (eligible, units) = trial::take();
     if !matches!(request.level, Level::O1 | Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
-        return Ok(tail(built, request, false, false)?.text);
+        return kept_text(built, assembled);
     }
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial candidates: {} functions, {units} units", eligible.len());
     }
-    let rate = tti.as_ref().map_or(0, |tti| tti.unroll_milliclocks_per_byte());
     let other = trial::with(limit, || program(text, request))?;
     let growth = instructions(&other).saturating_sub(instructions(&built));
     if !trial_fits(growth) {
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
             eprintln!("trial unroll: {growth} instructions more: put back unpriced");
         }
-        return Ok(tail(built, request, false, false)?.text);
+        return kept_text(built, assembled);
     }
-    let (kept, tried) = (tail(built, request, true, false)?, tail(other, request, true, false)?);
+    let kept = match assembled {
+        Some(done) => done,
+        None => tail(built, request, true, false)?,
+    };
+    let tried = tail(other, request, true, false)?;
     let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
-    let pays = trial_pays(request.level, rate, saved, added);
+    let pays = trial_pays(request.level, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial unroll: {added:+} bytes, {saved:+} clocks saved: {}", if pays { "kept" } else { "put back" });
     }
@@ -711,12 +730,11 @@ fn instructions(program: &Program) -> usize {
 /// fitted.
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
-/// Whether a trial that saved `saved` clocks for `added` bytes is kept. Bytes
-/// only at size, as everywhere else; at speed a byte is worth `rate`
-/// thousandths of a clock.
+/// Whether a trial that saved `saved` clocks for `added` bytes is kept: bytes
+/// first at every level (user ruling 2026-11-14), so one that adds none, and
+/// saves no fewer clocks, or one that removes some.
 pub fn trial_pays(
     level: Level,
-    rate: i64,
     saved: i64,
     added: i64,
 ) -> bool {
@@ -724,17 +742,15 @@ pub fn trial_pays(
         return false;
     }
     match level {
-        Level::Os => added < 0 || (added == 0 && saved >= 0),
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
         Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added),
-        _ => saved * 1000 >= added * rate,
+        _ => added < 0 || (added == 0 && saved >= 0),
     }
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
-/// `selected`: the clocks (a trip through a loop weighs ten) and the bytes at
-/// `routines.toml`'s price. A function either
-/// can't be priced for keeps its calls.
+/// `selected`: fewer bytes, the clocks (a trip through a loop weighs ten) only
+/// breaking a tie. A function either can't be priced for keeps its calls.
 fn cheaper(
     module: &llrm_mir::module::Module,
     name: &str,
@@ -742,12 +758,11 @@ fn cheaper(
     alt_module: &llrm_mir::module::Module,
     selected: &crate::dagisel::function::Selection,
     request: &Request,
-    speed_byte_clocks: u64,
     strict_at_o1: bool,
 ) -> Result<bool, String> {
     let prices = crate::routines::copy_prices();
-    let routines = [("memcpy", prices.call_clocks)];
-    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { speed_byte_clocks };
+    let routines = [("memcpy", prices.call_clocks), ("memset", prices.call_clocks)];
+    let original = module;
     let cost = |module: &llrm_mir::module::Module, selection| -> Option<(u64, u64)> {
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
@@ -760,20 +775,36 @@ fn cheaper(
         crate::weights::by_branch_weights(module, function, &mut weights);
         let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
         let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
-        Some((priced.cycles, u64::from(priced.bytes)))
+        // a library routine the text calls is linked once for its callers: this
+        // function pays its share
+        let mut called: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("jsr ").or_else(|| line.trim().strip_prefix("jmp ")))
+            .collect();
+        called.sort_unstable();
+        called.dedup();
+        let library: u64 = called
+            .iter()
+            .filter(|routine| crate::RUNTIME.contains(&format!("\n{routine}:")))
+            .map(|routine| {
+                u64::from(crate::mulimage::library_bytes(routine))
+                    / llrm_transforms::memloops::callers(original, routine).max(1) as u64
+            })
+            .sum();
+        Some((priced.cycles, u64::from(priced.bytes) + library))
     };
     let (alt_cost, kept_cost) = (cost(alt_module, alt), cost(module, selected));
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
-        eprintln!(
-            "cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}, {byte} clocks a byte"
-        );
+        eprintln!("cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}");
     }
     Ok(match (alt_cost, kept_cost) {
         // -O1 keeps no more bytes and no more clocks (6502-UNROLL-O1)
         (Some(alt), Some(kept)) if strict_at_o1 && request.level == Level::O1 => {
             alt.0 <= kept.0 && alt.1 <= kept.1 && alt != kept
         }
-        (Some(alt), Some(kept)) => alt.0 + byte * alt.1 < kept.0 + byte * kept.1,
+        // bytes first at every level, clocks break a tie (user ruling
+        // 2026-11-14)
+        (Some(alt), Some(kept)) => (alt.1, alt.0) < (kept.1, kept.0),
         _ => false,
     })
 }

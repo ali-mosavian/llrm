@@ -83,6 +83,8 @@ enum Arg {
     Byte(String),
     /// the low and the high byte, as operands (`#<sym`, `#>sym`)
     Word(String, String),
+    /// a pointer: the same operands, in a pair of cells (never `a`, `x`)
+    Pointer(String, String),
 }
 
 fn byte(value: u16) -> Arg {
@@ -93,14 +95,19 @@ fn w16(value: u16) -> Arg {
     Arg::Word(format!("#{}", value & 0xFF), format!("#{}", value >> 8))
 }
 
-/// The address of a symbol, a word.
+/// A pointer to a fixed address.
+fn ptr(value: u16) -> Arg {
+    Arg::Pointer(format!("#{}", value & 0xFF), format!("#{}", value >> 8))
+}
+
+/// The address of a symbol, a pointer.
 fn sym(name: &str) -> Arg {
-    Arg::Word(format!("#<{name}"), format!("#>{name}"))
+    Arg::Pointer(format!("#<{name}"), format!("#>{name}"))
 }
 
 /// The setup of a call: a byte takes the first free of `a`, `x`, `rc2`...; a
-/// word the first free pair of (`a`,`x`), (`rc2`,`rc3`)...; `x` and then `a`
-/// are loaded last.
+/// word the first free pair of (`a`,`x`), (`rc2`,`rc3`)... and a pointer the
+/// first free of (`rc2`,`rc3`)...; `x` and then `a` are loaded last.
 fn args(arguments: &[Arg]) -> String {
     let mut slots: [Option<&str>; 8] = [None; 8];
     for argument in arguments {
@@ -109,8 +116,9 @@ fn args(arguments: &[Arg]) -> String {
                 let at = slots.iter().position(Option::is_none).expect("a free register");
                 slots[at] = Some(value);
             }
-            Arg::Word(low, high) => {
-                let at = (0..8).step_by(2).find(|at| slots[*at].is_none()).expect("a free pair");
+            Arg::Word(low, high) | Arg::Pointer(low, high) => {
+                let first = if matches!(argument, Arg::Pointer(..)) { 2 } else { 0 };
+                let at = (first..8).step_by(2).find(|at| slots[*at].is_none()).expect("a free pair");
                 slots[at] = Some(low);
                 slots[at + 1] = Some(high);
             }
@@ -246,14 +254,15 @@ fn a_word_select_returns_the_larger_word() {
 }
 
 /// A value live across a runtime call cannot stay in a register the routine
-/// clobbers: it goes to a slot and comes back. a = 5: t = 6, r = 5 * 11 = 55,
-/// t + r = 61; 11 is not `2^n +- 1` times a power of two, so it stays a call.
+/// clobbers: `__mulqi3` names `rc2`, `rc3`, so it stays in another scratch cell
+/// (`rc4`). a = 5: t = 6, r = 5 * 11 = 55, t + r = 61; 11 is not `2^n +- 1`
+/// times a power of two, so it stays a call.
 #[test]
 fn a_value_live_across_a_call_survives_it() {
     let ir =
         "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
     let text = compile(ir, "across");
-    assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
+    assert!(text.contains("jsr __mulqi3") && !text.contains("s_across_"), "{text}");
     assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
 }
 
@@ -357,8 +366,8 @@ fn a_sum_through_a_pointer_runs_on_the_allocator() {
     assert_eq!(common::run_with("alloc-sump", &format!("{setup}  jsr sump\n"), &format!("{text}{data}")), 9);
 }
 
-/// A pointer live across a call is spilled as a pair and comes back whole:
-/// the second read through it sees the same bytes. data = 3 1 4 1:
+/// A pointer live across a call comes back whole: the second read through it
+/// sees the same bytes. data = 3 1 4 1:
 /// 4 + 55 + 1 = 60.
 #[test]
 fn a_pointer_live_across_a_call_survives_it() {
@@ -376,8 +385,9 @@ fn a_pointer_live_across_a_call_survives_it() {
     let text = compile(ir, "keep");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
     let setup = &args(&[sym("vals"), byte(5)]);
-    // the pair is kept in callee-saved cells, saved around the body
-    assert!(text.contains("pha") && text.contains("sta rc9"), "no spill:\n{text}");
+    // `__mulqi3` names `rc2`, `rc3`: the pair stays in a scratch pair it leaves
+    // alone, saved nowhere
+    assert!(text.contains("jsr __mulqi3") && !text.contains("pha") && !text.contains("rc9"), "{text}");
     assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
 }
 
@@ -731,7 +741,7 @@ fn a_pointer_bumped_in_a_loop_stays_a_pair() {
         assert!(text.contains(if k == 1 { "inc rc" } else { "bcc walk_pa" }), "k={k}: {text}");
         assert!(!text.contains("tay") && !text.contains("s_walk"), "k={k}: {text}");
         for (p, n) in [(0x0100u16, 4u16), (0x01FE, 2), (0x01FF, 3), (0x12FF, 1)] {
-            let setup = args(&[w16(p), byte(n)]);
+            let setup = args(&[ptr(p), byte(n)]);
             let low = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n"), &text);
             let high = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n  txa\n"), &text);
             assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), p + k * n, "k={k} p={p:#06x} n={n}");
@@ -1007,6 +1017,21 @@ fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
     );
 }
 
+/// digits kept its counter in `rc8` across the divide call, saved on entry and
+/// restored at the return (12 of its 105 bytes). The runtime divide names only
+/// `rc2`..`rc7`, so on a platform with scratch cells the counter stays in one
+/// of them, unsaved.
+#[test]
+fn a_value_across_a_runtime_call_lives_in_a_scratch_cell_the_routine_leaves_alone() {
+    let text = compile_on(DIGITS, "digits", 32);
+    assert!(!text.contains("pha") && !text.contains("rc8"), "{text}");
+    // digits(40000) = 5, digits(99) = 2, digits(100) = 3, digits(5) = 1
+    for (v, want) in [(40000u32, 5), (99, 2), (100, 3), (5, 1)] {
+        let main = format!("  lda #{}\n  ldx #{}\n  jsr digits\n", v & 0xFF, v >> 8);
+        assert_eq!(common::run_with(&format!("alloc-scratch-{v}"), &main, &text), want, "digits({v})\n{text}");
+    }
+}
+
 /// The word result of `name` for a word argument in rc2:rc3 (low byte in A,
 /// high byte in X).
 fn run_word(
@@ -1280,7 +1305,7 @@ fn a_zero_or_sign_test_does_not_compare_again() {
         let run = |x: u16, y: u16| {
             let setup = match name {
                 "sum" => bytes(&[x, y]),
-                _ => format!("  lda #{x}\n  sta $0300\n{}", args(&[w16(0x0300)])),
+                _ => format!("  lda #{x}\n  sta $0300\n{}", args(&[ptr(0x0300)])),
             };
             common::run_with("alloc-nzt", &format!("{setup}  jsr {name}\n"), &text)
         };
@@ -1812,10 +1837,11 @@ done:
 /// bytes that takes 5 more clocks a bit. The level decides: at size (12 clocks
 /// a byte) a shift of 5 to 7 bits is the loop (the shorter ones are decided by
 /// the final size, see `a_short_word_shift_stays_in_a_where_that_is_shorter`);
-/// at speed (1 clock a byte) none is. Both bytes of each result are checked,
+/// at speed the same (bytes first at every level, 2026-11-14; it was none at 1
+/// clock a byte). Both bytes of each result are checked,
 /// the shifted word added to the word so that the shift stays in cells.
 #[test]
-fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
+fn a_word_shift_is_a_counted_loop_at_every_level() {
     for (op, k) in [("shl", 5u32), ("shl", 7), ("lshr", 6)] {
         let name = format!("{op}{k}");
         let ir =
@@ -1823,7 +1849,7 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
         let looped = compile_at(&ir, &name, 16, Tuning::SIZE);
         let unrolled = compile_at(&ir, &name, 16, Tuning::SPEED);
         assert!(looped.contains("dex") || looped.contains("dey"), "{op} {k} at size:\n{looped}");
-        assert!(!unrolled.contains("dex") && !unrolled.contains("dey"), "{op} {k} at speed:\n{unrolled}");
+        assert!(unrolled.contains("dex") || unrolled.contains("dey"), "{op} {k} at speed:\n{unrolled}");
         for text in [&looped, &unrolled] {
             for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
                 let shifted = if op == "shl" { x << k } else { x >> k };
@@ -1839,12 +1865,13 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
     }
 }
 
-/// Three callee-saved cells cost 18 bytes of `lda`/`pha` and `pla`/`sta`. At
-/// the size level they are saved by `__csave` and restored by a jump to
-/// `__crest` (11 bytes, 99 clocks more); at speed they stay inline. digits(5) =
-/// 1, digits(10) = 2, digits(99) = 2, digits(100) = 3, digits(65535) = 5.
+/// Three callee-saved cells cost 18 bytes of `lda`/`pha` and `pla`/`sta`. They
+/// are saved by `__csave` and restored by a jump to `__crest` (11 bytes, 99
+/// clocks more) at every level: bytes first (2026-11-14); at speed they stayed
+/// inline at a clock a byte. digits(5) = 1, digits(10) = 2, digits(99) = 2,
+/// digits(100) = 3, digits(65535) = 5.
 #[test]
-fn three_saved_cells_are_shared_helpers_at_the_size_level_only() {
+fn three_saved_cells_are_shared_helpers_at_every_level() {
     // the word is read from a global: an argument in A:X is live at entry,
     // where `__csave` (which changes a, x and y) cannot run, and the
     // function then pushes the cells inline (6502-AX-PROGRAMS)
@@ -1869,7 +1896,7 @@ done:
     let shared = compile_at(ir, "digits", 16, Tuning::SIZE);
     let inline = compile_at(ir, "digits", 16, Tuning::SPEED);
     assert!(shared.contains("jsr __csave") && shared.contains("jmp __crest") && !shared.contains("pha"), "{shared}");
-    assert!(inline.contains("pha") && !inline.contains("__csave"), "{inline}");
+    assert!(inline.contains("jsr __csave") && inline.contains("jmp __crest") && !inline.contains("pha"), "{inline}");
     for (v, want) in [(5u16, 1), (10, 2), (99, 2), (100, 3), (65535, 5)] {
         for (name, text) in [("shared", &shared), ("inline", &inline)] {
             let setup = set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &set("g", v) + &set("g+1", v >> 8);
@@ -1887,9 +1914,10 @@ done:
 }
 
 /// `__csave` and `__crest` link as 34 bytes, so a module takes them only where
-/// its users together save more than that: one function that keeps three cells
-/// saved 9 bytes and cost 25 net (digits: 165 linked at speed, 189 at size with
-/// the helpers). Three such functions gain 27, four gain 36.
+/// its users together save more than that, as the users are written: digits
+/// (two returns) is 87 bytes inline and 71 with the helpers, 16 a user. The
+/// model said 9, and took them from four users on (2026-11-14); two users gain
+/// 32, three gain 48.
 #[test]
 fn the_save_helpers_are_linked_only_where_their_users_pay_for_them() {
     let digits = |name: &str| {
@@ -1931,7 +1959,7 @@ done:
             names.iter().map(String::as_str).zip(&selections).collect();
         (names.clone(), llrm_6502::select::module_text(&module, &parts).expect("emits"))
     };
-    for (users, shared) in [(1, false), (3, false), (4, true)] {
+    for (users, shared) in [(1, false), (2, false), (3, true)] {
         let (names, texts) = module_of(users);
         let all: String = texts.concat();
         assert_eq!(all.contains("jsr __csave"), shared, "{users} users:\n{all}");
@@ -2152,7 +2180,7 @@ define i16 @sloadx(ptr %p) {
     for name in ["sload", "sloadx"] {
         let text = compile_within_ten_seconds(ir, name);
         for byte in [0u16, 5, 0x7F, 0x80, 0xFF] {
-            let setup = format!("  lda #{byte}\n  sta $0300\n{}", args(&[w16(0x0300)]));
+            let setup = format!("  lda #{byte}\n  sta $0300\n{}", args(&[ptr(0x0300)]));
             let extended = byte as u8 as i8 as i16 as u16;
             let want = i32::from(if name == "sloadx" { extended ^ 1456 } else { extended });
             let low = common::run_with(&format!("alloc-{name}-{byte}"), &format!("{setup}  jsr {name}\n"), &text);
@@ -3452,17 +3480,19 @@ mod post_ra {
     }
 }
 
-/// `x * 9` at the size level was `lda lo; sta t; ...; ldx #3; loop; ...; lda
-/// t`: a copy of the shifted byte and its reload, 30 bytes and 100 clocks,
-/// against 26 and 69 for the shifts kept in `a` (k_mulax9; the loop was larger
-/// and slower than the speed level's code). `shift_loop_in_a` takes the run in
-/// `a` where the final text is shorter; a shift where it is not stays the loop.
+/// `x * 9` at the size level: the word arrives in A:X and is stored to its
+/// cells, which the counted loop shifts in place (23 B); three steps kept in
+/// `a` were 26. Before the A:X entry the loop needed a copy of the shifted byte
+/// and a reload (30 B against 26 for the run in `a`, k_mulax9), and
+/// `shift_loop_in_a` took the run; the pass still decides the shapes that keep
+/// that copy.
 #[test]
-fn a_short_word_shift_stays_in_a_where_that_is_shorter() {
+fn a_short_word_shift_is_the_loop_where_that_is_shorter() {
     let ir = "define i16 @m9(i16 %x) {\n  %p = mul i16 %x, 9\n  ret i16 %p\n}";
     let text = compile_at(ir, "m9", 16, Tuning::SIZE);
-    assert!(!text.contains("dex") && !text.contains("dey"), "a loop for three shifts:\n{text}");
-    assert!(text.matches("asl a").count() == 3, "{text}");
+    assert!(text.contains("dey") || text.contains("dex"), "no loop for three shifts:\n{text}");
+    let size = llrm_6502::timing::estimate(llrm_6502::dagisel::hooks::Cpu::Mos6502, &text).unwrap().bytes;
+    assert!(size <= 24, "{size} B:\n{text}");
     for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
         let want = x.wrapping_mul(9);
         let setup = args(&[w16(x)]);
@@ -3627,4 +3657,32 @@ fn counted_shift_loops_are_chosen_by_final_size_for_other_shapes_too() {
             assert_eq!(run("  txa\n"), i32::from(want >> 8), "{name} {x:#x}, high byte");
         }
     }
+}
+
+/// A function that never returns has no restore to share: the helpers saved 19
+/// bytes of its 8 cells and `__csave` is 22, and the program grew 7 B (recdeep
+/// -O2, 2026-11-14). The module measures the users as written both ways.
+#[test]
+fn the_save_helpers_stay_out_of_a_function_that_never_returns() {
+    let mut ir = String::from("declare void @tick()\n");
+    for k in 0..8 {
+        ir += &format!("@g{k} = global i8 0\n@h{k} = global i8 0\n");
+    }
+    ir += "define void @spin() {\nentry:\n";
+    for k in 0..8 {
+        ir += &format!("  %v{k} = load volatile i8, ptr @g{k}\n");
+    }
+    ir += "  br label %loop\nloop:\n";
+    for k in 0..8 {
+        ir += &format!("  %p{k} = phi i8 [ %v{k}, %entry ], [ %s{k}, %loop ]\n");
+    }
+    ir += "  call void @tick()\n";
+    for k in 0..8 {
+        ir += &format!("  %s{k} = add i8 %p{k}, 1\n  store volatile i8 %s{k}, ptr @h{k}\n");
+    }
+    ir += "  br label %loop\n}\n";
+    let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    let out =
+        llrm_6502::driver::assembly(&text, &llrm_6502::driver::Request::new(llrm_6502::driver::Level::O2)).unwrap();
+    assert!(!out.contains("__csave"), "{out}");
 }

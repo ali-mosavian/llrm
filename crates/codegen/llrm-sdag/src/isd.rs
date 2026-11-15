@@ -170,6 +170,8 @@ pub enum ISD {
 
     SetCC,
     Select,
+    /// `VSELECT`: a vector of booleans picks each lane of the first or the second operand.
+    VSelect,
     SelectCC,
     BrCC,
     BrCond,
@@ -429,6 +431,7 @@ impl ISD {
             FCopySign => "fcopysign",
             SetCC => "setcc",
             Select => "select",
+            VSelect => "vselect",
             SelectCC => "select_cc",
             BrCC => "br_cc",
             BrCond => "brcond",
@@ -478,6 +481,32 @@ impl ISD {
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
         name.to_string()
+    }
+
+    /// `TargetLowering::isBinOp` for the generic opcodes: the commutative
+    /// ones and the non-commutative arithmetic, shift and rotate nodes.
+    pub fn is_binop(self) -> bool {
+        use ISD::*;
+        self.is_commutative_binop()
+            || matches!(
+                self,
+                Sub | Shl
+                    | Srl
+                    | Sra
+                    | Rotl
+                    | Rotr
+                    | SDiv
+                    | UDiv
+                    | SRem
+                    | URem
+                    | SSubSat
+                    | USubSat
+                    | FSub
+                    | FDiv
+                    | FRem
+                    | PseudoFMin
+                    | PseudoFMax
+            )
     }
 
     /// `TargetLowering::isCommutativeBinOp` for the generic opcodes.

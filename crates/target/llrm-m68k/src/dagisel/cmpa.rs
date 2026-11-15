@@ -23,7 +23,6 @@ use super::asm::{AsmOperand, asm};
 use super::enc::{Enc, Piece, encoding};
 use super::generated::ids::reg as pin;
 use super::generated::instrinfo;
-use super::generated::m68k_m68000::MACHINE_OPCODES;
 
 /// Codes of the rows, above the scaled rows'.
 pub const FIRST: u16 = 0xF500;
@@ -90,7 +89,7 @@ pub fn name_of(code: u32) -> Option<&'static str> {
 }
 
 fn instrinfo_code(name: &str) -> Option<u16> {
-    MACHINE_OPCODES.iter().find(|(_, one)| *one == name).map(|(code, _)| *code)
+    super::opcodes::code_of(name)
 }
 
 static DESCS: LazyLock<Vec<&'static InstrDesc>> = LazyLock::new(|| {

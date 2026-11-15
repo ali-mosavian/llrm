@@ -584,8 +584,7 @@ fn cost(
     inst: &mc::Inst,
     cpu: Cpu,
 ) -> Result<(usize, u32), String> {
-    let size = crate::encode::encode(inst)?.bytes.len();
-    Ok((size, crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks))
+    crate::instprice::price_of(cpu, inst)
 }
 
 fn add(

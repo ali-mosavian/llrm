@@ -414,10 +414,12 @@ pub mod x86isd {
     pub const LLRM_CODE: u16 = 24582;
     pub const LLRM_COPY128: u16 = 24592;
     pub const LLRM_FARCALL: u16 = 24584;
+    pub const LLRM_FSTATUS: u16 = 24595;
     pub const LLRM_MOVE128: u16 = 24594;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_PUSHF: u16 = 24588;
+    pub const LLRM_STATUS_TEST: u16 = 24596;
     pub const LLRM_TC_RETURN: u16 = 24587;
     pub const LLRM_UDIV64BY32: u16 = 24593;
     pub const LLRM_WINDOW: u16 = 24581;
@@ -931,6 +933,10 @@ pub mod x86 {
     pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
     pub const TEST8mr: u16 = 5023;
+    pub const AND32ri: u16 = 860;
+    pub const AND8ri: u16 = 938;
+    pub const CMP32ri: u16 = 1324;
+    pub const CMP8ri: u16 = 1342;
     pub const TEST8ri: u16 = 5024;
     pub const TEST8rr: u16 = 5025;
     pub const UCOM_Fpr32: u16 = 5096;
@@ -986,16 +992,20 @@ pub mod x86 {
         (834, "AND16rr"),
         (845, "AND32mi"),
         (855, "AND32mr"),
+        (860, "AND32ri"),
         (870, "AND32rm"),
         (875, "AND32rr"),
         (911, "AND64rm"),
         (916, "AND64rr"),
         (927, "AND8mi"),
         (933, "AND8mr"),
+        (938, "AND8ri"),
         (944, "AND8rm"),
         (949, "AND8rr"),
         (977, "ANDPSrm"),
         (1202, "CDQ"),
+        (1324, "CMP32ri"),
+        (1342, "CMP8ri"),
         (1396, "CQO"),
         (1506, "CWD"),
         (1511, "DEC16m"),
@@ -1390,10 +1400,12 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_CODE" => 24582,
         "LLRM_COPY128" => 24592,
         "LLRM_FARCALL" => 24584,
+        "LLRM_FSTATUS" => 24595,
         "LLRM_MOVE128" => 24594,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_PUSHF" => 24588,
+        "LLRM_STATUS_TEST" => 24596,
         "LLRM_TC_RETURN" => 24587,
         "LLRM_UDIV64BY32" => 24593,
         "LLRM_WINDOW" => 24581,

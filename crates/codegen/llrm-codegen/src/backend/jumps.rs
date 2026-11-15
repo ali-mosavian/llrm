@@ -215,6 +215,7 @@ pub fn optimized_with(
         cpu.aggressive,
         cpu.tail_dup_threshold,
         cpu.tail_dup_hot(),
+        cpu.loop_top_clocks(),
         epilogue,
         cpu.operations.ext_tsp_for_size,
     )?);
@@ -235,6 +236,7 @@ pub fn optimized_with(
             cpu.aggressive,
             cpu.tail_dup_threshold,
             cpu.tail_dup_hot(),
+            cpu.loop_top_clocks(),
             epilogue,
             cpu.operations.ext_tsp_for_size,
         )?);
@@ -310,7 +312,7 @@ fn aligned(
     body: &LirBody,
     cpu: &cpu::Profile,
 ) -> LirBody {
-    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 || !(cpu.speed_rate || cpu.align_loops_at_o1) {
+    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 || !((cpu.speed_rate && cpu.speed_level) || cpu.align_loops_at_o1) {
         return body.clone();
     }
     const COLD: f64 = 0.2;
@@ -521,7 +523,7 @@ fn _placed(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
-    _placed_ext(body, size, aggressive, tail_dup, hot, epilogue, false)
+    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, false)
 }
 
 /// `_placed`, with the size order of `-apply-ext-tsp-for-size` where
@@ -532,6 +534,7 @@ fn _placed_ext(
     aggressive: bool,
     tail_dup: Option<usize>,
     hot: Option<placement::HotTailDup>,
+    top: Option<placement::TopClocks>,
     epilogue: usize,
     ext_tsp: bool,
 ) -> Result<LirBody, masm::Unprintable> {
@@ -539,7 +542,7 @@ fn _placed_ext(
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
-    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, epilogue, ext_tsp))
+    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, top, epilogue, ext_tsp))
 }
 
 /// `_placed_ext` for blocks whose fall-throughs are already jumps: a target
@@ -552,13 +555,14 @@ pub fn placed_explicit(
     aggressive: bool,
     tail_dup: Option<usize>,
     hot: Option<placement::HotTailDup>,
+    top: Option<placement::TopClocks>,
     epilogue: usize,
     ext_tsp: bool,
 ) -> LirBody {
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
     let (blocks, odds) = placement::order(
-        &explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, epilogue, ext_tsp,
+        &explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, top, epilogue, ext_tsp,
     );
     _reachable(&LirBody { odds, ..body.clone() }, blocks)
 }

@@ -13,8 +13,10 @@ fn lane_letter(lanes: Arrangement) -> &'static str {
     match lanes {
         Arrangement::B16 => "b",
         Arrangement::H8 => "h",
-        Arrangement::S4 => "s",
+        Arrangement::S4 | Arrangement::S2 => "s",
         Arrangement::D2 => "d",
+        Arrangement::B8 => "b",
+        Arrangement::H4 => "h",
     }
 }
 
@@ -377,7 +379,7 @@ impl fmt::Display for Inst {
             }
             Inst::VectorMov { rd, rn } => write!(out, "mov v{}.16b, v{}.16b", rd.0, rn.0),
             Inst::VectorBinary { op, lanes, rd, rn, rm } => {
-                let suffix = if op.is_logical() { "16b" } else { lanes.suffix() };
+                let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
             }
             Inst::VectorShift { op, lanes, rd, rn, amount } => {
@@ -385,6 +387,8 @@ impl fmt::Display for Inst {
                     VectorShift::Shl => "shl",
                     VectorShift::Ushr => "ushr",
                     VectorShift::Sshr => "sshr",
+                    VectorShift::Usra => "usra",
+                    VectorShift::Ssra => "ssra",
                 };
                 let suffix = lanes.suffix();
                 write!(out, "{name} v{}.{suffix}, v{}.{suffix}, #{amount}", rd.0, rn.0)
@@ -403,11 +407,7 @@ impl fmt::Display for Inst {
             }
             Inst::VectorLong { op, lane, high, rd, rn, rm } => {
                 // `uaddw` has a wide first operand; `umull` a narrow one.
-                let first = if op.adds_wide() {
-                    lane.wide_suffix()
-                } else {
-                    lane.narrow_suffix(*high)
-                };
+                let first = if op.adds_wide() { lane.wide_suffix() } else { lane.narrow_suffix(*high) };
                 write!(
                     out,
                     "{}{} v{}.{}, v{}.{first}, v{}.{}",
@@ -420,8 +420,32 @@ impl fmt::Display for Inst {
                     lane.narrow_suffix(*high)
                 )
             }
-            Inst::VectorNot { rd, rn } => write!(out, "mvn v{}.16b, v{}.16b", rd.0, rn.0),
+            Inst::VectorNot { quad, rd, rn } => {
+                let suffix = if *quad { "16b" } else { "8b" };
+                write!(out, "mvn v{}.{suffix}, v{}.{suffix}", rd.0, rn.0)
+            }
+            Inst::VectorCompare { op, lanes, quad, rd, rn, rm } => {
+                let suffix = lanes.suffix_of(*quad);
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorCompareZero { op, lanes, quad, rd, rn } => {
+                let suffix = lanes.suffix_of(*quad);
+                let zero = if op.is_float() { "0.0" } else { "0" };
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, #{zero}", op.mnemonic(), rd.0, rn.0)
+            }
+            Inst::VectorBitSelect { op, quad, rd, rn, rm } => {
+                let suffix = if *quad { "16b" } else { "8b" };
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorBsp { quad, rd, mask, rn, rm } => {
+                let suffix = if *quad { "16b" } else { "8b" };
+                write!(out, "bsp v{}.{suffix}, v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", rd.0, mask.0, rn.0, rm.0)
+            }
             Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorMulAcc { op, lanes, rd, rn, rm } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
             }
@@ -443,9 +467,13 @@ impl fmt::Display for Inst {
                 let s = lanes.suffix();
                 write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
             }
-            Inst::VectorNarrow { high, wide, rd, rn } => {
+            Inst::VectorNarrow { high, shift, wide, rd, rn } => {
                 let two = if *high { "2" } else { "" };
-                write!(out, "xtn{two} v{}.{}, v{}.{}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())
+                let (name, amount) = match shift {
+                    Some(amount) => ("shrn", format!(", #{amount}")),
+                    None => ("xtn", String::new()),
+                };
+                write!(out, "{name}{two} v{}.{}, v{}.{}{amount}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())
             }
             Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
@@ -456,6 +484,9 @@ impl fmt::Display for Inst {
             }
             Inst::VectorStoreLane { lanes, rt, index, base } => {
                 write!(out, "st1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
+            }
+            Inst::VectorLoadReplicate { lanes, rt, base } => {
+                write!(out, "ld1r {{ v{}.{} }}, [{}]", rt.0, lanes.suffix(), gpr(*base, Width::X, true))
             }
             Inst::VectorUmov { lanes, rd, rn, index } => {
                 let lane = lane_letter(*lanes);
@@ -476,6 +507,13 @@ impl fmt::Display for Inst {
             Inst::VectorDupLane { lanes, rd, rn, index } => {
                 let lane = lane_letter(*lanes);
                 write!(out, "dup v{}.{}, v{}.{lane}[{index}]", rd.0, lanes.suffix(), rn.0)
+            }
+            Inst::VectorIntUnary { op, lanes, rd, rn } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
+            }
+            Inst::VectorLoadLane { lanes, rt, index, base } => {
+                write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
             }
             Inst::VectorFpUnary { op, lanes, rd, rn } => {
                 let suffix = lanes.suffix();
@@ -502,6 +540,7 @@ impl fmt::Display for Inst {
             Inst::VectorFill { rd, fill } => match fill {
                 Fill::Zero => write!(out, "movi.2d v{}, #0", rd.0),
                 Fill::Byte(byte) => write!(out, "movi.16b v{}, #{byte}", rd.0),
+                Fill::Byte8(byte) => write!(out, "movi.8b v{}, #{byte}", rd.0),
                 Fill::Dup(arrangement, source) => {
                     let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
                     write!(out, "dup.{} v{}, {}", arrangement.suffix(), rd.0, gpr(*source, width, false))
@@ -511,6 +550,7 @@ impl fmt::Display for Inst {
                         ImmShape::H8(shift) => ("lsl", "8h", shift),
                         ImmShape::S4(shift) => ("lsl", "4s", shift),
                         ImmShape::S2(shift) => ("lsl", "2s", shift),
+                        ImmShape::H4(shift) => ("lsl", "4h", shift),
                         ImmShape::S4Msl(shift) => ("msl", "4s", shift),
                     };
                     let mnemonic = if *invert { "mvni" } else { "movi" };

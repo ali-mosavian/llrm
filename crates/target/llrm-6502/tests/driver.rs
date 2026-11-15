@@ -45,16 +45,16 @@ fn the_platforms_zero_page_reaches_the_allocator() {
     assert!(narrow.contains("s_many_0") || narrow.contains("pha"), "no pressure at 16:\n{narrow}");
 }
 
-/// A word shifted by 5 is a counted loop at the size level and `asl`/`rol`
-/// pairs at speed. A driver that kept `select_function`'s speed tuning gave
-/// `-Os` the same text as `-O2`.
+/// A word shifted by 5 is a counted loop at every level: bytes first (user
+/// ruling 2026-11-14), since `Tuning::SPEED` prices a byte as at size (#9933).
+/// The test still asserted `asl`/`rol` pairs at -O2 and failed on release/next.
 #[test]
-fn the_size_level_is_priced_in_bytes() {
+fn a_word_shifted_by_five_is_a_counted_loop_at_every_level() {
     let ir = module("define i16 @shl5(i16 %x) {\n  %p = shl i16 %x, 5\n  %q = add i16 %p, %x\n  ret i16 %q\n}");
-    let size = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(size.contains("dex") || size.contains("dey"), "-Os:\n{size}");
-    assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
+    for level in [Level::Os, Level::O2, Level::O3] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("dex") || text.contains("dey"), "{level:?}:\n{text}");
+    }
 }
 
 /// `n - 1` on a word went through the carry chain (`clc; adc #255` on each
@@ -596,7 +596,7 @@ fn exit_code_with(
 /// them with the program's start: `text` is the compiled function, the rest a
 /// `_main` and a `memset` that fills the tail.
 fn clocks_of_strncpy(text: &str) -> u64 {
-    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<src\n  sta rc2\n  lda #>src\n  sta rc3\n  lda #30\n  sta rc4\n  lda #0\n  sta rc5\n  lda #<dst\n  ldx #>dst\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  sta rc6\n  stx rc7\n  lda rc2\n  sta rc8\n  lda rc4\n  ora rc5\n  beq @done\n  ldy #0\n@loop:\n  lda rc8\n  sta (rc6),y\n  iny\n  bne @c\n  inc rc7\n@c:\n  lda rc4\n  bne @d\n  dec rc5\n@d:\n  dec rc4\n  lda rc4\n  ora rc5\n  bne @loop\n@done:\n  rts\n";
+    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<dst\n  sta rc2\n  lda #>dst\n  sta rc3\n  lda #<src\n  sta rc4\n  lda #>src\n  sta rc5\n  ldx #0\n  lda #30\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  sta rc8\n  lda rc4\n  ora rc5\n  beq @done\n  ldy #0\n@loop:\n  lda rc8\n  sta (rc2),y\n  iny\n  bne @c\n  inc rc3\n@c:\n  lda rc4\n  bne @d\n  dec rc5\n@d:\n  dec rc4\n  lda rc4\n  ora rc5\n  bne @loop\n@done:\n  rts\n";
     let dir = std::env::temp_dir().join(format!("llrm6502-clocks-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("t.s"), format!("{text}\n{MAIN}")).unwrap();
@@ -776,12 +776,17 @@ fn the_copy_loop_made_from_a_call_runs() {
 }
 
 /// A copy with nothing live across it is the call: 20 bytes against 78 as a
-/// loop.
+/// loop, the linked routine shared by its two callers (a lone caller pays all
+/// of it, and the loop is the smaller).
 #[test]
 fn a_copy_with_nothing_live_across_it_stays_a_call() {
     let ir = module(
         r#"declare void @llvm.memcpy.p0.p0.i16(ptr noalias, ptr noalias, i16, i1)
 define void @copy(ptr noalias %d, ptr noalias %s, i16 %n) {
+  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
+  ret void
+}
+define void @copy_again(ptr noalias %d, ptr noalias %s, i16 %n) {
   call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
   ret void
 }"#,
@@ -949,13 +954,13 @@ fn a_word_shifted_right_by_seven_is_one_shift_left() {
     assert!(!text.contains("lsr rc") && text.matches("ror").count() == 0, "seven right shifts:\n{text}");
 }
 
-/// A run of shifts of a word keeps the byte that shifts alone in `a`: `asl a;
-/// rol hi` is 7 clocks a step, `asl lo; rol hi` is 10.
+/// A run of shifts of a word keeps one byte in `a` (`asl a; rol hi` is 7
+/// clocks a step, `asl lo; rol hi` is 10): the low byte, which arrives there.
 #[test]
 fn a_run_of_word_shifts_carries_one_byte_in_the_accumulator() {
     let ir = module("define i16 @shr3(i16 %x) {\n  %r = lshr i16 %x, 3\n  ret i16 %r\n}");
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("lsr a\n  ror rc2"), "the shifts go through memory:\n{text}");
+    assert!(text.contains("lsr rc3\n  ror a") && !text.contains("ror rc"), "the shifts go through memory:\n{text}");
 }
 
 /// gcd's `if (a > b) a -= b; else b -= a;` was folded into two selects
@@ -2488,12 +2493,12 @@ fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
     assert!(size(&twice) * 2 < size(&once), "{} instructions against {}", size(&twice), size(&once));
 }
 
-/// The start-up zeroing of the new BSS costs 15 clocks a byte, once: a
-/// function called once, outside any loop, with a 24-byte array it touches
-/// twice, gave `tail_calls` 360 clocks for 46 saved. It keeps the stack where
-/// clocks count (-O2) and goes static where bytes do (-Os).
+/// k_itoa -O2 kept `tmp[16]` on the soft stack because the start-up zeroing of
+/// 16 bytes (240 clocks, once) outweighed the 190 clocks a call saves: 312 B
+/// against 291 B at -Os, which was also faster per call. Bytes come first at
+/// every level, so a function that cannot be re-entered goes static at -O2 too.
 #[test]
-fn a_static_array_pays_for_the_zeroing_of_its_bytes() {
+fn a_static_array_goes_static_at_every_level_where_it_saves_bytes() {
     let ir = module(
         r#"define i8 @once(i8 %n) noinline norecurse {
   %a = alloca [24 x i8]
@@ -2508,12 +2513,11 @@ define i8 @t() {
   ret i8 %r
 }"#,
     );
-    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(!speed.contains("_local"), "-O2 zeroes 24 bytes to save 46 clocks:\n{speed}");
-    assert_eq!(exit_code_of(&speed, "t"), 7, "{speed}");
-    let size = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    assert!(size.contains("_local0"), "-Os counts bytes:\n{size}");
-    assert_eq!(exit_code_of(&size, "t"), 7, "{size}");
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("_local0"), "{level:?} keeps the array on the soft stack:\n{text}");
+        assert_eq!(exit_code_of(&text, "t"), 7, "{level:?}: {text}");
+    }
 }
 
 /// call_keeps (tests/run/c): `churn` is settled after the first walk, and

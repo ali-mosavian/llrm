@@ -51,12 +51,13 @@ fn a_runtime_trip_count_loop_has_a_vector_body_and_a_scalar_remainder() {
     assert!(copy.contains("add ") || copy.contains("inc "), "the scalar remainder: {copy}");
 }
 
-/// A `<4 x i32>` multiply is not priced (no SSE2 `pmulld`): the loop stays scalar until the next step prices it.
+/// A `<4 x i32>` multiply has no SSE2 `pmulld`: `pmuludq` on the even and the odd lanes, then `punpckldq` (the pin's
+/// `LowerMUL`). It was unpriced, so the loop stayed scalar.
 #[test]
-fn a_loop_with_a_vector_multiply_stays_scalar_until_it_is_priced() {
+fn an_int_multiply_loop_uses_pmuludq() {
     let text = assembly("x86_64-linux", "-O2");
     let multiply = body(&text, "multiply_arrays");
-    assert!(!multiply.contains("xmm"), "{multiply}");
+    assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
 #[test]
@@ -66,34 +67,137 @@ fn the_32_bit_target_and_o1_keep_every_loop_scalar() {
 }
 
 /// A sum reached `llvm.vector.reduce.add` and the backend refused it (`CannotSelect("VecReduceAdd")`, no output at
-/// all): the loop stays scalar until the horizontal step is lowered.
+/// all), so reductions were kept scalar. The total is now folded from the spilled lanes (`expandVecReduce`).
 #[test]
-fn a_sum_loop_compiles_scalar_until_the_reduction_is_lowered() {
+fn a_sum_loop_is_vector_with_a_folded_total() {
     let text = assembly("x86_64-linux", "-O2");
     let sum = body(&text, "sum_array");
-    assert!(!sum.contains("xmm"), "{sum}");
+    assert!(sum.contains("paddd"), "{sum}");
 }
 
-/// The widened loops compute what the scalar ones do: forward and backward copies that overlap by 1 to 5 bytes, every
+/// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]
 fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-run-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let object = dir.join("a.o");
-    let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
-        .env("LLRM_CC_TARGET", "x86_64-linux")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set"))
-        .args(["-O2", "-w", "-c", "-o"])
-        .arg(&object)
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/lv_run.c"))
-        .output()
-        .unwrap();
-    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let mut objects = Vec::new();
+    for source in ["lv_run.c", "lv_loops.c"] {
+        let object = dir.join(format!("{source}.o"));
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "x86_64-linux")
+            .env("LLRM_LLC", std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set"))
+            .args(["-O2", "-w", "-c", "-o"])
+            .arg(&object)
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c").join(source))
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{source}: {}", String::from_utf8_lossy(&built.stderr));
+        objects.push(object);
+    }
     let exe = dir.join("a.out");
-    let linked = Command::new("gcc").args(["-static", "-no-pie", "-o"]).arg(&exe).arg(&object).output().unwrap();
+    let linked = Command::new("gcc").args(["-static", "-no-pie", "-o"]).arg(&exe).args(&objects).output().unwrap();
     assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
     let ran = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "bad 0");
+}
+
+/// The vector loop of a 64-lane row (VF 8, IC 2: four trips) was kept as a loop: the unroller found no size for a
+/// `<8 x i16>` store ("no cost for store") and never fully unrolled it. The pin unrolls it to one trip of eight
+/// stores per row.
+#[test]
+fn a_vector_loop_of_four_trips_is_fully_unrolled() {
+    let text = assembly("x86_64-linux", "-O2");
+    let fill = body(&text, "fill_rows");
+    let stores = fill.matches("movaps xmmword ptr [").count() + fill.matches("movups xmmword ptr [").count();
+    assert!(stores >= 8, "{fill}");
+}
+
+/// A vector constant the folder left as `bitcast (<16 x i8> .. to i128)` or `bitcast (i128 N to <4 x i32>)` stopped
+/// the compile (`CannotSelect("Truncate")`, "a vector constant that is not a list of integers"): both build now.
+#[test]
+fn loops_that_leave_vector_image_constants_compile_at_o2_and_o3() {
+    for level in ["-O2", "-O3"] {
+        let text = assembly("x86_64-linux", level);
+        assert!(text.contains("stack_copy") && text.contains("square_sum"), "{level}");
+    }
+}
+
+/// A `<8 x i16>` multiply is `pmullw`: the loop was kept scalar because the multiply had no price.
+#[test]
+fn a_short_multiply_loop_uses_pmullw() {
+    let text = assembly("x86_64-linux", "-O2");
+    let multiply = body(&text, "multiply_shorts");
+    assert!(multiply.contains("pmullw"), "{multiply}");
+}
+
+/// A shift by a constant is `pslld`/`psrad`/`psrld` (`VSHLI`, `VSRAI`, `VSRLI`): a loop with one stayed scalar, its
+/// shift unpriced.
+#[test]
+fn a_loop_of_constant_shifts_uses_the_immediate_forms() {
+    let text = assembly("x86_64-linux", "-O2");
+    let shifts = body(&text, "shift_ints");
+    assert!(shifts.contains("pslld") && shifts.contains("psrad") && shifts.contains("psrld"), "{shifts}");
+}
+
+/// A splat of a variable was four stores through the stack (`BUILD_VECTOR` expanded); it is `movd` + `pshufd` (and
+/// `movq` + `punpcklqdq` for 64-bit lanes), as the pin's `LowerBUILD_VECTOR` makes it.
+#[test]
+fn a_splat_of_a_variable_is_movd_and_pshufd() {
+    let text = assembly("x86_64-linux", "-O2");
+    let ints = body(&text, "fill_value");
+    assert!(ints.contains("movd xmm") && ints.contains("pshufd"), "{ints}");
+    assert!(!ints.contains("[rsp"), "{ints}");
+    let longs = body(&text, "fill_long_value");
+    assert!(longs.contains("movq xmm") && longs.contains("punpcklqdq"), "{longs}");
+}
+
+/// A `<16 x i8>` multiply is two `pmullw` of the unpacked halves, masked and packed: the loop was kept scalar (one
+/// `imul` and two byte stores a byte) because the byte multiply had no price and no lowering.
+#[test]
+fn a_byte_multiply_by_a_constant_is_pmullw_and_packuswb() {
+    let text = assembly("x86_64-linux", "-O2");
+    let pattern = body(&text, "multiply_bytes");
+    assert!(pattern.contains("pmullw") && pattern.contains("packuswb") && pattern.contains("pand"), "{pattern}");
+    assert!(!pattern.contains("imul"), "{pattern}");
+}
+
+/// A byte multiplied by a byte in memory (`mul byte ptr [..]`) stopped the compile to an object with
+/// `Semantics(op=MULTIPLY ... width=1)`: the one-operand `mul` took no memory byte.
+#[test]
+fn a_byte_multiply_from_memory_assembles() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-mulb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", llc)
+        .args(["-O2", "-w", "-c", "-o"])
+        .arg(dir.join("a.o"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/lv_loops.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// The splat constant of a vector loop is read from the pool before the loop: it was reloaded (`movaps xmm, $K`) on
+/// every trip, because machine LICM left every xmm value in the loop.
+#[test]
+fn a_vector_constant_is_loaded_before_the_loop() {
+    let text = assembly("x86_64-linux", "-O2");
+    let add = body(&text, "add_five");
+    let (before, inside) = add.split_once("align 16").expect("a loop");
+    assert!(before.contains("$K"), "{add}");
+    assert!(!inside.contains("$K"), "{add}");
+}
+
+/// The zero a reduction starts from is `xorps xmm, xmm` (`V_SET0`, an `isBuildVectorAllZeros` build the pin leaves
+/// legal): it was a 16-byte constant-pool load (`movaps xmm0, $K`) and a 16-byte `.rodata.cst16` entry.
+#[test]
+fn a_vector_of_zeros_is_an_xor_and_not_a_pool_load() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "sum_array");
+    assert!(sum.contains("xorps xmm") || sum.contains("pxor xmm"), "{sum}");
+    assert!(!sum.contains("$K"), "{sum}");
 }
