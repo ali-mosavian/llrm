@@ -100,8 +100,10 @@ impl Mos6502 {
     }
 
     /// A call to a runtime routine: `jsr` and the operands in `rc2..` (4 bytes
-    /// a byte-wide part), or past a word the long form through `__sa` and
-    /// `__sb` (measured, `x * C` of 32 bits: 59 bytes).
+    /// a byte-wide part), or past a word the long form (`x * C` of 32 bits:
+    /// 59 bytes through `__sa`/`__sb`, 17 now). The larger price stays: it also
+    /// stands for the routine a call links where an expansion does not
+    /// (div_constants_short: +168 B at the smaller).
     fn routine_bytes(parts: i64) -> i64 {
         if parts <= 2 { 3 + 4 * parts } else { 14 * parts + 3 }
     }
@@ -501,8 +503,9 @@ impl Tti for Mos6502 {
     }
 
     // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`),
-    // the signed word one too (`__divmodhi4`), and the long one in `__sr`
-    // (`__divmodsi4` for the signed), so a pair is one call.
+    // the signed word one too (`__divmodhi4`), and the long ones
+    // (`__divmodsi4`, `__udivmodsi4`: the remainder in rc4..rc7), so a pair is
+    // one call.
     fn has_div_rem_op(
         &self,
         bits: u32,

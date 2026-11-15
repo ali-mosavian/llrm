@@ -322,7 +322,7 @@ pub fn module_text(
     // a module whose divisions are cold calls the speed routines with the
     // small wide path
     let wide = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
             .iter()
             .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
@@ -338,7 +338,7 @@ pub fn module_text(
     // module's choice by the share of its clocks it saves
     let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
     let compact_division = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
             .iter()
             .any(|name| text.contains(&format!(" {name}\n")))
     };

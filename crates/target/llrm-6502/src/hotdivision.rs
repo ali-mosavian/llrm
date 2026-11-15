@@ -88,7 +88,7 @@ fn runs_of_width(
         let depths = block_depths(function);
         let called = calls.get(&index).copied().unwrap_or(1.0);
         // a remainder beside the division of the same operands is the same call
-        // (`__divmodsi4`, the unsigned divide leaves it in `__sr`)
+        // (`__divmodsi4`, `__udivmodsi4`: the remainder comes back in rc4..rc7)
         let quotients: Vec<_> = function
             .layout()
             .iter()

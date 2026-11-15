@@ -25,8 +25,8 @@ def sh(*a, **k):
 sh('cc', '-O2', '-ffp-contract=off', f'{TESTS}/gen_vectors64.c', '-o', f'{T}/gen')
 recs = [[int(t.rstrip('u'), 0) & 0xFFFFFFFF for t in l.strip().rstrip(',').strip('{}').split(',')] for l in sh(f'{T}/gen', str(N)).stdout.split('\n') if l.startswith('  {')]
 assert len(recs) == N and all(len(r) == 16 for r in recs)
-# mos_rt.s with the zero-page equates and its __sa/__sb cells exported (the compiler's 32-bit helper protocol)
-open(f'{T}/mos.s', 'w').write(''.join('rc%d = %d\n' % (i, 128 + i) for i in range(26)) + open(MOS_RT).read() + '\n.export __sa, __sb\n')
+# mos_rt.s with the zero-page equates and its __sa cell exported
+open(f'{T}/mos.s', 'w').write(''.join('rc%d = %d\n' % (i, 128 + i) for i in range(26)) + open(MOS_RT).read() + '\n.export __sa\n')
 sh('ca65', '-t', 'sim6502', f'{T}/mos.s', '-o', f'{T}/mos.o')
 WRAP = '''.export _main
 .bss

@@ -500,6 +500,10 @@ fn spill_copy_once(
             // argument cells
             if inst.op == Op::Jsr {
                 if call_keeps_scratch(inst, n) {
+                    // the folded reads would read `m` after the call
+                    if cell_number(s).is_some_and(|m| caller_saved(m) && !call_keeps_scratch(inst, m)) {
+                        return false;
+                    }
                     continue;
                 }
                 if n <= 7 {
