@@ -176,3 +176,14 @@ fn a_splat_of_a_load_is_ld1r() {
         assert!(text.contains("ld1r"), "<{lanes} x {element}> has no ld1r:\n{text}");
     }
 }
+
+/// An `insertelement` of a loaded scalar is `ld1 { v.s }[1], [x]`. Its source
+/// vector was never copied into the destination, so the live-range
+/// computation panicked ("a unique value") on every lane width.
+#[test]
+fn a_lane_load_into_a_vector_compiles() {
+    for (lanes, element, _) in TYPES.into_iter().filter(|(_, _, float)| !float) {
+        let source = function(lanes, element, "%x = load {E}, ptr %p, align 8\n%r = insertelement {T} %a, {E} %x, i64 1");
+        assert_eq!(complaint(&source), None, "<{lanes} x {element}>");
+    }
+}

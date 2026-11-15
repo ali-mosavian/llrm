@@ -2357,7 +2357,8 @@ impl Emitter<'_> {
                         | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
                         | Inst::VectorInsGpr { .. }
-                        | Inst::VectorInsLane { .. },
+                        | Inst::VectorInsLane { .. }
+                        | Inst::VectorLoadLane { .. },
                         Some(Operand::Fpr(acc)),
                     ) = (&inst, operands.first())
                     {
