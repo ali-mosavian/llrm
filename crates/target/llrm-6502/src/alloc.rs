@@ -4370,7 +4370,24 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("SRA1"), _) => {
                     let (lo, hi) = (register_name(regs[1]), register_name(regs[3]));
-                    writeln!(out, "  lda {hi}\n  cmp #$80\n  ror {hi}\n  ror {lo}").unwrap()
+                    // a run of arithmetic shifts keeps the high byte in `a` for
+                    // the whole run (`cmp #$80; ror a; ror lo`, 5 bytes a step,
+                    // 4 for the load and the store) or, shorter from the third
+                    // step, counts them: 14 bytes whatever the count
+                    let run = block.insts[i..]
+                        .iter()
+                        .take_while(|next| next.kind == inst.kind && next.operands == inst.operands)
+                        .count();
+                    let (saved, slower) = (5 * run as i64 - 10, 5 * run as u32 + 1);
+                    let pays = saved > 0 && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;
+                    match spare {
+                        Some(index) if pays => {
+                            made += 1;
+                            writeln!(out, "  lda {hi}\n  ld{index} #{run}\n_sh{made}:\n  cmp #$80\n  ror a\n  ror {lo}\n  de{index}\n  bne _sh{made}\n  sta {hi}").unwrap();
+                            repeated = run - 1;
+                        }
+                        _ => writeln!(out, "  lda {hi}\n  cmp #$80\n  ror {hi}\n  ror {lo}").unwrap(),
+                    }
                 }
                 (Kind::Op("CMPZ"), [_, _, _, _, low, high]) => {
                     made += 1;

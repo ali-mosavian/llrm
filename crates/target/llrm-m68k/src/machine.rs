@@ -13,6 +13,7 @@
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
@@ -88,10 +89,18 @@ impl Machine for M68kMachine {
     /// Code bytes per operation at this CPU ([`crate::opcosts`]); clocks are
     /// still one per operation.
     fn size_costs(&self) -> OperationCosts {
-        crate::opcosts::size_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
+        // A function of the CPU alone, asked once per instruction costed by the
+        // unroller: encode the forms once.
+        static BY_CPU: [OnceLock<OperationCosts>; 6] = [const { OnceLock::new() }; 6];
+        BY_CPU[self.cpu as usize]
+            .get_or_init(|| {
+                crate::opcosts::size_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
+            })
+            .clone()
     }
 
-    /// The Os inline trial's byte estimate prices a value wider than the word per word ([`crate::opcosts::trial_costs`]).
+    /// The Os inline trial's byte estimate prices a value wider than the word
+    /// per word ([`crate::opcosts::trial_costs`]).
     fn trial_costs(&self) -> OperationCosts {
         crate::opcosts::trial_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
     }
@@ -462,8 +471,9 @@ impl Tti for M68k {
         true
     }
 
-    /// -Os counts bytes and clocks against the best compiler's (user ruling 2026-11-14): a call the size bound
-    /// refused is built inlined too, and kept where the finished code is faster within the bytes ceiling.
+    /// -Os counts bytes and clocks against the best compiler's (user ruling
+    /// 2026-11-14): a call the size bound refused is built inlined too, and
+    /// kept where the finished code is faster within the bytes ceiling.
     fn opt_size_inline_finished_trial(&self) -> bool {
         true
     }
