@@ -200,3 +200,99 @@ fn the_signed_word_pair_routines_leave_both_results() {
         }
     }
 }
+
+/// The IR of a function that divides each `(a, b)` of `cases` in `bits` bits,
+/// the remainder first or the quotient first, and returns 1 where a result
+/// differs from the one worked out here (the operands are loaded from globals,
+/// volatile: nothing folds).
+fn probe(
+    bits: u32,
+    signed: bool,
+    remainder_first: bool,
+    cases: &[(i64, i64)],
+) -> String {
+    let ir = |value: i64| match bits {
+        16 => i64::from(value as u16 as i16),
+        _ => i64::from(value as u32 as i32),
+    };
+    let (div, rem) = if signed { ("sdiv", "srem") } else { ("udiv", "urem") };
+    let (mut globals, mut body) = (String::new(), String::new());
+    for (n, &(a, b)) in cases.iter().enumerate() {
+        globals += &format!("@a{n} = global i{bits} {}\n@b{n} = global i{bits} {}\n", ir(a), ir(b));
+        body += &format!("  %x{n} = load volatile i{bits}, ptr @a{n}\n  %y{n} = load volatile i{bits}, ptr @b{n}\n");
+        let make = |op: &str, name: &str| format!("  %{name}{n} = {op} i{bits} %x{n}, %y{n}\n");
+        body += &if remainder_first { make(rem, "r") + &make(div, "q") } else { make(div, "q") + &make(rem, "r") };
+        body += &format!(
+            "  %qe{n} = icmp ne i{bits} %q{n}, {}\n  %re{n} = icmp ne i{bits} %r{n}, {}\n  %e{n} = or i1 %qe{n}, %re{n}\n  %w{n} = zext i1 %e{n} to i8\n",
+            ir(a / b),
+            ir(a % b)
+        );
+        body += &if n == 0 {
+            format!("  %acc{n} = or i8 %w{n}, 0\n")
+        } else {
+            format!("  %acc{n} = or i8 %w{n}, %acc{}\n", n - 1)
+        };
+    }
+    format!("{globals}define i8 @probe() {{\n{body}  ret i8 %acc{}\n}}\n", cases.len() - 1)
+}
+
+/// The compiled pair gives the same quotient and remainder as the two
+/// operations, the remainder written first or the quotient first (the other
+/// order is a different path of the pairing: the first call's results go to the
+/// second instruction's words): 16 and 32 bits, both signs, negative operands,
+/// 1 and -1, the extremes, a divisor of a byte and a wider one, at -O2 and -Os
+/// (the compact routines).
+#[test]
+fn a_compiled_pair_gives_the_quotient_and_the_remainder_in_either_order() {
+    let signed32: &[(i64, i64)] =
+        &[(-100000, 7), (-7, -2), (7, -2), (i64::from(i32::MIN), 3), (i64::from(i32::MAX), -255), (123456789, 70000)];
+    let unsigned32: &[(i64, i64)] =
+        &[(4_000_000_000, 7), (4_000_000_000, 3_000_000_000), (4_294_967_295, 255), (100, 100)];
+    let signed16: &[(i64, i64)] = &[(-1000, 7), (7, -2), (-1000, -300), (-32768, 3), (32767, -1), (30000, 300)];
+    let unsigned16: &[(i64, i64)] = &[(50000, 7), (60000, 40000), (65535, 255), (40000, 300)];
+    for level in [Level::O2, Level::Os] {
+        for (bits, signed, cases) in
+            [(32, true, signed32), (32, false, unsigned32), (16, true, signed16), (16, false, unsigned16)]
+        {
+            for remainder_first in [false, true] {
+                let ir = format!(
+                    "target datalayout = \"{}\"\n{}",
+                    datalayout(),
+                    probe(bits, signed, remainder_first, cases)
+                );
+                let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+                let code: String = text
+                    .lines()
+                    .filter(|l| !l.starts_with("rc") || !l.contains(" = $"))
+                    .map(|l| format!("{l}\n"))
+                    .collect();
+                let divides = text
+                    .lines()
+                    .filter(|l| {
+                        [
+                            "jsr __udivsi3",
+                            "jsr __divsi3",
+                            "jsr __divmodsi4",
+                            "jsr __udivhi3",
+                            "jsr __divhi3",
+                            "jsr __divmodhi4",
+                            "jsr __umodsi3",
+                            "jsr __modsi3",
+                            "jsr __umodhi3",
+                            "jsr __modhi3",
+                            "jsr __mulsi3",
+                            "jsr __mulhi3",
+                        ]
+                        .iter()
+                        .any(|c| l.trim().starts_with(c))
+                    })
+                    .count();
+                let what = format!("{level:?} {bits} bits signed {signed} remainder first {remainder_first}");
+                let calls: Vec<&str> = text.lines().filter(|l| l.contains("jsr")).collect();
+                assert_eq!(divides, cases.len(), "{what}: one divide a pair: {calls:?}");
+                let name = format!("divrem-probe-{level:?}-{bits}-{signed}-{remainder_first}");
+                assert_eq!(common::run_with(&name, "  jsr probe\n", &code), 0, "{what}: a result is wrong");
+            }
+        }
+    }
+}
