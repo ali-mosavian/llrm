@@ -27,7 +27,11 @@ fn function(name: &str) -> Vec<String> {
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let asm = std::fs::read_to_string(dir.join("d.s")).unwrap();
     let start = asm.lines().position(|line| line.trim() == format!("{name} proc near")).expect("the function");
-    asm.lines().skip(start).take_while(|line| line.trim() != format!("{name} endp")).map(|line| line.trim().to_owned()).collect()
+    asm.lines()
+        .skip(start)
+        .take_while(|line| line.trim() != format!("{name} endp"))
+        .map(|line| line.trim().to_owned())
+        .collect()
 }
 
 #[test]
