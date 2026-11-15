@@ -100,7 +100,7 @@ fn matches_the_pin(source: &str) -> String {
     text
 }
 
-/// DEVIATE VEC3 (owner llrm-arm64-vec, exit 2026-11-27): compares against zero
+/// DEVIATE VEC3 (owner llrm-arm64-vec, exit 2026-11-24): compares against zero
 /// that the pin folds are not compared against zero.
 /// - `ule` is rewritten to `eq` (`cmeq #0`) by the pin's instcombine; ours stays `cmhs`.
 /// - `uge`/`ult` are constants: ours does not fold `sext` of a constant
