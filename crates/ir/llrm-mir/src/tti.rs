@@ -1103,10 +1103,11 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE OS-INLINE-TRIAL-CLOCKS (owner m68k, exit 2026-11-24): whether an -Os call the target's size bound
-    /// alone refused (the pin's cost accepts it) is built inlined as well, the driver keeping the finished code
-    /// that prices better (fewer clocks within the target's bytes ceiling). False: the bound's
-    /// verdict stands.
+    /// DEVIATE OS-INLINE-TRIAL-CLOCKS (owner m68k, exit 2026-11-24): whether an
+    /// -Os call the target's size bound alone refused (the pin's cost
+    /// accepts it) is built inlined as well, the driver keeping the finished
+    /// code that prices better (fewer clocks within the target's bytes
+    /// ceiling). False: the bound's verdict stands.
     fn opt_size_inline_finished_trial(&self) -> bool {
         false
     }
@@ -1366,6 +1367,16 @@ pub trait Tti {
     /// against objects (m68k, `size_calibration.rs`); the x86 model is not, and
     /// a truthful credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL (speed): whether a copy the -O2/-O3 byte rate
+    /// refused within the trial's band is built inlined as well, the driver
+    /// keeping the finished code that is smaller. The rate prices the copy
+    /// alone, not what it folds (a constant, a dead callee). Only with a
+    /// byte rate (`speed_inline_milliclocks_per_byte`) and
+    /// `opt_size_inline_trial_limits`.
+    fn speed_inline_finished_trial(&self) -> bool {
         false
     }
 
@@ -2416,6 +2427,17 @@ pub trait Tti {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1613
     fn lsr_call_clobbers_registers(&self) -> bool {
         false
+    }
+
+    /// DEVIATE LSR-CALL-SCALE (owner z80, exit 2026-11-24; no pin pass: GCC's
+    /// ivopts expresses a use as `candidate * ratio`,
+    /// `get_computation_cost`): in a loop with a call and
+    /// `lsr_call_clobbers_registers`, the largest shift of an induction
+    /// variable a basic use may take instead of an induction variable of its
+    /// own, which the call would leave in the frame (the pin's `isLegalUse`
+    /// takes no scale for a basic use). 0: none.
+    fn lsr_basic_use_scale_shifts(&self) -> u32 {
+        0
     }
 
     /// `getPreferredAddressingMode`: which indexed addressing LSR favors.

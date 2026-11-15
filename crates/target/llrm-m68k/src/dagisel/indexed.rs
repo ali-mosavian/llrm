@@ -254,7 +254,7 @@ fn indirect_mode(name: &str) -> Option<usize> {
 }
 
 fn code_of_pin(name: &str) -> Option<u16> {
-    MACHINE_OPCODES.iter().find(|(_, one)| *one == name).map(|(code, _)| *code)
+    super::opcodes::code_of(name)
 }
 
 /// The machine code of the instruction named `name`, the pin's or a writeback.
@@ -266,7 +266,7 @@ pub fn code_of(name: &str) -> Option<u16> {
 pub fn name_of(code: u32) -> Option<&'static str> {
     match u16::try_from(code).ok()?.checked_sub(FIRST) {
         Some(at) => WRITEBACKS.get(usize::from(at)).map(|one| one.name),
-        None => MACHINE_OPCODES.iter().find(|(value, _)| u32::from(*value) == code).map(|(_, name)| *name),
+        None => super::opcodes::name_of(code),
     }
 }
 

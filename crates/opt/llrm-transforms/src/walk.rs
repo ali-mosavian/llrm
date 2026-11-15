@@ -881,7 +881,7 @@ impl ProgramPass for Walk {
                                 let kept_bytes = function_bytes(module, &program.layout, &program.target.trial_costs(), &kept);
                                 // DEVIATE OS-INLINE-TRIAL (`trial::Site`): a copy the byte model refuses within its
                                 // error is the backend's to decide; the second compile inlines it.
-                                let by_bytes = tti.opt_size_inline_trial_by_bytes() && !priced;
+                                let by_bytes = tti.opt_size_inline_trial_by_bytes() && (!priced || tti.speed_inline_finished_trial());
                                 // DEVIATE OS-INLINE-TRIAL-CLOCKS: every site the size bound alone refused is the
                                 // backend's to price, whatever the model says of its bytes.
                                 let finished = tti.opt_size_inline_finished_trial() && !priced && size != crate::inlinecost::CallerSize::Speed;

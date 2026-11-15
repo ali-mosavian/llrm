@@ -13,7 +13,8 @@ use crate::mc::inst::{
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
-    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp,
+    Addr, Arrangement, Gpr, ImmShape, MulAcc, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
+    VectorLongOp, VectorOp,
     VectorReduce, VectorShift,
 };
 use crate::mfunc::Callee;
@@ -237,7 +238,7 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
-    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin] {
+    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin, VectorOp::Sqadd, VectorOp::Uqsub] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
             if !op.has_lanes(lanes) {
                 continue;
@@ -264,11 +265,18 @@ pub(super) fn instructions() -> Vec<Inst> {
     for (_, form) in crate::vector_forms::all() {
         use crate::vector_forms::VectorForm;
         out.push(match form {
-            VectorForm::Compare { op, lanes, quad } => Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) },
-            VectorForm::CompareZero { op, lanes, quad } => Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) },
+            VectorForm::Compare { op, lanes, quad } => {
+                Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) }
+            }
+            VectorForm::CompareZero { op, lanes, quad } => {
+                Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) }
+            }
             VectorForm::BitSelect { op, quad } => Inst::VectorBitSelect { op, quad, rd: v(0), rn: v(1), rm: v(2) },
             VectorForm::Bsp { quad } => Inst::VectorBsp { quad, rd: v(0), mask: v(3), rn: v(1), rm: v(2) },
         });
+    }
+    for (op, lanes) in [(MulAcc::Add, Arrangement::S4), (MulAcc::Sub, Arrangement::B8)] {
+        out.push(Inst::VectorMulAcc { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
     }
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
@@ -297,6 +305,14 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     for lanes in Arrangement::ALL {
         out.push(Inst::VectorLoadReplicate { lanes, rt: v(1), base: Gpr(3) });
+        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit] {
+            if op.has_lanes(lanes) {
+                out.push(Inst::VectorIntUnary { op, lanes, rd: v(0), rn: v(1) });
+            }
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        out.push(Inst::VectorLoadLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
     }
     for (op, lanes) in [
         (VectorReduce::Addv, Arrangement::B16),
@@ -308,7 +324,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     out.push(Inst::VectorDupLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), index: 0 });
     out.push(Inst::VectorDupLane { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             out.push(Inst::VectorFpBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         }
@@ -319,6 +335,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             VectorFpUnary::Ucvtf,
             VectorFpUnary::Fcvtzs,
             VectorFpUnary::Fcvtzu,
+            VectorFpUnary::Sqrt,
         ] {
             out.push(Inst::VectorFpUnary { op, lanes, rd: v(0), rn: v(1) });
         }
@@ -326,6 +343,8 @@ pub(super) fn instructions() -> Vec<Inst> {
     for fill in [
         Fill::Zero,
         Fill::Byte(0xa5),
+        Fill::Byte8(0xa5),
+        Fill::Imm { invert: false, shape: ImmShape::H4(8), imm8: 3 },
         Fill::Dup(Arrangement::B16, rn),
         Fill::Dup(Arrangement::H8, rn),
         Fill::Dup(Arrangement::D2, rn),
@@ -393,12 +412,15 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBsp { .. } => "VectorBsp",
         Inst::VectorLongShift { .. } => "VectorLongShift",
         Inst::VectorLong { .. } => "VectorLong",
+        Inst::VectorMulAcc { .. } => "VectorMulAcc",
         Inst::VectorFma { .. } => "VectorFma",
         Inst::VectorInsGpr { .. } => "VectorInsGpr",
         Inst::VectorInsLane { .. } => "VectorInsLane",
         Inst::VectorUmov { .. } => "VectorUmov",
         Inst::VectorStoreLane { .. } => "VectorStoreLane",
         Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
+        Inst::VectorIntUnary { .. } => "VectorIntUnary",
+        Inst::VectorLoadLane { .. } => "VectorLoadLane",
         Inst::VectorFmaLane { .. } => "VectorFmaLane",
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
         Inst::VectorMulLane { .. } => "VectorMulLane",
@@ -421,7 +443,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 72] = [
+const ALL: [&str; 75] = [
     "Mark",
     "Label",
     "Cfi",
@@ -472,12 +494,15 @@ const ALL: [&str; 72] = [
     "VectorBsp",
     "VectorLongShift",
     "VectorLong",
+    "VectorMulAcc",
     "VectorFma",
     "VectorInsGpr",
     "VectorInsLane",
     "VectorUmov",
     "VectorStoreLane",
     "VectorLoadReplicate",
+    "VectorIntUnary",
+    "VectorLoadLane",
     "VectorFmaLane",
     "VectorFmulLane",
     "VectorMulLane",

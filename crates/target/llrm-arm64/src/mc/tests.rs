@@ -299,6 +299,10 @@ fn branches() {
         VectorOp::Smin,
         VectorOp::Umax,
         VectorOp::Umin,
+        VectorOp::Sqadd,
+        VectorOp::Uqadd,
+        VectorOp::Sqsub,
+        VectorOp::Uqsub,
     ] {
         for lanes in ALL_ARRANGEMENTS {
             if !op.has_lanes(lanes) {
@@ -354,6 +358,13 @@ fn branches() {
         }
     }
     all.push(Inst::VectorReduce { op: VectorReduce::Addp, lanes: Arrangement::D2, rd: Vreg(3), rn: Vreg(28) });
+    for op in [MulAcc::Add, MulAcc::Sub] {
+        for lanes in
+            [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::B8, Arrangement::H4, Arrangement::S2]
+        {
+            all.push(Inst::VectorMulAcc { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+        }
+    }
     for (op, lanes) in [
         (VectorFma::Add, Arrangement::S4),
         (VectorFma::Add, Arrangement::D2),
@@ -410,6 +421,19 @@ fn branches() {
     }
     for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
+        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit] {
+            if op.has_lanes(lanes) {
+                all.push(Inst::VectorIntUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
+            }
+        }
+    }
+    for (lanes, index) in [
+        (Arrangement::B16, 15),
+        (Arrangement::H8, 5),
+        (Arrangement::S4, 3),
+        (Arrangement::D2, 1),
+    ] {
+        all.push(Inst::VectorLoadLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for (lanes, index) in [
         (Arrangement::B16, 3),
@@ -423,7 +447,7 @@ fn branches() {
     ] {
         all.push(Inst::VectorDupLane { lanes, rd: Vreg(5), rn: Vreg(26), index });
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             all.push(Inst::VectorFpBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
         }
@@ -434,6 +458,7 @@ fn branches() {
             VectorFpUnary::Ucvtf,
             VectorFpUnary::Fcvtzs,
             VectorFpUnary::Fcvtzu,
+            VectorFpUnary::Sqrt,
         ] {
             all.push(Inst::VectorFpUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
         }
@@ -599,6 +624,9 @@ fn floating_point() {
             Fill::Zero,
             Fill::Byte(0x5A),
             Fill::Byte(0xFF),
+            Fill::Byte8(0x5A),
+            Fill::Imm { invert: false, shape: ImmShape::H4(8), imm8: 3 },
+            Fill::Imm { invert: true, shape: ImmShape::H4(0), imm8: 0x81 },
             Fill::Dup(Arrangement::B16, Gpr(3)),
             Fill::Dup(Arrangement::H8, Gpr(3)),
             Fill::Dup(Arrangement::S4, Gpr(3)),
