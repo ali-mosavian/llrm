@@ -31,6 +31,10 @@ void times_three(void);
 void times_seven(void);
 void times_minus_three(void);
 unsigned char xor_toggle_count(unsigned char n);
+void pattern_bytes(unsigned char *dst, unsigned n);
+void z8_16(void *, const void *), s8_16(void *, const void *), z8_32(void *, const void *), s8_32(void *, const void *);
+void z16_32(void *, const void *), s16_32(void *, const void *), z32_64(void *, const void *), s32_64(void *, const void *);
+void t16_8(void *, const void *), t32_8(void *, const void *), t32_16(void *, const void *), t64_32(void *, const void *);
 void set_lanes(void *b, void *w, void *d, unsigned char x, unsigned short y, unsigned z);
 int stack_copy(int n);
 int square_sum(int n);
@@ -122,6 +126,40 @@ int main(void) {
             if (b[i] != (i == 5 ? 0xAB : i + 1)) bad++;
             if (w8[i] != (i == 6 ? 0xEF : i == 7 ? 0xCD : i + 1)) bad++;
             if (d8[i] != (i == 8 ? 0x78 : i == 9 ? 0x56 : i == 10 ? 0x34 : i == 11 ? 0x12 : i + 1)) bad++;
+        }
+    }
+    {
+        /* Every width pair, on values at the edges of their lanes and between. */
+        static const unsigned long edge[] = {0, 1, 0x7f, 0x80, 0xff, 0x100, 0x7fff, 0x8000, 0xffff, 0x10000, 0x7fffffffUL,
+                                             0x80000000UL, 0xffffffffUL, 0x100000000UL, 0x7fffffffffffffffUL, 0x8000000000000000UL,
+                                             ~0UL, 0x123456789abcdef0UL};
+        unsigned long in[16] __attribute__((aligned(16))), out[16] __attribute__((aligned(16)));
+        for (int rot = 0; rot < 18; rot++) {
+            for (int i = 0; i < 16; i++) in[i] = edge[(i + rot) % 18];
+            unsigned char *b = (unsigned char *)in; unsigned short *h = (unsigned short *)in; unsigned *w = (unsigned *)in;
+            unsigned char o8[16] __attribute__((aligned(16))); unsigned short o16[16] __attribute__((aligned(16)));
+            unsigned o32[16] __attribute__((aligned(16))); unsigned long o64[4] __attribute__((aligned(16)));
+            z8_16(o16, b); for (int i = 0; i < 16; i++) if (o16[i] != b[i]) bad++;
+            s8_16(o16, b); for (int i = 0; i < 16; i++) if (o16[i] != (unsigned short)(short)(signed char)b[i]) bad++;
+            z8_32(o32, b); for (int i = 0; i < 16; i++) if (o32[i] != b[i]) bad++;
+            s8_32(o32, b); for (int i = 0; i < 16; i++) if (o32[i] != (unsigned)(int)(signed char)b[i]) bad++;
+            z16_32(o32, h); for (int i = 0; i < 8; i++) if (o32[i] != h[i]) bad++;
+            s16_32(o32, h); for (int i = 0; i < 8; i++) if (o32[i] != (unsigned)(int)(short)h[i]) bad++;
+            z32_64(o64, w); for (int i = 0; i < 4; i++) if (o64[i] != w[i]) bad++;
+            s32_64(o64, w); for (int i = 0; i < 4; i++) if (o64[i] != (unsigned long)(long)(int)w[i]) bad++;
+            t16_8(o8, in); for (int i = 0; i < 16; i++) if (o8[i] != (unsigned char)h[i]) bad++;
+            t32_8(o8, in); for (int i = 0; i < 16; i++) if (o8[i] != (unsigned char)w[i]) bad++;
+            t32_16(o16, in); for (int i = 0; i < 8; i++) if (o16[i] != (unsigned short)w[i]) bad++;
+            t64_32(o32, in); for (int i = 0; i < 4; i++) if (o32[i] != (unsigned)in[i]) bad++;
+        }
+        (void)out;
+    }
+    {
+        static unsigned char pat[300];
+        for (unsigned n = 0; n < 300; n += 7) {
+            for (unsigned i = 0; i < 300; i++) pat[i] = 0xEE;
+            pattern_bytes(pat, n);
+            for (unsigned i = 0; i < 300; i++) if (pat[i] != (i < n ? (unsigned char)((i & 3) + ((i >> 2) & 1)) : 0xEE)) bad++;
         }
     }
     printf("bad %d\n", bad);

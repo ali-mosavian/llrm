@@ -69,3 +69,19 @@ def test_a_move_larger_than_the_drift_still_counts():
     base = {"win": cell(1000, 950, 980)}
     new = {"win": cell(850, 960, 990)}
     assert clocks.verdicts(base, new) == {"gained": ["win"], "lost": [], "moved": ["win"]}
+
+
+def test_a_program_with_an_lp64_expectation_is_checked_against_it():
+    """`call_keeps.out` is the ILP32 output; x86_64 prints `call_keeps.lp64.out`. Read the wrong one, ours, gcc and clang all
+    came out "not ok" (42 of 211 cells at -O2) and the cell was never counted."""
+    work = Path(tempfile.mkdtemp(prefix="clk"))
+    try:
+        source = work / "p.c"
+        source.write_text(PROGRAM)
+        assert clocks.expected_output(source) is None
+        source.with_suffix(".out").write_text("ilp32\n")
+        assert clocks.expected_output(source) == "ilp32\n"
+        source.with_suffix(".lp64.out").write_text("lp64\n")
+        assert clocks.expected_output(source) == "lp64\n"
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

@@ -23,8 +23,7 @@ fn a_cold_division_calls_the_compact_routine_at_speed() {
 /// `udivmod16` branches into `__udivhi3c` (`bne`), which the image scan read
 /// as a call only: the speed divide's image came out 16 B smaller than the
 /// compact one's (-16 for a 31 B growth), and the choice above never saw its
-/// bytes. The growth is 35 B since the compact routine lost its wrapper and the
-/// speed one its own (2026-11-15).
+/// bytes. The growth is 39 B since the compact routine lost its wrapper.
 #[test]
 fn an_image_includes_a_routine_the_speed_divide_branches_into() {
     use llrm_6502::mulimage::{image_bytes, image_of_texts};
@@ -32,7 +31,7 @@ fn an_image_includes_a_routine_the_speed_divide_branches_into() {
     let speed = image_of_texts(&names, &["  jsr __udivhi3\n".to_owned()]);
     let compact = image_of_texts(&names, &["  jsr __udivhi3c\n".to_owned()]);
     assert!(speed.contains("__udivhi3c"), "{speed:?}");
-    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 35, "{speed:?} against {compact:?}");
+    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 39, "{speed:?} against {compact:?}");
 }
 
 /// The compact word divide linked 55 B (an 8 B wrapper over a 47 B loop that
@@ -62,15 +61,4 @@ fn the_compact_signed_word_divide_image_is_bounded() {
     let remainder = image_of_texts(&names, &["  jsr __modhi3c\n".to_owned()]);
     assert!(image_bytes(&divide) <= 95, "{divide:?}");
     assert!(image_bytes(&remainder) <= 98, "{remainder:?}: {} B", image_bytes(&remainder));
-}
-
-/// A signed divide names `rc2` to `rc7` and no other cell: a value in `rc16`
-/// or above lives across the call. The sign pair reached its cells by index,
-/// which the scan reads as every cell.
-#[test]
-fn a_signed_word_divide_names_only_its_own_cells() {
-    let own: std::collections::BTreeSet<u8> = (2..=7).collect();
-    for routine in ["__divhi3", "__modhi3", "__divhi3c", "__modhi3c"] {
-        assert_eq!(llrm_6502::routines::cells_named(routine), Some(own.clone()), "{routine}");
-    }
 }

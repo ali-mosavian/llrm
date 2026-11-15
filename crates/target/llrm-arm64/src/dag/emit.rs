@@ -37,7 +37,7 @@ use crate::mc::inst::{
 };
 use crate::mc::inst::{
     Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
-    VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    SMOV_FORMS, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -1087,6 +1087,14 @@ fn float_inst(
                 Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: *index as u8 })
             }
             ([Operand::Fpr(rn)], true) => Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: 0 }),
+            _ => wrong(),
+        });
+    }
+    if let Some(&(_, lanes, wide)) = SMOV_FORMS.iter().find(|form| form.0 == name) {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Imm(index)] => {
+                Ok(Inst::VectorSmov { lanes, wide, rd: gd, rn: *rn, index: *index as u8 })
+            }
             _ => wrong(),
         });
     }
@@ -2375,13 +2383,15 @@ impl Emitter<'_> {
                 if name == "F128CSEL" {
                     return self.f128_select(id, &operands);
                 }
-                if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
+                if let Some(probe) = float_inst(name, Vreg(0), Gpr(0), &operands) {
                     // A fill of a 64-bit vector (`MOVIv2i32`) has no type of
-                    // ours: it reads as an `i64`.
+                    // ours: it reads as an `i64`, as does the `FMOVDr` that
+                    // zeroes the upper half of a `concat_vectors`.
                     let float_result = node.values[0].is_floating_point()
                         || node.values[0].is_vector()
                         || vector_fill(name, &operands).is_some()
-                        || reduction(name).is_some();
+                        || reduction(name).is_some()
+                        || matches!(probe, Ok(Inst::FpUnary { op: FpUnary::Mov, .. }));
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     // `FMLA` adds into the register it reads: `rd` is a copy of

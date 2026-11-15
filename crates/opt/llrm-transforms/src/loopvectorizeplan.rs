@@ -160,6 +160,26 @@ pub struct LoopFacts {
     /// (`collectElementTypesForWidening`: a loop without loads or stores has
     /// only these to take the widest type from).
     pub reduction_bits: Vec<u32>,
+    /// The values live across the loop's widened instructions, for the
+    /// register pressure; none: one register per value (the old count).
+    pub pressure: Option<Pressure>,
+}
+
+/// One value of the widened loop and where it lives: from the step that
+/// makes it to its last read (`calculateRegisterUsage`'s interval).
+#[derive(Clone, Copy, Debug)]
+pub struct Live {
+    pub lane: Ty,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The loop's values by interval, and its loop-invariant vector operands
+/// (the `LoopInvariants` of `calculateRegisterUsage`).
+#[derive(Clone, Debug, Default)]
+pub struct Pressure {
+    pub live: Vec<Live>,
+    pub invariants: Vec<Ty>,
 }
 
 /// The chosen factors.
@@ -303,6 +323,10 @@ fn iteration_cost(
     // (`SplitVectorResult`). Owner llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
     let taken = |lane: Ty| {
+        // A mask: `<VF x i1>` is held as the lanes of the compare that made it.
+        if lane == Ty::Int(1) {
+            return true;
+        }
         let bits = u64::from(lane_bits(lane)) * u64::from(vf);
         [register_bits, 2 * register_bits].contains(&bits)
             || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
@@ -503,6 +527,49 @@ fn max_local_users(recipes: &[Recipe]) -> u32 {
     values.max(1)
 }
 
+/// `getRegUsageForType` of a `lane` vector of `vf` lanes: the registers it
+/// legalizes to (a mask is held as bytes: one).
+fn registers_of(
+    tti: &dyn Tti,
+    lane: Ty,
+    vf: u32,
+) -> u32 {
+    if vf == 1 || lane == Ty::Int(1) {
+        return 1;
+    }
+    let register_bits = u64::from(tti.vector_register_bits()).max(1);
+    (u64::from(lane_bits(lane)) * u64::from(vf)).div_ceil(register_bits).max(1) as u32
+}
+
+/// `calculateRegisterUsage` (L5138): at each instruction that makes a value
+/// read later, the registers of the values open across it (those made before
+/// and read after), the largest such sum, and the registers of the
+/// loop-invariant values. A value the loop makes and does not read again is
+/// not open. DEVIATE VP5 (owner llrm-arm64-vec, exit 2026-11-24): the values
+/// are those the widening makes, not the VPlan's recipes.
+fn register_usage(
+    tti: &dyn Tti,
+    pressure: &Pressure,
+    vf: u32,
+) -> (u32, u32) {
+    let mut most = 0;
+    for at in 0..=pressure.live.iter().map(|one| one.end).max().unwrap_or(0) {
+        // Only an instruction whose value is read later is a point.
+        if !pressure.live.iter().any(|one| one.start == at && one.end > at) {
+            continue;
+        }
+        let open: u32 = pressure
+            .live
+            .iter()
+            .filter(|one| one.start < at && one.end > at)
+            .map(|one| registers_of(tti, one.lane, vf))
+            .sum();
+        most = most.max(open);
+    }
+    let invariants = pressure.invariants.iter().map(|lane| registers_of(tti, *lane, vf)).sum();
+    (most.max(1), invariants)
+}
+
 /// What `selectInterleaveCount` reads of the loop and its plan.
 #[derive(Clone, Copy, Debug)]
 struct IcInputs {
@@ -528,13 +595,16 @@ fn select_interleave_count(
     vf: u32,
     loop_cost: i64,
 ) -> u32 {
-    let values = max_local_users(&facts.recipes);
+    let (users, invariants) = match &facts.pressure {
+        Some(pressure) => register_usage(tti, pressure, vf),
+        None => (max_local_users(&facts.recipes), 0),
+    };
     let inputs = IcInputs {
         epilogue_allowed: epilogue_allowed(facts),
         safe_for_any_vector_width: facts.safe_for_any_vector_width,
         trip_count: facts.trip_count,
-        users: values,
-        invariants: 0,
+        users,
+        invariants,
         loads: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Load { .. })).count() as u32,
         stores: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Store { .. })).count() as u32,
         has_reductions: facts.has_reductions,
@@ -783,6 +853,11 @@ pub fn epilogue_vf(
             return None;
         }
         cap = cap.min(bit_floor(remaining));
+    } else {
+        // `SkipVF` against `SE.getURemExpr(TC, VF x IC)`: whatever the trip
+        // count, fewer than `VF x IC` iterations are left, so a factor of that
+        // many lanes or more would never run.
+        cap = cap.min(bit_floor(lanes - 1));
     }
     let (vf, _) = best_vf(tti, facts, cap, true, false);
     (vf > 1).then_some(vf)
