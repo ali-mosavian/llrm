@@ -161,6 +161,8 @@ pub struct Tuning {
     /// copy that leaves the module no larger and saves clocks, though no
     /// callee goes with it.
     pub inline_trial_keeps_shrinking_copy: bool,
+    /// `Tti::inline_trial_cold_margin`.
+    pub inline_trial_cold_margin: i64,
     /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24):
     /// `inline_size_bytes` at -O1 alone (the byte-measured size view, the
     /// second round, and the trial of a callee the bound refused, kept
@@ -749,6 +751,7 @@ impl Tuning {
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
+        inline_trial_cold_margin: 0,
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
