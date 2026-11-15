@@ -5451,7 +5451,9 @@ mod tests {
 
     /// `place` saved SI on every call, entered or not, though only its loop
     /// names it: the early `return 1` pushed and popped it for nothing. The
-    /// save is where the loop starts.
+    /// save is where the loop starts. The entry block reads no frame cell:
+    /// since #9917 (`useOrDefCSROrFI`) a read of an incoming argument there
+    /// keeps the save in the entry.
     #[test]
     fn test_a_register_only_a_later_block_names_is_saved_there() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
@@ -5461,7 +5463,7 @@ mod tests {
                 succ: vec![3, 2].into(),
                 ..lir::LirBlock::new(
                     1,
-                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()])), insn(2, branch)],
+                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![Loc::Reg(ir::Reg { register: RegId::BX, width: 2 })])), insn(2, branch)],
                 )
             },
             lir::LirBlock::new(
