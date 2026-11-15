@@ -107,7 +107,11 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
                 if digits.is_empty() {
                     continue;
                 }
-                if code[at + 2 + digits.len()..].starts_with(',') {
+                let after = &code[at + 2 + digits.len()..];
+                if after
+                    .strip_prefix(',')
+                    .is_some_and(|index| matches!(index.trim().to_ascii_lowercase().as_str(), "x" | "y"))
+                {
                     return None;
                 }
                 found.push(digits.parse().ok()?);

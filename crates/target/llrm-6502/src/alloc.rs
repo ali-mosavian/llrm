@@ -231,6 +231,9 @@ pub fn shared_save_gain(n: u32) -> i64 {
 /// What a `jsr` of the runtime routine `callee` destroys: `a`, `x`, `y` and the
 /// cells its text names, with the pairs over them, so a value may stay in any
 /// other scratch cell across the call. `None`: the convention's own set.
+///
+/// DEVIATE 6502-IPRA-RT (owner 6502, exit 2026-11-24): the pin runs without
+/// IPRA (`-enable-ipra`, `RegUsageInfo`); gcc's `-fipa-ra` is on.
 fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTreeSet<RegId>>> {
     // the size levels call the compact variant in its place
     let mut cells = crate::routines::cells_named(callee)?;
