@@ -22,6 +22,8 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 extern unsigned char pa[4096], pb[4096];
 void multiply_arrays(void);
 extern int a[1024], b[1024];
+unsigned char xor_toggle_count(unsigned char n);
+void set_lanes(void *b, void *w, void *d, unsigned char x, unsigned short y, unsigned z);
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -81,6 +83,17 @@ int main(void) {
         for (int i = 0; i < 4096; i++) y[i] = (unsigned char)(i * 7 + 3), z[i] = (unsigned char)(i * 31 + 11);
         multiply_byte_arrays(x, y, z);
         for (int i = 0; i < 4096; i++) if (x[i] != (unsigned char)(y[i] * z[i])) bad++;
+    }
+    for (int n = 0; n < 256; n++) if (xor_toggle_count((unsigned char)n) != (unsigned char)(n ^ (n & 1))) bad++;
+    {
+        unsigned char b[16] __attribute__((aligned(16))), w8[16] __attribute__((aligned(16))), d8[16] __attribute__((aligned(16)));
+        for (int i = 0; i < 16; i++) b[i] = w8[i] = d8[i] = (unsigned char)(i + 1);
+        set_lanes(b, w8, d8, 0xAB, 0xCDEF, 0x12345678u);
+        for (int i = 0; i < 16; i++) {
+            if (b[i] != (i == 5 ? 0xAB : i + 1)) bad++;
+            if (w8[i] != (i == 6 ? 0xEF : i == 7 ? 0xCD : i + 1)) bad++;
+            if (d8[i] != (i == 8 ? 0x78 : i == 9 ? 0x56 : i == 10 ? 0x34 : i == 11 ? 0x12 : i + 1)) bad++;
+        }
     }
     printf("bad %d\n", bad);
 }

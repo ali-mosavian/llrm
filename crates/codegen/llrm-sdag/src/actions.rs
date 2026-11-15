@@ -954,6 +954,14 @@ impl TargetLowering {
         // expansion. DEVIATE X86V3 now covers only the 8- and 16-bit
         // lanes and the non-splat builds.
         t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerSELECT`: a scalar condition over a vector is a `CMOV` of the
+        // register.
+        t.set_ops(&[ISD::Select], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
+        // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack). DEVIATE
+        // X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles
+        // (`movss`, `punpck`) or uses `pinsrw`/`pinsrb`.
+        t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
