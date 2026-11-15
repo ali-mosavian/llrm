@@ -199,9 +199,10 @@ fn tool(
 }
 
 /// The row of `kernel` built by SDCC for the NMOS 6502 or, with `cmos`, the
-/// 65C02.
+/// 65C02. `flags` are SDCC's optimizer options for the kernel's own compile.
 pub fn row(
     kernel: &Kernel,
+    flags: &[&str],
     cmos: bool,
 ) -> Result<Row, String> {
     let tag = if cmos { "sdccm" } else { "sdcc" };
@@ -210,7 +211,10 @@ pub fn row(
     let (ret, params) = prototype(kernel, source.to_str().unwrap())?;
     let target = if cmos { "-mmos65c02" } else { "-mmos6502" };
     let kernel_object = format!("{tag}-k.rel");
-    tool(&dir, &[target, &define, "-c", source.to_str().unwrap(), "-o", &kernel_object])?;
+    let mut compile = vec![target];
+    compile.extend_from_slice(flags);
+    compile.extend([define.as_str(), "-c", source.to_str().unwrap(), "-o", kernel_object.as_str()]);
+    tool(&dir, &compile)?;
     // two stubs, each one `rts`: the kernel's own signature (for the bytes) and
     // none (for the loop: no argument set-up is made for it)
     let stub_params = if params.is_empty() { "void" } else { params.as_str() };
