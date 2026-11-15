@@ -47,9 +47,9 @@ impl Cpu {
     /// [`super::bfffo`]): the table's row for it, not decoded as emulated.
     pub fn has_bit_field_find(self) -> bool {
         let model = crate::isa::Cpu::ALL[self as usize];
-        crate::isa::forms().iter().any(|form| {
-            form.mnemonic == "bfffo" && form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model)
-        })
+        crate::isa::forms_of("bfffo")
+            .iter()
+            .any(|form| form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model))
     }
 
     /// `Subtarget->atLeastM68020()` and its siblings.

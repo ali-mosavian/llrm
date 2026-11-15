@@ -49,6 +49,7 @@ pub mod narrow_add;
 pub mod negadd;
 pub mod object;
 pub mod opcosts;
+pub mod percpu;
 pub mod pccall;
 pub mod regalloc;
 pub mod routine;
