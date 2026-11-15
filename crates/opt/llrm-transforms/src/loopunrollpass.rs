@@ -97,6 +97,14 @@ pub use crate::trial;
 /// -O2: 41 s of 41 s CPU) to price an unroll no bar admits.
 const ANALYSIS_BUDGET: u64 = 1 << 18;
 
+static ROLLED_PRICED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many instructions the unroll cost analysis has priced as rolled: once
+/// per instruction, not once per simulated trip.
+pub fn rolled_priced() -> usize {
+    ROLLED_PRICED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
 
@@ -591,6 +599,7 @@ fn analyze_loop_unroll_cost(
     let mut heavy_first = Cost::FREE;
     let mut heavy_folded = 0_i64;
     let mut rolled_dynamic_cost = Cost::FREE;
+    let mut rolled_of = llrm_support::hash::HashMap::<InstId, Cost>::default();
     let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
 
@@ -665,8 +674,11 @@ fn analyze_loop_unroll_cost(
                             })
                             .map_or(Cost::FREE, Cost::of);
                 }
-                rolled_dynamic_cost = rolled_dynamic_cost
-                    + clocks
+                // the same instruction costs the same in every trip: priced
+                // once
+                let rolled = *rolled_of.entry(inst).or_insert_with(|| {
+                    ROLLED_PRICED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    clocks
                         .and_then(|costs| simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs))
                         .map_or_else(
                             || {
@@ -681,7 +693,9 @@ fn analyze_loop_unroll_cost(
                                 )
                             },
                             Cost::of,
-                        );
+                        )
+                });
+                rolled_dynamic_cost = rolled_dynamic_cost + rolled;
 
                 // Visit the instruction to analyze its loop cost after
                 // unrolling; if the visitor returns true, it is free.

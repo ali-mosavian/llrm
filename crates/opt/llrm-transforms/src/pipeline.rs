@@ -1125,8 +1125,9 @@ pub(crate) fn llvm_order(
             // are `simplifycfg::Options::{L1438, L1682}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             // SLPVectorizerPass (l.1455): the compares of adjacent bytes
-            // against constants, on a target with vector registers.
-            slot("slp@1455", Box::new(crate::slpcompares::SlpCompares)),
+            // against constants, on a target with vector registers, and the
+            // store chains of a target that prices them.
+            slot("slp@1455", Box::new(crate::slpvectorize::SlpVectorize)),
             combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
             // before LoopUnrollPass; the nest is in simplify form and LCSSA.
@@ -2030,7 +2031,8 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce {
             size: applied.options.prefers_size(),
-            bytes_strict: applied.options.prefers_size() || applied.options.at_o1(),
+            bytes_strict: applied.options.prefers_size()
+                || (applied.options.at_o1() && !applied.options.prices_bytes()),
         }));
         // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
         // LSR; it does nothing for a target whose TTI does not enable it.

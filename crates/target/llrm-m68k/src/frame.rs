@@ -302,5 +302,6 @@ impl Layout {
 /// The registers `CSR_STD` keeps, in the order the pin assigns them slots
 /// (`calling.toml`'s `preserved`).
 pub fn callee_saved() -> Vec<RegId> {
-    abi::c().preserved.iter().map(|kept| abi::register(&kept.full)).collect()
+    static SAVED: std::sync::OnceLock<Vec<RegId>> = std::sync::OnceLock::new();
+    SAVED.get_or_init(|| abi::c().preserved.iter().map(|kept| abi::register(&kept.full)).collect()).clone()
 }

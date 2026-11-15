@@ -493,12 +493,12 @@ impl llrm_target::Target for M64 {
                             // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): see
                             // `selectoptimize::SelectOptimizePass`.
                             branch_constant_arm_selects: true,
-                            // DEVIATE INL-O2 RATE at m64 (owner x86-m64, exit 2026-11-24), as x86-m32's:
-                            // a speed caller's inline pays the callee's bytes at the m64 net rate
-                            // (312 milliclocks a byte); gcc's `ipa-inline` takes a copy only where its
-                            // growth is small (shellsort -O2: main took a second 255 B copy of a
-                            // function that stays). -O1 and -Os unchanged.
-                            speed_inline_milliclocks_per_byte: 312,
+                            // INL-O2 RATE is retired at m64: bytes are not counted at -O1..-O3
+                            // (ruling 2026-11-14), so a speed caller's inline is the pin's
+                            // threshold, not a price in bytes. At 312 milliclocks a byte
+                            // loop_fusion kept `clear` a call (22 calls against 11); inlined, it
+                            // runs fewer instructions at -O2 and -O3. -O1 and -Os unchanged.
+                            speed_inline_milliclocks_per_byte: 0,
                             inline_trial_keeps_shrinking_copy: true,
                             // DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             inline_trials_at_o1: true,

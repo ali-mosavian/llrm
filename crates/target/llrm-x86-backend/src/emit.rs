@@ -1490,6 +1490,7 @@ impl Emitter<'_, '_> {
                 | "CMOV_GR32"
                 | "CMOV_FR32"
                 | "CMOV_FR64"
+                | "CMOV_VR128"
                 | "CMOV_RFP32"
                 | "CMOV_RFP64"
                 | "CMOV_RFP80"
