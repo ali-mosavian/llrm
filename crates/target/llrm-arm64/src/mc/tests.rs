@@ -328,7 +328,14 @@ fn branches() {
                     all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(4), rn: Vreg(27), amount });
                 }
             }
-            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+            for op in [
+                VectorLongOp::Uaddl,
+                VectorLongOp::Saddl,
+                VectorLongOp::Uaddw,
+                VectorLongOp::Saddw,
+                VectorLongOp::Umull,
+                VectorLongOp::Smull,
+            ] {
                 all.push(Inst::VectorLong { op, lane, high, rd: Vreg(4), rn: Vreg(27), rm: Vreg(19) });
             }
         }
@@ -421,18 +428,15 @@ fn branches() {
     }
     for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
-        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit] {
+        for op in
+            [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit]
+        {
             if op.has_lanes(lanes) {
                 all.push(Inst::VectorIntUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
             }
         }
     }
-    for (lanes, index) in [
-        (Arrangement::B16, 15),
-        (Arrangement::H8, 5),
-        (Arrangement::S4, 3),
-        (Arrangement::D2, 1),
-    ] {
+    for (lanes, index) in [(Arrangement::B16, 15), (Arrangement::H8, 5), (Arrangement::S4, 3), (Arrangement::D2, 1)] {
         all.push(Inst::VectorLoadLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for (lanes, index) in [

@@ -733,8 +733,9 @@ fn vector_inst(
         });
     }
     // `LD1Rv4s`: the lane at the address replicated into every lane of `rd`.
-    if let Some(lanes) =
-        name.strip_prefix("LD1Rv").and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
+    if let Some(lanes) = name
+        .strip_prefix("LD1Rv")
+        .and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
     {
         return Some(match operands {
             [Operand::Reg(base)] => Ok(Inst::VectorLoadReplicate { lanes, rt: rd, base: *base }),
@@ -775,11 +776,14 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    // `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: a narrow
-    // operand (a half of a vector, with `2`) into wide lanes.
+    // `USHLLv8i8_shift`, `UADDLv8i8_v8i16`, `UADDWv16i8_v8i16`,
+    // `SMULLv4i16_v4i32`: a narrow operand (a half of a vector, with `2`)
+    // into wide lanes.
     for op in [
         VectorLongOp::Ushll,
         VectorLongOp::Sshll,
+        VectorLongOp::Uaddl,
+        VectorLongOp::Saddl,
         VectorLongOp::Uaddw,
         VectorLongOp::Saddw,
         VectorLongOp::Umull,

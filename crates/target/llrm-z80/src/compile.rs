@@ -321,6 +321,13 @@ fn unroll_choice(
     }
     let mut best = (module_priced(ir, &request)?, request);
     for variant in variants {
+        // the two refusals together are tried only where one of them made the
+        // module smaller: a compile of its own that, in the corpus, no
+        // module wanted without one of the two (switch_table_in_code -O2 is the
+        // one that does)
+        if variant == SpeedUnroll::NoGrowBoth && best.1.unroll_variant.is_none() {
+            continue;
+        }
         let other = Request { unroll_variant: Some(variant), ..best.1.clone() };
         // a variant whose mid-end leaves the module as it is gives the same
         // object: not selected again
@@ -1192,6 +1199,120 @@ fn allocate_once(
 /// serves both finishes, as the fold decision needs them
 /// (`repeating_loop_fold_wins`).
 fn allocate_once_with(
+    function: MFunction,
+    name: &str,
+    strict: bool,
+    level: Level,
+    want_apart: bool,
+) -> Result<(Allocated, bool, Option<Allocated>), String> {
+    if std::env::var_os("LLRM_NO_Z80_MEMO").is_some() {
+        return allocate_once_computed(function, name, strict, level, want_apart);
+    }
+    let key = allocation_key(&function, name, strict, level, want_apart);
+    if let Some(done) = ALLOCATED.with(|memo| memo.borrow().get(&key).cloned()) {
+        if let Some(folded) = done.loops_folded {
+            LOOPS_FOLDED.with(|one| one.set(folded));
+        }
+        HOT_LOOP_FOLD.with(|one| one.set(done.hot_loop_fold));
+        STACK_REFUSALS.with(|one| one.borrow_mut().extend(done.refusals.iter().copied()));
+        return done.result;
+    }
+    let refusals = STACK_REFUSALS.with(|one| one.borrow().len());
+    let (folded_before, hot_before) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
+    let result = allocate_once_computed(function, name, strict, level, want_apart);
+    let (folded, hot_loop_fold) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
+    let done = AllocatedBefore {
+        result: result.clone(),
+        loops_folded: (folded != folded_before).then_some(folded),
+        hot_loop_fold: if hot_loop_fold != hot_before { hot_loop_fold } else { hot_before },
+        refusals: STACK_REFUSALS.with(|one| one.borrow()[refusals..].to_vec()),
+    };
+    ALLOCATED.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() >= ALLOCATED_KEPT {
+            memo.clear();
+        }
+        memo.insert(key, done);
+    });
+    result
+}
+
+/// How many allocations [`ALLOCATED`] keeps before it starts again.
+const ALLOCATED_KEPT: usize = 512;
+
+/// What one [`allocate_once_computed`] left besides its result, for a call with
+/// the same inputs to leave again.
+#[derive(Clone)]
+struct AllocatedBefore {
+    result: Result<(Allocated, bool, Option<Allocated>), String>,
+    /// `LOOPS_FOLDED` after the call, where the call changed it.
+    loops_folded: Option<bool>,
+    hot_loop_fold: bool,
+    refusals: Vec<(i32, StackRefusal)>,
+}
+
+thread_local! {
+    /// The allocations of the compile on this thread, by everything one reads
+    /// ([`allocation_key`]). The variants a function is built in (the module's
+    /// unroll and inline variants, the source and ILP schedules, the copied and
+    /// kept return blocks, the joined and unjoined copies) mostly feed the
+    /// allocator the same function again: loop_fusion
+    /// -O2 ran it 84 times on 64 distinct inputs, idioms -O2 992 times on 312.
+    static ALLOCATED: std::cell::RefCell<std::collections::HashMap<(u64, u64), AllocatedBefore>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Everything [`allocate_once_computed`] reads: the function as it is, the
+/// choices of the caller, the state of the thread the allocator and the pricing
+/// read, and the LLRM_ and Z80_ switches of the environment. Two 64-bit hashes
+/// of its text, taken as it is written: the text of a function is not kept.
+fn allocation_key(
+    function: &MFunction,
+    name: &str,
+    strict: bool,
+    level: Level,
+    want_apart: bool,
+) -> (u64, u64) {
+    use std::fmt::Write;
+    use std::hash::Hasher;
+    struct Both(
+        std::collections::hash_map::DefaultHasher,
+        <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher,
+    );
+    impl Write for Both {
+        fn write_str(
+            &mut self,
+            text: &str,
+        ) -> std::fmt::Result {
+            self.0.write(text.as_bytes());
+            self.1.write(text.as_bytes());
+            Ok(())
+        }
+    }
+    let mut environment: Vec<(String, String)> =
+        std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
+    environment.sort();
+    let mut frequencies: Vec<(u32, u64)> =
+        expand::frequencies().into_iter().map(|(id, one)| (id, one.to_bits())).collect();
+    frequencies.sort_unstable();
+    let mut both = Both(Default::default(), Default::default());
+    let _ = write!(
+        both,
+        "{name}|{strict}|{level:?}|{want_apart}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{environment:?}|{frequencies:?}|{function:?}",
+        crate::regalloc::UNJOINED.with(|one| one.get()),
+        crate::regalloc::NO_FOLD.with(|one| one.get()),
+        LOOPS_FOLDED.with(|one| one.get()),
+        HOT_LOOP_FOLD.with(|one| one.get()),
+        SLOT_BY_CONFLICTS.with(|one| one.get()),
+        expand::BYTES_FIRST.with(|one| one.get()),
+        expand::PRICING.with(|one| one.get()),
+        crate::dagisel::pipeline::ILP.with(|one| one.get()),
+        crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.get()),
+    );
+    (both.0.finish(), both.1.finish())
+}
+
+fn allocate_once_computed(
     mut function: MFunction,
     name: &str,
     strict: bool,
