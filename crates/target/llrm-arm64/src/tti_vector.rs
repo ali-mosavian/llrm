@@ -133,7 +133,7 @@ pub(crate) fn cast_cost(
     src: VectorTy,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if cost_kind != CostKind::RecipThroughput {
+    if cost_kind == CostKind::Latency {
         return None;
     }
     if let Some(&(.., cost)) = CONVERSIONS.iter().find(|&&(one, to, from, _)| one == kind && to == dst && from == src) {
@@ -150,6 +150,14 @@ pub(crate) fn cast_cost(
         let taken = scalarization_overhead(src, false, true, cost_kind)?;
         let put = scalarization_overhead(dst, true, false, cost_kind)?;
         return Some(Cost::of(i64::from(dst.count) + taken.value + put.value));
+    }
+    // `BasicTTIImplBase::getCastInstrCost`: a conversion between integer and
+    // float lanes of one width, wider than the table's rows, is its halves'
+    // (both types split, so the split is free).
+    if matches!(kind, CastKind::SIToFP | CastKind::UIToFP | CastKind::FPToSI | CastKind::FPToUI)
+        && vector_pieces(dst).zip(vector_pieces(src)).is_some_and(|((_, to), (_, from))| to == from)
+    {
+        return ext_cast_cost(kind, dst, src);
     }
     if kind == CastKind::BitCast {
         let (to, from) = (vector_pieces(dst)?, vector_pieces(src)?);
@@ -334,7 +342,7 @@ pub(crate) fn cmp_sel_cost(
     predicate: Option<Predicate>,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if cost_kind != CostKind::RecipThroughput {
+    if cost_kind == CostKind::Latency {
         return None;
     }
     let (registers, lane) = vector_pieces(ty)?;

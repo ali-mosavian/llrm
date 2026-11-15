@@ -13,8 +13,10 @@ fn lane_letter(lanes: Arrangement) -> &'static str {
     match lanes {
         Arrangement::B16 => "b",
         Arrangement::H8 => "h",
-        Arrangement::S4 => "s",
+        Arrangement::S4 | Arrangement::S2 => "s",
         Arrangement::D2 => "d",
+        Arrangement::B8 => "b",
+        Arrangement::H4 => "h",
     }
 }
 
@@ -377,7 +379,7 @@ impl fmt::Display for Inst {
             }
             Inst::VectorMov { rd, rn } => write!(out, "mov v{}.16b, v{}.16b", rd.0, rn.0),
             Inst::VectorBinary { op, lanes, rd, rn, rm } => {
-                let suffix = if op.is_logical() { "16b" } else { lanes.suffix() };
+                let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
             }
             Inst::VectorShift { op, lanes, rd, rn, amount } => {
@@ -385,6 +387,8 @@ impl fmt::Display for Inst {
                     VectorShift::Shl => "shl",
                     VectorShift::Ushr => "ushr",
                     VectorShift::Sshr => "sshr",
+                    VectorShift::Usra => "usra",
+                    VectorShift::Ssra => "ssra",
                 };
                 let suffix = lanes.suffix();
                 write!(out, "{name} v{}.{suffix}, v{}.{suffix}, #{amount}", rd.0, rn.0)
@@ -420,7 +424,27 @@ impl fmt::Display for Inst {
                     lane.narrow_suffix(*high)
                 )
             }
-            Inst::VectorNot { rd, rn } => write!(out, "mvn v{}.16b, v{}.16b", rd.0, rn.0),
+            Inst::VectorNot { quad, rd, rn } => {
+                let suffix = if *quad { "16b" } else { "8b" };
+                write!(out, "mvn v{}.{suffix}, v{}.{suffix}", rd.0, rn.0)
+            }
+            Inst::VectorCompare { op, lanes, quad, rd, rn, rm } => {
+                let suffix = lanes.suffix_of(*quad);
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorCompareZero { op, lanes, quad, rd, rn } => {
+                let suffix = lanes.suffix_of(*quad);
+                let zero = if op.is_float() { "0.0" } else { "0" };
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, #{zero}", op.mnemonic(), rd.0, rn.0)
+            }
+            Inst::VectorBitSelect { op, quad, rd, rn, rm } => {
+                let suffix = if *quad { "16b" } else { "8b" };
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorBsp { quad, rd, mask, rn, rm } => {
+                let suffix = if *quad { "16b" } else { "8b" };
+                write!(out, "bsp v{}.{suffix}, v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", rd.0, mask.0, rn.0, rm.0)
+            }
             Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)

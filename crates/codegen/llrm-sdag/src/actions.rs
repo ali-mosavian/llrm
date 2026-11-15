@@ -71,6 +71,10 @@ pub struct Features {
     /// `useSoftFloat()`: `f32` and `f64` have no register class; their
     /// arithmetic is a call (m16).
     pub soft_float: bool,
+    /// x87 compares read the status word as a value (DEVIATE X87-STATUS): `oeq`
+    /// and `une` are one masked compare of it, so the target lowers them
+    /// (`Custom`) instead of expanding them.
+    pub fp_status: bool,
 }
 
 /// The CPU features the AArch64 constructor's scalar arms test.
@@ -156,8 +160,9 @@ pub struct TargetLowering {
     /// A float constant is canonically positive (gcc's `negate_expr_p`): only a
     /// negative one is cheap to negate.
     positive_fp_constants: bool,
-    /// DEVIATE SOFT-UITOFP-NONNEG (owner m68k, exit 2026-11-24): a soft-float `uitofp` of a value known to
-    /// be non-negative calls the signed routine (gcc's `floatunsisf` is a different, larger one), so a program
+    /// DEVIATE SOFT-UITOFP-NONNEG (owner m68k, exit 2026-11-24): a soft-float
+    /// `uitofp` of a value known to be non-negative calls the signed
+    /// routine (gcc's `floatunsisf` is a different, larger one), so a program
     /// that converts with both links one.
     signed_conversion_of_nonneg: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
@@ -948,6 +953,40 @@ impl TargetLowering {
             &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
             Action::Expand,
         );
+        // `LowerBUILD_VECTOR`: a splat of a scalar is `movd` + `pshufd`; the other builds (and
+        // the constant ones, a pool load) stay the expansion. DEVIATE X86V3 now covers only
+        // the 8- and 16-bit lanes and the non-splat builds.
+        t.set_ops(&[ISD::BuildVector], &[MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the odd lanes.
+        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
+        // `LowerShift`: a shift by a constant splat is `VSHLI`/`VSRLI`/`VSRAI`;
+        // `psraq` is AVX-512, so a 64-bit arithmetic shift is left to the
+        // expansion.
+        t.set_ops(
+            &[ISD::Shl, ISD::Srl],
+            &[MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Custom,
+        );
+        t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `ExpandReductions` makes a reduction shuffles and `extractelement`; no
+        // shuffle is selected here, so the DAG folds the spilled lanes
+        // (`expandVecReduce`). DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit
+        // 2026-11-24, the C3 PR: shuffle selection).
+        t.set_ops(
+            &[
+                ISD::VecReduceAdd,
+                ISD::VecReduceMul,
+                ISD::VecReduceAnd,
+                ISD::VecReduceOr,
+                ISD::VecReduceXor,
+                ISD::VecReduceSMax,
+                ISD::VecReduceSMin,
+                ISD::VecReduceUMax,
+                ISD::VecReduceUMin,
+            ],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Expand,
+        );
         t
     }
 
@@ -1068,6 +1107,35 @@ impl TargetLowering {
         // operand's type.
         t.set_ops(&[SIntToFp, UIntToFp], &vectors, Custom);
         t.set_ops(&[FpToSInt, FpToUInt], &[MVT::V4F32, MVT::V2F64, MVT::V2F32], Custom);
+        // `addTypeForNEON`: a compare is `LowerVSETCC`, a select a mask
+        // expression (`ExpandVSELECT`), and the integer codes the compares
+        // lack are made by swapping or inverting ("Let common code emit
+        // inverted variants of compares we do support").
+        let neon = [
+            MVT::V16I8,
+            MVT::V8I16,
+            MVT::V4I32,
+            MVT::V2I64,
+            MVT::V4F32,
+            MVT::V2F64,
+            MVT::V2F32,
+            MVT::V8I8,
+            MVT::V4I16,
+            MVT::V2I32,
+        ];
+        t.set_ops(&[SetCC], &neon, Custom);
+        // `addTypeForNEON`'s `v1i64`/`v2i64`: "SMAX, SMIN, UMAX, UMIN" are
+        // `LowerMinMax`.
+        t.set_ops(&[SMax, SMin, UMax, UMin], &[MVT::V2I64], Custom);
+        t.set_ops(&[Select, SelectCC, VSelect], &neon, Expand);
+        // `initActions`: "These operations default to expand for vector
+        // types".
+        t.set_ops(&[SignExtendInReg], &MVT::vectors().collect::<Vec<_>>(), Expand);
+        for vt in neon.into_iter().filter(|vt| vt.element().is_some_and(|lane| !matches!(lane, MVT::F32 | MVT::F64))) {
+            for cc in [CondCode::SetNe, CondCode::SetLe, CondCode::SetLt, CondCode::SetULe, CondCode::SetULt] {
+                t.set_cond_code_action(cc, vt, Expand);
+            }
+        }
         t.set_ops(&[VAStart, VACopy, VAArg], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
         // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value
@@ -1076,6 +1144,13 @@ impl TargetLowering {
         t.set_ops(&[FShr, FShl], &words, Custom);
         t.set_ops(&[Rotl], &words, Expand);
         t.set_ops(&[MulHU, MulHS], &[MVT::I32], Expand);
+        // `addTypeForNEON`'s loop ([L1465][pin]): the 128-bit vectors of 8 to
+        // 32-bit lanes multiply high by `umull`/`umull2` and `uzp2`.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1465
+        t.set_ops(&[MulHU, MulHS], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Legal);
+        t.set_ops(&[MulHU, MulHS], &[MVT::V2I64], Expand);
         t.set_ops(&[UMulLoHi, SMulLoHi], &words, Expand);
         if features.cssc {
             t.set_ops(&[CtPop, CtTz, Abs, SMax, UMax, SMin, UMin], &words, Legal);
@@ -1187,8 +1262,9 @@ impl TargetLowering {
             t.set_trunc_store_action(vt, mem, Expand);
         }
         for vt in FLOATS {
-            t.set_cond_code_action(CondCode::SetOEq, vt, Expand);
-            t.set_cond_code_action(CondCode::SetUNe, vt, Expand);
+            let action = if features.fp_status { Custom } else { Expand };
+            t.set_cond_code_action(CondCode::SetOEq, vt, action);
+            t.set_cond_code_action(CondCode::SetUNe, vt, action);
         }
         // L205..L240
         if features.cmov {

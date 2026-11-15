@@ -575,6 +575,8 @@ pub struct Tuning {
     /// 2026-11-24): and at -O2, where gcc has none: queens m32 151807 ->
     /// 139804 clk for +293 B, m64 -9.4% instructions for +830 B.
     pub ipa_cp_clones_at_speed: bool,
+    /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function.
+    pub ipa_cp_max_clones: usize,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -776,6 +778,7 @@ impl Tuning {
         recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
         ipa_cp_clones_at_speed: false,
+        ipa_cp_max_clones: 4,
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,
@@ -1181,6 +1184,9 @@ pub struct OperationCosts {
     /// The product of two values extended from the word (`i32` by `i32` into `i64`), the form a fixed-point multiply
     /// expands to. 0: priced as `multiply_wide`.
     pub multiply_widening: i64,
+    /// An integer shifted by a variable count when it is wider than the target's word (an `i64` on a 32-bit CPU): the
+    /// CPU's whole sequence, both halves and the count's test against the word. 0: priced as `shift` per word.
+    pub shift_wide: i64,
     /// Percent by which a constant divide's multiply-high sequence must cost
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
@@ -1449,6 +1455,7 @@ impl Default for OperationCosts {
             divide_long: 1,
             multiply_wide: 0,
             multiply_widening: 0,
+            shift_wide: 0,
             divide_margin: 0,
             multiply_high: 1,
             shift: 1,

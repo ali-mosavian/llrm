@@ -198,6 +198,7 @@ impl Options {
             self.pipeline.stable_loads,
             self.pipeline.has_min_size,
             self.pipeline.prices_bytes(),
+            self.pipeline.pre,
         )
     }
 }

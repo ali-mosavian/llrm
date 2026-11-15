@@ -45,6 +45,12 @@
 //!   operation of the induction is widened on a `vec.ind` phi
 //!   (`VPWidenIntOrFpInductionRecipe`): the integer induction read as a value,
 //!   or its `trunc`; a floating-point induction is not.
+//! - LVP7 recipes also include `icmp`, `fcmp` (read only by the condition of a
+//!   select) and `select` by such a compare (`VPWidenRecipe`,
+//!   `VPWidenSelectRecipe`), where the backend selects vector compares
+//!   (`Tti::selects_vector_compares`). A select by a loop-invariant condition
+//!   (a scalar `i1` in the pin) and a compare read otherwise (an `i1` vector
+//!   `and`/`zext`) stay scalar. Exit: LV-S1 (owner llrm-arm64-vec, 2026-11-24).
 //! - LVP4 the new instructions carry no metadata (`!tbaa`, `!alias.scope`).
 //!
 //! # Runs
@@ -65,9 +71,9 @@ use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
+use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use llrm_mir::tti::{ArithOp, ExtOperand, ExtUser, MemoryOp, Ty};
+use llrm_mir::tti::{ArithOp, CmpSel, ExtOperand, ExtUser, MemoryOp, Predicate, Ty};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::lcssa::from_arms;
@@ -88,6 +94,9 @@ pub struct LoopVectorize {
     /// frontend of llrm emits that hint, so a forced loop is not looked
     /// for. Owner arm64-vec, exit 2026-11-24.
     pub only_when_forced: bool,
+    /// Widen compares and selects whatever the target says of its backend
+    /// (the unit tests').
+    pub compares: bool,
 }
 
 /// What an operand of a widened instruction is.
@@ -117,22 +126,27 @@ struct Access {
     reverse: bool,
 }
 
-/// What a widened operation computes: a binary operation, `fneg`, or the
-/// call of `llvm.fmuladd`.
+/// What a widened operation computes: a binary operation, `fneg`, a cast, a
+/// compare, a select, or the call of `llvm.fmuladd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WideOp {
     Binary(BinaryOp),
     FNeg,
     FMulAdd,
     Cast(CastOp),
+    /// `VPWidenRecipe` of a compare: a vector of `i1`.
+    ICmp(IntPredicate),
+    FCmp(FloatPredicate),
+    /// `VPWidenSelectRecipe`: the condition is a widened compare.
+    Select,
 }
 
 impl WideOp {
     fn arity(self) -> usize {
         match self {
-            WideOp::Binary(_) => 2,
+            WideOp::Binary(_) | WideOp::ICmp(_) | WideOp::FCmp(_) => 2,
             WideOp::FNeg | WideOp::Cast(_) => 1,
-            WideOp::FMulAdd => 3,
+            WideOp::FMulAdd | WideOp::Select => 3,
         }
     }
 }
@@ -208,16 +222,21 @@ fn element_ty(
 }
 
 /// Whether every vector of the widened loop is a whole number of registers
-/// (`VF` lanes of its element type, of each operand's too).
+/// (`VF` lanes of its element type, of each operand's too). `d_registers`: an
+/// integer vector of half a register is the D-register type, which the
+/// backend selects where it selects vector compares. A compare's `i1` result
+/// has no register: the target's compare makes it.
 fn fills_registers(
     cx: &Cx,
     widening: &Widening,
     vf: u32,
     register_bits: u32,
+    d_registers: bool,
 ) -> bool {
     let whole = |ty: TypeId| {
-        let bits = cx.layout.size_bits(&cx.context.types, ty);
-        (u64::from(vf) * u64::from(bits)) % u64::from(register_bits) == 0
+        let bits = u64::from(vf) * u64::from(cx.layout.size_bits(&cx.context.types, ty));
+        bits % u64::from(register_bits) == 0
+            || (d_registers && matches!(cx.context.types.get(ty), Type::Int(_)) && bits == u64::from(register_bits) / 2)
     };
     widening
         .steps
@@ -225,7 +244,10 @@ fn fills_registers(
         .all(
             |step| match step {
                 Step::Access(access) => whole(access.element),
-                Step::Operation(operation) => whole(operation.element) && whole(operation.operand_element),
+                Step::Operation(operation) => {
+                    (matches!(operation.op, WideOp::ICmp(_) | WideOp::FCmp(_)) || whole(operation.element))
+                        && whole(operation.operand_element)
+                }
                 Step::Induction(induction) => whole(induction.element),
                 Step::Reduction(reduction) => element_ty(cx, reduction.ty).is_some() && whole(reduction.ty),
             },
@@ -291,6 +313,7 @@ fn extract(
     se: &mut ScalarEvolution,
     the_loop: Loop,
     legality: &Legality,
+    widen_compares: bool,
 ) -> Result<(Vec<Recipe>, Widening), Skipped> {
     let function = cx.function;
     let header = the_loop.get_header();
@@ -316,7 +339,8 @@ fn extract(
             .is_some_and(|value| function.users(value).iter().any(|one| function.parent(one.user) != Some(header)))
     };
 
-    let used_after_the_loop = |value: ValueId| function.users(value).iter().any(|one| function.parent(one.user) != Some(header));
+    let used_after_the_loop =
+        |value: ValueId| function.users(value).iter().any(|one| function.parent(one.user) != Some(header));
     // Defined before the loop (a constant, an argument, an outer value).
     let invariant = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
@@ -335,8 +359,9 @@ fn extract(
         let src = function.operand_type(cx.context, extension.operands[0])?;
         Some(ExtOperand { kind: interleave::cast_kind(op)?, src: element_ty(cx, src)? })
     };
-    // Every use is a store's value or an integer binary operation of this
-    // loop (the instruction itself is judged where it comes).
+    // Every use is a store's value or an operation of this loop: a binary
+    // one, a cast, a compare or a select (the instruction itself is judged
+    // where it comes).
     let widened_users = |value: ValueId| {
         function
             .users(value)
@@ -347,11 +372,16 @@ fn extract(
                         Opcode::Store { .. } => one.index == 0,
                         Opcode::Binary(_) | Opcode::FNeg => true,
                         Opcode::Call(_) => widened_intrinsic(cx, one.user).is_some(),
-                        Opcode::Cast(_) => true,
+                        Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Select => true,
                         _ => false,
                     },
             )
     };
+    // The loop's exit test: the condition of its branch.
+    let exit_condition = function.terminator(header).and_then(|branch| match function.instruction(branch).operands[..] {
+        [Operand::Value(condition), ..] => Some(condition),
+        _ => None,
+    });
     // What an operand is: a value the loop widened, or a loop-invariant one.
     let source_of = |operand: Operand, widened: &[InstId]| -> Result<Source, Skipped> {
         if let Operand::Value(value) = operand
@@ -400,16 +430,19 @@ fn extract(
                 if used_outside(inst) {
                     return Err(Skipped("The induction variable is used after the loop"));
                 }
-                // `VPWidenIntOrFpInductionRecipe`: the induction read as a value
-                // (not as an address, its step or a `trunc` of its own recipe)
-                // is a vector of consecutive numbers.
+                // `VPWidenIntOrFpInductionRecipe`: the induction read as a
+                // value (not as an address, its step or a
+                // `trunc` of its own recipe) is a vector of
+                // consecutive numbers.
                 let Operand::Value(value) = primary_phi else { unreachable!("a phi's result") };
                 let read_as_value = function.users(value).iter().any(|one| {
                     one.user != step
                         && match function.instruction(one.user).opcode {
                             Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::Trunc) => false,
                             // The exit test (its own arm judges it).
-                            Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne) => {
+                            Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)
+                                if function.instruction(one.user).result == exit_condition =>
+                            {
                                 !invariant(function.instruction(one.user).operands[1 - one.index as usize])
                             }
                             _ => !function
@@ -418,11 +451,9 @@ fn extract(
                                 .is_some_and(|result| address_arithmetic(function, header, result)),
                         }
                 });
-                if read_as_value && reverse {
-                    return Err(Skipped("The induction is read as a value in a loop that counts down"));
-                }
                 if read_as_value {
-                    let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                    let lane =
+                        element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
                     recipes.push(Recipe::Induction { lane, truncated_from: None });
                     widened.push(inst);
                     steps.push(Step::Induction(Induction {
@@ -479,7 +510,7 @@ fn extract(
                 // lowest address of its lanes. The pin's reverses cancel
                 // (`simplifyReverses`) when every access of the loop is one,
                 // and then no lane is permuted. DEVIATE LV-R1 (owner
-                // llrm-arm64-lv, exit 2026-11-27): any other access of such a
+                // llrm-arm64-lv, exit 2026-11-24): any other access of such a
                 // loop would keep a reverse `shufflevector`, which the arm64
                 // selector declines (VEC1).
                 let stride = match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {
@@ -542,6 +573,10 @@ fn extract(
                     BinaryOp::FSub => ArithOp::FSub,
                     BinaryOp::FMul => ArithOp::FMul,
                     BinaryOp::FDiv => ArithOp::FDiv,
+                    // `VPWidenRecipe` of a divide: the pin widens it where the
+                    // divisor is safe to speculate; a non-zero constant is.
+                    BinaryOp::UDiv => ArithOp::UDiv,
+                    BinaryOp::URem => ArithOp::URem,
                     _ => return Err(Skipped("A binary operation the vectorizer does not widen yet")),
                 };
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
@@ -554,8 +589,7 @@ fn extract(
                     }
                     let phi = function.instruction(reduction.phi).result.expect("a phi");
                     let only_phi_and_exit = function.users(value).iter().all(|one| {
-                        function.parent(one.user) != Some(header)
-                            || function.instruction(one.user).result == Some(phi)
+                        function.parent(one.user) != Some(header) || function.instruction(one.user).result == Some(phi)
                     });
                     if !only_phi_and_exit {
                         return Err(Skipped("A reduction's update used other than by its phi and after the loop"));
@@ -580,8 +614,14 @@ fn extract(
                 if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
+                let second = interleave::divisor_info(cx.context, op, data.operands[1], lane);
+                if matches!(op, BinaryOp::UDiv | BinaryOp::URem)
+                    && !(second.constant && second.value != Some(0) && matches!(operands[1], Source::Splat(_)))
+                {
+                    return Err(Skipped("A division by a value that is not a non-zero constant"));
+                }
                 let ext = [ext_of(data.operands[0]), ext_of(data.operands[1])];
-                recipes.push(Recipe::Binary { op: arith, lane, ext });
+                recipes.push(Recipe::Binary { op: arith, lane, ext, second });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -606,7 +646,7 @@ fn extract(
                 if matches!(operand, Source::Splat(_)) {
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
-                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane, ext: [None, None] });
+                recipes.push(Recipe::Binary { op: ArithOp::FNeg, lane, ext: [None, None], second: Default::default() });
                 widened.push(inst);
                 steps.push(Step::Operation(Operation {
                     inst,
@@ -622,9 +662,6 @@ fn extract(
                     && !data.result.is_some_and(|result| address_arithmetic(function, header, result)) =>
             {
                 let value = data.result.expect("a cast");
-                if reverse {
-                    return Err(Skipped("The induction is read as a value in a loop that counts down"));
-                }
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
                 let src = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
                 if used_outside(inst) {
@@ -775,7 +812,7 @@ fn extract(
                     return Err(Skipped("The induction step is not a constant"));
                 }
             }
-            Opcode::ICmp(predicate) => {
+            Opcode::ICmp(predicate) if data.result == exit_condition => {
                 // The exit test: the stepped induction against a loop-invariant
                 // bound (LVP2). The constant trip count (VP3) fixes where the
                 // widened induction meets it.
@@ -799,21 +836,106 @@ fn extract(
                 };
                 exit_compare = Some((inst, bound_operand));
             }
+            // `VPWidenRecipe` of a compare: a vector of `i1`, read by the
+            // selects the loop makes of it.
+            Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Select if !widen_compares => {
+                return Err(Skipped("A comparison or select the backend does not select as a vector yet"));
+            }
+            Opcode::ICmp(_) | Opcode::FCmp(_) => {
+                let value = data.result.expect("a compare");
+                let source = function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped comparison"))?;
+                let lane = element_ty(cx, source).ok_or(Skipped("An element type the target has no vector of"))?;
+                let only_conditions = function.users(value).iter().all(|one| {
+                    function.parent(one.user) == Some(header)
+                        && one.index == 0
+                        && matches!(function.instruction(one.user).opcode, Opcode::Select)
+                });
+                if !only_conditions {
+                    return Err(Skipped("A comparison used other than by the condition of a select"));
+                }
+                let operands = [source_of(data.operands[0], &widened)?, source_of(data.operands[1], &widened)?];
+                if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
+                    return Err(Skipped("A comparison of loop-invariant values"));
+                }
+                let (op, predicate, wide) = match data.opcode {
+                    Opcode::ICmp(p) => (CmpSel::ICmp, Predicate::Int(p), WideOp::ICmp(p)),
+                    Opcode::FCmp(p) => (CmpSel::FCmp, Predicate::Float(p), WideOp::FCmp(p)),
+                    _ => unreachable!("a compare"),
+                };
+                recipes.push(Recipe::Compare { op, lane, predicate });
+                widened.push(inst);
+                steps.push(Step::Operation(Operation {
+                    inst,
+                    op: wide,
+                    flags: data.flags,
+                    element: data.ty,
+                    operand_element: source,
+                    operands: [operands[0], operands[1], operands[1]],
+                }));
+            }
+            // `VPWidenSelectRecipe`: the condition is a compare the loop
+            // widened. DEVIATE LV-S1 (owner llrm-arm64-vec, exit LV-W4): a
+            // loop-invariant condition (the pin keeps it a scalar `i1`) is
+            // not widened.
+            Opcode::Select => {
+                let value = data.result.expect("a select");
+                let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                if used_outside(inst) {
+                    return Err(Skipped("A select used after the loop"));
+                }
+                if !widened_users(value) {
+                    return Err(Skipped("A select result used other than by a store or an operation"));
+                }
+                let Source::Wide(condition) = source_of(data.operands[0], &widened)? else {
+                    return Err(Skipped("A select by a condition the loop does not make"));
+                };
+                let predicate = match function.instruction(condition).opcode {
+                    Opcode::ICmp(p) => Predicate::Int(p),
+                    Opcode::FCmp(p) => Predicate::Float(p),
+                    _ => return Err(Skipped("A select by a condition the loop does not make")),
+                };
+                let operands = [
+                    Source::Wide(condition),
+                    source_of(data.operands[1], &widened)?,
+                    source_of(data.operands[2], &widened)?,
+                ];
+                recipes.push(Recipe::Select { lane, predicate: Some(predicate) });
+                widened.push(inst);
+                steps.push(Step::Operation(Operation {
+                    inst,
+                    op: WideOp::Select,
+                    flags: data.flags,
+                    element: data.ty,
+                    operand_element: data.ty,
+                    operands,
+                }));
+            }
             Opcode::Br => {}
             _ => return Err(Skipped("An instruction the vectorizer does not widen yet")),
         }
     }
     let step_operand = step_operand.ok_or(Skipped("The induction step was not found"))?;
     let (compare, bound_operand) = exit_compare.ok_or(Skipped("No exit compare"))?;
-    if !steps.iter().any(|one| matches!(one, Step::Access(_))) {
-        return Err(Skipped("No memory access to widen"));
+    if !steps.iter().any(|one| matches!(one, Step::Access(_) | Step::Reduction(_))) {
+        return Err(Skipped("No memory access or reduction to widen"));
+    }
+    // The lanes of an induction count down in iteration order, those of a
+    // reverse access in memory order: the pin reverses one of them.
+    // DEVIATE LV-R1 (owner llrm-arm64-lv, exit 2026-11-27): left scalar.
+    if reverse
+        && steps.iter().any(|one| matches!(one, Step::Induction(_)))
+        && steps.iter().any(|one| matches!(one, Step::Access(_)))
+    {
+        return Err(Skipped("An induction read as a value beside the accesses of a loop that counts down"));
     }
     let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, tests_phi };
     // `VPDerivedIVRecipe`: the induction of the addresses is the canonical one
     // (from zero, by one) or `start + index * step`, an `add` of the scalar
     // type that is priced (`computeCost`).
-    let starts_at_zero = matches!(primary_start, Operand::Constant(c)
-        if matches!(cx.context.get(c).kind, ConstantKind::Int(0) | ConstantKind::Zero));
+    let starts_at_zero = matches!(
+        primary_start,
+        Operand::Constant(c) if matches!(cx.context.get(c).kind, ConstantKind::Int(0) | ConstantKind::Zero)
+    );
     if reverse || !starts_at_zero {
         let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
         recipes.push(Recipe::DerivedIv { lane });
@@ -1129,8 +1251,9 @@ fn widen_access(
 }
 
 /// `VPWidenIntOrFpInductionRecipe::execute`: a `vec.ind` phi in the header that
-/// starts at `start + <0, 1, .., VF-1>` and steps by VF per part
-/// (`step.add`, `vec.ind.next`); part `k` is the phi plus `k * VF`.
+/// starts at `start + step * <0, 1, .., VF-1>` and steps by `step * VF` per
+/// part (`step.add`, `vec.ind.next`); part `k` is the phi plus `k * step * VF`.
+/// The step is -1 where the loop counts down.
 fn widen_induction(
     context: &mut llrm_mir::context::Context,
     function: &mut Function,
@@ -1141,8 +1264,10 @@ fn widen_induction(
     wide: &mut Vec<(InstId, Vec<ValueId>)>,
 ) {
     let header = widening.shape.header;
+    let direction: i128 = if widening.shape.reverse { -1 } else { 1 };
     let vector_ty = context.types.intern(Type::Vector { element: induction.element, count: plan.vf });
-    let first = function.iter_block(header).find(|&inst| function.instruction(inst).opcode != Opcode::Phi).expect("a body");
+    let first =
+        function.iter_block(header).find(|&inst| function.instruction(inst).opcode != Opcode::Phi).expect("a body");
     let phi = function.create_instruction(Opcode::Phi, vector_ty, Vec::new(), Flags::default(), Some("vec.ind"));
     function.insert(phi, Position::Before(first)).expect("the header");
     let phi_value = function.instruction(phi).result.expect("a phi");
@@ -1150,7 +1275,8 @@ fn widen_induction(
     // The first lanes: constants where the start is one, else the start
     // (truncated) broadcast plus the lane numbers, in the vector preheader.
     let iota = |context: &mut llrm_mir::context::Context, base: i128| {
-        let lanes = (0..plan.vf).map(|lane| context.int(induction.element, base + i128::from(lane))).collect();
+        let lanes =
+            (0..plan.vf).map(|lane| context.int(induction.element, base + direction * i128::from(lane))).collect();
         Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(lanes) }))
     };
     let start = match induction.start {
@@ -1189,7 +1315,8 @@ fn widen_induction(
         }
     };
 
-    let by_vf = int_constant(context, induction.element, u64::from(plan.vf));
+    // `Context::int` wraps -VF to the lane type.
+    let by_vf = Operand::Constant(context.int(induction.element, direction * i128::from(plan.vf)));
     let by_vf = broadcast(context, function, splat_block, vector_ty, plan.vf, by_vf);
     let mut parts = vec![phi_value];
     let mut last = phi_value;
@@ -1212,7 +1339,9 @@ fn widen_induction(
         Flags::default(),
         Some("vec.ind.next"),
     );
-    function.insert(next, Position::Before(function.terminator(header).expect("a terminated loop"))).expect("the header");
+    function
+        .insert(next, Position::Before(function.terminator(header).expect("a terminated loop")))
+        .expect("the header");
     let next = Operand::Value(function.instruction(next).result.expect("an add"));
     function.set_operands(phi, from_arms(&[(start, splat_block), (next, header)]));
     wide.push((induction.inst, parts));
@@ -1250,10 +1379,13 @@ fn close_reductions(
         let start = match reduction.start {
             start if start == identity => splat,
             Operand::Constant(c) => {
-                let mut lanes = vec![match identity {
-                    Operand::Constant(id) => id,
-                    _ => unreachable!("an integer identity"),
-                }; plan.vf as usize];
+                let mut lanes = vec![
+                    match identity {
+                        Operand::Constant(id) => id,
+                        _ => unreachable!("an integer identity"),
+                    };
+                    plan.vf as usize
+                ];
                 lanes[0] = c;
                 Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(lanes) }))
             }
@@ -1297,7 +1429,13 @@ fn close_reductions(
         }
         let function_type = context
             .types
-            .intern(Type::Function { returns: reduction.ty, parameters: vec![*vector_ty], variadic: false });
+            .intern(
+                Type::Function {
+                    returns: reduction.ty,
+                    parameters: vec![*vector_ty],
+                    variadic: false,
+                },
+            );
         let kind = match reduction.kind {
             RecurKind::Add => "add",
             RecurKind::Mul => "mul",
@@ -1381,8 +1519,13 @@ fn execute(
                     .expect("a body");
                 let mut phis = Vec::new();
                 for _ in 0..plan.ic {
-                    let phi =
-                        function.create_instruction(Opcode::Phi, vector_ty, Vec::new(), Flags::default(), Some("vec.phi"));
+                    let phi = function.create_instruction(
+                        Opcode::Phi,
+                        vector_ty,
+                        Vec::new(),
+                        Flags::default(),
+                        Some("vec.phi"),
+                    );
                     function.insert(phi, Position::Before(first)).expect("the header");
                     phis.push(phi);
                 }
@@ -1420,6 +1563,9 @@ fn execute(
                         WideOp::Binary(op) => Opcode::Binary(op),
                         WideOp::FNeg => Opcode::FNeg,
                         WideOp::Cast(op) => Opcode::Cast(op),
+                        WideOp::ICmp(predicate) => Opcode::ICmp(predicate),
+                        WideOp::FCmp(predicate) => Opcode::FCmp(predicate),
+                        WideOp::Select => Opcode::Select,
                         WideOp::FMulAdd => {
                             // `llvm.fmuladd.v4f32` of the widened arguments.
                             let function_type = context
@@ -1593,7 +1739,8 @@ impl FunctionPass for LoopVectorize {
                 let memory_checks = rtc.need.then(|| rtc.clone());
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
                 let dep = lai.dep_checker();
-                let vector = match extract(&cx, se, found, &legality) {
+                let widen_compares = self.compares || tti.selects_vector_compares();
+                let vector = match extract(&cx, se, found, &legality, widen_compares) {
                     Ok((recipes, widening)) => {
                         let facts = LoopFacts {
                             recipes,
@@ -1605,17 +1752,21 @@ impl FunctionPass for LoopVectorize {
                             widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                             opt_size,
                             has_reductions: !legality.reductions.is_empty(),
+                            reduction_bits: widening
+                                .reductions
+                                .iter()
+                                .map(|one| cx.layout.size_bits(&cx.context.types, one.ty) as u32)
+                                .collect(),
                         };
                         match plan(&*tti, &facts) {
-                            // DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR): the pin's
-                            // x86 expands `llvm.vector.reduce.*` to shuffles
-                            // (`ExpandReductions`), which this backend does
-                            // not select yet.
+                            // A target whose backend selects no vector reduction keeps the loop scalar.
                             Ok(_) if !widening.reductions.is_empty() && !tti.lowers_vector_reductions() => {
                                 why(unit, &outer, header, "plan: The target does not lower a vector reduction");
                                 None
                             }
-                            Ok(chosen) if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits()) => {
+                            Ok(chosen)
+                                if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits(), widen_compares) =>
+                            {
                                 // DEVIATE LV-D6 (owner llrm-arm64-vec, exit
                                 // LV-W4): a
                                 // vector of lanes of two widths has one of them
@@ -1661,6 +1812,12 @@ impl FunctionPass for LoopVectorize {
                         widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                         opt_size,
                         has_reductions: !extracted.interleaving.reductions.is_empty(),
+                        reduction_bits: extracted
+                            .interleaving
+                            .reductions
+                            .iter()
+                            .map(|one| cx.layout.size_bits(&cx.context.types, one.ty) as u32)
+                            .collect(),
                     };
                     if extracted.widening_mul || pin_may_vectorize(&*tti, &priced) {
                         why(

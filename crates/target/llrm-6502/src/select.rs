@@ -123,6 +123,28 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
+    alloc::forget_wide_commuted();
+    let text = function_text_once(module, name, selection)?;
+    // the allocator's wider commute guesses it spares a copy; where it took
+    // a choice the narrow rule would not, the function is also allocated
+    // without it and the smaller kept
+    if !alloc::wide_commuted() {
+        return Ok(text);
+    }
+    let apart = alloc::with_wide_commute(false, || function_text_once(module, name, selection))?;
+    let cpu = selection.cpu;
+    let size = |text: &str| crate::timing::estimate(cpu, text).map(|e| (e.bytes, e.cycles));
+    Ok(match (size(&text), size(&apart)) {
+        (Ok(with), Ok(without)) if without < with => apart,
+        _ => text,
+    })
+}
+
+fn function_text_once(
+    module: &Module,
+    name: &str,
+    selection: &Selection,
+) -> Result<String, String> {
     // a call through a pointer no `!callees` bounds may come back into this
     // function
     let recursive = module
@@ -169,17 +191,32 @@ pub fn module_text(
     module: &Module,
     parts: &[(&str, &Selection)],
 ) -> Result<Vec<String>, String> {
+    alloc::forget_inline_saves();
     let mut texts =
         parts.iter().map(|(name, selection)| function_text(module, name, selection)).collect::<Result<Vec<_>, _>>()?;
     let cells = |text: &str| -> Option<u32> {
         let (before, _) = text.split_once("\n  jsr __csave")?;
         before.rsplit_once("ldy #")?.1.trim().parse().ok()
     };
-    let users: Vec<(usize, u32)> = texts.iter().enumerate().filter_map(|(at, text)| Some((at, cells(text)?))).collect();
-    let gain: i64 = users.iter().map(|(_, n)| alloc::shared_save_gain(*n)).sum();
-    if !users.is_empty() && gain <= alloc::SAVE_HELPERS_BYTES {
-        for (at, _) in users {
-            texts[at] = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
+    // each user is also written with its cells saved inline: the helpers are
+    // kept where the bytes the users save, as written, are more than the
+    // helpers take
+    let users: Vec<usize> = (0..texts.len()).filter(|&at| cells(&texts[at]).is_some()).collect();
+    if !users.is_empty() {
+        let cpu = parts.first().map_or(Cpu::Mos6502, |(_, selection)| selection.cpu);
+        let bytes = |text: &str| crate::timing::estimate(cpu, text).map(|priced| i64::from(priced.bytes));
+        let mut inline = Vec::new();
+        let mut gain = 0;
+        for &at in &users {
+            let text = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
+            gain += bytes(&text)? - bytes(&texts[at])?;
+            inline.push(text);
+        }
+        if gain <= alloc::SAVE_HELPERS_BYTES {
+            for (at, text) in users.into_iter().zip(inline) {
+                alloc::keep_saves_inline(parts[at].0);
+                texts[at] = text;
+            }
         }
     }
     // the wide speed division is linked once and costs 141 bytes:

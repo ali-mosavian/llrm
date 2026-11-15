@@ -59,8 +59,8 @@
 //!   so the pin's NEON loops end in an epilogue, as here.
 
 use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, Predicate, RegisterClass, Tti, Ty,
-    VectorTy,
+    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, OperandInfo, Predicate, RegisterClass,
+    Tti, Ty, VectorTy,
 };
 
 /// One widenable instruction of the loop, by what its cost and widening need.
@@ -74,7 +74,7 @@ pub enum Recipe {
     /// A binary operation of `lane`, integer or floating point; `ext`: which
     /// operands are a `sext` or `zext` (the pin's `Args`: the widening
     /// forms price on them).
-    Binary { op: ArithOp, lane: Ty, ext: [Option<ExtOperand>; 2] },
+    Binary { op: ArithOp, lane: Ty, ext: [Option<ExtOperand>; 2], second: OperandInfo },
     /// `llvm.fmuladd` of `lane`s (`VPWidenIntrinsicRecipe`): AArch64 prices it
     /// as one `fmul` (`getIntrinsicInstrCost`, L797).
     FMulAdd { lane: Ty },
@@ -156,6 +156,10 @@ pub struct LoopFacts {
     pub opt_size: bool,
     /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
     pub has_reductions: bool,
+    /// The recurrence types' widths of the reductions
+    /// (`collectElementTypesForWidening`: a loop without loads or stores has
+    /// only these to take the widest type from).
+    pub reduction_bits: Vec<u32>,
 }
 
 /// The chosen factors.
@@ -203,10 +207,17 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
     }
 }
 
-/// `getSmallestAndWidestTypes` (L513): the loads' and stores' lane widths; the
-/// widest starts at 8.
-fn smallest_and_widest(recipes: &[Recipe]) -> (u32, u32) {
+/// `getSmallestAndWidestTypes` (L513): the loads' and stores' lane widths and
+/// the reductions' recurrence types; the widest starts at 8.
+fn smallest_and_widest(
+    recipes: &[Recipe],
+    reduction_bits: &[u32],
+) -> (u32, u32) {
     let (mut smallest, mut widest) = (u32::MAX, 8);
+    for &bits in reduction_bits {
+        smallest = smallest.min(bits);
+        widest = widest.max(bits);
+    }
     for recipe in recipes {
         if matches!(
             recipe,
@@ -321,9 +332,9 @@ fn iteration_cost(
                     unknown(tti.vector_arithmetic_cost(ArithOp::FMul, vector(lane), kind))?
                 }
             }
-            Recipe::Binary { op, lane, ext } => {
+            Recipe::Binary { op, lane, ext, second } => {
                 if vf == 1 {
-                    tti.arithmetic_cost(op, lane, kind, Default::default(), Default::default())
+                    tti.arithmetic_cost(op, lane, kind, Default::default(), second)
                 } else if ext.iter().any(Option::is_some) {
                     // The widening forms; `Err`: a price that needs known bits.
                     match tti.vector_arithmetic_cost_ext(op, vector(lane), ext, kind) {
@@ -338,7 +349,7 @@ fn iteration_cost(
                     // An integer operation the target does not price is the
                     // pin's scalarized one (a multiply of
                     // `<2 x i64>`).
-                    tti.vector_arithmetic_cost(op, vector(lane), kind).ok_or(NotTaken)?
+                    tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
                 }
             }
             Recipe::Scalarized { op, lane } => {
@@ -378,8 +389,8 @@ fn iteration_cost(
                     unknown(tti.vector_cmp_sel_cost(CmpSel::Select, vector(lane), predicate, kind))?
                 }
             }
-            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free, the
-            // step an `add` of the vector.
+            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free,
+            // the step an `add` of the vector.
             Recipe::Induction { lane, truncated_from } => {
                 if vf == 1 {
                     truncated_from.map_or(Cost::FREE, |src| tti.cast_cost(CastKind::Trunc, lane, src, kind))
@@ -711,7 +722,7 @@ fn max_vf_of(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> u64 {
-    let (smallest, widest) = smallest_and_widest(&facts.recipes);
+    let (smallest, widest) = smallest_and_widest(&facts.recipes, &facts.reduction_bits);
     // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits /
     // WidestType).
     let mut max_safe = bit_floor(facts.max_safe_width_in_bits / u64::from(widest));
