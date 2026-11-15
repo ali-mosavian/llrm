@@ -525,6 +525,8 @@ fn tail(
     };
     llrm_6502_prepare(&mut program);
     let module = &program.modules[0];
+    // after the modules it keys texts by: dropped before them
+    let _texts = crate::select::TextCache::new();
     let names: Vec<String> = module
         .globals
         .iter()
