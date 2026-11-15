@@ -208,29 +208,6 @@ pub struct TargetLowering {
     min_stack_argument_alignment: u32,
 }
 
-/// Every vector type (`MVT::fixedlen_vector_valuetypes`).
-const VECTORS: [MVT; 19] = [
-    MVT::V16I8,
-    MVT::V8I16,
-    MVT::V4I32,
-    MVT::V2I64,
-    MVT::V4F32,
-    MVT::V2F64,
-    MVT::V2F32,
-    MVT::V8I8,
-    MVT::V4I16,
-    MVT::V2I32,
-    MVT::V32I8,
-    MVT::V16I16,
-    MVT::V8I32,
-    MVT::V4I64,
-    MVT::V8F32,
-    MVT::V4F64,
-    MVT::V16I32,
-    MVT::V8I64,
-    MVT::V16I64,
-];
-
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
@@ -1083,8 +1060,8 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
         // `AArch64TargetLowering` (L1637): no vector has an extending load or a
         // truncating store of another vector's memory type.
-        for vt in VECTORS {
-            for mem in VECTORS {
+        for vt in MVT::vectors() {
+            for mem in MVT::vectors() {
                 for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
                     t.set_load_ext_action(ext, vt, mem, Expand);
                 }
