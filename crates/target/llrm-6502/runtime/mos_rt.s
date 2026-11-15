@@ -297,7 +297,6 @@ __modqi3:                       ; rc2 % rc3 -> A
 
 ; rs1 := |rs1|, rs2 := |rs2|: the pair at rc4:rc5, then the one at rc2:rc3
 abs16_pair:
-  ; reaches rc2 rc3 rc4 rc5
   ldx #2
 @next:
   lda rc3,x

@@ -87,17 +87,9 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
         macros: HashMap<&'static str, bool>,
     }
     static RUNTIME: std::sync::OnceLock<Runtime> = std::sync::OnceLock::new();
-    /// The cells a line names, or `None` for one reached by index. A routine
-    /// that indexes says which cells it reaches in a comment line `; reaches
-    /// rc2 rc3`: those are added, and its indexed operands are then known.
+    /// The cells a line names, or `None` for one reached by index.
     fn cells_of(text: &str) -> Option<Vec<u8>> {
         let mut found = Vec::new();
-        let reached: Vec<u8> = text
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("; reaches"))
-            .flat_map(|names| names.split_whitespace().filter_map(|name| name.strip_prefix("rc")?.parse().ok()))
-            .collect();
-        found.extend(&reached);
         for line in text.lines() {
             let code = line.split(';').next().unwrap_or("");
             if code.match_indices("rs").any(|(at, _)| {
@@ -119,7 +111,6 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
                 if after
                     .strip_prefix(',')
                     .is_some_and(|index| matches!(index.trim().to_ascii_lowercase().as_str(), "x" | "y"))
-                    && reached.is_empty()
                 {
                     return None;
                 }
