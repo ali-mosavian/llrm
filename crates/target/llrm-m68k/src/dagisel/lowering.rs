@@ -329,7 +329,8 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         } else {
             Price::Size
         };
-        let plan = super::synth::plan(self.cpu, price, vt.size_in_bits(), c)?;
+        let plan = super::synth::plan(self.cpu, price, vt.size_in_bits(), c)
+            .or_else(|| super::synth::plan_unless_linked(self.cpu, price, vt.size_in_bits(), c))?;
         let taken = self.mul.allows(true).then_some(plan);
         if taken.is_some() {
             self.mul.note_synthesized();
