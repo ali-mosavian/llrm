@@ -512,12 +512,20 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
             let (u, a, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);
-            0x4E20_0400 | u << 29 | a << 23 | sz << 22 | vreg(*rm)? << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x0E20_0400
+                | lanes.q() << 30
+                | u << 29
+                | a << 23
+                | sz << 22
+                | vreg(*rm)? << 16
+                | opcode << 11
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
         }
         Inst::VectorFma { op, lanes, rd, rn, rm } => {
             let a = u32::from(*op == VectorFma::Sub);
             let sz = u32::from(*lanes == Arrangement::D2);
-            0x4E20_CC00 | a << 23 | sz << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x0E20_CC00 | lanes.q() << 30 | a << 23 | sz << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorInsGpr { lanes, rd, rn, index } => {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
@@ -600,7 +608,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::VectorFpUnary { op, lanes, rd, rn } => {
             let (u, high, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);
-            0x4E20_0800 | u << 29 | high << 23 | sz << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+            0x0E20_0800 | lanes.q() << 30 | u << 29 | high << 23 | sz << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,

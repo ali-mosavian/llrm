@@ -823,6 +823,7 @@ fn vector_inst(
     let fp_lanes = |text: &str| match text {
         "4f32" => Some(Arrangement::S4),
         "2f64" => Some(Arrangement::D2),
+        "2f32" => Some(Arrangement::S2),
         _ => None,
     };
     for (stem, op) in

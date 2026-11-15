@@ -531,7 +531,11 @@ fn vector_fp_name(
     mnemonic: &str,
     lanes: Arrangement,
 ) -> String {
-    let lanes = if lanes == Arrangement::D2 { "2f64" } else { "4f32" };
+    let lanes = match lanes {
+        Arrangement::D2 => "2f64",
+        Arrangement::S2 => "2f32",
+        _ => "4f32",
+    };
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
@@ -683,7 +687,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             }
         });
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFma::Add, VectorFma::Sub] {
             if name == vector_fp_name(op.mnemonic(), lanes) {
                 return Some(Inst::VectorFma { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) });
@@ -798,7 +802,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in VECTOR_FP_OPS {
             if name == vector_fp_name(op.mnemonic(), lanes) {
                 return Some(Inst::VectorFpBinary {
