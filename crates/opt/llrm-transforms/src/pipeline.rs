@@ -141,8 +141,8 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
-    inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
+    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
@@ -1645,7 +1645,10 @@ pub fn recorded(
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
                 cp_peel_limited: applied.options.inline.cp_clone.is_none(),
-                cp_max_clones: program.target.tti().map_or(crate::ipacp::DEFAULT_MAX_CLONES, |tti| tti.ipa_cp_max_clones()),
+                cp_max_clones: program
+                    .target
+                    .tti()
+                    .map_or(crate::ipacp::DEFAULT_MAX_CLONES, |tti| tti.ipa_cp_max_clones()),
                 ..applied.options.inline
             },
             ..applied.options.clone()
@@ -1891,7 +1894,8 @@ pub fn recorded(
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
     }
-    // After gepoffset, which leaves the constant part of an address in its own `gep`.
+    // After gepoffset, which leaves the constant part of an address in its own
+    // `gep`.
     if applied.options.wanted("gepbyteindex") {
         manager.add(gepbyteindex::GepByteIndex);
     }
@@ -2024,7 +2028,8 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce {
             size: applied.options.prefers_size(),
-            bytes_strict: applied.options.prefers_size() || applied.options.at_o1(),
+            bytes_strict: applied.options.prefers_size()
+                || (applied.options.at_o1() && !applied.options.prices_bytes()),
         }));
         // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
         // LSR; it does nothing for a target whose TTI does not enable it.
