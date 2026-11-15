@@ -1900,11 +1900,11 @@ pub trait Tti {
         4
     }
 
-    /// DEVIATE LSR-SPILL-PRICE: whether a loop whose other values fill the
-    /// registers keeps its pressure in LSR's cost
-    /// (`Tuning::lsr_prices_spills`).
-    fn lsr_prices_spills(&self) -> bool {
-        false
+    /// DEVIATE LSR-SPILL-PRICE: how many registers past the target's the
+    /// loop's other values must need for LSR to keep the pressure in its cost
+    /// (`Tuning::lsr_spill_pressure_margin`); none: the pin's.
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry

@@ -620,11 +620,11 @@ pub struct Tuning {
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function.
     pub ipa_cp_max_clones: usize,
     /// DEVIATE LSR-SPILL-PRICE (exit 2026-11-24): a loop whose other values
-    /// already fill the registers keeps its pressure in the cost, so an
-    /// induction variable held in memory is priced as the spill it is. The
-    /// pin's LSR searches again with the pressure cut (LU3b); gcc's ivopts
-    /// charges `estimate_reg_pressure_cost`.
-    pub lsr_prices_spills: bool,
+    /// need this many registers more than the target has keeps its pressure in
+    /// the cost, so an induction variable held in memory is priced as the
+    /// spill it is. The pin's LSR searches again with the pressure cut (LU3b);
+    /// gcc's ivopts charges `estimate_reg_pressure_cost`. none: the pin's.
+    pub lsr_spill_pressure_margin: Option<u32>,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -831,7 +831,7 @@ impl Tuning {
         recursive_tre_first: (false, false),
         ipa_cp_clones_at_speed: false,
         ipa_cp_max_clones: 4,
-        lsr_prices_spills: false,
+        lsr_spill_pressure_margin: None,
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,
