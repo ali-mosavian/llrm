@@ -1819,10 +1819,11 @@ done:
 /// bytes that takes 5 more clocks a bit. The level decides: at size (12 clocks
 /// a byte) a shift of 5 to 7 bits is the loop (the shorter ones are decided by
 /// the final size, see `a_short_word_shift_stays_in_a_where_that_is_shorter`);
-/// at speed (1 clock a byte) none is. Both bytes of each result are checked,
+/// at speed the same (bytes first at every level, 2026-11-14; it was none at 1
+/// clock a byte). Both bytes of each result are checked,
 /// the shifted word added to the word so that the shift stays in cells.
 #[test]
-fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
+fn a_word_shift_is_a_counted_loop_at_every_level() {
     for (op, k) in [("shl", 5u32), ("shl", 7), ("lshr", 6)] {
         let name = format!("{op}{k}");
         let ir =
@@ -1830,7 +1831,7 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
         let looped = compile_at(&ir, &name, 16, Tuning::SIZE);
         let unrolled = compile_at(&ir, &name, 16, Tuning::SPEED);
         assert!(looped.contains("dex") || looped.contains("dey"), "{op} {k} at size:\n{looped}");
-        assert!(!unrolled.contains("dex") && !unrolled.contains("dey"), "{op} {k} at speed:\n{unrolled}");
+        assert!(unrolled.contains("dex") || unrolled.contains("dey"), "{op} {k} at speed:\n{unrolled}");
         for text in [&looped, &unrolled] {
             for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
                 let shifted = if op == "shl" { x << k } else { x >> k };
@@ -1846,12 +1847,13 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
     }
 }
 
-/// Three callee-saved cells cost 18 bytes of `lda`/`pha` and `pla`/`sta`. At
-/// the size level they are saved by `__csave` and restored by a jump to
-/// `__crest` (11 bytes, 99 clocks more); at speed they stay inline. digits(5) =
-/// 1, digits(10) = 2, digits(99) = 2, digits(100) = 3, digits(65535) = 5.
+/// Three callee-saved cells cost 18 bytes of `lda`/`pha` and `pla`/`sta`. They
+/// are saved by `__csave` and restored by a jump to `__crest` (11 bytes, 99
+/// clocks more) at every level: bytes first (2026-11-14); at speed they stayed
+/// inline at a clock a byte. digits(5) = 1, digits(10) = 2, digits(99) = 2,
+/// digits(100) = 3, digits(65535) = 5.
 #[test]
-fn three_saved_cells_are_shared_helpers_at_the_size_level_only() {
+fn three_saved_cells_are_shared_helpers_at_every_level() {
     // the word is read from a global: an argument in A:X is live at entry,
     // where `__csave` (which changes a, x and y) cannot run, and the
     // function then pushes the cells inline (6502-AX-PROGRAMS)
@@ -1876,7 +1878,7 @@ done:
     let shared = compile_at(ir, "digits", 16, Tuning::SIZE);
     let inline = compile_at(ir, "digits", 16, Tuning::SPEED);
     assert!(shared.contains("jsr __csave") && shared.contains("jmp __crest") && !shared.contains("pha"), "{shared}");
-    assert!(inline.contains("pha") && !inline.contains("__csave"), "{inline}");
+    assert!(inline.contains("jsr __csave") && inline.contains("jmp __crest") && !inline.contains("pha"), "{inline}");
     for (v, want) in [(5u16, 1), (10, 2), (99, 2), (100, 3), (65535, 5)] {
         for (name, text) in [("shared", &shared), ("inline", &inline)] {
             let setup = set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &set("g", v) + &set("g+1", v >> 8);
@@ -1894,9 +1896,10 @@ done:
 }
 
 /// `__csave` and `__crest` link as 34 bytes, so a module takes them only where
-/// its users together save more than that: one function that keeps three cells
-/// saved 9 bytes and cost 25 net (digits: 165 linked at speed, 189 at size with
-/// the helpers). Three such functions gain 27, four gain 36.
+/// its users together save more than that, as the users are written: digits
+/// (two returns) is 87 bytes inline and 71 with the helpers, 16 a user. The
+/// model said 9, and took them from four users on (2026-11-14); two users gain
+/// 32, three gain 48.
 #[test]
 fn the_save_helpers_are_linked_only_where_their_users_pay_for_them() {
     let digits = |name: &str| {
@@ -1938,7 +1941,7 @@ done:
             names.iter().map(String::as_str).zip(&selections).collect();
         (names.clone(), llrm_6502::select::module_text(&module, &parts).expect("emits"))
     };
-    for (users, shared) in [(1, false), (3, false), (4, true)] {
+    for (users, shared) in [(1, false), (2, false), (3, true)] {
         let (names, texts) = module_of(users);
         let all: String = texts.concat();
         assert_eq!(all.contains("jsr __csave"), shared, "{users} users:\n{all}");
@@ -3459,17 +3462,19 @@ mod post_ra {
     }
 }
 
-/// `x * 9` at the size level was `lda lo; sta t; ...; ldx #3; loop; ...; lda
-/// t`: a copy of the shifted byte and its reload, 30 bytes and 100 clocks,
-/// against 26 and 69 for the shifts kept in `a` (k_mulax9; the loop was larger
-/// and slower than the speed level's code). `shift_loop_in_a` takes the run in
-/// `a` where the final text is shorter; a shift where it is not stays the loop.
+/// `x * 9` at the size level: the word arrives in A:X and is stored to its
+/// cells, which the counted loop shifts in place (23 B); three steps kept in
+/// `a` were 26. Before the A:X entry the loop needed a copy of the shifted byte
+/// and a reload (30 B against 26 for the run in `a`, k_mulax9), and
+/// `shift_loop_in_a` took the run; the pass still decides the shapes that keep
+/// that copy.
 #[test]
-fn a_short_word_shift_stays_in_a_where_that_is_shorter() {
+fn a_short_word_shift_is_the_loop_where_that_is_shorter() {
     let ir = "define i16 @m9(i16 %x) {\n  %p = mul i16 %x, 9\n  ret i16 %p\n}";
     let text = compile_at(ir, "m9", 16, Tuning::SIZE);
-    assert!(!text.contains("dex") && !text.contains("dey"), "a loop for three shifts:\n{text}");
-    assert!(text.matches("asl a").count() == 3, "{text}");
+    assert!(text.contains("dey") || text.contains("dex"), "no loop for three shifts:\n{text}");
+    let size = llrm_6502::timing::estimate(llrm_6502::dagisel::hooks::Cpu::Mos6502, &text).unwrap().bytes;
+    assert!(size <= 24, "{size} B:\n{text}");
     for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
         let want = x.wrapping_mul(9);
         let setup = args(&[w16(x)]);
@@ -3634,4 +3639,32 @@ fn counted_shift_loops_are_chosen_by_final_size_for_other_shapes_too() {
             assert_eq!(run("  txa\n"), i32::from(want >> 8), "{name} {x:#x}, high byte");
         }
     }
+}
+
+/// A function that never returns has no restore to share: the helpers saved 19
+/// bytes of its 8 cells and `__csave` is 22, and the program grew 7 B (recdeep
+/// -O2, 2026-11-14). The module measures the users as written both ways.
+#[test]
+fn the_save_helpers_stay_out_of_a_function_that_never_returns() {
+    let mut ir = String::from("declare void @tick()\n");
+    for k in 0..8 {
+        ir += &format!("@g{k} = global i8 0\n@h{k} = global i8 0\n");
+    }
+    ir += "define void @spin() {\nentry:\n";
+    for k in 0..8 {
+        ir += &format!("  %v{k} = load volatile i8, ptr @g{k}\n");
+    }
+    ir += "  br label %loop\nloop:\n";
+    for k in 0..8 {
+        ir += &format!("  %p{k} = phi i8 [ %v{k}, %entry ], [ %s{k}, %loop ]\n");
+    }
+    ir += "  call void @tick()\n";
+    for k in 0..8 {
+        ir += &format!("  %s{k} = add i8 %p{k}, 1\n  store volatile i8 %s{k}, ptr @h{k}\n");
+    }
+    ir += "  br label %loop\n}\n";
+    let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    let out =
+        llrm_6502::driver::assembly(&text, &llrm_6502::driver::Request::new(llrm_6502::driver::Level::O2)).unwrap();
+    assert!(!out.contains("__csave"), "{out}");
 }
