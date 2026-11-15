@@ -958,7 +958,9 @@ impl TargetLowering {
         // register.
         t.set_ops(&[ISD::Select], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
-        // `movd`.
+        // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack). DEVIATE
+        // X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles
+        // (`movss`, `punpck`) or uses `pinsrw`/`pinsrb`.
         t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
