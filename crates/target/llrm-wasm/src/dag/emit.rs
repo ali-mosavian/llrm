@@ -384,6 +384,17 @@ pub fn emit(
     for selected in blocks {
         emitter.block(selected);
     }
+    // `MBB.predecessors()`: the edges in the order selection made them, block
+    // by block in reverse post-order.
+    let mut selection: Vec<&Selected> = blocks.iter().collect();
+    selection.sort_by_key(|block| block.rank);
+    emitter.f.preds = vec![Vec::new(); emitter.f.blocks.len()];
+    for block in selection {
+        let at = emitter.position[&block.id];
+        for &to in &emitter.f.succs[at] {
+            emitter.f.preds[to].push(at);
+        }
+    }
     // The phis, at the start of their blocks: `PHI dst, src, pred, ..` in the
     // builder's order.
     let mut phis: BTreeMap<(u32, u32), (ValType, Vec<(u32, u32)>)> = BTreeMap::new();

@@ -186,13 +186,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
+        // DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24):
+        // see `Tti::frame_slot_add_with_saved`.
+        frame_slot_add_with_saved: true,
         // DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24):
         // see `Tti::inline_trial_cold_margin`.
         inline_trial_cold_margin: 3,
-        // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
-        // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
-        // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
-        imul_at_size: true,
         // DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24):
         // see `Tuning::mul_chains_hot_at_size`.
         mul_chains_hot_at_size: true,
@@ -268,10 +267,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
-        // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin
-        // keeps up to MaxStoresPerMemsetOptSize stores). `mov dword/word/byte
-        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax`
-        // 2,
+        // fill is `rep stos` where its stores take more bytes and are more
+        // than MaxStoresPerMemsetOptSize (the pin keeps up to that many
+        // stores; lru -Os: 7 stores were `rep stosd`, 201 clk against
+        // 124). `mov dword/word/byte [esp+d8], imm` 8/7/5 B, at an absolute
+        // address 10/9/7; `xor eax, eax` 2,
         // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
         // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
         // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin

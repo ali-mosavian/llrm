@@ -128,6 +128,7 @@ impl Target for Arm64 {
             ("FixupLEAs", "X86FixupLEAs"),
             ("LeafFold", "DEVIATE LEAF-FOLD-OS, an x86 -Os join; arm64 states leaf_fold_at_size false"),
             ("BreakFalseDeps", "x86 partial-register dependency breaking; the pin's AArch64 adds no such pass"),
+            ("KnownZero", "x86 byte lanes; beyond the pin (GCC postreload-cse)"),
         ]
     }
 

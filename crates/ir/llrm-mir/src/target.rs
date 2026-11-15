@@ -161,6 +161,8 @@ pub struct Tuning {
     /// copy that leaves the module no larger and saves clocks, though no
     /// callee goes with it.
     pub inline_trial_keeps_shrinking_copy: bool,
+    /// `Tti::frame_slot_add_with_saved`.
+    pub frame_slot_add_with_saved: bool,
     /// `Tti::inline_trial_cold_margin`.
     pub inline_trial_cold_margin: i64,
     /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24):
@@ -751,6 +753,7 @@ impl Tuning {
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
+        frame_slot_add_with_saved: false,
         inline_trial_cold_margin: 0,
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,

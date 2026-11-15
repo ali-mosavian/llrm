@@ -2500,6 +2500,8 @@ impl<'a> Analyzer<'a> {
         // growing inline it takes, for a driver to try that variant.
         let rate = if rate > 0 && trial::speed_unroll().is_some_and(trial::SpeedUnroll::refuses_inline_growth) {
             trial::NO_GROW_RATE
+        } else if trial::pinning_inlines() {
+            0
         } else {
             rate
         };

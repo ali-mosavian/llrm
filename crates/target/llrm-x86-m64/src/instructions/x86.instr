@@ -135,6 +135,11 @@ punpcklbw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpcklbw_xmm_xmmm128
 punpckhbw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhbw_xmm_xmmm128
 packuswb	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Packuswb_xmm_xmmm128
 packsswb	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Packsswb_xmm_xmmm128
+punpcklwd	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpcklwd_xmm_xmmm128
+punpckhwd	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhwd_xmm_xmmm128
+punpckhdq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhdq_xmm_xmmm128
+punpckhqdq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhqdq_xmm_xmmm128
+packssdw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Packssdw_xmm_xmmm128
 pand	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Pand_xmm_xmmm128
 pandn	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Pandn_xmm_xmmm128
 por	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Por_xmm_xmmm128
@@ -145,6 +150,8 @@ movups	move	x/xm	128	sse_move	-	self,same	-	-/-	Movups_xmm_xmmm128
 movups	move	m/x	128	sse_move	-	-	-	-/-	Movups_xmmm128_xmm
 movq	extend	r/x	64	sse_move	-	-	-	-/-	Movq_rm64_xmm
 movq_x	extend	x/r	64	sse_move	-	-	-	-/-	Movq_xmm_rm64
+movq_x	extend	x/m	64	sse_move	-	-	-	-/-	Movq_xmm_xmmm64
+movq_x	extend	m/x	64	sse_move	-	-	-	-/-	Movq_xmmm64_xmm
 movd	extend	r/x	32	sse_move	-	-	-	-/-	Movd_rm32_xmm
 movd_x	extend	x/r	32	sse_move	-	-	-	-/-	Movd_xmm_rm32
 cvtss2sd	extend	x/xm	32	sse_move	-	-	-	-/-	Cvtss2sd_xmm_xmmm32

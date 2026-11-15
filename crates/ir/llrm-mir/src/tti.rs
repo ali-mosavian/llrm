@@ -789,6 +789,13 @@ pub trait Tti {
         true
     }
 
+    /// The backend selects a vector under a register (`<8 x i8>`): the pin's
+    /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
+    /// whose backend takes none keeps the loop scalar.
+    fn selects_sub_register_vectors(&self) -> bool {
+        false
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
@@ -1089,6 +1096,25 @@ pub trait Tti {
         Cost::BASIC
     }
 
+    /// `getAddressComputationCost` of one lane of a scalarized access
+    /// (`getMemInstScalarizationCost`, which passes a vector of pointers and
+    /// the pointer's SCEV): `stride_bytes` is the constant step of the
+    /// address between iterations, `None` where it is not one.
+    fn scalarized_address_cost(
+        &self,
+        stride_bytes: Option<i64>,
+        kind: CostKind,
+    ) -> Cost {
+        let _ = stride_bytes;
+        self.address_computation_cost(kind)
+    }
+
+    /// `prefersVectorizedAddressing`: a scalarized load takes its pointers
+    /// apart from a vector (a target with gathers). A store does so always.
+    fn prefers_vectorized_addressing(&self) -> bool {
+        true
+    }
+
     /// What a call of a function the target lowers to a call, with
     /// `arguments` arguments, costs: one unit for the call and one per
     /// argument, as the pin's `TargetTransformInfoImplBase` prices it.
@@ -1157,6 +1183,13 @@ pub trait Tti {
     /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
     /// +1.2M instructions when the copies were kept).
     fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a one-slot frame is released by `add` when
+    /// callee-saved registers are restored, as the pin does: `emitEpilogue` stands at the first callee-saved `pop`, where
+    /// `findDeadCallerSavedReg` answers 0. False: a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
+    fn frame_slot_add_with_saved(&self) -> bool {
         false
     }
 
@@ -1516,6 +1549,15 @@ pub trait Tti {
     /// byte rate (`speed_inline_milliclocks_per_byte`) and
     /// `opt_size_inline_trial_limits`.
     fn speed_inline_finished_trial(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE WRITEONLY-LATE (beyond the pin; owner 6502, exit 2026-11-24, row
+    /// 6502-INLINE-RATE): whether the stores of a global no body loads any more
+    /// are removed after the late unroll as well. The pin's GlobalOpt runs
+    /// before it, so an array the unrolled loops fold every read of keeps its
+    /// stores (loop_fusion -O2 inlined and unrolled: 1,237 B against 133 B).
+    fn write_only_after_late_unroll(&self) -> bool {
         false
     }
 
@@ -3423,6 +3465,172 @@ pub fn base_intrinsic_cost(name: &str) -> Option<Cost> {
     const MEMSET_PATTERN: &str = "llvm.experimental.memset.pattern";
     (name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.')))
         .then(|| Cost::of(4))
+}
+
+/// The intrinsics `BasicTTIImplBase::getIntrinsicInstrCost` and
+/// `getTypeBasedIntrinsicInstrCost` name a case for (the pin, `BasicTTIImpl.h`
+/// L1792..L3217), by their `Intrinsic::` names: an intrinsic with none of them
+/// is "going to be turned into a library call" and costs
+/// [`library_call_intrinsic_cost`].
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L3217
+const PIN_INTRINSIC_CASES: &[&str] = &[
+    "vp_load",
+    "vp_store",
+    "vp_udiv",
+    "vp_sdiv",
+    "vp_urem",
+    "vp_srem",
+    "vp_load_ff",
+    "vp_scatter",
+    "vp_gather",
+    "vp_merge",
+    "experimental_vp_reverse",
+    "vector_reverse",
+    "vector_reduce_fadd",
+    "vector_reduce_fmul",
+    "powi",
+    "cttz",
+    "ctlz",
+    "memcpy",
+    "masked_scatter",
+    "masked_gather",
+    "masked_compressstore",
+    "masked_expandload",
+    "experimental_vp_strided_store",
+    "experimental_vp_strided_load",
+    "stepvector",
+    "vector_extract",
+    "vector_insert",
+    "vector_splice_left",
+    "vector_splice_right",
+    "vector_reduce_add",
+    "vector_reduce_mul",
+    "vector_reduce_and",
+    "vector_reduce_or",
+    "vector_reduce_xor",
+    "vector_reduce_smax",
+    "vector_reduce_smin",
+    "vector_reduce_fmax",
+    "vector_reduce_fmin",
+    "vector_reduce_fmaximum",
+    "vector_reduce_fminimum",
+    "vector_reduce_fmaximumnum",
+    "vector_reduce_fminimumnum",
+    "vector_reduce_umax",
+    "vector_reduce_umin",
+    "fshl",
+    "fshr",
+    "experimental_cttz_elts",
+    "get_active_lane_mask",
+    "experimental_vector_match",
+    "experimental_vector_histogram_add",
+    "experimental_vector_histogram_uadd_sat",
+    "experimental_vector_histogram_umax",
+    "experimental_vector_histogram_umin",
+    "masked_udiv",
+    "masked_sdiv",
+    "masked_urem",
+    "masked_srem",
+    "modf",
+    "sincos",
+    "sincospi",
+    "loop_dependence_war_mask",
+    "loop_dependence_raw_mask",
+    "abs",
+    "sqrt",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "sinh",
+    "cosh",
+    "tanh",
+    "exp",
+    "exp2",
+    "exp10",
+    "log",
+    "log10",
+    "log2",
+    "ldexp",
+    "fabs",
+    "canonicalize",
+    "minnum",
+    "maxnum",
+    "minimum",
+    "maximum",
+    "minimumnum",
+    "maximumnum",
+    "copysign",
+    "floor",
+    "ceil",
+    "trunc",
+    "nearbyint",
+    "rint",
+    "lrint",
+    "llrint",
+    "round",
+    "roundeven",
+    "lround",
+    "llround",
+    "pow",
+    "fma",
+    "fmuladd",
+    "experimental_constrained_fmuladd",
+    "lifetime_start",
+    "lifetime_end",
+    "sideeffect",
+    "pseudoprobe",
+    "arithmetic_fence",
+    "masked_store",
+    "masked_load",
+    "uadd_sat",
+    "umax",
+    "umin",
+    "experimental_memset_pattern",
+    "smax",
+    "smin",
+    "sadd_sat",
+    "ssub_sat",
+    "usub_sat",
+    "smul_fix",
+    "umul_fix",
+    "sadd_with_overflow",
+    "ssub_with_overflow",
+    "uadd_with_overflow",
+    "usub_with_overflow",
+    "smul_with_overflow",
+    "umul_with_overflow",
+    "fptosi_sat",
+    "fptoui_sat",
+    "ctpop",
+    "bswap",
+    "bitreverse",
+    "ucmp",
+    "scmp",
+    "clmul",
+    "smulh",
+    "umulh",
+    "experimental_constrained_fmul",
+    "experimental_constrained_fadd",
+];
+
+/// The last line of `getTypeBasedIntrinsicInstrCost`: a scalar intrinsic none
+/// of the pin's cases names (`stacksave`, `stackrestore`, `trap`, `expect`...)
+/// "is going to be turned into a library call, make it expensive":
+/// `SingleCallCost`, 1 for code size, else 10. `None` for an intrinsic the pin
+/// does price by a case this port does not carry.
+pub fn library_call_intrinsic_cost(
+    name: &str,
+    kind: CostKind,
+) -> Option<Cost> {
+    let family = name.strip_prefix("llvm.")?.replace('.', "_");
+    let named = PIN_INTRINSIC_CASES
+        .iter()
+        .any(|case| family == *case || family.strip_prefix(case).is_some_and(|rest| rest.starts_with('_')));
+    (!named).then(|| Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 }))
 }
 
 pub fn is_free_intrinsic(name: &str) -> bool {

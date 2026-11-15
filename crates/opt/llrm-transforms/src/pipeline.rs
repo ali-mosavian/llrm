@@ -1842,6 +1842,11 @@ pub fn recorded(
     // not run through the simplification pipeline again.
     if let Some(stage) = late_stage {
         manager.add(stage);
+        // DEVIATE WRITEONLY-LATE (`Tti::write_only_after_late_unroll`).
+        if program.target.tti().is_some_and(|tti| tti.write_only_after_late_unroll()) {
+            manager.add_module(globalopt::WriteOnly);
+            manager.add(dead::Dead);
+        }
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
     // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not

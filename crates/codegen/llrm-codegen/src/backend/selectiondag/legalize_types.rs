@@ -51,6 +51,7 @@ use super::mvt::{EVT, MVT};
 
 mod mask;
 mod vector;
+mod widen;
 
 /// The width of the C `int` the soft-float routines take for a conversion: a
 /// 32-bit integer is passed as is, a narrower one is extended to it.
@@ -84,6 +85,9 @@ pub struct TypeLegalizer<'a> {
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
     /// A vector value and its two halves (`SplitVectors`).
     split: HashMap<SDValue, (SDValue, SDValue)>,
+    /// A vector value and the wider vector that stands for it
+    /// (`WidenedVectors`).
+    widened: HashMap<SDValue, SDValue>,
     /// A float value and the integer of its width that stands for it
     /// (`SoftenedFloats`).
     softened: HashMap<SDValue, SDValue>,
@@ -142,6 +146,7 @@ impl<'a> TypeLegalizer<'a> {
             promoted: HashMap::default(),
             expanded: HashMap::default(),
             split: HashMap::default(),
+            widened: HashMap::default(),
             softened: HashMap::default(),
             target: None,
             hooks: None,
@@ -273,6 +278,12 @@ impl<'a> TypeLegalizer<'a> {
                     }
                     return Ok(true);
                 }
+                TypeAction::WidenVector => {
+                    if !self.custom_lower_node(n, vt) {
+                        self.widen_vector_result(value)?;
+                    }
+                    return Ok(true);
+                }
                 // The builder creates a vector only where a register class
                 // holds it.
                 TypeAction::ScalarizeVector => {
@@ -303,6 +314,7 @@ impl<'a> TypeLegalizer<'a> {
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
                 TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
                 TypeAction::SplitVector => self.split_vector_operand(n, at)?,
+                TypeAction::WidenVector => self.widen_vector_operand(n, at)?,
                 TypeAction::ScalarizeVector => {
                     let op = self.dag.node(SDValue { node: n, res: 0 }).opcode;
                     return Err(LegalizeError::Unsupported {
@@ -1514,6 +1526,32 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
                 self.dag.get_node(ISD::ExtractElement, to, &[vector, index])
+            }
+            ISD::ExtractSubvector => {
+                // `PromoteIntRes_EXTRACT_SUBVECTOR` (fixed width): each lane
+                // of the (promoted) source read out, widened to the promoted
+                // lane, and built into the promoted vector (`v8i1` of a
+                // `v16i1` mask).
+                let (source, base) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let source = if self.action(self.dag.value_type(source)) == TypeAction::PromoteInteger {
+                    self.promoted_integer(source)
+                } else {
+                    source
+                };
+                let (in_lane, out_lane) = (self.dag.value_type(source).element(), to.element());
+                let at = self.dag.constant(base).ok_or(LegalizeError::Unsupported {
+                    op: ISD::ExtractSubvector,
+                    ty: vt,
+                    what: "promote an extract at a variable index",
+                })?;
+                let ops: Vec<SDValue> = (0..vt.lanes())
+                    .map(|lane| {
+                        let index = self.dag.get_constant(at + u128::from(lane), self.dag.value_type(base));
+                        let element = self.dag.get_node(ISD::ExtractElement, in_lane, &[source, index]);
+                        self.dag.get_any_ext_or_trunc(element, out_lane)
+                    })
+                    .collect();
+                self.dag.get_build_vector(to, &ops)
             }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };

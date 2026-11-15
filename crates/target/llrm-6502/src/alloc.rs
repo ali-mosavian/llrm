@@ -113,6 +113,52 @@ thread_local! {
     static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Whether the last allocation made a choice only the wider rule makes.
     static WIDE_COMMUTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ALLOCATED: std::cell::RefCell<Option<HashMap<String, Vec<Allocated>>>> = const { std::cell::RefCell::new(None) };
+    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One allocation: the function as it went in, the inputs the allocator reads
+/// besides it, and what came out.
+struct Allocated {
+    stack: bool,
+    tuning: Tuning,
+    imaginary: u8,
+    spike: bool,
+    input: MFunction<Class>,
+    output: MFunction<Class>,
+    assignment: llrm_spike_mf::regalloc::Assignment,
+    slots: Vec<(i32, Class)>,
+}
+
+/// While it lives, [`allocate`] remembers each allocation it makes. The
+/// variants of one function (a layout, a sink, a callee-save choice, a speed
+/// routine) most often reach the allocator with the very function an earlier
+/// run gave it, and the allocator is a third of a compile.
+pub struct AllocationCache(());
+
+impl AllocationCache {
+    pub fn new() -> AllocationCache {
+        ALLOCATED.with(|all| *all.borrow_mut() = Some(HashMap::default()));
+        AllocationCache(())
+    }
+}
+
+impl Default for AllocationCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for AllocationCache {
+    fn drop(&mut self) {
+        ALLOCATED.with(|all| *all.borrow_mut() = None);
+    }
+}
+
+/// How many times this thread ran the register allocator (not found in the
+/// [`AllocationCache`]): what a test counts instead of seconds.
+pub fn allocations() -> usize {
+    ALLOCATIONS.with(std::cell::Cell::get)
 }
 
 /// `f` with the wider `commute_accumulator` rule on or off. It is a guess
@@ -448,28 +494,38 @@ impl<const STACK: bool> Target for Mos<STACK> {
         operand: usize,
         register: RegId,
     ) -> u32 {
+        if !has_form(inst.kind, inst.operands.len()) {
+            return 0;
+        }
         let priced = inst.operands.get(operand);
-        let regs: Vec<RegId> = inst
-            .operands
-            .iter()
-            .filter_map(|o| match o {
-                Operand::Def(r) | Operand::Use(r)
-                    if Some(o) == priced
-                        || matches!(
-                            (o, priced),
-                            (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
-                        ) =>
-                {
-                    let _ = r;
-                    Some(register)
-                }
-                Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
-                Operand::Def(_) | Operand::Use(_) => Some(reg::A),
-                _ => None,
-            })
-            .collect();
-        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs)
-            .map_or(0, |priced| priced.bytes + priced.cycles as u32)
+        let named = |o: &Operand| match o {
+            Operand::Def(r) | Operand::Use(r)
+                if Some(o) == priced
+                    || matches!(
+                        (o, priced),
+                        (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
+                    ) =>
+            {
+                let _ = r;
+                Some(register)
+            }
+            Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+            Operand::Def(_) | Operand::Use(_) => Some(reg::A),
+            _ => None,
+        };
+        let cost = |regs: &[RegId]| form_cost(Cpu::Mos6502, inst.kind, &inst.operands, regs);
+        let mut few = [reg::A; 8];
+        let found = if inst.operands.len() <= few.len() {
+            let mut count = 0;
+            for r in inst.operands.iter().filter_map(named) {
+                few[count] = r;
+                count += 1;
+            }
+            cost(&few[..count])
+        } else {
+            cost(&inst.operands.iter().filter_map(named).collect::<Vec<RegId>>())
+        };
+        found.map_or(0, |priced| priced.bytes + priced.cycles as u32)
     }
 
     type Class = Class;
@@ -3527,17 +3583,77 @@ fn form_text(
     })
 }
 
+/// Whether [`form_text`] writes a form for `kind` with `operands` operands.
+fn has_form(
+    kind: Kind,
+    operands: usize,
+) -> bool {
+    match kind {
+        Kind::Op("INC" | "DEC") => true,
+        Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR" | "CMP") => operands >= 3,
+        _ => false,
+    }
+}
+
+/// What a form's text depends on besides its mnemonic: the registers it names
+/// and the kind of its second operand (an immediate or a frame slot is priced
+/// by its mode, not its value).
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct FormKey {
+    cmos: bool,
+    kind: &'static str,
+    lead: Option<RegId>,
+    second: Option<Result<RegId, bool>>,
+}
+
+thread_local! {
+    static FORM_COSTS: std::cell::RefCell<HashMap<FormKey, Option<crate::timing::Estimate>>> =
+        std::cell::RefCell::new(HashMap::default());
+}
+
 /// What `kind` costs on `cpu` with `operands` in `regs`, from the timing
 /// tables: the data a hint or a join weighs (an `inc` is 1 byte and 2 clocks in
-/// `x`, 2 and 5 in a cell, 3 and 4 in `a`).
+/// `x`, 2 and 5 in a cell, 3 and 4 in `a`). The table is read once for each
+/// form: a join weighs the same few forms again and again.
 pub fn form_cost(
     cpu: Cpu,
     kind: Kind,
     operands: &[Operand],
     regs: &[RegId],
 ) -> Option<crate::timing::Estimate> {
-    let text = form_text(kind, operands, regs, cpu == Cpu::W65c02, &|slot| format!("s_{slot}"))?;
-    crate::timing::estimate(cpu, &text).ok()
+    let Kind::Op(name) = kind else { return None };
+    if !has_form(kind, operands.len()) {
+        return None;
+    }
+    let cmos = cpu == Cpu::W65c02;
+    let key = match name {
+        "INC" | "DEC" => Some(FormKey { cmos, kind: name, lead: Some(regs[0]), second: None }),
+        _ => {
+            let second = match &operands[2] {
+                Operand::Imm(_) => Some(Err(false)),
+                Operand::Frame(_) => Some(Err(true)),
+                Operand::Symbol(..) => None,
+                _ => Some(Ok(regs[2.min(regs.len() - 1)])),
+            };
+            second.map(|second| FormKey {
+                cmos,
+                kind: name,
+                lead: (name == "CMP").then(|| regs[1]),
+                second: Some(second),
+            })
+        }
+    };
+    let priced = || {
+        let text = form_text(kind, operands, regs, cmos, &|slot| format!("s_{slot}"))?;
+        crate::timing::estimate(cpu, &text).ok()
+    };
+    let Some(key) = key else { return priced() };
+    if let Some(found) = FORM_COSTS.with(|all| all.borrow().get(&key).copied()) {
+        return found;
+    }
+    let found = priced();
+    FORM_COSTS.with(|all| all.borrow_mut().insert(key, found));
+    found
 }
 
 fn register_name(register: RegId) -> String {
@@ -5052,6 +5168,49 @@ pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
 fn allocate<const STACK: bool>(
     function: &mut MFunction<Class>
 ) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    let (tuning, imaginary, spike) = (TUNING.with(|t| t.get()), IMAGINARY.with(|n| n.get()), spike_asked());
+    let same = |one: &Allocated| {
+        one.stack == STACK
+            && one.tuning == tuning
+            && one.imaginary == imaginary
+            && one.spike == spike
+            && one.input == *function
+    };
+    let found = ALLOCATED.with(|all| {
+        let all = all.borrow();
+        let one = all.as_ref()?.get(&function.name)?.iter().find(|one| same(one))?;
+        Some((one.output.clone(), one.assignment.clone(), one.slots.clone()))
+    });
+    if let Some((output, assignment, slots)) = found {
+        *function = output;
+        return Ok((assignment, slots));
+    }
+    let remembered = ALLOCATED.with(|all| all.borrow().is_some()).then(|| function.clone());
+    let (assignment, slots) = allocate_once::<STACK>(function)?;
+    if let Some(input) = remembered {
+        let one = Allocated {
+            stack: STACK,
+            tuning,
+            imaginary,
+            spike,
+            input,
+            output: function.clone(),
+            assignment: assignment.clone(),
+            slots: slots.clone(),
+        };
+        ALLOCATED.with(|all| {
+            if let Some(all) = all.borrow_mut().as_mut() {
+                all.entry(function.name.clone()).or_default().push(one);
+            }
+        });
+    }
+    Ok((assignment, slots))
+}
+
+fn allocate_once<const STACK: bool>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    ALLOCATIONS.with(|count| count.set(count.get() + 1));
     // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
     // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
     let only = std::env::var("LLRM_6502_GREEDY_ONLY").ok();

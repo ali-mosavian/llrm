@@ -292,7 +292,7 @@ pub struct Estimate {
 
 /// `text` with each use of a `.macro` replaced by its body, the parameters by
 /// the arguments; the definitions stay, for the loop below to skip.
-fn expand_macros(text: &str) -> String {
+pub(crate) fn expand_macros(text: &str) -> String {
     let mut macros: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     let mut open: Option<(String, Vec<String>, Vec<String>)> = None;
     for line in text.lines() {

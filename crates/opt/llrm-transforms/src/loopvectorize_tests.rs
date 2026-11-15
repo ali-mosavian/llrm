@@ -1128,3 +1128,19 @@ fn a_select_by_a_loop_invariant_condition_stays_scalar() {
     let text = run_compares(SELECT_INVARIANT);
     assert_eq!(count(&text, "<4 x i32>"), 0, "{text}");
 }
+
+const COUNT_AND_SUM: &str = include_str!("../tests/lv/count_and_sum_of_zeros.ll");
+
+/// `n += x == 0; s += x == 0 ? i : 0` stayed scalar ("A comparison used other
+/// than by the condition of a select": the count reads the compare through a
+/// `zext i1`). The pin takes VF 16, IC 1 (`<16 x i64>` values take eight
+/// registers each, so nothing is interleaved) and widens the count as
+/// `zext <16 x i1> to <16 x i16>`.
+#[test]
+fn a_count_of_a_compare_beside_a_select_sum_is_widened_without_interleaving() {
+    let text = run_compares(COUNT_AND_SUM);
+    assert_eq!(count(&text, "= zext <16 x i1>"), 1, "{text}");
+    assert_eq!(count(&text, "load <16 x i8>"), 1, "{text}");
+    assert_eq!(count(&text, "select <16 x i1>"), 1, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
+}
