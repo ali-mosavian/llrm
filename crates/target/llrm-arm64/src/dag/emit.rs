@@ -696,6 +696,15 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `LD1Rv4s`: the lane at the address replicated into every lane of `rd`.
+    if let Some(lanes) =
+        name.strip_prefix("LD1Rv").and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
+    {
+        return Some(match operands {
+            [Operand::Reg(base)] => Ok(Inst::VectorLoadReplicate { lanes, rt: rd, base: *base }),
+            _ => wrong(),
+        });
+    }
     // `DUPi64`: one lane of a vector register as a scalar.
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         let suffix = match lanes {

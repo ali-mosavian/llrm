@@ -261,6 +261,17 @@ pub(super) fn to(
                 None,
             )
         }
+        Inst::VectorLoadReplicate { lanes, rt, base } => {
+            let mut at = Mem::new(None, lanes.lane_bits());
+            (at.through, at.base) = place(*base);
+            semantics(
+                Operation::Move,
+                format!("LD1Rv{}", lanes.suffix()),
+                vec![vreg_loc(*rt, 128)],
+                vec![Loc::Mem(at)],
+                None,
+            )
+        }
         Inst::Adr { page, rd, target, got } => semantics(
             Operation::Address,
             format!("{}{}", if *page { "ADRP" } else { "ADR" }, if *got { ".got" } else { "" }),
@@ -325,6 +336,17 @@ pub(super) fn back(
             rs,
             rt,
             rn: unplace(at.through, at.base),
+        }));
+    }
+    if let Some(lanes) = head
+        .strip_prefix("LD1Rv")
+        .and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
+    {
+        let Some(Loc::Mem(at)) = s.last() else { return None };
+        return Some(Op::I(Inst::VectorLoadReplicate {
+            lanes,
+            rt: vreg_of(dest?),
+            base: unplace(at.through, at.base),
         }));
     }
     if let Some(lanes) = [
