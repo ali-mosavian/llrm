@@ -132,7 +132,7 @@ fn cell_dead_from(
     from: usize,
     cell: &str,
     results: &BTreeSet<String>,
-    seen: &mut BTreeSet<usize>,
+    seen: &mut llrm_support::hash::HashSet<usize>,
 ) -> bool {
     dead_from_pushed(lines, from, cell, results, seen, 0)
 }
@@ -145,7 +145,7 @@ fn dead_from_pushed(
     from: usize,
     cell: &str,
     results: &BTreeSet<String>,
-    seen: &mut BTreeSet<usize>,
+    seen: &mut llrm_support::hash::HashSet<usize>,
     mut pushed: u32,
 ) -> bool {
     let Some(n) = cell_number(cell) else { return false };
@@ -201,7 +201,7 @@ fn dead_from_pushed(
         }
         let label = |inst: &Inst| {
             let name = inst.target()?;
-            lines.iter().position(|l| *l == Line::Label(name.to_owned()))
+            Line::label_position(lines, name)
         };
         if inst.op == Op::Jmp || inst.op == Op::Bra {
             return label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, results, seen, pushed));
@@ -303,7 +303,7 @@ pub fn drop_dead_stores(asm: &mut Asm) {
     while at < asm.lines.len() {
         if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), .. }) =
             &asm.lines[at]
-            && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut BTreeSet::new())
+            && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut Default::default())
         {
             asm.lines.remove(at);
             continue;
@@ -352,7 +352,8 @@ fn store_then_index_once(asm: &mut Asm) -> bool {
                 }
             }
             let Some(t) = found else { continue };
-            if cell_dead_from(lines, t + 1, m, &asm.result_cells, &mut BTreeSet::new()) && flags_unread(lines, t + 1) {
+            if cell_dead_from(lines, t + 1, m, &asm.result_cells, &mut Default::default()) && flags_unread(lines, t + 1)
+            {
                 asm.lines[s] = Line::Inst(Inst { op: transfer, operand: Operand::None, place: 0 });
                 asm.lines.remove(t);
                 return true;
@@ -397,7 +398,7 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
         if !alu(user.op) || user.operand != Operand::Direct(t.clone()) {
             continue;
         }
-        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut BTreeSet::new()) {
+        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut Default::default()) {
             continue;
         }
         let operand = first.operand.clone();
@@ -457,7 +458,7 @@ fn spill_copy_once(
     let lines = &asm.lines;
     let covers = |c: &String| cell_number(c).is_some_and(|m| m == n || m + 1 == n);
     let covers_s = |c: &String| cell_number(c).zip(cell_number(s)).is_some_and(|(m, k)| m == k || m + 1 == k);
-    let position = |name: &str| lines.iter().position(|l| *l == Line::Label(name.to_owned()));
+    let position = |name: &str| Line::label_position(lines, name);
     let mut reads = Vec::new();
     let mut arrivals: std::collections::BTreeMap<usize, usize> = Default::default();
     let mut seen = BTreeSet::new();
@@ -535,7 +536,8 @@ fn spill_copy_once(
                 Line::Inst(i) if !matches!(i.op, Op::Jmp | Op::Bra | Op::Rts)
             )
             || label > 0 && matches!(&lines[label - 1], Line::Label(_));
-        if came < refs + usize::from(falls) && !cell_dead_from(lines, label, t, &asm.result_cells, &mut BTreeSet::new())
+        if came < refs + usize::from(falls)
+            && !cell_dead_from(lines, label, t, &asm.result_cells, &mut Default::default())
         {
             return false;
         }
@@ -659,7 +661,7 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
                 &mut Default::default(),
                 exits,
             ),
-            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut BTreeSet::new()),
+            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut Default::default()),
         };
         // the `lsr` leaves zero and not-negative; the work's flags are what
         // stay
@@ -714,7 +716,7 @@ fn chain_once(asm: &mut Asm) -> bool {
         if x != &m && x != &n {
             continue;
         }
-        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut BTreeSet::new())
+        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut Default::default())
             || !flags_unread(lines, load + 1)
         {
             continue;
@@ -1101,7 +1103,7 @@ fn forward_once(
             _ => {}
         }
     }
-    if rewritten.is_empty() || !cell_dead_from(&asm.lines, at + 2, &t, &asm.result_cells, &mut BTreeSet::new()) {
+    if rewritten.is_empty() || !cell_dead_from(&asm.lines, at + 2, &t, &asm.result_cells, &mut Default::default()) {
         for (index, operand) in rewritten {
             if let Line::Inst(inst) = &mut asm.lines[index] {
                 inst.operand = operand;
@@ -1264,7 +1266,7 @@ fn coalesce_once(
         }
         end += 1;
     }
-    let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.result_cells, &mut BTreeSet::new());
+    let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.result_cells, &mut Default::default());
     if renames.is_empty() || !dead(&s) || !dead(&t) {
         return false;
     }

@@ -260,8 +260,8 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     let built = program(text, request)?;
-    let (built, inlined) = trial_inlined(built, text, request)?;
-    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
+    let (built, inlined, assembled) = trial_inlined(built, text, request)?;
+    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, text, request))
 }
 
 /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
@@ -278,7 +278,7 @@ fn trial_inlined(
     built: Program,
     text: &str,
     request: &Request,
-) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
+) -> Result<(Program, Vec<llrm_transforms::trial::Site>, Option<Assembled>), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
     let limit = built
@@ -286,8 +286,10 @@ fn trial_inlined(
         .tti()
         .and_then(|tti| tti.opt_size_inline_trial_limits())
         .map_or(0, |(_, instructions)| instructions);
-    if request.level != Level::Os || sites.is_empty() {
-        return Ok((built, Vec::new()));
+    let at_speed = matches!(request.level, Level::O2 | Level::O3)
+        && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
+    if !(request.level == Level::Os || at_speed) || sites.is_empty() {
+        return Ok((built, Vec::new(), None));
     }
     if instructions(&built) > limit {
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
@@ -297,7 +299,7 @@ fn trial_inlined(
                 instructions(&built)
             );
         }
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), None));
     }
     let kept_unroll = trial::take();
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
@@ -311,13 +313,23 @@ fn trial_inlined(
     };
     let Ok(other) = trial::with_inlined(&sites, || program(text, request)) else {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), None));
     };
     let other_unroll = trial::take();
     let cut = trial::differing(&built.modules[0], &other.modules[0]);
-    let (Some(kept_bytes), Some(other_bytes)) = (chain(&built, &cut), chain(&other, &cut)) else {
+    // The kept side is priced from its own assembly, which the result carries
+    // to the unroll trial and the output; only the second compile's chain
+    // is assembled for the trial.
+    let Ok(kept_all) = tail(built.clone(), request, true, true) else {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), None));
+    };
+    let of = |cut: &std::collections::BTreeSet<String>| -> std::collections::BTreeMap<String, i64> {
+        kept_all.functions.iter().filter(|(name, _)| cut.contains(name)).cloned().collect()
+    };
+    let (kept_bytes, Some(other_bytes)) = (of(&cut), chain(&other, &cut)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new(), None));
     };
     let flags = trial::accepted(&sites, &kept_bytes, &other_bytes);
     if debug {
@@ -331,29 +343,26 @@ fn trial_inlined(
     }
     if flags.iter().all(|one| !one) {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), Some(kept_all)));
     }
     if flags.iter().all(|one| *one) {
         trial::restore(other_unroll);
-        return Ok((other, sites));
+        return Ok((other, sites, None));
     }
     let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
     let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
         trial::restore(kept_unroll);
-        return Ok((built, Vec::new()));
+        return Ok((built, Vec::new(), Some(kept_all)));
     };
     let third_unroll = trial::take();
     let cut = trial::differing(&built.modules[0], &third.modules[0]);
-    let pays = match (chain(&built, &cut), chain(&third, &cut)) {
-        (Some(kept), Some(third)) => third.values().sum::<i64>() < kept.values().sum::<i64>(),
-        _ => false,
-    };
+    let pays = chain(&third, &cut).is_some_and(|third| third.values().sum::<i64>() < of(&cut).values().sum::<i64>());
     if pays {
         trial::restore(third_unroll);
-        Ok((third, chosen))
+        Ok((third, chosen, None))
     } else {
         trial::restore(kept_unroll);
-        Ok((built, Vec::new()))
+        Ok((built, Vec::new(), Some(kept_all)))
     }
 }
 
@@ -654,17 +663,24 @@ fn tail(
 /// +27.7% at -Os in user-mode instructions, the median program unchanged.
 fn trial_unrolled(
     built: Program,
+    assembled: Option<Assembled>,
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
     use llrm_transforms::loopunrollpass::trial;
+    // `assembled`: `built` as the inline trial already wrote it (price and text
+    // of `tail`)
+    let kept_text = |built: Program, assembled: Option<Assembled>| match assembled {
+        Some(done) => Ok(done.text),
+        None => tail(built, request, false, false).map(|done| done.text),
+    };
     let tti = built.target.tti();
     let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else {
-        return Ok(tail(built, request, false, false)?.text);
+        return kept_text(built, assembled);
     };
     let (eligible, units) = trial::take();
     if !matches!(request.level, Level::O1 | Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
-        return Ok(tail(built, request, false, false)?.text);
+        return kept_text(built, assembled);
     }
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial candidates: {} functions, {units} units", eligible.len());
@@ -675,9 +691,13 @@ fn trial_unrolled(
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
             eprintln!("trial unroll: {growth} instructions more: put back unpriced");
         }
-        return Ok(tail(built, request, false, false)?.text);
+        return kept_text(built, assembled);
     }
-    let (kept, tried) = (tail(built, request, true, false)?, tail(other, request, true, false)?);
+    let kept = match assembled {
+        Some(done) => done,
+        None => tail(built, request, true, false)?,
+    };
+    let tried = tail(other, request, true, false)?;
     let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
     let pays = trial_pays(request.level, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {

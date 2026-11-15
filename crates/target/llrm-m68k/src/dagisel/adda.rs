@@ -22,7 +22,6 @@ use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::ids::reg as pin;
 use super::generated::instrinfo::{self, flag};
-use super::generated::m68k_m68000::MACHINE_OPCODES;
 
 /// Codes of the rows, above the compares'.
 pub const FIRST: u16 = 0xF600;
@@ -40,7 +39,7 @@ pub fn name_of(code: u32) -> Option<&'static str> {
 }
 
 static DESCS: LazyLock<Vec<&'static InstrDesc>> = LazyLock::new(|| {
-    let code = MACHINE_OPCODES.iter().find(|(_, name)| *name == "ADD32dd").map(|(code, _)| *code).expect("a pin row");
+    let code = super::opcodes::code_of("ADD32dd").expect("a pin row");
     let base = instrinfo::desc(code).expect("a described row");
     ROWS.iter()
         .map(|_| {

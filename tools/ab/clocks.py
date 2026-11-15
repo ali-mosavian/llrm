@@ -58,7 +58,9 @@ def verdicts(base: dict, new: dict) -> dict[str, list[str]]:
     """The cells of two runs (`rows` of a result) whose count moved, split by whether `ours` now beats the best of gcc and clang.
 
     gained: moved and ours is at or under the best now, was not before. lost: the reverse. A cell that did not move by more
-    than 1% is neither, whatever side of a tie it landed on.
+    than 1% is neither, whatever side of a tie it landed on. gcc and clang are the same binaries in both runs, so a change in
+    either column is drift of the instrument (merge_icmps_fields: both fell 4-5% on no code change): `ours` must move by more
+    than the larger of 1% and that drift.
     """
     def best(cell):
         return min(cell["gcc"]["instr"], cell["clang"]["instr"])
@@ -71,7 +73,10 @@ def verdicts(base: dict, new: dict) -> dict[str, list[str]]:
             old_best, new_best = best(was), best(now)
         except (KeyError, TypeError):
             continue
-        if before is None or after is None or not moved(before, after):
+        if before is None or after is None:
+            continue
+        drift = max(abs(now[column]["instr"] - was[column]["instr"]) / max(was[column]["instr"], 1) for column in ("gcc", "clang"))
+        if not moved(before, after, max(MOVED, drift)):
             continue
         out["moved"].append(name)
         if after <= new_best and before > old_best:
