@@ -228,3 +228,36 @@ fn wide_products_are_priced_at_what_each_cpu_makes_of_them() {
         assert!(estimates[0] > estimates[1], "{name}: the 68000 makes more of a product than the 68020 ({estimates:?})");
     }
 }
+
+/// An `i64` shifted by a variable count was priced as one 2-byte shift; `a << n` and `a >> n` are 62 B objects at both
+/// CPUs (2026-11-15, `-Os`), the sequence 40 B. The SZ2 trial of `pick` (`u64_shift_select_arms`) read -40 B for an inline
+/// that grew the object by 72 B. The table of each function is within 0.75 and 1.4 of its object.
+#[test]
+fn a_wide_shift_by_a_variable_is_priced_as_the_sequence_it_is() {
+    let layout = format!("target datalayout = \"{DATALAYOUT}\"\n");
+    for (name, op) in [("shl64", "shl"), ("lshr64", "lshr")] {
+        let text = format!("{layout}define i64 @{name}(i64 %a, i64 %n) {{\n  %r = {op} i64 %a, %n\n  ret i64 %r\n}}\n");
+        for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
+            let module = llrm_mir::parse::module(&text).unwrap();
+            let object = driver::object_in(&text, driver::cpu_of(cpu_name).unwrap(), Level::parse("s").unwrap(), name, CodeModel::Small).unwrap();
+            let (table, actual) = (estimate_with(&module, &table_costs(cpu)), text_bytes(&object) as i64);
+            let ratio = table as f64 / actual as f64;
+            assert!((0.75..=1.4).contains(&ratio), "{name} at the {cpu_name}: table {table} B, object {actual} B ({ratio:.2})");
+        }
+    }
+}
+
+/// The Os trial priced an `i64` add, compare and select as one 32-bit operation each: a copy that keeps an `i64`
+/// computation looked half its size. Each is two words in the trial's prices.
+#[test]
+fn the_trial_prices_a_wide_value_per_word() {
+    let layout = format!("target datalayout = \"{DATALAYOUT}\"\n");
+    // What two adds cost over a function that returns its argument.
+    let adds = |ty: &str| {
+        let sum = format!("{layout}define {ty} @f({ty} %a, {ty} %b) {{\n  %r = add {ty} %a, %b\n  %s = add {ty} %r, %b\n  ret {ty} %s\n}}\n");
+        let bare = format!("{layout}define {ty} @f({ty} %a, {ty} %b) {{\n  ret {ty} %a\n}}\n");
+        let price = |text: &str| estimate_with(&llrm_mir::parse::module(text).unwrap(), &llrm_mir::target::OperationCosts { function_scale: 100, ..M68kMachine { cpu: Cpu::M68000 }.trial_costs() });
+        price(&sum) - price(&bare)
+    };
+    assert_eq!(adds("i64"), 2 * adds("i32"), "two adds: an i64 add is two words");
+}

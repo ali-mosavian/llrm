@@ -669,6 +669,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether the backend selects a vector `icmp`, `fcmp` and `select`: the
+    /// loop vectorizer widens them only where it does. DEVIATE: the pin's
+    /// targets all do; here each backend says when its selector has them.
+    fn selects_vector_compares(&self) -> bool {
+        false
+    }
+
     /// `getNumberOfRegisters(ClassID)`: 0 where the target has no vector
     /// registers.
     fn number_of_registers(

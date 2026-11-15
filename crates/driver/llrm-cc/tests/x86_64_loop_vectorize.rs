@@ -153,6 +153,34 @@ fn a_splat_of_a_variable_is_movd_and_pshufd() {
     assert!(longs.contains("movq xmm") && longs.contains("punpcklqdq"), "{longs}");
 }
 
+/// A `<16 x i8>` multiply is two `pmullw` of the unpacked halves, masked and packed: the loop was kept scalar (one
+/// `imul` and two byte stores a byte) because the byte multiply had no price and no lowering.
+#[test]
+fn a_byte_multiply_by_a_constant_is_pmullw_and_packuswb() {
+    let text = assembly("x86_64-linux", "-O2");
+    let pattern = body(&text, "multiply_bytes");
+    assert!(pattern.contains("pmullw") && pattern.contains("packuswb") && pattern.contains("pand"), "{pattern}");
+    assert!(!pattern.contains("imul"), "{pattern}");
+}
+
+/// A byte multiplied by a byte in memory (`mul byte ptr [..]`) stopped the compile to an object with
+/// `Semantics(op=MULTIPLY ... width=1)`: the one-operand `mul` took no memory byte.
+#[test]
+fn a_byte_multiply_from_memory_assembles() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-mulb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", llc)
+        .args(["-O2", "-w", "-c", "-o"])
+        .arg(dir.join("a.o"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/lv_loops.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
 /// The splat constant of a vector loop is read from the pool before the loop: it was reloaded (`movaps xmm, $K`) on
 /// every trip, because machine LICM left every xmm value in the loop.
 #[test]

@@ -1633,7 +1633,9 @@ pub fn function_bytes(
                         } else {
                             costs.wide_product()
                         };
-                        product * words(ty) + prefix
+                        // A product the table states whole (`multiply_wide`, `multiply_widening`) is not per word.
+                        let whole = wide && (costs.multiply_wide > 0 || costs.multiply_widening > 0);
+                        product * if whole { 1 } else { words(ty) } + prefix
                     }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem if constant_divisor => {
                         // The multiply-high sequence: the constant, the high
@@ -1649,6 +1651,9 @@ pub fn function_bytes(
                     }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem => {
                         (if wide { costs.divide_long } else { costs.divide }) * words(ty) + prefix
+                    }
+                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if wide && costs.shift_wide > 0 && !constant_divisor => {
+                        costs.shift_wide + prefix
                     }
                     BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift * words(ty) + prefix,
                     _ => costs.add * words(ty) + prefix,
