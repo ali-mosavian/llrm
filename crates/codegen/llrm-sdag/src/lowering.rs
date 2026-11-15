@@ -64,6 +64,9 @@ pub struct TargetLoweringInfo {
     far: bool,
     /// No FPU: `f32` and `f64` have no register class.
     soft_float: bool,
+    /// x86 `getPreferredVectorAction`: vectors of other than `i1` are widened,
+    /// not promoted.
+    widens_vectors: bool,
     /// `getScalarShiftAmountTy`.
     shift_amount: ShiftAmount,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
@@ -118,6 +121,7 @@ impl TargetLoweringInfo {
             integers,
             far,
             soft_float: false,
+            widens_vectors: false,
             shift_amount: ShiftAmount::I8,
             set_cc_result: MVT::I8,
             int_size: 32,
@@ -131,6 +135,13 @@ impl TargetLoweringInfo {
     /// `i64` (`TypeSoftenFloat`).
     pub fn with_soft_float(mut self) -> TargetLoweringInfo {
         self.soft_float = true;
+        self
+    }
+
+    /// `X86TargetLowering::getPreferredVectorAction`: widen, not promote, a
+    /// vector whose elements are not `i1`.
+    pub fn with_widened_vectors(mut self) -> TargetLoweringInfo {
+        self.widens_vectors = true;
         self
     }
 
@@ -244,6 +255,7 @@ impl TargetLoweringInfo {
             &[MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
             false,
         )
+        .with_widened_vectors()
     }
 
     /// m16: the same registers, and the far pointer (SD2).
@@ -282,7 +294,11 @@ impl TargetLoweringInfo {
                         let promoted = mvt
                             .element()
                             .zip(mvt.lanes())
-                            .filter(|&(element, lanes)| lanes.is_power_of_two() && EVT::Simple(element).is_integer())
+                            .filter(|&(element, lanes)| {
+                                lanes.is_power_of_two()
+                                    && EVT::Simple(element).is_integer()
+                                    && !(self.widens_vectors && element != MVT::I1)
+                            })
                             .and_then(|(element, lanes)| {
                                 let bits = EVT::Simple(element).size_in_bits();
                                 [MVT::I8, MVT::I16, MVT::I32, MVT::I64]
@@ -401,6 +417,30 @@ mod tests {
         assert_eq!(TargetLoweringInfo::x86_32().type_action(EVT::Simple(MVT::V2I64)), TypeAction::ScalarizeVector);
         assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V4I32)), TypeAction::Legal);
         assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V16I8)), TypeAction::Legal);
+    }
+
+    /// A vector under a D register has no register class: its lanes are
+    /// promoted to the narrowest wider type that makes a legal vector of as many
+    /// lanes (`getPreferredVectorAction`); `v4i8` was `ScalarizeVector`, which no
+    /// backend could build.
+    #[test]
+    fn a_vector_under_a_d_register_has_its_lanes_promoted() {
+        let aarch64 = TargetLoweringInfo::aarch64();
+        let promoted = |vt| aarch64.type_conversion(EVT::Simple(vt));
+        assert_eq!(promoted(MVT::V4I8), (TypeAction::PromoteInteger, EVT::Simple(MVT::V4I16)));
+        assert_eq!(promoted(MVT::V2I8), (TypeAction::PromoteInteger, EVT::Simple(MVT::V2I32)));
+        assert_eq!(promoted(MVT::V2I16), (TypeAction::PromoteInteger, EVT::Simple(MVT::V2I32)));
+        assert_eq!(promoted(MVT::V4I1), (TypeAction::PromoteInteger, EVT::Simple(MVT::V4I16)));
+        assert_eq!(promoted(MVT::V8I8), (TypeAction::Legal, EVT::Simple(MVT::V8I8)));
+    }
+
+    /// x86 widens `v4i8` (`X86TargetLowering::getPreferredVectorAction`); promoting
+    /// it to `v4i32` would pre-empt the widening and diverge from the pin.
+    #[test]
+    fn x86_does_not_promote_the_lanes_of_a_narrow_vector() {
+        let x86 = TargetLoweringInfo::x86_64_sse2();
+        assert_ne!(x86.type_conversion(EVT::Simple(MVT::V4I8)).0, TypeAction::PromoteInteger);
+        assert_ne!(x86.type_conversion(EVT::Simple(MVT::V2I16)).0, TypeAction::PromoteInteger);
     }
 
     /// Every target compared into an `i8`; AArch64 compares into an `i32`.

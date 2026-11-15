@@ -27,7 +27,7 @@ fn compile(function: &str) -> Result<String, String> {
 }
 
 /// Four byte lanes compared with zero and counted in 64-bit lanes (the epilogue
-/// of a count loop): `ldr s`, a widening, `cmeq`.
+/// of a count loop).
 #[test]
 fn four_byte_lanes_compared_and_widened_compile() {
     let text = compile(
@@ -36,16 +36,42 @@ fn four_byte_lanes_compared_and_widened_compile() {
          store <4 x i64> %z, ptr %q, align 8\n  ret void\n}\n",
     )
     .unwrap();
-    assert!(text.contains("ldr\ts") || text.contains("ldr s"), "{text}");
+    assert!(text.contains("ldr s"), "{text}");
     assert!(text.contains("cmeq"), "{text}");
 }
 
-/// Two halfword lanes added to a constant and stored.
+/// `v4i8` is a scalar load and a widening (`ldr s`, `ushll`), as the pin.
 #[test]
-fn two_halfword_lanes_added_compile() {
-    compile(
-        "define void @f(ptr %p, ptr %q) {\n  %x = load <2 x i16>, ptr %p, align 2\n  \
-         %y = add <2 x i16> %x, <i16 1, i16 2>\n  store <2 x i16> %y, ptr %q, align 2\n  ret void\n}\n",
+fn four_byte_lanes_extended_are_one_load_and_a_widening() {
+    let text = compile(
+        "define void @f(ptr %p, ptr %q) {\n  %x = load <4 x i8>, ptr %p, align 1\n  \
+         %z = zext <4 x i8> %x to <4 x i32>\n  store <4 x i32> %z, ptr %q, align 16\n  ret void\n}\n",
     )
     .unwrap();
+    assert!(text.contains("ldr s"), "{text}");
+    assert!(text.contains("ushll"), "{text}");
+}
+
+/// `v4i8` is stored by narrowing `v4i16` (`uzp1`) and a word store, as the pin.
+#[test]
+fn four_byte_lanes_added_are_stored_as_one_word() {
+    let text = compile(
+        "define void @f(ptr %p, ptr %q) {\n  %x = load <4 x i8>, ptr %p, align 1\n  \
+         %y = add <4 x i8> %x, <i8 1, i8 2, i8 3, i8 4>\n  store <4 x i8> %y, ptr %q, align 1\n  ret void\n}\n",
+    )
+    .unwrap();
+    assert!(text.contains("uzp1"), "{text}");
+    assert!(text.contains("str s"), "{text}");
+}
+
+/// A mask of four byte lanes stored as bytes.
+#[test]
+fn four_byte_lanes_compared_and_sign_extended_compile() {
+    let text = compile(
+        "define void @f(ptr %p, ptr %q) {\n  %x = load <4 x i8>, ptr %p, align 1\n  \
+         %m = icmp eq <4 x i8> %x, zeroinitializer\n  %s = sext <4 x i1> %m to <4 x i8>\n  \
+         store <4 x i8> %s, ptr %q, align 1\n  ret void\n}\n",
+    )
+    .unwrap();
+    assert!(text.contains("cmeq"), "{text}");
 }

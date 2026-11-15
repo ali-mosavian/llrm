@@ -328,11 +328,8 @@ fn iteration_cost(
             return true;
         }
         let bits = u64::from(lane_bits(lane)) * u64::from(vf);
-        // `v4i8` is a quarter register: loaded as a scalar and widened, the
-        // pin's lowering of it (`tryLowerSmallVectorExtLoad`).
         [register_bits, 2 * register_bits].contains(&bits)
             || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
-            || (lane == Ty::Int(8) && vf == 4)
     };
     if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
         return Err(NotTaken);
