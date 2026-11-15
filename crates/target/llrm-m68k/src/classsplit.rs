@@ -40,7 +40,7 @@ fn needs_address(
 
 /// Whether operand `position` of an instruction of `kind` may be a data
 /// register.
-fn takes_data(
+pub(crate) fn takes_data(
     kind: Kind,
     position: usize,
 ) -> bool {
