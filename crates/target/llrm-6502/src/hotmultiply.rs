@@ -30,8 +30,10 @@ pub const FAST_BYTES: f64 = 15.0;
 /// Clocks a call saves on average
 /// (`the_fast_multiply_saves_what_hotmultiply_prices`, within 10%: sim65 adds a
 /// clock a page crossing, so it moves with where the runtime's text starts: 586
-/// after the divide routines shrank, 2026-11-15).
-pub const SAVED_CLOCKS: f64 = 615.0;
+/// after the divide routines shrank, 553 to 607 with the 32-bit calls taking
+/// their arguments in cells; 550 keeps phi_slot_unknown_arm at -Os on the
+/// compact routine, 15 B under the fast one, 2026-11-15).
+pub const SAVED_CLOCKS: f64 = 550.0;
 /// Static runs from which a module's multiplies are taken to run.
 pub const MIN_RUNS: f64 = 3.0;
 
