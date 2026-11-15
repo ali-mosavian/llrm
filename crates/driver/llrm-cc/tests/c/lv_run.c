@@ -22,6 +22,7 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 extern unsigned char pa[4096], pb[4096];
 void multiply_arrays(void);
 extern int a[1024], b[1024];
+unsigned char xor_toggle_count(unsigned char n);
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -82,5 +83,6 @@ int main(void) {
         multiply_byte_arrays(x, y, z);
         for (int i = 0; i < 4096; i++) if (x[i] != (unsigned char)(y[i] * z[i])) bad++;
     }
+    for (int n = 0; n < 256; n++) if (xor_toggle_count((unsigned char)n) != (unsigned char)(n ^ (n & 1))) bad++;
     printf("bad %d\n", bad);
 }

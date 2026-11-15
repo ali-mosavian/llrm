@@ -46,3 +46,13 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 }
 
 void add_five(void) { for (int i = 0; i < 1024; ++i) a[i] += 5; }
+
+/* A byte accumulator seeded from an argument and folded with a loop-invariant byte: the seed is lane 0 of a zero
+   vector and the operand a broadcast (`insertelement`), which had no x86 lowering (known_loads_walks). */
+unsigned char xor_toggle_count(unsigned char n)
+{
+    unsigned char x = n;
+    for (unsigned char i = 0; i < n; i++)
+        x ^= 1;
+    return x;
+}

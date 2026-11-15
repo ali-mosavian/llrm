@@ -201,3 +201,18 @@ fn a_vector_of_zeros_is_an_xor_and_not_a_pool_load() {
     assert!(sum.contains("xorps xmm") || sum.contains("pxor xmm"), "{sum}");
     assert!(!sum.contains("$K"), "{sum}");
 }
+
+/// A byte loop whose accumulator starts from an argument and whose operand is a
+/// loop-invariant byte stopped the compile: `insertelement <16 x i8>` (the seed
+/// in lane 0 of a zero vector, the broadcast) had no lowering (`CannotSelect("
+/// InsertVectorElt")`), and the `i1` condition of a vector `select` was
+/// zero-extended to a vector (panic "a vector type"). The seed is now a `movd`
+/// and the select a branch around the register copy. known_loads_walks.
+#[test]
+fn a_byte_accumulator_seeded_from_an_argument_compiles_with_movd_and_a_vector_select() {
+    for level in ["-O2", "-O3"] {
+        let text = assembly("x86_64-linux", level);
+        let toggle = body(&text, "xor_toggle_count");
+        assert!(toggle.contains("movd xmm"), "{level}: {toggle}");
+    }
+}
