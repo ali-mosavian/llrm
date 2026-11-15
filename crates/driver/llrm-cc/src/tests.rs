@@ -490,16 +490,18 @@ fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
 /// clk against gcc's 614; shift_int32_variable m32 -O1: 8942 clk against gcc's
 /// 7784; arm64 mandel -O1: 153,637 instructions against gcc's 139,398, the
 /// second `b.hi` on one compare; m64 mandel -O1: 192,827 instructions against
-/// gcc's 176,067, the same). The m68k, m32, m64 and arm64 rows give their
-/// backend `-fthread-jumps` at -O1, unless the command line states either
-/// spelling; no other row, and no other level, does.
+/// gcc's 176,067, the same; 6502 k_strnicmp -O1: 197 B against 129, the loop
+/// exit left as a `switch` on a phi of constants). The m68k, m32, m64, arm64
+/// and 6502 rows give their backend `-fthread-jumps` at -O1, unless the
+/// command line states either spelling; no other row, and no other level,
+/// does.
 #[test]
-fn m68k_x86_and_arm64_rows_thread_jumps_at_o1_unless_told_otherwise() {
+fn m68k_x86_arm64_and_6502_rows_thread_jumps_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
     let threads = |row: &str| {
-        row.starts_with("m68k-") || row.starts_with("x86_32-") || row.starts_with("x86_64-") || row.starts_with("arm64-")
+        ["m68k-", "x86_32-", "x86_64-", "arm64-", "6502-", "65c02-"].iter().any(|prefix| row.starts_with(prefix))
     };
     for row in table.keys().filter(|row| threads(row)) {
         assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
