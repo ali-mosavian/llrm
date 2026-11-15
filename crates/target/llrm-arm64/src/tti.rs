@@ -389,6 +389,13 @@ fn vector_memory_op_cost(
     kind: CostKind,
 ) -> Option<Cost> {
     let (first, lane) = vector_pieces(ty)?;
+    // DEVIATE VT3 (owner arm64, exit 2026-11-24): a memory access under 64
+    // bits (`<2 x i8>`, `<4 x i8>`, `<2 x i16>`) is not priced: the selector
+    // has no register class for it, and SLP's `store <2 x i8>` was refused by
+    // llc (jpeg -Os).
+    if u64::from(lane) * u64::from(ty.count) < 64 {
+        return None;
+    }
     match kind {
         CostKind::Latency => return None,
         CostKind::CodeSize | CostKind::SizeAndLatency => return Some(Cost::of(first)),
