@@ -1,4 +1,5 @@
-//! A copy that grows the code is not made at -O2/-O3: bytes first at every level (6502-RATE).
+//! A copy that grows the code is not made at -O2/-O3: bytes first at every
+//! level (6502-RATE).
 
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{self, Level, Request};
@@ -37,14 +38,15 @@ define i32 @main() {
 "#;
 
 fn assembly(level: Level) -> String {
-    let text = format!("target datalayout = \"{}\"\n{}", Mos.layout().datalayout, CALLEE_TWICE.replace(" noinline_not", ""));
+    let text =
+        format!("target datalayout = \"{}\"\n{}", Mos.layout().datalayout, CALLEE_TWICE.replace(" noinline_not", ""));
     let mut request = Request::new(level);
     request.cpu = Cpu::Mos6502;
     driver::assembly(&text, &request).unwrap()
 }
 
-/// Two copies of a 12-operation i32 body cost more bytes than the two calls; at -O2/-O3 the pin's
-/// threshold alone inlined them (`mix` gone, main larger).
+/// Two copies of a 12-operation i32 body cost more bytes than the two calls; at
+/// -O2/-O3 the pin's threshold alone inlined them (`mix` gone, main larger).
 #[test]
 fn a_copy_that_grows_the_code_stays_a_call_at_speed() {
     for level in [Level::O2, Level::O3] {
