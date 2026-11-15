@@ -293,15 +293,17 @@ fn an_optsize_loop_stays_scalar_even_when_vf_divides_the_trip_count() {
 #[test]
 fn a_symbolic_trip_count_is_checked_at_run_time() {
     let text = run(include_str!("../tests/lv/symbolic_trip.ll"));
-    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
     assert_eq!(count(&text, "load i16"), 1, "{text}");
-    assert!(text.contains("%min.iters.check = icmp ult i64 %n, 16"), "{text}");
+    assert!(text.contains("%min.iters.check2 = icmp ult i64 %n, 16"), "{text}");
     assert!(text.contains("%n.mod.vf = and i64 %n, 15"), "{text}");
     assert!(text.contains("%n.vec = sub i64 %n, %n.mod.vf"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %n.vec"), "{text}");
     assert!(text.contains("%cmp.n = icmp eq i64 %n, %n.vec"), "{text}");
-    assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ], [ 0, %entry ]"), "{text}");
-    assert!(text.contains("br i1 %min.iters.check, label %scalar.ph, label %vector.ph"), "{text}");
+    // Its remainder is widened in turn: that loop's `n < 8` comes first.
+    assert!(text.contains("%iter.check = icmp ult i64 %n, 8"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ]"), "{text}");
+    assert!(text.contains("br i1 %min.iters.check2, label %vector.ph1, label %vector.ph"), "{text}");
 }
 
 /// A loop starting at 8 against a symbolic bound: the iterations are
@@ -312,7 +314,7 @@ fn a_symbolic_bound_from_a_nonzero_start_counts_from_the_start() {
     assert!(text.contains("%n.trip = sub i64 %n, 8"), "{text}");
     assert!(text.contains("%ind.end = add i64 8, %n.vec"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %ind.end"), "{text}");
-    assert!(text.contains("%bc.resume.val = phi i64 [ %ind.end, %middle.block ], [ 8, %entry ]"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64 [ %ind.end, %middle.block ]"), "{text}");
 }
 
 /// Run again over its own output the pass would widen the remainder again (its
@@ -324,7 +326,7 @@ fn the_loops_it_made_are_not_widened_again() {
     assert_eq!(count(&once, "llvm.loop.isvectorized"), 2, "{once}");
     assert_eq!(count(&once, "llvm.loop.unroll.runtime.disable"), 2, "{once}");
     let twice = run(&once);
-    assert_eq!(count(&twice, "load <8 x i16>"), 2, "{twice}");
+    assert_eq!(count(&twice, "load <8 x i16>"), 3, "{twice}");
 }
 
 /// The store 80 elements ahead of the load bounds the safe distance: the pin
@@ -388,8 +390,11 @@ fn an_exit_phi_takes_an_arm_from_each_way_out() {
         .replace("define void", "define i32")
         .replace("ret void", "%r = phi i32 [ 7, %loop ]\n  ret i32 %r");
     let text = run(&source);
-    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
-    assert!(text.contains("%r = phi i32 [ 7, %middle.block ], [ 7, %loop.scalar ]"), "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert!(
+        text.contains("%r = phi i32 [ 7, %middle.block ], [ 7, %middle.block1 ], [ 7, %loop.scalar.scalar ]"),
+        "{text}"
+    );
 }
 
 /// The splat of an invariant stored value is made in `vector.ph`, where the
@@ -608,8 +613,8 @@ fn an_induction_read_as_a_value_is_widened() {
 fn an_induction_that_starts_at_a_run_time_value_is_widened() {
     let text = run(INDUCTION_START);
     assert!(text.contains("induction = add <8 x i16>"), "{text}");
-    assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
-    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "phi <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 3, "{text}");
 }
 
 /// A count-down loop that reads its induction as a value (recsum's
@@ -662,7 +667,7 @@ fn a_reverse_copy_is_widened_on_the_lowest_addresses_without_a_shuffle() {
 #[test]
 fn a_reverse_copy_from_a_run_time_start_counts_its_iterations_down() {
     let text = run(REVERSE_SYMBOLIC);
-    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
     assert!(text.contains("n.trip = sub i64 %n, -1"), "{text}");
     assert!(text.contains("ind.end = sub i64 %n, %n.vec"), "{text}");
     assert!(text.contains("bc.resume.val"), "{text}");
@@ -842,8 +847,22 @@ out:
     }
 }
 
+const EPILOGUE_SUM: &str = include_str!("../tests/lv/epilogue_sum.ll");
+const EPILOGUE_SUM_DYNAMIC: &str = include_str!("../tests/lv/epilogue_sum_dynamic.ll");
 const REDUCTION_SUM: &str = include_str!("../tests/lv/reduction_sum.ll");
 const SCROLL_CHECKSUM: &str = include_str!("../tests/lv/scroll_checksum.ll");
+const SUM_ZEXT_BYTES: &str = include_str!("../tests/lv/sum_zext_bytes.ll");
+
+/// textfill's checksum (a sum of 4000 extended bytes) stayed scalar: VF 16
+/// makes `<16 x i64>` lanes, eight registers, which the plan did not take
+/// (32009 instructions at -O2). The pin takes VF 16, IC 2.
+#[test]
+fn a_sum_of_extended_bytes_takes_the_vector_factor_of_the_bytes() {
+    let text = run(SUM_ZEXT_BYTES);
+    assert_eq!(count(&text, "load <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "zext <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v16i64"), 1, "{text}");
+}
 
 /// `Reductions are not widened yet` left every sum of a loop scalar. The sum of
 /// 1003 words is a vector phi per part from `<start, 0, 0, 0>`, folded in the
@@ -853,10 +872,82 @@ const SCROLL_CHECKSUM: &str = include_str!("../tests/lv/scroll_checksum.ll");
 fn a_sum_is_a_vector_phi_reduced_in_the_middle_block() {
     let text = run(REDUCTION_SUM);
     assert!(count(&text, "vec.phi") >= 1, "{text}");
-    assert_eq!(count(&text, "call i32 @llvm.vector.reduce.add.v4i32"), 1, "{text}");
-    // A constant trip count enters the vector loop for sure: no merge phi.
-    assert!(text.contains("phi i32 [ %rdx, %middle.block ]"), "{text}");
+    assert_eq!(count(&text, "call i32 @llvm.vector.reduce.add.v4i32"), 2, "{text}");
+    // A constant trip count enters each loop for sure: no merge phi; the
+    // epilogue (VF 4, to 1000) starts from the main loop's total.
+    assert!(text.contains("%done = icmp eq i64 %in, 992"), "{text}");
+    assert!(text.contains("%done.scalar = icmp eq i64 %in.scalar, 1000"), "{text}");
     assert!(text.contains("insertelement <4 x i32> zeroinitializer, i32 %start, i64 0"), "{text}");
+}
+
+/// A sum of 40 `i16` (bench `tile`) took VF 8, IC 2 and left the 8 iterations
+/// past 32 scalar: eight loads and adds in every outer trip. The pin widens
+/// that remainder too (`LEV: Maximum Trip Count for Epilogue: 8`): one more
+/// `<8 x i16>` load, and no scalar one.
+#[test]
+fn the_remainder_of_a_vector_loop_is_widened_in_turn() {
+    let text = run(EPILOGUE_SUM);
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v8i64"), 2, "{text}");
+}
+
+/// A run-time trip count under the epilogue's lanes went through the main
+/// loop's own check first, then the epilogue's (a second `sub`, `icmp` and
+/// branch to reach the scalar loop: recchop's `chop` ran 112 instructions
+/// more than without the epilogue). The pin tests `n < epilogue lanes` first
+/// (`iter.check`), and `n < main lanes` after (`vector.main.loop.iter.check`).
+#[test]
+fn a_short_trip_skips_both_vector_loops_in_one_check() {
+    let text = run(EPILOGUE_SUM_DYNAMIC);
+    let first = text.find("%iter.check = icmp ult i64 %n, 8").unwrap_or_else(|| panic!("{text}"));
+    let main = text.find("icmp ult i64 %n, 16").unwrap_or_else(|| panic!("{text}"));
+    assert!(first < main, "{text}");
+    assert!(text.contains("br i1 %iter.check, label %scalar.ph1, label %vector.main.loop.iter.check"), "{text}");
+}
+
+/// The same loop run before and after, over trip counts under, at and over each
+/// vector loop's lanes: a value the epilogue read from the main loop's
+/// `scalar.ph` that its new entry does not carry changes the answer.
+#[test]
+fn a_loop_entered_past_the_main_loop_keeps_the_answer() {
+    let source = format!(
+        "{EPILOGUE_SUM_DYNAMIC}
+define i64 @g(i64 %n) {{
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %t = trunc i64 %i to i16
+  %m = mul i16 %t, 37
+  %v = add i16 %m, 5
+  %p = getelementptr inbounds i16, ptr @t, i64 %i
+  store i16 %v, ptr %p, align 2
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 200
+  br i1 %fd, label %run, label %fill
+run:
+  %r = call i64 @f(i64 %n)
+  ret i64 %r
+}}
+"
+    );
+    let before = crate::testing::parsed(&source);
+    let text = run(&source);
+    assert!(text.contains("%iter.check"), "the remainder was not widened:\n{text}");
+    let after = crate::testing::parsed(&text);
+    let answer = |module: &llrm_mir::module::Module, n: u64| {
+        llrm_mir::interpret::run(
+            module,
+            "g",
+            vec![llrm_mir::interpret::Val::Int { bits: n as u128, width: 64 }],
+            5_000_000,
+        )
+        .unwrap_or_else(|trap| panic!("n = {n}: {trap:?}\n{}", crate::testing::printed(module)))
+    };
+    for n in [0, 1, 3, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33, 47, 48, 100, 199] {
+        assert_eq!(answer(&after, n), answer(&before, n), "n = {n}:\n{text}");
+    }
 }
 
 /// The pin leaves scroll's checksum (a sum of extended products) scalar and

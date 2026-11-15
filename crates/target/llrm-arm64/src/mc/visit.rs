@@ -348,6 +348,10 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
+            Inst::VectorLoadReplicate { rt, base, .. } => {
+                f(Fpr(rt), Role::Def);
+                f(G(base), Role::Use);
+            }
             Inst::VectorStoreLane { rt, base, .. } => {
                 f(Fpr(rt), Role::Use);
                 f(G(base), Role::Use);
