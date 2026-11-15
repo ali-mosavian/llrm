@@ -530,9 +530,11 @@ fn long_name(
     format!("{stem}v{narrow}_v{wide}")
 }
 
-const LONG_OPS: [VectorLongOp; 8] = [
+const LONG_OPS: [VectorLongOp; 10] = [
     VectorLongOp::Ushll,
     VectorLongOp::Sshll,
+    VectorLongOp::Uaddl,
+    VectorLongOp::Saddl,
     VectorLongOp::Uaddw,
     VectorLongOp::Saddw,
     VectorLongOp::Umull,
@@ -653,13 +655,8 @@ fn vector_int_unary_name(
     format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes))
 }
 
-const VECTOR_INT_UNARY: [VectorIntUnary; 5] = [
-    VectorIntUnary::Neg,
-    VectorIntUnary::Abs,
-    VectorIntUnary::Cnt,
-    VectorIntUnary::Clz,
-    VectorIntUnary::Rbit,
-];
+const VECTOR_INT_UNARY: [VectorIntUnary; 5] =
+    [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit];
 
 const VECTOR_OPS: [VectorOp; 18] = [
     VectorOp::Add,

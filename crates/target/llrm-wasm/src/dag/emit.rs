@@ -19,11 +19,11 @@
 //! `InstrEmitter::EmitMachineNode`, pin d1106deb71cc.
 
 use std::collections::BTreeMap;
-use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
+use llrm_support::hash::HashMap;
 
 use super::function::{PhiCopy, Selected};
 use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS};
@@ -138,9 +138,10 @@ impl Emitter<'_> {
         // The builder register a result is copied to, where a `CopyToReg` takes
         // it whole.
         // `CreateVirtualRegisters` takes the first matching user of the result,
-        // and a node's users list the newest first: the latest
-        // `CopyToReg` wins.
-        let mut copied: HashMap<(u32, u8), (u32, u32)> = HashMap::default();
+        // and a use list has the newest use first: the `CopyToReg` whose use
+        // was added last wins, whatever its node number (`ReplaceAllUsesWith`
+        // adds a moved use again, at the head).
+        let mut copied: HashMap<(u32, u8), (usize, u32)> = HashMap::default();
         for &node in selected.units.iter().flat_map(|unit| &unit.nodes) {
             let data = dag.node(SDValue { node, res: 0 });
             if data.opcode != ISD::CopyToReg {
@@ -148,9 +149,10 @@ impl Emitter<'_> {
             }
             let (NodeData::Register(number), value) = (dag.node(data.ops[1]).data, data.ops[2]) else { continue };
             if matches!(dag.node(value).opcode, ISD::Machine(_)) {
-                let latest = copied.entry((value.node, value.res)).or_insert((node, number));
-                if node > latest.0 {
-                    *latest = (node, number);
+                let added = dag.use_candidates(value.node).iter().rposition(|&user| user == node).unwrap_or(0);
+                let latest = copied.entry((value.node, value.res)).or_insert((added, number));
+                if added > latest.0 {
+                    *latest = (added, number);
                 }
             }
         }

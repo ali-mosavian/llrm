@@ -140,6 +140,22 @@ pub fn forget_inline_saves() {
     INLINE_SAVES.with(|set| set.borrow_mut().clear());
 }
 
+/// Every choice outside a selection that the text of a function depends on
+/// (see [`with_shared_saves`], [`with_fast_division`] and the others): two
+/// compiles of one selection under equal flags write the same text.
+pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
+    (
+        SPIKE.with(|a| a.get()),
+        SHARED_SAVES.with(|a| a.get()),
+        FAST_DIVISION.with(|a| a.get()),
+        FAST_MULTIPLY.with(|a| a.get()),
+        SIZE_FAST_DIVISION.with(|a| a.get()),
+        COMPACT_DIVISION16.with(|a| a.get()),
+        WIDE_COMMUTE.with(|a| a.get()),
+        INLINE_SAVES.with(|set| set.borrow().contains(name)),
+    )
+}
+
 /// Whether the allocation just made took a choice only the wider rule makes.
 pub fn wide_commuted() -> bool {
     WIDE_COMMUTED.with(|a| a.get())
