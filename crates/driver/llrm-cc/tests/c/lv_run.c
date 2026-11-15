@@ -17,6 +17,8 @@ extern int si[1024];
 extern unsigned ui[1024];
 void fill_value(int *a, int v, int n);
 void fill_long_value(long *a, long v, int n);
+void multiply_arrays(void);
+extern int a[1024], b[1024];
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -61,6 +63,13 @@ int main(void) {
             fill_long_value(wl, 0x123456789abcdefL - n, n);
             for (int i = 0; i < n; i++) if (wi[i] != 0x1234567 + n || wl[i] != 0x123456789abcdefL - n) bad++;
         }
+    }
+    for (int i = 0; i < 1024; i++) { a[i] = i * 1000003 - 700000000; b[i] = 123456789 - i * 77777; }
+    {
+        static int want[1024];
+        for (int i = 0; i < 1024; i++) want[i] = (int)((unsigned)a[i] * (unsigned)b[i]);
+        multiply_arrays();
+        for (int i = 0; i < 1024; i++) if (a[i] != want[i]) bad++;
     }
     printf("bad %d\n", bad);
 }
