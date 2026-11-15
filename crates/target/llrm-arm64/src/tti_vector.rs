@@ -151,6 +151,14 @@ pub(crate) fn cast_cost(
         let put = scalarization_overhead(dst, true, false, cost_kind)?;
         return Some(Cost::of(i64::from(dst.count) + taken.value + put.value));
     }
+    // `BasicTTIImplBase::getCastInstrCost`: a conversion between integer and
+    // float lanes of one width, wider than the table's rows, is its halves'
+    // (both types split, so the split is free).
+    if matches!(kind, CastKind::SIToFP | CastKind::UIToFP | CastKind::FPToSI | CastKind::FPToUI)
+        && vector_pieces(dst).zip(vector_pieces(src)).is_some_and(|((_, to), (_, from))| to == from)
+    {
+        return ext_cast_cost(kind, dst, src);
+    }
     if kind == CastKind::BitCast {
         let (to, from) = (vector_pieces(dst)?, vector_pieces(src)?);
         let bits = |ty: VectorTy, (_, lane): (i64, u32)| u64::from(lane) * u64::from(ty.count);

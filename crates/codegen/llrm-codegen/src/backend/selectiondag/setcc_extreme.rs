@@ -11,16 +11,20 @@ use super::dag::{SDValue, SelectionDAG};
 use super::isd::CondCode;
 use super::mvt::EVT;
 
-/// The simpler `setcc vt n0, c1, cond`, or `None`.
+/// The simpler `setcc vt n0, c1, cond`, or `None`. `c1` is the constant, or
+/// the splat of a vector compare; the folds to `!=` and `==` are not made for
+/// a vector once its operations are legalized (`before_legalize_ops`).
 pub fn fold_against_an_extreme(
     dag: &mut SelectionDAG,
     vt: EVT,
     n0: SDValue,
     c1: u128,
     cond: CondCode,
+    before_legalize_ops: bool,
 ) -> Option<SDValue> {
     let op_type = dag.value_type(n0);
-    let bits = op_type.size_in_bits();
+    let vector = op_type.is_vector();
+    let bits = if vector { op_type.element().size_in_bits() } else { op_type.size_in_bits() };
     if bits < 2 {
         return None;
     }
@@ -52,8 +56,8 @@ pub fn fold_against_an_extreme(
         (true, true) if c1 == min + 1 => same(min, CondCode::SetEq),
         // x > MAX is false; x > MIN is x != MIN; unsigned x > MAX-1 is x == MAX
         (false, true) if c1 == max => Some(dag.get_bool_constant(false, vt)),
-        (false, true) if c1 == min => same(c1, CondCode::SetNe),
-        (false, true) if unsigned && c1 == max - 1 => same(max, CondCode::SetEq),
+        (false, true) if c1 == min && (!vector || before_legalize_ops) => same(c1, CondCode::SetNe),
+        (false, true) if unsigned && c1 == max - 1 && (!vector || before_legalize_ops) => same(max, CondCode::SetEq),
         _ => None,
     }
 }

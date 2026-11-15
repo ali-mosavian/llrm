@@ -772,9 +772,13 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    if name == "NOTv16i8" {
+    if let Some(quad) = match name {
+        "NOTv16i8" => Some(true),
+        "NOTv8i8" => Some(false),
+        _ => None,
+    } {
         return Some(match operands {
-            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
+            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { quad, rd, rn: *rn }),
             _ => wrong(),
         });
     }
@@ -922,15 +926,36 @@ fn vector_inst(
         ("EOR", VectorOp::Eor),
         ("USHL", VectorOp::Ushl),
         ("SSHL", VectorOp::Sshl),
+        ("SMAX", VectorOp::Smax),
+        ("SMIN", VectorOp::Smin),
+        ("UMAX", VectorOp::Umax),
+        ("UMIN", VectorOp::Umin),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
         };
-        if (op.is_logical() && lanes.full() != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+        if !op.has_lanes(lanes) {
             continue;
         }
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorBinary { op, lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
+    // `CMGTv4i32`, `CMLTv8i8rz`, `FCMGEv2f32`, `BSPv16i8`.
+    if let Some(form) = crate::vector_forms::parse(name) {
+        use crate::vector_forms::VectorForm;
+        return Some(match (form, operands) {
+            (VectorForm::Compare { op, lanes, quad }, [Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorCompare { op, lanes, quad, rd, rn: *rn, rm: *rm })
+            }
+            // The zero is part of the form.
+            (VectorForm::CompareZero { op, lanes, quad }, [Operand::Fpr(rn), ..]) => {
+                Ok(Inst::VectorCompareZero { op, lanes, quad, rd, rn: *rn })
+            }
+            (VectorForm::Bsp { quad }, [Operand::Fpr(mask), Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorBsp { quad, rd, mask: *mask, rn: *rn, rm: *rm })
+            }
             _ => wrong(),
         });
     }
