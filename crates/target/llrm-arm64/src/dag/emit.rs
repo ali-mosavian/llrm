@@ -696,6 +696,15 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `LD1Rv4s`: the lane at the address replicated into every lane of `rd`.
+    if let Some(lanes) =
+        name.strip_prefix("LD1Rv").and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
+    {
+        return Some(match operands {
+            [Operand::Reg(base)] => Ok(Inst::VectorLoadReplicate { lanes, rt: rd, base: *base }),
+            _ => wrong(),
+        });
+    }
     // `DUPi64`: one lane of a vector register as a scalar.
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         let suffix = match lanes {
@@ -820,7 +829,16 @@ fn vector_inst(
         if name == format!("XTN{narrow}") {
             return Some(match operands {
                 [Operand::Fpr(rn)] | [Operand::Fpr(_), Operand::Fpr(rn)] => {
-                    Ok(Inst::VectorNarrow { high, wide, rd, rn: *rn })
+                    Ok(Inst::VectorNarrow { high, shift: None, wide, rd, rn: *rn })
+                }
+                _ => wrong(),
+            });
+        }
+        if name == format!("SHRN{narrow}_shift") {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Imm(amount)]
+                | [Operand::Fpr(_), Operand::Fpr(rn), Operand::Imm(amount)] => {
+                    Ok(Inst::VectorNarrow { high, shift: Some(*amount as u8), wide, rd, rn: *rn })
                 }
                 _ => wrong(),
             });

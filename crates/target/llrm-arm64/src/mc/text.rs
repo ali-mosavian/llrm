@@ -407,11 +407,7 @@ impl fmt::Display for Inst {
             }
             Inst::VectorLong { op, lane, high, rd, rn, rm } => {
                 // `uaddw` has a wide first operand; `umull` a narrow one.
-                let first = if op.adds_wide() {
-                    lane.wide_suffix()
-                } else {
-                    lane.narrow_suffix(*high)
-                };
+                let first = if op.adds_wide() { lane.wide_suffix() } else { lane.narrow_suffix(*high) };
                 write!(
                     out,
                     "{}{} v{}.{}, v{}.{first}, v{}.{}",
@@ -467,9 +463,13 @@ impl fmt::Display for Inst {
                 let s = lanes.suffix();
                 write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
             }
-            Inst::VectorNarrow { high, wide, rd, rn } => {
+            Inst::VectorNarrow { high, shift, wide, rd, rn } => {
                 let two = if *high { "2" } else { "" };
-                write!(out, "xtn{two} v{}.{}, v{}.{}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())
+                let (name, amount) = match shift {
+                    Some(amount) => ("shrn", format!(", #{amount}")),
+                    None => ("xtn", String::new()),
+                };
+                write!(out, "{name}{two} v{}.{}, v{}.{}{amount}", rd.0, wide.narrowed(*high), rn.0, wide.suffix())
             }
             Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
@@ -480,6 +480,9 @@ impl fmt::Display for Inst {
             }
             Inst::VectorStoreLane { lanes, rt, index, base } => {
                 write!(out, "st1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
+            }
+            Inst::VectorLoadReplicate { lanes, rt, base } => {
+                write!(out, "ld1r {{ v{}.{} }}, [{}]", rt.0, lanes.suffix(), gpr(*base, Width::X, true))
             }
             Inst::VectorUmov { lanes, rd, rn, index } => {
                 let lane = lane_letter(*lanes);

@@ -442,6 +442,9 @@ DUPv4i32lane             move     x/x,i         -                        fp_arit
 XTNv8i8                  unary    x/x           -                        fp_arith   - - - -/-                XTNv8i8
 XTNv4i16                 unary    x/x           -                        fp_arith   - - - -/-                XTNv4i16
 XTNv2i32                 unary    x/x           -                        fp_arith   - - - -/-                XTNv2i32
+SHRNv8i8_shift           binary   x/x,i         -                        fp_arith   - - - -/-                SHRNv8i8_shift
+SHRNv4i16_shift          binary   x/x,i         -                        fp_arith   - - - -/-                SHRNv4i16_shift
+SHRNv2i32_shift          binary   x/x,i         -                        fp_arith   - - - -/-                SHRNv2i32_shift
 UZP1v16i8                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v16i8
 UZP1v8i16                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v8i16
 UZP1v4i32                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v4i32
@@ -473,6 +476,9 @@ SSRAv2i64_shift          binary   x/x,x,i         -                        fp_ar
 XTNv16i8                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv16i8
 XTNv8i16                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv8i16
 XTNv4i32                 binary   x/x,x         -                        fp_arith   - - - -/-                XTNv4i32
+SHRNv16i8_shift          binary   x/x,x,i       -                        fp_arith   - - - -/-                SHRNv16i8_shift
+SHRNv8i16_shift          binary   x/x,x,i       -                        fp_arith   - - - -/-                SHRNv8i16_shift
+SHRNv4i32_shift          binary   x/x,x,i       -                        fp_arith   - - - -/-                SHRNv4i32_shift
 MULv4i32_indexed         binary   x/x,x,i       -                        fp_arith   - - - -/-                MULv4i32_indexed
 FMULv4i32_indexed        binary   x/x,x,i       -                        fp_arith   - - - -/-                FMULv4i32_indexed
 FMULv2i64_indexed        binary   x/x,x,i       -                        fp_arith   - - - -/-                FMULv2i64_indexed
@@ -559,6 +565,13 @@ LDRF8.{pre|post}         move     x,r/m         -                        load   
 LDRF16.{ui|fi|pg|gotpg}  move     x/m           -                        load       - - - -/-                LDRQui
 LDRF16.ro21              move     x/m           -                        load       - - - -/-                LDRQ[roW|roX]
 LDRF16.{pre|post}        move     x,r/m         -                        load       - - - -/-                LDRQ{pre|post}
+LD1Rv8b                  move     x/m           -                        load       - - - -/-                LD1Rv8b
+LD1Rv16b                 move     x/m           -                        load       - - - -/-                LD1Rv16b
+LD1Rv4h                  move     x/m           -                        load       - - - -/-                LD1Rv4h
+LD1Rv8h                  move     x/m           -                        load       - - - -/-                LD1Rv8h
+LD1Rv2s                  move     x/m           -                        load       - - - -/-                LD1Rv2s
+LD1Rv4s                  move     x/m           -                        load       - - - -/-                LD1Rv4s
+LD1Rv2d                  move     x/m           -                        load       - - - -/-                LD1Rv2d
 ST1i8                    move     -/x,i,m       -                        store      - - - -/-                ST1i8
 ST1i16                   move     -/x,i,m       -                        store      - - - -/-                ST1i16
 ST1i32                   move     -/x,i,m       -                        store      - - - -/-                ST1i32

@@ -431,6 +431,17 @@ impl Arrangement {
         }
     }
 
+    /// Every arrangement.
+    pub const ALL: [Arrangement; 7] = [
+        Arrangement::B16,
+        Arrangement::H8,
+        Arrangement::S4,
+        Arrangement::D2,
+        Arrangement::B8,
+        Arrangement::H4,
+        Arrangement::S2,
+    ];
+
     pub fn suffix(self) -> &'static str {
         match self {
             Arrangement::B16 => "16b",
@@ -1533,8 +1544,10 @@ pub enum Inst {
     },
     /// `xtn{2} v.8b, v.8h`: each lane of `rn` (`wide`'s lanes) halved, into
     /// the low half of `rd` or, `high`, its top half (`rd` is then read too).
+    /// `shift`: `shrn{2}`, each lane shifted right by it first.
     VectorNarrow {
         high: bool,
+        shift: Option<u8>,
         wide: Arrangement,
         rd: Vreg,
         rn: Vreg,
@@ -1563,6 +1576,13 @@ pub enum Inst {
         lanes: Arrangement,
         rt: Vreg,
         index: u8,
+        base: Gpr,
+    },
+    /// `ld1r { v.4s }, [base]`: the lane at `[base]` replicated into every
+    /// lane of `rt` (`LD1Rv4s`).
+    VectorLoadReplicate {
+        lanes: Arrangement,
+        rt: Vreg,
         base: Gpr,
     },
     /// `umov w, v.s[index]`: one lane of `rn` zero-extended into a general

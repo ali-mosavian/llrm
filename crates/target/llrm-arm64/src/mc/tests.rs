@@ -383,7 +383,7 @@ fn branches() {
         for (op, amount) in [(VectorLongOp::Sshll, 0), (VectorLongOp::Ushll, 0), (VectorLongOp::Sshll, 3)] {
             all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(5), rn: Vreg(17), amount });
         }
-        all.push(Inst::VectorNarrow { high, wide, rd: Vreg(6), rn: Vreg(30) });
+        all.push(Inst::VectorNarrow { high, shift: None, wide, rd: Vreg(6), rn: Vreg(30) });
         for op in [VectorLongOp::Smull, VectorLongOp::Umull, VectorLongOp::Smlal, VectorLongOp::Umlal] {
             all.push(Inst::VectorLong { op, lane, high, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
         }
@@ -407,6 +407,9 @@ fn branches() {
         all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
         all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
+    }
+    for lanes in ALL_ARRANGEMENTS {
+        all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
     }
     for (lanes, index) in [
         (Arrangement::B16, 3),
