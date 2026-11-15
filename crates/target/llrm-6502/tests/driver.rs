@@ -45,16 +45,16 @@ fn the_platforms_zero_page_reaches_the_allocator() {
     assert!(narrow.contains("s_many_0") || narrow.contains("pha"), "no pressure at 16:\n{narrow}");
 }
 
-/// A word shifted by 5 is a counted loop at the size level and `asl`/`rol`
-/// pairs at speed. A driver that kept `select_function`'s speed tuning gave
-/// `-Os` the same text as `-O2`.
+/// A word shifted by 5 is a counted loop at every level: bytes first (user
+/// ruling 2026-11-14), since `Tuning::SPEED` prices a byte as at size (#9933).
+/// The test still asserted `asl`/`rol` pairs at -O2 and failed on release/next.
 #[test]
-fn the_size_level_is_priced_in_bytes() {
+fn a_word_shifted_by_five_is_a_counted_loop_at_every_level() {
     let ir = module("define i16 @shl5(i16 %x) {\n  %p = shl i16 %x, 5\n  %q = add i16 %p, %x\n  ret i16 %q\n}");
-    let size = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(size.contains("dex") || size.contains("dey"), "-Os:\n{size}");
-    assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
+    for level in [Level::Os, Level::O2, Level::O3] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("dex") || text.contains("dey"), "{level:?}:\n{text}");
+    }
 }
 
 /// `n - 1` on a word went through the carry chain (`clc; adc #255` on each
