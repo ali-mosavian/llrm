@@ -147,3 +147,115 @@ fn the_shift_form_choice_does_work_in_proportion_to_the_loops() {
     assert!(small > 0, "no candidate was built");
     assert!(large <= 6 * small, "200 loops built {large} candidate lines, 50 built {small}");
 }
+
+/// The exit code of `probe` run on sim65: the number of the first case that
+/// is wrong, 0 when all agree.
+fn exit_code_of(
+    text: &str,
+    name: &str,
+) -> i32 {
+    // the runtime defines the cells
+    let text: String =
+        text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
+    common::run_with(&format!("shift-forms-{name}"), "  jsr probe\n", &text)
+}
+
+/// `defs` (noinline functions `@f0`, `@f1`, ... returning i16) called as
+/// `call` says on four inputs; the case that gives other than the value it
+/// names is the exit code.
+fn failing_case(
+    name: &str,
+    level: Level,
+    defs: &str,
+    call: impl Fn(usize, u8, u8, u16) -> (String, u16),
+    functions: usize,
+) -> i32 {
+    let mut ir = format!("target datalayout = \"{}\"\n{defs}\n", datalayout());
+    ir += "define i8 @probe() {\n";
+    let mut previous = "0".to_owned();
+    let mut case = 0;
+    for function in 0..functions {
+        for (c, d, x) in [(1u8, 2u8, 0x0123u16), (0xFF, 0x80, 0xA5C3), (0x40, 0x01, 0x8001), (0, 0, 0xFFFF)] {
+            case += 1;
+            let (arguments, want) = call(function, c, d, x);
+            ir += &format!(
+                "  %r{case} = call i16 @f{function}({arguments})\n  %ok{case} = icmp eq i16 %r{case}, {}\n  %a{case} = select i1 %ok{case}, i8 {previous}, i8 {case}\n",
+                want as i16
+            );
+            previous = format!("%a{case}");
+        }
+    }
+    ir += &format!("  ret i8 {previous}\n}}\n");
+    let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+    exit_code_of(&text, name)
+}
+
+/// Four functions that hold a byte in `a` (`h`, `g`, `m`) or in `x` (`g2`)
+/// across a shift of a word: the run in `a` would clobber the first, the loop
+/// on `x` the second. The call argument, the sum and the compare read what
+/// the shift must leave alone.
+#[test]
+fn a_shift_run_leaves_the_bytes_held_in_a_and_x_alone() {
+    let defs = "\
+declare i16 @sink(i8, i16) noinline
+define i16 @sink(i8 %c, i16 %s) noinline {\n  %z = zext i8 %c to i16\n  %r = add i16 %s, %z\n  ret i16 %r\n}
+define i16 @sink2(i8 %c, i8 %d, i16 %s) noinline {\n  %z = zext i8 %c to i16\n  %w = zext i8 %d to i16\n  %t = add i16 %s, %z\n  %r = xor i16 %t, %w\n  ret i16 %r\n}
+define i16 @f0(i8 %c, i8 %d, i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %r = call i16 @sink(i8 %c, i16 %s)\n  ret i16 %r\n}
+define i16 @f1(i8 %c, i8 %d, i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %z = zext i8 %c to i16\n  %r = add i16 %s, %z\n  ret i16 %r\n}
+define i16 @f2(i8 %c, i8 %d, i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %z = zext i8 %c to i16\n  %e = icmp eq i16 %s, %z\n  %r = select i1 %e, i16 7, i16 9\n  ret i16 %r\n}
+define i16 @f3(i8 %c, i8 %d, i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %r = call i16 @sink2(i8 %c, i8 %d, i16 %s)\n  ret i16 %r\n}
+define i16 @f4(i8 %c, i8 %d, i16 %x) noinline {\n  %s = lshr i16 %x, 5\n  %r = call i16 @sink2(i8 %c, i8 %d, i16 %s)\n  ret i16 %r\n}
+";
+    let defs = defs.replace("declare i16 @sink(i8, i16) noinline\n", "");
+    let call = |function: usize, c: u8, d: u8, x: u16| -> (String, u16) {
+        let (c16, d16) = (u16::from(c), u16::from(d));
+        let arguments = format!("i8 {}, i8 {}, i16 {}", c as i8, d as i8, x as i16);
+        let want = match function {
+            0 | 1 => (x << 3).wrapping_add(c16),
+            2 => {
+                if x << 3 == c16 {
+                    7
+                } else {
+                    9
+                }
+            }
+            3 => ((x << 3).wrapping_add(c16)) ^ d16,
+            _ => ((x >> 5).wrapping_add(c16)) ^ d16,
+        };
+        (arguments, want)
+    };
+    for level in [Level::O2, Level::Os] {
+        let failed = failing_case("held", level, &defs, call, 5);
+        assert_eq!(failed, 0, "{level:?}: case {failed} (of 4 inputs a function) is wrong");
+    }
+}
+
+/// A word that arrives in A:X is stored to its cells and its low byte stays in
+/// `a`: the run in `a` is cheapest if the stored copy is read back, but `a`
+/// is read after the run (`x * 9`, `x * 17`, `x * 5`, `(x << 3) ^ x`).
+#[test]
+fn a_shift_run_keeps_the_low_byte_the_word_arrived_with() {
+    let defs = "\
+define i16 @f0(i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %r = add i16 %s, %x\n  ret i16 %r\n}
+define i16 @f1(i16 %x) noinline {\n  %s = shl i16 %x, 4\n  %r = add i16 %s, %x\n  ret i16 %r\n}
+define i16 @f2(i16 %x) noinline {\n  %s = shl i16 %x, 2\n  %r = add i16 %s, %x\n  ret i16 %r\n}
+define i16 @f3(i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %r = xor i16 %s, %x\n  ret i16 %r\n}
+define i16 @f4(i16 %x) noinline {\n  %s = lshr i16 %x, 4\n  %r = add i16 %s, %x\n  ret i16 %r\n}
+define i16 @f5(i16 %x) noinline {\n  %s = lshr i16 %x, 3\n  %r = xor i16 %s, %x\n  ret i16 %r\n}
+";
+    let call = |function: usize, _c: u8, _d: u8, x: u16| -> (String, u16) {
+        let want = match function {
+            0 => (x << 3).wrapping_add(x),
+            1 => (x << 4).wrapping_add(x),
+            2 => (x << 2).wrapping_add(x),
+            3 => (x << 3) ^ x,
+            4 => (x >> 4).wrapping_add(x),
+            _ => (x >> 3) ^ x,
+        };
+        (format!("i16 {}", x as i16), want)
+    };
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let failed = failing_case("arrived", level, defs, call, 6);
+        assert_eq!(failed, 0, "{level:?}: case {failed} (of 4 inputs a function) is wrong");
+    }
+}
