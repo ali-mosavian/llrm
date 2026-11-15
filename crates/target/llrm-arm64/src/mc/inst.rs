@@ -474,6 +474,11 @@ pub enum VectorOp {
     Smin,
     Umax,
     Umin,
+    /// `sqadd`, `uqadd`, `sqsub`, `uqsub`: the saturating add and subtract.
+    Sqadd,
+    Uqadd,
+    Sqsub,
+    Uqsub,
 }
 
 impl VectorOp {
@@ -494,6 +499,10 @@ impl VectorOp {
             VectorOp::Smin => (0, 0b01101, None),
             VectorOp::Umax => (1, 0b01100, None),
             VectorOp::Umin => (1, 0b01101, None),
+            VectorOp::Sqadd => (0, 0b00001, None),
+            VectorOp::Uqadd => (1, 0b00001, None),
+            VectorOp::Sqsub => (0, 0b00101, None),
+            VectorOp::Uqsub => (1, 0b00101, None),
         }
     }
 
@@ -513,6 +522,10 @@ impl VectorOp {
             VectorOp::Smin => "smin",
             VectorOp::Umax => "umax",
             VectorOp::Umin => "umin",
+            VectorOp::Sqadd => "sqadd",
+            VectorOp::Uqadd => "uqadd",
+            VectorOp::Sqsub => "sqsub",
+            VectorOp::Uqsub => "uqsub",
         }
     }
 
@@ -791,6 +804,10 @@ pub enum VectorIntUnary {
     Neg,
     Abs,
     Cnt,
+    /// `clz`: leading zeros, no `2d` form.
+    Clz,
+    /// `rbit v.16b`: the bits of each byte reversed.
+    Rbit,
 }
 
 impl VectorIntUnary {
@@ -800,7 +817,17 @@ impl VectorIntUnary {
             VectorIntUnary::Neg => (1, 0b01011),
             VectorIntUnary::Abs => (0, 0b01011),
             VectorIntUnary::Cnt => (0, 0b00101),
+            VectorIntUnary::Clz => (1, 0b00100),
+            VectorIntUnary::Rbit => (1, 0b00101),
         }
+    }
+
+    /// The `size` field: `rbit` is the `01` form of the byte opcode.
+    pub(super) fn size(
+        self,
+        lanes: Arrangement,
+    ) -> u32 {
+        if self == VectorIntUnary::Rbit { 1 } else { lanes.size() }
     }
 
     pub fn mnemonic(self) -> &'static str {
@@ -808,16 +835,22 @@ impl VectorIntUnary {
             VectorIntUnary::Neg => "neg",
             VectorIntUnary::Abs => "abs",
             VectorIntUnary::Cnt => "cnt",
+            VectorIntUnary::Clz => "clz",
+            VectorIntUnary::Rbit => "rbit",
         }
     }
 
-    /// Whether the encoding has these lanes: `cnt` is bytes, the others have
-    /// no `1d`.
+    /// Whether the encoding has these lanes: `cnt` and `rbit` are bytes,
+    /// `clz` has no `2d`.
     pub fn has_lanes(
         self,
         lanes: Arrangement,
     ) -> bool {
-        self != VectorIntUnary::Cnt || lanes.full() == Arrangement::B16
+        match self {
+            VectorIntUnary::Cnt | VectorIntUnary::Rbit => lanes.full() == Arrangement::B16,
+            VectorIntUnary::Clz => lanes.full() != Arrangement::D2,
+            _ => true,
+        }
     }
 }
 
