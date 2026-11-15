@@ -107,6 +107,32 @@ fn test_a_conditional_constant_is_added_inside_its_branch() {
     }
 }
 
+/// The branch for `acc += ok ? (int)a : 0` was made at the select, so the sum
+/// of the six terms moved to its join, away from their selects: `mov r, 4; je;
+/// xor r, r` diamonds and `sete` bytes in stack slots (sfm16_float -O2: the
+/// terms were not added inside their branches).
+#[test]
+fn test_a_conversion_branch_does_not_part_the_terms_from_their_sum() {
+    for level in ["-O2", "-O3"] {
+        let asm = compiled(level);
+        let body = function(&asm, "six_then_convert");
+        let loads: Vec<_> = body
+            .iter()
+            .filter(|line| {
+                ["mov eax, ", "mov ebx, ", "mov ecx, ", "mov edx, ", "mov esi, ", "mov edi, ", "mov ebp, "]
+                    .iter()
+                    .any(|prefix| line.strip_prefix(prefix).is_some_and(|rest| rest.parse::<u32>().is_ok()))
+            })
+            .collect();
+        assert!(loads.is_empty(), "{level}: constant loads {loads:?}:\n{}", body.join("\n"));
+        assert!(
+            body.iter().all(|line| !line.starts_with("sete byte ptr [esp")),
+            "{level}: a flag held in a stack byte:\n{}",
+            body.join("\n")
+        );
+    }
+}
+
 #[test]
 fn test_size_keeps_sahf() {
     let asm = compiled("-Os");
