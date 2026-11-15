@@ -61,6 +61,7 @@ pub mod shiftadd;
 pub mod wordtable;
 pub mod sizes;
 pub mod slotreg;
+pub mod spillfold;
 pub mod spillmove;
 pub mod target;
 pub mod timing;
