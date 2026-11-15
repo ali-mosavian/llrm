@@ -43,6 +43,11 @@ const ADDRESS: [RegId; 5] = [reg::A2, reg::A3, reg::A4, reg::A5, reg::A6];
 
 /// The callees `function` calls directly more than once, most called first.
 pub fn repeated(function: &MFunction) -> Vec<String> {
+    repeated_counts(function).into_iter().map(|(name, _)| name).collect()
+}
+
+/// [`repeated`], each with its number of calls.
+fn repeated_counts(function: &MFunction) -> Vec<(String, usize)> {
     let mut count: HashMap<&str, usize> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
@@ -56,7 +61,48 @@ pub fn repeated(function: &MFunction) -> Vec<String> {
     }
     order.retain(|name| count[name] > 1);
     order.sort_by_key(|name| std::cmp::Reverse(count[name]));
-    order.into_iter().map(str::to_owned).collect()
+    order.into_iter().map(|name| (name.to_owned(), count[name])).collect()
+}
+
+/// A lower bound on the price of routing `set`'s callees through registers,
+/// from the price `best` of the function as it stands: each callee's load is
+/// paid, each of its `count` calls gets cheaper by at most the dearer of its
+/// two direct forms less the call through a register, and the saved register
+/// and the frame only add. `None` where a price is not to be had.
+fn lower_bound(
+    set: &[(String, usize)],
+    best: (usize, u32),
+    cpu: Cpu,
+) -> Option<(usize, u32)> {
+    let register = mc::Operand::Reg(reg::A2);
+    let through =
+        crate::instprice::price_of(cpu, &mc::Inst { opcode: "CALLj", operands: vec![register.clone()] }).ok()?;
+    let (mut bytes, mut clocks) = (best.0 as i64, i64::from(best.1));
+    for (name, count) in set {
+        let symbol = mc::Operand::Symbol(name.clone(), 0);
+        let load = crate::instprice::price_of(
+            cpu,
+            &mc::Inst { opcode: "LEA32b", operands: vec![register.clone(), symbol.clone()] },
+        )
+        .ok()?;
+        let direct =
+            |opcode| crate::instprice::price_of(cpu, &mc::Inst { opcode, operands: vec![symbol.clone()] }).ok();
+        let (absolute, relative) = (direct("CALLb")?, direct("CALLq")?);
+        let dearest = (absolute.0.max(relative.0), absolute.1.max(relative.1));
+        let calls = *count as i64;
+        bytes += load.0 as i64 - calls * (dearest.0 as i64 - through.0 as i64);
+        clocks += i64::from(load.1) - calls * (i64::from(dearest.1) - i64::from(through.1));
+    }
+    // the register each callee takes is saved and restored by the frame: pushed
+    // and popped one by one, or by `movem`, which adds no bytes for another
+    // register and a few clocks; the cheaper of the two, at least
+    let clocks_of =
+        |text: &str, bytes: u32| crate::timing::cost(cpu, text, bytes, false).ok().map(|one| i64::from(one.clocks));
+    let push = clocks_of("move.l %a2,-(%sp)", 2)? + clocks_of("move.l (%sp)+,%a2", 2)?;
+    let movem = (clocks_of("movem.l %a2/%a3,-(%sp)", 4)? - clocks_of("movem.l %a2,-(%sp)", 4)?)
+        + (clocks_of("movem.l (%sp)+,%a2/%a3", 4)? - clocks_of("movem.l (%sp)+,%a2", 4)?);
+    clocks += set.len() as i64 * push.min(movem).max(0);
+    Some((bytes.max(0) as usize, u32::try_from(clocks.max(0)).unwrap_or(u32::MAX)))
 }
 
 /// Whether any instruction of `function` names a callee-saved register, which
@@ -180,7 +226,9 @@ pub fn choose(
     if function.returns_twice {
         return Ok(chosen);
     }
-    let candidates = repeated(function);
+    let counted = repeated_counts(function);
+    let candidates: Vec<String> = counted.iter().map(|(name, _)| name.clone()).collect();
+    let calls = |name: &str| counted.iter().find(|(callee, _)| callee == name).map_or(0, |(_, count)| *count);
     let mut free = unused(function, assignment);
     if candidates.is_empty() || free.is_empty() {
         return Ok(chosen);
@@ -198,6 +246,12 @@ pub fn choose(
         let with_pending: Vec<String> = pending.iter().cloned().chain(std::iter::once(name.clone())).collect();
         for set in [vec![name.clone()], with_pending] {
             if set.len() > free.len() || (set.len() > 1 && pending.is_empty()) {
+                continue;
+            }
+            // a set that cannot beat the build as it stands even at the best
+            // case is not expanded
+            let members: Vec<(String, usize)> = set.iter().map(|callee| (callee.clone(), calls(callee))).collect();
+            if lower_bound(&members, best, cpu).is_some_and(|low| !price.beats(cpu, low, best)) {
                 continue;
             }
             let mut targets = chosen.clone();

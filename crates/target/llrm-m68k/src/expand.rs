@@ -414,6 +414,16 @@ pub(crate) fn call_area(
         .unwrap_or(0)
 }
 
+thread_local! {
+    static EXPANSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many functions [`finish_with`] expanded on this thread: a candidate
+/// the call-target choice prices is one more (`choose` was 23% of grep -O2).
+pub fn expansions() -> usize {
+    EXPANSIONS.with(std::cell::Cell::get)
+}
+
 /// [`finish`], with the outgoing arguments pushed where [`crate::callpush`]
 /// finds that cheaper: `pushes` is `Some(price)` to allow it.
 pub fn finish_with(
@@ -426,6 +436,7 @@ pub fn finish_with(
     short: bool,
     pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
+    EXPANSIONS.with(|count| count.set(count.get() + 1));
     if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short) {
         // the fold proved its range for the stack depth it could foresee; call
         // cleanups left owed grow the depth, which only emission knows:
@@ -525,7 +536,8 @@ pub fn finish_with(
                 // The table and blocks of a table jump are for the passes and
                 // the emitted table; the instruction is `jmp (An)`.
                 Operand::Symbol(..) | Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
-                // a word table's jump names its table; the blocks are the table's
+                // a word table's jump names its table; the blocks are the
+                // table's
                 Operand::Block(_) if inst.kind == Kind::Op(crate::dagisel::wordjump::NAME) => continue,
                 Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
                 Operand::Block(id) => {
