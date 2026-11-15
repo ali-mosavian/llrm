@@ -152,13 +152,13 @@ impl Inst {
 }
 
 /// `PHI result, (incoming, predecessor)..`: a predecessor is a block index.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Phi {
     pub result: Reg,
     pub incoming: Vec<(usize, Reg)>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Block {
     /// The IR block's number: what a [`Operand::Block`] names.
     pub id: u32,
@@ -204,7 +204,7 @@ impl Block {
 
 /// A source variable the debug info names, and where it lives for the whole
 /// function: the channel `-g` formats read, whatever the target.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Variable {
     pub name: String,
     /// Its `!DIType` node, as the module the function was selected from has it.
@@ -224,7 +224,7 @@ pub enum VariablePlace {
 }
 
 /// `C` is the target's register class.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MFunction<C> {
     pub name: String,
     pub blocks: Vec<Block>,

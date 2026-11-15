@@ -184,12 +184,12 @@ thread_local! {
 /// writes: the pricing of a layout, of a multiply or a callee-save choice asks
 /// for the same text again, and the allocator and the peephole passes are the
 /// bulk of a compile. The modules the texts are keyed by must outlive it.
-pub struct TextCache(());
+pub struct TextCache(alloc::AllocationCache);
 
 impl TextCache {
     pub fn new() -> TextCache {
         TEXTS.with(|texts| *texts.borrow_mut() = Some(HashMap::default()));
-        TextCache(())
+        TextCache(alloc::AllocationCache::new())
     }
 }
 
