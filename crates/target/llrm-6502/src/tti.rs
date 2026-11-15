@@ -209,6 +209,10 @@ impl Tti for Mos6502 {
         true
     }
 
+    fn write_only_after_late_unroll(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
