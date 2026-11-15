@@ -1184,8 +1184,8 @@ impl Tti for X86 {
         self.tuning.ipa_cp_max_clones
     }
 
-    fn lsr_prices_spills(&self) -> bool {
-        self.tuning.lsr_prices_spills
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        self.tuning.lsr_spill_pressure_margin
     }
 
     fn recursive_tre_first(&self) -> (bool, bool) {
