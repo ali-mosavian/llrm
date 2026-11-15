@@ -356,10 +356,14 @@ pub fn items_with(
     // two builds of the shared `MachineCSE` are compared.
     let prefixes = Prefixes::default();
     let wants_slots = options.slot_registers;
+    // DEVIATE M68K-ONE-BUILD, continued: a speed build is not built again for
+    // the relaxation, the shared `MachineCSE` or the slot registers (-O2 68020
+    // over 165 programs: no cell passes a gcc/clang clock bar either way).
+    let one_build = !wants_size && !options.strict;
     let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
         let (plain, saved, chosen, shared) =
             items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
-        if !options.relax_classes || !saved {
+        if !options.relax_classes || !saved || one_build {
             return Ok((plain, shared, chosen));
         }
         let relaxed_options = Options { relax_classes: true, ..chosen };
@@ -374,7 +378,7 @@ pub fn items_with(
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
-    if shared {
+    if shared && !one_build {
         let (without, _, without_options) = finished(Options { shared_cse: false, ..options })?;
         if !crate::trial::keeps(&kept, &without, cpu, price) {
             trial_won(name, "shared_cse", crate::trial::keeps(&without, &kept, cpu, price));
@@ -382,7 +386,7 @@ pub fn items_with(
         }
     }
     // A function with no spill slot has nothing to move.
-    if wants_slots && prefixes.had_slots.get() {
+    if wants_slots && !one_build && prefixes.had_slots.get() {
         let (items, touched) =
             items_once(module, name, cpu, Options { slot_registers: true, ..kept_options }, &prefixes)?;
         let mut best = kept;
