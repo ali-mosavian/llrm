@@ -37,7 +37,7 @@ use crate::mc::inst::{
 };
 use crate::mc::inst::{
     Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
-    VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    SMOV_FORMS, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -1087,6 +1087,14 @@ fn float_inst(
                 Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: *index as u8 })
             }
             ([Operand::Fpr(rn)], true) => Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: 0 }),
+            _ => wrong(),
+        });
+    }
+    if let Some(&(_, lanes, wide)) = SMOV_FORMS.iter().find(|form| form.0 == name) {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Imm(index)] => {
+                Ok(Inst::VectorSmov { lanes, wide, rd: gd, rn: *rn, index: *index as u8 })
+            }
             _ => wrong(),
         });
     }
