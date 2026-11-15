@@ -87,6 +87,16 @@ mod recurrence;
 mod throughput;
 pub use crate::trial;
 
+/// The instructions `analyze_loop_unroll_cost` simulates before it gives up.
+///
+/// DEVIATE UNROLL-ANALYSIS-BUDGET (owner m68k, exit none): the pin analyzes
+/// at most `-unroll-max-iteration-count-to-analyze` (10) iterations; the
+/// target trials and the pricing ask for every trip, and the simulation is
+/// O(trips x size) with a map entry per instruction and trip. A loop of 200000
+/// trips was simulated twice for 49 s (`shl_of_a_zero_extended_dividend`
+/// -O2: 41 s of 41 s CPU) to price an unroll no bar admits.
+const ANALYSIS_BUDGET: u64 = 1 << 18;
+
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
 
@@ -584,6 +594,7 @@ fn analyze_loop_unroll_cost(
     let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
 
+    let mut simulated = 0_u64;
     // Simulate execution of each iteration of the loop counting instructions
     // which would be simplified.
     for iteration in 0..trip_count {
@@ -637,6 +648,11 @@ fn analyze_loop_unroll_cost(
                 // calculating their cost.
                 if eph.contains(&inst) {
                     continue;
+                }
+                simulated += 1;
+                if simulated > ANALYSIS_BUDGET {
+                    why(run, lp, &format!("cannot analyze: over {ANALYSIS_BUDGET} simulated instructions"));
+                    return None;
                 }
 
                 // Track this instruction's expected baseline cost when

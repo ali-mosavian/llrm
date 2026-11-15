@@ -149,6 +149,16 @@ fn a_four_trip_loop_is_priced_at_four_trips() {
     assert_eq!(calls, 1, "the loop was unrolled to {calls} calls:\n{asm}");
 }
 
+/// The trial priced the functions' bytes only: static_pointers' unroll folds a
+/// 6-byte switch table away for 3 bytes of code, was put back as +3 B, and the
+/// program was 196 B against 193 (2026-11-14).
+#[test]
+fn a_trial_prices_the_initialised_data_too() {
+    use llrm_6502::driver::data_bytes;
+    let text = ".segment \"RODATA\"\nt:\n  .byte 11,12,30,6,40,13\n  .word 1,2\n.segment \"BSS\"\nb: .res 9\n.segment \"DATA\"\nd:\n  .res 3\n";
+    assert_eq!(data_bytes(text), 6 + 4 + 3);
+}
+
 /// A full unroll that repaid its bytes at 3 clocks each was made at -O2/-O3:
 /// eight stores of `v + i` were 8 `clc; txa; adc` and a 22 B body, against a 12
 /// B loop; bytes come first (2026-11-14).
@@ -174,14 +184,4 @@ done:
         let adds = text.lines().filter(|line| line.trim_start().starts_with("adc")).count();
         assert!(adds < 4 && text.contains("bne"), "{level:?}: {adds} adds, the loop was copied out:\n{text}");
     }
-}
-
-/// The trial priced the functions' bytes only: static_pointers' unroll folds a
-/// 6-byte switch table away for 3 bytes of code, was put back as +3 B, and the
-/// program was 196 B against 193 (2026-11-14).
-#[test]
-fn a_trial_prices_the_initialised_data_too() {
-    use llrm_6502::driver::data_bytes;
-    let text = ".segment \"RODATA\"\nt:\n  .byte 11,12,30,6,40,13\n  .word 1,2\n.segment \"BSS\"\nb: .res 9\n.segment \"DATA\"\nd:\n  .res 3\n";
-    assert_eq!(data_bytes(text), 6 + 4 + 3);
 }
