@@ -217,6 +217,7 @@ pub mod intbits;
 mod isel_tests;
 pub mod ivshare;
 pub mod ivzero;
+pub mod joinsp;
 pub mod jumps;
 pub mod lanes;
 pub mod latecleanup;
