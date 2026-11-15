@@ -33,7 +33,7 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, Use, ValueDef};
-use llrm_mir::opcode::{Attribute, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::types::Type;
 
@@ -48,11 +48,13 @@ const MAX_THREADS: usize = 16;
 
 pub struct BackwardThreading {
     pub enabled: bool,
+    /// Paths threaded per function at most.
+    pub max_threads: usize,
 }
 
 impl BackwardThreading {
     pub fn from_env() -> Self {
-        Self { enabled: !llrm_support::env_flag!("LLRM_NO_BACKTHREAD") }
+        Self { enabled: !llrm_support::env_flag!("LLRM_NO_BACKTHREAD"), max_threads: MAX_THREADS }
     }
 }
 
@@ -77,7 +79,7 @@ impl FunctionPass for BackwardThreading {
             return PreservedAnalyses::all();
         }
         let mut changed = false;
-        for _ in 0..MAX_THREADS {
+        for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
             let Some(path) = find(unit.context, unit.function, &dt, &loops) else { break };
@@ -329,35 +331,63 @@ fn find(
     None
 }
 
-/// `block`'s non-phi, non-terminator instructions copied before `at` with
-/// `map` applied; each phi of the block is its input from `from`.
+/// `block`'s instructions copied into `copy` before `at` with `map` applied.
+/// Each phi of the block becomes a phi of one input in `copy`: the input
+/// `block`'s phi has from `from`, read from `pred`, the one block that enters
+/// `copy`. It stays a def, so that SSA repair renames the input like any other
+/// use: a value the original phi names is not the copy's once the path loops.
 fn copy_into(
     function: &mut Function,
     block: BlockId,
+    copy: BlockId,
+    pred: BlockId,
     from: BlockId,
     at: InstId,
     map: &mut ValueMap,
 ) {
+    let mut first_phi: Option<InstId> = None;
     for inst in function.iter_block(block).collect::<Vec<_>>() {
         let opcode = function.instruction(inst).opcode.clone();
         let result = function.instruction(inst).result;
         if opcode == Opcode::Phi {
-            let (incoming, _) =
-                arms(function, inst).into_iter().find(|&(_, pred)| pred == from).expect("an input from the new edge");
+            let (incoming, _) = arms(function, inst)
+                .into_iter()
+                .find(|&(_, from_pred)| from_pred == from)
+                .expect("an input from the new edge");
             let incoming = match incoming {
                 Operand::Value(id) => map.values.get(&id).copied().unwrap_or(incoming),
                 other => other,
             };
-            map.values.insert(result.expect("a phi's value"), incoming);
+            let ty = function.instruction(inst).ty;
+            let phi = function.create_instruction(
+                Opcode::Phi,
+                ty,
+                vec![incoming, Operand::Block(pred)],
+                Flags::default(),
+                None,
+            );
+            match first_phi {
+                None => {
+                    let first = function.iter_block(copy).next().expect("a jump");
+                    function.insert(phi, Position::Before(first)).expect("a placed block");
+                }
+                Some(last) => function.insert(phi, Position::After(last)).expect("a placed phi"),
+            }
+            first_phi = Some(phi);
+            let new = function.instruction(phi).result.expect("a phi's value");
+            if let Some(name) = result.and_then(|old| function.value(old).name.clone()) {
+                function.set_name(new, &format!("{name}.bt"));
+            }
+            map.values.insert(result.expect("a phi's value"), Operand::Value(new));
             continue;
         }
         if opcode.is_terminator() {
             continue;
         }
-        let copy = function.clone_instruction(inst);
-        function.insert(copy, Position::Before(at)).expect("a placed jump");
-        function.remap_instruction(copy, map);
-        if let (Some(old), Some(new)) = (result, function.instruction(copy).result) {
+        let duplicate = function.clone_instruction(inst);
+        function.insert(duplicate, Position::Before(at)).expect("a placed jump");
+        function.remap_instruction(duplicate, map);
+        if let (Some(old), Some(new)) = (result, function.instruction(duplicate).result) {
             if let Some(name) = function.value(old).name.clone() {
                 function.set_name(new, &format!("{name}.bt"));
             }
@@ -401,7 +431,7 @@ fn thread(
     // The copy of `p`: a block of its own on the edge `q -> p`.
     let e = edges::split_block_predecessors(function, p, &[q]);
     let e_jump = function.terminator(e).expect("a jump");
-    copy_into(function, p, e, e_jump, &mut map);
+    copy_into(function, p, e, q, e, e_jump, &mut map);
     let p_term = function.terminator(p).expect("a terminated block");
     let e_term = function.clone_instruction(p_term);
     function.insert(e_term, Position::Before(e_jump)).expect("a placed jump");
@@ -416,7 +446,7 @@ fn thread(
     // The copy of `bb`: a block on the edge `e -> bb` that jumps to the arm.
     let f = edges::split_block_predecessors(function, bb, &[e]);
     let f_jump = function.terminator(f).expect("a jump");
-    copy_into(function, bb, f, f_jump, &mut map);
+    copy_into(function, bb, f, e, f, f_jump, &mut map);
     edges::predecessor_added(function, arm, f, bb);
     remap_input(function, arm, f, &map);
     function.predecessor_removed(context, bb, f, true);
@@ -433,9 +463,6 @@ fn thread(
                 .iter()
                 .filter(|one| {
                     let user_block = function.parent(one.user);
-                    if user_block == Some(e) || user_block == Some(f) {
-                        return false;
-                    }
                     let user = function.instruction(one.user);
                     if user.opcode == Opcode::Phi {
                         user.operands[one.index as usize + 1] != Operand::Block(block)

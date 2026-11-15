@@ -47,7 +47,7 @@ fn threaded(text: &str) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true });
+    manager.add(BackwardThreading { enabled: true, max_threads: super::MAX_THREADS });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let text = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{text}");
@@ -61,4 +61,16 @@ fn a_join_of_a_known_and_an_unknown_path_is_threaded_for_the_known_one() {
     assert!(changed, "the guard is tested again after the path that passed it:\n{text}");
     // The copy of `head` that the path through `loop` takes jumps to `enter`.
     assert_eq!(text.matches("br label %enter").count(), 1, "{text}");
+}
+
+/// The path through `loop` is taken several trips running (`col > 1`): each
+/// copy of `head` must read the column the copy of `latch` before it made,
+/// not the one `head` itself last made. Reading `head`'s own phi left the
+/// column where the first threaded trip put it: a loop that never ended
+/// (queens at arm64 -O2 ran past 217 M instructions, 118 K before).
+#[test]
+fn trips_through_the_threaded_path_run_on_each_others_values() {
+    let text = COLUMNS.replace("%u = icmp eq i16 %col, 3", "%u = icmp ugt i16 %col, 1");
+    let (out, changed) = threaded(&text);
+    assert!(changed, "{out}");
 }
