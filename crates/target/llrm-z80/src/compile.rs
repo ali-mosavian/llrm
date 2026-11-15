@@ -1165,8 +1165,11 @@ thread_local! {
 thread_local! {
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Forms of a function (scheduler, return block copied or kept, carry form) built since the last
-    /// [`take_forms_built`].
+    /// Reports `stack_slot_report_by` made, and whole-function read-again
+    /// analyses it ran, since the last [`take_slot_analyses`].
+    static SLOT_ANALYSES: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// Forms of a function (scheduler, return block copied or kept, carry form)
+    /// built since the last [`take_forms_built`].
     static FORMS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The request's `slot_by_conflicts`, for the allocation on this thread.
     static SLOT_BY_CONFLICTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1187,7 +1190,15 @@ pub fn take_allocations() -> usize {
     ALLOCATIONS.with(|one| one.replace(0))
 }
 
-/// The forms of a function built on this thread since the last call: each is allocated a bounded number of times.
+/// The stack-slot reports made on this thread since the last call, and the
+/// whole-function read-again analyses they ran: one a report, however many
+/// slots it refuses.
+pub fn take_slot_analyses() -> (usize, usize) {
+    SLOT_ANALYSES.with(|one| one.replace((0, 0)))
+}
+
+/// The forms of a function built on this thread since the last call: each is
+/// allocated a bounded number of times.
 pub fn take_forms_built() -> usize {
     FORMS_BUILT.with(|one| one.replace(0))
 }
@@ -2075,10 +2086,12 @@ pub fn stack_slot_report_by(
     }
     let succs = llrm_spike_mf::regalloc::successors(function);
     let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+    SLOT_ANALYSES.with(|one| one.set((one.get().0 + 1, one.get().1)));
     // the first slot that keeps `chosen` from being a stack, or none
     // per block and instruction: whether a load's slot is read again after it
     let read_again = |function: &MFunction, chosen: &std::collections::BTreeSet<i32>| -> Vec<Vec<bool>> {
         use std::collections::BTreeSet;
+        SLOT_ANALYSES.with(|one| one.set((one.get().0, one.get().1 + 1)));
         let n = function.blocks.len();
         let (mut live_in, mut live_out) = (vec![BTreeSet::<i32>::new(); n], vec![BTreeSet::<i32>::new(); n]);
         let step = |inst: &Inst, now: &mut BTreeSet<i32>| match spill(inst) {
@@ -2121,6 +2134,41 @@ pub fn stack_slot_report_by(
             })
             .collect()
     };
+    // What a slot's loads need does not depend on which other slots are chosen
+    // (the slots are independent in `read_again`, and the mate of a pair is
+    // live or not whatever is chosen), so both are computed once for every
+    // slot in play, not again for each slot that is refused.
+    let all_slots: std::collections::BTreeSet<i32> = chosen.iter().chain(&chosen_crossing).copied().collect();
+    let again = read_again(function, &all_slots);
+    // per block, in program order, the slots whose load restores a byte of a
+    // pair whose other half is live
+    let mate_live: Vec<Vec<i32>> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(b, block)| {
+            let mut after =
+                live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, block.insts.len());
+            let mut slots = Vec::new();
+            for (_, inst) in block.insts.iter().enumerate().rev() {
+                if let Some((false, slot, register)) = spill(inst)
+                    && all_slots.contains(&slot)
+                {
+                    let pair = stack_pair(register).expect("checked above");
+                    if register != pair {
+                        let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
+                        let mate = if register == lo { hi } else { lo };
+                        if after.is_live(&REGISTER_INFO, mate) {
+                            slots.push(slot);
+                        }
+                    }
+                }
+                after.step_backward::<Z80Registers>(&REGISTER_INFO, assignment, inst);
+            }
+            slots.reverse();
+            slots
+        })
+        .collect();
     // DEVIATE Z80-SLOT-CONFLICT: on a load with other slots on top the pin has
     // no counterpart (StackSlotColoring.cpp only shares frame slots, by weight,
     // first fit); here the slot in the most such conflicts goes back to the
@@ -2131,7 +2179,6 @@ pub fn stack_slot_report_by(
      -> Option<(i32, StackRefusal)> {
         peeks.clear();
         let mut conflicts: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
-        let again = read_again(function, chosen);
         let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
         entry[0] = Some(Vec::new());
         let mut work = vec![0usize];
@@ -2194,33 +2241,12 @@ pub fn stack_slot_report_by(
             return Some((slot, StackRefusal::LoadNotOnTop));
         }
         // the other half of a pair a byte slot saves is dead once the pair is
-        // restored. One backward sweep a block, so the liveness after each load
-        // is stepped to once, not recomputed from the block's end; the
-        // first load in program order is the one reported.
-        for (b, block) in function.blocks.iter().enumerate() {
-            let mut after =
-                live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, block.insts.len());
-            let mut first = None;
-            for (at, inst) in block.insts.iter().enumerate().rev() {
-                if let Some((false, slot, register)) = spill(inst)
-                    && chosen.contains(&slot)
-                {
-                    let pair = stack_pair(register).expect("checked above");
-                    if register != pair {
-                        let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
-                        let mate = if register == lo { hi } else { lo };
-                        if after.is_live(&REGISTER_INFO, mate) {
-                            first = Some(slot);
-                        }
-                    }
-                }
-                after.step_backward::<Z80Registers>(&REGISTER_INFO, assignment, inst);
-            }
-            if let Some(slot) = first {
-                return Some((slot, StackRefusal::ByteMateLive));
-            }
-        }
-        None
+        // restored; the first load in program order is the one reported
+        mate_live
+            .iter()
+            .find_map(
+                |slots| slots.iter().find(|slot| chosen.contains(slot)).map(|&slot| (slot, StackRefusal::ByteMateLive)),
+            )
     };
     let mut peeks = std::collections::BTreeSet::new();
     while let Some((slot, why)) = violation(function, &chosen, &mut peeks) {
