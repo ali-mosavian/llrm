@@ -49,6 +49,20 @@ fn caller_saved(n: u8) -> bool {
     n >= 2 && !(8..=15).contains(&n)
 }
 
+/// Whether `inst`, a `jsr`, leaves the scratch cell `rcn` (`n >= 16`) as it
+/// was: a runtime routine whose text names no such cell
+/// (`routines::cells_named`; the allocator keeps a value there across it).
+fn call_keeps_scratch(
+    inst: &Inst,
+    n: u8,
+) -> bool {
+    n >= 16
+        && matches!(
+            &inst.operand,
+            Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
+}
+
 fn straight(op: Op) -> bool {
     use Op::*;
     matches!(
@@ -171,6 +185,9 @@ fn dead_from_pushed(
         // a call clobbers the scratch cells above the callee-saved ones and
         // reads none of them
         if inst.op == Op::Jsr && n >= 16 {
+            if call_keeps_scratch(inst, n) {
+                continue;
+            }
             return true;
         }
         // a call of a routine that names no cell reads none of them
@@ -481,6 +498,9 @@ fn spill_copy_once(
             // a call clobbers a caller-saved cell and reads none above the
             // argument cells
             if inst.op == Op::Jsr {
+                if call_keeps_scratch(inst, n) {
+                    continue;
+                }
                 if n <= 7 {
                     return false;
                 }
@@ -831,13 +851,14 @@ thread_local! {
 /// is one instruction there); this target picks the loop or the run at the
 /// size level from the final text, like [`arithmetic_chain_in_a`] does for a
 /// signed shift. The choice is by bytes, so it holds for every shape of
-/// shift, not one multiplier. Owner 6502, exit 2026-11-15: price the in-`a`
-/// run at emission, where the copy and the reload are known, and drop the
-/// pass. The exit also recovers the whole-function form this region form
-/// gives up (Os: `call_keeps` -11 B vs -8, `overflow_builtins` -18 vs -3,
-/// `div_constants_short` -21 and `sat_builtins` -18 vs 0, `loop_interchange`
-/// -6 vs -4): that needs liveness across blocks, which emission-time pricing
-/// has and a region does not.
+/// shift, not one multiplier. Owner 6502, exit 2026-11-18 (renewed from
+/// 2026-11-15: the replacement, a word shift's byte roles chosen by the
+/// allocator, is in review): price the in-`a` run at emission, where the copy
+/// and the reload are known, and drop the pass. The exit also recovers the
+/// whole-function form this region form gives up (Os: `call_keeps` -11 B vs -8,
+/// `overflow_builtins` -18 vs -3, `div_constants_short` -21 and `sat_builtins`
+/// -18 vs 0, `loop_interchange` -6 vs -4): that needs liveness across blocks,
+/// which emission-time pricing has and a region does not.
 pub fn shift_loop_in_a(asm: &mut Asm) {
     let mut at = 0;
     let mut references = std::collections::HashMap::<String, usize>::new();

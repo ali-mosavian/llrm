@@ -539,6 +539,10 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let index = u32::from(*index);
             0x4F80_8000 | (index & 1) << 21 | vreg(*rm)? << 16 | (index >> 1) << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        // `LD1R`: Q, size and the base register.
+        Inst::VectorLoadReplicate { lanes, rt, base } => {
+            0x0D40_C000 | lanes.q() << 30 | lanes.size() << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
         Inst::VectorStoreLane { lanes, rt, index, base } => {
             let index = u32::from(*index);
             // Q:S:size is the index, as many bits of it as the lane leaves

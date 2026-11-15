@@ -252,7 +252,7 @@ pub fn module_text(
             texts = faster;
         }
     }
-    // at speed the 16-bit divisions are the speed routine (31 bytes over the
+    // at speed the 16-bit divisions are the speed routine (39 bytes over the
     // compact one, linked once): a module takes the compact one, bytes first,
     // unless the clocks the speed one saves are worth them
     let speed_division16 = |text: &str| {
@@ -1054,7 +1054,7 @@ fn priced(
 ///
 /// DEVIATE 6502-DIV-16 (owner llrm-target-6502, exit 2026-11-24): the pin's
 /// `__udivhi3` is one routine. Reason: bytes first on this target at every
-/// level (user ruling 2026-11-14); the compact routine is 31 bytes smaller and
+/// level (user ruling 2026-11-14); the compact routine is 39 bytes smaller and
 /// 215 clocks slower a call on average (`hotdivision::SAVED_AT_SPEED_16`).
 fn speed_division16_pays(
     module: &Module,

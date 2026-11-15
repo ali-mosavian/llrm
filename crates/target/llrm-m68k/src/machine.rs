@@ -462,6 +462,12 @@ impl Tti for M68k {
         true
     }
 
+    /// -Os counts bytes and clocks against the best compiler's (user ruling 2026-11-14): a call the size bound
+    /// refused is built inlined too, and kept where the finished code is faster within the bytes ceiling.
+    fn opt_size_inline_finished_trial(&self) -> bool {
+        true
+    }
+
     /// DEVIATE INL-O1-TRIAL-M68K (owner m68k, exit 2026-11-24): at -O1 a callee
     /// the growth bound refused is tried in the caller and kept where the
     /// caller comes out smaller (uint64_to_float: `classify` x6 folds `main`

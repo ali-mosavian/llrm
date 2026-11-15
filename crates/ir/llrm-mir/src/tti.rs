@@ -694,6 +694,15 @@ pub trait Tti {
         1
     }
 
+    /// Whether the vectorizer widens the remainder of a vector loop too
+    /// (`EpilogueVectorizerMainLoop`; `preferEpilogueVectorization`, which
+    /// every target of the pin answers true to). DEVIATE LV-E1 (owner
+    /// llrm-arm64, exit 2026-11-27): opt-in, so a target's vector backend is
+    /// shown to select the epilogue's vectors before the planner asks for them.
+    fn vectorizes_epilogues(&self) -> bool {
+        false
+    }
+
     /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: size the widest
     /// VF by the smallest type in the loop, not the widest.
     fn should_maximize_vector_bandwidth(&self) -> bool {
@@ -1091,6 +1100,14 @@ pub trait Tti {
     /// registers the merged loops lose (its `LoopPenalty` is added at
     /// minsize callers alone). False: the cost decides.
     fn inline_loop_copy_trial(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL-CLOCKS (owner m68k, exit 2026-11-24): whether an -Os call the target's size bound
+    /// alone refused (the pin's cost accepts it) is built inlined as well, the driver keeping the finished code
+    /// that prices better (fewer clocks within the target's bytes ceiling). False: the bound's
+    /// verdict stands.
+    fn opt_size_inline_finished_trial(&self) -> bool {
         false
     }
 

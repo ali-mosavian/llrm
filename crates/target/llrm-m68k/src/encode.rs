@@ -202,6 +202,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
             })
             .max()
     };
+    // the operand shapes are the opcode's, looked up once: a lookup is a miss
+    // through every local table, and was repeated for each operand piece
+    let shape = crate::dagisel::local::text(inst.opcode).map(|&(_, _, shape)| shape);
     for piece in pieces {
         let (lo, width, value) = match *piece {
             Piece::Const { lo, width, value } => (lo, width, value),
@@ -217,7 +220,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
                 // #255`, `#-1`). The small `Plain` fields (registers, a quick
                 // immediate where 8 is written 0, a bit number) are masked on
                 // purpose and stay so.
-                let displacement = crate::dagisel::local::text(inst.opcode).is_some_and(|&(_, _, shape)| {
+                let displacement = shape.is_some_and(|shape| {
                     shape
                         .iter()
                         .any(

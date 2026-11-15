@@ -295,6 +295,9 @@ pub(super) fn instructions() -> Vec<Inst> {
         out.push(Inst::VectorUmov { lanes, rd: Gpr(3), rn: v(1), index: 1 });
         out.push(Inst::VectorStoreLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
     }
+    for lanes in Arrangement::ALL {
+        out.push(Inst::VectorLoadReplicate { lanes, rt: v(1), base: Gpr(3) });
+    }
     for (op, lanes) in [
         (VectorReduce::Addv, Arrangement::B16),
         (VectorReduce::Smaxv, Arrangement::H8),
@@ -395,6 +398,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorInsLane { .. } => "VectorInsLane",
         Inst::VectorUmov { .. } => "VectorUmov",
         Inst::VectorStoreLane { .. } => "VectorStoreLane",
+        Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
         Inst::VectorFmaLane { .. } => "VectorFmaLane",
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
         Inst::VectorMulLane { .. } => "VectorMulLane",
@@ -417,7 +421,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 71] = [
+const ALL: [&str; 72] = [
     "Mark",
     "Label",
     "Cfi",
@@ -473,6 +477,7 @@ const ALL: [&str; 71] = [
     "VectorInsLane",
     "VectorUmov",
     "VectorStoreLane",
+    "VectorLoadReplicate",
     "VectorFmaLane",
     "VectorFmulLane",
     "VectorMulLane",
