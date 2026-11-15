@@ -64,6 +64,23 @@ fn an_int_multiply_loop_uses_pmuludq() {
     assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
+/// A vector multiply by `2^n + 1`, `2^n - 1` or `-(2^n - 1)` is a shift and an add or subtract (`visitMUL` through
+/// `isConstOrConstSplat`, `decomposeMulByConstant`): it read only a scalar constant, so a splat stayed `pmuludq` twice
+/// with five shuffles (`loop_countdown_sum` +24% instructions against clang).
+#[test]
+fn a_vector_multiply_by_a_near_power_of_two_is_a_shift_and_an_add() {
+    let text = assembly("x86_64-linux", "-O2");
+    for (name, shift, op) in [
+        ("times_three", "pslld", "paddd"),
+        ("times_seven", "pslld", "psubd"),
+        ("times_minus_three", "pslld", "psubd"),
+    ] {
+        let body = body(&text, name);
+        assert!(!body.contains("pmuludq"), "{name} multiplies: {body}");
+        assert!(body.contains(shift) && body.contains(op), "{name} lacks {shift} and {op}: {body}");
+    }
+}
+
 #[test]
 fn the_32_bit_target_and_o1_keep_every_loop_scalar() {
     assert!(!assembly("x86_32-linux", "-O2").contains("xmm"));
