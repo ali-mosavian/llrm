@@ -28,7 +28,7 @@ define void @f(ptr %p, ptr %q) {{
 #[test]
 fn a_v4i32_signed_remainder_by_a_constant_is_a_multiply_high() {
     let asm = assembly("4", "%r = srem <4 x i32> %x, <i32 11, i32 11, i32 11, i32 11>");
-    for wanted in ["smull2", "smull ", "uzp2", "sshr", "usra"] {
+    for wanted in ["smull2", "smull ", "uzp2", "sshr", "usra", "mls"] {
         assert!(asm.contains(wanted), "{wanted}: {asm}");
     }
     assert!(!asm.contains("sdiv"), "{asm}");
@@ -39,7 +39,7 @@ fn a_v4i32_signed_remainder_by_a_constant_is_a_multiply_high() {
 #[test]
 fn a_v2i32_signed_remainder_by_a_constant_narrows_with_shrn() {
     let asm = assembly("2", "%r = srem <2 x i32> %x, <i32 11, i32 11>");
-    for wanted in ["smull", "shrn", "sshr", "usra"] {
+    for wanted in ["smull", "shrn", "sshr", "usra", "mls"] {
         assert!(asm.contains(wanted), "{wanted}: {asm}");
     }
 }

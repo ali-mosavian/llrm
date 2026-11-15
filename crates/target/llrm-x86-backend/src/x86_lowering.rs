@@ -3494,6 +3494,10 @@ fn lower_build_vector_splat(
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     let lanes = dag.node(node).ops.clone();
+    // `ISD::isBuildVectorAllZeros`: legal as it is; isel selects `V_SET0` (`pxor`), no pool entry.
+    if lanes.iter().all(|lane| dag.is_undef(*lane) || dag.constant(*lane) == Some(0)) {
+        return Some(node);
+    }
     let first = *lanes.first()?;
     if lanes.iter().any(|lane| *lane != first) || dag.constant(first).is_some() || dag.is_undef(first) {
         return None;

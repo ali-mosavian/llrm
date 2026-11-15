@@ -332,7 +332,8 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorMov { rd, rn })
             | Op::I(Inst::VectorShift { rd, rn, .. })
             | Op::I(Inst::VectorNot { quad: true, rd, rn })
-            | Op::I(Inst::VectorFpUnary { rd, rn, .. }) => {
+            | Op::I(Inst::VectorFpUnary { rd, rn, .. })
+            | Op::I(Inst::VectorIntUnary { rd, rn, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
             }
             Op::I(Inst::VectorLongShift { rd, rn, high, .. }) => {
@@ -380,7 +381,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorDupScalar { rn, .. }) => {
                 wide.insert(Reg::Fpr(*rn));
             }
-            Op::I(Inst::VectorLoadReplicate { rt, .. }) => {
+            Op::I(Inst::VectorLoadReplicate { rt, .. } | Inst::VectorLoadLane { rt, .. }) => {
                 wide.insert(Reg::Fpr(*rt));
             }
             Op::I(Inst::VectorDupLane { rd, .. }) => {
@@ -392,6 +393,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorBinary { rd, rn, rm, .. })
             | Op::I(Inst::VectorFpBinary { rd, rn, rm, .. })
             | Op::I(Inst::VectorFma { rd, rn, rm, .. })
+            | Op::I(Inst::VectorMulAcc { rd, rn, rm, .. })
             | Op::I(Inst::VectorFmaLane { rd, rn, rm, .. })
             | Op::I(Inst::VectorFmulLane { rd, rn, rm, .. })
             | Op::I(Inst::VectorMulLane { rd, rn, rm, .. }) => {

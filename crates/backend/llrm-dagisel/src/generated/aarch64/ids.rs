@@ -3672,6 +3672,12 @@ pub mod opcode {
     pub const MLA_ZZZI_D: u16 = 5482;
     pub const MLA_ZZZI_H: u16 = 5483;
     pub const MLA_ZZZI_S: u16 = 5484;
+    pub const MLAv16i8: u16 = 5485;
+    pub const MLAv2i32: u16 = 5486;
+    pub const MLAv4i16: u16 = 5488;
+    pub const MLAv4i32: u16 = 5490;
+    pub const MLAv8i16: u16 = 5492;
+    pub const MLAv8i8: u16 = 5494;
     pub const MLS_ZPZZZ_B_UNDEF: u16 = 1105;
     pub const MLS_ZPZZZ_D_UNDEF: u16 = 1106;
     pub const MLS_ZPZZZ_H_UNDEF: u16 = 1107;
@@ -3683,6 +3689,12 @@ pub mod opcode {
     pub const MLS_ZZZI_D: u16 = 5499;
     pub const MLS_ZZZI_H: u16 = 5500;
     pub const MLS_ZZZI_S: u16 = 5501;
+    pub const MLSv16i8: u16 = 5502;
+    pub const MLSv2i32: u16 = 5503;
+    pub const MLSv4i16: u16 = 5505;
+    pub const MLSv4i32: u16 = 5507;
+    pub const MLSv8i16: u16 = 5509;
+    pub const MLSv8i8: u16 = 5511;
     pub const MOVAZ_ZMI_H_B_PSEUDO: u16 = 1131;
     pub const MOVAZ_ZMI_H_D_PSEUDO: u16 = 1132;
     pub const MOVAZ_ZMI_H_H_PSEUDO: u16 = 1133;

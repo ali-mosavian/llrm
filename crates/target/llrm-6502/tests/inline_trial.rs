@@ -1,28 +1,69 @@
-//! DEVIATE OS-INLINE-TRIAL: a copy the -Os byte model refuses within its error is inlined in a
-//! second compile and kept where the backend writes the chain smaller.
+//! DEVIATE OS-INLINE-TRIAL: a copy the -Os byte model refuses within its error
+//! is inlined in a second compile and kept where the backend writes the chain
+//! smaller.
 
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{self, Level, Request};
 use llrm_6502::target::Mos;
 use llrm_target::Target;
 
-fn os(name: &str) -> String {
+fn source(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data_size").join(format!("{name}.ll"));
     let text = std::fs::read_to_string(path)
         .unwrap()
         .lines()
         .filter(|line| !line.starts_with("target datalayout"))
         .fold(format!("target datalayout = \"{}\"\n", Mos.layout().datalayout), |text, line| text + line + "\n");
-    let mut request = Request::new(Level::Os);
+    text
+}
+
+fn at(
+    level: Level,
+    name: &str,
+) -> String {
+    let text = source(name);
+    let mut request = Request::new(level);
     request.cpu = Cpu::Mos6502;
     driver::assembly(&text, &request).unwrap_or_else(|why| panic!("{name}: {why}"))
 }
 
-/// memcpy_libcall -Os: the model read the two copies of the private `same` as 52 B larger than its
-/// calls and refused them; the object is 58 B larger for it (CODE 577 against 519). `same` is gone
-/// once the trial inlines it.
+fn os(name: &str) -> String {
+    at(Level::Os, name)
+}
+
+/// memcpy_libcall -Os: the model read the two copies of the private `same` as
+/// 52 B larger than its calls and refused them; the object is 58 B larger for
+/// it (CODE 577 against 519). `same` is gone once the trial inlines it.
 #[test]
 fn a_copy_the_model_refuses_within_its_error_is_inlined_when_the_backend_writes_it_smaller() {
     let text = os("memcpy_libcall");
     assert!(!text.contains("same:") && !text.contains("jsr same"), "`same` is still a function\n{text}");
+}
+
+/// memcpy_libcall -O2/-O3: the byte rate refused the copies of `same` (the
+/// model prices the copy, not the constants it folds in `main`) and the module
+/// came out 100 B larger than inlined.
+#[test]
+fn a_copy_the_byte_rate_refuses_is_inlined_at_speed_when_the_backend_writes_it_smaller() {
+    for level in [Level::O2, Level::O3] {
+        let text = at(level, "memcpy_libcall");
+        assert!(!text.contains("same:") && !text.contains("jsr same"), "{level:?}: `same` is still a function\n{text}");
+    }
+}
+
+/// double_to_uint64 -O2: the trial inlines `show` and keeps nothing. The kept
+/// side was selected twice, as the cut chain to price it and again to write it
+/// (and a third time for the unroll trial's price): 13 selections
+/// for 5 functions. It is priced from the assembly the output and the unroll
+/// trial use.
+#[test]
+fn a_trial_that_keeps_nothing_selects_the_kept_side_once() {
+    let mut request = Request::new(Level::O2);
+    request.cpu = Cpu::Mos6502;
+    let text = source("double_to_uint64");
+    let functions = driver::size_audit(&text, &request).unwrap().len();
+    let before = driver::selected();
+    driver::assembly(&text, &request).unwrap();
+    let selected = driver::selected() - before;
+    assert!(selected <= 2 * functions + 1, "{selected} selections for {functions} functions");
 }

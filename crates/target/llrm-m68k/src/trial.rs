@@ -230,7 +230,7 @@ fn price_of(
     for (at, item) in items.iter().enumerate() {
         let Item::Inst(inst) = item else { continue };
         let size = sizes[at];
-        let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks
+        let cost = crate::instprice::clocks_of(cpu, inst, size as u32).ok()?
             + callee_clocks(inst, cpu, &hoisted);
         let depth = members.iter().filter(|member| member[at]).count().min(3);
         bytes += size;

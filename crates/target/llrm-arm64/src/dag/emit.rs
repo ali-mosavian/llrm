@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp,
-    VectorOp, VectorReduce, VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
+    VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -599,6 +599,7 @@ fn vector_fill(
     }
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
+        ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
         ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
         ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
         _ => {}
@@ -616,6 +617,7 @@ fn vector_fill(
             "v8i16" => Some(shaped(ImmShape::H8, 0)),
             "v4i32" => Some(shaped(ImmShape::S4, 0)),
             "v2i32" => Some(shaped(ImmShape::S2, 0)),
+            "v4i16" => Some(shaped(ImmShape::H4, 0)),
             "v4s_msl" => Some(shaped(ImmShape::S4Msl, 256)),
             _ => continue,
         };
@@ -692,6 +694,40 @@ fn vector_inst(
             }
             ([Operand::Fpr(_), Operand::Imm(index), Operand::Fpr(rn), Operand::Imm(src)], false) => {
                 Ok(Inst::VectorInsLane { lanes, rd, rn: *rn, index: *index as u8, src: *src as u8 })
+            }
+            _ => wrong(),
+        });
+    }
+    // `NEGv4i32`, `ABSv8i8`, `CNTv16i8`: one source, integer lanes.
+    for (stem, op) in [
+        ("NEG", VectorIntUnary::Neg),
+        ("ABS", VectorIntUnary::Abs),
+        ("CNT", VectorIntUnary::Cnt),
+        ("CLZ", VectorIntUnary::Clz),
+        ("RBIT", VectorIntUnary::Rbit),
+    ] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
+            continue;
+        };
+        if !op.has_lanes(lanes) {
+            continue;
+        }
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::VectorIntUnary { op, lanes, rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    // `LD1i32`: a lane loaded into `rd`, which starts as the first operand.
+    if let Some(lanes) = name.strip_prefix("LD1i").and_then(|bits| match bits {
+        "8" => Some(Arrangement::B16),
+        "16" => Some(Arrangement::H8),
+        "32" => Some(Arrangement::S4),
+        "64" => Some(Arrangement::D2),
+        _ => None,
+    }) {
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Imm(index), Operand::Reg(base)] => {
+                Ok(Inst::VectorLoadLane { lanes, rt: rd, index: *index as u8, base: *base })
             }
             _ => wrong(),
         });
@@ -795,6 +831,7 @@ fn vector_inst(
     let fp_lanes = |text: &str| match text {
         "4f32" => Some(Arrangement::S4),
         "2f64" => Some(Arrangement::D2),
+        "2f32" => Some(Arrangement::S2),
         _ => None,
     };
     for (stem, op) in
@@ -924,6 +961,7 @@ fn vector_inst(
         ("UCVTF", VectorFpUnary::Ucvtf),
         ("FCVTZS", VectorFpUnary::Fcvtzs),
         ("FCVTZU", VectorFpUnary::Fcvtzu),
+        ("FSQRT", VectorFpUnary::Sqrt),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
             continue;
@@ -948,6 +986,10 @@ fn vector_inst(
         ("SMIN", VectorOp::Smin),
         ("UMAX", VectorOp::Umax),
         ("UMIN", VectorOp::Umin),
+        ("SQADD", VectorOp::Sqadd),
+        ("UQADD", VectorOp::Uqadd),
+        ("SQSUB", VectorOp::Sqsub),
+        ("UQSUB", VectorOp::Uqsub),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
@@ -2337,7 +2379,8 @@ impl Emitter<'_> {
                         | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
                         | Inst::VectorInsGpr { .. }
-                        | Inst::VectorInsLane { .. },
+                        | Inst::VectorInsLane { .. }
+                        | Inst::VectorLoadLane { .. },
                         Some(Operand::Fpr(acc)),
                     ) = (&inst, operands.first())
                     {
