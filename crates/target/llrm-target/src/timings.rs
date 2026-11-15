@@ -42,6 +42,16 @@ pub struct CpuTable {
     /// `max-grow-copy-bb-insns` 8, takes any block it optimises for speed);
     /// `None`: the pin's bound alone.
     pub tail_dup_hot_threshold: Option<i64>,
+    /// DEVIATE LOOP-TOP-JMP (owner x87-b, exit 2026-11-24): placement's choice
+    /// of a loop's top weighs the fall-throughs it gains and loses in clocks:
+    /// a taken conditional branch made one that falls through saves
+    /// `jcc - jcc_not_taken`, and a fall-through lost costs a whole `jmp`.
+    /// The pin counts each as one (`FallThroughGains`) and put the latch of
+    /// x_ld_dot above its header, so the inner loop's exit took a `jmp` every
+    /// outer trip. A loop's exit also falls into what follows it unless
+    /// another block's edge to it is hotter (`hasBetterLayoutPredecessor`'s
+    /// ratio gave the guard's edge block the latch). Off: the pin's count.
+    pub loop_top_prices_jumps: bool,
     /// Two-address commuting ties the operand the result goes back into (a
     /// loop's back-edge copy) even where the operand was read earlier in the
     /// block (DEVIATE TA-LC, owner anyisa, exit 2026-11-27): the pin's
@@ -256,6 +266,7 @@ impl Timings {
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
                     ("scalars", "tail_dup_hot_threshold") => table.tail_dup_hot_threshold = Some(number()?),
+                    ("scalars", "loop_top_prices_jumps") => table.loop_top_prices_jumps = number()? != 0,
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,

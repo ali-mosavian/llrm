@@ -699,7 +699,13 @@ fn vector_inst(
         });
     }
     // `NEGv4i32`, `ABSv8i8`, `CNTv16i8`: one source, integer lanes.
-    for (stem, op) in [("NEG", VectorIntUnary::Neg), ("ABS", VectorIntUnary::Abs), ("CNT", VectorIntUnary::Cnt)] {
+    for (stem, op) in [
+        ("NEG", VectorIntUnary::Neg),
+        ("ABS", VectorIntUnary::Abs),
+        ("CNT", VectorIntUnary::Cnt),
+        ("CLZ", VectorIntUnary::Clz),
+        ("RBIT", VectorIntUnary::Rbit),
+    ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
         };
@@ -770,15 +776,14 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    // `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: a narrow
-    // operand (a half of a vector, with `2`) into wide lanes.
+    // `USHLLv8i8_shift`, `UADDLv8i8_v8i16`, `UADDWv16i8_v8i16`,
+    // `SMULLv4i16_v4i32`: a narrow operand (a half of a vector, with `2`)
+    // into wide lanes.
     for op in [
         VectorLongOp::Ushll,
         VectorLongOp::Sshll,
         VectorLongOp::Uaddl,
         VectorLongOp::Saddl,
-        VectorLongOp::Usubl,
-        VectorLongOp::Ssubl,
         VectorLongOp::Uaddw,
         VectorLongOp::Saddw,
         VectorLongOp::Umull,
@@ -830,6 +835,7 @@ fn vector_inst(
     let fp_lanes = |text: &str| match text {
         "4f32" => Some(Arrangement::S4),
         "2f64" => Some(Arrangement::D2),
+        "2f32" => Some(Arrangement::S2),
         _ => None,
     };
     for (stem, op) in
@@ -984,6 +990,10 @@ fn vector_inst(
         ("SMIN", VectorOp::Smin),
         ("UMAX", VectorOp::Umax),
         ("UMIN", VectorOp::Umin),
+        ("SQADD", VectorOp::Sqadd),
+        ("UQADD", VectorOp::Uqadd),
+        ("SQSUB", VectorOp::Sqsub),
+        ("UQSUB", VectorOp::Uqsub),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;

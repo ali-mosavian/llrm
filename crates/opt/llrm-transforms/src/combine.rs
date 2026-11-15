@@ -45,7 +45,7 @@ use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Ope
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::simplify::simplify_instruction_in;
-use llrm_mir::types::TypeId;
+use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
@@ -601,7 +601,7 @@ pub fn visit(
     )
         && matches!(
             c.context.types.get(c.function.instruction(inst).ty),
-            llrm_mir::types::Type::Vector { .. }
+            Type::Vector { .. }
         )
     {
         if let Some(result) = c.function.instruction(inst).result

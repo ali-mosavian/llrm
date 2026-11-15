@@ -474,6 +474,11 @@ pub enum VectorOp {
     Smin,
     Umax,
     Umin,
+    /// `sqadd`, `uqadd`, `sqsub`, `uqsub`: the saturating add and subtract.
+    Sqadd,
+    Uqadd,
+    Sqsub,
+    Uqsub,
 }
 
 impl VectorOp {
@@ -494,6 +499,10 @@ impl VectorOp {
             VectorOp::Smin => (0, 0b01101, None),
             VectorOp::Umax => (1, 0b01100, None),
             VectorOp::Umin => (1, 0b01101, None),
+            VectorOp::Sqadd => (0, 0b00001, None),
+            VectorOp::Uqadd => (1, 0b00001, None),
+            VectorOp::Sqsub => (0, 0b00101, None),
+            VectorOp::Uqsub => (1, 0b00101, None),
         }
     }
 
@@ -513,6 +522,10 @@ impl VectorOp {
             VectorOp::Smin => "smin",
             VectorOp::Umax => "umax",
             VectorOp::Umin => "umin",
+            VectorOp::Sqadd => "sqadd",
+            VectorOp::Uqadd => "uqadd",
+            VectorOp::Sqsub => "sqsub",
+            VectorOp::Uqsub => "uqsub",
         }
     }
 
@@ -747,6 +760,22 @@ impl VectorFma {
     }
 }
 
+/// `mla` and `mls`: `rd += rn * rm` and `rd -= rn * rm`, every integer lane.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum MulAcc {
+    Add,
+    Sub,
+}
+
+impl MulAcc {
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            MulAcc::Add => "mla",
+            MulAcc::Sub => "mls",
+        }
+    }
+}
+
 /// The one-register float vector operations: `fneg v.4s, v.4s`, and the
 /// conversions between a float vector and an integer one of the same lane
 /// width (`scvtf v.4s, v.4s`).
@@ -795,6 +824,10 @@ pub enum VectorIntUnary {
     Neg,
     Abs,
     Cnt,
+    /// `clz`: leading zeros, no `2d` form.
+    Clz,
+    /// `rbit v.16b`: the bits of each byte reversed.
+    Rbit,
 }
 
 impl VectorIntUnary {
@@ -804,7 +837,17 @@ impl VectorIntUnary {
             VectorIntUnary::Neg => (1, 0b01011),
             VectorIntUnary::Abs => (0, 0b01011),
             VectorIntUnary::Cnt => (0, 0b00101),
+            VectorIntUnary::Clz => (1, 0b00100),
+            VectorIntUnary::Rbit => (1, 0b00101),
         }
+    }
+
+    /// The `size` field: `rbit` is the `01` form of the byte opcode.
+    pub(super) fn size(
+        self,
+        lanes: Arrangement,
+    ) -> u32 {
+        if self == VectorIntUnary::Rbit { 1 } else { lanes.size() }
     }
 
     pub fn mnemonic(self) -> &'static str {
@@ -812,16 +855,22 @@ impl VectorIntUnary {
             VectorIntUnary::Neg => "neg",
             VectorIntUnary::Abs => "abs",
             VectorIntUnary::Cnt => "cnt",
+            VectorIntUnary::Clz => "clz",
+            VectorIntUnary::Rbit => "rbit",
         }
     }
 
-    /// Whether the encoding has these lanes: `cnt` is bytes, the others have
-    /// no `1d`.
+    /// Whether the encoding has these lanes: `cnt` and `rbit` are bytes,
+    /// `clz` has no `2d`.
     pub fn has_lanes(
         self,
         lanes: Arrangement,
     ) -> bool {
-        self != VectorIntUnary::Cnt || lanes.full() == Arrangement::B16
+        match self {
+            VectorIntUnary::Cnt | VectorIntUnary::Rbit => lanes.full() == Arrangement::B16,
+            VectorIntUnary::Clz => lanes.full() != Arrangement::D2,
+            _ => true,
+        }
     }
 }
 
@@ -936,7 +985,8 @@ impl NarrowLane {
 
 /// The vector operations whose result lanes are twice as wide as a narrow
 /// operand's: a shift left (`ushll`, `sshll`), an add of a narrow operand
-/// to a wide one (`uaddw`, `saddw`) and a multiply, with or without the
+/// to a wide one (`uaddw`, `saddw`), an add of two narrow ones (`uaddl`,
+/// `saddl`) and a multiply, with or without the
 /// accumulate (`umull`, `smull`, `umlal`, `smlal`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VectorLongOp {
@@ -944,8 +994,6 @@ pub enum VectorLongOp {
     Sshll,
     Uaddl,
     Saddl,
-    Usubl,
-    Ssubl,
     Uaddw,
     Saddw,
     Umull,
@@ -963,8 +1011,6 @@ impl VectorLongOp {
             VectorLongOp::Sshll => (0, 0x0F00_A400),
             VectorLongOp::Uaddl => (1, 0x0E20_0000),
             VectorLongOp::Saddl => (0, 0x0E20_0000),
-            VectorLongOp::Usubl => (1, 0x0E20_2000),
-            VectorLongOp::Ssubl => (0, 0x0E20_2000),
             VectorLongOp::Uaddw => (1, 0x0E20_1000),
             VectorLongOp::Saddw => (0, 0x0E20_1000),
             VectorLongOp::Umull => (1, 0x0E20_C000),
@@ -980,8 +1026,6 @@ impl VectorLongOp {
             VectorLongOp::Sshll => "sshll",
             VectorLongOp::Uaddl => "uaddl",
             VectorLongOp::Saddl => "saddl",
-            VectorLongOp::Usubl => "usubl",
-            VectorLongOp::Ssubl => "ssubl",
             VectorLongOp::Uaddw => "uaddw",
             VectorLongOp::Saddw => "saddw",
             VectorLongOp::Umull => "umull",
@@ -1536,6 +1580,15 @@ pub enum Inst {
     /// v.4s`; `lanes` is `S4` or `D2`.
     VectorFpBinary {
         op: VectorFpOp,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// `mla v.4s, v.4s, v.4s`: `rd` is read and written; `lanes` has 8 to
+    /// 32-bit lanes.
+    VectorMulAcc {
+        op: MulAcc,
         lanes: Arrangement,
         rd: Vreg,
         rn: Vreg,

@@ -318,7 +318,15 @@ fn lowered(
     // A lowering that fails is the compile's error, not a verdict: it was once
     // swallowed here and every trial put the unroll back.
     let (with, without) = (lower(&other, &cut)?, lower(&base, &cut)?);
-    let pays = crate::trial::keeps(&flat(&with), &flat(&without), cpu, crate::timing::Price::of(small));
+    let rest_calls_mulsi3 = || {
+        let rest: std::collections::BTreeSet<String> = other
+            .functions()
+            .filter(|(_, _, function)| !function.is_declaration())
+            .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
+            .collect();
+        lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+    };
+    let pays = crate::trial::keeps_linking(&with.items, &without.items, rest_calls_mulsi3, cpu, crate::timing::Price::of(small));
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }

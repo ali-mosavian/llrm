@@ -24,6 +24,7 @@
 //!    `isa/prm/m68060_support.tsv`.
 
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A CPU of the family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,49 +95,57 @@ impl Form {
     }
 }
 
-static FORMS: LazyLock<Vec<Form>> = LazyLock::new(|| {
-    include_str!("isa/table.tsv")
-        .lines()
-        .filter(|line| !line.starts_with('#') && !line.is_empty())
-        .map(|line| {
-            let mut column = line.split('\t');
-            let mut next = || column.next().unwrap_or_else(|| panic!("isa/table.tsv: short row {line:?}"));
-            let (mnemonic, operands, first, ext) = (next(), next(), next(), next());
-            let (formats, cpus, emulated) = (next(), next(), next());
-            let hex = |text: &str| u16::from_str_radix(text, 16).unwrap_or_else(|_| panic!("isa/table.tsv: {line:?}"));
-            let cubes = |text: &str| -> Vec<(u16, u16)> {
-                text.split(' ')
-                    .filter(|cube| *cube != "-")
-                    .map(|cube| {
-                        let (mask, value) = cube.split_once('/').unwrap_or_else(|| panic!("isa/table.tsv: {line:?}"));
-                        (hex(mask), hex(value))
-                    })
-                    .collect()
-            };
-            let set = |names: &str| {
-                names
-                    .split(',')
-                    .filter(|name| *name != "-")
-                    .fold(
-                        0,
-                        |set, name| {
-                            let cpu = Cpu::ALL.iter().position(|cpu| &cpu.name()[2..] == name);
-                            set | 1 << cpu.unwrap_or_else(|| panic!("isa/table.tsv: cpu {name:?}"))
-                        },
-                    )
-            };
-            Form {
-                mnemonic,
-                operands,
-                cubes: cubes(first),
-                ext: cubes(ext),
-                formats,
-                cpus: set(cpus),
-                emulated: set(emulated),
-            }
-        })
-        .collect()
-});
+static PARSED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many table rows were parsed into forms: a question about one mnemonic
+/// parses that mnemonic's rows, not the table.
+pub fn rows_parsed() -> usize {
+    PARSED.load(Ordering::Relaxed)
+}
+
+const TABLE: &str = include_str!("isa/table.tsv");
+
+fn rows() -> impl Iterator<Item = &'static str> {
+    TABLE.lines().filter(|line| !line.starts_with('#') && !line.is_empty())
+}
+
+fn parse_row(line: &'static str) -> Form {
+    PARSED.fetch_add(1, Ordering::Relaxed);
+    let mut column = line.split('\t');
+    let mut next = || column.next().unwrap_or_else(|| panic!("isa/table.tsv: short row {line:?}"));
+    let (mnemonic, operands, first, ext) = (next(), next(), next(), next());
+    let (formats, cpus, emulated) = (next(), next(), next());
+    let hex = |text: &str| u16::from_str_radix(text, 16).unwrap_or_else(|_| panic!("isa/table.tsv: {line:?}"));
+    let cubes = |text: &str| -> Vec<(u16, u16)> {
+        text.split(' ')
+            .filter(|cube| *cube != "-")
+            .map(|cube| {
+                let (mask, value) = cube.split_once('/').unwrap_or_else(|| panic!("isa/table.tsv: {line:?}"));
+                (hex(mask), hex(value))
+            })
+            .collect()
+    };
+    let set = |names: &str| {
+        names
+            .split(',')
+            .filter(|name| *name != "-")
+            .fold(
+                0,
+                |set, name| {
+                    let cpu = Cpu::ALL.iter().position(|cpu| &cpu.name()[2..] == name);
+                    set | 1 << cpu.unwrap_or_else(|| panic!("isa/table.tsv: cpu {name:?}"))
+                },
+            )
+    };
+    Form { mnemonic, operands, cubes: cubes(first), ext: cubes(ext), formats, cpus: set(cpus), emulated: set(emulated) }
+}
+
+static FORMS: LazyLock<Vec<Form>> = LazyLock::new(|| rows().map(parse_row).collect());
+
+/// The forms of one mnemonic: parses its rows, not the table's.
+pub fn forms_of(mnemonic: &str) -> Vec<Form> {
+    rows().filter(|line| line.split('\t').next() == Some(mnemonic)).map(parse_row).collect()
+}
 
 /// Every form of the table.
 pub fn forms() -> &'static [Form] {

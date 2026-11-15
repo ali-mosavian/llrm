@@ -7,16 +7,21 @@ use llrm_6502::driver::{self, Level, Request};
 use llrm_6502::target::Mos;
 use llrm_target::Target;
 
-fn at(
-    level: Level,
-    name: &str,
-) -> String {
+fn source(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data_size").join(format!("{name}.ll"));
     let text = std::fs::read_to_string(path)
         .unwrap()
         .lines()
         .filter(|line| !line.starts_with("target datalayout"))
         .fold(format!("target datalayout = \"{}\"\n", Mos.layout().datalayout), |text, line| text + line + "\n");
+    text
+}
+
+fn at(
+    level: Level,
+    name: &str,
+) -> String {
+    let text = source(name);
     let mut request = Request::new(level);
     request.cpu = Cpu::Mos6502;
     driver::assembly(&text, &request).unwrap_or_else(|why| panic!("{name}: {why}"))
@@ -44,4 +49,21 @@ fn a_copy_the_byte_rate_refuses_is_inlined_at_speed_when_the_backend_writes_it_s
         let text = at(level, "memcpy_libcall");
         assert!(!text.contains("same:") && !text.contains("jsr same"), "{level:?}: `same` is still a function\n{text}");
     }
+}
+
+/// double_to_uint64 -O2: the trial inlines `show` and keeps nothing. The kept
+/// side was selected twice, as the cut chain to price it and again to write it
+/// (and a third time for the unroll trial's price): 13 selections
+/// for 5 functions. It is priced from the assembly the output and the unroll
+/// trial use.
+#[test]
+fn a_trial_that_keeps_nothing_selects_the_kept_side_once() {
+    let mut request = Request::new(Level::O2);
+    request.cpu = Cpu::Mos6502;
+    let text = source("double_to_uint64");
+    let functions = driver::size_audit(&text, &request).unwrap().len();
+    let before = driver::selected();
+    driver::assembly(&text, &request).unwrap();
+    let selected = driver::selected() - before;
+    assert!(selected <= 2 * functions + 1, "{selected} selections for {functions} functions");
 }
