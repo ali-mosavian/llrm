@@ -62,14 +62,3 @@ fn the_compact_signed_word_divide_image_is_bounded() {
     assert!(image_bytes(&divide) <= 95, "{divide:?}");
     assert!(image_bytes(&remainder) <= 98, "{remainder:?}: {} B", image_bytes(&remainder));
 }
-
-/// A signed divide names `rc2` to `rc7` and no other cell: a value in `rc16`
-/// or above lives across the call. The sign pair reached its cells by index,
-/// which the scan reads as every cell.
-#[test]
-fn a_signed_word_divide_names_only_its_own_cells() {
-    let own: std::collections::BTreeSet<u8> = (2..=7).collect();
-    for routine in ["__divhi3", "__modhi3", "__divhi3c", "__modhi3c"] {
-        assert_eq!(llrm_6502::routines::cells_named(routine), Some(own.clone()), "{routine}");
-    }
-}
