@@ -882,7 +882,10 @@ impl ProgramPass for Walk {
                                 // DEVIATE OS-INLINE-TRIAL (`trial::Site`): a copy the byte model refuses within its
                                 // error is the backend's to decide; the second compile inlines it.
                                 let by_bytes = tti.opt_size_inline_trial_by_bytes() && !priced;
-                                let site = by_bytes.then(|| crate::trial::Site {
+                                // DEVIATE OS-INLINE-TRIAL-CLOCKS: every site the size bound alone refused is the
+                                // backend's to price, whatever the model says of its bytes.
+                                let finished = tti.opt_size_inline_finished_trial() && !priced && size != crate::inlinecost::CallerSize::Speed;
+                                let site = (by_bytes || finished).then(|| crate::trial::Site {
                                     caller: module.global(id).name.as_deref().unwrap_or_default().to_owned(),
                                     callees: calls
                                         .iter()
@@ -898,8 +901,9 @@ impl ProgramPass for Walk {
                                 } else {
                                     if let Some(site) = site.filter(|_| {
                                         !crate::trial::inlining()
-                                            && growth > 0
-                                            && tti.opt_size_inline_trial_limits().is_some_and(|(band, _)| growth * 100 <= kept_bytes * band)
+                                            && (finished
+                                                || (growth > 0
+                                                    && tti.opt_size_inline_trial_limits().is_some_and(|(band, _)| growth * 100 <= kept_bytes * band)))
                                     }) {
                                         crate::trial::note_refused(site);
                                     }

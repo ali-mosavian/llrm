@@ -1092,6 +1092,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-INLINE-TRIAL-CLOCKS (owner m68k, exit 2026-11-24): whether an -Os call the target's size bound
+    /// alone refused (the pin's cost accepts it) is built inlined as well, the driver keeping the finished code
+    /// that prices better (fewer clocks within the target's bytes ceiling). False: the bound's
+    /// verdict stands.
+    fn opt_size_inline_finished_trial(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
