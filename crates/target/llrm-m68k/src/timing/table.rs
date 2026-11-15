@@ -33,6 +33,9 @@ pub struct Table {
 }
 
 pub(super) fn split_csv(line: &str) -> Vec<String> {
+    if !line.contains('"') {
+        return line.split(',').map(str::to_owned).collect();
+    }
     let mut fields = vec![String::new()];
     let mut quoted = false;
     let mut chars = line.chars().peekable();
@@ -63,11 +66,14 @@ pub fn keys_made() -> usize {
 /// A label without what typesetting varies: spaces, `*`, the dash kinds.
 pub fn key(label: &str) -> String {
     KEYS.with(|count| count.set(count.get() + 1));
-    label
-        .chars()
-        .filter(|c| !c.is_whitespace() && !matches!(*c, '*' | '\u{2020}'))
-        .map(|c| if matches!(c, '\u{2013}' | '\u{2212}' | '\u{2014}') { '-' } else { c.to_ascii_lowercase() })
-        .collect()
+    let mut out = String::with_capacity(label.len());
+    out.extend(
+        label
+            .chars()
+            .filter(|c| !c.is_whitespace() && !matches!(*c, '*' | '\u{2020}'))
+            .map(|c| if matches!(c, '\u{2013}' | '\u{2212}' | '\u{2014}') { '-' } else { c.to_ascii_lowercase() }),
+    );
+    out
 }
 
 impl Table {

@@ -893,7 +893,31 @@ impl ProgramPass for Walk {
                                         .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
                                         .collect(),
                                 });
-                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried, best, credit, saved, growth, rate, kept_bytes, size == crate::inlinecost::CallerSize::Speed);
+                                // DEVIATE SZ2-COLD
+                                // (`Tti::inline_trial_cold_margin`): a copy
+                                // that runs once per run of
+                                // the program and leaves its callee in place
+                                // must beat the units by the margin.
+                                let cold_margin = tti.inline_trial_cold_margin();
+                                let margin = if cold_margin > 0
+                                    && credit == 0
+                                    && size != crate::inlinecost::CallerSize::Speed
+                                    && {
+                                        let entry = llrm_analysis::entryweight::entry_weight(
+                                            module,
+                                            &program.layout,
+                                            id,
+                                            &addressed,
+                                        );
+                                        calls
+                                            .iter()
+                                            .all(|one| site_frequencies.get(one).copied().unwrap_or(1.0) * entry <= 1.0)
+                                    } {
+                                    cold_margin
+                                } else {
+                                    0
+                                };
+                                let ruled = speed_at_size || trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot || (priced && by_trips), tried + margin, best, credit, saved, growth, rate, kept_bytes, size == crate::inlinecost::CallerSize::Speed);
                                 let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;

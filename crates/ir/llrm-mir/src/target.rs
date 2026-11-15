@@ -163,6 +163,8 @@ pub struct Tuning {
     pub inline_trial_keeps_shrinking_copy: bool,
     /// `Tti::frame_slot_add_with_saved`.
     pub frame_slot_add_with_saved: bool,
+    /// `Tti::inline_trial_cold_margin`.
+    pub inline_trial_cold_margin: i64,
     /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24):
     /// `inline_size_bytes` at -O1 alone (the byte-measured size view, the
     /// second round, and the trial of a callee the bound refused, kept
@@ -525,6 +527,11 @@ pub struct Tuning {
     /// x86's rows until judged per target (DEVIATE, owner
     /// llrm-target-x86-m64 at m64, exit 2026-11-24).
     pub add_to_or_disjoint: bool,
+    /// `LoopVectorize` widens an `optsize` loop whose trip count VF divides
+    /// (`isScalarEpilogueAllowed`). false: DEVIATE LV-OS (owner
+    /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
+    /// bytes +5..+50% on 15 corpus files.
+    pub vectorize_at_size: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -747,6 +754,7 @@ impl Tuning {
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
         frame_slot_add_with_saved: false,
+        inline_trial_cold_margin: 0,
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
@@ -813,6 +821,7 @@ impl Tuning {
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
         add_to_or_disjoint: false,
+        vectorize_at_size: true,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,

@@ -723,6 +723,7 @@ impl X86 {
         } else {
             "nosse"
         };
+        let cost_kind = kind;
         let kind = match kind {
             CostKind::RecipThroughput => "throughput",
             CostKind::Latency => "latency",
@@ -734,7 +735,9 @@ impl X86 {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+            None => base_intrinsic_cost(name)
+                .or_else(|| library_call_intrinsic_cost(name, cost_kind))
+                .unwrap_or(Cost::INVALID),
         }
     }
 }
@@ -820,6 +823,10 @@ impl Tti for X86 {
 
     fn frame_slot_add_with_saved(&self) -> bool {
         self.tuning.frame_slot_add_with_saved
+    }
+
+    fn inline_trial_cold_margin(&self) -> i64 {
+        self.tuning.inline_trial_cold_margin
     }
 
     fn second_ipsccp(&self) -> bool {
@@ -1287,6 +1294,10 @@ impl Tti for X86 {
 
     fn add_to_or_disjoint(&self) -> bool {
         self.tuning.add_to_or_disjoint
+    }
+
+    fn vectorizes_at_size(&self) -> bool {
+        self.tuning.vectorize_at_size
     }
 
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86

@@ -55,18 +55,18 @@ static ROWS: LazyLock<Vec<Row>> = LazyLock::new(|| {
         .iter()
         .flat_map(|text| text.lines().skip(1))
         .map(split_csv)
-        .map(|fields| Row {
-            instruction: fields[0].clone(),
-            operands: fields[1].clone(),
-            mark: fields[2].clone(),
-            cache: fields[4].clone(),
+        .map(|mut fields| Row {
+            instruction: std::mem::take(&mut fields[0]),
+            operands: std::mem::take(&mut fields[1]),
+            mark: std::mem::take(&mut fields[2]),
+            cache: std::mem::take(&mut fields[4]),
         })
         .collect()
 });
 
 /// An effective address table: `(mode label, cache cell)`.
 fn grid(text: &str) -> Vec<(String, String)> {
-    text.lines().skip(1).map(split_csv).map(|fields| (key(&fields[0]), fields[2].clone())).collect()
+    text.lines().skip(1).map(split_csv).map(|mut fields| (key(&fields[0]), std::mem::take(&mut fields[2]))).collect()
 }
 
 struct Grids {

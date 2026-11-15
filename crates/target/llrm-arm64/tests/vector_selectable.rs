@@ -199,8 +199,6 @@ const REFUSED: &[(&str, &str)] = &[
     ("shl", "custom lowering of Shl"),
     ("lshr", "custom lowering of Srl"),
     ("ashr", "custom lowering of Sra"),
-    // An `i8`/`i16` lane is promoted by the legalizer to a result it cannot make.
-    ("extract_lane", "what: \\\"promote result\\\""),
     // `CLZ`, `RBIT` and the saturating arithmetic have no instruction; `CNT`
     // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern.
     ("ctlz", "CannotSelect(\"CtLz\")"),
