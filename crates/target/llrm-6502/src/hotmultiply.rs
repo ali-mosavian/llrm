@@ -28,10 +28,10 @@ use crate::staticlocals::{block_depths, call_weights, callee_intrinsic, weight};
 /// Bytes of `__mulsi3_fast` over `__mulsi3` (`mos_rt.s`).
 pub const FAST_BYTES: f64 = 19.0;
 /// Clocks a call saves on average
-/// (`the_fast_multiply_saves_what_hotmultiply_prices`). It moves with where
-/// the runtime's text starts, a page crossing at a time: 615 before the divide
-/// routines changed (2026-11-15).
-pub const SAVED_CLOCKS: f64 = 586.0;
+/// (`the_fast_multiply_saves_what_hotmultiply_prices`, within 10%: sim65 adds a
+/// clock a page crossing, so it moves with where the runtime's text starts: 586
+/// after the divide routines shrank, 2026-11-15).
+pub const SAVED_CLOCKS: f64 = 615.0;
 /// Static runs from which a module's multiplies are taken to run.
 pub const MIN_RUNS: f64 = 3.0;
 
