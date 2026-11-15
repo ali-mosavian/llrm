@@ -127,12 +127,31 @@ impl Query<'_> {
         }
     }
 
-    /// `m_APInt`: the bits and width of a constant integer (a zero too).
+    /// `m_APInt`: the bits and width of a constant integer (a zero too); of a
+    /// vector of integers, the lane every lane of it is (a splat) and the
+    /// lane's width.
     fn number(
         &self,
         operand: Operand,
     ) -> Option<(u128, u32)> {
         let constant = self.context.get(self.constant(operand)?);
+        if let crate::types::Type::Vector { element, .. } = self.context.types.get(constant.ty) {
+            let width = self.context.types.int_bits(*element).filter(|&width| width <= 128)?;
+            return match &constant.kind {
+                ConstantKind::Null | ConstantKind::Zero => Some((0, width)),
+                ConstantKind::Aggregate(lanes) => {
+                    let mut value = None;
+                    for &lane in lanes {
+                        let (bits, _) = self.number(Operand::Constant(lane))?;
+                        if *value.get_or_insert(bits) != bits {
+                            return None;
+                        }
+                    }
+                    value.map(|bits| (bits, width))
+                }
+                _ => None,
+            };
+        }
         let width = self.context.types.int_bits(constant.ty).filter(|&width| width <= 128)?;
         match constant.kind {
             ConstantKind::Int(bits) => Some((bits, width)),

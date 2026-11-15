@@ -593,7 +593,9 @@ pub fn visit(
     }
     // DEVIATE COMBINE-VEC: the arithmetic visitors read integer widths (MIR had
     // no vectors), so an operation on vectors, which the loop vectorizer makes,
-    // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
+    // gets `simplifyBinOp`/`simplifyCastInst` only (`x + 0`, `x * 1`: the
+    // identities of a widened reduction whose loop unrolled away), no visitor.
+    // Exit: vector-aware folds (owner arm64-vec, with LV-X3).
     if matches!(
         c.function.instruction(inst).opcode,
         Opcode::Binary(_) | Opcode::Cast(_)
@@ -603,6 +605,13 @@ pub fn visit(
             llrm_mir::types::Type::Vector { .. }
         )
     {
+        if let Some(result) = c.function.instruction(inst).result
+            && let Some(found) =
+                simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
+            && found != Operand::Value(result)
+        {
+            return Visit::Replace(found);
+        }
         return Visit::None;
     }
     // The table is 'static: the opcode (a clone per visit, a Box for calls) is
