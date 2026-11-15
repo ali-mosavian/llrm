@@ -1160,6 +1160,18 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24): the instruction
+    /// units an -Os trial must save, beyond a tie, for a copy that runs at most
+    /// once per run of the program and whose callee stays. The units count a
+    /// call as its arguments, not the argument and result moves it carries, so
+    /// a copy that wins by a unit or two grows the code (`unpack`, an
+    /// out-parameter decode, 6 sites: +50 B on every soft-float cell once
+    /// `x == 0 ? 1 : x` became `umax` and saved two units). A hot copy is kept
+    /// by its clocks, so the margin is not taken there. 0: none.
+    fn inline_trial_cold_margin(&self) -> i64 {
+        0
+    }
+
     /// DEVIATE SZ2-TRIPS: whether the priced SZ2 trial counts clocks at each
     /// block's frequency over the entry's (a loop's trips), and lets the byte
     /// rate alone decide a copy whose callee stays. False: each instruction
@@ -1477,6 +1489,11 @@ pub trait Tti {
     /// (`Tuning::add_to_or_disjoint`).
     fn add_to_or_disjoint(&self) -> bool {
         false
+    }
+
+    /// `Tuning::vectorize_at_size`: `LoopVectorize` runs on an `optsize` loop.
+    fn vectorizes_at_size(&self) -> bool {
+        true
     }
 
     fn opt_size_inline_chain_trial(&self) -> bool {

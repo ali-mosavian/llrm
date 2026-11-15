@@ -818,6 +818,10 @@ impl Tti for X86 {
         self.tuning.inline_trial_keeps_shrinking_copy
     }
 
+    fn inline_trial_cold_margin(&self) -> i64 {
+        self.tuning.inline_trial_cold_margin
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
@@ -1283,6 +1287,10 @@ impl Tti for X86 {
 
     fn add_to_or_disjoint(&self) -> bool {
         self.tuning.add_to_or_disjoint
+    }
+
+    fn vectorizes_at_size(&self) -> bool {
+        self.tuning.vectorize_at_size
     }
 
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
