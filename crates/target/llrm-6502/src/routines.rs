@@ -84,9 +84,6 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
     use std::collections::{BTreeSet, HashMap, HashSet};
     struct Runtime {
         routines: HashMap<&'static str, &'static str>,
-        /// The routine each one falls into: the next label after it, with no
-        /// code between.
-        falls_into: HashMap<&'static str, &'static str>,
         macros: HashMap<&'static str, Option<Vec<u8>>>,
     }
     static RUNTIME: std::sync::OnceLock<Runtime> = std::sync::OnceLock::new();
@@ -164,31 +161,7 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
         if let Some((label, from)) = start {
             routines.insert(label, &source[from..]);
         }
-        let mut order: Vec<(usize, &'static str)> = routines
-            .iter()
-            .map(|(label, text): (&&'static str, &&'static str)| {
-                (text.as_ptr() as usize - source.as_ptr() as usize, *label)
-            })
-            .collect();
-        order.sort_unstable();
-        let mut falls_into = HashMap::new();
-        for pair in order.windows(2) {
-            let (from, label) = pair[0];
-            let end = from + routines[label].len();
-            let gap = &source[end..pair[1].0];
-            let quiet = gap
-                .lines()
-                .all(
-                    |line| {
-                        let code = line.split(';').next().unwrap_or("").trim();
-                        code.is_empty() || code.starts_with(".export") || code.starts_with(".global")
-                    },
-                );
-            if quiet {
-                falls_into.insert(label, pair[1].1);
-            }
-        }
-        Runtime { routines, falls_into, macros }
+        Runtime { routines, macros }
     });
     let mut cells = BTreeSet::new();
     let mut seen = HashSet::new();
@@ -199,14 +172,14 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
         }
         let text = runtime.routines.get(routine)?;
         cells.extend(cells_of(text)?);
-        // a span that ends in neither a return nor a jump falls into the next
-        // routine
+        // the span must end in a return or a jump: a fall-through is a callee
+        // the scan did not follow
         let last = text
             .lines()
             .map(|line| line.split(';').next().unwrap_or("").trim())
             .rfind(|code| !code.is_empty() && !code.ends_with(':') && !code.starts_with('.'))?;
         if !(last == "rts" || last.starts_with("jmp ")) {
-            pending.push(runtime.falls_into.get(routine)?);
+            return None;
         }
         for line in text.lines() {
             let code = line.split(';').next().unwrap_or("").trim();

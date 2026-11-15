@@ -204,3 +204,34 @@ fn a_wide_product_keeps_its_high_word_across_the_next_call() {
         assert_eq!(common::run_with(&name, "  jsr probe\n", &code), 0, "{level:?}: wrong product:\n{text}");
     }
 }
+
+/// A routine of `mos_rt.s` ends in `rts` or `jmp`: the runtime is linked by
+/// routine (`ours_cr.py`, the archive of `mkrt.py`), so a fall-through into the
+/// next label runs whatever follows in the image. `out32r` fell into `out32`:
+/// a 32-bit divide pair that linked it alone halted (exit 126, 3 of the 4
+/// 32-bit smoke programs, 2026-11-15).
+#[test]
+fn no_runtime_routine_falls_through_into_the_next_label() {
+    let text = include_str!("../runtime/mos_rt.s");
+    let (mut label, mut last, mut in_macro) = (String::new(), String::new(), false);
+    for line in text.lines() {
+        let code = line.split(';').next().unwrap_or("").trim();
+        if code.starts_with(".macro") {
+            in_macro = true;
+        }
+        if in_macro {
+            in_macro = !code.starts_with(".endmacro");
+            continue;
+        }
+        let is_label = !line.starts_with([' ', '\t', ';', '.', '@']) && code.contains(':');
+        if is_label {
+            let ends =
+                last.is_empty() || last.starts_with("rts") || last.starts_with("jmp ") || last.starts_with(".res");
+            assert!(ends, "`{label}` falls from `{last}` into `{}`", code.split(':').next().unwrap_or(""));
+            label = code.split(':').next().unwrap_or("").to_owned();
+            last = code.split_once(':').map_or(String::new(), |(_, rest)| rest.trim().to_owned());
+        } else if !code.is_empty() && (!code.starts_with('.') || code.starts_with(".res")) {
+            last = code.to_owned();
+        }
+    }
+}

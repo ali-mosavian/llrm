@@ -153,3 +153,17 @@ fn a_store_before_a_routine_that_reads_the_cell_stays() {
     drop_dead_stores(&mut a);
     assert_eq!(a.text(), text);
 }
+
+/// `__csave` pushes rc8 and up by index (`lda rc7,x`) and says so in a comment
+/// span. Without it the scan knew nothing of the routine and took it for a call
+/// that clobbers the scratch cells: `sta rc16` of an argument before `ldy #6;
+/// jsr __csave` was dropped, and the signed 32x32 -> 64 product of
+/// wide_product_then_call read rc16 never written at -O1 (low word 2113190408,
+/// want 1445054984).
+#[test]
+fn a_scratch_cell_stored_before_csave_is_not_dead() {
+    let text = "  sta rc16\n  stx rc17\n  ldy #6\n  jsr __csave\n  lda rc16\n  ldx rc17\n  rts\n";
+    let mut a = asm(text, &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), text);
+}

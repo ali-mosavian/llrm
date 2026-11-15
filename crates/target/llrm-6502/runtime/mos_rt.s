@@ -28,7 +28,7 @@ __csave:
   sta __ra+1
   ldx #1
 @next:
-  lda rc7,x
+  lda rc7,x                     ; [rc8..rc15]
   pha
   inx
   dey
@@ -43,7 +43,7 @@ __csave:
 __crest:
 @next:
   pla
-  sta rc7,x
+  sta rc7,x                     ; [rc8..rc15]
   dex
   bne @next
   tya
@@ -551,6 +551,7 @@ out32r:                         ; the remainder __sr -> rc4..rc7, then the quoti
   sta rc6
   lda __sr+3
   sta rc7
+  jmp out32                     ; no fall-through: a linker keeps routines apart
 out32:                          ; __sa -> A:X:rc2:rc3
   lda __sa+2
   sta rc2

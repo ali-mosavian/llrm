@@ -5,7 +5,7 @@
 //! `__mulsi3_fast` walks the multiplier a byte at a time and stops at its last
 //! set byte; the compact `__mulsi3` always walks 32 bits. A call saves
 //! [`SAVED_CLOCKS`] on average over multipliers of one to four bytes, the
-//! routine is [`FAST_BYTES`] longer, so a site
+//! routine is [`fast_bytes`] longer, so a site
 //! that runs repays it at once. The static count cannot tell a site that runs
 //! from one that is dead after folding (an exported function nothing calls
 //! counts once: `mul_words_to_long`, `float_in_memory_loop` and
@@ -25,8 +25,15 @@ use llrm_mir::types::TypeId;
 
 use crate::staticlocals::{block_depths, call_weights, callee_intrinsic, weight};
 
-/// Bytes of `__mulsi3_fast` over `__mulsi3` (`mos_rt.s`).
-pub const FAST_BYTES: f64 = 15.0;
+/// Bytes of `__mulsi3_fast` over `__mulsi3`, read from the runtime's text with
+/// what each links (`mulimage::library_bytes`).
+pub fn fast_bytes() -> f64 {
+    static BYTES: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        f64::from(crate::mulimage::library_bytes("__mulsi3_fast"))
+            - f64::from(crate::mulimage::library_bytes("__mulsi3"))
+    })
+}
 /// Clocks a call saves on average
 /// (`the_fast_multiply_saves_what_hotmultiply_prices`, within 10%: sim65 adds a
 /// clock a page crossing, so it moves with where the runtime's text starts: 586
