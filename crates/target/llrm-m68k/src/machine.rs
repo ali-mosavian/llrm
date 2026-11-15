@@ -91,6 +91,11 @@ impl Machine for M68kMachine {
         crate::opcosts::size_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
     }
 
+    /// The Os inline trial's byte estimate prices a value wider than the word per word ([`crate::opcosts::trial_costs`]).
+    fn trial_costs(&self) -> OperationCosts {
+        crate::opcosts::trial_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
+    }
+
     /// `d0`..`d7`, `a0`..`a5`.
     fn registers(&self) -> i64 {
         14

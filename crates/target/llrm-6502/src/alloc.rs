@@ -67,15 +67,21 @@ const BASE_CELLS: u8 = 16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Tuning {
     pub clocks_per_byte: u32,
+    /// Whether the 32-bit multiply, divide and shift calls take the speed
+    /// routines' entries: they are bigger, linked once, and the module
+    /// trial keeps them where the clocks they save pay for it
+    /// (`select::module_text`).
+    pub fast_routines: bool,
 }
 
 impl Tuning {
-    /// Speed: a byte saved is not worth a clock.
-    pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
+    /// Speed: bytes first as at size (user ruling 2026-11-14); the speed
+    /// routines' entries stay.
+    pub const SPEED: Tuning = Tuning { clocks_per_byte: 12, fast_routines: true };
     /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits
     /// is 3 bytes and 16 clocks; three shared callee-saved cells are 9
     /// bytes and 99 clocks).
-    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12 };
+    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12, fast_routines: false };
 }
 
 thread_local! {
@@ -99,6 +105,49 @@ thread_local! {
     /// Whether a 16-bit division calls its compact routine at speed too (see
     /// [`with_compact_division16`]).
     static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The functions of the module in hand that save their cells inline (see
+    /// [`keep_saves_inline`]).
+    static INLINE_SAVES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
+    /// Whether `commute_accumulator` makes its wider choice (see
+    /// [`with_wide_commute`]).
+    static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// Whether the last allocation made a choice only the wider rule makes.
+    static WIDE_COMMUTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the wider `commute_accumulator` rule on or off. It is a guess
+/// that spares a copy of a source; `select::function_text` allocates a
+/// function that took it both ways and keeps the smaller.
+pub fn with_wide_commute<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = WIDE_COMMUTE.with(|a| a.replace(allowed));
+    let result = f();
+    WIDE_COMMUTE.with(|a| a.set(before));
+    result
+}
+
+/// The module's choice that function `name` saves its callee-saved cells
+/// inline, not by `__csave`: it holds for every later compile of the function
+/// (`select::module_text`).
+pub fn keep_saves_inline(name: &str) {
+    INLINE_SAVES.with(|set| set.borrow_mut().insert(name.to_owned()));
+}
+
+/// Forget the choices [`keep_saves_inline`] made (a new module).
+pub fn forget_inline_saves() {
+    INLINE_SAVES.with(|set| set.borrow_mut().clear());
+}
+
+/// Whether the allocation just made took a choice only the wider rule makes.
+pub fn wide_commuted() -> bool {
+    WIDE_COMMUTED.with(|a| a.get())
+}
+
+/// Forget what the allocations so far chose (see [`wide_commuted`]).
+pub fn forget_wide_commuted() {
+    WIDE_COMMUTED.with(|a| a.set(false));
 }
 
 /// `f` with the 16-bit divisions calling the compact routines at speed too:
@@ -154,7 +203,7 @@ pub fn with_fast_division<R>(
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
-/// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them, but the
+/// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them , but the
 /// runtime that holds them is [`SAVE_HELPERS_BYTES`] a module: only a module
 /// whose users together save more than that should link it
 /// (`select::module_text`).
@@ -171,8 +220,10 @@ pub fn with_shared_saves<R>(
 /// The bytes `__csave` and `__crest` take once linked.
 pub const SAVE_HELPERS_BYTES: i64 = 34;
 
-/// What a function that keeps `n` callee-saved cells saves by calling the
-/// helpers: six bytes a cell inline, and two for the result, against eleven.
+/// What a function that keeps `n` callee-saved cells and returns from one place
+/// saves by calling the helpers: six bytes a cell inline, and two for the
+/// result, against eleven. A guess for the function's own choice; the module's
+/// is measured (`select::module_text`).
 pub fn shared_save_gain(n: u32) -> i64 {
     6 * i64::from(n) + 2 - 11
 }
@@ -247,6 +298,15 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// A shift by one steps a zero-page cell as it is (`asl rc2; rol rc3`).
+    fn writes_memory_in_place(name: &str) -> bool {
+        matches!(name, "SHL1" | "SRL1")
+    }
+
+    fn commutes_beyond_one_use() -> bool {
+        WIDE_COMMUTE.with(|a| a.get())
+    }
+
     /// The second source of a byte op on the accumulator is a zero-page cell.
     fn operand_class(
         name: &str,
@@ -3669,6 +3729,7 @@ fn save_preserved<const STACK: bool>(
         let n = used.len() as u32;
         let (saved, slower) = (shared_save_gain(n), 57 + 14 * n);
         let shared = SHARED_SAVES.with(|a| a.get())
+            && !INLINE_SAVES.with(|set| set.borrow().contains(&function.name))
             && n >= 3
             && used.iter().enumerate().all(|(at, byte)| *byte == rc(8 + at as u8))
             && saved > 0
@@ -3825,7 +3886,8 @@ fn emit_with<const STACK: bool>(
         remove_dead(&mut function);
     }
     reschedule_kills::<Mos<STACK>>(&mut function);
-    commute_accumulator::<Mos<STACK>>(&mut function);
+    let beyond = commute_accumulator::<Mos<STACK>>(&mut function);
+    WIDE_COMMUTED.with(|a| a.set(a.get() || beyond));
     two_address(&mut function);
     let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
@@ -4123,7 +4185,7 @@ fn emit_with<const STACK: bool>(
                         Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
                         _ => (callee.as_str(), false),
                     };
-                    let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    let speed = TUNING.with(|t| t.get()).fast_routines;
                     let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
                     let entry = if !speed
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
