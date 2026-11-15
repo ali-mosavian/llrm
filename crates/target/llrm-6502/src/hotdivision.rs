@@ -60,7 +60,9 @@ pub fn runs(module: &Module) -> f64 {
 /// byte divisor takes a short path) is called and not the compact one (the
 /// 16-step bit loop), over four shapes (sim65, `k_tosudivax`): 60707 / 37 saves
 /// 352, 40000 / 300 saves -6, 65535 / 2 saves 522, 9999 / 1000 saves -6; the
-/// mean is 215. The speed routine is 31 bytes over the compact one.
+/// mean is 215 (measured against the compact loop before it returned its own
+/// quotient and subtracted once, 2026-11-15). The speed routine is 39 bytes
+/// over the compact one.
 pub const SAVED_AT_SPEED_16: f64 = 215.0;
 
 /// What a call of the compact 16-bit division costs on average over the same

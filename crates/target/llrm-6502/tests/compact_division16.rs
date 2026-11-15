@@ -20,16 +20,30 @@ fn a_cold_division_calls_the_compact_routine_at_speed() {
     assert!(text.contains("__udivhi3c") && !text.contains("__udivhi3\n"), "the compact routine at -O2:\n{text}");
 }
 
-/// `udivmod16` branches into `udivmod16c` (`bne`), which the image scan read
+/// `udivmod16` branches into `__udivhi3c` (`bne`), which the image scan read
 /// as a call only: the speed divide's image came out 16 B smaller than the
 /// compact one's (-16 for a 31 B growth), and the choice above never saw its
-/// bytes.
+/// bytes. The growth is 39 B since the compact routine lost its wrapper.
 #[test]
 fn an_image_includes_a_routine_the_speed_divide_branches_into() {
     use llrm_6502::mulimage::{image_bytes, image_of_texts};
     let names = vec!["f".to_owned()];
     let speed = image_of_texts(&names, &["  jsr __udivhi3\n".to_owned()]);
     let compact = image_of_texts(&names, &["  jsr __udivhi3c\n".to_owned()]);
-    assert!(speed.contains("udivmod16c"), "{speed:?}");
-    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 31, "{speed:?} against {compact:?}");
+    assert!(speed.contains("__udivhi3c"), "{speed:?}");
+    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 39, "{speed:?} against {compact:?}");
+}
+
+/// The compact word divide linked 55 B (an 8 B wrapper over a 47 B loop that
+/// compared, then subtracted again, and tested a 17th bit that a 16-step loop
+/// from a zero remainder never produces): k_tosudivax stood 6 B over sdcc's 64.
+/// The loop now returns the quotient itself and subtracts once.
+#[test]
+fn the_compact_word_divide_image_is_42_bytes_and_the_remainder_one_50() {
+    use llrm_6502::mulimage::{image_bytes, image_of_texts};
+    let names = vec!["f".to_owned()];
+    let divide = image_of_texts(&names, &["  jsr __udivhi3c\n".to_owned()]);
+    let remainder = image_of_texts(&names, &["  jsr __umodhi3c\n".to_owned()]);
+    assert!(image_bytes(&divide) <= 42, "{divide:?}: {} B", image_bytes(&divide));
+    assert!(image_bytes(&remainder) <= 50, "{remainder:?}: {} B", image_bytes(&remainder));
 }
