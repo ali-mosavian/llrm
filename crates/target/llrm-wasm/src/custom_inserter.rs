@@ -82,6 +82,7 @@ fn lower(
             *to += 2;
         }
     }
+    f.remap_preds(f.blocks.len() + 2, |old| Some(if old > block { old + 2 } else { old }));
     let tail = f.blocks[block].split_off(at + 1);
     f.blocks[block].pop();
     let successors = std::mem::take(&mut f.succs[block]);

@@ -1706,6 +1706,15 @@ pub enum Inst {
         rn: Vreg,
         index: u8,
     },
+    /// `smov w|x, v.h[index]`: one lane sign-extended into a general register,
+    /// an `x` one when `wide` (`SMOVvi16to64`).
+    VectorSmov {
+        lanes: Arrangement,
+        wide: bool,
+        rd: Gpr,
+        rn: Vreg,
+        index: u8,
+    },
     /// `ins v.s[index], v.s[src]`: lane `src` of `rn` into lane `index` of
     /// `rd`, the others kept (`INSvi32lane`).
     VectorInsLane {
@@ -1790,3 +1799,12 @@ impl fmt::Display for Cond {
         out.write_str(NAMES[*self as usize])
     }
 }
+
+/// The pin's `SMOV` rows: name, lane arrangement, and whether the register is an `x` one.
+pub const SMOV_FORMS: [(&str, Arrangement, bool); 5] = [
+    ("SMOVvi8to32", Arrangement::B16, false),
+    ("SMOVvi8to64", Arrangement::B16, true),
+    ("SMOVvi16to32", Arrangement::H8, false),
+    ("SMOVvi16to64", Arrangement::H8, true),
+    ("SMOVvi32to64", Arrangement::S4, true),
+];

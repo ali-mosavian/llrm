@@ -80,7 +80,7 @@ use crate::lcssa::from_arms;
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
 use crate::loopvectorizeplan::{
-    LoopFacts, Plan, Recipe, ScalarFacts, choose_interleave, epilogue_vf, pin_may_vectorize, plan,
+    Live, LoopFacts, Plan, Pressure, Recipe, ScalarFacts, choose_interleave, epilogue_vf, pin_may_vectorize, plan,
 };
 use crate::loopvectorizeskeleton::{self as skeleton, Shape, Skeleton};
 use crate::runtimechecks::Rewriter;
@@ -248,12 +248,75 @@ fn fills_registers(
                 Step::Access(access) => whole(access.element),
                 Step::Operation(operation) => {
                     (matches!(operation.op, WideOp::ICmp(_) | WideOp::FCmp(_)) || whole(operation.element))
-                        && whole(operation.operand_element)
+                        // A mask (`<VF x i1>`) is held in the registers of its compare.
+                        && (matches!(cx.context.types.get(operation.operand_element), Type::Int(1))
+                            || whole(operation.operand_element))
                 }
                 Step::Induction(induction) => whole(induction.element),
                 Step::Reduction(reduction) => element_ty(cx, reduction.ty).is_some() && whole(reduction.ty),
             },
         )
+}
+
+/// The widened loop's values by where they live: each step that makes a value
+/// to its last reader, a vector induction and a reduction's phi too. A
+/// loop-invariant vector operand is counted once (`calculateRegisterUsage`).
+fn register_pressure(
+    cx: &Cx,
+    widening: &Widening,
+) -> Pressure {
+    let lane_of = |ty: TypeId| element_ty(cx, ty).unwrap_or(Ty::Int(1));
+    let mut made: Vec<(InstId, Ty, usize)> = Vec::new();
+    for (at, step) in widening.steps.iter().enumerate() {
+        match step {
+            Step::Access(access) if access.is_load => made.push((access.inst, lane_of(access.element), at)),
+            Step::Operation(operation) => made.push((operation.inst, lane_of(operation.element), at)),
+            Step::Induction(induction) => made.push((induction.inst, lane_of(induction.element), at)),
+            Step::Reduction(reduction) => made.push((reduction.phi, lane_of(reduction.ty), at)),
+            _ => {}
+        }
+    }
+    let mut last_read: Vec<usize> = made.iter().map(|(_, _, at)| *at).collect();
+    let mut invariants: Vec<(Operand, Ty)> = Vec::new();
+    let mut read = |source: Source, at: usize, lane: Ty, last_read: &mut Vec<usize>| match source {
+        Source::Wide(def) => {
+            if let Some(index) = made.iter().position(|(inst, _, _)| *inst == def) {
+                last_read[index] = last_read[index].max(at);
+            }
+        }
+        Source::Splat(operand @ Operand::Value(_)) => {
+            if !invariants.iter().any(|(one, _)| *one == operand) {
+                invariants.push((operand, lane));
+            }
+        }
+        Source::Splat(_) => {}
+    };
+    for (at, step) in widening.steps.iter().enumerate() {
+        match step {
+            Step::Access(access) if !access.is_load => {
+                if let Some(stored) = access.stored {
+                    read(stored, at, lane_of(access.element), &mut last_read);
+                }
+            }
+            Step::Operation(operation) => {
+                for source in &operation.operands[..operation.op.arity()] {
+                    read(*source, at, lane_of(operation.operand_element), &mut last_read);
+                }
+            }
+            _ => {}
+        }
+    }
+    // The induction's vector is read by its own step at the loop's end.
+    let end = widening.steps.len();
+    let live = made
+        .iter()
+        .zip(&last_read)
+        .map(|((inst, lane, start), &read_at)| {
+            let carried = widening.steps.iter().any(|step| matches!(step, Step::Induction(one) if one.inst == *inst));
+            Live { lane: *lane, start: *start, end: if carried { end } else { read_at } }
+        })
+        .collect();
+    Pressure { live, invariants: invariants.into_iter().map(|(_, lane)| lane).collect() }
 }
 
 /// The integer induction that steps by one and its step instruction.
@@ -706,7 +769,15 @@ fn extract(
                 let value = data.result.expect("a cast");
                 let dst = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
                 let source = function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped cast"))?;
-                let src = element_ty(cx, source).ok_or(Skipped("An element type the target has no vector of"))?;
+                // The mask of a compare the loop widened is a vector of `i1`.
+                let mask_source = matches!(cx.context.types.get(source), Type::Int(1))
+                    && matches!(op, CastOp::ZExt | CastOp::SExt)
+                    && matches!(source_of(data.operands[0], &widened), Ok(Source::Wide(_)));
+                let src = if mask_source {
+                    Ty::Int(1)
+                } else {
+                    element_ty(cx, source).ok_or(Skipped("An element type the target has no vector of"))?
+                };
                 // `sitofp`/`uitofp` of another width: narrowing is unrolled and
                 // widening is extended first by the backend
                 // (`LowerVectorINT_TO_FP`); the conversions to
@@ -856,13 +927,19 @@ fn extract(
                 let value = data.result.expect("a compare");
                 let source = function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped comparison"))?;
                 let lane = element_ty(cx, source).ok_or(Skipped("An element type the target has no vector of"))?;
+                // Read by selects (as their condition) and extensions of the
+                // mask (`zext i1` counts, `sext i1` masks): `VPWidenCastRecipe`
+                // of a vector of `i1`.
                 let only_conditions = function.users(value).iter().all(|one| {
                     function.parent(one.user) == Some(header)
                         && one.index == 0
-                        && matches!(function.instruction(one.user).opcode, Opcode::Select)
+                        && matches!(
+                            function.instruction(one.user).opcode,
+                            Opcode::Select | Opcode::Cast(CastOp::ZExt | CastOp::SExt)
+                        )
                 });
                 if !only_conditions {
-                    return Err(Skipped("A comparison used other than by the condition of a select"));
+                    return Err(Skipped("A comparison used other than by a select or an extension"));
                 }
                 let operands = [source_of(data.operands[0], &widened)?, source_of(data.operands[1], &widened)?];
                 if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
@@ -1694,11 +1771,7 @@ impl FunctionPass for LoopVectorize {
             eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));
         }
         let opt_size = has_opt_size(unit.function);
-        // DEVIATE LV-OS (owner llrm-arm64-vec, exit 2026-11-24): the pin widens
-        // an optsize loop whose trip count VF divides; here none, until
-        // the cause card for the bytes it adds at -Os (histo, scroll,
-        // jpeg) is closed.
-        if opt_size {
+        if opt_size && !tti.vectorizes_at_size() {
             return PreservedAnalyses::all();
         }
         let mut changed = crate::loopsimplify::simplified(unit.function);
@@ -1774,6 +1847,7 @@ impl FunctionPass for LoopVectorize {
                                 .iter()
                                 .map(|one| cx.layout.size_bits(&cx.context.types, one.ty) as u32)
                                 .collect(),
+                            pressure: Some(register_pressure(&cx, &widening)),
                         };
                         let chosen = match forced {
                             Some(vf) => Ok(Plan { vf, ic: 1 }),
@@ -1848,6 +1922,7 @@ impl FunctionPass for LoopVectorize {
                             .iter()
                             .map(|one| cx.layout.size_bits(&cx.context.types, one.ty) as u32)
                             .collect(),
+                        pressure: None,
                     };
                     if extracted.widening_mul || pin_may_vectorize(&*tti, &priced) {
                         why(

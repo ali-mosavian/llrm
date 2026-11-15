@@ -1951,6 +1951,72 @@ fn is_zeroing(
     matches!((mnemonic, second), ("AND", Operand::Imm(0)))
 }
 
+/// The cell a name stands for: a word's high byte is the word.
+fn cell_of(name: &str) -> &str {
+    name.strip_suffix("+1").unwrap_or(name)
+}
+
+/// The remainder of a division, or the quotient of a remainder, of the same
+/// operands a few copies on: the item that is the other half of a pair.
+///
+/// The pin's `DAGCombiner::useDivRem`
+/// ([DAGCombiner.cpp#L5112](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5112))
+/// makes one `DIVREM` node of the two, and its libcall (`__divmodsi4`) returns
+/// both; the runtime's divides leave the remainder beside the quotient (`__sr`,
+/// `rc6:rc7`). Only copies and constants stand between the two, and none of
+/// them touches a cell of either, so the first call makes both results.
+///
+/// DEVIATE 6502-DIVREM-PAIR (owner 6502, exit 2026-11-24): the pair is made
+/// over the instructions, not in the combiner. Reason: the node of a long pair
+/// has four result words and the selector tables hold two results (`decode.rs`
+/// `num_vts`), shared by every target. Exit: with four results in the tables.
+fn division_partner(
+    items: &[Item],
+    at: usize,
+) -> Option<usize> {
+    let Item::Inst(first) = &items[at] else { return None };
+    // the result words and the operand words of each width
+    let (want, results, operands) = match first.opcode {
+        op::UDIV32 => (op::UREM32, 0..2, 2..6),
+        op::UREM32 => (op::UDIV32, 0..2, 2..6),
+        op::SDIV32 => (op::SREM32, 0..2, 2..6),
+        op::SREM32 => (op::SDIV32, 0..2, 2..6),
+        op::SDIV16 => (op::SREM16, 0..1, 1..3),
+        op::SREM16 => (op::SDIV16, 0..1, 1..3),
+        _ => return None,
+    };
+    let cells = |inst: &MInst, range: std::ops::Range<usize>| -> Option<Vec<String>> {
+        range.map(|n| name(inst.operands.get(n)?).ok().map(|one| cell_of(one).to_owned())).collect()
+    };
+    let (own, inputs) = (cells(first, results.clone())?, cells(first, operands.clone())?);
+    if own.iter().any(|cell| inputs.contains(cell)) {
+        return None;
+    }
+    let mut between: Vec<&MInst> = Vec::new();
+    for (to, item) in items.iter().enumerate().skip(at + 1).take(8) {
+        let Item::Inst(next) = item else { return None };
+        if next.opcode == want && cells(next, operands.clone())? == inputs {
+            let others = cells(next, results.clone())?;
+            // the copies between neither change what the first read or made,
+            // nor use what the remainder makes before it is made
+            let clean = others.iter().all(|cell| !inputs.contains(cell) && !own.contains(cell))
+                && between.iter().all(|one| {
+                    let mut cells = one.operands.iter().filter_map(|operand| name(operand).ok().map(cell_of));
+                    let dest = cells.next().map(str::to_owned);
+                    let defines_other = dest
+                        .is_some_and(|dest| inputs.contains(&dest) || own.contains(&dest) || others.contains(&dest));
+                    !defines_other && cells.all(|cell| !others.iter().any(|other| other == cell))
+                });
+            return clean.then_some(to);
+        }
+        if !matches!(next.opcode, op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16) {
+            return None;
+        }
+        between.push(next);
+    }
+    None
+}
+
 fn name(operand: &Machine) -> Result<&str, Unsupported> {
     match operand {
         Machine::Reg(name) => Ok(name),
@@ -2174,6 +2240,7 @@ pub fn build_with_places(
     }
     let mut after_inst = false;
     let mut entry_labeled = false;
+    let mut joined: HashSet<usize> = HashSet::default();
     for (at, item) in items.iter().enumerate() {
         let inst = match item {
             Item::Label(_) => {
@@ -2193,6 +2260,9 @@ pub fn build_with_places(
         };
         b.origin = inst.origin;
         after_inst = true;
+        if joined.contains(&at) {
+            continue;
+        }
         let o = &inst.operands;
         match inst.opcode {
             op::COPY8 => b.copy_byte(name(&o[0])?, name(&o[1])?)?,
@@ -2650,14 +2720,18 @@ pub fn build_with_places(
             | op::SHL32
             | op::SRL32
             | op::SRA32) => {
-                let routine = match code {
-                    op::MUL32 => "__mulsi3",
-                    op::UDIV32 => "__udivsi3",
-                    op::SDIV32 => "__divsi3",
-                    op::UREM32 => "__umodsi3",
-                    op::SREM32 => "__modsi3",
-                    op::SHL32 => "__ashlsi3",
-                    op::SRL32 => "__lshrsi3",
+                // a division and its remainder are one call: the routine leaves
+                // the remainder in `__sr`
+                let partner = division_partner(items, at);
+                let routine = match (code, partner) {
+                    (op::MUL32, _) => "__mulsi3",
+                    (op::UDIV32 | op::UREM32, Some(_)) | (op::UDIV32, None) => "__udivsi3",
+                    (op::SDIV32 | op::SREM32, Some(_)) => "__divmodsi4",
+                    (op::SDIV32, None) => "__divsi3",
+                    (op::UREM32, None) => "__umodsi3",
+                    (op::SREM32, None) => "__modsi3",
+                    (op::SHL32, _) => "__ashlsi3",
+                    (op::SRL32, _) => "__lshrsi3",
                     _ => "__ashrsi3",
                 };
                 // a divisor whose three upper bytes are known zero is a byte
@@ -2693,11 +2767,31 @@ pub fn build_with_places(
                 let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine, 0)]);
                 jsr.call = true;
                 b.push(jsr);
-                let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
-                for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
-                    let symbol = if n == 0 { "__sa".to_owned() } else { format!("__sa+{n}") };
-                    b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
-                    b.copy(to, acc);
+                // the words each result goes to: the quotient is in `__sa` and
+                // the remainder in `__sr` after a pair; a lone
+                // remainder is in `__sa`
+                let own_from = match (code, partner) {
+                    (op::UREM32 | op::SREM32, Some(_)) => "__sr",
+                    _ => "__sa",
+                };
+                let mut results = vec![(own_from, name(&o[0])?.to_owned(), name(&o[1])?.to_owned())];
+                if let Some(to) = partner {
+                    let Item::Inst(other) = &items[to] else { unreachable!() };
+                    joined.insert(to);
+                    let other_from = if own_from == "__sr" { "__sa" } else { "__sr" };
+                    results.push((
+                        other_from,
+                        name(&other.operands[0])?.to_owned(),
+                        name(&other.operands[1])?.to_owned(),
+                    ));
+                }
+                for (from, low, high) in results {
+                    let (first, second) = (b.write_word(&low)?, b.write_word(&high)?);
+                    for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
+                        let symbol = if n == 0 { from.to_owned() } else { format!("{from}+{n}") };
+                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
+                        b.copy(to, acc);
+                    }
                 }
             }
             // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
@@ -2975,12 +3069,16 @@ pub fn build_with_places(
                 b.copy(dh, Reg::Phys(reg::X));
             }
             code @ (op::MUL16 | op::SDIV16 | op::SREM16 | op::SHLV16 | op::SRLV16 | op::SRAV16) => {
-                let routine = match code {
-                    op::MUL16 => "__mulhi3",
-                    op::SDIV16 => "__divhi3",
-                    op::SREM16 => "__modhi3",
-                    op::SHLV16 => "__ashlhi3",
-                    op::SRLV16 => "__lshrhi3",
+                // a division and its remainder are one call: the routine leaves
+                // the remainder in `rc6:rc7`
+                let partner = division_partner(items, at);
+                let routine = match (code, partner) {
+                    (op::MUL16, _) => "__mulhi3",
+                    (op::SDIV16 | op::SREM16, Some(_)) => "__divmodhi4",
+                    (op::SDIV16, None) => "__divhi3",
+                    (op::SREM16, None) => "__modhi3",
+                    (op::SHLV16, _) => "__ashlhi3",
+                    (op::SRLV16, _) => "__lshrhi3",
                     _ => "__ashrhi3",
                 };
                 let (mut xl, mut xh) = b.read_word(name(&o[1])?)?;
@@ -3003,8 +3101,19 @@ pub fn build_with_places(
                     b.copy(Reg::Phys(rc(5)), yh);
                 }
                 b.call_runtime(routine);
-                b.copy(dl, Reg::Phys(reg::A));
-                b.copy(dh, Reg::Phys(reg::X));
+                // the quotient comes back in A:X, the remainder in rc6:rc7
+                let own_is_remainder = partner.is_some() && code == op::SREM16;
+                let (low, high) = if own_is_remainder { (rc(6), rc(7)) } else { (reg::A, reg::X) };
+                b.copy(dl, Reg::Phys(low));
+                b.copy(dh, Reg::Phys(high));
+                if let Some(to) = partner {
+                    let Item::Inst(other) = &items[to] else { unreachable!() };
+                    joined.insert(to);
+                    let (low, high) = if own_is_remainder { (reg::A, reg::X) } else { (rc(6), rc(7)) };
+                    let (rl, rh) = b.write_word(name(&other.operands[0])?)?;
+                    b.copy(rl, Reg::Phys(low));
+                    b.copy(rh, Reg::Phys(high));
+                }
             }
             op::RET => {
                 let results = results(&b.function.blocks[b.current].insts);
@@ -4310,11 +4419,17 @@ fn emit_with<const STACK: bool>(
                     // `_byte` marks the byte-divisor entry of the four
                     // divisions only: a program's own function may end in it
                     let (callee, byte) = match callee.strip_suffix("_byte") {
-                        Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
+                        Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4")) => {
+                            (base, true)
+                        }
                         _ => (callee.as_str(), false),
                     };
                     let speed = TUNING.with(|t| t.get()).fast_routines;
-                    let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
+                    let division =
+                        matches!(
+                            callee,
+                            "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4"
+                        );
                     let entry = if !speed
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
                         && !(division && SIZE_FAST_DIVISION.with(|f| f.get()))
