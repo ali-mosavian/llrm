@@ -1374,6 +1374,10 @@ impl Tti for X86 {
         self.tuning.vectorize_at_size
     }
 
+    fn should_maximize_vector_bandwidth(&self) -> bool {
+        self.tuning.maximize_vector_bandwidth
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {

@@ -549,6 +549,12 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
+    /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: `LoopVectorize`
+    /// sizes the widest VF by the smallest type of the loop. false: the pin's
+    /// x86 (the widest type, so a byte sum into an `i64` stays at VF 2).
+    /// DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin's
+    /// own `-vectorizer-maximize-bandwidth`, a tuning limit, not a new rule.
+    pub maximize_vector_bandwidth: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -848,6 +854,7 @@ impl Tuning {
         lsr_size_order: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
+        maximize_vector_bandwidth: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,

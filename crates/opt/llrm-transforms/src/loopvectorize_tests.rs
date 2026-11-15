@@ -331,9 +331,14 @@ fn run_x86(
     source: &str,
     at_size: bool,
 ) -> String {
-    let tti = llrm_x86::tti::X86::of_cpu("x86-64")
-        .unwrap()
-        .with_tuning(llrm_mir::target::Tuning { vectorize_at_size: at_size, ..llrm_mir::target::Tuning::PIN });
+    run_x86_tuned(source, llrm_mir::target::Tuning { vectorize_at_size: at_size, ..llrm_mir::target::Tuning::PIN })
+}
+
+fn run_x86_tuned(
+    source: &str,
+    tuning: llrm_mir::target::Tuning,
+) -> String {
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap().with_tuning(tuning);
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false });
@@ -352,6 +357,20 @@ fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
     assert!(count(&run_x86(&optsize, true), "x i16>") > 0, "the premise: the pin widens it");
     assert_eq!(count(&run_x86(&optsize, false), "x i16>"), 0);
     assert!(count(&run_x86(COPY, false), "x i16>") > 0, "a loop at speed is widened either way");
+}
+
+/// mem_length_boundaries_m32: `sum += dst[i]` (bytes into an `i64`) stayed at the
+/// pin's VF 2 (the widest type) while gcc sums 16 bytes a trip: 142,319
+/// instructions to gcc's 137,355. With the pin's own
+/// `-vectorizer-maximize-bandwidth` (the smallest type sizes the VF) it is a
+/// VF 16 loop, 266,570 total to gcc's 341,638 in the pin itself.
+#[test]
+fn a_byte_sum_into_a_wide_total_is_sized_by_the_smallest_type_where_the_tuning_says_so() {
+    let source = include_str!("../tests/lv/sum_zext_bytes.ll");
+    let pin = llrm_mir::target::Tuning::PIN;
+    assert_eq!(count(&run_x86_tuned(source, pin), "<16 x i8>"), 0, "the pin keeps it narrow");
+    let wide = run_x86_tuned(source, llrm_mir::target::Tuning { maximize_vector_bandwidth: true, ..pin });
+    assert!(count(&wide, "load <16 x i8>") > 0, "{wide}");
 }
 
 /// A trip count `n` the loop is given: the pin checks `n < 16` (minimum
