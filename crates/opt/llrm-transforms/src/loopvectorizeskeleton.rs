@@ -741,8 +741,8 @@ fn retarget_exit_phis(
     }
 }
 
-/// The metadata node `at`: the module's, or one this pass made.
-fn node_at(
+/// The metadata node `at`: the module's, or one made since (by this pass or an earlier one in the run).
+pub(crate) fn node_at(
     declared: &Declared,
     metadata: &[MetadataNode],
     at: MetadataId,
