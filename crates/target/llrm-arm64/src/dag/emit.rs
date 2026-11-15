@@ -2115,6 +2115,16 @@ impl Emitter<'_> {
                 self.values.insert((id, 0), rd);
                 Ok(())
             }
+            // `IMPLICIT_DEF`: a vector or float value nothing defines, a half
+            // of a widened vector that is `undef`.
+            ISD::Undef | ISD::Poison if in_float_file(node.values[0]) => {
+                let one = self.mf.fpr();
+                if is_quad(node.values[0]) {
+                    self.mf.wide.push(Reg::Fpr(one));
+                }
+                self.fvalues.insert((id, 0), one);
+                Ok(())
+            }
             ISD::CopyFromReg if in_float_file(node.values[0]) => {
                 let value = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => {

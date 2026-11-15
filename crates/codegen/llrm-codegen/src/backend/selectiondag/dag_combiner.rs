@@ -4513,6 +4513,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        // `visitSTORE`: "Turn 'store undef, Ptr' -> nothing."
+        if self.dag.is_undef(value) && !info.volatile {
+            return Some(chain);
+        }
         // DEVIATE SD256: the call argument the builder cast to its bits stays
         // a float store when the load can never become an integer load
         // (`visit_bitcast`: volatile or extending): the cast alone would cost
