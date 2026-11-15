@@ -279,6 +279,12 @@ fn run_suffix(
     if crate::copyprop::enabled(std::env::var_os("LLRM_6502_MCP").as_deref()) {
         crate::copyprop::copy_propagation(asm);
     }
+    // `LLRM_6502_REASSOC=0` is the kill switch, for an A/B of one binary
+    if crate::copyprop::enabled(std::env::var_os("LLRM_6502_REASSOC").as_deref()) {
+        crate::sink_compare::sink_past_compare(asm);
+        crate::sink_compare::compare_the_copy(asm);
+        crate::reassociate::reassociate_adds(asm);
+    }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
     // the dead stores left a save with nothing between its `pha` and `pla`
@@ -299,7 +305,7 @@ fn run_suffix(
 }
 
 /// How many lines name `label`: a branch or jump to it, or a directive.
-fn references(
+pub(crate) fn references(
     lines: &[Line],
     label: &str,
 ) -> usize {
@@ -2323,7 +2329,7 @@ const LEFT: CarryOut = CarryOut { shifts: [Op::Asl, Op::Rol], masked: false, bra
 const RIGHT: CarryOut = CarryOut { shifts: [Op::Lsr, Op::Ror], masked: true, branches: [Op::Beq, Op::Bne] };
 
 /// Whether the instruction writes register `bit`.
-fn writes_register(
+pub(crate) fn writes_register(
     inst: &Inst,
     bit: Registers,
 ) -> bool {
@@ -2586,7 +2592,7 @@ fn step_of(
 /// Whether the carry is written before it is read, along every path from
 /// `lines[from]`. A call or a return counts as a write: no routine takes the
 /// carry in, and none leaves it for a caller to read.
-fn carry_dead_from(
+pub(crate) fn carry_dead_from(
     lines: &[Line],
     from: usize,
     seen: &mut HashSet<usize>,
