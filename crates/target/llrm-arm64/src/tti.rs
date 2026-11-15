@@ -482,13 +482,22 @@ pub(crate) fn vector_arithmetic_cost(
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5149
+/// [L5035]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5035
 pub(crate) fn vector_divide_by_constant_cost(
     op: ArithOp,
     ty: VectorTy,
     second: OperandInfo,
     kind: CostKind,
 ) -> Option<Cost> {
-    if !matches!(op, ArithOp::UDiv | ArithOp::URem) || !second.constant || ty.lane.is_float() {
+    let signed = matches!(op, ArithOp::SDiv | ArithOp::SRem);
+    if !matches!(
+        op,
+        ArithOp::UDiv | ArithOp::URem | ArithOp::SDiv | ArithOp::SRem
+    )
+        || !second.constant
+        || ty.lane.is_float()
+    {
         return None;
     }
     let (_, lane) = vector_pieces(ty)?;
@@ -496,6 +505,16 @@ pub(crate) fn vector_divide_by_constant_cost(
         return None;
     }
     let price = |op| vector_arithmetic_cost(op, ty, kind).map(|cost| cost.value);
+    if signed {
+        // The `ISD::SDIV` case ([L5035]): `smull2`, `smull`, `uzp2`, `sshr`
+        // and `usra` (two shifts), the remainder's multiply and subtract not
+        // priced. A power of two needs `cmlt`, which has no vector form here.
+        if second.power_of_two || second.negated_power_of_two {
+            return None;
+        }
+        let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+        return Some(Cost::of(2 * mul + add + shr + 2 * shr));
+    }
     if second.power_of_two {
         return price(if op == ArithOp::UDiv { ArithOp::LShr } else { ArithOp::And }).map(Cost::of);
     }
