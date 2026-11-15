@@ -64,9 +64,12 @@ out:
     )
 }
 
-/// The compares of `%i` against a bound the function still makes.
+/// The compares of the loop's own `%i` against a bound the function still
+/// makes. The peeled copies name theirs by number and keep what they were
+/// cloned as (`peelLoop` simplifies the loop that remains, not them: the
+/// pin's InstCombine folds them after).
 fn compares(text: &str) -> usize {
-    text.matches("icmp sgt i32 %").count()
+    text.matches("icmp sgt i32 %i,").count()
 }
 
 /// bintree's `for (i = 1; ...) { ...; if (i > 1) insert(i); }` tested `i > 1`
