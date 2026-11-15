@@ -19,11 +19,11 @@
 //! `InstrEmitter::EmitMachineNode`, pin d1106deb71cc.
 
 use std::collections::BTreeMap;
-use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
+use llrm_support::hash::HashMap;
 
 use super::function::{PhiCopy, Selected};
 use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS};

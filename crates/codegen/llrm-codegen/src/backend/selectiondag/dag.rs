@@ -1337,7 +1337,9 @@ impl SelectionDAG {
             return self.constant(value);
         }
         let first = self.constant(self.operand(value, 0))?;
-        (1..self.value_type(value).lanes()).all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first)).then_some(first)
+        (1..self.value_type(value).lanes())
+            .all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first))
+            .then_some(first)
     }
 
     pub fn is_opaque(

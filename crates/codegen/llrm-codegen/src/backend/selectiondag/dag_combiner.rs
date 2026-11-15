@@ -5049,7 +5049,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SignExtend | ISD::AnyExtend if sext_legal => {
                 let small = lane(self.dag.value_type(n00)).size_in_bits();
                 if small <= ext_bits
-                    || lane(self.dag.value_type(n00)).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00) + 1
+                    || lane(self.dag.value_type(n00)).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00)
+                        + 1
                         <= ext_bits
                 {
                     return Some(self.dag.get_node(ISD::SignExtend, vt, &[n00]));

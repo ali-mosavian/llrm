@@ -25,11 +25,10 @@
 //! isProfitableToSinkTo, AllUsesDominatedByBlock}`,
 //! `MachineInstr::isSafeToMove`.
 
-use llrm_support::hash::{HashMap, HashSet};
-
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::BlockId;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
 use crate::dagisel::generated::instrinfo::{desc, flag};
@@ -89,8 +88,9 @@ pub fn machine_sink(f: &mut Function) -> bool {
         let mut split = false;
         for at in 0..edges.len() {
             let (pred, block) = edges[at];
-            // `SplitCriticalEdge` returns null where `canSplitCriticalEdge` says no
-            // ("Not legal to break critical edge"): a `BR_TABLE` block keeps its edges.
+            // `SplitCriticalEdge` returns null where `canSplitCriticalEdge`
+            // says no ("Not legal to break critical edge"): a
+            // `BR_TABLE` block keeps its edges.
             if f.is_eh_pad(block) || !crate::phi_elimination::can_split_critical_edge(f, pred) {
                 continue;
             }
@@ -124,6 +124,12 @@ pub(crate) fn is_safe_to_move(
         return false;
     }
     if inst.opcode == IMPLICIT_DEF {
+        return true;
+    }
+    // The pin's MIR holds a generic `COPY` here, with no implicit read of
+    // `ARGUMENTS`; this port selects `COPY_I32` and its kin straight away, so a
+    // copy is as movable as a `COPY`.
+    if is_copy(inst.opcode) {
         return true;
     }
     let Some(info) = desc(inst.opcode) else { return false };
