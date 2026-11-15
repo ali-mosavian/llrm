@@ -34,7 +34,11 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             // `isOffsetFoldingLegal` is false: `performGlobalAddressCombine`
             // picks the offset.
             dso_local_symbols: true,
+            // `AArch64TargetLowering::aggressivelyPreferBuildVectorSources`.
+            prefers_build_vector_sources: true,
             boolean_contents: BooleanContents::ZeroOrOne,
+            // `setBooleanVectorContents(ZeroOrNegativeOneBooleanContent)`.
+            vector_boolean_contents: Some(BooleanContents::ZeroOrNegativeOne),
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
             vectors: crate::machine::vectors_enabled(),

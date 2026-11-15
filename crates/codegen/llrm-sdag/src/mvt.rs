@@ -26,6 +26,12 @@ pub enum MVT {
     V2F64,
     /// `v2f32`: the 64-bit float vector `FPR64` holds (`addDRTypeForNEON`).
     V2F32,
+    /// The vectors of booleans (`v2i1`..`v16i1`): no register holds one, the
+    /// type legalizer promotes the lanes (`getPreferredVectorAction`).
+    V2I1,
+    V4I1,
+    V8I1,
+    V16I1,
     /// The 64-bit integer vectors `FPR64` holds (arm64, `addDRTypeForNEON`).
     V8I8,
     V4I16,
@@ -50,6 +56,9 @@ pub enum MVT {
     V64I16,
     V32I32,
     V16I64,
+    /// The 2048-bit `v32i64` of the pin's `MVT`: the widest the vectorizers
+    /// form (`<32 x i16>` widened to `i64` lanes).
+    V32I64,
     V32F32,
     V16F64,
     /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin
@@ -123,7 +132,11 @@ impl MVT {
 }
 
 /// Every vector type: its element and its lane count.
-const VECTORS: [(MVT, MVT, u32); 28] = [
+const VECTORS: [(MVT, MVT, u32); 33] = [
+    (MVT::V2I1, MVT::I1, 2),
+    (MVT::V4I1, MVT::I1, 4),
+    (MVT::V8I1, MVT::I1, 8),
+    (MVT::V16I1, MVT::I1, 16),
     (MVT::V16I8, MVT::I8, 16),
     (MVT::V8I16, MVT::I16, 8),
     (MVT::V4I32, MVT::I32, 4),
@@ -150,6 +163,7 @@ const VECTORS: [(MVT, MVT, u32); 28] = [
     (MVT::V64I16, MVT::I16, 64),
     (MVT::V32I32, MVT::I32, 32),
     (MVT::V16I64, MVT::I64, 16),
+    (MVT::V32I64, MVT::I64, 32),
     (MVT::V32F32, MVT::F32, 32),
     (MVT::V16F64, MVT::F64, 16),
 ];
@@ -196,6 +210,18 @@ impl EVT {
 
     pub fn is_vector(self) -> bool {
         matches!(self, EVT::Simple(vt) if vt.is_vector())
+    }
+
+    /// `changeVectorElementTypeToInteger`: the vector of integer lanes as wide
+    /// as this one's (a scalar's own type is its integer of that width).
+    pub fn change_vector_element_type_to_integer(self) -> EVT {
+        match self {
+            EVT::Simple(vt) if vt.is_vector() => {
+                let lane = MVT::integer(self.element().size_in_bits()).expect("an integer lane of a simple width");
+                MVT::vector(lane, vt.lanes().expect("a vector")).map(EVT::Simple).expect("an integer vector type")
+            }
+            other => other,
+        }
     }
 
     /// `getVectorElementType`.

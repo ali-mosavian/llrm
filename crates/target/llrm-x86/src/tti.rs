@@ -231,7 +231,10 @@ impl X86 {
         let load = function.instruction(inst);
         let (Opcode::Load { volatile: false, .. }, Some(result)) = (&load.opcode, load.result) else { return false };
         let integer = context.types.int_bits(load.ty);
-        let float = matches!(context.types.get(load.ty), Type::Float(FloatKind::Float | FloatKind::Double));
+        let float = matches!(
+            context.types.get(load.ty),
+            Type::Float(FloatKind::Float | FloatKind::Double)
+        );
         if !float && !matches!(integer, Some(8 | 16 | 32)) && !(integer == Some(64) && self.native() == 64) {
             return false;
         }
@@ -241,9 +244,10 @@ impl X86 {
             return false;
         }
         let place = only.index as usize;
-        // The memory form needs a register for the other operand: against an immediate
-        // `cmp [m],imm` is longer than the shared load plus `test`/`cmp r,imm`, and
-        // `add r,imm` cannot take the load at all.
+        // The memory form needs a register for the other operand: against an
+        // immediate `cmp [m],imm` is longer than the shared load plus
+        // `test`/`cmp r,imm`, and `add r,imm` cannot take the load at
+        // all.
         let Some(&other) = function.instruction(only.user).operands.get(1 - place.min(1)) else { return false };
         if !matches!(other, llrm_mir::module::Operand::Value(_)) {
             return false;
@@ -359,6 +363,47 @@ impl X86 {
     ) -> X86 {
         X86 { tuning, ..self.clone() }
     }
+}
+
+/// `SSE2ConversionTbl`'s integer rows (the pin's `X86TargetTransformInfo.cpp`, L3526): a cast, its destination and
+/// source as (lane bits, lanes), and the throughput; the other three cost kinds are 1.
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3526
+const SSE2_INTEGER_CASTS: [(CastKind, (u32, u32), (u32, u32), i64); 23] = [
+    (CastKind::ZExt, (64, 2), (8, 16), 4),
+    (CastKind::SExt, (64, 2), (8, 16), 4),
+    (CastKind::ZExt, (32, 4), (8, 16), 2),
+    (CastKind::SExt, (32, 4), (8, 16), 3),
+    (CastKind::ZExt, (16, 8), (8, 16), 1),
+    (CastKind::SExt, (16, 8), (8, 16), 2),
+    (CastKind::ZExt, (64, 2), (16, 8), 2),
+    (CastKind::SExt, (64, 2), (16, 8), 3),
+    (CastKind::ZExt, (32, 4), (16, 8), 1),
+    (CastKind::SExt, (32, 4), (16, 8), 2),
+    (CastKind::ZExt, (64, 2), (32, 4), 1),
+    (CastKind::SExt, (64, 2), (32, 4), 2),
+    (CastKind::Trunc, (8, 16), (16, 8), 2),
+    (CastKind::Trunc, (8, 16), (16, 16), 3),
+    (CastKind::Trunc, (8, 16), (32, 4), 3),
+    (CastKind::Trunc, (8, 16), (32, 16), 7),
+    (CastKind::Trunc, (16, 2), (32, 2), 1),
+    (CastKind::Trunc, (16, 8), (32, 4), 3),
+    (CastKind::Trunc, (16, 8), (32, 8), 5),
+    (CastKind::Trunc, (16, 16), (32, 16), 10),
+    (CastKind::Trunc, (8, 16), (64, 2), 4),
+    (CastKind::Trunc, (16, 8), (64, 2), 2),
+    (CastKind::Trunc, (32, 4), (64, 2), 1),
+];
+
+/// `getTypeLegalizationCost` of an integer vector of 8 to 64-bit lanes and a power-of-two lane count: a type under
+/// 128 bits is widened to a register (`X86TargetLowering::getPreferredVectorAction` widens every vector but one lane);
+/// a wider one is split to registers, each its own operation.
+fn legalized_vector(ty: VectorTy) -> Option<(i64, (u32, u32))> {
+    let Ty::Int(bits @ (8 | 16 | 32 | 64)) = ty.lane else { return None };
+    if !ty.count.is_power_of_two() || ty.count < 2 {
+        return None;
+    }
+    let total = bits * ty.count;
+    Some((i64::from(total.div_ceil(128)), (bits, 128 / bits)))
 }
 
 /// `getTypeLegalizationCost` for the scalar types: how many operations of what
@@ -701,9 +746,11 @@ fn intrinsic_price(
 }
 
 impl X86 {
-    /// The intrinsic's row of `tti_intrinsics.txt` for this profile: long mode has its own (`x64`), as the pin's
-    /// `X64CostTbl` and 64-bit legalization differ from the 32-bit ones. A `ctlz` or `cttz` called with a zero-poison
-    /// flag is priced from its own `.zp` row (the pin looks up `*_ZERO_POISON`).
+    /// The intrinsic's row of `tti_intrinsics.txt` for this profile: long mode
+    /// has its own (`x64`), as the pin's `X64CostTbl` and 64-bit
+    /// legalization differ from the 32-bit ones. A `ctlz` or `cttz` called with
+    /// a zero-poison flag is priced from its own `.zp` row (the pin looks
+    /// up `*_ZERO_POISON`).
     fn priced_intrinsic(
         &self,
         name: &str,
@@ -717,6 +764,7 @@ impl X86 {
         } else {
             "nosse"
         };
+        let cost_kind = kind;
         let kind = match kind {
             CostKind::RecipThroughput => "throughput",
             CostKind::Latency => "latency",
@@ -728,14 +776,16 @@ impl X86 {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+            None => base_intrinsic_cost(name)
+                .or_else(|| library_call_intrinsic_cost(name, cost_kind))
+                .unwrap_or(Cost::INVALID),
         }
     }
 }
 
-/// `getTypeLegalizationCost(<count x lane>).first` of an integer vector of whole
-/// XMM registers: the registers it takes. Lanes of 8 to 64 bits, a power-of-two
-/// count and a total that is a multiple of 128 bits only.
+/// `getTypeLegalizationCost(<count x lane>).first` of an integer vector of
+/// whole XMM registers: the registers it takes. Lanes of 8 to 64 bits, a
+/// power-of-two count and a total that is a multiple of 128 bits only.
 fn xmm_pieces(ty: VectorTy) -> Option<i64> {
     let lane = match ty.lane {
         Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
@@ -790,7 +840,8 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_size
     }
 
-    /// -O1 is strict on bytes where the -Os trial is (`unroll_trial_bytes_strict`): a peel copies the loop body.
+    /// -O1 is strict on bytes where the -Os trial is
+    /// (`unroll_trial_bytes_strict`): a peel copies the loop body.
     fn peels_at_o1(&self) -> bool {
         !self.tuning.unroll_trial_bytes_strict
     }
@@ -809,6 +860,10 @@ impl Tti for X86 {
 
     fn inline_trial_keeps_shrinking_copy(&self) -> bool {
         self.tuning.inline_trial_keeps_shrinking_copy
+    }
+
+    fn inline_trial_cold_margin(&self) -> i64 {
+        self.tuning.inline_trial_cold_margin
     }
 
     fn second_ipsccp(&self) -> bool {
@@ -859,9 +914,12 @@ impl Tti for X86 {
             .then(|| std::rc::Rc::new(X86 { size_bytes: true, ..self.clone() }) as std::rc::Rc<dyn Tti>)
     }
 
-    /// `Tuning::inline_trials_at_o1` alone gives the byte view to -O1 only: the -O2 and -O3 callers keep the
-    /// units their rate was fitted in.
-    fn inline_size_view_at(&self, speed: bool) -> Option<std::rc::Rc<dyn Tti>> {
+    /// `Tuning::inline_trials_at_o1` alone gives the byte view to -O1 only: the
+    /// -O2 and -O3 callers keep the units their rate was fitted in.
+    fn inline_size_view_at(
+        &self,
+        speed: bool,
+    ) -> Option<std::rc::Rc<dyn Tti>> {
         if speed && !self.tuning.inline_size_bytes { None } else { self.inline_size_view() }
     }
 
@@ -970,7 +1028,10 @@ impl Tti for X86 {
         self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
-    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+    fn callee_saved_clocks(
+        &self,
+        peak: usize,
+    ) -> i64 {
         self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
             (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
         })
@@ -1064,6 +1125,19 @@ impl Tti for X86 {
         self.cmov
     }
 
+    /// DEVIATE D5-M16 (owner x86-m16-b, exit 2026-11-24): in real mode, with no
+    /// conditional move, each select a two-entry phi would become costs the
+    /// branch and move it lowers to. m16 grep -O1/-O2 `if (b == 10) { lines +=
+    /// inline_hit; inline_hit = 0; }` became two selects and an add run on
+    /// every byte of the scan loop (2 clk, and the byte spilled): 34.89M
+    /// clk against bcc's 33.86M, 29.72M without the fold.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        i64::from(!self.cmov && self.real_mode.is_some())
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
@@ -1103,7 +1177,10 @@ impl Tti for X86 {
         self.tuning.x87_zero_fill_at_size && !self.sse2
     }
 
-    fn wide_float_to_int(&self, bits: u32) -> Option<u32> {
+    fn wide_float_to_int(
+        &self,
+        bits: u32,
+    ) -> Option<u32> {
         // `fistp` word, dword and qword: x87 only, where the SSE converts have
         // their own forms (a 32-bit result is a dword, `cvttsd2si`)
         (!self.sse2).then_some(match bits {
@@ -1162,6 +1239,14 @@ impl Tti for X86 {
 
     fn ipa_cp_clones_at_speed(&self) -> bool {
         self.tuning.ipa_cp_clones_at_speed
+    }
+
+    fn ipa_cp_max_clones(&self) -> usize {
+        self.tuning.ipa_cp_max_clones
+    }
+
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        self.tuning.lsr_spill_pressure_margin
     }
 
     fn recursive_tre_first(&self) -> (bool, bool) {
@@ -1248,6 +1333,10 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    fn vectorizes_at_size(&self) -> bool {
+        self.tuning.vectorize_at_size
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
@@ -1255,8 +1344,8 @@ impl Tti for X86 {
     }
 
     /// `getRegisterBitWidth(RGK_FixedWidthVector)` of an SSE2 target: one XMM
-    /// register. Only where the 128-bit integer vectors are taken (`vector_values`):
-    /// the others stay scalar and read 0.
+    /// register. Only where the 128-bit integer vectors are taken
+    /// (`vector_values`): the others stay scalar and read 0.
     fn vector_register_bits(&self) -> u32 {
         if self.vector_values() { 128 } else { 0 }
     }
@@ -1268,12 +1357,6 @@ impl Tti for X86 {
         _class: RegisterClass,
     ) -> u32 {
         if self.vector_values() { 16 } else { 0 }
-    }
-
-    /// The pin expands a reduction to shuffles (`ExpandReductions`); the
-    /// backend has no vector shuffle yet. DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR).
-    fn lowers_vector_reductions(&self) -> bool {
-        false
     }
 
     /// `X86TTIImpl::getMaxInterleaveFactor`: a scalar loop is left to the
@@ -1288,39 +1371,97 @@ impl Tti for X86 {
 
     /// `X86TTIImpl::getMemoryOpCost` of a contiguous vector access of whole XMM
     /// registers (`movups`): one per register. A type that is not a multiple of
-    /// 128 bits, or a lane that is not an integer of 8 to 64 bits, is not priced
-    /// (DEVIATE X86V1, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR: the pin widens or scalarizes it; isel here takes none).
+    /// 128 bits, or a lane that is not an integer of 8 to 64 bits, is not
+    /// priced (DEVIATE X86V1, owner llrm-target-x86-m64-b, exit 2026-11-20,
+    /// the C2 PR: the pin widens or scalarizes it; isel here takes none).
     fn vector_memory_op_cost(
         &self,
-        _op: MemoryOp,
+        op: MemoryOp,
         ty: VectorTy,
         _align: u64,
         kind: CostKind,
     ) -> Option<Cost> {
-        if !self.vector_values() || kind != CostKind::RecipThroughput {
+        if !self.vector_values() {
             return None;
         }
-        xmm_pieces(ty).map(Cost::of)
+        let pieces = xmm_pieces(ty)?;
+        // Every other kind is `TCC_Basic` ("TODO: Handle other cost kinds"), a
+        // load's latency the base's 4.
+        Some(match kind {
+            CostKind::RecipThroughput => Cost::of(pieces),
+            CostKind::Latency if op == MemoryOp::Load => Cost::of(4),
+            _ => Cost::BASIC,
+        })
     }
 
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
     /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
-    /// cost one per register. Shifts (a variable count is not selectable), the
-    /// multiplies and the divisions are not priced, so a loop holding one stays
-    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR).
+    /// cost one per register; the multiplies of 8-, 16- and 32-bit lanes are
+    /// the pin's rows. Byte shifts, a variable shift count, the 64-bit
+    /// multiply and the divisions are not priced, so a loop holding one stays
+    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-24).
     fn vector_arithmetic_cost(
         &self,
         op: ArithOp,
         ty: VectorTy,
         kind: CostKind,
     ) -> Option<Cost> {
-        if !self.vector_values() || kind != CostKind::RecipThroughput {
+        if !self.vector_values() {
             return None;
         }
         match op {
             ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            // `psllX`/`psrlX`/`psraX` by an immediate (a constant splat amount,
+            // the only one the lowering takes); there is no 64-bit arithmetic
+            // shift before AVX-512.
+            ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
+            ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
+            // The pin's SSE2 rows, a register each: {throughput, latency, code
+            // size, size and latency}.
+            // `v16i8`: 2*unpack/2*pmullw/2*and/pack. `v8i16`: `pmullw`, the one
+            // multiply that keeps its lane.
+            // `v4i32`: 3*pmuludq/4*shuffle.
+            ArithOp::Mul => {
+                let row = match ty.lane {
+                    Ty::Int(8) => [6, 18, 12, 12],
+                    Ty::Int(16) => [1, 5, 1, 1],
+                    Ty::Int(32) => [6, 8, 7, 7],
+                    _ => return None,
+                };
+                xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))
+            }
             _ => None,
         }
+    }
+
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
+    /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
+    /// legalized, is free. Anything else (a float, a mask, a scalarized cast) is not priced.
+    fn vector_cast_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !matches!(kind, CastKind::ZExt | CastKind::SExt | CastKind::Trunc) {
+            return None;
+        }
+        let (Ty::Int(to), Ty::Int(from)) = (dst.lane, src.lane) else { return None };
+        let row = |kind: CastKind, dst: (u32, u32), src: (u32, u32)| {
+            SSE2_INTEGER_CASTS
+                .iter()
+                .find(|&&(one, to, from, _)| one == kind && to == dst && from == src)
+                .map(|&(.., throughput)| if cost_kind == CostKind::RecipThroughput { throughput } else { 1 })
+        };
+        if let Some(cost) = row(kind, (to, dst.count), (from, src.count)) {
+            return Some(Cost::of(cost));
+        }
+        let ((to_pieces, to_mvt), (from_pieces, from_mvt)) = (legalized_vector(dst)?, legalized_vector(src)?);
+        if kind == CastKind::Trunc && to_mvt == from_mvt {
+            return Some(Cost::FREE);
+        }
+        row(kind, to_mvt, from_mvt).map(|cost| Cost::of(to_pieces.max(from_pieces) * cost))
     }
 
     fn opt_size_inline_chain_trial(&self) -> bool {
@@ -1346,14 +1487,18 @@ impl Tti for X86 {
     }
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
-        self.tuning.lsr_size_order.then(|| {
-            let model = if self.tuning.lsr_size_x86_64 {
-                crate::encoding::lsr_size_model_64()
-            } else {
-                llrm_mir::tti::LsrSizeModel::X86
-            };
-            llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
-        })
+        self.tuning
+            .lsr_size_order
+            .then(
+                || {
+                    let model = if self.tuning.lsr_size_x86_64 {
+                        crate::encoding::lsr_size_model_64()
+                    } else {
+                        llrm_mir::tti::LsrSizeModel::X86
+                    };
+                    llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
+                },
+            )
     }
 
     fn lsr_phi_operand_uses(&self) -> bool {
@@ -1511,8 +1656,9 @@ impl Tti for X86 {
         false
     }
 
-    /// Long mode's DAG selects an access of any byte size (an `i24` is a 16-bit and an 8-bit access, an `i40` a
-    /// dword and a byte), as the pin's does: SROA cuts the slices where the pin cuts them.
+    /// Long mode's DAG selects an access of any byte size (an `i24` is a 16-bit
+    /// and an 8-bit access, an `i40` a dword and a byte), as the pin's
+    /// does: SROA cuts the slices where the pin cuts them.
     fn selects_odd_sized_integers(&self) -> bool {
         self.quad
     }
@@ -1569,9 +1715,27 @@ impl Tti for X86 {
         multiplier: Option<u128>,
     ) -> bool {
         let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, .. } = self.tuning;
-        // a shift-and-add chain is a shift and an add for each term past the first
+        // a shift-and-add chain is a shift and an add for each term past the
+        // first
         let chain = multiplier.map_or(i64::MAX, |m| 2 * (signed_digits(m) as i64 - 1).max(1));
         multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
+    }
+
+    fn reduces_outer_address_scale(
+        &self,
+        size: u128,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, counter_exit_compare_clocks, .. } =
+            self.tuning;
+        // The addressing mode scales by 1, 2, 4 or 8 for nothing; the rest of
+        // the size is a `lea` or a shift-and-add chain every trip, and the
+        // counter that stands for it also ends the loop, so the compare of the
+        // index goes too.
+        let rest = size >> size.trailing_zeros().min(3);
+        let chain = 2 * (signed_digits(rest) as i64 - 1).max(1);
+        rest > 1
+            && multiply_clocks > 0
+            && multiply_clocks.min(chain) + counter_exit_compare_clocks > loop_carried_clocks
     }
 
     fn splits_merged_conditions(&self) -> bool {
@@ -1619,7 +1783,11 @@ impl Tti for X86 {
             Logic::And if both_eq => CondMerging { base_cost: 3, likely_bias: 0, unlikely_bias: -1 },
             _ => CondMerging { base_cost: 2, likely_bias: 0, unlikely_bias: -1 },
         };
-        if params.base_cost <= extra { CondMerging::SPLIT } else { CondMerging { base_cost: params.base_cost - extra, ..params } }
+        if params.base_cost <= extra {
+            CondMerging::SPLIT
+        } else {
+            CondMerging { base_cost: params.base_cost - extra, ..params }
+        }
     }
 
     fn intrinsic_cost(

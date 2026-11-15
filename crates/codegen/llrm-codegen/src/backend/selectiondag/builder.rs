@@ -811,6 +811,7 @@ impl<'a> Builder<'a> {
             call_clobbers: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
+            call_pointers: Vec::new(),
             call_result_assert: None,
             call_result_range_bits: None,
             fixed_args: 0,
@@ -876,6 +877,9 @@ struct Builder<'a> {
     call_attrs_move_arguments: bool,
     /// The arguments of the call being lowered that carry `sret`.
     call_sret: Vec<bool>,
+    /// The arguments of the call being lowered that are pointers
+    /// (`ArgFlags.isPointer()`); none listed means none are.
+    call_pointers: Vec<bool>,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -1549,8 +1553,10 @@ impl Builder<'_> {
             self.live_ins.push((reg, vreg));
             vreg
         };
-        let mut make_object = |_size: u32, offset: i64, _immutable: bool| {
+        let mut objects: Vec<(u32, bool)> = Vec::new();
+        let mut make_object = |size: u32, offset: i64, immutable: bool| {
             offsets.push(offset);
+            objects.push((size, immutable));
             -(offsets.len() as i32)
         };
         let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
@@ -1584,6 +1590,7 @@ impl Builder<'_> {
         }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
+            self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
         }
         let mut next = 0;
         for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
@@ -2271,6 +2278,7 @@ impl Builder<'_> {
             .iter()
             .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
             .collect();
+        self.call_pointers = owner.iter().map(|argument| self.is_pointer_type(arg_types[*argument])).collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -2539,6 +2547,7 @@ impl Builder<'_> {
         // call it was for a fixed one).
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
+        let pointer_args = std::mem::take(&mut self.call_pointers);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2584,7 +2593,7 @@ impl Builder<'_> {
                 outs.push(Out {
                     value: piece,
                     ext,
-                    pointer: false,
+                    pointer: pointer_args.get(at).copied().unwrap_or(false),
                     arg_vt,
                     split,
                     variadic: at >= variadic_from,
@@ -3429,6 +3438,30 @@ impl Builder<'_> {
                         _ => Err(Refused("a vector constant lane that is not an integer or a float")),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.dag.get_build_vector(vt, &ops))
+            }
+            // A vector the folder made out of an integer (`bitcast (i128 N to
+            // <4 x i32>)`): its lanes are the integer's slices, the first in
+            // the low bits (little-endian lane order).
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::BitCast, value }) => {
+                let ConstantKind::Int(image) = self.module.context.get(value).kind else {
+                    return Err(Refused("a vector constant cast from something other than an integer"));
+                };
+                let lane_bits = lane_vt.size_in_bits();
+                if lane_bits == 0 || lane_bits * vt.lanes() > 128 {
+                    return Err(Refused("a vector constant image wider than 128 bits"));
+                }
+                let mask = u128::MAX >> (128 - lane_bits);
+                let ops: Vec<SDValue> = (0..vt.lanes())
+                    .map(|at| {
+                        let bits = (image >> (at * lane_bits)) & mask;
+                        if lane_vt.is_floating_point() {
+                            self.dag.get_constant_fp(bits, lane_vt)
+                        } else {
+                            self.dag.get_constant(bits, lane_vt)
+                        }
+                    })
+                    .collect();
                 Ok(self.dag.get_build_vector(vt, &ops))
             }
             _ => Err(Refused("a vector constant that is not a list of integers")),
@@ -4284,21 +4317,127 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// `visitShuffleVector`: `getVectorShuffle` of the two inputs with the
-    /// IR's mask (a lane of `-1` is undefined).
+    /// `visitShuffleVector`
+    /// ([L12199](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L12199)):
+    /// `getVectorShuffle` of the two inputs with the IR's mask (a lane of `-1`
+    /// is undefined). A mask of another length than the inputs is made one of
+    /// theirs by concatenating (a longer mask) or by extracting subvectors (a
+    /// shorter one); what neither does is built lane by lane.
     fn visit_shuffle_vector(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
         mask: &[i32],
     ) -> Result<(), Refused> {
-        let first = self.get_value(instruction.operands[0])?;
-        let second = self.get_value(instruction.operands[1])?;
+        let mut first = self.get_value(instruction.operands[0])?;
+        let mut second = self.get_value(instruction.operands[1])?;
         let result = self.type_of(instruction.ty)?;
         let input = self.dag.value_type(first);
-        if result != input {
-            return Err(Refused("a shufflevector that changes the lane count"));
-        }
-        let node = self.dag.get_vector_shuffle(result, first, second, mask);
+        let (mut sources, lanes) = (input.lanes() as usize, mask.len());
+        let node = 'shuffled: {
+            if sources == lanes {
+                break 'shuffled self.dag.get_vector_shuffle(result, first, second, mask);
+            }
+            if sources < lanes {
+                // A mask that is whole inputs one after another, or undefined
+                // pieces, is `CONCAT_VECTORS`.
+                if lanes % sources == 0 {
+                    let mut pieces: Vec<Option<usize>> = vec![None; lanes / sources];
+                    let concat = mask
+                        .iter()
+                        .enumerate()
+                        .all(
+                            |(at, &lane)| {
+                                if lane < 0 {
+                                    return true;
+                                }
+                                let lane = lane as usize;
+                                let piece = &mut pieces[at / sources];
+                                let sequential =
+                                    lane % sources == at % sources && piece.is_none_or(|from| from == lane / sources);
+                                *piece = Some(lane / sources);
+                                sequential
+                            },
+                        );
+                    if concat {
+                        let undef = self.dag.get_undef(input);
+                        let operands: Vec<SDValue> =
+                            pieces.iter().map(|piece| piece.map_or(undef, |from| [first, second][from])).collect();
+                        break 'shuffled self.dag.get_node(ISD::ConcatVectors, result, &operands);
+                    }
+                }
+                // Both inputs padded with undefined lanes to the mask's length.
+                let count = lanes.div_ceil(sources);
+                let padded = match input {
+                    EVT::Simple(mvt) => mvt.element().and_then(|lane| MVT::vector(lane, (count * sources) as u32)),
+                    EVT::Int(_) => None,
+                }
+                .map(EVT::Simple)
+                .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
+                for operand in [&mut first, &mut second] {
+                    if self.dag.is_undef(*operand) {
+                        *operand = self.dag.get_undef(padded);
+                    } else {
+                        let undef = self.dag.get_undef(input);
+                        let mut pieces = vec![undef; count];
+                        pieces[0] = *operand;
+                        *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
+                    }
+                }
+                sources = count * sources;
+            }
+            if sources > lanes {
+                // Each input a subvector of the mask's width, at one start.
+                let mut start: [Option<usize>; 2] = [None, None];
+                let extract = mask.iter().filter(|&&lane| lane >= 0).all(|&lane| {
+                    let (which, lane) =
+                        if lane as usize >= sources { (1, lane as usize - sources) } else { (0, lane as usize) };
+                    let at = lane - lane % lanes;
+                    let fits = at + lanes <= sources && start[which].is_none_or(|from| from == at);
+                    start[which] = Some(at);
+                    fits
+                });
+                if extract {
+                    let mut inputs = [first, second];
+                    for (which, operand) in inputs.iter_mut().enumerate() {
+                        *operand = match start[which] {
+                            None => self.dag.get_undef(result),
+                            Some(at) => {
+                                let index = self.dag.get_constant(at as u128, self.target.dag.pointer);
+                                self.dag.get_node(ISD::ExtractSubvector, result, &[*operand, index])
+                            }
+                        };
+                    }
+                    let mapped: Vec<i32> = mask
+                        .iter()
+                        .map(|&lane| match lane {
+                            lane if lane < 0 => lane,
+                            lane if lane as usize >= sources => {
+                                lane - sources as i32 - start[1].unwrap_or(0) as i32 + lanes as i32
+                            }
+                            lane => lane - start[0].unwrap_or(0) as i32,
+                        })
+                        .collect();
+                    break 'shuffled self.dag.get_vector_shuffle(result, inputs[0], inputs[1], &mapped);
+                }
+            }
+            // Neither concatenation nor subvectors: a lane at a time.
+            let lane_vt = result.element();
+            let mut operands = Vec::with_capacity(lanes);
+            for &lane in mask {
+                operands.push(if lane < 0 {
+                    self.dag.get_undef(lane_vt)
+                } else {
+                    let (from, lane) = if lane as usize >= sources {
+                        (second, lane as usize - sources)
+                    } else {
+                        (first, lane as usize)
+                    };
+                    let index = self.dag.get_constant(lane as u128, self.target.dag.pointer);
+                    self.dag.get_node(ISD::ExtractElement, lane_vt, &[from, index])
+                });
+            }
+            self.dag.get_build_vector(result, &operands)
+        };
         self.set_value(instruction.result.expect("a shufflevector has a result"), node);
         Ok(())
     }
@@ -4314,7 +4453,9 @@ impl Builder<'_> {
         let then = self.get_value(instruction.operands[1])?;
         let other = self.get_value(instruction.operands[2])?;
         let vt = self.dag.value_type(then);
-        let node = self.dag.get_node(ISD::Select, vt, &[cond, then, other]);
+        // `visitSelect`: a vector condition picks lane by lane.
+        let opcode = if self.dag.value_type(cond).is_vector() { ISD::VSelect } else { ISD::Select };
+        let node = self.dag.get_node(opcode, vt, &[cond, then, other]);
         self.set_value(instruction.result.expect("a select has a result"), node);
         Ok(())
     }

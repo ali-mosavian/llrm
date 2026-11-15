@@ -7,7 +7,7 @@ use llrm_arm64::tti::AArch64;
 use llrm_mir::opcode::FloatPredicate;
 use llrm_mir::tti::{ArithOp, CastKind, CmpSel, MemoryOp, Predicate, Ty};
 
-use super::{LoopFacts, Plan, Recipe, choose, iteration_cost, pin_may_vectorize, plan};
+use super::{LoopFacts, Plan, Recipe, choose, epilogue_vf, iteration_cost, pin_may_vectorize, plan};
 
 fn facts(
     lane_bits: u32,
@@ -18,7 +18,7 @@ fn facts(
     let align = u64::from(lane_bits / 8);
     let mut recipes = vec![Recipe::Load { lane, align }];
     if add {
-        recipes.push(Recipe::Binary { op: ArithOp::Add, lane, ext: [None, None] });
+        recipes.push(Recipe::Binary { op: ArithOp::Add, lane, ext: [None, None], second: Default::default() });
     }
     recipes.push(Recipe::Store { lane, align });
     LoopFacts {
@@ -30,6 +30,8 @@ fn facts(
         widest_induction_bits: 64,
         opt_size: false,
         has_reductions: false,
+        reduction_bits: Vec::new(),
+        pressure: None,
     }
 }
 
@@ -146,11 +148,11 @@ fn a_loop_of_scattered_floats_is_priced_as_the_pin_prices_it() {
     let recipes = vec![
         Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
         Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
-        Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float, ext: [None, None] },
+        Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float, ext: [None, None], second: Default::default() },
         Recipe::Compare { op: CmpSel::FCmp, lane: Ty::Float, predicate: Predicate::Float(uno) },
         Recipe::Cast { kind: CastKind::BitCast, dst: Ty::Int(32), src: Ty::Float, folded: false, users: Vec::new() },
         Recipe::Select { lane: Ty::Int(32), predicate: Some(Predicate::Float(uno)) },
-        Recipe::Binary { op: ArithOp::Add, lane: Ty::Int(32), ext: [None, None] },
+        Recipe::Binary { op: ArithOp::Add, lane: Ty::Int(32), ext: [None, None], second: Default::default() },
     ];
     let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();
     assert_eq!((costs(1), costs(2), costs(4)), (11, 26, 48));
@@ -166,7 +168,7 @@ fn a_loop_of_consecutive_floats_is_priced_as_the_pin_prices_it() {
     let tti = AArch64::of_cpu("apple-m1").unwrap();
     let recipes = vec![
         Recipe::Load { lane: Ty::Float, align: 4 },
-        Recipe::Binary { op: ArithOp::FMul, lane: Ty::Float, ext: [None, None] },
+        Recipe::Binary { op: ArithOp::FMul, lane: Ty::Float, ext: [None, None], second: Default::default() },
         Recipe::Store { lane: Ty::Float, align: 4 },
     ];
     let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();
@@ -189,4 +191,16 @@ fn an_unpriced_recipe_never_makes_a_loop_look_costlier_than_it_is() {
     assert!(iteration_cost(&tti, &recipes, 4, false, false).is_err());
     assert_eq!(iteration_cost(&tti, &recipes, 4, false, true), Ok(4));
     assert!(pin_may_vectorize(&tti, &loop_of(recipes)));
+}
+
+/// A main loop of VF 16 and IC 1 of unknown trip count leaves fewer than 16
+/// iterations, so an epilogue of 16 lanes would never run (`SkipVF` against
+/// `urem(tc, 16)`); the epilogue's factor is below the main loop's lanes. It
+/// was 16, and the vectorized remainder was the main loop again.
+#[test]
+fn an_epilogue_is_narrower_than_the_lanes_of_the_main_loop() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let facts = facts(8, 0, false);
+    assert!(epilogue_vf(&tti, &facts, Plan { vf: 16, ic: 1 }).is_none_or(|vf| vf < 16));
+    assert!(epilogue_vf(&tti, &facts, Plan { vf: 16, ic: 2 }).is_none_or(|vf| vf <= 16));
 }

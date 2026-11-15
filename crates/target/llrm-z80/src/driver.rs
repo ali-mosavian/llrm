@@ -72,31 +72,60 @@ pub struct Request {
     /// The pin's block frequencies as they are, a loop of 10 trips weighing as
     /// a loop of 41 (DEVIATE Z80-BFI-TRIPS, `frequency.rs`, is the default).
     pub flat_loop_trips: bool,
-    /// DEVIATE z80-oz-best-of (owner z80, exit 2026-12-15): at -Oz the module is compiled as -Oz, as -Os and as -Os
-    /// without `minsize` (`optsize_only`) and the smallest is kept (module bytes, the runtime it reaches included; a tie keeps -Oz). The pin's -Oz is not
-    /// smaller than its -Os here: 41 of 109 corpus rows grow (+4681 B), because header duplication is off at -Oz
-    /// (LoopRotation.cpp#L80) and the inline threshold is 5 (inlinecost.rs `OPT_MIN_SIZE_THRESHOLD`), and the
-    /// pin has no Z80 byte cost to say where either pays. The rotation that wins depends on what LSR and the unroll
-    /// do after it, which no local price sees (three single-compile rules measured, none without regressions).
-    /// Cost: -Oz compiles three times (the second compile measured median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The real fix is the
-    /// rotation/LSR interplay; the exit date is the revisit.
+    /// DEVIATE z80-oz-best-of (owner z80, exit 2026-12-15): at -Oz the module
+    /// is compiled as -Oz, as -Os and as -Os without `minsize`
+    /// (`optsize_only`) and the smallest is kept (module bytes, the runtime it
+    /// reaches included; a tie keeps -Oz). The pin's -Oz is not
+    /// smaller than its -Os here: 41 of 109 corpus rows grow (+4681 B), because
+    /// header duplication is off at -Oz (LoopRotation.cpp#L80) and the
+    /// inline threshold is 5 (inlinecost.rs `OPT_MIN_SIZE_THRESHOLD`), and the
+    /// pin has no Z80 byte cost to say where either pays. The rotation that
+    /// wins depends on what LSR and the unroll do after it, which no local
+    /// price sees (three single-compile rules measured, none without
+    /// regressions). Cost: -Oz compiles three times (the second compile
+    /// measured median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The
+    /// real fix is the rotation/LSR interplay; the exit date is the
+    /// revisit.
     pub oz_best_of: bool,
-    /// DEVIATE Z80-SP-FRAME (owner z80, exit 2026-11-24): a function whose frame is addressed from SP is no larger and no
-    /// slower than with IX (`sp_frame.rs`). Off, every framed function keeps IX.
+    /// DEVIATE Z80-SP-FRAME (owner z80, exit 2026-11-24): a function whose
+    /// frame is addressed from SP is no larger and no slower than with IX
+    /// (`sp_frame.rs`). Off, every framed function keeps IX.
     pub sp_frame: bool,
-    /// The functions' `minsize` is dropped before the mid-end: the -Os compile `oz_best_of` weighs -Oz against. The
-    /// attribute names a per-function level of its own (no peeled switch case, no balanced tree), so an -Os compile
-    /// of a module clang built at -Oz was not -Os, and the best of the two never saw what -Os makes.
+    /// The functions' `minsize` is dropped before the mid-end: the -Os compile
+    /// `oz_best_of` weighs -Oz against. The attribute names a per-function
+    /// level of its own (no peeled switch case, no balanced tree), so an -Os
+    /// compile of a module clang built at -Oz was not -Os, and the best of
+    /// the two never saw what -Os makes.
     pub optsize_only: bool,
-    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the mid-end refuses the copies of a callee that holds a
-    /// loop at several sites of a loop of its caller (`llrm_transforms::trial::with_refused_loop_copies`): the
+    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the mid-end
+    /// refuses the copies of a callee that holds a loop at several sites of
+    /// a loop of its caller
+    /// (`llrm_transforms::trial::with_refused_loop_copies`): the
     /// compile `compile::effective` weighs the default one against.
     pub refuse_loop_copies: bool,
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): the full unroll
+    /// the mid-end makes at -O2 and -O3 under this variant
+    /// (`llrm_transforms::trial::SpeedUnroll`); `None`: the pin's decisions.
+    /// `compile::effective` keeps the variant whose module is smaller in
+    /// bytes, then in clocks.
+    pub unroll_variant: Option<llrm_transforms::trial::SpeedUnroll>,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true, sp_frame: true, optsize_only: false, refuse_loop_copies: false }
+        Self {
+            cpu: Cpu::Z80,
+            level,
+            passes: Vec::new(),
+            debug: false,
+            slot_by_conflicts: true,
+            flat_loop_trips: false,
+            oz_best_of: true,
+            sp_frame: true,
+            optsize_only: false,
+            refuse_loop_copies: false,
+            unroll_variant: None,
+        }
     }
 }
 
@@ -115,21 +144,131 @@ pub fn program(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {
+    MID_END_RUNS.with(|runs| runs.set(runs.get() + 1));
+    let unrolled = || llrm_transforms::trial::with_speed_unroll(request.unroll_variant, || program_of(text, request));
     let made = if request.refuse_loop_copies {
-        llrm_transforms::trial::with_refused_loop_copies(|| program_of(text, request))
+        llrm_transforms::trial::with_refused_loop_copies(unrolled)
     } else {
-        program_of(text, request)
+        unrolled()
     };
     LOOP_COPIES.with(|count| count.set(llrm_transforms::trial::take_loop_copies()));
+    let decisions = llrm_transforms::trial::take_speed_unrolls();
+    SPEED_UNROLLS.with(|count| count.set(decisions));
+    // The mid-end's module as printed, hashed: kept for a compile that made
+    // unroll decisions (what a variant could change), and compared by a
+    // variant's compile (`with_unroll_base`).
+    let base = UNROLL_BASE.with(std::cell::Cell::get);
+    let wanted = base.is_some()
+        || (request.unroll_variant.is_none()
+            && matches!(request.level, Level::O2 | Level::O3)
+            && decisions.made + decisions.refused + decisions.inlined > 0);
+    let printed = made
+        .as_ref()
+        .ok()
+        .filter(|_| wanted)
+        .map(
+            |program| {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                program.modules.iter().for_each(|module| llrm_mir::print::module(module).hash(&mut hasher));
+                let instructions = program
+                    .modules
+                    .iter()
+                    .flat_map(|module| &module.globals)
+                    .filter_map(|global| global.function())
+                    .map(|function| function.instruction_count())
+                    .sum();
+                Fingerprint { hash: hasher.finish(), instructions }
+            },
+        );
+    FINGERPRINT.with(|held| held.set(printed));
+    if let (Some(variant), Some(base), Some(now)) = (request.unroll_variant, base, printed) {
+        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
+            eprintln!("unroll {variant:?}: {} instructions against {}", now.instructions, base.instructions);
+        }
+        if now.hash == base.hash {
+            return Err(UNCHANGED.to_owned());
+        }
+        if now.instructions > base.instructions + UNROLL_TRIAL_GROWTH {
+            return Err(GROWN.to_owned());
+        }
+    }
     made
 }
 
-thread_local! {
-    static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+/// What a mid-end module is, for comparing a variant's to the base compile's:
+/// its text hashed, and its instructions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fingerprint {
+    pub hash: u64,
+    pub instructions: usize,
 }
 
-/// The inlines of a loop-holding callee at several sites of a loop that the last [`program`] made (they are what
-/// a compile with `refuse_loop_copies` would not).
+/// What [`program`] says of a variant whose mid-end made the module the base
+/// compile's made.
+pub const UNCHANGED: &str = "the unroll variant leaves the module as it is";
+
+/// What [`program`] says of a variant whose mid-end made a module of more than
+/// [`UNROLL_TRIAL_GROWTH`] instructions beyond the base compile's: its
+/// selection, the bulk of a compile, is not run.
+pub const GROWN: &str = "the unroll variant makes a module of far more instructions";
+
+/// The instructions a variant's module may have beyond the base compile's and
+/// still be selected: a compile-time budget of UNROLL-SPEED-TRIAL. The variants
+/// that won on the corpus add at most 518 (byval_struct -O2, 76 B to 31 B);
+/// fcmp_all and div_constants_short -O2 add 2076 and 1549 and their wide
+/// variants are 90% and 16% bigger in bytes.
+pub const UNROLL_TRIAL_GROWTH: usize = 1000;
+
+/// Runs `body` with `fingerprint` (a compile's [`mid_end_fingerprint`]) as the
+/// module a variant's compile must differ from: a variant that comes out the
+/// same fails with [`UNCHANGED`], one that comes out bigger with [`GROWN`],
+/// both before the selection.
+pub fn with_unroll_base<T>(
+    fingerprint: Option<Fingerprint>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = UNROLL_BASE.with(|held| held.replace(fingerprint));
+    let value = body();
+    UNROLL_BASE.with(|held| held.set(before));
+    value
+}
+
+/// The data text of the module the last [`selections_with_alternatives`] made.
+pub fn data_of_last_selection() -> Option<Result<String, String>> {
+    DATA_OF_LAST.with(|held| held.borrow_mut().take())
+}
+
+/// The mid-end runs on this thread since the last call.
+pub fn take_mid_end_runs() -> usize {
+    MID_END_RUNS.with(std::cell::Cell::take)
+}
+
+/// The hash of the module the last [`program`] made, kept where it made unroll
+/// decisions at -O2 and up.
+pub fn mid_end_fingerprint() -> Option<Fingerprint> {
+    FINGERPRINT.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    static DATA_OF_LAST: std::cell::RefCell<Option<Result<String, String>>> = const { std::cell::RefCell::new(None) };
+    static MID_END_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FINGERPRINT: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
+    static UNROLL_BASE: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
+    static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SPEED_UNROLLS: std::cell::Cell<llrm_transforms::trial::UnrollDecisions> =
+        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+}
+
+/// The full-unroll decisions the last [`program`] made at -O2 and up: what an
+/// `unroll_variant` could change.
+pub fn speed_unrolls_made() -> llrm_transforms::trial::UnrollDecisions {
+    SPEED_UNROLLS.with(std::cell::Cell::get)
+}
+
+/// The inlines of a loop-holding callee at several sites of a loop that the
+/// last [`program`] made (they are what a compile with `refuse_loop_copies`
+/// would not).
 pub fn loop_copies_made() -> usize {
     LOOP_COPIES.with(std::cell::Cell::get)
 }
@@ -150,7 +289,14 @@ fn program_of(
     if request.optsize_only {
         for global in &mut module.globals {
             if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
-                function.attrs.retain(|attr| !matches!(attr, llrm_mir::opcode::Attribute::Flag(one) if one == "minsize"));
+                function
+                    .attrs
+                    .retain(
+                        |attr| !matches!(
+                            attr,
+                            llrm_mir::opcode::Attribute::Flag(one) if one == "minsize"
+                        ),
+                    );
             }
         }
     }
@@ -164,11 +310,12 @@ fn program_of(
         // No zero- or sign-extending load: the compare of a loaded byte stays a
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
-        // The DAG builder plans the switch (clusters, table header), as the pin does.
-        // DEVIATE Z80-SWITCH-ROWS (owner z80, exit 2026-11-15): against the
-        // mid-end lowering, switch_jump_table Os +4 B, switch_table_holes Os
-        // +2 B and Oz +82k T, compound_assignment_types Os/Oz +2 B. Layout
-        // and allocation noise after the pin's own plan; no pass is wrong.
+        // The DAG builder plans the switch (clusters, table header), as the pin
+        // does. DEVIATE Z80-SWITCH-ROWS (owner z80, exit 2026-11-15):
+        // against the mid-end lowering, switch_jump_table Os +4 B,
+        // switch_table_holes Os +2 B and Oz +82k T,
+        // compound_assignment_types Os/Oz +2 B. Layout and allocation
+        // noise after the pin's own plan; no pass is wrong.
         options.lower_switches = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
         // and `memcmp` (SDCC's libc has no `bcmp`).
@@ -186,7 +333,8 @@ fn program_of(
             program.modules.iter_mut().for_each(crate::prepare::mark_word_chains);
         }
     }
-    // The pin lowers `llvm.is.constant` at every level; -O0 reaches here with the call.
+    // The pin lowers `llvm.is.constant` at every level; -O0 reaches here with
+    // the call.
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     Ok(program)
 }
@@ -221,6 +369,9 @@ pub fn selections_with_alternatives(
     request: &Request,
 ) -> Result<(Vec<Selected>, Vec<Selected>), String> {
     let mut program = program(text, request)?;
+    // the module's data text, from the mid-end this compile ran:
+    // `compile::kept_data_text` is not made to run it again
+    DATA_OF_LAST.with(|held| *held.borrow_mut() = Some(crate::data::text_of(&program)));
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
     let module = &program.modules[0];
     let names: Vec<String> = module
@@ -232,17 +383,21 @@ pub fn selections_with_alternatives(
     let select_form = |name: &str, ilp: bool| {
         crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
-        crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
+        crate::dagisel::pipeline::STRICT_LEVEL
+            .with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(false));
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
         one
     };
-    // A form whose long adds became carry ops is also selected with them left to the generic expansion, kept on the
-    // selection (`Selection::generic`): the allocated function is the cheaper of the two (`compile::lines_of`).
-    // DEVIATE Z80-CARRY-PRICE (owner z80, exit 2026-11-24): the pin's `ExpandIntRes_ADDSUB` takes the carry ops
-    // whenever `UADDO_CARRY` is legal and prices nothing; `adc hl, rr` ties each sum to `hl`, which costs spills
-    // where several longs are live (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
+    // A form whose long adds became carry ops is also selected with them left
+    // to the generic expansion, kept on the
+    // selection (`Selection::generic`): the allocated function is the cheaper
+    // of the two (`compile::lines_of`). DEVIATE Z80-CARRY-PRICE (owner z80,
+    // exit 2026-11-24): the pin's `ExpandIntRes_ADDSUB` takes the carry ops
+    // whenever `UADDO_CARRY` is legal and prices nothing; `adc hl, rr` ties
+    // each sum to `hl`, which costs spills where several longs are live
+    // (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
     let select = |name: &str, ilp: bool| {
         crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
         let mut one = select_form(name, ilp);
@@ -256,19 +411,27 @@ pub fn selections_with_alternatives(
         }
         one
     };
-    // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
-    // other way: a sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one (at -O1 only) with every multiply a
-    // call (`CALL_MULS`); the caller prices the two (`compile::decomposed_functions`).
+    // A function with the routine for its long multiplies
+    // (`prepare::mark_long_multiplies`) is also selected the other way: a
+    // sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one
+    // (at -O1 only) with every multiply a call (`CALL_MULS`); the caller
+    // prices the two (`compile::decomposed_functions`).
     let calls_the_routine = |name: &str| -> Option<bool> {
-        module.globals.iter().find_map(|global| {
-            let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
-            llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY).then(|| {
-                ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr))
-            })
-        })
+        module
+            .globals
+            .iter()
+            .find_map(
+                |global| {
+                    let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
+                    llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
+                        .then(|| ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr)))
+                },
+            )
     };
-    // A function with a constant-count `memset` (`prepare::mark_constant_fills`) is also selected with each such
-    // fill an inline `ldir` fill (`INLINE_FILLS`); the caller prices the two with the routine linked once.
+    // A function with a constant-count `memset`
+    // (`prepare::mark_constant_fills`) is also selected with each such fill
+    // an inline `ldir` fill (`INLINE_FILLS`); the caller prices the two with
+    // the routine linked once.
     let has_fills = |name: &str| -> bool {
         module.globals.iter().any(|global| {
             global.function().is_some_and(|one| {
@@ -287,8 +450,9 @@ pub fn selections_with_alternatives(
             })
         })
     };
-    // A function with a long divide (`prepare::mark_wide_divides`) is also selected with the speed routines in a
-    // function tuned for size (`SPEED_ROUTINES`).
+    // A function with a long divide (`prepare::mark_wide_divides`) is also
+    // selected with the speed routines in a function tuned for size
+    // (`SPEED_ROUTINES`).
     let has_divides = |name: &str| -> bool {
         module.globals.iter().any(|global| {
             global.function().is_some_and(|one| {
@@ -296,12 +460,15 @@ pub fn selections_with_alternatives(
             })
         })
     };
-    let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
+    let main: Vec<Selected> =
+        names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
-            // The all-calls form is priced bytes first at every level (it was -O1 only: at 1 B = 3 T the static loop
-            // weights, about 5x under the measured ones, made -368 B for +5970 T look like a gain on call_keeps).
+            // The all-calls form is priced bytes first at every level (it was
+            // -O1 only: at 1 B = 3 T the static loop weights, about
+            // 5x under the measured ones, made -368 B for +5970 T look like a
+            // gain on call_keeps).
             let muls = calls_the_routine(name).filter(|sized| *sized || request.level != Level::O0);
             let fills = has_fills(name);
             let shifts = has_shifts(name);
@@ -317,9 +484,12 @@ pub fn selections_with_alternatives(
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(shifts));
-            // the alternative is one switch for every reason a function has one: the speed routines ride along only where
-            // nothing else is switched, or the form that decomposes a multiply would also carry the divide's price
-            crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(divides && muls.is_none() && !fills && !shifts));
+            // the alternative is one switch for every reason a function has
+            // one: the speed routines ride along only where nothing
+            // else is switched, or the form that decomposes a multiply would
+            // also carry the divide's price
+            crate::dagisel::pipeline::SPEED_ROUTINES
+                .with(|one| one.set(divides && muls.is_none() && !fills && !shifts));
             let selected = (name.clone(), select(name, false), select(name, true));
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(false));
@@ -348,7 +518,8 @@ pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> =
 struct Z80Machine;
 
 impl llrm_mir::target::Machine for Z80Machine {
-    /// The Z80 shifts by one bit per instruction: a variable count is `__ashlhi3`.
+    /// The Z80 shifts by one bit per instruction: a variable count is
+    /// `__ashlhi3`.
     fn variable_shift_legal(&self) -> bool {
         false
     }
@@ -370,8 +541,10 @@ impl llrm_mir::target::Machine for Z80Machine {
         crate::clocks::sheet()
     }
 
-    /// One unit an operation, as `costs()` was before it stated T-states: the pin's thresholds read instruction
-    /// units, and the size decisions defaulted to `costs()` (-Os grew copy_runs +362 B reading T-states as bytes).
+    /// One unit an operation, as `costs()` was before it stated T-states: the
+    /// pin's thresholds read instruction units, and the size decisions
+    /// defaulted to `costs()` (-Os grew copy_runs +362 B reading T-states as
+    /// bytes).
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         llrm_mir::target::OperationCosts { jump_table: 4, ..llrm_mir::target::Neutral.costs() }
     }
@@ -416,23 +589,32 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 }
 
-/// `MaxStoresPerMemcpy` (and `...OptSize`): the word copies a constant `memcpy` may be before it is an `ldir`.
+/// `MaxStoresPerMemcpy` (and `...OptSize`): the word copies a constant `memcpy`
+/// may be before it is an `ldir`.
 ///
-/// DEVIATE Z80-MEMCPY-LIMIT (owner z80-argpush, exit 2026-11-30): the pin's x86 default is 8 at speed and 4 at size
-/// (`Tuning::PIN`, `TargetLoweringBase`), where a copied word is a load and a store with a displacement. Here a word
-/// is 8 B / 52 T through `hl` and `de` and 12 B / 76 T between frame slots, against an `ldir` block of 11 B to 20 B
-/// and 21 T a byte: one word is cheaper in both bytes and clocks, two are dearer in both (`tests/memcpy_limit.rs`
-/// prices it). Reason: variadic copied a 12 B struct argument twice as 6 word pairs, 72 B each. Exit: none; the number
-/// is the target's price, as m16's `Dos::tuning` is.
+/// DEVIATE Z80-MEMCPY-LIMIT (owner z80-argpush, exit 2026-11-30): the pin's x86
+/// default is 8 at speed and 4 at size (`Tuning::PIN`, `TargetLoweringBase`),
+/// where a copied word is a load and a store with a displacement. Here a word
+/// is 8 B / 52 T through `hl` and `de` and 12 B / 76 T between frame slots,
+/// against an `ldir` block of 11 B to 20 B and 21 T a byte: one word is cheaper
+/// in both bytes and clocks, two are dearer in both (`tests/memcpy_limit.rs`
+/// prices it). Reason: variadic copied a 12 B struct argument twice as 6 word
+/// pairs, 72 B each. Exit: none; the number is the target's price, as m16's
+/// `Dos::tuning` is.
 const MEMCPY_STORES: usize = 1;
 
-/// `MaxStoresPerMemset` at every level (the pin's X86 values: 16, 8 at size): one store of the widest width, then the fill is an `ldir`. The pin's x86 limits
-/// (16 at speed, 8 at size) count 4-byte stores, which are two word stores of 3 B each through IX here: a 34 B zero fill
-/// was 102 B against an `ldir` fill of 13 B for 1.1% of its clocks (huffman_decode -O1 +70 B over the -Os form). At
-/// -O2/-O3 too: a 64 B row fill stored inline was 224 B and slower than its `ldir` (fill_nest 601 B against 348 B, +5 k T;
-/// 3 T a byte does not pay for 213 B), and memory_expansion -4576 B, rep_count -409 B, +18 k T in all.
+/// `MaxStoresPerMemset` at every level (the pin's X86 values: 16, 8 at size):
+/// one store of the widest width, then the fill is an `ldir`. The pin's x86
+/// limits (16 at speed, 8 at size) count 4-byte stores, which are two word
+/// stores of 3 B each through IX here: a 34 B zero fill was 102 B against an
+/// `ldir` fill of 13 B for 1.1% of its clocks (huffman_decode -O1 +70 B over
+/// the -Os form). At -O2/-O3 too: a 64 B row fill stored inline was 224 B and
+/// slower than its `ldir` (fill_nest 601 B against 348 B, +5 k T; 3 T a byte
+/// does not pay for 213 B), and memory_expansion -4576 B, rep_count -409 B, +18
+/// k T in all.
 ///
-/// DEVIATE Z80-MEMSET-LIMIT (owner z80-pf, exit 2026-11-24), as Z80-MEMCPY-LIMIT.
+/// DEVIATE Z80-MEMSET-LIMIT (owner z80-pf, exit 2026-11-24), as
+/// Z80-MEMCPY-LIMIT.
 const MEMSET_STORES: usize = 1;
 
 fn memset_stores() -> usize {

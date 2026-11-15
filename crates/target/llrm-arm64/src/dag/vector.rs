@@ -17,9 +17,10 @@
 //! splat of a scalar (`DUP`); `DUPLANE` and the other masks are declined.
 //! Exit: the rest of both lowerings, with reverse (`REV64`) first.
 
+use llrm_codegen::backend::selectiondag::SDNodeFlags;
 use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
-use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_dagisel::generated::aarch64::ids::isd as aarch64_isd;
 
@@ -95,6 +96,10 @@ fn constant_build_vector(
         if from == vt { mov } else { dag.get_node(ISD::Target(aarch64_isd::NVCAST), vt, &[mov]) }
     };
     let imm = |dag: &mut SelectionDAG, value: u64| dag.get_constant(u128::from(value), EVT::I32);
+    // The modified-immediate forms make a vector of the size asked: a 64-bit
+    // vector is made as one (`MOVIv2i32`), not as a 128-bit one cast down.
+    let wide = vt.size_in_bits() == 128;
+    let (t32, t16, t8) = if wide { (MVT::V4I32, MVT::V8I16, MVT::V16I8) } else { (MVT::V2I32, MVT::V4I16, MVT::V8I8) };
     // `tryAdvSIMDModImm64`
     let attempt = |dag: &mut SelectionDAG, bits: u64, inverted: bool| -> Option<SDValue> {
         let (opcode_shift, opcode_msl, opcode_byte) = if inverted {
@@ -116,7 +121,7 @@ fn constant_build_vector(
         ];
         if let Some(&(_, shift, value)) = word.iter().find(|(is, ..)| *is) {
             let (value, shift) = (imm(dag, value), imm(dag, shift));
-            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(MVT::V4I32), &[value, shift]);
+            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(t32), &[value, shift]);
             return Some(nvcast(dag, mov));
         }
         // `tryAdvSIMDModImm321s`: types 7 and 8, the shifted ones.
@@ -124,14 +129,14 @@ fn constant_build_vector(
             [(modimm::type7(bits), 264u64, (bits & 0xff00) >> 8), (modimm::type8(bits), 272, (bits & 0xff_0000) >> 16)];
         if let Some(&(_, shift, value)) = ones.iter().find(|(is, ..)| *is) {
             let (value, shift) = (imm(dag, value), imm(dag, shift));
-            let mov = dag.get_node(ISD::Target(opcode_msl), EVT::Simple(MVT::V4I32), &[value, shift]);
+            let mov = dag.get_node(ISD::Target(opcode_msl), EVT::Simple(t32), &[value, shift]);
             return Some(nvcast(dag, mov));
         }
         // `tryAdvSIMDModImm16`: types 5 and 6.
         let half = [(modimm::type5(bits), 0u64, bits & 0xff), (modimm::type6(bits), 8, (bits & 0xff00) >> 8)];
         if let Some(&(_, shift, value)) = half.iter().find(|(is, ..)| *is) {
             let (value, shift) = (imm(dag, value), imm(dag, shift));
-            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(MVT::V8I16), &[value, shift]);
+            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(t16), &[value, shift]);
             return Some(nvcast(dag, mov));
         }
         // `tryAdvSIMDModImm8`: type 9, `MOVI` of a byte (the pin tries no
@@ -140,7 +145,7 @@ fn constant_build_vector(
             && modimm::type9(bits)
         {
             let value = imm(dag, bits & 0xff);
-            let mov = dag.get_node(ISD::Target(opcode), EVT::Simple(MVT::V16I8), &[value]);
+            let mov = dag.get_node(ISD::Target(opcode), EVT::Simple(t8), &[value]);
             return Some(nvcast(dag, mov));
         }
         None
@@ -195,6 +200,12 @@ pub fn lower_build_vector(
         // "isOnlyLowElement && !isIntOrFPConstant(Value)"
         return Some(dag.get_node(ISD::ScalarToVector, vt, &[first]));
     }
+    // `MaybeLowHalfZeroHigh`: a 128-bit vector whose low half repeats one
+    // non-constant value and whose high half is zero is the low half
+    // concatenated with zeros, `FMOV Dd, Dn` (the move clears the upper half).
+    if let Some(done) = low_half_zero_high(dag, vt, &ops) {
+        return Some(done);
+    }
     let one_value = defined.iter().all(|&lane| lane == first);
     if one_value {
         // "Use DUP for non-constant splats."
@@ -202,7 +213,7 @@ pub fn lower_build_vector(
     }
     // "If all else fails, just use a sequence of INSERT_VECTOR_ELT": lane 0 by
     // `SCALAR_TO_VECTOR`, the others inserted. DEVIATE VEC6 (owner
-    // llrm-arm64-vec, exit 2026-11-27): the branches before it in the pin
+    // llrm-arm64-vec, exit 2026-11-24): the branches before it in the pin
     // (`PreferDUPAndInsert`, a constant splat with other lanes inserted, two
     // `DUP`s joined, `ReconstructShuffle`) are not translated.
     let index_ty = EVT::I64;
@@ -219,6 +230,42 @@ pub fn lower_build_vector(
         }
     }
     Some(vec)
+}
+
+/// `LowerBUILD_VECTOR`'s `MaybeLowHalfZeroHigh` block.
+///
+/// DEVIATE VEC8 (owner arm64, exit 2026-11-24): a vector of two `f64` lanes is
+/// not made (the half is a `v1f64`, which is no type here); one of `i64` lanes
+/// is the `FMOVDXr` the pin's pattern selects.
+fn low_half_zero_high(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    ops: &[SDValue],
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::mvt::MVT;
+    let lane = vt.element();
+    let (bits, half) = (lane.size_in_bits(), ops.len() / 2);
+    if vt.size_in_bits() != 128 || ops.iter().any(|&one| dag.is_undef(one)) {
+        return None;
+    }
+    let first = ops[0];
+    let low_repeats = ops[..half].iter().all(|&one| one == first);
+    let high_zero = ops[half..].iter().all(|&one| lane_constant(dag, one, bits) == Some(0));
+    if !low_repeats || !high_zero || lane_constant(dag, first, bits).is_some() {
+        return None;
+    }
+    if bits == 64 {
+        // The pin's half is a `v1i64`, which is no type here: its
+        // `concat_vectors (scalar_to_vector x), zeros` is selected as `fmov
+        // d, x`, which clears the upper half; so is this `SCALAR_TO_VECTOR`.
+        return lane.is_integer().then(|| dag.get_node(ISD::ScalarToVector, vt, &[first]));
+    }
+    let EVT::Simple(lane_mvt) = lane else { return None };
+    let half_vt = EVT::Simple(MVT::vector(lane_mvt, half as u32)?);
+    let zero_lane = if lane.is_floating_point() { dag.get_constant_fp(0, lane) } else { dag.get_constant(0, lane) };
+    let zero = dag.get_splat_build_vector(half_vt, zero_lane);
+    let low = dag.get_node(ISD::Target(aarch64_isd::DUP), half_vt, &[first]);
+    Some(dag.get_node(ISD::ConcatVectors, vt, &[low, zero]))
 }
 
 /// `UnrollVectorOp`: one scalar operation per lane, put together by a
@@ -246,7 +293,7 @@ fn unroll_vector_op(
 /// goes through the wider float otherwise; to a wider float the operand is
 /// extended first; one of the same size is as it is.
 ///
-/// DEVIATE VEC7 (owner llrm-arm64-vec, exit 2026-11-27): the `f16` target of
+/// DEVIATE VEC7 (owner llrm-arm64-vec, exit 2026-11-24): the `f16` target of
 /// a split conversion, a conversion of a one-lane vector and the SVE forms are
 /// not translated.
 pub fn lower_vector_int_to_fp(
@@ -472,7 +519,7 @@ fn skip_extension_for_vector_mull(
 /// `performTruncateCombine`, the `DUP` arm
 /// ([L23964](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L23964)):
 /// a 64-bit truncate of a splat is the splat of the truncated scalar. DEVIATE
-/// MUL2 (owner llrm-arm64-vec, exit 2026-11-27): the `ADDHN` and the
+/// MUL2 (owner llrm-arm64-vec, exit 2026-11-24): the `ADDHN` and the
 /// `extract_vector_elt` arms are not translated.
 pub fn truncate_combine(
     dag: &mut SelectionDAG,
@@ -496,7 +543,7 @@ pub fn truncate_combine(
 /// ([L22164](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L22164)):
 /// "If "v2i32 DUP(x)" and "v4i32 DUP(x)" both exist, use an extract from the
 /// 128bit vector version." DEVIATE MUL3 (owner llrm-arm64-vec, exit
-/// 2026-11-27): the `DUP` of a load, of a float compare or of an extracted
+/// 2026-11-24): the `DUP` of a load, of a float compare or of an extracted
 /// lane, and `performPostLD1Combine`, are not translated.
 pub fn dup_combine(
     dag: &mut SelectionDAG,
@@ -529,7 +576,7 @@ fn double_lanes(vt: EVT) -> Option<EVT> {
 /// ([L24761](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L24761)):
 /// a long multiply of the high half of a vector and a splat takes the high
 /// half of a wider splat, so that `SMULL2` matches. DEVIATE MUL4 (owner
-/// llrm-arm64-vec, exit 2026-11-27): `tryCombineMULLWithUZP1` is not
+/// llrm-arm64-vec, exit 2026-11-24): `tryCombineMULLWithUZP1` is not
 /// translated.
 pub fn mull_combine(
     dag: &mut SelectionDAG,
@@ -615,7 +662,7 @@ pub fn lower_vector_shuffle(
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[dag.operand(v1, lane as usize)]));
     }
     // `constructDup`: `DUPLANE` of the lane of the vector. DEVIATE VEC1
-    // (owner llrm-arm64-vec, exit 2026-11-27): only a 128-bit source of the
+    // (owner llrm-arm64-vec, exit 2026-11-24): only a 128-bit source of the
     // result's own type; the pin also widens a 64-bit one and extracts a
     // lane from a wider one.
     if dag.value_type(v1) != vt || vt.size_in_bits() != 128 {
@@ -773,7 +820,7 @@ fn reduction_node(
 /// the halves combined as one 64-bit value, whose own halves are then
 /// combined by shifts until one lane is left.
 ///
-/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-11-27): the pin splits a
+/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-11-24): the pin splits a
 /// 128-bit vector into two 64-bit vectors (`and v0.8b`); there are none here,
 /// so the two `i64` lanes are taken and combined as scalars. The same
 /// instructions, in another order and register file.
@@ -824,4 +871,108 @@ pub fn lower_vec_reduce(
         _ => return None,
     };
     Some(reduction_node(dag, across_lanes, node))
+}
+
+/// `LowerMinMax` for the NEON `v2i64` (no `smax.2d`): "`setcc`, then `select`".
+pub fn lower_min_max(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let code = match dag.opcode(node) {
+        ISD::SMax => CondCode::SetGt,
+        ISD::SMin => CondCode::SetLt,
+        ISD::UMax => CondCode::SetUGt,
+        ISD::UMin => CondCode::SetULt,
+        _ => return None,
+    };
+    let vt = dag.value_type(node);
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let cond = dag.get_setcc(vt.change_vector_element_type_to_integer(), lhs, rhs, code);
+    // `DAG.getSelect` makes a `VSELECT` of a vector condition.
+    Some(dag.get_node(ISD::VSelect, vt, &[cond, lhs, rhs]))
+}
+
+/// `changeVectorFPCCToAArch64CC`: the condition, a second one to OR with it,
+/// and whether the mask is inverted at the end.
+fn vector_fp_cc(code: CondCode) -> (u128, Option<u128>, bool) {
+    use super::lowering::cc;
+    match code {
+        CondCode::SetUo => (cc::MI, Some(cc::GE), true),
+        CondCode::SetO => (cc::MI, Some(cc::GE), false),
+        CondCode::SetLe => (cc::LS, None, false),
+        CondCode::SetLt => (cc::MI, None, false),
+        // "All of the compare-mask comparisons are ordered, but we can switch
+        // between the two by a double inversion. E.g. ULE == !OGT."
+        CondCode::SetUEq | CondCode::SetULt | CondCode::SetULe | CondCode::SetUGt | CondCode::SetUGe => {
+            let (first, second) = super::lowering::fp_cc(code.inverse_float());
+            (first, second, true)
+        }
+        _ => {
+            let (first, second) = super::lowering::fp_cc(code);
+            (first, second, false)
+        }
+    }
+}
+
+/// `emitVectorComparison`: the mask of one natural condition, if the compare
+/// instructions have it.
+fn emit_vector_comparison(
+    dag: &mut SelectionDAG,
+    lhs: SDValue,
+    rhs: SDValue,
+    code: u128,
+    no_nans: bool,
+    vt: EVT,
+) -> Option<SDValue> {
+    use super::lowering::cc;
+    let mut compare = |dag: &mut SelectionDAG, opcode: u16, a: SDValue, b: SDValue| {
+        Some(dag.get_node(ISD::Target(opcode), vt, &[a, b]))
+    };
+    match code {
+        cc::NE => {
+            let equal = dag.get_node(ISD::Target(aarch64_isd::FCMEQ), vt, &[lhs, rhs]);
+            Some(dag.get_not(equal, vt))
+        }
+        cc::EQ => compare(dag, aarch64_isd::FCMEQ, lhs, rhs),
+        cc::GE => compare(dag, aarch64_isd::FCMGE, lhs, rhs),
+        cc::GT => compare(dag, aarch64_isd::FCMGT, lhs, rhs),
+        // "If we ignore NaNs then we can use the LS (MI) implementation."
+        cc::LE if !no_nans => None,
+        cc::LE | cc::LS => compare(dag, aarch64_isd::FCMGE, rhs, lhs),
+        cc::LT if !no_nans => None,
+        cc::LT | cc::MI => compare(dag, aarch64_isd::FCMGT, rhs, lhs),
+        _ => None,
+    }
+}
+
+/// `LowerVSETCC`: an integer compare is selected as it is, by the `CMEQ`,
+/// `CMGT`, ... fragments over `SETCC`; a float one is the `FCMEQ`, `FCMGE`,
+/// `FCMGT` masks of its condition, OR-ed and inverted as the condition needs.
+///
+/// DEVIATE VEC2 (owner llrm-arm64-vec, exit 2026-11-24): `isKnownNeverNaN` is
+/// not asked, so `isnan(x) | isnan(never-nan)` is `x != x` only for
+/// `LHS == RHS`.
+pub fn lower_vsetcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(lhs).element().is_integer() {
+        return Some(node);
+    }
+    let mut code = super::lowering::cond_of(dag, dag.operand(node, 2));
+    let vt = dag.value_type(node);
+    let compare_vt = dag.value_type(lhs).change_vector_element_type_to_integer();
+    if matches!(code, CondCode::SetUo | CondCode::SetO) && lhs == rhs {
+        code = if code == CondCode::SetUo { CondCode::SetUNe } else { CondCode::SetOEq };
+    }
+    let (first, second, invert) = vector_fp_cc(code);
+    let no_nans = dag.node(node).flags.has(SDNodeFlags::NO_NANS);
+    let mut mask = emit_vector_comparison(dag, lhs, rhs, first, no_nans, compare_vt)?;
+    if let Some(second) = second {
+        let other = emit_vector_comparison(dag, lhs, rhs, second, no_nans, compare_vt)?;
+        mask = dag.get_node(ISD::Or, compare_vt, &[mask, other]);
+    }
+    let mask = dag.get_sext_or_trunc(mask, vt);
+    Some(if invert { dag.get_not(mask, vt) } else { mask })
 }

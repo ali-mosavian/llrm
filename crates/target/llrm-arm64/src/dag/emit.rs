@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp,
-    VectorOp, VectorReduce, VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
+    SMOV_FORMS, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -584,6 +584,9 @@ fn vector_fill(
         ("DUPv8i16gpr", Arrangement::H8),
         ("DUPv4i32gpr", Arrangement::S4),
         ("DUPv2i64gpr", Arrangement::D2),
+        ("DUPv8i8gpr", Arrangement::B8),
+        ("DUPv4i16gpr", Arrangement::H4),
+        ("DUPv2i32gpr", Arrangement::S2),
     ]
     .into_iter()
     .find(|(one, _)| *one == name)
@@ -596,6 +599,7 @@ fn vector_fill(
     }
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
+        ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
         ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
         ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
         _ => {}
@@ -613,6 +617,7 @@ fn vector_fill(
             "v8i16" => Some(shaped(ImmShape::H8, 0)),
             "v4i32" => Some(shaped(ImmShape::S4, 0)),
             "v2i32" => Some(shaped(ImmShape::S2, 0)),
+            "v4i16" => Some(shaped(ImmShape::H4, 0)),
             "v4s_msl" => Some(shaped(ImmShape::S4Msl, 256)),
             _ => continue,
         };
@@ -658,6 +663,9 @@ fn vector_inst(
         "8i16" => Some(Arrangement::H8),
         "4i32" => Some(Arrangement::S4),
         "2i64" => Some(Arrangement::D2),
+        "8i8" => Some(Arrangement::B8),
+        "4i16" => Some(Arrangement::H4),
+        "2i32" => Some(Arrangement::S2),
         _ => None,
     };
     // `INSvi64gpr`, `INSvi32lane`: a general register or a lane of another
@@ -690,6 +698,50 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `NEGv4i32`, `ABSv8i8`, `CNTv16i8`: one source, integer lanes.
+    for (stem, op) in [
+        ("NEG", VectorIntUnary::Neg),
+        ("ABS", VectorIntUnary::Abs),
+        ("CNT", VectorIntUnary::Cnt),
+        ("CLZ", VectorIntUnary::Clz),
+        ("RBIT", VectorIntUnary::Rbit),
+    ] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
+            continue;
+        };
+        if !op.has_lanes(lanes) {
+            continue;
+        }
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::VectorIntUnary { op, lanes, rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    // `LD1i32`: a lane loaded into `rd`, which starts as the first operand.
+    if let Some(lanes) = name.strip_prefix("LD1i").and_then(|bits| match bits {
+        "8" => Some(Arrangement::B16),
+        "16" => Some(Arrangement::H8),
+        "32" => Some(Arrangement::S4),
+        "64" => Some(Arrangement::D2),
+        _ => None,
+    }) {
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Imm(index), Operand::Reg(base)] => {
+                Ok(Inst::VectorLoadLane { lanes, rt: rd, index: *index as u8, base: *base })
+            }
+            _ => wrong(),
+        });
+    }
+    // `LD1Rv4s`: the lane at the address replicated into every lane of `rd`.
+    if let Some(lanes) = name
+        .strip_prefix("LD1Rv")
+        .and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
+    {
+        return Some(match operands {
+            [Operand::Reg(base)] => Ok(Inst::VectorLoadReplicate { lanes, rt: rd, base: *base }),
+            _ => wrong(),
+        });
+    }
     // `DUPi64`: one lane of a vector register as a scalar.
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         let suffix = match lanes {
@@ -697,6 +749,7 @@ fn vector_inst(
             Arrangement::H8 => "i16",
             Arrangement::S4 => "i32",
             Arrangement::D2 => "i64",
+            Arrangement::B8 | Arrangement::H4 | Arrangement::S2 => unreachable!("listed above"),
         };
         if name == format!("DUP{suffix}") {
             return Some(match operands {
@@ -723,11 +776,14 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    // `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: a narrow
-    // operand (a half of a vector, with `2`) into wide lanes.
+    // `USHLLv8i8_shift`, `UADDLv8i8_v8i16`, `UADDWv16i8_v8i16`,
+    // `SMULLv4i16_v4i32`: a narrow operand (a half of a vector, with `2`)
+    // into wide lanes.
     for op in [
         VectorLongOp::Ushll,
         VectorLongOp::Sshll,
+        VectorLongOp::Uaddl,
+        VectorLongOp::Saddl,
         VectorLongOp::Uaddw,
         VectorLongOp::Saddw,
         VectorLongOp::Umull,
@@ -765,9 +821,13 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    if name == "NOTv16i8" {
+    if let Some(quad) = match name {
+        "NOTv16i8" => Some(true),
+        "NOTv8i8" => Some(false),
+        _ => None,
+    } {
         return Some(match operands {
-            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { rd, rn: *rn }),
+            [Operand::Fpr(rn)] => Ok(Inst::VectorNot { quad, rd, rn: *rn }),
             _ => wrong(),
         });
     }
@@ -775,6 +835,7 @@ fn vector_inst(
     let fp_lanes = |text: &str| match text {
         "4f32" => Some(Arrangement::S4),
         "2f64" => Some(Arrangement::D2),
+        "2f32" => Some(Arrangement::S2),
         _ => None,
     };
     for (stem, op) in
@@ -809,7 +870,16 @@ fn vector_inst(
         if name == format!("XTN{narrow}") {
             return Some(match operands {
                 [Operand::Fpr(rn)] | [Operand::Fpr(_), Operand::Fpr(rn)] => {
-                    Ok(Inst::VectorNarrow { high, wide, rd, rn: *rn })
+                    Ok(Inst::VectorNarrow { high, shift: None, wide, rd, rn: *rn })
+                }
+                _ => wrong(),
+            });
+        }
+        if name == format!("SHRN{narrow}_shift") {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Imm(amount)]
+                | [Operand::Fpr(_), Operand::Fpr(rn), Operand::Imm(amount)] => {
+                    Ok(Inst::VectorNarrow { high, shift: Some(*amount as u8), wide, rd, rn: *rn })
                 }
                 _ => wrong(),
             });
@@ -825,6 +895,7 @@ fn vector_inst(
             Arrangement::H8 => "v8i16",
             Arrangement::S4 => "v4i32",
             Arrangement::D2 => "v2i64",
+            Arrangement::B8 | Arrangement::H4 | Arrangement::S2 => unreachable!("listed above"),
         };
         if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
             return Some(match operands {
@@ -894,6 +965,7 @@ fn vector_inst(
         ("UCVTF", VectorFpUnary::Ucvtf),
         ("FCVTZS", VectorFpUnary::Fcvtzs),
         ("FCVTZU", VectorFpUnary::Fcvtzu),
+        ("FSQRT", VectorFpUnary::Sqrt),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
             continue;
@@ -914,11 +986,19 @@ fn vector_inst(
         ("EOR", VectorOp::Eor),
         ("USHL", VectorOp::Ushl),
         ("SSHL", VectorOp::Sshl),
+        ("SMAX", VectorOp::Smax),
+        ("SMIN", VectorOp::Smin),
+        ("UMAX", VectorOp::Umax),
+        ("UMIN", VectorOp::Umin),
+        ("SQADD", VectorOp::Sqadd),
+        ("UQADD", VectorOp::Uqadd),
+        ("SQSUB", VectorOp::Sqsub),
+        ("UQSUB", VectorOp::Uqsub),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
         };
-        if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+        if !op.has_lanes(lanes) {
             continue;
         }
         return Some(match operands {
@@ -926,7 +1006,30 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    for (stem, op) in [("SHL", VectorShift::Shl), ("USHR", VectorShift::Ushr), ("SSHR", VectorShift::Sshr)] {
+    // `CMGTv4i32`, `CMLTv8i8rz`, `FCMGEv2f32`, `BSPv16i8`.
+    if let Some(form) = crate::vector_forms::parse(name) {
+        use crate::vector_forms::VectorForm;
+        return Some(match (form, operands) {
+            (VectorForm::Compare { op, lanes, quad }, [Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorCompare { op, lanes, quad, rd, rn: *rn, rm: *rm })
+            }
+            // The zero is part of the form.
+            (VectorForm::CompareZero { op, lanes, quad }, [Operand::Fpr(rn), ..]) => {
+                Ok(Inst::VectorCompareZero { op, lanes, quad, rd, rn: *rn })
+            }
+            (VectorForm::Bsp { quad }, [Operand::Fpr(mask), Operand::Fpr(rn), Operand::Fpr(rm)]) => {
+                Ok(Inst::VectorBsp { quad, rd, mask: *mask, rn: *rn, rm: *rm })
+            }
+            _ => wrong(),
+        });
+    }
+    for (stem, op) in [
+        ("SHL", VectorShift::Shl),
+        ("USHR", VectorShift::Ushr),
+        ("SSHR", VectorShift::Sshr),
+        ("USRA", VectorShift::Usra),
+        ("SSRA", VectorShift::Ssra),
+    ] {
         let Some(lanes) = name
             .strip_prefix(stem)
             .and_then(|rest| rest.strip_prefix('v'))
@@ -935,8 +1038,12 @@ fn vector_inst(
         else {
             continue;
         };
+        // The accumulating forms list the tied register first.
         return Some(match operands {
-            [Operand::Fpr(rn), Operand::Imm(amount)] => {
+            [Operand::Fpr(rn), Operand::Imm(amount)] if !op.accumulates() => {
+                Ok(Inst::VectorShift { op, lanes, rd, rn: *rn, amount: *amount as u8 })
+            }
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Imm(amount)] if op.accumulates() => {
                 Ok(Inst::VectorShift { op, lanes, rd, rn: *rn, amount: *amount as u8 })
             }
             _ => wrong(),
@@ -980,6 +1087,14 @@ fn float_inst(
                 Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: *index as u8 })
             }
             ([Operand::Fpr(rn)], true) => Ok(Inst::VectorUmov { lanes, rd: gd, rn: *rn, index: 0 }),
+            _ => wrong(),
+        });
+    }
+    if let Some(&(_, lanes, wide)) = SMOV_FORMS.iter().find(|form| form.0 == name) {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Imm(index)] => {
+                Ok(Inst::VectorSmov { lanes, wide, rd: gd, rn: *rn, index: *index as u8 })
+            }
             _ => wrong(),
         });
     }
@@ -2008,6 +2123,16 @@ impl Emitter<'_> {
                 self.values.insert((id, 0), rd);
                 Ok(())
             }
+            // `IMPLICIT_DEF`: a vector or float value nothing defines, a half
+            // of a widened vector that is `undef`.
+            ISD::Undef | ISD::Poison if in_float_file(node.values[0]) => {
+                let one = self.mf.fpr();
+                if is_quad(node.values[0]) {
+                    self.mf.wide.push(Reg::Fpr(one));
+                }
+                self.fvalues.insert((id, 0), one);
+                Ok(())
+            }
             ISD::CopyFromReg if in_float_file(node.values[0]) => {
                 let value = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => {
@@ -2258,13 +2383,15 @@ impl Emitter<'_> {
                 if name == "F128CSEL" {
                     return self.f128_select(id, &operands);
                 }
-                if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
+                if let Some(probe) = float_inst(name, Vreg(0), Gpr(0), &operands) {
                     // A fill of a 64-bit vector (`MOVIv2i32`) has no type of
-                    // ours: it reads as an `i64`.
+                    // ours: it reads as an `i64`, as does the `FMOVDr` that
+                    // zeroes the upper half of a `concat_vectors`.
                     let float_result = node.values[0].is_floating_point()
                         || node.values[0].is_vector()
                         || vector_fill(name, &operands).is_some()
-                        || reduction(name).is_some();
+                        || reduction(name).is_some()
+                        || matches!(probe, Ok(Inst::FpUnary { op: FpUnary::Mov, .. }));
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     // `FMLA` adds into the register it reads: `rd` is a copy of
@@ -2273,9 +2400,11 @@ impl Emitter<'_> {
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
                         | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
+                        | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
                         | Inst::VectorInsGpr { .. }
-                        | Inst::VectorInsLane { .. },
+                        | Inst::VectorInsLane { .. }
+                        | Inst::VectorLoadLane { .. },
                         Some(Operand::Fpr(acc)),
                     ) = (&inst, operands.first())
                     {

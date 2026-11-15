@@ -94,6 +94,37 @@ pub struct VectorTy {
     pub count: u32,
 }
 
+/// The element instruction `getVectorInstrCost` prices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaneOp {
+    Insert,
+    Extract,
+}
+
+/// `TargetTransformInfo::VectorInstrContext` (`getVectorInstrContextHint`): how
+/// the scalar of a lane instruction is made or used. An insert of a one-use
+/// load is `Load`; an extract whose only user is a store is `Store`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VectorInstrContext {
+    None,
+    Load,
+    Store,
+}
+
+/// `TargetTransformInfo::ShuffleKind` (`SK_*`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShuffleKind {
+    Broadcast,
+    Reverse,
+    Select,
+    Transpose,
+    InsertSubvector,
+    ExtractSubvector,
+    PermuteSingleSrc,
+    PermuteTwoSrc,
+    Splice,
+}
+
 /// An operand that is a `sext` or a `zext` of `src` lanes, as the pin's `Args`
 /// (the operand values of the instruction priced) show it to the widening
 /// rules of `getArithmeticInstrCost` and `getCastInstrCost`.
@@ -669,6 +700,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether the backend selects a vector `icmp`, `fcmp` and `select`: the
+    /// loop vectorizer widens them only where it does. DEVIATE: the pin's
+    /// targets all do; here each backend says when its selector has them.
+    fn selects_vector_compares(&self) -> bool {
+        false
+    }
+
     /// `getNumberOfRegisters(ClassID)`: 0 where the target has no vector
     /// registers.
     fn number_of_registers(
@@ -685,6 +723,15 @@ pub trait Tti {
         _has_unordered_reductions: bool,
     ) -> u32 {
         1
+    }
+
+    /// Whether the vectorizer widens the remainder of a vector loop too
+    /// (`EpilogueVectorizerMainLoop`; `preferEpilogueVectorization`, which
+    /// every target of the pin answers true to). DEVIATE LV-E1 (owner
+    /// llrm-arm64, exit 2026-11-27): opt-in, so a target's vector backend is
+    /// shown to select the epilogue's vectors before the planner asks for them.
+    fn vectorizes_epilogues(&self) -> bool {
+        false
     }
 
     /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: size the widest
@@ -721,6 +768,19 @@ pub trait Tti {
         None
     }
 
+    /// `getArithmeticInstrCost` of a vector operation by `second` (`Op2Info`):
+    /// a divide by a constant is a few multiplies, not a division. The default
+    /// is the cost with no operand information.
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        _second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        self.vector_arithmetic_cost(op, ty, kind)
+    }
+
     /// The backend selects `llvm.vector.reduce.*` of a vector (the horizontal
     /// step the pin's `ExpandReductions` or the target's lowering makes). A
     /// port that does not yet lowers none, and no loop with a reduction is
@@ -738,6 +798,21 @@ pub trait Tti {
         _kind: crate::intrinsics::ReduceKind,
         _ty: VectorTy,
         _ordered: bool,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getExtendedReductionCost` of `llvm.vector.reduce.add` of `vec` extended
+    /// to the lane `result`, where the target has a native form (AArch64's
+    /// `uaddlv`, `uaddlp`). `None`: `BaseT`'s: the reduction of the extended
+    /// vector and the extension.
+    fn vector_extended_reduction_cost(
+        &self,
+        _kind: crate::intrinsics::ReduceKind,
+        _unsigned: bool,
+        _result: Ty,
+        _vec: VectorTy,
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
@@ -809,10 +884,86 @@ pub trait Tti {
         None
     }
 
+    /// Whether the SLP vectorizer's tree and store chains run: only where the
+    /// target's vector costs are priced against the pin (arm64). DEVIATE SLP2
+    /// (owner arm64, exit 2026-11-24): a target with vector registers and no
+    /// priced hooks keeps its scalar code.
+    fn slp_priced(&self) -> bool {
+        false
+    }
+
+    /// `getMinVectorRegisterBitWidth`: the narrowest vector the SLP vectorizer
+    /// forms (TargetTransformInfoImpl L654: 128).
+    fn min_vector_register_bits(&self) -> u32 {
+        128
+    }
+
+    /// `getMaximumVF(ElemWidth, Opcode)`: the widest VF for `elem_bits`-bit
+    /// lanes of `opcode`; 0 where the target puts no limit.
+    fn maximum_vf(
+        &self,
+        _elem_bits: u32,
+        _opcode: crate::opcode::Opcode,
+    ) -> u32 {
+        0
+    }
+
+    /// `getStoreMinimumVF(VF, ScalarMemTy, ScalarValTy, ...)`: the VF a store
+    /// chain of `vf` lanes of `mem` is cut to at least; `vf` where the target
+    /// does not say (TargetTransformInfoImpl L672).
+    fn store_minimum_vf(
+        &self,
+        vf: u32,
+        _mem: Ty,
+        _value: Ty,
+    ) -> u32 {
+        vf
+    }
+
+    /// `getVectorInstrCost` of one `insertelement` or `extractelement` of
+    /// `ty`, at the constant lane `index` (`None`: a variable one).
+    /// `into_poison`: the vector inserted into is poison. `None`: not priced.
+    fn vector_instr_cost(
+        &self,
+        _op: LaneOp,
+        _ty: VectorTy,
+        _index: Option<u32>,
+        _into_poison: bool,
+        _context: VectorInstrContext,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getShuffleCost` of a `kind` shuffle of `ty` by `mask`. `None`: not
+    /// priced (the SLP vectorizer then does not form a tree that needs it).
+    fn shuffle_cost(
+        &self,
+        _kind: ShuffleKind,
+        _ty: VectorTy,
+        _mask: &[i32],
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize (the target's `split_merged_conditions`);
     /// false: the pin's cost rule decides.
     fn splits_merged_conditions(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-OUTER: whether an outer loop's address stepped by `size`
+    /// bytes an iteration (`g[i]` over elements of `size`) is reduced to a
+    /// counter: what the addressing mode's scale does not absorb is computed
+    /// every trip (gcc's ivopts reduces every loop). false: the pin's, which
+    /// leaves a loop with a subloop alone.
+    fn reduces_outer_address_scale(
+        &self,
+        size: u128,
+    ) -> bool {
+        let _ = size;
         false
     }
 
@@ -1009,6 +1160,18 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24): the instruction
+    /// units an -Os trial must save, beyond a tie, for a copy that runs at most
+    /// once per run of the program and whose callee stays. The units count a
+    /// call as its arguments, not the argument and result moves it carries, so
+    /// a copy that wins by a unit or two grows the code (`unpack`, an
+    /// out-parameter decode, 6 sites: +50 B on every soft-float cell once
+    /// `x == 0 ? 1 : x` became `umax` and saved two units). A hot copy is kept
+    /// by its clocks, so the margin is not taken there. 0: none.
+    fn inline_trial_cold_margin(&self) -> i64 {
+        0
+    }
+
     /// DEVIATE SZ2-TRIPS: whether the priced SZ2 trial counts clocks at each
     /// block's frequency over the entry's (a loop's trips), and lets the byte
     /// rate alone decide a copy whose callee stays. False: each instruction
@@ -1064,11 +1227,22 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver may compile the module again with
-    /// the copies of a loop-holding callee at several sites of a loop refused, and keep the form it prices
-    /// cheaper after allocation. The pin's InlineCost has no price for the registers the merged loops lose
-    /// (its `LoopPenalty` is added at minsize callers alone). False: the cost decides.
+    /// DEVIATE LOOP-COPY-TRIAL (`trial::note_loop_copy`): whether the driver
+    /// may compile the module again with the copies of a loop-holding
+    /// callee at several sites of a loop refused, and keep the form it prices
+    /// cheaper after allocation. The pin's InlineCost has no price for the
+    /// registers the merged loops lose (its `LoopPenalty` is added at
+    /// minsize callers alone). False: the cost decides.
     fn inline_loop_copy_trial(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL-CLOCKS (owner m68k, exit 2026-11-24): whether an
+    /// -Os call the target's size bound alone refused (the pin's cost
+    /// accepts it) is built inlined as well, the driver keeping the finished
+    /// code that prices better (fewer clocks within the target's bytes
+    /// ceiling). False: the bound's verdict stands.
+    fn opt_size_inline_finished_trial(&self) -> bool {
         false
     }
 
@@ -1272,9 +1446,21 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE RL-EXITING-LATCH: whether `LoopRotate` also rotates a loop whose latch already exits when the copy of
-    /// its header folds away in the preheader (the pin: only when a header phi dies or the latch's exit count
-    /// becomes computable). gcc's header copy does it. False: the pin's.
+    /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-24): LICM may hoist
+    /// a load behind a loop guard when SCEV bounds the offset of its pointer
+    /// inside the object it is based on (`licm::range_deref`), not only where
+    /// the pin's constant-offset rule proves it dereferenceable. Not at
+    /// `optsize` or `minsize`: the hoisted value costs a register for the
+    /// loop's length. False: the pin's rule.
+    fn licm_range_deref(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE RL-EXITING-LATCH: whether `LoopRotate` also rotates a loop whose
+    /// latch already exits when the copy of its header folds away in the
+    /// preheader (the pin: only when a header phi dies or the latch's exit
+    /// count becomes computable). gcc's header copy does it. False: the
+    /// pin's.
     fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
         false
     }
@@ -1305,6 +1491,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::vectorize_at_size`: `LoopVectorize` runs on an `optsize` loop.
+    fn vectorizes_at_size(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         false
     }
@@ -1315,6 +1506,16 @@ pub trait Tti {
     /// against objects (m68k, `size_calibration.rs`); the x86 model is not, and
     /// a truthful credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL (speed): whether a copy the -O2/-O3 byte rate
+    /// refused within the trial's band is built inlined as well, the driver
+    /// keeping the finished code that is smaller. The rate prices the copy
+    /// alone, not what it folds (a constant, a dead callee). Only with a
+    /// byte rate (`speed_inline_milliclocks_per_byte`) and
+    /// `opt_size_inline_trial_limits`.
+    fn speed_inline_finished_trial(&self) -> bool {
         false
     }
 
@@ -1488,6 +1689,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): whether the
+    /// driver compiles the module again under unroll variants at -O2 and
+    /// -O3 (`llrm_transforms::trial::SpeedUnroll`), so the pass notes which of
+    /// its decisions a variant would change.
+    fn unroll_speed_trial(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
@@ -1619,7 +1828,7 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32,
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-24; users: x86-m32,
     /// m68k with `va_arg_slot` = 4): `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
@@ -1683,8 +1892,8 @@ pub trait Tti {
     }
 
     /// Drop the local functions that are the same code at the levels that
-    /// allow no trade between bytes and clocks, and at speed (`MergeLocalFunctions`);
-    /// no thunk is written.
+    /// allow no trade between bytes and clocks, and at speed
+    /// (`MergeLocalFunctions`); no thunk is written.
     fn merge_local_functions_at_speed(&self) -> bool {
         false
     }
@@ -1822,6 +2031,19 @@ pub trait Tti {
     /// `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
+    }
+
+    /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
+    /// (gcc's `ipa-cp-max-recursive-depth` is 8).
+    fn ipa_cp_max_clones(&self) -> usize {
+        4
+    }
+
+    /// DEVIATE LSR-SPILL-PRICE: how many registers past the target's the
+    /// loop's other values must need for LSR to keep the pressure in its cost
+    /// (`Tuning::lsr_spill_pressure_margin`); none: the pin's.
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
@@ -2318,7 +2540,7 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-30): `replaceCongruentIVs`
+    /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-24): `replaceCongruentIVs`
     /// maps each wide counter's truncation to the type of the header's last
     /// phi (`Phis.back()`, ScalarEvolutionExpander.cpp#L1965), which is a
     /// pointer phi when the loop has one (pointers sort to the back), and
@@ -2335,7 +2557,7 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
+    /// DEVIATE LU13 (owner z80, exit 2026-11-24: a per-class register model in
     /// the LSR cost): a call clobbers every register, so each register the
     /// loop keeps across one is a frame slot, reloaded each trip and, for a
     /// recurrence, stored each trip. The pin has no call term in
@@ -2344,6 +2566,17 @@ pub trait Tti {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1613
     fn lsr_call_clobbers_registers(&self) -> bool {
         false
+    }
+
+    /// DEVIATE LSR-CALL-SCALE (owner z80, exit 2026-11-24; no pin pass: GCC's
+    /// ivopts expresses a use as `candidate * ratio`,
+    /// `get_computation_cost`): in a loop with a call and
+    /// `lsr_call_clobbers_registers`, the largest shift of an induction
+    /// variable a basic use may take instead of an induction variable of its
+    /// own, which the call would leave in the frame (the pin's `isLegalUse`
+    /// takes no scale for a basic use). 0: none.
+    fn lsr_basic_use_scale_shifts(&self) -> u32 {
+        0
     }
 
     /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
@@ -2555,10 +2788,12 @@ pub trait Tti {
         false
     }
 
-    /// Whether InstCombine leaves `icmp eq/ne (select c, a, b), (select c, b, a)` alone. The pin
-    /// compares the arms, `icmp eq/ne a, b` (`matchSymmetricPair`), on every target. DEVIATE
-    /// SYMPAIR-1 (owner llrm-target-wasm, exit 2026-11-24): at m16 a 64-bit arm compare is a
-    /// longer sequence than the two selects it replaces (+4 B in 24 sfm16_float objects).
+    /// Whether InstCombine leaves `icmp eq/ne (select c, a, b), (select c, b,
+    /// a)` alone. The pin compares the arms, `icmp eq/ne a, b`
+    /// (`matchSymmetricPair`), on every target. DEVIATE SYMPAIR-1 (owner
+    /// llrm-target-wasm, exit 2026-11-24): at m16 a 64-bit arm compare is a
+    /// longer sequence than the two selects it replaces (+4 B in 24 sfm16_float
+    /// objects).
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)
     fn keeps_icmp_of_swapped_selects(&self) -> bool {
         false
@@ -2731,7 +2966,7 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
-    /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-30): whether `indvars`
+    /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-24): whether `indvars`
     /// also widens a counter of an illegal narrow width whose chain is
     /// masked by a constant and then extended (`(i*5+3)&1023` indexing a
     /// table, `short i`). The pin sees only an extension of the counter's own
@@ -2740,7 +2975,7 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE IND-PREFIX (beyond the pin; exit 2026-11-30): an integer
+    /// DEVIATE IND-PREFIX (beyond the pin; exit 2026-11-24): an integer
     /// width `indvars_widens_narrow_counter_through_masks` also covers
     /// although it is legal, because every operation on it pays more than the
     /// register's width (the 486's operand-size prefix on 16 bits).
@@ -2855,7 +3090,7 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-24): the
     /// largest object offset a byte index reaches in one address instruction
     /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
     /// than this has a byte offset (`gepbyteindex`). None: the pass is off.
@@ -3113,7 +3348,7 @@ pub trait Tti {
         basic_case_clusters(cases, index_bits, for_size)
     }
 
-    /// DEVIATE (owner m68k, exit 2026-11-27): the code size, in the unit of the
+    /// DEVIATE (owner m68k, exit 2026-11-24): the code size, in the unit of the
     /// inliner's size view, of a switch's compares and jump table beyond its
     /// one branch; `clusters` and `table` as
     /// [`Self::estimated_number_of_case_clusters`]. The pin counts a switch
@@ -3188,6 +3423,172 @@ pub fn base_intrinsic_cost(name: &str) -> Option<Cost> {
     const MEMSET_PATTERN: &str = "llvm.experimental.memset.pattern";
     (name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.')))
         .then(|| Cost::of(4))
+}
+
+/// The intrinsics `BasicTTIImplBase::getIntrinsicInstrCost` and
+/// `getTypeBasedIntrinsicInstrCost` name a case for (the pin, `BasicTTIImpl.h`
+/// L1792..L3217), by their `Intrinsic::` names: an intrinsic with none of them
+/// is "going to be turned into a library call" and costs
+/// [`library_call_intrinsic_cost`].
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L3217
+const PIN_INTRINSIC_CASES: &[&str] = &[
+    "vp_load",
+    "vp_store",
+    "vp_udiv",
+    "vp_sdiv",
+    "vp_urem",
+    "vp_srem",
+    "vp_load_ff",
+    "vp_scatter",
+    "vp_gather",
+    "vp_merge",
+    "experimental_vp_reverse",
+    "vector_reverse",
+    "vector_reduce_fadd",
+    "vector_reduce_fmul",
+    "powi",
+    "cttz",
+    "ctlz",
+    "memcpy",
+    "masked_scatter",
+    "masked_gather",
+    "masked_compressstore",
+    "masked_expandload",
+    "experimental_vp_strided_store",
+    "experimental_vp_strided_load",
+    "stepvector",
+    "vector_extract",
+    "vector_insert",
+    "vector_splice_left",
+    "vector_splice_right",
+    "vector_reduce_add",
+    "vector_reduce_mul",
+    "vector_reduce_and",
+    "vector_reduce_or",
+    "vector_reduce_xor",
+    "vector_reduce_smax",
+    "vector_reduce_smin",
+    "vector_reduce_fmax",
+    "vector_reduce_fmin",
+    "vector_reduce_fmaximum",
+    "vector_reduce_fminimum",
+    "vector_reduce_fmaximumnum",
+    "vector_reduce_fminimumnum",
+    "vector_reduce_umax",
+    "vector_reduce_umin",
+    "fshl",
+    "fshr",
+    "experimental_cttz_elts",
+    "get_active_lane_mask",
+    "experimental_vector_match",
+    "experimental_vector_histogram_add",
+    "experimental_vector_histogram_uadd_sat",
+    "experimental_vector_histogram_umax",
+    "experimental_vector_histogram_umin",
+    "masked_udiv",
+    "masked_sdiv",
+    "masked_urem",
+    "masked_srem",
+    "modf",
+    "sincos",
+    "sincospi",
+    "loop_dependence_war_mask",
+    "loop_dependence_raw_mask",
+    "abs",
+    "sqrt",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "sinh",
+    "cosh",
+    "tanh",
+    "exp",
+    "exp2",
+    "exp10",
+    "log",
+    "log10",
+    "log2",
+    "ldexp",
+    "fabs",
+    "canonicalize",
+    "minnum",
+    "maxnum",
+    "minimum",
+    "maximum",
+    "minimumnum",
+    "maximumnum",
+    "copysign",
+    "floor",
+    "ceil",
+    "trunc",
+    "nearbyint",
+    "rint",
+    "lrint",
+    "llrint",
+    "round",
+    "roundeven",
+    "lround",
+    "llround",
+    "pow",
+    "fma",
+    "fmuladd",
+    "experimental_constrained_fmuladd",
+    "lifetime_start",
+    "lifetime_end",
+    "sideeffect",
+    "pseudoprobe",
+    "arithmetic_fence",
+    "masked_store",
+    "masked_load",
+    "uadd_sat",
+    "umax",
+    "umin",
+    "experimental_memset_pattern",
+    "smax",
+    "smin",
+    "sadd_sat",
+    "ssub_sat",
+    "usub_sat",
+    "smul_fix",
+    "umul_fix",
+    "sadd_with_overflow",
+    "ssub_with_overflow",
+    "uadd_with_overflow",
+    "usub_with_overflow",
+    "smul_with_overflow",
+    "umul_with_overflow",
+    "fptosi_sat",
+    "fptoui_sat",
+    "ctpop",
+    "bswap",
+    "bitreverse",
+    "ucmp",
+    "scmp",
+    "clmul",
+    "smulh",
+    "umulh",
+    "experimental_constrained_fmul",
+    "experimental_constrained_fadd",
+];
+
+/// The last line of `getTypeBasedIntrinsicInstrCost`: a scalar intrinsic none
+/// of the pin's cases names (`stacksave`, `stackrestore`, `trap`, `expect`...)
+/// "is going to be turned into a library call, make it expensive":
+/// `SingleCallCost`, 1 for code size, else 10. `None` for an intrinsic the pin
+/// does price by a case this port does not carry.
+pub fn library_call_intrinsic_cost(
+    name: &str,
+    kind: CostKind,
+) -> Option<Cost> {
+    let family = name.strip_prefix("llvm.")?.replace('.', "_");
+    let named = PIN_INTRINSIC_CASES
+        .iter()
+        .any(|case| family == *case || family.strip_prefix(case).is_some_and(|rest| rest.starts_with('_')));
+    (!named).then(|| Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 }))
 }
 
 pub fn is_free_intrinsic(name: &str) -> bool {

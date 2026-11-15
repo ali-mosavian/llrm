@@ -49,6 +49,7 @@ use super::libcalls::{self, Cmp3, Libcall};
 use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 
+mod mask;
 mod vector;
 
 /// The width of the C `int` the soft-float routines take for a conversion: a
@@ -917,6 +918,37 @@ impl<'a> TypeLegalizer<'a> {
                 let opcode = if vt.size_in_bits() % 8 == 0 { ISD::SignExtend } else { ISD::ZeroExtend };
                 self.dag.get_node(opcode, to, &[value])
             }
+            ISD::BuildVector => {
+                // `PromoteIntRes_BUILD_VECTOR`: each lane extended to the
+                // promoted lane; a constant boolean as the target's
+                // vectors hold it, which lets it fold with a compare's mask.
+                let lane = to.element();
+                let extend = match self.dag.config().boolean_contents_of(to) {
+                    BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                    BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                    BooleanContents::Undefined => ISD::AnyExtend,
+                };
+                let ops: Vec<SDValue> = self
+                    .dag
+                    .node(value)
+                    .ops
+                    .clone()
+                    .into_iter()
+                    .map(|op| {
+                        let op_vt = self.dag.value_type(op);
+                        if !op_vt.bits_lt(lane) {
+                            return op;
+                        }
+                        let opcode = if op_vt == EVT::I1 && self.dag.opcode(op) == ISD::Constant {
+                            extend
+                        } else {
+                            ISD::AnyExtend
+                        };
+                        self.dag.get_node(opcode, lane, &[op])
+                    })
+                    .collect();
+                self.dag.get_build_vector(to, &ops)
+            }
             // `PromoteIntRes_UNDEF`: an undef of the promoted type.
             ISD::Undef | ISD::Poison => self.dag.get_undef(to),
             ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor => {
@@ -1005,14 +1037,14 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 self.dag.get_node(op, wide, &[lhs, amount])
             }
-            ISD::Select => {
-                // `PromoteIntRes_SELECT`: the arms promoted, the condition as
+            op @ (ISD::Select | ISD::VSelect) => {
+                // `PromoteIntRes_Select`: the arms promoted, the condition as
                 // is.
                 let (cond, then, other) =
                     (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
                 let (then, other) = (self.promoted_integer(then), self.promoted_integer(other));
                 let wide = self.dag.value_type(then);
-                self.dag.get_node(ISD::Select, wide, &[cond, then, other])
+                self.dag.get_node(op, wide, &[cond, then, other])
             }
             ISD::Freeze => {
                 // `PromoteIntRes_FREEZE`: the promoted operand, frozen.
@@ -1021,19 +1053,15 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(ISD::Freeze, wide, &[promoted])
             }
             ISD::SetCC => {
-                // Compare into the target's own result type, then sign extend
-                // or truncate to the promoted type.
+                // `PromoteIntRes_SETCC`: compare into the canonical result
+                // type of the operands, then sign extend or truncate to the
+                // promoted type.
                 let ops = self.dag.node(value).ops.clone();
                 let in_vt = self.dag.value_type(ops[0]);
                 let wide = self.tli.types.set_cc_result_type(in_vt);
-                let setcc = self.dag.get_node(ISD::SetCC, wide, &ops);
-                if to.size_in_bits() > wide.size_in_bits() {
-                    self.dag.get_node(ISD::SignExtend, to, &[setcc])
-                } else if to.size_in_bits() < wide.size_in_bits() {
-                    self.dag.get_node(ISD::Truncate, to, &[setcc])
-                } else {
-                    setcc
-                }
+                let flags = self.dag.node(value).flags;
+                let setcc = self.dag.get_node_flags(ISD::SetCC, wide, &ops, flags);
+                self.dag.get_sext_or_trunc(setcc, to)
             }
             ISD::Truncate => {
                 // `PromoteIntRes_TRUNCATE`: truncate the (promoted) input to
@@ -1470,6 +1498,49 @@ impl<'a> TypeLegalizer<'a> {
                     return Ok(());
                 }
             }
+            ISD::ExtractElement => {
+                // `PromoteIntRes_EXTRACT_VECTOR_ELT`: the lane read at the
+                // promoted type; a promoted source wider than that is read at
+                // its own lane and narrowed.
+                let (vector, index) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                if self.action(self.dag.value_type(vector)) == TypeAction::PromoteInteger {
+                    let promoted = self.promoted_integer(vector);
+                    let lane = self.dag.value_type(promoted).element();
+                    if !lane.bits_lt(to) {
+                        let read = self.dag.get_node(ISD::ExtractElement, lane, &[promoted, index]);
+                        let wide = self.dag.get_any_ext_or_trunc(read, to);
+                        self.set_promoted_integer(value, wide);
+                        return Ok(());
+                    }
+                }
+                self.dag.get_node(ISD::ExtractElement, to, &[vector, index])
+            }
+            ISD::ExtractSubvector => {
+                // `PromoteIntRes_EXTRACT_SUBVECTOR` (fixed width): each lane
+                // of the (promoted) source read out, widened to the promoted
+                // lane, and built into the promoted vector (`v8i1` of a
+                // `v16i1` mask).
+                let (source, base) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let source = if self.action(self.dag.value_type(source)) == TypeAction::PromoteInteger {
+                    self.promoted_integer(source)
+                } else {
+                    source
+                };
+                let (in_lane, out_lane) = (self.dag.value_type(source).element(), to.element());
+                let at = self.dag.constant(base).ok_or(LegalizeError::Unsupported {
+                    op: ISD::ExtractSubvector,
+                    ty: vt,
+                    what: "promote an extract at a variable index",
+                })?;
+                let ops: Vec<SDValue> = (0..vt.lanes())
+                    .map(|lane| {
+                        let index = self.dag.get_constant(at + u128::from(lane), self.dag.value_type(base));
+                        let element = self.dag.get_node(ISD::ExtractElement, in_lane, &[source, index]);
+                        self.dag.get_any_ext_or_trunc(element, out_lane)
+                    })
+                    .collect();
+                self.dag.get_build_vector(to, &ops)
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
@@ -1530,7 +1601,9 @@ impl<'a> TypeLegalizer<'a> {
                 let promoted = self.promoted_integer(src);
                 let vt = self.dag.value_type(node);
                 let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
-                let mask = super::fold::mask(self.dag.value_type(src).size_in_bits());
+                // A vector's mask is its lane's, in every lane.
+                let lane = if vt.is_vector() { self.dag.value_type(src).element() } else { self.dag.value_type(src) };
+                let mask = super::fold::mask(lane.size_in_bits());
                 let mask = self.dag.get_constant(mask, vt);
                 self.dag.get_node(ISD::And, vt, &[wide, mask])
             }
@@ -1587,12 +1660,39 @@ impl<'a> TypeLegalizer<'a> {
                 }
                 self.dag.get_token_factor(&stores)
             }
+            ISD::VSelect if at == 0 => {
+                // `PromoteIntOp_SELECT` of a `VSELECT`: the mask at the
+                // compare's own lane width where it can be, else a boolean of
+                // the select's type (`PromoteTargetBoolean`).
+                let (cond, then, other) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let vt = self.dag.value_type(node);
+                match self.widen_vselect_mask(node) {
+                    Some(mask) => self.dag.get_node(ISD::VSelect, vt, &[mask, then, other]),
+                    None => {
+                        let then_vt = self.dag.value_type(then);
+                        let bool_vt = self.tli.types.set_cc_result_type(then_vt);
+                        let extend = match self.dag.config().boolean_contents_of(then_vt) {
+                            BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                            BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                            BooleanContents::Undefined => ISD::AnyExtend,
+                        };
+                        let cond = self.dag.get_node(extend, bool_vt, &[cond]);
+                        let updated = self.dag.update_node_operands(n, &[cond, then, other]);
+                        SDValue { node: updated, res: 0 }
+                    }
+                }
+            }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
                 // (`PromoteTargetBoolean`).
                 let (cond, then, other) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
-                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(then));
+                // The scalar condition of a vector select is one `i1`, whatever
+                // the lanes (`OpTy.getScalarType()`).
+                let value_vt = self.dag.value_type(then);
+                let value_vt = if value_vt.is_vector() { value_vt.element() } else { value_vt };
+                let bool_vt = self.tli.types.set_cc_result_type(value_vt);
                 let extend = match self.dag.config().boolean_contents {
                     BooleanContents::ZeroOrOne => ISD::ZeroExtend,
                     BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
@@ -1908,8 +2008,11 @@ impl<'a> TypeLegalizer<'a> {
                 // each half to its own type is the half).
                 self.split_integer(self.softened_float(self.dag.operand(value, 0)), half)
             }
-            ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
-                // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
+            ISD::BitCast
+                if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point()
+                    || self.dag.value_type(self.dag.operand(value, 0)).is_vector() =>
+            {
+                // `ExpandRes_BITCAST` of a float or a legal vector: stored to a stack slot, the
                 // halves loaded from it.
                 let src = self.dag.operand(value, 0);
                 let (slot, store, cell) = self.store_to_slot(src);
@@ -3589,7 +3692,8 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue, i32) {
         let vt = self.dag.value_type(src);
         let size = vt.size_in_bits().div_ceil(8);
-        let cell = self.dag.create_stack_temporary(size, 4);
+        // A vector is stored whole (`movaps` wants 16).
+        let cell = self.dag.create_stack_temporary(size, if vt.is_vector() { 16 } else { 4 });
         let pointer = self.dag.config().pointer;
         let slot = self.dag.get_frame_index(pointer, cell);
         let info = self.slot_info(src, cell);
@@ -3781,7 +3885,7 @@ impl<'a> TypeLegalizer<'a> {
             let folded = this
                 .dag
                 .constant(b)
-                .and_then(|c| super::setcc_extreme::fold_against_an_extreme(this.dag, vt, a, c, code));
+                .and_then(|c| super::setcc_extreme::fold_against_an_extreme(this.dag, vt, a, c, code, true));
             folded.unwrap_or_else(|| this.dag.get_setcc(vt, a, b, code))
         };
         let low = half_compare(self, ll, rl, low_code);

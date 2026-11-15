@@ -17,7 +17,7 @@ Method: every text pass in `peephole.rs`, `peephole_cells.rs`, `cmpzero.rs`, `co
 | `dead_from(A)` | `bit` read as no read | **unsound**: fixed, #9518 |
 | `flagcheck` writes table | `plx`/`ply` missing | instrument gap: fixed in #9511 |
 | `drop_dead_stores`, `store_then_index_load`, `fold_temp_operand`, `fold_spill_copy` | cells, X | sound |
-| `chain_ends_in_a`, `shift_loop_in_a`, `forward_cell_copy`, `coalesce_copy`, `carry_holds_the_bit` | cells, A | sound |
+| `chain_ends_in_a`, `shift_forms::choose`, `forward_cell_copy`, `coalesce_copy`, `carry_holds_the_bit` | cells, A | sound |
 | `copyprop`, `drop_reloads`, `drop_known_loads`, `fold_known_cells`, `compare_through_an_index` | N/Z of removed loads | sound; `flags_unread_after` guards each |
 | `drop_zero_compares`, `cmpzero` | C of a dropped `cmp #0` | sound: no flag lives across blocks (`redo_compare`) |
 | `hoist_common_successor_code`, `drop_flag_reload`, `drop_dead_repeat_load` | code across a branch | sound |

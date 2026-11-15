@@ -49,6 +49,19 @@ extra_symbols = [
   "AArch64::BFMWri",
   # Selected by hand (LowerBR_JT).
   "AArch64::JumpTableDest32",
+  # The machine combiner's `mla`/`mls` (`VectorMulAcc`).
+  "AArch64::MLAv16i8",
+  "AArch64::MLAv2i32",
+  "AArch64::MLAv4i16",
+  "AArch64::MLAv4i32",
+  "AArch64::MLAv8i16",
+  "AArch64::MLAv8i8",
+  "AArch64::MLSv16i8",
+  "AArch64::MLSv2i32",
+  "AArch64::MLSv4i16",
+  "AArch64::MLSv4i32",
+  "AArch64::MLSv8i16",
+  "AArch64::MLSv8i8",
   # Every opcode a form of `opcodes.instr` stands for: the scheduling model resolves its class by number
   # (checked by `every_opcode_a_form_stands_for_has_a_number_in_the_table`).
   "TargetOpcode::COPY",
@@ -108,6 +121,12 @@ extra_symbols = [
 # Selected by hand when the vectors are live (a 64-bit `mvni`, a byte load for a lane): the tables before
 # the vectors leave them out, so the scheduling model prices them only then.
 dynamic_extra_symbols = [
+  "AArch64::BIFv16i8",
+  "AArch64::BIFv8i8",
+  "AArch64::BITv16i8",
+  "AArch64::BITv8i8",
+  "AArch64::BSLv16i8",
+  "AArch64::BSLv8i8",
   "AArch64::LDRBpost",
   "AArch64::LDRBpre",
   "AArch64::MVNIv2i32"

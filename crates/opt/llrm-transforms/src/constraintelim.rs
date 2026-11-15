@@ -2938,7 +2938,7 @@ fn apply(
     match action {
         Action::ReplaceCmp { check, is_true, uses } => {
             let ty = function.instruction(check).ty;
-            let constant = Operand::Constant(context.int(ty, i128::from(is_true)));
+            let constant = Operand::Constant(context.int_splat(ty, i128::from(is_true)));
             let changed = !uses.is_empty();
             for used in uses {
                 function.set_operand(used.user, used.index as usize, constant);
@@ -2958,7 +2958,7 @@ fn apply(
         }
         Action::ReplaceWithInt { inst, value } => {
             let ty = function.instruction(inst).ty;
-            let constant = Operand::Constant(context.int(ty, value));
+            let constant = Operand::Constant(context.int_splat(ty, value));
             let result = function.instruction(inst).result.expect("a compare has a result");
             function.replace_all_uses_with(result, constant);
             to_remove.push(inst);

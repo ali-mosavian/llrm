@@ -87,6 +87,24 @@ mod recurrence;
 mod throughput;
 pub use crate::trial;
 
+/// The instructions `analyze_loop_unroll_cost` simulates before it gives up.
+///
+/// DEVIATE UNROLL-ANALYSIS-BUDGET (owner m68k, exit none): the pin analyzes
+/// at most `-unroll-max-iteration-count-to-analyze` (10) iterations; the
+/// target trials and the pricing ask for every trip, and the simulation is
+/// O(trips x size) with a map entry per instruction and trip. A loop of 200000
+/// trips was simulated twice for 49 s (`shl_of_a_zero_extended_dividend`
+/// -O2: 41 s of 41 s CPU) to price an unroll no bar admits.
+const ANALYSIS_BUDGET: u64 = 1 << 18;
+
+static ROLLED_PRICED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many instructions the unroll cost analysis has priced as rolled: once
+/// per instruction, not once per simulated trip.
+pub fn rolled_priced() -> usize {
+    ROLLED_PRICED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
 
@@ -494,6 +512,10 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
+    // DEVIATE UNROLL-SPEED-TRIAL: the trial compile's own threshold.
+    if let Some(trial::SpeedUnroll::Wide(wide)) = trial::speed_unroll() {
+        up.threshold = wide;
+    }
     // Apply size attributes.
     if run.options.opt_size {
         up.threshold = up.opt_size_threshold;
@@ -577,9 +599,11 @@ fn analyze_loop_unroll_cost(
     let mut heavy_first = Cost::FREE;
     let mut heavy_folded = 0_i64;
     let mut rolled_dynamic_cost = Cost::FREE;
+    let mut rolled_of = llrm_support::hash::HashMap::<InstId, Cost>::default();
     let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
 
+    let mut simulated = 0_u64;
     // Simulate execution of each iteration of the loop counting instructions
     // which would be simplified.
     for iteration in 0..trip_count {
@@ -634,6 +658,11 @@ fn analyze_loop_unroll_cost(
                 if eph.contains(&inst) {
                     continue;
                 }
+                simulated += 1;
+                if simulated > ANALYSIS_BUDGET {
+                    why(run, lp, &format!("cannot analyze: over {ANALYSIS_BUDGET} simulated instructions"));
+                    return None;
+                }
 
                 // Track this instruction's expected baseline cost when
                 // executing the rolled loop form.
@@ -645,8 +674,11 @@ fn analyze_loop_unroll_cost(
                             })
                             .map_or(Cost::FREE, Cost::of);
                 }
-                rolled_dynamic_cost = rolled_dynamic_cost
-                    + clocks
+                // the same instruction costs the same in every trip: priced
+                // once
+                let rolled = *rolled_of.entry(inst).or_insert_with(|| {
+                    ROLLED_PRICED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    clocks
                         .and_then(|costs| simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs))
                         .map_or_else(
                             || {
@@ -661,7 +693,9 @@ fn analyze_loop_unroll_cost(
                                 )
                             },
                             Cost::of,
-                        );
+                        )
+                });
+                rolled_dynamic_cost = rolled_dynamic_cost + rolled;
 
                 // Visit the instruction to analyze its loop cost after
                 // unrolling; if the visitor returns true, it is free.
@@ -1602,13 +1636,6 @@ pub(crate) fn compute_unroll_count(
         up.partial |= pinfo.explicit_unroll;
     }
 
-    // DEVIATE RU-REC: the same veto as runtime unrolling, for a known trip
-    // count, unless the user asked for the unroll.
-    if trip_count != 0 && !up.force && !pinfo.explicit_unroll && recurrence::recurrence_bound(run, lp) {
-        why(run, lp, "partial unroll: the loop-carried chain bounds a trip (RU-REC)");
-        return 0;
-    }
-
     // 6th priority is partial unrolling, when the trip count is known.
     if let Some(factor) = should_partial_unroll(loop_size, trip_count, uce, up) {
         return factor;
@@ -1944,6 +1971,49 @@ fn try_to_unroll_loop(
         &mut se,
         &mut pp,
     );
+    if run.tti.unroll_speed_trial()
+        && run.options.opt_level >= 2
+        && !run.options.opt_size
+        && trial::speed_unroll().is_none()
+        && (count > 0 || trip_count > 0)
+    {
+        // DEVIATE UNROLL-SPEED-TRIAL: the same question asked under each variant; a driver compiles a variant only
+        // where an answer differs.
+        let variant = if count > 0 {
+            Some(trial::SpeedUnroll::NoGrow)
+        } else if run.options.opt_level == 2 && up.threshold < trial::WIDE_THRESHOLD {
+            Some(trial::SpeedUnroll::Wide(trial::WIDE_THRESHOLD))
+        } else {
+            None
+        };
+        if let Some(variant) = variant {
+            let mut asked = up.clone();
+            if let trial::SpeedUnroll::Wide(wide) = variant {
+                asked.threshold = wide;
+            }
+            let mut peeling = PeelingPreferences::default();
+            let again = trial::with_speed_unroll(Some(variant), || {
+                compute_unroll_count(
+                    run,
+                    analyzed,
+                    lp,
+                    &eph,
+                    &pinfo,
+                    trip_count,
+                    max_trip_count,
+                    max_or_zero,
+                    trip_multiple,
+                    &uce,
+                    &mut asked,
+                    &mut se,
+                    &mut peeling,
+                )
+            });
+            if again != count {
+                trial::note_speed_unroll(count > 0);
+            }
+        }
+    }
     // Nothing has changed the function yet.
     run.scev = se;
     if count == 0 {
@@ -2721,7 +2791,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
                 env,
                 header,
             );
-            let after = unrolled_blocks(run, capacity, &body);
+            // Only the loop that remains (`L->getBlocks()`,
+            // LoopUnrollPass.cpp:1417): the peeled copies keep what they were
+            // cloned as.
+            let after = unrolled_blocks(run, usize::MAX, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
             // `LoopFullUnrollPass` does not revisit the loop it peeled; the

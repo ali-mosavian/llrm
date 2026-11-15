@@ -59,8 +59,8 @@
 //!   so the pin's NEON loops end in an epilogue, as here.
 
 use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, Predicate, RegisterClass, Tti, Ty,
-    VectorTy,
+    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, OperandInfo, Predicate, RegisterClass,
+    Tti, Ty, VectorTy,
 };
 
 /// One widenable instruction of the loop, by what its cost and widening need.
@@ -74,7 +74,7 @@ pub enum Recipe {
     /// A binary operation of `lane`, integer or floating point; `ext`: which
     /// operands are a `sext` or `zext` (the pin's `Args`: the widening
     /// forms price on them).
-    Binary { op: ArithOp, lane: Ty, ext: [Option<ExtOperand>; 2] },
+    Binary { op: ArithOp, lane: Ty, ext: [Option<ExtOperand>; 2], second: OperandInfo },
     /// `llvm.fmuladd` of `lane`s (`VPWidenIntrinsicRecipe`): AArch64 prices it
     /// as one `fmul` (`getIntrinsicInstrCost`, L797).
     FMulAdd { lane: Ty },
@@ -156,6 +156,30 @@ pub struct LoopFacts {
     pub opt_size: bool,
     /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
     pub has_reductions: bool,
+    /// The recurrence types' widths of the reductions
+    /// (`collectElementTypesForWidening`: a loop without loads or stores has
+    /// only these to take the widest type from).
+    pub reduction_bits: Vec<u32>,
+    /// The values live across the loop's widened instructions, for the
+    /// register pressure; none: one register per value (the old count).
+    pub pressure: Option<Pressure>,
+}
+
+/// One value of the widened loop and where it lives: from the step that
+/// makes it to its last read (`calculateRegisterUsage`'s interval).
+#[derive(Clone, Copy, Debug)]
+pub struct Live {
+    pub lane: Ty,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The loop's values by interval, and its loop-invariant vector operands
+/// (the `LoopInvariants` of `calculateRegisterUsage`).
+#[derive(Clone, Debug, Default)]
+pub struct Pressure {
+    pub live: Vec<Live>,
+    pub invariants: Vec<Ty>,
 }
 
 /// The chosen factors.
@@ -203,10 +227,17 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
     }
 }
 
-/// `getSmallestAndWidestTypes` (L513): the loads' and stores' lane widths; the
-/// widest starts at 8.
-fn smallest_and_widest(recipes: &[Recipe]) -> (u32, u32) {
+/// `getSmallestAndWidestTypes` (L513): the loads' and stores' lane widths and
+/// the reductions' recurrence types; the widest starts at 8.
+fn smallest_and_widest(
+    recipes: &[Recipe],
+    reduction_bits: &[u32],
+) -> (u32, u32) {
     let (mut smallest, mut widest) = (u32::MAX, 8);
+    for &bits in reduction_bits {
+        smallest = smallest.min(bits);
+        widest = widest.max(bits);
+    }
     for recipe in recipes {
         if matches!(
             recipe,
@@ -288,12 +319,17 @@ fn iteration_cost(
     // recipe's vectors (a conversion's source too) are one register or two
     // (`SplitVectorResult` of a 256-bit type). Integer vectors of half a
     // register (the D registers) and of four registers are taken too: those
-    // MVTs exist. Owner llrm-arm64-vec, exit LV-X4.
+    // MVTs exist; eight registers (a `<16 x i64>` sum of bytes) split to them
+    // (`SplitVectorResult`). Owner llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
     let taken = |lane: Ty| {
+        // A mask: `<VF x i1>` is held as the lanes of the compare that made it.
+        if lane == Ty::Int(1) {
+            return true;
+        }
         let bits = u64::from(lane_bits(lane)) * u64::from(vf);
         [register_bits, 2 * register_bits].contains(&bits)
-            || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits].contains(&bits))
+            || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
     };
     if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
         return Err(NotTaken);
@@ -321,9 +357,9 @@ fn iteration_cost(
                     unknown(tti.vector_arithmetic_cost(ArithOp::FMul, vector(lane), kind))?
                 }
             }
-            Recipe::Binary { op, lane, ext } => {
+            Recipe::Binary { op, lane, ext, second } => {
                 if vf == 1 {
-                    tti.arithmetic_cost(op, lane, kind, Default::default(), Default::default())
+                    tti.arithmetic_cost(op, lane, kind, Default::default(), second)
                 } else if ext.iter().any(Option::is_some) {
                     // The widening forms; `Err`: a price that needs known bits.
                     match tti.vector_arithmetic_cost_ext(op, vector(lane), ext, kind) {
@@ -338,7 +374,7 @@ fn iteration_cost(
                     // An integer operation the target does not price is the
                     // pin's scalarized one (a multiply of
                     // `<2 x i64>`).
-                    tti.vector_arithmetic_cost(op, vector(lane), kind).ok_or(NotTaken)?
+                    tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
                 }
             }
             Recipe::Scalarized { op, lane } => {
@@ -378,8 +414,8 @@ fn iteration_cost(
                     unknown(tti.vector_cmp_sel_cost(CmpSel::Select, vector(lane), predicate, kind))?
                 }
             }
-            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free, the
-            // step an `add` of the vector.
+            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free,
+            // the step an `add` of the vector.
             Recipe::Induction { lane, truncated_from } => {
                 if vf == 1 {
                     truncated_from.map_or(Cost::FREE, |src| tti.cast_cost(CastKind::Trunc, lane, src, kind))
@@ -491,6 +527,49 @@ fn max_local_users(recipes: &[Recipe]) -> u32 {
     values.max(1)
 }
 
+/// `getRegUsageForType` of a `lane` vector of `vf` lanes: the registers it
+/// legalizes to (a mask is held as bytes: one).
+fn registers_of(
+    tti: &dyn Tti,
+    lane: Ty,
+    vf: u32,
+) -> u32 {
+    if vf == 1 || lane == Ty::Int(1) {
+        return 1;
+    }
+    let register_bits = u64::from(tti.vector_register_bits()).max(1);
+    (u64::from(lane_bits(lane)) * u64::from(vf)).div_ceil(register_bits).max(1) as u32
+}
+
+/// `calculateRegisterUsage` (L5138): at each instruction that makes a value
+/// read later, the registers of the values open across it (those made before
+/// and read after), the largest such sum, and the registers of the
+/// loop-invariant values. A value the loop makes and does not read again is
+/// not open. DEVIATE VP5 (owner llrm-arm64-vec, exit 2026-11-24): the values
+/// are those the widening makes, not the VPlan's recipes.
+fn register_usage(
+    tti: &dyn Tti,
+    pressure: &Pressure,
+    vf: u32,
+) -> (u32, u32) {
+    let mut most = 0;
+    for at in 0..=pressure.live.iter().map(|one| one.end).max().unwrap_or(0) {
+        // Only an instruction whose value is read later is a point.
+        if !pressure.live.iter().any(|one| one.start == at && one.end > at) {
+            continue;
+        }
+        let open: u32 = pressure
+            .live
+            .iter()
+            .filter(|one| one.start < at && one.end > at)
+            .map(|one| registers_of(tti, one.lane, vf))
+            .sum();
+        most = most.max(open);
+    }
+    let invariants = pressure.invariants.iter().map(|lane| registers_of(tti, *lane, vf)).sum();
+    (most.max(1), invariants)
+}
+
 /// What `selectInterleaveCount` reads of the loop and its plan.
 #[derive(Clone, Copy, Debug)]
 struct IcInputs {
@@ -516,13 +595,16 @@ fn select_interleave_count(
     vf: u32,
     loop_cost: i64,
 ) -> u32 {
-    let values = max_local_users(&facts.recipes);
+    let (users, invariants) = match &facts.pressure {
+        Some(pressure) => register_usage(tti, pressure, vf),
+        None => (max_local_users(&facts.recipes), 0),
+    };
     let inputs = IcInputs {
         epilogue_allowed: epilogue_allowed(facts),
         safe_for_any_vector_width: facts.safe_for_any_vector_width,
         trip_count: facts.trip_count,
-        users: values,
-        invariants: 0,
+        users,
+        invariants,
         loads: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Load { .. })).count() as u32,
         stores: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Store { .. })).count() as u32,
         has_reductions: facts.has_reductions,
@@ -711,7 +793,7 @@ fn max_vf_of(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> u64 {
-    let (smallest, widest) = smallest_and_widest(&facts.recipes);
+    let (smallest, widest) = smallest_and_widest(&facts.recipes, &facts.reduction_bits);
     // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits /
     // WidestType).
     let mut max_safe = bit_floor(facts.max_safe_width_in_bits / u64::from(widest));
@@ -739,6 +821,46 @@ fn choose_with(
         return Err(NotPlanned("Vectorization is possible but not beneficial"));
     }
     Ok(Plan { vf, ic: select_interleave_count(tti, facts, vf, cost) })
+}
+
+/// `AArch64Subtarget::EpilogueVectorizationMinVF` (every target's default): the
+/// lanes a main loop covers (`VF x IC`) before its remainder is widened too.
+const EPILOGUE_MIN_VF: u64 = 16;
+
+/// `LoopVectorizationPlanner::selectBestEpiloguePlan`: the vector factor of the
+/// loop that takes the remainder of a main loop planned as `main`, or none.
+/// The main loop must cover at least `EPILOGUE_MIN_VF` lanes
+/// (`isEpilogueVectorizationProfitable`); the epilogue's factor is no wider
+/// than the main loop's, and where the trip count is known no wider than the
+/// iterations left over (`SkipVF`: such a loop would never run); the cheapest
+/// per lane of those wins.
+pub fn epilogue_vf(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    main: Plan,
+) -> Option<u32> {
+    if facts.opt_size || !tti.vectorizes_epilogues() {
+        return None;
+    }
+    let lanes = u64::from(main.vf) * u64::from(main.ic);
+    if lanes < EPILOGUE_MIN_VF {
+        return None;
+    }
+    let mut cap = u64::from(main.vf);
+    if facts.trip_count != 0 {
+        let remaining = facts.trip_count % lanes;
+        if remaining == 0 {
+            return None;
+        }
+        cap = cap.min(bit_floor(remaining));
+    } else {
+        // `SkipVF` against `SE.getURemExpr(TC, VF x IC)`: whatever the trip
+        // count, fewer than `VF x IC` iterations are left, so a factor of that
+        // many lanes or more would never run.
+        cap = cap.min(bit_floor(lanes - 1));
+    }
+    let (vf, _) = best_vf(tti, facts, cap, true, false);
+    (vf > 1).then_some(vf)
 }
 
 /// The constant trip count under which the pin allows no epilogue
