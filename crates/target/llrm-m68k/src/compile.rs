@@ -466,7 +466,7 @@ fn items_trials(
         use crate::dagisel::mulprice::Mode;
         let without = Options { mul: Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
-        let linked = crate::routine::mulsi3_share(module, name, cpu);
+        let linked = crate::routine::mulsi3_share(module, name, cpu, price);
         if touched.mul_synthesized {
             // DEVIATE G2: the pin's shapes are judged as before (clocks
             // count wherever they run); a chain beyond them only against

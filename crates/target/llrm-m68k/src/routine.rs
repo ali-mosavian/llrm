@@ -119,11 +119,17 @@ pub fn mulsi3_share(
     module: &llrm_mir::module::Module,
     except: &str,
     cpu: crate::dagisel::hooks::Cpu,
+    price: crate::timing::Price,
 ) -> usize {
     use llrm_mir::module::Operand;
     use llrm_mir::opcode::{BinaryOp, Opcode};
     if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) || another_function_multiplies_variables(module, except, cpu) {
         return 0;
+    }
+    // where clocks count too, the whole routine is the build's, as before: sharing it flipped `urem_eq` -O1 to
+    // the calls, 8.4 M to 12.9 M clocks
+    if price != crate::timing::Price::Size {
+        return mulsi3_bytes(cpu);
     }
     let by_constant = module
         .functions()
