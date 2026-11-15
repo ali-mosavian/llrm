@@ -29,3 +29,23 @@ fn eighty_constant_stores_become_ten_vector_stores() {
     assert_eq!(text.matches(&splat).count(), 10, "{text}");
     assert_eq!(text.matches("store i16").count(), 0, "{text}");
 }
+
+const TILE: &str = include_str!("../tests/slp/tile_reduction.ll");
+
+/// bench/tile -O3 (arm64) summed 40 `sext i16` loads of a row as 40 scalar
+/// loads and adds; the pin makes a `<32 x i16>` and an `<8 x i16>` load, the
+/// second added into the low lanes of the first, and one
+/// `llvm.vector.reduce.add.v32i64`.
+#[test]
+fn forty_sign_extended_loads_summed_become_two_vector_loads_and_one_reduction() {
+    let text = run(TILE);
+    assert!(text.contains("load <32 x i16>"), "{text}");
+    assert!(text.contains("load <8 x i16>"), "{text}");
+    assert!(text.contains("@llvm.vector.reduce.add.v32i64"), "{text}");
+    assert_eq!(text.matches("load i16").count(), 0, "{text}");
+    // The pin's `removeInstructionsAndOperands`: the loads' addresses go too.
+    assert_eq!(text.matches("getelementptr").count(), 3, "{text}");
+    // The 40 values: one `rdx.op` of the eight lanes, and the phi's `op.rdx`.
+    assert_eq!(text.matches("add <8 x i64>").count(), 1, "{text}");
+    assert_eq!(text.matches("add i64 %rdx, %3").count(), 1, "{text}");
+}

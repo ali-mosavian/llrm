@@ -998,6 +998,7 @@ fn items_once(
     drop(sp);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
+    crate::mirdump::dump("before allocation", &function, None);
     let allocating = llrm_support::debug::span("m68k allocate");
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
@@ -1038,6 +1039,7 @@ fn items_once(
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
+    crate::mirdump::dump("after allocation", &function, Some(&assignment));
     if options.hoist_flag_setters {
         crate::cmpelim::eliminate_adjacent_tests(&mut function, &assignment);
     }
@@ -1047,6 +1049,9 @@ fn items_once(
         &crate::REGISTER_INFO,
         &slots,
     );
+    if options.short {
+        crate::spillhoist::hoist_spills(&mut function, &assignment);
+    }
     if options.short && options.slot_registers {
         let moved = crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots);
         touched.slot_registers = !moved.is_empty();
