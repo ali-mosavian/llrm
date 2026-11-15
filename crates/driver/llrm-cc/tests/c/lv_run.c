@@ -27,6 +27,9 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 extern unsigned char pa[4096], pb[4096];
 void multiply_arrays(void);
 extern int a[1024], b[1024];
+void times_three(void);
+void times_seven(void);
+void times_minus_three(void);
 unsigned char xor_toggle_count(unsigned char n);
 void set_lanes(void *b, void *w, void *d, unsigned char x, unsigned short y, unsigned z);
 int stack_copy(int n);
@@ -54,6 +57,14 @@ int main(void) {
         for (int i = 0; i < n; i++) { s += ints[i]; x ^= ints[i] * 3; }
         if (run_sum(ints, n) != s || run_xor(ints, n) != x) bad++;
     }
+    /* A multiply by 2^n +- 1 is a shift and an add or subtract: every lane must still be the product. */
+    for (int i = 0; i < 1024; i++) { b[i] = i * 100003 - 51200000; }
+    times_three();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * 3u)) bad++;
+    times_seven();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * 7u)) bad++;
+    times_minus_three();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * (unsigned)-3)) bad++;
     {
         /* Every lane differs, so a reduction that folds the wrong lanes gives another total. */
         static long longs[300]; static short shorts[300]; static signed char bytes[300]; static int words[300], masks[300];

@@ -1459,21 +1459,20 @@ fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow(
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
 }
 
-/// switch.ll's two functions took 8 full allocations each (the return block
-/// copied or kept, constants hoisted or not, the argument copies joined or
-/// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. Copied and kept
-/// gave the same code on all 60 kernel cells; only the copied one is made.
-/// lz4 -O2 took 16 runs. The choice of a byte loaded through `a` with the
-/// argument copies unjoined won on no kernel cell and none of the 105 corpus
-/// files: 6 per scheduler (`Source`, `ILP`), 12.
+/// switch.ll's two functions took 8 full allocations each (the return block copied or kept, constants hoisted or
+/// not, the argument copies joined or not): 16 greedy runs, 51% of a 1.3 G-instruction compile. The choice of a byte
+/// loaded through `a` with the argument copies unjoined won on no kernel cell and none of the 105 corpus files, and
+/// was dropped: a form of a function (scheduler, return block copied or kept, carry form) is allocated at most 6
+/// times. Copied and kept differ on most functions since #9853 (tail-duplicated returns), and kept wins 2-11 B on
+/// 14 of 128 programs at -O2: both are built, lz4 -O2 takes 24 runs for its 4 forms.
 #[test]
-#[ignore = "until 2026-11-24, #9853 regression, fix PR pending: lz4 -O2 takes 24 runs, bound 12 (tail-duplicated returns make copied and kept differ)"]
-fn a_function_is_allocated_at_most_six_times_per_scheduler() {
+fn a_form_of_a_function_is_allocated_at_most_six_times() {
     let ir = include_str!("kernels/ir/lz4.ll");
     llrm_z80::compile::take_allocations();
+    llrm_z80::compile::take_forms_built();
     text(ir, "lz4", 0, &Request::new(Level::O2)).expect("compiles");
-    let runs = llrm_z80::compile::take_allocations();
-    assert!(runs <= 12, "lz4 -O2 was allocated {runs} times");
+    let (runs, forms) = (llrm_z80::compile::take_allocations(), llrm_z80::compile::take_forms_built());
+    assert!(runs <= 6 * forms, "lz4 -O2 was allocated {runs} times for {forms} forms");
 }
 
 fn many(
