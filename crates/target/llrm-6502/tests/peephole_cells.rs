@@ -167,3 +167,28 @@ fn a_scratch_cell_stored_before_csave_is_not_dead() {
     drop_dead_stores(&mut a);
     assert_eq!(a.text(), text);
 }
+
+/// A routine's read set is its argument list (`routine_effects`): a divisor of
+/// 1 to 255 is `rc4` alone, so the zero stored to `rc5` before it is dead,
+/// though the routine's text names `rc5` (it writes the pair's remainder
+/// there). The stores stayed (div_constants_long: 140 B, 2026-11-15).
+#[test]
+fn a_store_to_a_cell_a_call_does_not_read_is_dropped() {
+    let mut a = asm("  sta rc5\n  sta rc4\n  jsr __divsi3_fast_byte\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  sta rc4\n  jsr __divsi3_fast_byte\n  rts\n");
+}
+
+/// A pair call writes `rc4`..`rc7` on every path: a store to `rc6` is dead
+/// though the remainder is read after. A call that leaves `rc5` alone does not
+/// end the store's life: the cell is read after it.
+#[test]
+fn a_store_is_dead_before_a_call_that_always_writes_the_cell_and_live_before_one_that_leaves_it() {
+    let mut a = asm("  sta rc6\n  jsr __divmodsi4_fast_byte\n  lda rc6\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  jsr __divmodsi4_fast_byte\n  lda rc6\n  rts\n");
+    let text = "  sta rc5\n  jsr __divsi3_fast_byte\n  lda rc5\n  rts\n";
+    let mut a = asm(text, &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), text);
+}

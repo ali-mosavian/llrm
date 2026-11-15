@@ -235,3 +235,80 @@ fn no_runtime_routine_falls_through_into_the_next_label() {
         }
     }
 }
+
+fn cells(mask: u64) -> Vec<u8> {
+    (0..64u8).filter(|n| mask >> n & 1 == 1).collect()
+}
+
+/// A routine's argument cells are the ones it reads before writing, and its
+/// result cells the ones every path writes: a divisor of 1 to 255 is `rc4`
+/// alone, and a pair routine writes the remainder to `rc4`..`rc7`. The scan of
+/// cells a routine names called all of them arguments, so the three zero
+/// stores of each byte divisor stayed (about 8 B a site, 140 B in
+/// div_constants_long, 2026-11-15).
+#[test]
+fn a_byte_divisor_routine_reads_rc4_of_its_divisor_and_a_pair_writes_the_remainder() {
+    use llrm_6502::routine_effects::cell_effects;
+    for routine in [
+        "__divsi3_fast_byte",
+        "__modsi3_fast_byte",
+        "__udivsi3_fast_byte",
+        "__umodsi3_fast_byte",
+        "__divmodsi4_fast_byte",
+        "__udivmodsi4_fast_byte",
+    ] {
+        let effects = cell_effects(routine).unwrap_or_else(|| panic!("{routine}: effects not known"));
+        let divisor: Vec<u8> = cells(effects.reads).into_iter().filter(|n| *n >= 4).collect();
+        assert_eq!(divisor, [4], "{routine} reads {:?}", cells(effects.reads));
+    }
+    for routine in ["__divmodsi4_fast_byte", "__udivmodsi4_fast", "__divmodsi4"] {
+        let effects = cell_effects(routine).unwrap_or_else(|| panic!("{routine}: effects not known"));
+        for n in 4..=7 {
+            assert!(effects.writes >> n & 1 == 1, "{routine} writes {:?}", cells(effects.writes));
+        }
+    }
+    let wide = cell_effects("__udivsi3_fast").expect("known");
+    assert_eq!(cells(wide.reads).into_iter().filter(|n| *n >= 4).collect::<Vec<_>>(), [4, 5, 6, 7]);
+}
+
+/// A call of a byte divisor stores no zero to `rc5`..`rc7`: the routine reads
+/// `rc4` alone, and the zeros kept in scratch cells for those stores go too.
+#[test]
+fn a_byte_divisor_call_stores_nothing_to_the_cells_it_ignores() {
+    let ir = "define i32 @f(ptr %p, ptr %q) {\n  %x = load i32, ptr %p\n  %y = load i32, ptr %q\n\
+              %a = srem i32 %x, 5\n  %b = udiv i32 %y, 7\n  %r = add i32 %a, %b\n  ret i32 %r\n}\n";
+    for level in [Level::O2, Level::O3] {
+        let text = asm(ir, level);
+        assert!(text.contains("_byte"), "{level:?}: no byte divisor call:\n{text}");
+        for cell in ["rc5", "rc6", "rc7"] {
+            assert!(!text.contains(&format!("sta {cell}\n")), "{level:?}: a store to {cell}:\n{text}");
+        }
+    }
+}
+
+/// The bytes a byte divisor ignores are junk, and the wide divide before it
+/// leaves them so: the quotient, the remainder and a later pair come out as the
+/// host's.
+#[test]
+fn a_byte_divisor_after_a_wide_divide_ignores_the_high_cells_it_leaves() {
+    let (a, b, x): (u32, u32, u32) = (0x1234_5678, 0x0102_0304, 0x7654_3210);
+    let want = (a / b) ^ (a % b);
+    let want = want.wrapping_add(x / 5).wrapping_add(x % 7).wrapping_add((a % b) / 9);
+    let ir = format!(
+        "@a = global i32 {}\n@b = global i32 {}\n@x = global i32 {}\n\
+         define i8 @probe() {{\n  %a = load volatile i32, ptr @a\n  %b = load volatile i32, ptr @b\n  %x = load volatile i32, ptr @x\n\
+           %q = udiv i32 %a, %b\n  %r = urem i32 %a, %b\n  %m = xor i32 %q, %r\n\
+           %d = udiv i32 %x, 5\n  %e = urem i32 %x, 7\n  %f = udiv i32 %r, 9\n\
+           %s = add i32 %m, %d\n  %t = add i32 %s, %e\n  %u = add i32 %t, %f\n\
+           %bad = icmp ne i32 %u, {}\n  %o = zext i1 %bad to i8\n  ret i8 %o\n}}\n",
+        a as i32, b as i32, x as i32, want as i32
+    );
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let text = assembly(&format!("target datalayout = \"{}\"\n{ir}", datalayout()), &Request::new(level))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let code: String =
+            text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
+        let name = format!("call-glue-dirty-high-{level:?}");
+        assert_eq!(common::run_with(&name, "  jsr probe\n", &code), 0, "{level:?}: wrong result:\n{text}");
+    }
+}
