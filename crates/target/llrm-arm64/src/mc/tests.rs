@@ -408,6 +408,9 @@ fn branches() {
         all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
+    for lanes in ALL_ARRANGEMENTS {
+        all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
+    }
     for (lanes, index) in [
         (Arrangement::B16, 3),
         (Arrangement::H8, 5),

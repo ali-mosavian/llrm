@@ -79,7 +79,9 @@ use llrm_mir::types::{FloatKind, Type, TypeId};
 use crate::lcssa::from_arms;
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
-use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, ScalarFacts, choose_interleave, pin_may_vectorize, plan};
+use crate::loopvectorizeplan::{
+    LoopFacts, Plan, Recipe, ScalarFacts, choose_interleave, epilogue_vf, pin_may_vectorize, plan,
+};
 use crate::loopvectorizeskeleton::{self as skeleton, Shape, Skeleton};
 use crate::runtimechecks::Rewriter;
 
@@ -1701,23 +1703,29 @@ impl FunctionPass for LoopVectorize {
         }
         let mut changed = crate::loopsimplify::simplified(unit.function);
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
-        let worklist: Vec<BlockId> = {
+        // The loops, and the vector factor an epilogue loop is forced to (the
+        // remainder of a main loop widened in turn, pushed as it is made).
+        let mut worklist: Vec<(BlockId, Option<u32>)> = {
             let (_, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
             env.loops
                 .get_loops_in_preorder()
                 .into_iter()
                 .filter(|one| one.is_innermost())
-                .map(|one| one.get_header())
+                .map(|one| (one.get_header(), None))
                 .collect()
         };
-        for header in worklist {
+        let mut next = 0;
+        while let Some(&(header, forced)) = worklist.get(next) {
+            next += 1;
             let planned = {
                 let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
                 let cx = env.cx(&*unit.context, &*unit.function);
                 let Some(found) = cx.loops.get_loop_for(header) else { continue };
                 // The product of an earlier run (the vector loop, or its
                 // remainder) is left alone.
-                if let Some(latch) = found.get_loop_latch(cx.function).and_then(|latch| cx.function.terminator(latch))
+                if forced.is_none()
+                    && let Some(latch) =
+                        found.get_loop_latch(cx.function).and_then(|latch| cx.function.terminator(latch))
                     && skeleton::already_vectorized(unit.metadata, cx.function, latch)
                 {
                     why(unit, &outer, header, "already vectorized");
@@ -1767,8 +1775,13 @@ impl FunctionPass for LoopVectorize {
                                 .map(|one| cx.layout.size_bits(&cx.context.types, one.ty) as u32)
                                 .collect(),
                         };
-                        match plan(&*tti, &facts) {
-                            // A target whose backend selects no vector reduction keeps the loop scalar.
+                        let chosen = match forced {
+                            Some(vf) => Ok(Plan { vf, ic: 1 }),
+                            None => plan(&*tti, &facts),
+                        };
+                        match chosen {
+                            // A target whose backend selects no vector
+                            // reduction keeps the loop scalar.
                             Ok(_) if !widening.reductions.is_empty() && !tti.lowers_vector_reductions() => {
                                 why(unit, &outer, header, "plan: The target does not lower a vector reduction");
                                 None
@@ -1785,7 +1798,15 @@ impl FunctionPass for LoopVectorize {
                                 why(unit, &outer, header, "plan: A vector narrower than a register");
                                 None
                             }
-                            Ok(chosen) => Some(Planned::Vector(chosen, widening)),
+                            Ok(chosen) => {
+                                // `selectBestEpiloguePlan`: not where a memory
+                                // check guards the main loop (the epilogue
+                                // would make its own).
+                                let epilogue = (forced.is_none() && memory_checks.is_none())
+                                    .then(|| epilogue_vf(&*tti, &facts, chosen))
+                                    .flatten();
+                                Some(Planned::Vector(chosen, widening, epilogue))
+                            }
                             Err(not) => {
                                 why(unit, &outer, header, &format!("plan: {not:?}"));
                                 None
@@ -1867,7 +1888,7 @@ impl FunctionPass for LoopVectorize {
             };
             let Some((planned, memory_checks)) = planned else { continue };
             let (vf, ic, shape, reduced) = match &planned {
-                Planned::Vector(chosen, widening) => {
+                Planned::Vector(chosen, widening, _) => {
                     (chosen.vf, chosen.ic, widening.shape, widening.reductions.iter().map(|one| one.latch).collect())
                 }
                 Planned::Interleave(ic, extracted) => {
@@ -1948,9 +1969,16 @@ impl FunctionPass for LoopVectorize {
                 }
             };
             match planned {
-                Planned::Vector(chosen, widening) => {
-                    why(unit, &outer, header, &format!("vectorized VF {} IC {}", chosen.vf, chosen.ic));
+                Planned::Vector(chosen, widening, epilogue) => {
+                    let kind = if forced.is_some() { "epilogue vectorized" } else { "vectorized" };
+                    why(unit, &outer, header, &format!("{kind} VF {} IC {}", chosen.vf, chosen.ic));
                     execute(unit.context, unit.function, unit.declared, &widening, chosen, &skeleton);
+                    if forced.is_some() {
+                        skeleton::check_epilogue_first(unit.context, unit.function, shape.preheader, header, &skeleton);
+                    }
+                    if let (Some(vf), Some((remainder, _))) = (epilogue, &skeleton.remainder) {
+                        worklist.push((*remainder, Some(vf)));
+                    }
                 }
                 Planned::Interleave(ic, extracted) => {
                     why(unit, &outer, header, &format!("interleaved IC {ic}"));
@@ -1975,7 +2003,7 @@ const VECTORIZE_MEMORY_CHECK_THRESHOLD: usize = 128;
 /// What the pass does to a loop.
 enum Planned {
     /// Widen by VF lanes, interleaved IC times.
-    Vector(Plan, Widening),
+    Vector(Plan, Widening, Option<u32>),
     /// Copy the body IC times (VF 1).
     Interleave(u32, Extracted),
 }

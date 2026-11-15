@@ -565,6 +565,13 @@ LDRF8.{pre|post}         move     x,r/m         -                        load   
 LDRF16.{ui|fi|pg|gotpg}  move     x/m           -                        load       - - - -/-                LDRQui
 LDRF16.ro21              move     x/m           -                        load       - - - -/-                LDRQ[roW|roX]
 LDRF16.{pre|post}        move     x,r/m         -                        load       - - - -/-                LDRQ{pre|post}
+LD1Rv8b                  move     x/m           -                        load       - - - -/-                LD1Rv8b
+LD1Rv16b                 move     x/m           -                        load       - - - -/-                LD1Rv16b
+LD1Rv4h                  move     x/m           -                        load       - - - -/-                LD1Rv4h
+LD1Rv8h                  move     x/m           -                        load       - - - -/-                LD1Rv8h
+LD1Rv2s                  move     x/m           -                        load       - - - -/-                LD1Rv2s
+LD1Rv4s                  move     x/m           -                        load       - - - -/-                LD1Rv4s
+LD1Rv2d                  move     x/m           -                        load       - - - -/-                LD1Rv2d
 ST1i8                    move     -/x,i,m       -                        store      - - - -/-                ST1i8
 ST1i16                   move     -/x,i,m       -                        store      - - - -/-                ST1i16
 ST1i32                   move     -/x,i,m       -                        store      - - - -/-                ST1i32

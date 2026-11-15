@@ -481,6 +481,9 @@ impl fmt::Display for Inst {
             Inst::VectorStoreLane { lanes, rt, index, base } => {
                 write!(out, "st1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
             }
+            Inst::VectorLoadReplicate { lanes, rt, base } => {
+                write!(out, "ld1r {{ v{}.{} }}, [{}]", rt.0, lanes.suffix(), gpr(*base, Width::X, true))
+            }
             Inst::VectorUmov { lanes, rd, rn, index } => {
                 let lane = lane_letter(*lanes);
                 let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };

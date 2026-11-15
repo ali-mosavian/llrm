@@ -208,6 +208,13 @@ fn the_compact_word_division_agrees_with_the_fast_one() {
         (32768, 32768, 1, 0),
         (65535, 2, 32767, 1),
         (65535, 16385, 3, 16380),
+        (65535, 32769, 1, 32766),
+        (49151, 32768, 1, 16383),
+        (32767, 32768, 0, 32767),
+        (65535, 65534, 1, 1),
+        (65534, 65535, 0, 65534),
+        (32768, 32769, 0, 32768),
+        (40000, 32767, 1, 7233),
     ] {
         let n = format!("c{a}-{b}");
         assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
@@ -233,6 +240,16 @@ fn signed_byte_division() {
 fn signed_word_division() {
     assert_eq!(word("divhi", &two_words(64536, 7), "__divhi3"), 65394);
     assert_eq!(word("modhi", &two_words(64536, 7), "__modhi3"), 65530);
+}
+
+/// A divisor of 256 or more runs the bit loop, which uses Y: the sign the
+/// signed routines keep across it must not be there. -1000 / 300 = -3 r -100.
+#[test]
+fn signed_word_division_by_a_long_divisor_keeps_its_sign() {
+    assert_eq!(word("divhil", &two_words(64536, 300), "__divhi3"), 65533);
+    assert_eq!(word("modhil", &two_words(64536, 300), "__modhi3"), 65436);
+    assert_eq!(word("divhir", &two_words(1000, 65236), "__divhi3"), 65533);
+    assert_eq!(word("modhir", &two_words(1000, 65236), "__modhi3"), 100);
 }
 
 /// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling

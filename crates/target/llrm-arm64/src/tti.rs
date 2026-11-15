@@ -879,6 +879,10 @@ impl Tti for AArch64 {
         self.cpu.max_interleave_factor()
     }
 
+    fn vectorizes_epilogues(&self) -> bool {
+        true
+    }
+
     /// `AArch64TTIImpl::shouldMaximizeVectorBandwidth`: true for fixed-width
     /// NEON (L375).
     fn should_maximize_vector_bandwidth(&self) -> bool {

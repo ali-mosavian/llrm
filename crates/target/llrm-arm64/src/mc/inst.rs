@@ -431,6 +431,17 @@ impl Arrangement {
         }
     }
 
+    /// Every arrangement.
+    pub const ALL: [Arrangement; 7] = [
+        Arrangement::B16,
+        Arrangement::H8,
+        Arrangement::S4,
+        Arrangement::D2,
+        Arrangement::B8,
+        Arrangement::H4,
+        Arrangement::S2,
+    ];
+
     pub fn suffix(self) -> &'static str {
         match self {
             Arrangement::B16 => "16b",
@@ -1565,6 +1576,13 @@ pub enum Inst {
         lanes: Arrangement,
         rt: Vreg,
         index: u8,
+        base: Gpr,
+    },
+    /// `ld1r { v.4s }, [base]`: the lane at `[base]` replicated into every
+    /// lane of `rt` (`LD1Rv4s`).
+    VectorLoadReplicate {
+        lanes: Arrangement,
+        rt: Vreg,
         base: Gpr,
     },
     /// `umov w, v.s[index]`: one lane of `rn` zero-extended into a general
