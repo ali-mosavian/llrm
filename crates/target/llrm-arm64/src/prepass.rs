@@ -304,6 +304,7 @@ pub fn run(
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
+    redundant_zero_high_moves(function);
     narrow_extension_uses(function);
     dead_code(function);
 }
@@ -1996,6 +1997,67 @@ fn redundant_zero_extends(function: &mut MFunc) {
             op.visit(&mut |slot, _| {
                 if let Some(Reg::Gpr(new)) = rename.get(&slot.key())
                     && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitFMOVDr`: an `fmov d, d` already follows an
+/// instruction that writes a `D` register (a 64-bit load, a `dup` of 64 bits,
+/// an `fmov d, x`), which clears the upper half; the move goes.
+/// `is64bitDefwithZeroHigh64bit` is translated for the instructions this
+/// selector makes; the pin's other cases (`COPY` of a general register, a load
+/// of a tuple) are not.
+fn redundant_zero_high_moves(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let zeroed: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter_map(|op| match op {
+            Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, reg }, addr: Addr::Offset { .. }, .. })
+            | Op::I(Inst::VectorFill {
+                rd: reg,
+                fill: Fill::Dup(Arrangement::B8 | Arrangement::H4 | Arrangement::S2, _),
+            })
+            | Op::I(Inst::FpInt {
+                op: FpConvert::Bits { to_fp: true },
+                width: Width::X,
+                size: FpSize::D,
+                fpr: reg,
+                ..
+            }) => Some(Reg::Fpr(*reg)),
+            _ => None,
+        })
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    for block in &mut function.blocks {
+        block
+            .ops
+            .retain(
+                |op| {
+                    let Op::I(Inst::FpUnary { op: FpUnary::Mov, size: FpSize::D, rd, rn }) = op else { return true };
+                    let (from, to) = (Reg::Fpr(*rd), Reg::Fpr(*rn));
+                    if rd.is_virtual() && definitions.get(&from) == Some(&1) && zeroed.contains(&to) {
+                        rename.insert(from, to);
+                        return false;
+                    }
+                    true
+                },
+            );
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Fpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Fpr(slot) = slot
                 {
                     *slot = *new;
                 }

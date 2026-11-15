@@ -2375,13 +2375,15 @@ impl Emitter<'_> {
                 if name == "F128CSEL" {
                     return self.f128_select(id, &operands);
                 }
-                if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
+                if let Some(probe) = float_inst(name, Vreg(0), Gpr(0), &operands) {
                     // A fill of a 64-bit vector (`MOVIv2i32`) has no type of
-                    // ours: it reads as an `i64`.
+                    // ours: it reads as an `i64`, as does the `FMOVDr` that
+                    // zeroes the upper half of a `concat_vectors`.
                     let float_result = node.values[0].is_floating_point()
                         || node.values[0].is_vector()
                         || vector_fill(name, &operands).is_some()
-                        || reduction(name).is_some();
+                        || reduction(name).is_some()
+                        || matches!(probe, Ok(Inst::FpUnary { op: FpUnary::Mov, .. }));
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     // `FMLA` adds into the register it reads: `rd` is a copy of
