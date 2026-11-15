@@ -6,7 +6,7 @@ use super::*;
 use crate::mc::inst::Cond;
 use crate::mc::inst::{
     Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Rounding,
-    VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::vector_forms::VectorForm;
 
@@ -335,6 +335,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
             None,
         ),
+        Inst::VectorIntUnary { op, lanes, rd, rn } => semantics(
+            Operation::Unary,
+            vector_int_unary_name(*op, *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128)],
+            None,
+        ),
         Inst::VectorFpUnary { op, lanes, rd, rn } => semantics(
             Operation::Unary,
             vector_fp_name(op.mnemonic(), *lanes),
@@ -614,13 +621,14 @@ const VECTOR_REDUCES: [VectorReduce; 6] = [
 ];
 
 const VECTOR_FP_OPS: [VectorFpOp; 4] = [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div];
-const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
+const VECTOR_FP_UNARY: [VectorFpUnary; 7] = [
     VectorFpUnary::Neg,
     VectorFpUnary::Abs,
     VectorFpUnary::Scvtf,
     VectorFpUnary::Ucvtf,
     VectorFpUnary::Fcvtzs,
     VectorFpUnary::Fcvtzu,
+    VectorFpUnary::Sqrt,
 ];
 
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
@@ -631,6 +639,15 @@ fn vector_op_name(
     let stem = op.mnemonic().to_uppercase();
     format!("{stem}v{}", lane_name(lanes))
 }
+
+fn vector_int_unary_name(
+    op: VectorIntUnary,
+    lanes: Arrangement,
+) -> String {
+    format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes))
+}
+
+const VECTOR_INT_UNARY: [VectorIntUnary; 3] = [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt];
 
 const VECTOR_OPS: [VectorOp; 14] = [
     VectorOp::Add,
@@ -850,6 +867,13 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                     rn: vreg_of(&s[0]),
                     rm: vreg_of(&s[1]),
                 });
+            }
+        }
+    }
+    for op in VECTOR_INT_UNARY {
+        for lanes in OP_ARRANGEMENTS {
+            if name == vector_int_unary_name(op, lanes) && op.has_lanes(lanes) {
+                return Some(Inst::VectorIntUnary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
             }
         }
     }

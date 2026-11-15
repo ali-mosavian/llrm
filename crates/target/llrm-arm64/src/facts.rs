@@ -51,6 +51,7 @@ pub fn of(op: &Op) -> Facts {
                     | Inst::Atomic { .. }
                     | Inst::Prefetch { .. }
                     | Inst::VectorLoadReplicate { .. }
+                    | Inst::VectorLoadLane { .. }
             )
         ),
         may_store: matches!(

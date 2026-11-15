@@ -417,6 +417,19 @@ fn branches() {
     }
     for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
+        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt] {
+            if op.has_lanes(lanes) {
+                all.push(Inst::VectorIntUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
+            }
+        }
+    }
+    for (lanes, index) in [
+        (Arrangement::B16, 15),
+        (Arrangement::H8, 5),
+        (Arrangement::S4, 3),
+        (Arrangement::D2, 1),
+    ] {
+        all.push(Inst::VectorLoadLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for (lanes, index) in [
         (Arrangement::B16, 3),
@@ -441,6 +454,7 @@ fn branches() {
             VectorFpUnary::Ucvtf,
             VectorFpUnary::Fcvtzs,
             VectorFpUnary::Fcvtzu,
+            VectorFpUnary::Sqrt,
         ] {
             all.push(Inst::VectorFpUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
         }
