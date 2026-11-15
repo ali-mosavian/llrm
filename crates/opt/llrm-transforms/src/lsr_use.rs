@@ -745,6 +745,20 @@ impl Cost {
             }
         }
 
+        // DEVIATE LSR-NEG-BASIC: a negated register is an instruction (`neg`,
+        // or `sub` from the other register) that the loop runs every trip and
+        // every use of the register shares; the pin rates it free.
+        if inside
+            && f.scale == -1
+            && lu.kind == Kind::Special
+            && let Some(insns) = r.tti.lsr_negated_basic_insns()
+            && let Some(reg) = f.scaled_reg
+            && !self.scaled.contains(&(reg, f.scale))
+        {
+            self.scaled.push((reg, f.scale));
+            self.c.insns += insns;
+        }
+
         // The non-zero immediates.
         for fixup in &lu.fixups {
             let offset = fixup.offset.add_unsigned(f.base_offset);

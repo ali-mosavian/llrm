@@ -1907,6 +1907,13 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE LSR-NEG-BASIC: the instructions a trip a plain in-loop use
+    /// pays to take a -1 scale (`Tuning::lsr_negated_basic_insns`); none: it
+    /// may not, as the pin's.
+    fn lsr_negated_basic_insns(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
     /// constants fold enough of it to pay the copy at the speed rate.
     fn peels_folded_entry(&self) -> bool {

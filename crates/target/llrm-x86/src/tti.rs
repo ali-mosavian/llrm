@@ -1188,6 +1188,10 @@ impl Tti for X86 {
         self.tuning.lsr_spill_pressure_margin
     }
 
+    fn lsr_negated_basic_insns(&self) -> Option<u32> {
+        self.tuning.lsr_negated_basic_insns
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }

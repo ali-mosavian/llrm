@@ -746,8 +746,12 @@ impl Collection<'_, '_> {
                 })
             };
             if !legal(kind) {
-                // An out-of-loop basic use is special, and takes a -1 scale.
-                if kind == Kind::Basic && legal(Kind::Special) && outside {
+                // An out-of-loop basic use is special, and takes a -1 scale
+                // (an in-loop one too, DEVIATE LSR-NEG-BASIC).
+                if kind == Kind::Basic
+                    && legal(Kind::Special)
+                    && (outside || self.tti.lsr_negated_basic_insns().is_some())
+                {
                     self.uses[lu_idx].kind = Kind::Special;
                 } else {
                     continue;

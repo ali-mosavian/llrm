@@ -625,6 +625,14 @@ pub struct Tuning {
     /// spill it is. The pin's LSR searches again with the pressure cut (LU3b);
     /// gcc's ivopts charges `estimate_reg_pressure_cost`. none: the pin's.
     pub lsr_spill_pressure_margin: Option<u32>,
+    /// DEVIATE LSR-NEG-BASIC (exit 2026-11-24): a plain value used inside the
+    /// loop may be the negation of an induction variable another use already
+    /// holds (`row - r` as `-(r - row)`), at this many instructions a trip
+    /// (a copy and a `sub` on a two-address target); the pin's LSR gives -1
+    /// scales to out-of-loop uses only ("TODO: Reconsider this special
+    /// case") and rates them free, gcc's ivopts expresses `use = a * cand + b`
+    /// for any `a` and prices it. none: the pin's.
+    pub lsr_negated_basic_insns: Option<u32>,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -832,6 +840,7 @@ impl Tuning {
         ipa_cp_clones_at_speed: false,
         ipa_cp_max_clones: 4,
         lsr_spill_pressure_margin: None,
+        lsr_negated_basic_insns: None,
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,

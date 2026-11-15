@@ -352,6 +352,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // (-6..-9%); sfm16_float_cmp holds 7 and its pointer step is not
         // spilled (22,268 clk, +3.6% without it).
         lsr_spill_pressure_margin: Some(2),
+        // DEVIATE LSR-NEG-BASIC (owner x86-m32-b, exit 2026-11-24): queens -O1
+        // keeps `r - row` and `row - r` as two registers (gcc holds one); a
+        // `mov` and a `sub` each trip (one: x_funcptr +1500 clk, x_hash +428).
+        lsr_negated_basic_insns: Some(2),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a
