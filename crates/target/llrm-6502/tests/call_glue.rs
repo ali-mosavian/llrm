@@ -159,6 +159,26 @@ fn a_pair_remainder_survives_a_later_word_division() {
     }
 }
 
+/// The same with the later divide unsigned: `x % 3` (a pair's rc6:rc7) against
+/// `x % c` read rc6 after both, so it compared the second remainder with
+/// itself and said equal (10 % 3 against 10 % 7: exit 0, want 1). release/next
+/// compiles div_constants_short's unsigned function so.
+#[test]
+fn a_pair_remainder_is_not_compared_with_a_later_remainder_of_itself() {
+    let ir = "@x = global i16 10\n@c = global i16 7\n@k = global i16 3\n\
+              define i8 @probe() {\n  %a = load volatile i16, ptr @x\n  %c = load volatile i16, ptr @c\n  %k = load volatile i16, ptr @k\n\
+                %q = udiv i16 %a, %k\n  %r = urem i16 %a, %k\n  %s = udiv i16 %a, %c\n\
+                %eq = icmp ne i16 %q, %s\n  %t = urem i16 %a, %c\n  %ne = icmp ne i16 %r, %t\n  %both = and i1 %eq, %ne\n  %o = zext i1 %both to i8\n  ret i8 %o\n}\n";
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let text = assembly(&format!("target datalayout = \"{}\"\n{ir}", datalayout()), &Request::new(level))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let code: String =
+            text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
+        let name = format!("call-glue-pair-remainder-compare-{level:?}");
+        assert_eq!(common::run_with(&name, "  jsr probe\n", &code), 1, "{level:?}: stale remainder:\n{text}");
+    }
+}
+
 /// `rc2:rc3` is the high word `__umulhisi3` returns and the next call writes. A
 /// copy of it from `rc2` was folded forward past the second call, so the high
 /// word of a 32x32 product read the next partial product (int64_division,
