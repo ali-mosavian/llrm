@@ -1915,7 +1915,7 @@ pub fn recorded(
             manager.add(cgpaddr::CgpAddr);
         }
     }
-    // DEVIATE CB1 (owner x87-b, exit 2026-12-10): clock-priced, so not -Os.
+    // DEVIATE CB1 (owner x87-b, exit 2026-11-24): clock-priced, so not -Os.
     if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
         manager.add(crate::cgpcondsplit::CondSplit);
     }

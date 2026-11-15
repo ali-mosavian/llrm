@@ -15,7 +15,7 @@
 //! prices: on x87 `fld`, `fadd` and `fstp` are 18 clocks against 3 for the
 //! branch, paid on every trip though `a` decides one in 25.
 //!
-//! DEVIATE CB1 (owner x87-b; exit 2026-12-10: the pin's DAG keeps the cone in
+//! DEVIATE CB1 (owner x87-b; exit 2026-11-24: the pin's DAG keeps the cone in
 //! the first block, and `splitBranchCondition` takes only an `or`/`and`
 //! instruction): `SimplifyCFG`'s `FoldBranchToCommonDest` made the select
 //! from two branches, and the cone, made before the first branch in the
