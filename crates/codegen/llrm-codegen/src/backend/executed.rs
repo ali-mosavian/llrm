@@ -125,6 +125,11 @@ impl Executed {
         &self,
         cpu: &Profile,
     ) -> Result<f64, String> {
+        // A CPU with no x87 states no price, and a body with no exchange
+        // needs none.
+        if self.exchanges == 0.0 {
+            return Ok(0.0);
+        }
         Ok(self.exchanges * (cpu.cost("x87_exchange")? as f64 - 1.0))
     }
 }
@@ -317,6 +322,14 @@ mod tests {
 
     /// NOTHING anchors print no bytes, yet each counted as an executed
     /// instruction: nbody.c read 144 more with its asm unchanged.
+    #[test]
+    fn test_an_fxch_costs_the_486_three_clocks_over_one_instruction() {
+        let cpu = cpu::profile("486").unwrap();
+        let done = super::Executed { exchanges: 2.0, ..Default::default() };
+        assert_eq!(done.exchange_cycles(cpu).unwrap(), 6.0);
+        assert_eq!(super::Executed::default().exchange_cycles(cpu).unwrap(), 0.0);
+    }
+
     #[test]
     fn test_anchors_that_print_nothing_do_not_execute() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
