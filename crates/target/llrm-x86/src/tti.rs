@@ -818,6 +818,10 @@ impl Tti for X86 {
         self.tuning.inline_trial_keeps_shrinking_copy
     }
 
+    fn inline_trial_cold_margin(&self) -> i64 {
+        self.tuning.inline_trial_cold_margin
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
