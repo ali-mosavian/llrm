@@ -829,7 +829,16 @@ fn vector_inst(
         if name == format!("XTN{narrow}") {
             return Some(match operands {
                 [Operand::Fpr(rn)] | [Operand::Fpr(_), Operand::Fpr(rn)] => {
-                    Ok(Inst::VectorNarrow { high, wide, rd, rn: *rn })
+                    Ok(Inst::VectorNarrow { high, shift: None, wide, rd, rn: *rn })
+                }
+                _ => wrong(),
+            });
+        }
+        if name == format!("SHRN{narrow}_shift") {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Imm(amount)]
+                | [Operand::Fpr(_), Operand::Fpr(rn), Operand::Imm(amount)] => {
+                    Ok(Inst::VectorNarrow { high, shift: Some(*amount as u8), wide, rd, rn: *rn })
                 }
                 _ => wrong(),
             });

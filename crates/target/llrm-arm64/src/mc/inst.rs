@@ -1544,8 +1544,10 @@ pub enum Inst {
     },
     /// `xtn{2} v.8b, v.8h`: each lane of `rn` (`wide`'s lanes) halved, into
     /// the low half of `rd` or, `high`, its top half (`rd` is then read too).
+    /// `shift`: `shrn{2}`, each lane shifted right by it first.
     VectorNarrow {
         high: bool,
+        shift: Option<u8>,
         wide: Arrangement,
         rd: Vreg,
         rn: Vreg,

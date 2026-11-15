@@ -1889,6 +1889,13 @@ pub trait Tti {
         4
     }
 
+    /// DEVIATE LSR-SPILL-PRICE: whether a loop whose other values fill the
+    /// registers keeps its pressure in LSR's cost
+    /// (`Tuning::lsr_prices_spills`).
+    fn lsr_prices_spills(&self) -> bool {
+        false
+    }
+
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
     /// constants fold enough of it to pay the copy at the speed rate.
     fn peels_folded_entry(&self) -> bool {

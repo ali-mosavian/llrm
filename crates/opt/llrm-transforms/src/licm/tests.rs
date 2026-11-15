@@ -2772,3 +2772,17 @@ impl llrm_mir::target::Machine for RangeDeref {
         self.0.address_forms()
     }
 }
+
+/// A signed divide of a vector in a loop panicked ("an integer division"):
+/// the speculation check read its type as an integer.
+#[test]
+fn test_a_vector_signed_divide_in_a_loop_does_not_panic() {
+    let text = "define void @f(ptr %p, <4 x i32> %v, i64 %n) {\n\
+entry:\n  br label %loop\n\
+loop:\n  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]\n\
+  %d = sdiv <4 x i32> %v, <i32 11, i32 11, i32 11, i32 11>\n\
+  store <4 x i32> %d, ptr %p, align 16\n\
+  %i.next = add i64 %i, 1\n  %e = icmp eq i64 %i.next, %n\n  br i1 %e, label %exit, label %loop\n\
+exit:\n  ret void\n}\n";
+    let _ = decided(text);
+}

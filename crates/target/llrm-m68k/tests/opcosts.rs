@@ -138,3 +138,19 @@ fn encoding_an_instruction_looks_its_shape_up_once() {
         }
     }
 }
+
+/// `Machine::size_costs` re-encoded every operation form on each call, and the
+/// loop unroller asks it once per instruction costed (`add_cost_recursively`):
+/// 45% of matmul -O2's 1777 M compile instructions.
+#[test]
+fn the_operation_sizes_are_computed_once_per_cpu() {
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let machine = llrm_m68k::machine::M68kMachine { cpu };
+        let first = format!("{:?}", machine.size_costs());
+        let before = llrm_m68k::dagisel::local::text_lookups();
+        let again = format!("{:?}", machine.size_costs());
+        let lookups = llrm_m68k::dagisel::local::text_lookups() - before;
+        assert_eq!(lookups, 0, "{cpu:?}: a repeat call looked {lookups} shapes up");
+        assert_eq!(first, again);
+    }
+}
