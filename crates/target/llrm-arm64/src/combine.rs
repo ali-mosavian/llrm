@@ -19,6 +19,7 @@
 //!   MULADDWI/MULSUBWI  t = mul a, b ; r = add/sub t, #i  =>  n = mov ±i ; r = madd a, b, n
 //!   MULADDv_OP1/OP2    t = mul.v a, b ; r = add.v t, c  =>  r = c ; mla r, a, b
 //!   MULSUBv_OP2        t = mul.v a, b ; r = sub.v c, t  =>  r = c ; mls r, a, b
+//!   MULSUBv_OP1        t = mul.v a, b ; r = sub.v t, c  =>  r = neg c ; mla r, a, b
 //! ```
 //!
 //! The shared pass takes a replacement only when it does not lengthen the
@@ -38,10 +39,6 @@
 //! DEVIATE MC-R (owner w15, exit: `preservesResourceLen` over the A510 unit
 //! tables): the resources test accepts every replacement; each fusion removes
 //! an instruction.
-//!
-//! DEVIATE MC-V1 (owner w11, exit 2026-11-24): `MULSUBv_OP1` (`sub t, c`, the
-//! pin's `neg` and `mla`) is not made: there is no vector `neg` here. The
-//! indexed `mla`/`mls` are not made either.
 //!
 //! DEVIATE MC-P (owner w15, review 2026-11-07): the flag-setting forms and the
 //! integer vector patterns of the `_indexed` kind are not made. The
@@ -79,11 +76,21 @@ enum Pattern {
     Scalar(ScalarPattern),
     /// `mla`/`mls` of a vector product and the register it is combined with.
     Vector {
-        subtract: bool,
+        kind: VectorKind,
         mul: usize,
         other: Vreg,
         lanes: Arrangement,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VectorKind {
+    /// `MULADDv_OP1/OP2`: `mla`.
+    Add,
+    /// `MULSUBv_OP2`, `sub c, t`: `mls`.
+    SubFrom,
+    /// `MULSUBv_OP1`, `sub t, c`: `neg` of `c`, then `mla`.
+    SubOf,
 }
 
 impl Pattern {
@@ -172,6 +179,7 @@ fn latency(op: &Op) -> u32 {
             // A510 ASIMD: `(ADD|SUB|NEG)v` 3, `MULv` (`WriteVq`)
             // and `ML[AS]v` 4.
             Inst::VectorBinary { op: VectorOp::Add | VectorOp::Sub, .. } => 3,
+            Inst::VectorIntUnary { op: VectorIntUnary::Neg, .. } => 3,
             Inst::VectorBinary { op: VectorOp::Mul, .. } | Inst::VectorMulAcc { .. } => 4,
             Inst::FpBinary { op: FpBinary::Div, size: FpSize::D, .. } => 22,
             Inst::FpBinary { op: FpBinary::Div, .. } => 13,
@@ -274,10 +282,13 @@ impl Block<'_> {
         rn: Vreg,
         rm: Vreg,
     ) -> Vec<Pattern> {
-        // `sub c, t` (`rm` the product) is `mls`; `sub t, c` needs a `neg`.
-        let candidates: &[(Vreg, Vreg)] = if subtract { &[(rm, rn)] } else { &[(rn, rm), (rm, rn)] };
+        let candidates: &[(Vreg, Vreg, VectorKind)] = if subtract {
+            &[(rm, rn, VectorKind::SubFrom), (rn, rm, VectorKind::SubOf)]
+        } else {
+            &[(rn, rm, VectorKind::Add), (rm, rn, VectorKind::Add)]
+        };
         let mut found = vec![];
-        for &(product, other) in candidates {
+        for &(product, other, kind) in candidates {
             if !product.is_virtual() || !other.is_virtual() {
                 continue;
             }
@@ -298,7 +309,7 @@ impl Block<'_> {
                         && !self.ops[mul + 1..root].iter().any(|op| op.defs_and_uses().0.contains(&Reg::Fpr(*reg))),
                 );
             if stable {
-                found.push(Pattern::Vector { subtract, mul, other, lanes });
+                found.push(Pattern::Vector { kind, mul, other, lanes });
             }
         }
         found
@@ -311,13 +322,15 @@ impl Block<'_> {
         root: usize,
         pattern: Pattern,
     ) -> Option<Replacement> {
-        let Pattern::Vector { subtract, mul, other, lanes } = pattern else { return None };
+        let Pattern::Vector { kind, mul, other, lanes } = pattern else { return None };
         let Op::I(Inst::VectorBinary { rd, .. }) = self.ops[root] else { return None };
         let Op::I(Inst::VectorBinary { rn: a, rm: b, .. }) = self.ops[mul] else { return None };
-        let made = vec![
-            Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(other) },
-            Op::I(Inst::VectorMulAcc { op: if subtract { MulAcc::Sub } else { MulAcc::Add }, lanes, rd, rn: a, rm: b }),
-        ];
+        let accumulate = match kind {
+            VectorKind::SubOf => Op::I(Inst::VectorIntUnary { op: VectorIntUnary::Neg, lanes, rd, rn: other }),
+            _ => Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(other) },
+        };
+        let op = if kind == VectorKind::SubFrom { MulAcc::Sub } else { MulAcc::Add };
+        let made = vec![accumulate, Op::I(Inst::VectorMulAcc { op, lanes, rd, rn: a, rm: b })];
         let inserted = made.iter().map(node_of).collect();
         self.pending = made;
         Some(Replacement { inserted, deleted: vec![mul, root] })

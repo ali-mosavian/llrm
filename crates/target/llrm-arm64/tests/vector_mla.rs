@@ -44,11 +44,11 @@ fn a_product_subtracted_from_a_register_is_mls() {
     }
 }
 
-/// `sub t, c` has no `mls` form (the pin negates and uses `mla`).
+/// `sub t, c` is `neg` of the register and `mla` (`MULSUBv_OP1`).
 #[test]
-fn a_register_subtracted_from_a_product_stays_a_multiply() {
+fn a_register_subtracted_from_a_product_is_neg_and_mla() {
     let asm = assembly("4", "%t = sub <4 x i32> %m, %z");
-    assert!(asm.contains("mul ") && !asm.contains("mls"), "{asm}");
+    assert!(asm.contains("neg ") && asm.contains("mla") && !asm.contains("mul "), "{asm}");
 }
 
 /// A product read twice cannot be folded away.
