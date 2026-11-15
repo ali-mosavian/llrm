@@ -246,14 +246,15 @@ fn a_word_select_returns_the_larger_word() {
 }
 
 /// A value live across a runtime call cannot stay in a register the routine
-/// clobbers: it goes to a slot and comes back. a = 5: t = 6, r = 5 * 11 = 55,
-/// t + r = 61; 11 is not `2^n +- 1` times a power of two, so it stays a call.
+/// clobbers: `__mulqi3` names `rc2`, `rc3`, so it stays in another scratch cell
+/// (`rc4`). a = 5: t = 6, r = 5 * 11 = 55, t + r = 61; 11 is not `2^n +- 1`
+/// times a power of two, so it stays a call.
 #[test]
 fn a_value_live_across_a_call_survives_it() {
     let ir =
         "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
     let text = compile(ir, "across");
-    assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
+    assert!(text.contains("jsr __mulqi3") && !text.contains("s_across_"), "{text}");
     assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
 }
 
@@ -357,8 +358,8 @@ fn a_sum_through_a_pointer_runs_on_the_allocator() {
     assert_eq!(common::run_with("alloc-sump", &format!("{setup}  jsr sump\n"), &format!("{text}{data}")), 9);
 }
 
-/// A pointer live across a call is spilled as a pair and comes back whole:
-/// the second read through it sees the same bytes. data = 3 1 4 1:
+/// A pointer live across a call comes back whole: the second read through it
+/// sees the same bytes. data = 3 1 4 1:
 /// 4 + 55 + 1 = 60.
 #[test]
 fn a_pointer_live_across_a_call_survives_it() {
@@ -376,8 +377,8 @@ fn a_pointer_live_across_a_call_survives_it() {
     let text = compile(ir, "keep");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
     let setup = &args(&[sym("vals"), byte(5)]);
-    // the pair is kept in callee-saved cells, saved around the body
-    assert!(text.contains("pha") && text.contains("sta rc9"), "no spill:\n{text}");
+    // `__mulqi3` names `rc2`, `rc3`: the pair stays in a scratch pair it leaves alone, saved nowhere
+    assert!(text.contains("jsr __mulqi3") && !text.contains("pha") && !text.contains("rc9"), "{text}");
     assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
 }
 
@@ -1005,6 +1006,21 @@ fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
         (8..16).any(|n| looped.contains(&format!("rc{n}"))),
         "a loop of calls keeps its values in a cell:\n{looped}"
     );
+}
+
+/// digits kept its counter in `rc8` across the divide call, saved on entry and
+/// restored at the return (12 of its 105 bytes). The runtime divide names only
+/// `rc2`..`rc7`, so on a platform with scratch cells the counter stays in one
+/// of them, unsaved.
+#[test]
+fn a_value_across_a_runtime_call_lives_in_a_scratch_cell_the_routine_leaves_alone() {
+    let text = compile_on(DIGITS, "digits", 32);
+    assert!(!text.contains("pha") && !text.contains("rc8"), "{text}");
+    // digits(40000) = 5, digits(99) = 2, digits(100) = 3, digits(5) = 1
+    for (v, want) in [(40000u32, 5), (99, 2), (100, 3), (5, 1)] {
+        let main = format!("  lda #{}\n  ldx #{}\n  jsr digits\n", v & 0xFF, v >> 8);
+        assert_eq!(common::run_with(&format!("alloc-scratch-{v}"), &main, &text), want, "digits({v})\n{text}");
+    }
 }
 
 /// The word result of `name` for a word argument in rc2:rc3 (low byte in A,

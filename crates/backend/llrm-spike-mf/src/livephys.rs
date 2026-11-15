@@ -126,7 +126,8 @@ impl LiveLanes {
             }
         }
         if inst.call {
-            for root in T::caller_saved() {
+            let clobbered = inst.call_clobbers.as_ref().map_or_else(T::caller_saved, |known| known.iter().copied().collect());
+            for root in clobbered {
                 self.remove(info, root);
             }
         }

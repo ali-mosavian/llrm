@@ -228,6 +228,21 @@ pub fn shared_save_gain(n: u32) -> i64 {
     6 * i64::from(n) + 2 - 11
 }
 
+/// What a `jsr` of the runtime routine `callee` destroys: `a`, `x`, `y` and the
+/// cells its text names, with the pairs over them, so a value may stay in any
+/// other scratch cell across the call. `None`: the convention's own set.
+fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTreeSet<RegId>>> {
+    // the size levels call the compact variant in its place
+    let mut cells = crate::routines::cells_named(callee)?;
+    if let Some(compact) = crate::routines::compact_variant(callee) {
+        cells.extend(crate::routines::cells_named(compact)?);
+    }
+    let mut set: std::collections::BTreeSet<RegId> = [reg::A, reg::X, reg::Y].into_iter().collect();
+    set.extend(cells.iter().map(|&n| rc(n)));
+    set.extend(pairs().filter(|&pair| cells.iter().any(|&n| lane(pair, 0) == rc(n) || lane(pair, 1) == rc(n))));
+    Some(std::sync::Arc::new(set))
+}
+
 fn imaginary() -> u8 {
     IMAGINARY.with(|n| n.get())
 }
@@ -1244,6 +1259,17 @@ impl Builder {
         );
         jsr.call = true;
         self.push(jsr);
+    }
+
+    /// `jsr routine`, a runtime routine: it destroys only what its text names.
+    fn call_runtime(
+        &mut self,
+        routine: &str,
+    ) {
+        self.call(routine);
+        if let Some(Inst { call_clobbers, .. }) = self.function.blocks[self.current].insts.last_mut() {
+            *call_clobbers = runtime_clobbers(routine);
+        }
     }
 
     /// `jsr (pointer)`: the same, entering the callee through the pair that
@@ -2838,7 +2864,7 @@ pub fn build_with_places(
                 let (d, x, y) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?, b.byte(name(&o[2])?)?);
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
-                b.call(routine);
+                b.call_runtime(routine);
                 b.copy(d, Reg::Phys(reg::A));
             }
             // the quotient comes back in A (and X), the remainder in rc6 (and
@@ -2850,7 +2876,7 @@ pub fn build_with_places(
                 let (x, y) = (b.byte(name(&o[2])?)?, b.byte(name(&o[3])?)?);
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
-                b.call("__udivmodqi4");
+                b.call_runtime("__udivmodqi4");
                 b.copy(q, Reg::Phys(reg::A));
                 b.copy(r, Reg::Phys(rc(6)));
             }
@@ -2863,7 +2889,7 @@ pub fn build_with_places(
                 b.copy(Reg::Phys(rc(3)), xh);
                 b.copy(Reg::Phys(rc(4)), yl);
                 b.copy(Reg::Phys(rc(5)), yh);
-                b.call("__udivhi3");
+                b.call_runtime("__udivhi3");
                 b.copy(ql, Reg::Phys(reg::A));
                 b.copy(qh, Reg::Phys(reg::X));
                 b.copy(rl, Reg::Phys(rc(6)));
@@ -2879,7 +2905,7 @@ pub fn build_with_places(
                 }
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
-                b.call(if code == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" });
+                b.call_runtime(if code == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" });
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
@@ -2911,7 +2937,7 @@ pub fn build_with_places(
                     b.copy(Reg::Phys(rc(4)), yl);
                     b.copy(Reg::Phys(rc(5)), yh);
                 }
-                b.call(routine);
+                b.call_runtime(routine);
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
@@ -3426,7 +3452,10 @@ fn live_after(
         }
         // a call writes every register it does not preserve, results included
         if inst.call {
-            defs.extend(Mos::<false>::caller_saved());
+            match &inst.call_clobbers {
+                Some(known) => defs.extend(known.iter().copied()),
+                None => defs.extend(Mos::<false>::caller_saved()),
+            }
         }
         (defs, reads)
     };
