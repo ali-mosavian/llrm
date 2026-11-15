@@ -11,11 +11,9 @@ target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i
 
 const MISSING: &str = "has no arm64 instruction yet";
 
-/// DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the machine opcodes
-/// the sweep found selected and not emitted: `NEG`, `ABS`, `CNT`, `FSQRT` and
-/// the lane load `LD1i8/16/32/64`, and the 64-bit float forms (`FADDv2f32`,
-/// the 64-bit vector work). Any other missing opcode fails the test.
-const KNOWN_MISSING: [&str; 5] = ["NEGv", "ABSv", "CNTv", "FSQRTv", "LD1i"];
+/// DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the 64-bit float
+/// forms (`FADDv2f32`) are selected and not emitted: the 64-bit vector work.
+/// Any other missing opcode fails the test.
 const KNOWN_MISSING_SUFFIX: &str = "v2f32 has no";
 
 /// `(lane count, lane type)` of each NEON vector and whether its lanes are floats.
@@ -149,9 +147,7 @@ fn every_selected_vector_opcode_has_an_instruction() {
         for (name, body) in bodies {
             let source = function(lanes, element, body);
             if let Some(said) = complaint(&source) {
-                if said.contains(MISSING) && !said.contains(KNOWN_MISSING_SUFFIX)
-                    && !KNOWN_MISSING.iter().any(|stem| said.contains(&format!("opcode {stem}")))
-                {
+                if said.contains(MISSING) && !said.contains(KNOWN_MISSING_SUFFIX) {
                     missing.push(format!("{name} <{lanes} x {element}>: {said}"));
                 }
             }
@@ -178,5 +174,16 @@ fn a_splat_of_a_load_is_ld1r() {
         assert!(said.status.success(), "<{lanes} x {element}>: {}", String::from_utf8_lossy(&said.stderr));
         let text = std::fs::read_to_string(&output).unwrap();
         assert!(text.contains("ld1r"), "<{lanes} x {element}> has no ld1r:\n{text}");
+    }
+}
+
+/// An `insertelement` of a loaded scalar is `ld1 { v.s }[1], [x]`. Its source
+/// vector was never copied into the destination, so the live-range
+/// computation panicked ("a unique value") on every lane width.
+#[test]
+fn a_lane_load_into_a_vector_compiles() {
+    for (lanes, element, _) in TYPES.into_iter().filter(|(_, _, float)| !float) {
+        let source = function(lanes, element, "%x = load {E}, ptr %p, align 8\n%r = insertelement {T} %a, {E} %x, i64 1");
+        assert_eq!(complaint(&source), None, "<{lanes} x {element}>");
     }
 }
