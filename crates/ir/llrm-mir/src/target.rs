@@ -456,6 +456,10 @@ pub struct Tuning {
     /// Clocks a value held across an inner loop costs each outer trip: a store
     /// and a load.
     pub loop_carried_clocks: i64,
+    /// DEVIATE LSR-OUTER: the compare a counter stepped by an element size
+    /// takes over as the loop's exit test (`lftr`), saved each trip besides
+    /// the scaled index. 0: the pin (no outer-loop reduction).
+    pub counter_exit_compare_clocks: i64,
     /// DEVIATE EXT-LOAD-COST (owner llrm-target-x86-m16, exit 2026-11-27):
     /// the clocks a load that widens (`movzx`) costs over the plain load. CGP's
     /// `optimizeExt` moves an extension next to its load, as the pin does where
@@ -794,6 +798,7 @@ impl Tuning {
         merged_condition_clocks: 0,
         multiply_clocks: 0,
         loop_carried_clocks: 0,
+        counter_exit_compare_clocks: 0,
         ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,

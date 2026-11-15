@@ -56,6 +56,9 @@ pub enum MVT {
     V64I16,
     V32I32,
     V16I64,
+    /// The 2048-bit `v32i64` of the pin's `MVT`: the widest the vectorizers
+    /// form (`<32 x i16>` widened to `i64` lanes).
+    V32I64,
     V32F32,
     V16F64,
     /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin
@@ -129,7 +132,7 @@ impl MVT {
 }
 
 /// Every vector type: its element and its lane count.
-const VECTORS: [(MVT, MVT, u32); 32] = [
+const VECTORS: [(MVT, MVT, u32); 33] = [
     (MVT::V2I1, MVT::I1, 2),
     (MVT::V4I1, MVT::I1, 4),
     (MVT::V8I1, MVT::I1, 8),
@@ -160,6 +163,7 @@ const VECTORS: [(MVT, MVT, u32); 32] = [
     (MVT::V64I16, MVT::I16, 64),
     (MVT::V32I32, MVT::I32, 32),
     (MVT::V16I64, MVT::I64, 16),
+    (MVT::V32I64, MVT::I64, 32),
     (MVT::V32F32, MVT::F32, 32),
     (MVT::V16F64, MVT::F64, 16),
 ];

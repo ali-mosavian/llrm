@@ -133,6 +133,11 @@ pub struct Options {
     /// its range (DEVIATE SLOT-REG, [`crate::slotreg`]). On in the shipped
     /// options; `LLRM_NO_SLOT_REG` turns it off.
     pub slot_registers: bool,
+    /// An instruction reads a spilled value from its slot
+    /// ([`crate::spillfold`]). A slot read that way cannot live
+    /// in an address register, so a function with spills is also built without
+    /// it and the cheaper kept.
+    pub spill_fold: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
     /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
     /// changed is also built without it and the cheaper kept
@@ -235,6 +240,7 @@ impl Options {
         reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
         slot_registers: false,
+        spill_fold: false,
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
@@ -278,6 +284,7 @@ impl Default for Options {
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
             slot_registers: !llrm_support::env_flag!("LLRM_NO_SLOT_REG"),
+            spill_fold: !llrm_support::env_flag!("LLRM_NO_SPILL_FOLD"),
             shared_cse: true,
             direct_copies: false,
             shared_licm: false,
@@ -384,9 +391,21 @@ pub fn items_with(
     if wants_slots && !one_build && prefixes.had_slots.get() {
         let (items, touched) =
             items_once(module, name, cpu, Options { slot_registers: true, ..kept_options }, &prefixes)?;
-        if touched.slot_registers && crate::trial::keeps(&items, &kept, cpu, price) {
-            return Ok(items);
+        let mut best = kept;
+        if touched.slot_registers && crate::trial::keeps(&items, &best, cpu, price) {
+            best = items;
         }
+        // a slot read in place stays in the frame: the same build without the
+        // fold may move it
+        if touched.spill_folded {
+            let options = Options { slot_registers: true, spill_fold: false, ..kept_options };
+            let (items, touched) = items_once(module, name, cpu, options, &prefixes)?;
+            if touched.slot_registers && crate::trial::keeps(&items, &best, cpu, price) {
+                trial_won(name, "spill_fold", true);
+                best = items;
+            }
+        }
+        return Ok(best);
     }
     Ok(kept)
 }
@@ -609,6 +628,8 @@ struct Touched {
     shared_cse: bool,
     /// A spill slot moved into an address register ([`crate::slotreg`]).
     slot_registers: bool,
+    /// An instruction reads a spill slot in place ([`crate::spillfold`]).
+    spill_folded: bool,
     /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
     /// trial credits clocks only inside loops, since a straight-line multiply
     /// may never run.
@@ -981,16 +1002,19 @@ fn items_once(
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy_after(
-            &mut function,
-            wants_size,
-            options.indexed,
-            options.rematerialize_arguments,
-            options.global_copies,
-            options.loop_carried_first,
-            options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
-        )?
+        crate::spillfold::scoped(options.spill_fold, || {
+            crate::regalloc::allocate_greedy_after(
+                &mut function,
+                wants_size,
+                options.indexed,
+                options.rematerialize_arguments,
+                options.global_copies,
+                options.loop_carried_first,
+                options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
+            )
+        })?
     };
+    touched.spill_folded = crate::spillfold::has_folded_reads(&function);
     drop(allocating);
     let mut slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     let sp = llrm_support::debug::span("m68k postalloc");
