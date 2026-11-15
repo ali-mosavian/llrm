@@ -286,12 +286,17 @@ impl FunctionPass for SlpVectorize {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
-        if tti.vector_register_bits() == 0 || !outer.target().has_vector_mir() {
-            return PreservedAnalyses::all();
-        }
-        let chains = tti.slp_priced() && run_function(unit.context, unit.layout, unit.function, &outer, &*tti);
-        // The pin's one pass also makes the wide compare of an `and` chain.
+        let chains = outer
+            .target()
+            .tti()
+            .is_some_and(
+                |tti| tti.slp_priced()
+                    && tti.vector_register_bits() > 0
+                    && outer.target().has_vector_mir()
+                    && run_function(unit.context, unit.layout, unit.function, &outer, &*tti),
+            );
+        // The pin's one pass also makes the wide compare of an `and` chain; it
+        // runs wherever it did before this pass held the store chains.
         let compares = crate::slpcompares::SlpCompares.run(unit, analyses);
         if chains { PreservedAnalyses::none() } else { compares }
     }
