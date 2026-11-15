@@ -504,6 +504,13 @@ impl fmt::Display for Inst {
                 let lane = lane_letter(*lanes);
                 write!(out, "dup v{}.{}, v{}.{lane}[{index}]", rd.0, lanes.suffix(), rn.0)
             }
+            Inst::VectorIntUnary { op, lanes, rd, rn } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
+            }
+            Inst::VectorLoadLane { lanes, rt, index, base } => {
+                write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
+            }
             Inst::VectorFpUnary { op, lanes, rd, rn } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)

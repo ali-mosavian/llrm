@@ -754,6 +754,7 @@ pub enum VectorFpUnary {
     Ucvtf,
     Fcvtzs,
     Fcvtzu,
+    Sqrt,
 }
 
 impl VectorFpUnary {
@@ -766,6 +767,7 @@ impl VectorFpUnary {
             VectorFpUnary::Ucvtf => (1, 0, 0b11101),
             VectorFpUnary::Fcvtzs => (0, 1, 0b11011),
             VectorFpUnary::Fcvtzu => (1, 1, 0b11011),
+            VectorFpUnary::Sqrt => (1, 1, 0b11111),
         }
     }
 
@@ -777,7 +779,45 @@ impl VectorFpUnary {
             VectorFpUnary::Ucvtf => "ucvtf",
             VectorFpUnary::Fcvtzs => "fcvtzs",
             VectorFpUnary::Fcvtzu => "fcvtzu",
+            VectorFpUnary::Sqrt => "fsqrt",
         }
+    }
+}
+
+/// The one-source integer vector operations: `neg v.4s, v.4s`, `abs` and
+/// `cnt v.16b, v.16b` (bytes only).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorIntUnary {
+    Neg,
+    Abs,
+    Cnt,
+}
+
+impl VectorIntUnary {
+    /// (`U`, `opcode`) of the "two-register misc" integer encoding.
+    pub(super) fn fields(self) -> (u32, u32) {
+        match self {
+            VectorIntUnary::Neg => (1, 0b01011),
+            VectorIntUnary::Abs => (0, 0b01011),
+            VectorIntUnary::Cnt => (0, 0b00101),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorIntUnary::Neg => "neg",
+            VectorIntUnary::Abs => "abs",
+            VectorIntUnary::Cnt => "cnt",
+        }
+    }
+
+    /// Whether the encoding has these lanes: `cnt` is bytes, the others have
+    /// no `1d`.
+    pub fn has_lanes(
+        self,
+        lanes: Arrangement,
+    ) -> bool {
+        self != VectorIntUnary::Cnt || lanes.full() == Arrangement::B16
     }
 }
 
@@ -1600,7 +1640,22 @@ pub enum Inst {
         index: u8,
         src: u8,
     },
-    /// `fneg v.4s, v.4s` and `fabs`; `lanes` is `S4` or `D2`.
+    /// `neg v.4s, v.4s`, `abs`, `cnt v.16b, v.16b`.
+    VectorIntUnary {
+        op: VectorIntUnary,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+    },
+    /// `ld1 { v.s }[index], [base]`: one lane of `rt` loaded from `[base]`;
+    /// `rt` is read and written (`LD1i32`).
+    VectorLoadLane {
+        lanes: Arrangement,
+        rt: Vreg,
+        index: u8,
+        base: Gpr,
+    },
+    /// `fneg v.4s, v.4s`, `fabs`, `fsqrt` and the conversions; `lanes` is `S4` or `D2`.
     VectorFpUnary {
         op: VectorFpUnary,
         lanes: Arrangement,

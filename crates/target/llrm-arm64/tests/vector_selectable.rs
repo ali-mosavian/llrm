@@ -11,11 +11,9 @@ target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i
 
 const MISSING: &str = "has no arm64 instruction yet";
 
-/// DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the machine opcodes
-/// the sweep found selected and not emitted: `NEG`, `ABS`, `CNT`, `FSQRT` and
-/// the lane load `LD1i8/16/32/64`, and the 64-bit float forms (`FADDv2f32`,
-/// the 64-bit vector work). Any other missing opcode fails the test.
-const KNOWN_MISSING: [&str; 5] = ["NEGv", "ABSv", "CNTv", "FSQRTv", "LD1i"];
+/// DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the 64-bit float
+/// forms (`FADDv2f32`) are selected and not emitted: the 64-bit vector work.
+/// Any other missing opcode fails the test.
 const KNOWN_MISSING_SUFFIX: &str = "v2f32 has no";
 
 /// `(lane count, lane type)` of each NEON vector and whether its lanes are floats.
@@ -149,9 +147,7 @@ fn every_selected_vector_opcode_has_an_instruction() {
         for (name, body) in bodies {
             let source = function(lanes, element, body);
             if let Some(said) = complaint(&source) {
-                if said.contains(MISSING) && !said.contains(KNOWN_MISSING_SUFFIX)
-                    && !KNOWN_MISSING.iter().any(|stem| said.contains(&format!("opcode {stem}")))
-                {
+                if said.contains(MISSING) && !said.contains(KNOWN_MISSING_SUFFIX) {
                     missing.push(format!("{name} <{lanes} x {element}>: {said}"));
                 }
             }

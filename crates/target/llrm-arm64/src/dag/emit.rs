@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp,
-    VectorOp, VectorReduce, VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
+    VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -696,6 +696,34 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `NEGv4i32`, `ABSv8i8`, `CNTv16i8`: one source, integer lanes.
+    for (stem, op) in [("NEG", VectorIntUnary::Neg), ("ABS", VectorIntUnary::Abs), ("CNT", VectorIntUnary::Cnt)] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
+            continue;
+        };
+        if !op.has_lanes(lanes) {
+            continue;
+        }
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::VectorIntUnary { op, lanes, rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
+    // `LD1i32`: a lane loaded into `rd`, which starts as the first operand.
+    if let Some(lanes) = name.strip_prefix("LD1i").and_then(|bits| match bits {
+        "8" => Some(Arrangement::B16),
+        "16" => Some(Arrangement::H8),
+        "32" => Some(Arrangement::S4),
+        "64" => Some(Arrangement::D2),
+        _ => None,
+    }) {
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Imm(index), Operand::Reg(base)] => {
+                Ok(Inst::VectorLoadLane { lanes, rt: rd, index: *index as u8, base: *base })
+            }
+            _ => wrong(),
+        });
+    }
     // `LD1Rv4s`: the lane at the address replicated into every lane of `rd`.
     if let Some(lanes) =
         name.strip_prefix("LD1Rv").and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
@@ -915,6 +943,7 @@ fn vector_inst(
         ("UCVTF", VectorFpUnary::Ucvtf),
         ("FCVTZS", VectorFpUnary::Fcvtzs),
         ("FCVTZU", VectorFpUnary::Fcvtzu),
+        ("FSQRT", VectorFpUnary::Sqrt),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(fp_lanes) else {
             continue;

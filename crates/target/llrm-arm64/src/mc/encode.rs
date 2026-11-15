@@ -91,6 +91,21 @@ fn error<T>(text: impl Into<String>) -> Result<T, Error> {
     Err(Error(text.into()))
 }
 
+/// `(opcode, Q, S, size)` of the single-structure forms: Q:S:size is the
+/// index, as many bits of it as the lane leaves.
+fn single_structure_fields(
+    lanes: Arrangement,
+    index: u8,
+) -> (u32, u32, u32, u32) {
+    let index = u32::from(index);
+    match lanes.full() {
+        Arrangement::B16 => (0b000, index >> 3, (index >> 2) & 1, index & 3),
+        Arrangement::H8 => (0b010, index >> 2, (index >> 1) & 1, (index & 1) << 1),
+        Arrangement::S4 => (0b100, index >> 1, index & 1, 0b00),
+        _ => (0b100, index, 0, 0b01),
+    }
+}
+
 fn reg(register: Gpr) -> Result<u32, Error> {
     if register.0 > 31 { error(format!("x{} is no machine register", register.0)) } else { Ok(register.0) }
 }
@@ -544,16 +559,17 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x0D40_C000 | lanes.q() << 30 | lanes.size() << 10 | reg(*base)? << 5 | vreg(*rt)?
         }
         Inst::VectorStoreLane { lanes, rt, index, base } => {
-            let index = u32::from(*index);
-            // Q:S:size is the index, as many bits of it as the lane leaves
-            // (`ST1 (single structure)`)
-            let (opcode, q, s, size) = match lanes.full() {
-                Arrangement::B16 => (0b000, index >> 3, (index >> 2) & 1, index & 3),
-                Arrangement::H8 => (0b010, index >> 2, (index >> 1) & 1, (index & 1) << 1),
-                Arrangement::S4 => (0b100, index >> 1, index & 1, 0b00),
-                _ => (0b100, index, 0, 0b01),
-            };
+            let (opcode, q, s, size) = single_structure_fields(*lanes, *index);
             0x0D00_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
+        // `LD1 (single structure)`: the store's encoding with L set.
+        Inst::VectorLoadLane { lanes, rt, index, base } => {
+            let (opcode, q, s, size) = single_structure_fields(*lanes, *index);
+            0x0D40_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
+        Inst::VectorIntUnary { op, lanes, rd, rn } => {
+            let (u, opcode) = op.fields();
+            0x0E20_0800 | lanes.q() << 30 | u << 29 | lanes.size() << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();

@@ -348,6 +348,10 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
+            Inst::VectorLoadLane { rt, base, .. } => {
+                f(Fpr(rt), Role::UseDef);
+                f(G(base), Role::Use);
+            }
             Inst::VectorLoadReplicate { rt, base, .. } => {
                 f(Fpr(rt), Role::Def);
                 f(G(base), Role::Use);
@@ -385,6 +389,7 @@ impl Inst {
             Inst::VectorLongShift { rd, rn, .. }
             | Inst::VectorNot { rd, rn, .. }
             | Inst::VectorFpUnary { rd, rn, .. }
+            | Inst::VectorIntUnary { rd, rn, .. }
             | Inst::VectorReduce { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
