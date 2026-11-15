@@ -599,6 +599,7 @@ fn vector_fill(
     }
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
+        ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
         ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
         ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
         _ => {}
@@ -616,6 +617,7 @@ fn vector_fill(
             "v8i16" => Some(shaped(ImmShape::H8, 0)),
             "v4i32" => Some(shaped(ImmShape::S4, 0)),
             "v2i32" => Some(shaped(ImmShape::S2, 0)),
+            "v4i16" => Some(shaped(ImmShape::H4, 0)),
             "v4s_msl" => Some(shaped(ImmShape::S4Msl, 256)),
             _ => continue,
         };
@@ -697,7 +699,13 @@ fn vector_inst(
         });
     }
     // `NEGv4i32`, `ABSv8i8`, `CNTv16i8`: one source, integer lanes.
-    for (stem, op) in [("NEG", VectorIntUnary::Neg), ("ABS", VectorIntUnary::Abs), ("CNT", VectorIntUnary::Cnt)] {
+    for (stem, op) in [
+        ("NEG", VectorIntUnary::Neg),
+        ("ABS", VectorIntUnary::Abs),
+        ("CNT", VectorIntUnary::Cnt),
+        ("CLZ", VectorIntUnary::Clz),
+        ("RBIT", VectorIntUnary::Rbit),
+    ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;
         };
@@ -823,6 +831,7 @@ fn vector_inst(
     let fp_lanes = |text: &str| match text {
         "4f32" => Some(Arrangement::S4),
         "2f64" => Some(Arrangement::D2),
+        "2f32" => Some(Arrangement::S2),
         _ => None,
     };
     for (stem, op) in
@@ -977,6 +986,10 @@ fn vector_inst(
         ("SMIN", VectorOp::Smin),
         ("UMAX", VectorOp::Umax),
         ("UMIN", VectorOp::Umin),
+        ("SQADD", VectorOp::Sqadd),
+        ("UQADD", VectorOp::Uqadd),
+        ("SQSUB", VectorOp::Sqsub),
+        ("UQSUB", VectorOp::Uqsub),
     ] {
         let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')).and_then(lanes_of) else {
             continue;

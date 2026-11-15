@@ -210,3 +210,13 @@ fn a_vector_constant_is_loaded_before_the_loop() {
     assert!(before.contains("$K"), "{add}");
     assert!(!inside.contains("$K"), "{add}");
 }
+
+/// The zero a reduction starts from is `xorps xmm, xmm` (`V_SET0`, an `isBuildVectorAllZeros` build the pin leaves
+/// legal): it was a 16-byte constant-pool load (`movaps xmm0, $K`) and a 16-byte `.rodata.cst16` entry.
+#[test]
+fn a_vector_of_zeros_is_an_xor_and_not_a_pool_load() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "sum_array");
+    assert!(sum.contains("xorps xmm") || sum.contains("pxor xmm"), "{sum}");
+    assert!(!sum.contains("$K"), "{sum}");
+}
