@@ -214,7 +214,9 @@ impl LoopOptions {
         let id = lp.get_loop_latch(function).and_then(|latch| function.terminator(latch)).and_then(|term| {
             function.instruction(term).metadata.iter().find(|(kind, _)| kind == "llvm.loop").map(|(_, id)| *id)
         });
-        let node = |at: llrm_mir::module::MetadataId| run.metadata.get(at.0 as usize);
+        // The loop ID may be one the vectorizer made earlier in this run: not yet in the module's table.
+        let node =
+            |at: llrm_mir::module::MetadataId| crate::loopvectorizeskeleton::node_at(&*run.declared, run.metadata, at);
         let Some(id) = id else { return Self(Vec::new()) };
         let Some(loop_id) = node(id) else { return Self(Vec::new()) };
         if !matches!(
