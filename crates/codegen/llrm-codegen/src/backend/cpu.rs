@@ -210,9 +210,10 @@ pub struct Profile {
     pub post_ra_tail_duplicate: bool,
     /// `TimingTable::tail_merge_pin_faithful`.
     pub tail_merge_pin_faithful: bool,
-    /// Equal literal stores share a register at the speed levels too
-    /// (`TimingTable::share_literal_stores`).
+    /// Equal literal stores share a register where bytes are strict (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
+    /// `TimingTable::share_literal_stores_at_speed`.
+    pub share_literal_stores_at_speed: bool,
     /// `TimingTable::zero_extend_with_and`.
     pub zero_extend_with_and: bool,
     /// Pool data bytes are strict (`TimingTable::pool_data_strict`).
@@ -438,6 +439,7 @@ impl Profile {
             post_ra_tail_duplicate: false,
             tail_merge_pin_faithful: false,
             share_literal_stores: false,
+            share_literal_stores_at_speed: false,
             zero_extend_with_and: false,
             pool_data_strict: false,
             size_one_is_xor_inc: false,
@@ -785,6 +787,7 @@ fn _profile(
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         tail_merge_pin_faithful: table.tail_merge_pin_faithful,
         share_literal_stores: table.share_literal_stores,
+        share_literal_stores_at_speed: table.share_literal_stores_at_speed,
         zero_extend_with_and: table.zero_extend_with_and,
         pool_data_strict: table.pool_data_strict,
         size_one_is_xor_inc: table.size_one_is_xor_inc,

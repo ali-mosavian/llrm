@@ -580,9 +580,9 @@ fn compute_known_bits_from_shift_operator(
 }
 
 /// The `Y` of `m_c_BinOp(m_Value(X), m_c_Add(m_Deferred(X), m_Value(Y)))`,
-/// `..m_Sub(m_Deferred(X), m_Value(Y))` or `..m_Sub(m_Value(Y), m_Deferred(X))`,
-/// tried in that order. Each operand is looked up once, with no matcher
-/// closures: the miss path ran 126 Ir per call.
+/// `..m_Sub(m_Deferred(X), m_Value(Y))` or `..m_Sub(m_Value(Y),
+/// m_Deferred(X))`, tried in that order. Each operand is looked up once, with
+/// no matcher closures: the miss path ran 126 Ir per call.
 fn low_bit_partner(
     q: &Query,
     instruction: &Instruction,
@@ -610,7 +610,9 @@ fn low_bit_partner(
         }
         None
     };
-    find(BinaryOp::Add, true, true).or_else(|| find(BinaryOp::Sub, false, true)).or_else(|| find(BinaryOp::Sub, false, false))
+    find(BinaryOp::Add, true, true)
+        .or_else(|| find(BinaryOp::Sub, false, true))
+        .or_else(|| find(BinaryOp::Sub, false, false))
 }
 
 /// `getKnownBitsFromAndXorOr(I, DemandedElts, KnownLHS, KnownRHS, Q, Depth)`.
@@ -1761,6 +1763,17 @@ pub fn compute_known_bits(
     depth: u32,
 ) -> KnownBits {
     crate::counts::bump(crate::counts::Event::KnownBitsComputed);
+    // DEVIATE (vectors, w11): the rules below are the scalar ones; a vector is
+    // what every lane holds, a splat constant's number, else nothing.
+    if let Some(lane) = q.int_vector_lane_bits(v) {
+        return match v {
+            Operand::Constant(id) => match q.context().splat_int(id) {
+                Some((bits, width)) => KnownBits::constant(width, bits),
+                None => KnownBits::unknown(lane),
+            },
+            _ => KnownBits::unknown(lane),
+        };
+    }
     let mut known = KnownBits::unknown(width_of(q, v));
     compute_known_bits_into(q, v, &mut known, depth);
     known

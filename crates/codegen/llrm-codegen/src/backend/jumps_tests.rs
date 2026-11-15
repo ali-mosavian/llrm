@@ -2834,6 +2834,45 @@ fn test_the_latch_stays_below_the_inner_loop_it_falls_from() {
     assert!(at(&priced, 6) == at(&priced, 5) + 1, "the inner loop falls into the latch: {priced:?}");
 }
 
+/// x_cordic -O2: an inner loop whose header splits in two arms that join in
+/// a small latch. Placement copies the latch into both arms, so the arm's jump
+/// to it is no loss when the latch goes above the header and falls into it.
+/// Priced as a lost `jmp`, the latch stayed below, both arms paid a taken
+/// `jne` and the loop took 50,653 clk against 48,939.
+#[test]
+fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
+    use super::placement::TopClocks;
+    let source = {
+        let mut made = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+                block(3, vec![_compare(3), _branch(4, "js", 4), _jump(5, 5)], vec![4, 5]).into(),
+                block(4, vec![_move(6, imm(1)), _jump(7, 6)], vec![6]).into(),
+                block(5, vec![_move(8, imm(2)), _jump(9, 6)], vec![6]).into(),
+                block(6, vec![_compare(10), _branch(11, "jne", 3), _jump(12, 7)], vec![3, 7]).into(),
+                block(7, vec![_return(13)], vec![]).into(),
+            ],
+        );
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        made.odds.taken.insert((3, 4), fixed(25.0 / 40.0));
+        made.odds.taken.insert((3, 5), fixed(15.0 / 40.0));
+        made.odds.taken.insert((6, 3), fixed(31.0 / 32.0));
+        made.odds.taken.insert((6, 7), fixed(1.0 / 32.0));
+        made
+    };
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
+    let pin = order(None);
+    assert!(at(&pin, 5) < at(&pin, 3), "premise: the pin has an arm, with the latch copied in, above the header: {pin:?}");
+    let priced = order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 }));
+    assert!(at(&priced, 5) < at(&priced, 3), "an arm with the latch is the loop top: {priced:?}");
+}
+
 /// Control: the clock weights and the exit rule are for a loop's top and a
 /// loop's exit; a diamond's join keeps the pin's order (sfm16_float_cmp -O2
 /// ran 1,364 clk longer when every join took the hotter-edge rule).
