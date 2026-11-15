@@ -17,7 +17,7 @@
 
 use llrm_spike_mf::{Kind, Operand, Reg};
 
-use crate::classsplit::takes_data;
+use crate::classsplit::{address_bound, takes_data};
 use crate::mfunc::{Class, Inst, MFunction};
 
 /// The values `moveq` loads.
@@ -34,23 +34,26 @@ pub fn rematerializable_constants(function: &mut MFunction) -> usize {
             }
         }
     }
-    marked += hold_in_data_registers(function);
     marked
 }
 
 fn is_moveq(inst: &Inst) -> bool {
     inst.kind == Kind::Op("MOVI32ri")
-        && matches!(inst.operands[..], [Operand::Def(_), Operand::Imm(value)] if MOVEQ.contains(&value))
+        && matches!(
+            inst.operands[..],
+            [Operand::Def(_), Operand::Imm(value)] if MOVEQ.contains(&value)
+        )
 }
 
-/// A value only `moveq` makes, read only where a data register does, is held
-/// in one: `move.w #11, %a1` is 4 bytes where `moveq #11, %d1` is 2, and the
-/// allocator tries the address registers first for a value of either kind
-/// (DEVIATE M68K-FLEXORDER, `regalloc.rs`). The pin tries the data registers
-/// first, so its `MOVI32ri` (`xr32`, no `MOVQ` at selection) lands in one. A
-/// narrowed constant is made again where it is read, so it holds no register
-/// the loop needs.
-fn hold_in_data_registers(function: &mut MFunction) -> usize {
+/// A value only `moveq` makes, read only where a data register does, and not
+/// joined by copies to a value that needs an address register (`suba.l %a0,
+/// %a0` is 2 bytes, a `moveq` and a copy 4), is held in one: `move.w #11, %a1`
+/// is 4 bytes where `moveq #11, %d1` is 2, and the allocator tries the address
+/// registers first for a value of either kind (DEVIATE M68K-FLEXORDER,
+/// `regalloc.rs`). The pin tries the data registers first, so its `MOVI32ri`
+/// (`xr32`, no `MOVQ` at selection) lands in one. A narrowed constant is made
+/// again where it is read, so it holds no register the loop needs.
+pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
     let count = function.classes.len();
     let mut only_moveq = vec![true; count];
     let mut defined = vec![false; count];
@@ -83,9 +86,53 @@ fn hold_in_data_registers(function: &mut MFunction) -> usize {
             }
         }
     }
+    // the values a copy or a phi ties together are one register's worth: one
+    // that needs an address register takes the whole group there
+    let (wants_address, _) = address_bound(function);
+    let mut group: Vec<usize> = (0..count).collect();
+    fn find(
+        group: &mut [usize],
+        mut v: usize,
+    ) -> usize {
+        while group[v] != v {
+            group[v] = group[group[v]];
+            v = group[v];
+        }
+        v
+    }
+    for block in &function.blocks {
+        let mut join = |a: usize, b: usize| {
+            let (a, b) = (find(&mut group, a), find(&mut group, b));
+            group[a] = b;
+        };
+        for phi in &block.phis {
+            if let Reg::Virt(to) = phi.result {
+                for (_, from) in &phi.incoming {
+                    if let Reg::Virt(from) = from {
+                        join(*from as usize, to as usize);
+                    }
+                }
+            }
+        }
+        for inst in &block.insts {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) =
+                (inst.kind, &inst.operands[..])
+            {
+                join(*from as usize, *to as usize);
+            }
+        }
+    }
+    let mut address_group = vec![false; count];
+    for v in 0..count {
+        if wants_address[v] || function.classes[v] == Class::Ar32 {
+            let root = find(&mut group, v);
+            address_group[root] = true;
+        }
+    }
     let mut held = 0;
     for v in 0..count {
-        if defined[v] && only_moveq[v] && fits[v] && function.classes[v] == Class::Xr32 {
+        let root = find(&mut group, v);
+        if defined[v] && only_moveq[v] && fits[v] && !address_group[root] && function.classes[v] == Class::Xr32 {
             function.classes[v] = Class::Dr32;
             held += 1;
         }
