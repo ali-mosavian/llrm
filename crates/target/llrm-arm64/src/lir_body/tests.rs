@@ -278,7 +278,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     out.push(Inst::VectorMulLane { rd: v(0), rn: v(1), rm: v(2), index: 1 });
     out.push(Inst::VectorDupScalar { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
     for (high, wide) in [(false, Arrangement::H8), (true, Arrangement::S4), (false, Arrangement::D2)] {
-        out.push(Inst::VectorNarrow { high, wide, rd: v(0), rn: v(1) });
+        out.push(Inst::VectorNarrow { high, shift: None, wide, rd: v(0), rn: v(1) });
     }
     for (high, lane) in [(false, NarrowLane::B), (true, NarrowLane::H), (false, NarrowLane::S)] {
         for op in [VectorLongOp::Umlal, VectorLongOp::Smlal] {
