@@ -114,7 +114,6 @@ pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
 pub mod combine_assume;
-pub mod combine_stack;
 pub mod combine_bitcast;
 pub mod combine_bitorder;
 pub mod combine_branch;
@@ -200,6 +199,7 @@ pub mod combine_shifts;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
+pub mod combine_stack;
 pub mod combine_sub;
 pub mod combine_switch;
 pub mod combine_visit_select;
@@ -380,9 +380,6 @@ mod narrowspace_tests;
 mod noaliasscopes;
 pub mod pagecount;
 pub mod pageindex;
-pub mod rangesplit;
-#[cfg(test)]
-mod rangesplit_tests;
 #[cfg(test)]
 mod pageindex_tests;
 pub mod parity;
@@ -400,6 +397,9 @@ pub mod predicateinfo;
 pub mod profit;
 pub mod profswap;
 pub mod promote;
+pub mod rangesplit;
+#[cfg(test)]
+mod rangesplit_tests;
 pub mod reassociate;
 pub mod reassociate_fneg;
 pub mod reassociate_forms;
@@ -424,6 +424,7 @@ pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
 pub mod slpcompares;
+pub mod slpreduction;
 pub mod slpvectorize;
 pub mod spares;
 pub mod speculate;

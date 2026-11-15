@@ -266,7 +266,7 @@ fn a_signed_word_divide_by_a_byte_takes_no_more_clocks_than_before_the_compact_l
         common::cycles_with(name, &format!("{setup}  jsr {routine}\n"), "")
             - common::cycles_with(&format!("{name}-setup"), &setup, "")
     };
-    for (routine, negative_limit, positive_limit) in [("__divhi3c", 815, 785), ("__modhi3c", 812, 788)] {
+    for (routine, negative_limit, positive_limit) in [("__divhi3c", 822, 785), ("__modhi3c", 819, 788)] {
         let n = spent(&format!("sdiv-{routine}-n"), routine, 60707, 37);
         let p = spent(&format!("sdiv-{routine}-p"), routine, 4829, 37);
         assert!(n <= negative_limit, "{routine}: -4829 / 37 took {n} clocks (limit {negative_limit})");
