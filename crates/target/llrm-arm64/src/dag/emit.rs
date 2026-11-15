@@ -2432,6 +2432,9 @@ impl Emitter<'_> {
                         || node.values[0].is_vector()
                         || vector_fill(name, &operands).is_some()
                         || reduction(name).is_some()
+                        // `DUPi16` reads a lane into an `h` register, which has no
+                        // type of ours: it reads as an `i16`.
+                        || matches!(probe, Ok(Inst::VectorDupScalar { .. }))
                         || matches!(probe, Ok(Inst::FpUnary { op: FpUnary::Mov, .. }));
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
@@ -2626,7 +2629,11 @@ impl Emitter<'_> {
                         return Ok(());
                     }
                     ("IMPLICIT_DEF", []) => {
+                        // A scalar nothing defines can still be read (the
+                        // undefined lane of a vector built from it): it is
+                        // zero, which the dead-code pass drops where unread.
                         let dst = self.mf.gpr();
+                        self.ops.push(Op::Imm { dst, bits: 64, value: 0 });
                         self.values.insert((id, 0), dst);
                         return Ok(());
                     }
