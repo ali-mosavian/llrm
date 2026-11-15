@@ -7,7 +7,7 @@ use llrm_arm64::tti::AArch64;
 use llrm_mir::opcode::FloatPredicate;
 use llrm_mir::tti::{ArithOp, CastKind, CmpSel, MemoryOp, Predicate, Ty};
 
-use super::{LoopFacts, Plan, Recipe, choose, iteration_cost, pin_may_vectorize, plan};
+use super::{LoopFacts, Plan, Recipe, choose, epilogue_vf, iteration_cost, pin_may_vectorize, plan};
 
 fn facts(
     lane_bits: u32,
@@ -31,6 +31,7 @@ fn facts(
         opt_size: false,
         has_reductions: false,
         reduction_bits: Vec::new(),
+        pressure: None,
     }
 }
 
@@ -190,4 +191,16 @@ fn an_unpriced_recipe_never_makes_a_loop_look_costlier_than_it_is() {
     assert!(iteration_cost(&tti, &recipes, 4, false, false).is_err());
     assert_eq!(iteration_cost(&tti, &recipes, 4, false, true), Ok(4));
     assert!(pin_may_vectorize(&tti, &loop_of(recipes)));
+}
+
+/// A main loop of VF 16 and IC 1 of unknown trip count leaves fewer than 16
+/// iterations, so an epilogue of 16 lanes would never run (`SkipVF` against
+/// `urem(tc, 16)`); the epilogue's factor is below the main loop's lanes. It
+/// was 16, and the vectorized remainder was the main loop again.
+#[test]
+fn an_epilogue_is_narrower_than_the_lanes_of_the_main_loop() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let facts = facts(8, 0, false);
+    assert!(epilogue_vf(&tti, &facts, Plan { vf: 16, ic: 1 }).is_none_or(|vf| vf < 16));
+    assert!(epilogue_vf(&tti, &facts, Plan { vf: 16, ic: 2 }).is_none_or(|vf| vf <= 16));
 }
