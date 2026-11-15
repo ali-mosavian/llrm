@@ -1515,6 +1515,32 @@ impl<'a> TypeLegalizer<'a> {
                 }
                 self.dag.get_node(ISD::ExtractElement, to, &[vector, index])
             }
+            ISD::ExtractSubvector => {
+                // `PromoteIntRes_EXTRACT_SUBVECTOR` (fixed width): each lane
+                // of the (promoted) source read out, widened to the promoted
+                // lane, and built into the promoted vector (`v8i1` of a
+                // `v16i1` mask).
+                let (source, base) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let source = if self.action(self.dag.value_type(source)) == TypeAction::PromoteInteger {
+                    self.promoted_integer(source)
+                } else {
+                    source
+                };
+                let (in_lane, out_lane) = (self.dag.value_type(source).element(), to.element());
+                let at = self.dag.constant(base).ok_or(LegalizeError::Unsupported {
+                    op: ISD::ExtractSubvector,
+                    ty: vt,
+                    what: "promote an extract at a variable index",
+                })?;
+                let ops: Vec<SDValue> = (0..vt.lanes())
+                    .map(|lane| {
+                        let index = self.dag.get_constant(at + u128::from(lane), self.dag.value_type(base));
+                        let element = self.dag.get_node(ISD::ExtractElement, in_lane, &[source, index]);
+                        self.dag.get_any_ext_or_trunc(element, out_lane)
+                    })
+                    .collect();
+                self.dag.get_build_vector(to, &ops)
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
