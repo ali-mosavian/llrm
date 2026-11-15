@@ -1396,10 +1396,11 @@ out:
     assert!(runtime_unrolled_text(text, true));
 }
 
-/// loop_interchange -O3 (`sum = (sum * 31 + t[i]) % 100003`, 1024 trips): the chain
-/// bounded a trip, so the partial unroll the pin makes was vetoed. Unrolled by 8, the
-/// copies after the first see a remainder in (-100003, 100003) and CVP narrows their
-/// divide to 32 bits: 49,000 instructions against the pin's 41,000 (clang).
+/// loop_interchange -O3 (`sum = (sum * 31 + t[i]) % 100003`, 1024 trips): the
+/// chain bounded a trip, so the partial unroll the pin makes was vetoed.
+/// Unrolled by 8, the copies after the first see a remainder in (-100003,
+/// 100003) and CVP narrows their divide to 32 bits: 49,000 instructions against
+/// the pin's 41,000 (clang).
 #[test]
 fn test_a_known_trip_loop_bound_by_its_chain_is_still_partially_unrolled() {
     let text = "define i64 @f(ptr %a) {
