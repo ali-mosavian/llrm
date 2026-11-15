@@ -4,11 +4,11 @@
 
 use super::*;
 use crate::mc::inst::Cond;
-use crate::vector_forms::VectorForm;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, NarrowLane, Rounding, VectorFma,
-    VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Rounding,
+    VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
+use crate::vector_forms::VectorForm;
 
 const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Mov, "FMOV"),
@@ -216,6 +216,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::VectorMulAcc { op, lanes, rd, rn, rm } => semantics(
+            Operation::MultiplyAdd,
+            format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(*lanes)),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
         Inst::VectorFma { op, lanes, rd, rn, rm } => semantics(
             Operation::FloatMultiplyAdd,
             vector_fp_name(op.mnemonic(), *lanes),
@@ -709,6 +716,19 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 Inst::VectorBsp { quad, rd, mask: vreg_of(&s[0]), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) }
             }
         });
+    }
+    for lanes in OP_ARRANGEMENTS.into_iter().filter(|lanes| *lanes != Arrangement::D2) {
+        for op in [MulAcc::Add, MulAcc::Sub] {
+            if name == format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes)) {
+                return Some(Inst::VectorMulAcc {
+                    op,
+                    lanes,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[1]),
+                    rm: vreg_of(&s[2]),
+                });
+            }
+        }
     }
     for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFma::Add, VectorFma::Sub] {
