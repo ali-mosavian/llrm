@@ -1160,6 +1160,18 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24): the instruction
+    /// units an -Os trial must save, beyond a tie, for a copy that runs at most
+    /// once per run of the program and whose callee stays. The units count a
+    /// call as its arguments, not the argument and result moves it carries, so
+    /// a copy that wins by a unit or two grows the code (`unpack`, an
+    /// out-parameter decode, 6 sites: +50 B on every soft-float cell once
+    /// `x == 0 ? 1 : x` became `umax` and saved two units). A hot copy is kept
+    /// by its clocks, so the margin is not taken there. 0: none.
+    fn inline_trial_cold_margin(&self) -> i64 {
+        0
+    }
+
     /// DEVIATE SZ2-TRIPS: whether the priced SZ2 trial counts clocks at each
     /// block's frequency over the entry's (a loop's trips), and lets the byte
     /// rate alone decide a copy whose callee stays. False: each instruction
@@ -1477,6 +1489,11 @@ pub trait Tti {
     /// (`Tuning::add_to_or_disjoint`).
     fn add_to_or_disjoint(&self) -> bool {
         false
+    }
+
+    /// `Tuning::vectorize_at_size`: `LoopVectorize` runs on an `optsize` loop.
+    fn vectorizes_at_size(&self) -> bool {
+        true
     }
 
     fn opt_size_inline_chain_trial(&self) -> bool {
@@ -3406,6 +3423,172 @@ pub fn base_intrinsic_cost(name: &str) -> Option<Cost> {
     const MEMSET_PATTERN: &str = "llvm.experimental.memset.pattern";
     (name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.')))
         .then(|| Cost::of(4))
+}
+
+/// The intrinsics `BasicTTIImplBase::getIntrinsicInstrCost` and
+/// `getTypeBasedIntrinsicInstrCost` name a case for (the pin, `BasicTTIImpl.h`
+/// L1792..L3217), by their `Intrinsic::` names: an intrinsic with none of them
+/// is "going to be turned into a library call" and costs
+/// [`library_call_intrinsic_cost`].
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L3217
+const PIN_INTRINSIC_CASES: &[&str] = &[
+    "vp_load",
+    "vp_store",
+    "vp_udiv",
+    "vp_sdiv",
+    "vp_urem",
+    "vp_srem",
+    "vp_load_ff",
+    "vp_scatter",
+    "vp_gather",
+    "vp_merge",
+    "experimental_vp_reverse",
+    "vector_reverse",
+    "vector_reduce_fadd",
+    "vector_reduce_fmul",
+    "powi",
+    "cttz",
+    "ctlz",
+    "memcpy",
+    "masked_scatter",
+    "masked_gather",
+    "masked_compressstore",
+    "masked_expandload",
+    "experimental_vp_strided_store",
+    "experimental_vp_strided_load",
+    "stepvector",
+    "vector_extract",
+    "vector_insert",
+    "vector_splice_left",
+    "vector_splice_right",
+    "vector_reduce_add",
+    "vector_reduce_mul",
+    "vector_reduce_and",
+    "vector_reduce_or",
+    "vector_reduce_xor",
+    "vector_reduce_smax",
+    "vector_reduce_smin",
+    "vector_reduce_fmax",
+    "vector_reduce_fmin",
+    "vector_reduce_fmaximum",
+    "vector_reduce_fminimum",
+    "vector_reduce_fmaximumnum",
+    "vector_reduce_fminimumnum",
+    "vector_reduce_umax",
+    "vector_reduce_umin",
+    "fshl",
+    "fshr",
+    "experimental_cttz_elts",
+    "get_active_lane_mask",
+    "experimental_vector_match",
+    "experimental_vector_histogram_add",
+    "experimental_vector_histogram_uadd_sat",
+    "experimental_vector_histogram_umax",
+    "experimental_vector_histogram_umin",
+    "masked_udiv",
+    "masked_sdiv",
+    "masked_urem",
+    "masked_srem",
+    "modf",
+    "sincos",
+    "sincospi",
+    "loop_dependence_war_mask",
+    "loop_dependence_raw_mask",
+    "abs",
+    "sqrt",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "sinh",
+    "cosh",
+    "tanh",
+    "exp",
+    "exp2",
+    "exp10",
+    "log",
+    "log10",
+    "log2",
+    "ldexp",
+    "fabs",
+    "canonicalize",
+    "minnum",
+    "maxnum",
+    "minimum",
+    "maximum",
+    "minimumnum",
+    "maximumnum",
+    "copysign",
+    "floor",
+    "ceil",
+    "trunc",
+    "nearbyint",
+    "rint",
+    "lrint",
+    "llrint",
+    "round",
+    "roundeven",
+    "lround",
+    "llround",
+    "pow",
+    "fma",
+    "fmuladd",
+    "experimental_constrained_fmuladd",
+    "lifetime_start",
+    "lifetime_end",
+    "sideeffect",
+    "pseudoprobe",
+    "arithmetic_fence",
+    "masked_store",
+    "masked_load",
+    "uadd_sat",
+    "umax",
+    "umin",
+    "experimental_memset_pattern",
+    "smax",
+    "smin",
+    "sadd_sat",
+    "ssub_sat",
+    "usub_sat",
+    "smul_fix",
+    "umul_fix",
+    "sadd_with_overflow",
+    "ssub_with_overflow",
+    "uadd_with_overflow",
+    "usub_with_overflow",
+    "smul_with_overflow",
+    "umul_with_overflow",
+    "fptosi_sat",
+    "fptoui_sat",
+    "ctpop",
+    "bswap",
+    "bitreverse",
+    "ucmp",
+    "scmp",
+    "clmul",
+    "smulh",
+    "umulh",
+    "experimental_constrained_fmul",
+    "experimental_constrained_fadd",
+];
+
+/// The last line of `getTypeBasedIntrinsicInstrCost`: a scalar intrinsic none
+/// of the pin's cases names (`stacksave`, `stackrestore`, `trap`, `expect`...)
+/// "is going to be turned into a library call, make it expensive":
+/// `SingleCallCost`, 1 for code size, else 10. `None` for an intrinsic the pin
+/// does price by a case this port does not carry.
+pub fn library_call_intrinsic_cost(
+    name: &str,
+    kind: CostKind,
+) -> Option<Cost> {
+    let family = name.strip_prefix("llvm.")?.replace('.', "_");
+    let named = PIN_INTRINSIC_CASES
+        .iter()
+        .any(|case| family == *case || family.strip_prefix(case).is_some_and(|rest| rest.starts_with('_')));
+    (!named).then(|| Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 }))
 }
 
 pub fn is_free_intrinsic(name: &str) -> bool {

@@ -353,6 +353,12 @@ impl Function {
             .map(|&old| succs[old].take().expect("a block once").into_iter().map(|to| new_of[to]).collect())
             .collect();
         self.remap_preds(order.len(), |old| Some(new_of[old]).filter(|&new| new != usize::MAX));
+        // An edge's probability stays with its block (a block left out takes
+        // its row along; an `edge_probs` the passes cleared stays empty).
+        if self.edge_probs.len() == new_of.len() {
+            let mut probs = std::mem::take(&mut self.edge_probs).into_iter().map(Some).collect::<Vec<_>>();
+            self.edge_probs = order.iter().map(|&old| probs[old].take().expect("a block once")).collect();
+        }
         for operand in self.blocks.iter_mut().flatten().flat_map(|inst| inst.operands.iter_mut()) {
             if let Operand::Block(block) = operand {
                 if let Some(&new) = new_of.get(*block as usize) {
@@ -546,5 +552,27 @@ mod preds_tests {
         f.preds = vec![vec![], vec![0], vec![1, 0]];
         f.remap_preds(4, |old| Some(if old >= 1 { old + 1 } else { old }));
         assert_eq!(f.preds, [vec![], vec![], vec![0], vec![2, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod apply_order_tests {
+    use super::*;
+
+    /// `fix_br_table_defaults` dropped two blocks and left `edge_probs` as it
+    /// was: every later block read another block's probabilities, and
+    /// `MachineSink` took a 2^31 row (one edge) for a two-way branch, so its
+    /// "unlikely edge" test failed and `CONST 1` stayed out of the split edge
+    /// (tail_calls -Os, one block and two instructions over the pin).
+    #[test]
+    fn the_probabilities_of_an_edge_follow_its_block() {
+        let mut f = Function::default();
+        f.blocks = vec![Vec::new(); 4];
+        f.succs = vec![vec![2, 3], vec![3], vec![3], vec![]];
+        f.edge_probs = vec![vec![1 << 30, 1 << 30], vec![1 << 31], vec![1 << 31], vec![]];
+        // Block 1 is dropped: block 2 and 3 move up.
+        f.apply_order(&[0, 2, 3]);
+        assert_eq!(f.edge_probs, [vec![1 << 30, 1 << 30], vec![1 << 31], vec![]]);
+        assert_eq!(f.succs[0], [1, 2]);
     }
 }
