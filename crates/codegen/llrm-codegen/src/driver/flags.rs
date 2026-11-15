@@ -129,6 +129,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
     ("thread-jumps", |options, on| options.thread_jumps = on),
+    ("llrm-speed-rate", |options, on| options.speed_rate = on),
     ("tree-switch-conversion", |options, on| options.switch_conversion = on),
     ("jump-tables", |options, on| options.jump_tables = on),
     ("tree-dse", |options, on| options.drop_stores = on),

@@ -121,18 +121,29 @@ impl FunctionCompiler<'_> {
     }
 
     /// Continues where `condition` holds; elsewhere calls `panic`, which never
-    /// returns.
+    /// returns. The checks of a function share one block per routine, as
+    /// clang's `EmitTrapCheck` shares its trap block (`TrapBBs`): the call,
+    /// and what the target puts before it, is made once.
     pub(super) fn panic_unless(
         &mut self,
         condition: hir::Operand,
         panic: &'static str,
     ) {
+        let outside = match self.panic_blocks.get(panic) {
+            Some(&shared) => shared,
+            None => {
+                let shared = self.block();
+                let resume = self.current;
+                self.current = shared;
+                self.emit_builtin(panic, Vec::new());
+                self.terminate(hir::Terminator { kind: "unreachable", operands: Vec::new(), targets: Vec::new() });
+                self.current = resume;
+                self.panic_blocks.insert(panic, shared);
+                shared
+            }
+        };
         let inside = self.block();
-        let outside = self.block();
         self.terminate(hir::Terminator { kind: "branch", operands: vec![condition], targets: vec![inside, outside] });
-        self.current = outside;
-        self.emit_builtin(panic, Vec::new());
-        self.terminate(hir::Terminator { kind: "unreachable", operands: Vec::new(), targets: Vec::new() });
         self.current = inside;
     }
 

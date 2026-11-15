@@ -6,9 +6,21 @@ use super::LoopVectorize;
 use crate::testing::parsed;
 
 fn run(source: &str) -> String {
+    run_with(source, false)
+}
+
+/// [`run`] with the compares and selects the arm64 backend does not select yet.
+fn run_compares(source: &str) -> String {
+    run_with(source, true)
+}
+
+fn run_with(
+    source: &str,
+    compares: bool,
+) -> String {
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares });
     manager
         .run_module(
             &mut module,
@@ -45,6 +57,13 @@ const SPLAT: &str = include_str!("../tests/lv/binop_splat.ll");
 const SHIFT: &str = include_str!("../tests/lv/binop_shift.ll");
 const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
+const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
+const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
+const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
+const FP_CONVERT_NARROW: &str = include_str!("../tests/lv/fp_convert_narrow.ll");
+const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
+const FP_SUB_DOUBLE: &str = include_str!("../tests/lv/fp_sub_double.ll");
+const FP_NEG_DOUBLE: &str = include_str!("../tests/lv/fp_neg_double.ll");
 
 /// `c[i] = a[i] + b[i]` stayed scalar ("An instruction the vectorizer does not
 /// widen yet"); the pin takes VF 8, IC 2 (`opt -passes=loop-vectorize`: four
@@ -57,6 +76,93 @@ fn an_add_of_two_loaded_arrays_is_widened() {
     assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
     assert_eq!(count(&text, "load i16"), 0, "{text}");
+}
+
+/// `c[i] = a[i] * b[i] + 2.5` over `float` stayed scalar ("An element type the
+/// target has no vector of"); the pin takes VF 4, IC 2 (`opt
+/// -passes=loop-vectorize -mcpu=generic`: four `load <4 x float>`, step 8) and
+/// splats the constant.
+#[test]
+fn a_float_multiply_add_of_loaded_arrays_is_widened() {
+    let text = run(FP_AXPY);
+    assert_eq!(count(&text, "load <4 x float>"), 4, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "fadd <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+    assert_eq!(count(&text, "load float"), 0, "{text}");
+}
+
+/// `d[i] = fmuladd(a[i], k, b[i])`: "Found a non-intrinsic callsite" kept the
+/// loop scalar; the pin widens the call (VF 4, IC 2: two `llvm.fmuladd.v4f32`,
+/// `k` splatted, step 8).
+#[test]
+fn a_float_fmuladd_call_is_widened_to_a_vector_intrinsic() {
+    let text = run(FP_FMULADD);
+    assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
+    assert_eq!(count(&text, "call float @llvm.fmuladd.f32"), 0, "{text}");
+    assert_eq!(count(&text, "load <4 x float>"), 4, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `b[i] = (float)a[i] * 2.5f`: "An instruction the vectorizer does not widen
+/// yet" kept the `sitofp` loop scalar; the pin widens it (VF 4, IC 2: two
+/// `sitofp <4 x i32>`, step 8).
+#[test]
+fn an_int_to_float_conversion_is_widened_with_its_operand() {
+    let text = run(FP_CONVERT);
+    assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "load <4 x i32>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `b[i] = (float)a[i] * 2.5f` over `i64`: "A cast that changes the lane width"
+/// kept the loop scalar; the pin takes VF 4, IC 1 (`opt
+/// -passes=loop-vectorize -mcpu=generic`: one `load <4 x i64>`, one `sitofp
+/// <4 x i64> to <4 x float>`, step 4).
+#[test]
+fn a_narrowing_int_to_float_conversion_is_widened() {
+    let text = run(FP_CONVERT_NARROW);
+    assert_eq!(count(&text, "load <4 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "sitofp <4 x i64> "), 1, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
+}
+
+/// The IDCT pass-1 shape (two stride-8 `i32` loads, `sitofp`, `fmuladd`,
+/// consecutive store): "An access that is not consecutive" kept it scalar; the
+/// pin makes four scalar loads per access and puts them together with
+/// `insertelement` (`CM_Scalarize`, VF 4).
+#[test]
+fn strided_loads_are_scalarized_and_put_together() {
+    let text = run(FP_STRIDED);
+    assert_eq!(count(&text, "load i32"), 8, "{text}");
+    assert_eq!(count(&text, "insertelement <4 x i32>"), 8, "{text}");
+    assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
+}
+
+/// `double` lanes: pin VF 2, IC 2 (step 4).
+#[test]
+fn a_double_subtract_of_loaded_arrays_is_widened() {
+    let text = run(FP_SUB_DOUBLE);
+    assert_eq!(count(&text, "load <2 x double>"), 4, "{text}");
+    assert_eq!(count(&text, "fsub <2 x double>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
+}
+
+/// `c[i] = -(a[i] - b[i])`: the `fneg` was "a binary result used other than by
+/// a store or a binary operation"; the pin widens it with the `fsub` (VF 2,
+/// IC 2).
+#[test]
+fn a_float_negation_is_widened_with_its_operand() {
+    let text = run(FP_NEG_DOUBLE);
+    assert_eq!(count(&text, "fneg <2 x double>"), 2, "{text}");
+    assert_eq!(count(&text, "fsub <2 x double>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
 }
 
 /// A chain of operations feeds one into the next, a constant operand is a
@@ -114,7 +220,7 @@ fn a_tiny_trip_count_is_not_interleaved() {
 fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     let mut module = crate::testing::parsed(COPY);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: true });
+    manager.add(LoopVectorize { always: true, only_when_forced: true, compares: false });
     manager
         .run_module(
             &mut module,
@@ -122,17 +228,6 @@ fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
         )
         .unwrap();
     assert_eq!(count(&crate::testing::printed(&module), "load <"), 0);
-}
-
-/// Two pointers that may overlap need the pin's `vector.memcheck`
-/// (LoopVectorize L1637), which is not built: `b[i] = a[i]` over plain pointers
-/// was widened with no overlap test, so `b = a + 1` read stale lanes. It stays
-/// scalar.
-#[test]
-fn a_copy_between_pointers_that_may_overlap_stays_scalar() {
-    let text = run(&COPY.replace("noalias ", ""));
-    assert_eq!(count(&text, "load <8 x i16>"), 0, "{text}");
-    assert_eq!(count(&text, "load i16"), 1, "{text}");
 }
 
 /// A trip count VF x IC does not divide (1921) was left scalar ("A scalar
@@ -198,15 +293,17 @@ fn an_optsize_loop_stays_scalar_even_when_vf_divides_the_trip_count() {
 #[test]
 fn a_symbolic_trip_count_is_checked_at_run_time() {
     let text = run(include_str!("../tests/lv/symbolic_trip.ll"));
-    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
     assert_eq!(count(&text, "load i16"), 1, "{text}");
-    assert!(text.contains("%min.iters.check = icmp ult i64 %n, 16"), "{text}");
+    assert!(text.contains("%min.iters.check2 = icmp ult i64 %n, 16"), "{text}");
     assert!(text.contains("%n.mod.vf = and i64 %n, 15"), "{text}");
     assert!(text.contains("%n.vec = sub i64 %n, %n.mod.vf"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %n.vec"), "{text}");
     assert!(text.contains("%cmp.n = icmp eq i64 %n, %n.vec"), "{text}");
-    assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ], [ 0, %entry ]"), "{text}");
-    assert!(text.contains("br i1 %min.iters.check, label %scalar.ph, label %vector.ph"), "{text}");
+    // Its remainder is widened in turn: that loop's `n < 8` comes first.
+    assert!(text.contains("%iter.check = icmp ult i64 %n, 8"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ]"), "{text}");
+    assert!(text.contains("br i1 %min.iters.check2, label %vector.ph1, label %vector.ph"), "{text}");
 }
 
 /// A loop starting at 8 against a symbolic bound: the iterations are
@@ -217,7 +314,7 @@ fn a_symbolic_bound_from_a_nonzero_start_counts_from_the_start() {
     assert!(text.contains("%n.trip = sub i64 %n, 8"), "{text}");
     assert!(text.contains("%ind.end = add i64 8, %n.vec"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %ind.end"), "{text}");
-    assert!(text.contains("%bc.resume.val = phi i64 [ %ind.end, %middle.block ], [ 8, %entry ]"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64 [ %ind.end, %middle.block ]"), "{text}");
 }
 
 /// Run again over its own output the pass would widen the remainder again (its
@@ -229,7 +326,7 @@ fn the_loops_it_made_are_not_widened_again() {
     assert_eq!(count(&once, "llvm.loop.isvectorized"), 2, "{once}");
     assert_eq!(count(&once, "llvm.loop.unroll.runtime.disable"), 2, "{once}");
     let twice = run(&once);
-    assert_eq!(count(&twice, "load <8 x i16>"), 2, "{twice}");
+    assert_eq!(count(&twice, "load <8 x i16>"), 3, "{twice}");
 }
 
 /// The store 80 elements ahead of the load bounds the safe distance: the pin
@@ -293,8 +390,11 @@ fn an_exit_phi_takes_an_arm_from_each_way_out() {
         .replace("define void", "define i32")
         .replace("ret void", "%r = phi i32 [ 7, %loop ]\n  ret i32 %r");
     let text = run(&source);
-    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
-    assert!(text.contains("%r = phi i32 [ 7, %middle.block ], [ 7, %loop.scalar ]"), "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert!(
+        text.contains("%r = phi i32 [ 7, %middle.block ], [ 7, %middle.block1 ], [ 7, %loop.scalar.scalar ]"),
+        "{text}"
+    );
 }
 
 /// The splat of an invariant stored value is made in `vector.ph`, where the
@@ -374,15 +474,18 @@ fn an_induction_step_the_body_reads_keeps_its_value() {
 
 const SUM_PLAIN: &str = include_str!("../tests/lv/sum_plain.ll");
 
-/// A sum the pin vectorizes (VF 8: the loads and the add have vector forms)
-/// is not interleaved alone: its widening is the pin's answer, and four scalar
-/// copies add a remainder and a fold the loop does not need (huge -O2 ran
-/// 12,213 more instructions).
+/// A sum the pin vectorizes (VF 8, IC 2: "Interleaving because of
+/// reductions") is widened, not interleaved alone as four scalar copies
+/// (huge -O2 ran 12,213 more instructions). Since reductions widen the loop
+/// has a `bin.rdx` of its own, the fold of the two `<8 x i64>` parts, so the
+/// test pins the vector loads and the one `vector.reduce.add.v8i64`.
 #[test]
 fn a_sum_a_vector_factor_takes_is_not_interleaved_alone() {
     let text = run(SUM_PLAIN);
-    assert_eq!(count(&text, "load i16"), 1, "{text}");
-    assert!(!text.contains("bin.rdx"), "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert_eq!(count(&text, "%bin.rdx = add <8 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v8i64"), 1, "{text}");
 }
 
 const REM_STORE: &str = include_str!("../tests/lv/rem_store.ll");
@@ -400,12 +503,18 @@ fn a_remainder_the_pin_may_vectorize_is_not_interleaved_alone() {
 const DOT_SEXT: &str = include_str!("../tests/lv/dot_sext.ll");
 
 /// A dot product of extended shorts is vectorized by the pin (dot -O2: VF 8,
-/// widening multiplies); the `i64` multiply has no vector price here, which
-/// read as scalarized and interleaved the loop alone (+160 instructions).
+/// widening multiplies; IC 2); the `i64` multiply has no vector price here,
+/// which read as scalarized and interleaved the loop alone (+160
+/// instructions). The widened loop has a `bin.rdx` (the fold of the two
+/// `<8 x i64>` parts), so the test pins the vector loads and the one
+/// `vector.reduce.add.v8i64`.
 #[test]
 fn a_dot_product_of_extended_values_is_not_interleaved_alone() {
     let text = run(DOT_SEXT);
-    assert!(!text.contains("bin.rdx"), "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 4, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert_eq!(count(&text, "%bin.rdx = add <8 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v8i64"), 1, "{text}");
 }
 
 const FP_CANON_SUM: &str = include_str!("../tests/lv/fp_canon_sum.ll");
@@ -425,12 +534,529 @@ fn a_loop_the_pin_finds_vectorization_not_beneficial_for_is_interleaved() {
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }
 
-/// A scale of consecutive floats the pin widens (VF 4) must not be interleaved
-/// alone: that was the +12,213 and +31,612 instruction failure of an interleave
-/// where a vector factor takes the loop.
+/// A scale of consecutive floats the pin widens (VF 4, IC 2) is widened, not
+/// interleaved alone: interleaving where a vector factor takes the loop was the
+/// +12,213 and +31,612 instruction failure; while floats were not widened the
+/// loop stayed scalar for that reason.
 #[test]
-fn a_float_loop_the_pin_vectorizes_is_not_interleaved_alone() {
+fn a_float_loop_the_pin_vectorizes_is_widened_not_interleaved_alone() {
     let text = run(FP_SCALE);
-    assert_eq!(count(&text, "fmul float"), 1, "{text}");
-    assert_eq!(count(&text, "llvm.loop.isvectorized"), 0, "{text}");
+    assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "fmul float"), 0, "{text}");
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
+}
+
+const MEMCHECK_COPY: &str = include_str!("../tests/lv/memcheck_copy.ll");
+const MEMCHECK_COPY_CONST: &str = include_str!("../tests/lv/memcheck_copy_const.ll");
+
+/// `b[i] = a[i]` over plain pointers stayed scalar (`Runtime memory checks are
+/// needed`). The pin's block order (`opt -passes=loop-vectorize`): the
+/// iteration check, `vector.memcheck` (one `diff.check`), `vector.ph`; an
+/// overlap runs the scalar loop whole, from index 0.
+#[test]
+fn plain_pointers_are_widened_behind_a_memory_check() {
+    let text = run(MEMCHECK_COPY);
+    assert_eq!(count(&text, "vector.memcheck:"), 1, "{text}");
+    assert_eq!(count(&text, "diff.check = icmp ult"), 1, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    let check = text.split("vector.memcheck:").nth(1).expect("the block").split("vector.ph:").next().unwrap();
+    assert!(check.contains("br i1 %diff.check, label %scalar.ph, label %vector.ph"), "{text}");
+    assert!(text.contains("[ 0, %vector.memcheck ]"), "{text}");
+}
+
+/// A constant trip count the lanes divide needs no remainder, but a memory
+/// conflict runs the scalar loop: the check keeps its `scalar.ph`.
+#[test]
+fn a_memory_check_keeps_the_remainder_of_a_divisible_constant_trip() {
+    let text = run(MEMCHECK_COPY_CONST);
+    assert_eq!(count(&text, "vector.memcheck:"), 1, "{text}");
+    assert_eq!(count(&text, "scalar.ph:"), 1, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+}
+
+const INDUCTION_TRUNC: &str = include_str!("../tests/lv/induction_trunc.ll");
+const INDUCTION_VALUE: &str = include_str!("../tests/lv/induction_value.ll");
+const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");
+const INDUCTION_VALUE_REVERSE: &str = include_str!("../tests/lv/induction_value_reverse.ll");
+const INDUCTION_VALUE_REVERSE_STORE: &str = include_str!("../tests/lv/induction_value_reverse_store.ll");
+
+/// `a[i] = ((i * 7) & 255) | 0x700` over `i16` (scroll's init loop) stayed
+/// scalar ("A value the loop computes that is not widened": the `trunc` of the
+/// induction); the pin takes VF 8, IC 2 on a `<8 x i16>` `vec.ind` that
+/// replaces the `trunc`.
+#[test]
+fn a_truncated_induction_is_widened_to_a_vec_ind() {
+    let text = run(INDUCTION_TRUNC);
+    assert!(text.contains("<i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>"), "{text}");
+    assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "step.add = add <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "vec.ind.next = add <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "mul <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "trunc"), 0, "{text}");
+}
+
+/// `a[i] = i + 5` over `i64`: the induction read as a value is a `<2 x i64>`
+/// `vec.ind` (pin VF 2, IC 2).
+#[test]
+fn an_induction_read_as_a_value_is_widened() {
+    let text = run(INDUCTION_VALUE);
+    assert!(text.contains("<i64 0, i64 1>"), "{text}");
+    assert_eq!(count(&text, "phi <2 x i64>"), 1, "{text}");
+    assert_eq!(count(&text, "add <2 x i64>"), 4, "{text}");
+    assert_eq!(count(&text, "store <2 x i64>"), 2, "{text}");
+}
+
+/// A run-time start: the lanes begin at the truncated start plus the lane
+/// numbers, made in the vector preheader (`induction`).
+#[test]
+fn an_induction_that_starts_at_a_run_time_value_is_widened() {
+    let text = run(INDUCTION_START);
+    assert!(text.contains("induction = add <8 x i16>"), "{text}");
+    assert_eq!(count(&text, "phi <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 3, "{text}");
+}
+
+/// A count-down loop that reads its induction as a value (recsum's
+/// `(n * 3) % 11`) stayed scalar ("The induction is read as a value in a loop
+/// that counts down"); the pin takes VF 4, IC 4 on a `<4 x i32>` `vec.ind`
+/// that starts at `<1999, 1998, 1997, 1996>` and steps by -4 a part.
+#[test]
+fn a_count_down_induction_read_as_a_value_is_widened() {
+    let text = run(INDUCTION_VALUE_REVERSE);
+    assert!(text.contains("<i32 1999, i32 1998, i32 1997, i32 1996>"), "{text}");
+    assert_eq!(count(&text, "step.add = add <4 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "vec.ind.next = add <4 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "mul <4 x i32>"), 4, "{text}");
+}
+
+/// `a[i] = i` counting down: a `vec.ind` in iteration order stored at the
+/// lowest address first would write each lane to the wrong element (the pin
+/// reverses it); the loop stays scalar until LV-R1.
+#[test]
+fn a_count_down_induction_stored_through_a_reverse_access_stays_scalar() {
+    let text = run(INDUCTION_VALUE_REVERSE_STORE);
+    assert_eq!(count(&text, "vec.ind"), 0, "{text}");
+    assert_eq!(count(&text, "store <"), 0, "{text}");
+}
+
+const REVERSE_COPY: &str = include_str!("../tests/lv/reverse_copy.ll");
+const REVERSE_SYMBOLIC: &str = include_str!("../tests/lv/reverse_symbolic.ll");
+const REVERSE_MIXED: &str = include_str!("../tests/lv/reverse_mixed.ll");
+const FORWARD_PHI_EXIT: &str = include_str!("../tests/lv/forward_phi_exit.ll");
+
+/// scroll's `for (i = 1919; i >= 0; --i) s[i + 80] = s[i]` stayed 1920 scalar
+/// iterations ("No integer induction that steps by one"); the pin takes VF 8,
+/// IC 2: loads at `-7` and `-15` elements from the address of the first
+/// iteration, stores likewise, no `shufflevector` (the reverses cancel), and
+/// the loop leaves when the stepped induction is `-1`.
+#[test]
+fn a_reverse_copy_is_widened_on_the_lowest_addresses_without_a_shuffle() {
+    let text = run(REVERSE_COPY);
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "i64 -7"), 2, "{text}");
+    assert_eq!(count(&text, "i64 -15"), 2, "{text}");
+    assert_eq!(count(&text, "shufflevector"), 0, "{text}");
+    assert!(text.contains("add nsw i64 %i, -16"), "{text}");
+    assert!(text.contains("icmp eq i64 %next, -1"), "{text}");
+}
+
+/// The same with a run-time start: the iterations are `start - bound`, the end
+/// `start - n.vec` (the pin: `sub %n, %n.vec`).
+#[test]
+fn a_reverse_copy_from_a_run_time_start_counts_its_iterations_down() {
+    let text = run(REVERSE_SYMBOLIC);
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert!(text.contains("n.trip = sub i64 %n, -1"), "{text}");
+    assert!(text.contains("ind.end = sub i64 %n, %n.vec"), "{text}");
+    assert!(text.contains("bc.resume.val"), "{text}");
+}
+
+/// A loop that counts down and writes forward keeps a reverse `shufflevector`
+/// in the pin (VF 8, IC 2); the arm64 selector declines it, so the loop stays
+/// scalar until LV-R1.
+#[test]
+fn a_loop_that_counts_down_and_writes_forward_stays_scalar() {
+    let text = run(REVERSE_MIXED);
+    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+}
+
+/// A loop counting up that tests the induction before its step (`i == 1919`)
+/// was left alone ("The exit test is not the stepped induction against a
+/// loop-invariant bound"); the pin takes VF 8, IC 2, and the test moves onto
+/// the step.
+#[test]
+fn an_exit_test_on_the_induction_before_its_step_is_moved_onto_the_step() {
+    let text = run(FORWARD_PHI_EXIT);
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert!(text.contains("icmp eq i64 %next, 1920"), "{text}");
+}
+
+/// The widened loops compute what the scalar ones do: a fill, then scroll's
+/// overlapping reverse copy (`s[i + 80] = s[i]`, `i` from 1919 down), then a
+/// checksum of elements across the seams, run by the interpreter before and
+/// after. A wrong lane order, an end pointer off by a lane or an exit never
+/// taken changes the answer (or exhausts the fuel).
+#[test]
+fn a_reverse_copy_keeps_the_answers_of_the_scalar_loop() {
+    let source = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"
+@s = global [2000 x i16] zeroinitializer, align 2
+define i64 @f() {
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %t = trunc i64 %i to i16
+  %m = mul i16 %t, 7
+  %v = add i16 %m, 3
+  %p = getelementptr inbounds i16, ptr @s, i64 %i
+  store i16 %v, ptr %p, align 2
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 2000
+  br i1 %fd, label %back, label %fill
+back:
+  br label %loop
+loop:
+  %j = phi i64 [ 1919, %back ], [ %next, %loop ]
+  %a = getelementptr inbounds i16, ptr @s, i64 %j
+  %x = load i16, ptr %a, align 2
+  %b = getelementptr inbounds i8, ptr %a, i64 160
+  store i16 %x, ptr %b, align 2
+  %next = add nsw i64 %j, -1
+  %done = icmp eq i64 %j, 0
+  br i1 %done, label %exit, label %loop
+exit:
+  %p0 = getelementptr inbounds i16, ptr @s, i64 0
+  %p1 = getelementptr inbounds i16, ptr @s, i64 79
+  %p2 = getelementptr inbounds i16, ptr @s, i64 80
+  %p3 = getelementptr inbounds i16, ptr @s, i64 81
+  %p4 = getelementptr inbounds i16, ptr @s, i64 1000
+  %p5 = getelementptr inbounds i16, ptr @s, i64 1999
+  %l0 = load i16, ptr %p0, align 2
+  %l1 = load i16, ptr %p1, align 2
+  %l2 = load i16, ptr %p2, align 2
+  %l3 = load i16, ptr %p3, align 2
+  %l4 = load i16, ptr %p4, align 2
+  %l5 = load i16, ptr %p5, align 2
+  %e0 = zext i16 %l0 to i64
+  %e1 = zext i16 %l1 to i64
+  %e2 = zext i16 %l2 to i64
+  %e3 = zext i16 %l3 to i64
+  %e4 = zext i16 %l4 to i64
+  %e5 = zext i16 %l5 to i64
+  %s1 = shl i64 %e1, 16
+  %s2 = shl i64 %e2, 32
+  %s3 = shl i64 %e3, 8
+  %s4 = shl i64 %e4, 24
+  %s5 = shl i64 %e5, 40
+  %o1 = xor i64 %e0, %s1
+  %o2 = xor i64 %o1, %s2
+  %o3 = xor i64 %o2, %s3
+  %o4 = xor i64 %o3, %s4
+  %o5 = xor i64 %o4, %s5
+  ret i64 %o5
+}
+";
+    let before = crate::testing::parsed(source);
+    let after = crate::testing::parsed(&run(source));
+    let answer = |module: &llrm_mir::module::Module| {
+        llrm_mir::interpret::run(module, "f", Vec::new(), 2_000_000).unwrap_or_else(|trap| panic!("{trap:?}"))
+    };
+    let text = run(source);
+    assert!(text.contains("<8 x i16>"), "the reverse loop was not widened:\n{text}");
+    assert_eq!(answer(&after), answer(&before), "{text}");
+}
+
+const REVERSE_UPDATE_INDEX: &str = include_str!("../tests/lv/reverse_update_index.ll");
+const FORWARD_UPDATE_INDEX: &str = include_str!("../tests/lv/forward_update_index.ll");
+
+/// `for (i = n; i > 0; i--) a[i + 2] = a[i - 1]` indexes with the update `i -
+/// 1`, which the widened loop steps by VF x IC. The widened addresses read the
+/// stepped update and sat VF x IC - 1 bytes low: 340 of the 1000 overlapping
+/// copies of the arm64 -O2 build wrote below the destination. Run by the
+/// interpreter before and after.
+#[test]
+fn a_reverse_copy_indexed_by_the_induction_update_keeps_the_answers_of_the_scalar_loop() {
+    assert_widened_copy_keeps_answers(REVERSE_UPDATE_INDEX);
+}
+
+/// The same for a loop that counts up and indexes with its update (`a[i + 1]`
+/// by the stepped `i`).
+#[test]
+fn a_forward_copy_indexed_by_the_induction_update_keeps_the_answers_of_the_scalar_loop() {
+    assert_widened_copy_keeps_answers(FORWARD_UPDATE_INDEX);
+}
+
+/// Widens `f` (a copy of `n` bytes at `@s + 8`, three bytes on), runs the
+/// interpreter before and after on sizes around the vector width, and compares
+/// a checksum of the whole array.
+fn assert_widened_copy_keeps_answers(f: &str) {
+    let source = format!(
+        "{f}
+@s = global [200 x i8] zeroinitializer, align 16
+define i64 @g(i64 %n) {{
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %v = trunc i64 %i to i8
+  %m = mul i8 %v, 13
+  %w = add i8 %m, 5
+  %p = getelementptr inbounds i8, ptr @s, i64 %i
+  store i8 %w, ptr %p, align 1
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 200
+  br i1 %fd, label %run, label %fill
+run:
+  %base = getelementptr inbounds i8, ptr @s, i64 8
+  call void @f(ptr %base, i64 %n)
+  br label %sum
+sum:
+  %k = phi i64 [ 0, %run ], [ %kn, %sum ]
+  %acc = phi i64 [ 0, %run ], [ %an, %sum ]
+  %q = getelementptr inbounds i8, ptr @s, i64 %k
+  %x = load i8, ptr %q, align 1
+  %xe = zext i8 %x to i64
+  %mul = mul i64 %acc, 31
+  %an = add i64 %mul, %xe
+  %kn = add nuw nsw i64 %k, 1
+  %kd = icmp eq i64 %kn, 200
+  br i1 %kd, label %out, label %sum
+out:
+  ret i64 %an
+}}
+"
+    );
+    let before = crate::testing::parsed(&source);
+    let text = run(&source);
+    assert!(text.contains("<16 x i8>"), "the loop was not widened:\n{text}");
+    let after = crate::testing::parsed(&text);
+    let answer = |module: &llrm_mir::module::Module, n: i64| {
+        llrm_mir::interpret::run(
+            module,
+            "g",
+            vec![llrm_mir::interpret::Val::Int { bits: n as u128, width: 64 }],
+            5_000_000,
+        )
+        .unwrap_or_else(|trap| panic!("n = {n}: {trap:?}\n{}", crate::testing::printed(module)))
+    };
+    for n in [1, 3, 31, 32, 33, 63, 64, 65, 100] {
+        let want = answer(&before, n);
+        assert_eq!(answer(&after, n), want, "n = {n}:\n{text}");
+    }
+}
+
+const EPILOGUE_SUM: &str = include_str!("../tests/lv/epilogue_sum.ll");
+const EPILOGUE_SUM_DYNAMIC: &str = include_str!("../tests/lv/epilogue_sum_dynamic.ll");
+const REDUCTION_SUM: &str = include_str!("../tests/lv/reduction_sum.ll");
+const SCROLL_CHECKSUM: &str = include_str!("../tests/lv/scroll_checksum.ll");
+const SUM_ZEXT_BYTES: &str = include_str!("../tests/lv/sum_zext_bytes.ll");
+
+/// textfill's checksum (a sum of 4000 extended bytes) stayed scalar: VF 16
+/// makes `<16 x i64>` lanes, eight registers, which the plan did not take
+/// (32009 instructions at -O2). The pin takes VF 16, IC 2.
+#[test]
+fn a_sum_of_extended_bytes_takes_the_vector_factor_of_the_bytes() {
+    let text = run(SUM_ZEXT_BYTES);
+    assert_eq!(count(&text, "load <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "zext <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v16i64"), 1, "{text}");
+}
+
+/// `Reductions are not widened yet` left every sum of a loop scalar. The sum of
+/// 1003 words is a vector phi per part from `<start, 0, 0, 0>`, folded in the
+/// middle block and reduced by `llvm.vector.reduce.add`, with the remainder
+/// resuming from the total.
+#[test]
+fn a_sum_is_a_vector_phi_reduced_in_the_middle_block() {
+    let text = run(REDUCTION_SUM);
+    assert!(count(&text, "vec.phi") >= 1, "{text}");
+    assert_eq!(count(&text, "call i32 @llvm.vector.reduce.add.v4i32"), 2, "{text}");
+    // A constant trip count enters each loop for sure: no merge phi; the
+    // epilogue (VF 4, to 1000) starts from the main loop's total.
+    assert!(text.contains("%done = icmp eq i64 %in, 992"), "{text}");
+    assert!(text.contains("%done.scalar = icmp eq i64 %in.scalar, 1000"), "{text}");
+    assert!(text.contains("insertelement <4 x i32> zeroinitializer, i32 %start, i64 0"), "{text}");
+}
+
+/// A sum of 40 `i16` (bench `tile`) took VF 8, IC 2 and left the 8 iterations
+/// past 32 scalar: eight loads and adds in every outer trip. The pin widens
+/// that remainder too (`LEV: Maximum Trip Count for Epilogue: 8`): one more
+/// `<8 x i16>` load, and no scalar one.
+#[test]
+fn the_remainder_of_a_vector_loop_is_widened_in_turn() {
+    let text = run(EPILOGUE_SUM);
+    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert_eq!(count(&text, "call i64 @llvm.vector.reduce.add.v8i64"), 2, "{text}");
+}
+
+/// A run-time trip count under the epilogue's lanes went through the main
+/// loop's own check first, then the epilogue's (a second `sub`, `icmp` and
+/// branch to reach the scalar loop: recchop's `chop` ran 112 instructions
+/// more than without the epilogue). The pin tests `n < epilogue lanes` first
+/// (`iter.check`), and `n < main lanes` after (`vector.main.loop.iter.check`).
+#[test]
+fn a_short_trip_skips_both_vector_loops_in_one_check() {
+    let text = run(EPILOGUE_SUM_DYNAMIC);
+    let first = text.find("%iter.check = icmp ult i64 %n, 8").unwrap_or_else(|| panic!("{text}"));
+    let main = text.find("icmp ult i64 %n, 16").unwrap_or_else(|| panic!("{text}"));
+    assert!(first < main, "{text}");
+    assert!(text.contains("br i1 %iter.check, label %scalar.ph1, label %vector.main.loop.iter.check"), "{text}");
+}
+
+/// The same loop run before and after, over trip counts under, at and over each
+/// vector loop's lanes: a value the epilogue read from the main loop's
+/// `scalar.ph` that its new entry does not carry changes the answer.
+#[test]
+fn a_loop_entered_past_the_main_loop_keeps_the_answer() {
+    let source = format!(
+        "{EPILOGUE_SUM_DYNAMIC}
+define i64 @g(i64 %n) {{
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %t = trunc i64 %i to i16
+  %m = mul i16 %t, 37
+  %v = add i16 %m, 5
+  %p = getelementptr inbounds i16, ptr @t, i64 %i
+  store i16 %v, ptr %p, align 2
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 200
+  br i1 %fd, label %run, label %fill
+run:
+  %r = call i64 @f(i64 %n)
+  ret i64 %r
+}}
+"
+    );
+    let before = crate::testing::parsed(&source);
+    let text = run(&source);
+    assert!(text.contains("%iter.check"), "the remainder was not widened:\n{text}");
+    let after = crate::testing::parsed(&text);
+    let answer = |module: &llrm_mir::module::Module, n: u64| {
+        llrm_mir::interpret::run(
+            module,
+            "g",
+            vec![llrm_mir::interpret::Val::Int { bits: n as u128, width: 64 }],
+            5_000_000,
+        )
+        .unwrap_or_else(|trap| panic!("n = {n}: {trap:?}\n{}", crate::testing::printed(module)))
+    };
+    for n in [0, 1, 3, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33, 47, 48, 100, 199] {
+        assert_eq!(answer(&after, n), answer(&before, n), "n = {n}:\n{text}");
+    }
+}
+
+/// The pin leaves scroll's checksum (a sum of extended products) scalar and
+/// interleaves it ("the cost-model indicates that vectorization is not
+/// beneficial", interleaved count 4): a loop the pin declines is declined.
+#[test]
+fn the_checksum_the_pin_declines_stays_scalar() {
+    let text = run(SCROLL_CHECKSUM);
+    assert_eq!(count(&text, "x i64>"), 0, "{text}");
+    assert_eq!(count(&text, "vector.reduce"), 0, "{text}");
+}
+
+/// A sum run by the interpreter before and after widening: a wrong lane in the
+/// start, a part lost in the fold or a remainder that restarts from the start
+/// changes the answer.
+#[test]
+fn a_widened_sum_keeps_the_answer_of_the_scalar_loop() {
+    let source = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"
+@s = global [2000 x i32] zeroinitializer, align 4
+define i32 @f() {
+entry:
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %entry ], [ %in, %fill ]
+  %t = trunc i64 %i to i32
+  %m = mul i32 %t, 7
+  %v = add i32 %m, 3
+  %p = getelementptr inbounds i32, ptr @s, i64 %i
+  store i32 %v, ptr %p, align 4
+  %in = add nuw nsw i64 %i, 1
+  %fd = icmp eq i64 %in, 2000
+  br i1 %fd, label %sum, label %fill
+sum:
+  br label %loop
+loop:
+  %j = phi i64 [ 0, %sum ], [ %jn, %loop ]
+  %acc = phi i32 [ 100, %sum ], [ %next, %loop ]
+  %q = getelementptr inbounds i32, ptr @s, i64 %j
+  %x = load i32, ptr %q, align 4
+  %next = add nsw i32 %acc, %x
+  %jn = add nuw nsw i64 %j, 1
+  %done = icmp eq i64 %jn, 1003
+  br i1 %done, label %exit, label %loop
+exit:
+  %r = phi i32 [ %next, %loop ]
+  ret i32 %r
+}
+";
+    let answer = |text: &str| {
+        let module = parsed(text);
+        llrm_mir::interpret::run(&module, "f", Vec::new(), 2_000_000)
+    };
+    let before = answer(source);
+    let after_text = run(source);
+    assert!(after_text.contains("llvm.vector.reduce.add"), "the sum was not widened:\n{after_text}");
+    assert_eq!(format!("{:?}", answer(&after_text)), format!("{before:?}"), "{after_text}");
+}
+
+const SELECT_CLAMP: &str = include_str!("../tests/lv/select_clamp.ll");
+const FLOAT_CLAMP: &str = include_str!("../tests/lv/float_clamp.ll");
+const FLOAT_SELECT: &str = include_str!("../tests/lv/float_select.ll");
+
+/// `b[i] = a[i] > 100 ? 100 : a[i]` stayed scalar ("An instruction the
+/// vectorizer does not widen yet": the `icmp`/`select`); the pin takes VF 4,
+/// IC 2 (`opt -passes=loop-vectorize`: two `icmp sgt <4 x i32>`, two `select
+/// <4 x i1>`, step 8).
+#[test]
+fn an_integer_compare_and_select_are_widened() {
+    let text = run_compares(SELECT_CLAMP);
+    assert_eq!(count(&text, "icmp sgt <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "select <4 x i1>"), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x i32>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `c[i] = a[i] < b[i] ? a[i] : b[i]` over `float`: the pin takes VF 4, IC 2
+/// (two `fcmp olt <4 x float>`, two `select <4 x i1>`).
+#[test]
+fn a_float_compare_and_select_are_widened() {
+    let text = run_compares(FLOAT_SELECT);
+    assert_eq!(count(&text, "fcmp olt <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "select <4 x i1>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// jpeg_single's clamp (`fadd`, two `fcmp`, two `select`, `fptosi`, `trunc` to
+/// `i8`, over 8 trips) stayed scalar ("A binary result used other than by a
+/// store or a binary operation", +1.48M instructions at -O2); the pin takes VF
+/// 8, IC 1 (one `fptosi <8 x float> to <8 x i32>`, one `trunc <8 x i32> to <8 x
+/// i8>`, a `select <8 x i1>` of `<8 x i8>` stored whole).
+#[test]
+fn a_clamp_through_fptosi_and_trunc_is_widened() {
+    let text = run_compares(FLOAT_CLAMP);
+    assert_eq!(count(&text, "fcmp ole <8 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "fcmp oge <8 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "select <8 x i1>"), 2, "{text}");
+    assert_eq!(count(&text, "fptosi <8 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "trunc <8 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "store <8 x i8>"), 1, "{text}");
+    assert_eq!(count(&text, "load float"), 0, "{text}");
+}
+
+const SELECT_INVARIANT: &str = include_str!("../tests/lv/select_invariant.ll");
+
+/// DEVIATE LV-S1: a select by a loop-invariant condition stays scalar (the pin
+/// widens it with the scalar `i1`); a splatted condition would be a different
+/// recipe.
+#[test]
+fn a_select_by_a_loop_invariant_condition_stays_scalar() {
+    let text = run_compares(SELECT_INVARIANT);
+    assert_eq!(count(&text, "<4 x i32>"), 0, "{text}");
 }

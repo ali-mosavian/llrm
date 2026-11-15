@@ -936,6 +936,7 @@ mod tests {
                 object_aligned: false,
                 red_zone: 0,
                 slot_scratch: None,
+                slot_dead_checked: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,

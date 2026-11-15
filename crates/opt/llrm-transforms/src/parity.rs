@@ -168,6 +168,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
     entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
+    // DEVIATE FMULADD-SPLIT: no pass of LLVM's; it runs inside every LICM slot.
+    entry("fmuladdsplit", Simplify, "fmuladd-split (no pass of LLVM)", Old, "fmuladd-split"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
     entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial> (-O3: nontrivial;trivial)", Translated, ""),
@@ -317,7 +319,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp@1455",
         Late,
         "slp-vectorizer",
-        "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
+        "slpvectorize.rs makes vector stores of runs of constant stores (arm64 only: cost-priced, VF down from the register width, DEVIATE SLP1: constants only), slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
     partial(
         "loop-vectorize@1354",

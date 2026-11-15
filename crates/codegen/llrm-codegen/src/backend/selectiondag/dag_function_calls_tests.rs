@@ -1226,6 +1226,7 @@ entry:
         object_aligned: false,
         red_zone: 0,
         slot_scratch: None,
+        slot_dead_checked: false,
     };
     let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));

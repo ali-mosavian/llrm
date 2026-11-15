@@ -177,12 +177,6 @@ impl Tti for Wasm {
         true
     }
 
-    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
-    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
-    fn lftr_any_stride(&self) -> bool {
-        true
-    }
-
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
         &self,
@@ -195,25 +189,14 @@ impl Tti for Wasm {
         "WebAssembly"
     }
 
-    /// SZ1: a size build keeps a callee that inlining would copy into
-    /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
-    /// The pin's `OptSizeThreshold` 50 allows the growth.
-    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
-    /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
-    /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245). On the whole
-    /// corpus (198 rows, 2026-11-10) 20 -O1 rows were above it, +1 256 B: nine
-    /// of them held inlines the pin prices below zero (next hook).
-    /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
-    /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
+    /// SZ1 retired (2026-11-13): the pin's `OptSizeThreshold` 50 decides, as the pin does
+    /// (`tests/os_inline_growth.rs`). The bound had kept `sf_cmp_bits` (cost 35, 7 sites) a
+    /// call because our InstCombine made `scmp` of its select chain where the pin's
+    /// `matchSymmetricPair` (equality `icmp`) left it at 50; with that translated, the bound
+    /// held 17 cells above the pin at -Os and 18 at -O1 (corpus, 195 cells; 0 lost at -Os,
+    /// 1 at -O1: row WSZ-32).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        true
-    }
-
-    /// The bound stands down where the pin's own cost is below zero: the pin
-    /// counts the inline as shrinking the caller (uint64_to_float -O1: six
-    /// `classify` calls kept at cost -15..-5, 241 B against the pin's 96).
-    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
-        true
+        false
     }
 
     /// A callee the -O1 size bound refused is tried inline as at -Os, the copy staying where the
@@ -385,7 +368,8 @@ impl Tti for Wasm {
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1257>):
     /// a pointer cast to or from a legal integer of its width, and a `trunc`
     /// or `bitcast` between types that legalize to one register of one size
-    /// (`i32` to `i8`: both an `i32`), are free. `Basic` charged each one.
+    /// (`i32` to `i8`: both an `i32`), are free, and so is a `trunc` to a
+    /// legal integer (`i64` to `i32`). `Basic` charged each one.
     fn cast_cost(
         &self,
         op: CastKind,
@@ -401,6 +385,9 @@ impl Tti for Wasm {
         let free = match op {
             CastKind::IntToPtr => legal_integer(from) && width(from) <= POINTER_BITS,
             CastKind::PtrToInt => legal_integer(to) && width(to) >= POINTER_BITS,
+            // `TargetTransformInfoImplBase`: a `trunc` to a legal integer is free
+            // (`n32:64`: `i32` and `i64`), whatever it comes from.
+            CastKind::Trunc if legal_integer(to) => true,
             CastKind::Trunc | CastKind::BitCast => {
                 let integral = |ty: Ty| matches!(ty, Ty::Int(_) | Ty::Pointer);
                 let (from_count, from_size) = legalized(from);
@@ -485,7 +472,11 @@ impl Tti for Wasm {
         match intrinsic_price(kind, name) {
             Some(cost) => Cost::of(cost),
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+            // A scalar intrinsic with no case of its own (`stacksave`) is
+            // "turned into a library call": `BasicTTIImplBase`'s
+            // `SingleCallCost` (1 for code size, else 10).
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2323
+            None => base_intrinsic_cost(name).unwrap_or(Cost::of(if kind == "code-size" { 1 } else { 10 })),
         }
     }
 }
@@ -494,11 +485,23 @@ impl Tti for Wasm {
 mod tests {
     use super::*;
 
-    /// DEVIATE LFTR1: the pin's step-one rule cost wasm bytes in
-    /// byte_multiply and variadic; the knob must stay on here.
+    /// The pin's IndVars takes a unit-stride counter only (LFTR1 is gone).
     #[test]
-    fn lftr_counts_any_constant_stride() {
-        assert!(Wasm.lftr_any_stride());
+    fn lftr_takes_the_pins_unit_stride() {
+        assert!(!Wasm.lftr_any_stride());
+    }
+
+    /// A `trunc` of an `i64` to an `i32` cost one unit where the pin prices it at
+    /// none (`TargetTransformInfoImplBase`: a truncation to a legal integer):
+    /// the outer loop of `int64_divmod_edges` read 78 against the pin's 70 and
+    /// stayed rolled at -O3 (+33 executed instructions).
+    #[test]
+    fn a_truncation_to_a_legal_integer_is_free() {
+        let cost = |from, to| Wasm.cast_cost(CastKind::Trunc, to, from, CostKind::CodeSize);
+        assert_eq!(cost(Ty::Int(64), Ty::Int(32)), Cost::FREE);
+        assert_eq!(cost(Ty::Int(32), Ty::Int(8)), Cost::FREE);
+        assert_eq!(cost(Ty::Int(128), Ty::Int(64)), Cost::FREE);
+        assert_eq!(cost(Ty::Int(128), Ty::Int(32)), Cost::FREE);
     }
 
     /// A `zext` of a loaded byte cost one unit, where the pin prices it at none
@@ -525,6 +528,17 @@ mod tests {
         assert!(!Wasm.ext_load_free(CastKind::Trunc, Ty::Int(8), Ty::Int(32)));
     }
 
+    /// `stacksave` and `stackrestore` had no price, so a loop that held a
+    /// variable-length array could not be unrolled (vla_callee_constant -O2:
+    /// 3,021 instructions against the pin's 994). The pin prices them as a
+    /// library call: 1 for code size, else 10.
+    #[test]
+    fn a_stack_save_or_restore_is_priced_as_a_library_call() {
+        let cost = |name, ret, args: &[Ty], kind| Wasm.intrinsic_cost(name, ret, args, kind);
+        assert_eq!(cost("llvm.stacksave.p0", Some(Ty::Pointer), &[], CostKind::CodeSize), Cost::of(1));
+        assert_eq!(cost("llvm.stackrestore.p0", None, &[Ty::Pointer], CostKind::SizeAndLatency), Cost::of(10));
+    }
+
     /// `llvm.fmuladd` had no price, so a loop that held one could not be
     /// unrolled (floats -O2: 23,042 instructions against the pin's 16,542).
     /// The pin prices it as an `fmul` and an `fadd`.
@@ -534,5 +548,28 @@ mod tests {
         assert_eq!(cost("llvm.fmuladd.f64", CostKind::CodeSize), Cost::of(2));
         assert_eq!(cost("llvm.fmuladd.f32", CostKind::RecipThroughput), Cost::of(4));
         assert_eq!(cost("llvm.lifetime.start.p0", CostKind::CodeSize), Cost::FREE);
+    }
+
+    /// The saturating add, subtract and shift had no price, so a loop that held
+    /// one could not be sized or unrolled (ssub_sat_i64_loop, sat_sub_u64_shared_compare
+    /// -O2/-O3: the pin unrolls the 3-trip loop, ours kept it, +25 and +347 instructions).
+    #[test]
+    fn a_saturating_operation_has_the_pins_price() {
+        let cost = |name, kind| Wasm.intrinsic_cost(name, None, &[], kind);
+        assert_eq!(cost("llvm.ssub.sat.i64", CostKind::CodeSize), Cost::of(7));
+        assert_eq!(cost("llvm.usub.sat.i64", CostKind::CodeSize), Cost::of(3));
+        assert_eq!(cost("llvm.uadd.sat.i8", CostKind::Latency), Cost::of(3));
+        assert!(cost("llvm.sadd.sat.i32", CostKind::RecipThroughput).valid);
+    }
+
+    /// A loop that held a `memset` could not be sized, so it was never
+    /// unrolled (rep_count -O3: the 16-trip zero nest, a `memset` of 16 once
+    /// MemCpyOpt merged its stores, stayed a loop; the pin unrolls it).
+    #[test]
+    fn a_memory_intrinsic_has_the_pins_price() {
+        let cost = |name| Wasm.intrinsic_cost(name, None, &[], CostKind::CodeSize);
+        assert_eq!(cost("llvm.memset.p0.i32"), Cost::of(1));
+        assert_eq!(cost("llvm.memcpy.p0.p0.i32"), Cost::of(4));
+        assert_eq!(cost("llvm.memmove.p0.p0.i64"), Cost::of(1));
     }
 }

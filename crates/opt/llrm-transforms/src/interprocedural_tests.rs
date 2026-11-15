@@ -1473,7 +1473,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         let (f, h) = (program.modules[0].named("f").unwrap(), program.modules[0].named("h").unwrap());
         let private = private(program, 0);
         let mut state = crate::ipacp::Cloning::default();
-        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false }, &mut state);
+        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false, max_clones: crate::ipacp::DEFAULT_MAX_CLONES }, &mut state);
         assert_eq!(first.added.len(), 1, "the first round clones fill for row 2");
         let mut analyses = managers(program, &mut ProgramAnalyses::default());
         // What `bare` leaves, without its check that no call stands: the callers
@@ -1487,7 +1487,7 @@ fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
         stub.insert(end, llrm_mir::edit::Position::End(entry)).unwrap();
         module.globals[first.added[0].0 as usize].kind = GlobalKind::Function(Box::new(stub));
         analyses[0].changed(first.added[0]);
-        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false }, &mut state);
+        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false, max_clones: crate::ipacp::DEFAULT_MAX_CLONES }, &mut state);
         let module = &program.modules[0];
         let caller = module.global(h).function().unwrap();
         let target = caller

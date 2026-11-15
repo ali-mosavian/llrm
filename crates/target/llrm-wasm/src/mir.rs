@@ -250,6 +250,8 @@ pub struct Function {
     pub frame: Vec<(u64, u64)>,
     /// `Function::hasPersonalityFn`.
     pub personality: bool,
+    /// `MFI.hasVarSizedObjects()`: the function has a non-static alloca.
+    pub has_var_sized: bool,
     /// The callees that never throw (`Function::doesNotThrow`, and the
     /// libcalls `mayThrow` lists).
     pub nothrow: std::sync::Arc<llrm_support::hash::HashSet<String>>,

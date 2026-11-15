@@ -55,6 +55,37 @@ pub fn mulsi3_clocks(
     }
 }
 
+/// Bytes of `__mulsi3` a program that calls it links (assembled `mulsi3.s`, 2026-11-15): 54 at the 68000 and
+/// 68010, 12 from the 68020. A trial counts them against a build that calls the routine and another that does not.
+pub fn mulsi3_bytes(cpu: crate::dagisel::hooks::Cpu) -> usize {
+    if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 12 } else { 54 }
+}
+
+/// Whether a function of `module` other than `except` multiplies two variables, which a CPU without a long multiply
+/// calls `__mulsi3` for: the routine is then linked whatever a trial chooses for `except` (its own calls show in its
+/// items; two narrow operands are a `muls`, so this may say yes where the other function does not call).
+pub fn another_function_multiplies_variables(
+    module: &llrm_mir::module::Module,
+    except: &str,
+    cpu: crate::dagisel::hooks::Cpu,
+) -> bool {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::{BinaryOp, Opcode};
+    if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+        return false;
+    }
+    module
+        .functions()
+        .filter(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() != Some(except))
+        .any(|(_, _, function)| {
+        function.walk().any(|(_, inst)| {
+            let instruction = function.instruction(inst);
+            matches!(instruction.opcode, Opcode::Binary(BinaryOp::Mul))
+                && !instruction.operands.iter().any(|operand| matches!(operand, Operand::Constant(_)))
+        })
+    })
+}
+
 /// [`mulsi3_clocks`] with `b` = 1: the floor a trial counts for a call.
 pub fn mulsi3_floor(cpu: crate::dagisel::hooks::Cpu) -> u32 {
     mulsi3_clocks(cpu, 1)

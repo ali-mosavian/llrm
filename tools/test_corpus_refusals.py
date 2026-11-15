@@ -40,3 +40,14 @@ def test_register_upper_half_is_not_run_at_m64_where_there_is_no_watcom_abi():
     source = (Path(__file__).parent.parent / "tests/run/c/register_upper_half.c").read_text()
     assert not corpus_targets.applies("x86_64-linux", source)
     assert all(corpus_targets.applies(t, source) for t in ("x86_32-linux", "x86_32-dos", "x86_16-dos", "arm64-linux", "m68k-68020", "wasm32"))
+
+
+def test_bench_io_passes_no_void_to_report():
+    """Since #9424's twins `bench_close` is `((void)...)` where __INT_MAX__ is defined (every compiler but the DOS ones): `report(bench_close(handle))` was
+    "passing void to long" and the program was refused at all targets (36 cells). The program closes, then reports the 0 its `.out` expects."""
+    import subprocess
+
+    root = Path(__file__).parent.parent
+    done = subprocess.run(["gcc", "-fsyntax-only", "-I", str(root / "runtime/shared/posix"), str(root / "tests/run/c/bench_io.c")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+

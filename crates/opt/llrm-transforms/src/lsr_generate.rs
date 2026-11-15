@@ -171,7 +171,7 @@ fn collect_subexprs(
 impl Collection<'_, '_> {
     /// The formula `f` of use `lu_idx` is legal as it is: used before
     /// inserting a variant.
-    fn legal(
+    pub(crate) fn legal(
         &self,
         lu_idx: usize,
         f: &Formula,
@@ -188,7 +188,26 @@ impl Collection<'_, '_> {
             f.base_offset,
             mode.has_base_reg,
             mode.scale,
-        )
+        ) || self.scales_basic_use(lu.kind, &mode, f.base_offset)
+    }
+
+    /// DEVIATE LSR-CALL-SCALE (`Tti::lsr_basic_use_scale_shifts`): a basic use
+    /// of a loop with a call is a register shifted left, `{0,+,1} << k` for
+    /// the use `{0,+,2^k}`, where the call would keep `{0,+,2^k}` in the frame.
+    fn scales_basic_use(
+        &self,
+        kind: Kind,
+        mode: &crate::lsr_formula::Mode,
+        base_offset: Immediate,
+    ) -> bool {
+        let shifts = self.tti.lsr_basic_use_scale_shifts();
+        kind == Kind::Basic
+            && self.across_call
+            && !mode.global
+            && base_offset.is_zero()
+            && mode.scale > 1
+            && mode.scale.count_ones() == 1
+            && mode.scale.trailing_zeros() <= shifts
     }
 
     fn reg_at(
@@ -723,7 +742,7 @@ impl Collection<'_, '_> {
                         base.base_offset,
                         mode.has_base_reg,
                         mode.scale,
-                    )
+                    ) || self.scales_basic_use(kind, &mode, base.base_offset)
                 })
             };
             if !legal(kind) {

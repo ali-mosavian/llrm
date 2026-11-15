@@ -208,6 +208,13 @@ fn the_compact_word_division_agrees_with_the_fast_one() {
         (32768, 32768, 1, 0),
         (65535, 2, 32767, 1),
         (65535, 16385, 3, 16380),
+        (65535, 32769, 1, 32766),
+        (49151, 32768, 1, 16383),
+        (32767, 32768, 0, 32767),
+        (65535, 65534, 1, 1),
+        (65534, 65535, 0, 65534),
+        (32768, 32769, 0, 32768),
+        (40000, 32767, 1, 7233),
     ] {
         let n = format!("c{a}-{b}");
         assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
@@ -235,17 +242,25 @@ fn signed_word_division() {
     assert_eq!(word("modhi", &two_words(64536, 7), "__modhi3"), 65530);
 }
 
-/// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling over the bit loop alone) gives the
-/// fast routines' answers, for divisors under and over 256: -1000 / 7 = -142 r -6, 7 / -2 = -3 r 1, -1000 / -300 = 3 r
-/// -100, 30000 / 300 = 100 r 0.
+/// A divisor of 256 or more runs the bit loop, which uses Y: the sign the
+/// signed routines keep across it must not be there. -1000 / 300 = -3 r -100.
+#[test]
+fn signed_word_division_by_a_long_divisor_keeps_its_sign() {
+    assert_eq!(word("divhil", &two_words(64536, 300), "__divhi3"), 65533);
+    assert_eq!(word("modhil", &two_words(64536, 300), "__modhi3"), 65436);
+    assert_eq!(word("divhir", &two_words(1000, 65236), "__divhi3"), 65533);
+    assert_eq!(word("modhir", &two_words(1000, 65236), "__modhi3"), 100);
+}
+
+/// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling
+/// over the bit loop alone) gives the fast routines' answers, for divisors
+/// under and over 256: -1000 / 7 = -142 r -6, 7 / -2 = -3 r 1, -1000 / -300 = 3
+/// r -100, 30000 / 300 = 100 r 0.
 #[test]
 fn compact_signed_word_division_matches_the_fast_routines() {
-    for (a, b, quotient, remainder) in [
-        (64536u16, 7u16, 65394i32, 65530i32),
-        (7, 65534, 65533, 1),
-        (64536, 65236, 3, 65436),
-        (30000, 300, 100, 0),
-    ] {
+    for (a, b, quotient, remainder) in
+        [(64536u16, 7u16, 65394i32, 65530i32), (7, 65534, 65533, 1), (64536, 65236, 3, 65436), (30000, 300, 100, 0)]
+    {
         let n = format!("{a}-{b}");
         assert_eq!(word(&format!("divhic-{n}"), &two_words(a, b), "__divhi3c"), quotient, "{a} / {b} compact");
         assert_eq!(word(&format!("modhic-{n}"), &two_words(a, b), "__modhi3c"), remainder, "{a} % {b} compact");
@@ -322,18 +337,33 @@ fn multiply_longs_stops_when_the_multiplier_is_spent() {
         (3, 0x00FF_FF00),
     ] {
         for routine in ["__mulsi3", "__mulsi3_fast"] {
-            assert_eq!(long(&format!("mulsi-exit-{a}-{b}{routine}"), routine, a, b), a.wrapping_mul(b), "{routine}: {a} * {b}");
+            assert_eq!(
+                long(&format!("mulsi-exit-{a}-{b}{routine}"), routine, a, b),
+                a.wrapping_mul(b),
+                "{routine}: {a} * {b}"
+            );
         }
     }
 }
 
 /// The 16 x 16 -> 32 products: unsigned 65535 * 65535 = 0xFFFE0001, signed
 /// -32768 * -32768 = 0x40000000, -3 * 7 = -21, 0x7FFF * 0x8001 (= -32767)
-/// negative; a multiplier under 256 ends after its first byte (0xFFFF * 0xFF, 0x8000 * 0x80). The signed routine takes the unsigned product less the other
+/// negative; a multiplier under 256 ends after its first byte (0xFFFF * 0xFF,
+/// 0x8000 * 0x80). The signed routine takes the unsigned product less the other
 /// operand from the high word for each negative operand.
 #[test]
 fn widening_multiplies_give_the_32_bit_product() {
-    for (a, b) in [(0u32, 0u32), (1, 0xFFFF), (0xFFFF, 0xFFFF), (0x8000, 0x8000), (0x7FFF, 0x8001), (0xFFFD, 7), (0xFFFF, 0xFF), (0x1234, 0x0100), (0x8000, 0x0080)] {
+    for (a, b) in [
+        (0u32, 0u32),
+        (1, 0xFFFF),
+        (0xFFFF, 0xFFFF),
+        (0x8000, 0x8000),
+        (0x7FFF, 0x8001),
+        (0xFFFD, 7),
+        (0xFFFF, 0xFF),
+        (0x1234, 0x0100),
+        (0x8000, 0x0080),
+    ] {
         assert_eq!(long(&format!("umulhisi-{a}-{b}"), "__umulhisi3", a, b), a * b, "{a} * {b}");
         let signed = i32::from(a as u16 as i16) * i32::from(b as u16 as i16);
         assert_eq!(long(&format!("mulhisi-{a}-{b}"), "__mulhisi3", a, b), signed as u32, "{a} * {b} signed");
@@ -343,8 +373,8 @@ fn widening_multiplies_give_the_32_bit_product() {
 /// A multiplier under 256 is added for each set bit and the walk ends with its
 /// last (fcmp_all: 384 calls of `(F) * (k + 1)`, 414 clocks each): the carries
 /// run through all three product bytes (0xFFFF * 0xFF), and a multiplier of 3
-/// costs 194 clocks, not the 419 of 16 bits. The signed entry takes the byte from the high
-/// word of a negative multiplicand.
+/// costs 194 clocks, not the 419 of 16 bits. The signed entry takes the byte
+/// from the high word of a negative multiplicand.
 #[test]
 fn a_byte_multiplier_ends_with_its_last_set_bit() {
     for (a, b) in [(0xFFFFu32, 0xFFu32), (0xABCD, 0x55), (0x1234, 0)] {
@@ -429,8 +459,9 @@ fn the_fast_long_shifts_agree_with_the_bit_loops_for_every_count() {
 
 /// `__ashlsi3` shifted one bit per trip of a loop of 25 clocks: a shift by 21,
 /// the average one of f32 add (`__ashlsi3` was 18% of it), took about 530
-/// clocks. The speed variant is two byte moves and five bits, about 260; the bound is 300, since a page cross
-/// anywhere in `mos_rt.s` moves it by a clock (inserting 29 lines of unrelated routines made 259 into 260 and failed
+/// clocks. The speed variant is two byte moves and five bits, about 260; the
+/// bound is 300, since a page cross anywhere in `mos_rt.s` moves it by a clock
+/// (inserting 29 lines of unrelated routines made 259 into 260 and failed
 /// `< 260`), and the bit loop it must beat is at 530.
 #[test]
 fn a_long_shift_by_21_takes_whole_byte_steps() {
@@ -495,20 +526,22 @@ fn expected(edit: impl FnOnce(&mut [u8])) -> i32 {
     i32::from(memory.iter().fold(0u8, |sum, byte| sum.rotate_left(1) ^ byte))
 }
 
-/// `routine(buf + dst, buf + src, n)` for memcpy and memmove, `routine(buf +
-/// dst, c, n)` for memset (`c` in A, `n` in rs2).
+/// `routine(buf + dst, buf + src, n)` for memcpy and memmove (`dst` in rc2:rc3,
+/// `src` in rc4:rc5, `n` in A:X), `routine(buf + dst, c, n)` for memset (`c` in
+/// A, `n` in rc4:rc5). `second` loads the source or the byte.
 fn mem_call(
     routine: &str,
     dst: usize,
     second: &str,
     n: usize,
 ) -> String {
-    let (low, high) = if routine == "memset" { (4, 5) } else { (6, 7) };
-    format!(
-        "  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n  lda #{}\n  sta rc{low}\n  lda #{}\n  sta rc{high}\n{second}  jsr {routine}\n",
-        n & 0xFF,
-        n >> 8
-    )
+    let (lo, hi) = (n & 0xFF, n >> 8);
+    let dst = format!("  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n");
+    if routine == "memset" {
+        format!("{dst}  lda #{lo}\n  sta rc4\n  lda #{hi}\n  sta rc5\n{second}  jsr memset\n")
+    } else {
+        format!("{dst}{second}  lda #{lo}\n  ldx #{hi}\n  jsr {routine}\n")
+    }
 }
 
 fn source(src: usize) -> String {
@@ -632,7 +665,9 @@ fn division_mismatches(
         table += &format!("  .dword {a}, {b}, {}\n", want(a, b));
     }
     table += ".segment \"CODE\"\n";
-    let mut main = String::from("  lda #<the_cases\n  sta rc2\n  lda #>the_cases\n  sta rc3\n  lda #0\n  sta rc4\n  sta rc5\nthe_next:\n");
+    let mut main = String::from(
+        "  lda #<the_cases\n  sta rc2\n  lda #>the_cases\n  sta rc3\n  lda #0\n  sta rc4\n  sta rc5\nthe_next:\n",
+    );
     for (cell, from) in [("__sa", 0), ("__sb", 4)] {
         for at in 0..4 {
             main += &format!("  ldy #{}\n  lda (rc2),y\n  sta {cell}+{at}\n", from + at);
@@ -657,10 +692,16 @@ fn long_division_routines_agree_with_the_machine_on_edges_and_a_walk() {
     let unsigned = |a: u32, b: u32| if b == 0 { (u32::MAX, a) } else { (a / b, a % b) };
     let signed = |a: u32, b: u32| {
         let (x, y) = (a as i32, b as i32);
-        if y == 0 { (if x < 0 { 1 } else { u32::MAX }, a) } else { (x.wrapping_div(y) as u32, x.wrapping_rem(y) as u32) }
+        if y == 0 {
+            (if x < 0 { 1 } else { u32::MAX }, a)
+        } else {
+            (x.wrapping_div(y) as u32, x.wrapping_rem(y) as u32)
+        }
     };
     for suffix in ["", "_fast"] {
-        for (routine, quotient, which) in [("udivsi3", true, 0), ("umodsi3", false, 0), ("divsi3", true, 1), ("modsi3", false, 1)] {
+        for (routine, quotient, which) in
+            [("udivsi3", true, 0), ("umodsi3", false, 0), ("divsi3", true, 1), ("modsi3", false, 1)]
+        {
             let name = format!("__{routine}{suffix}");
             let wrong = division_mismatches(&format!("div-{routine}{suffix}"), &name, &cases, |a, b| {
                 let (q, r) = if which == 0 { unsigned(a, b) } else { signed(a, b) };
@@ -813,8 +854,8 @@ fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
     assert!(mean >= llrm_6502::hotdivision::SAVED_CLOCKS * 0.9, "the wide path saves {mean} clocks a call");
 }
 
-/// `hotmultiply::SAVED_CLOCKS`: what `__mulsi3_fast` saves a call, averaged over
-/// multipliers of one to four bytes, in sim65 clocks.
+/// `hotmultiply::SAVED_CLOCKS`: what `__mulsi3_fast` saves a call, averaged
+/// over multipliers of one to four bytes, in sim65 clocks.
 #[test]
 fn the_fast_multiply_saves_what_hotmultiply_prices() {
     let call = |routine: &str, b: u32| {

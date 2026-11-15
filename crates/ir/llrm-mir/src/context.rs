@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use crate::arena::Arena;
 use crate::hash::HashMap;
 use crate::opcode::{BinaryOp, CastOp};
-use crate::types::{FloatKind, TypeId, Types};
+use crate::types::{FloatKind, Type, TypeId, Types};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConstantId(u32);
@@ -198,6 +198,22 @@ impl Context {
         self.interned = Box::new(RefCell::new(interned));
     }
 
+    /// `ConstantInt::get(Type *, ..)`: `value` as an integer of `ty`, or in
+    /// every lane of a vector `ty`.
+    pub fn int_splat(
+        &self,
+        ty: TypeId,
+        value: i128,
+    ) -> ConstantId {
+        match self.types.get(ty) {
+            Type::Vector { element, count } => {
+                let lane = self.int(*element, value);
+                self.constant(Constant { ty, kind: ConstantKind::Aggregate(vec![lane; *count as usize]) })
+            }
+            _ => self.int(ty, value),
+        }
+    }
+
     /// `value` modulo the width of the integer type `ty`.
     #[inline]
     pub fn int(
@@ -205,8 +221,41 @@ impl Context {
         ty: TypeId,
         value: i128,
     ) -> ConstantId {
+        // `ConstantInt::get` of a vector type is the splat of the lane's value.
+        if let Type::Vector { element, count } = self.types.get(ty).clone() {
+            let lane = self.int(element, value);
+            let kind = if matches!(self.get(lane).kind, ConstantKind::Int(0)) {
+                ConstantKind::Zero
+            } else {
+                ConstantKind::Aggregate(vec![lane; count as usize])
+            };
+            return self.constant(Constant { ty, kind });
+        }
         let bits = self.types.int_bits(ty).expect("an integer constant has an integer type");
         self.constant(Constant { ty, kind: ConstantKind::Int(value as u128 & mask(bits)) })
+    }
+
+    /// `m_APInt` of a constant: a number, or the one every lane of a vector
+    /// constant holds (a splat), and the width of the lane.
+    pub fn splat_int(
+        &self,
+        id: ConstantId,
+    ) -> Option<(u128, u32)> {
+        let constant = self.get(id);
+        let width = self.types.scalar_int_bits(constant.ty)?;
+        match &constant.kind {
+            ConstantKind::Int(bits) => Some((*bits, width)),
+            ConstantKind::Null | ConstantKind::Zero => Some((0, width)),
+            ConstantKind::Aggregate(lanes) if matches!(self.types.get(constant.ty), Type::Vector { .. }) => {
+                let first = *lanes.first()?;
+                let (bits, _) = self.splat_int(first)?;
+                lanes
+                    .iter()
+                    .all(|lane| *lane == first || self.splat_int(*lane) == Some((bits, width)))
+                    .then_some((bits, width))
+            }
+            _ => None,
+        }
     }
 }
 

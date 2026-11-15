@@ -1,8 +1,8 @@
 %struct.P = type { i32, i32 }
 %struct.Q = type { i8, i16, i32, i64 }
-@g1 = dso_local global i32 0, align 4
-@garr = dso_local global [8 x i32] zeroinitializer, align 16
-@gp = dso_local global %struct.P zeroinitializer, align 4
+@g1 = hidden global i32 0, align 4
+@garr = hidden global [8 x i32] zeroinitializer, align 16
+@gp = hidden global %struct.P zeroinitializer, align 4
 declare void @take(ptr noundef)
 declare i32 @get()
 declare void @put(i32 noundef)

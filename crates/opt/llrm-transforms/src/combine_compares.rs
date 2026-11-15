@@ -17,7 +17,7 @@
 //! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 //! `foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
-//! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
+//! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the two-select fold,
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 //! `dyn_castNegVal` select fold.
 //!
@@ -60,7 +60,7 @@ use crate::combine::{Combiner, Visit};
 use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
 use crate::combine_icmp_equality::fold_icmp_equality;
-use crate::combine_shared::{get_complexity, has_one_use, query};
+use crate::combine_shared::{get_complexity, has_one_use, match_symmetric_pair, query, replace_operand};
 
 /// `ICmpInst::isSigned`.
 fn is_signed(pred: IntPredicate) -> bool {
@@ -292,6 +292,16 @@ pub fn visit_icmp(
     if let Some(r) = crate::combine_icmp_minmax::fold_icmp_with_min_max(c, inst, pred.swapped(), op1, op0) {
         return r;
     }
+    // `if (I.isCommutative())`: `matchSymmetricPair`, the pair of selects that swap their arms
+    // compares as the two arms (`icmp ne (select c, a, b), (select c, b, a)` is `icmp ne a, b`).
+    if matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
+        && !c.env.hooks.keeps_swapped_select_compare
+        && let Some((x, y)) = match_symmetric_pair(&query(c, Some(inst)), op0, op1)
+    {
+        replace_operand(c, inst, 0, x);
+        replace_operand(c, inst, 1, y);
+        return Visit::Changed;
+    }
     if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
         return r;
     }
@@ -300,8 +310,7 @@ pub fn visit_icmp(
         return r;
     }
     // OWED: the other arms of foldICmpInstWithConstantNotInt, the rest of
-    // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
-    // the two-select fold.
+    // foldICmpCommutative, foldCmpSelectOfConstants and the two-select fold.
     if let Some(r) = fold_sub_add_pair(c, inst, pred, op0, op1) {
         return r;
     }

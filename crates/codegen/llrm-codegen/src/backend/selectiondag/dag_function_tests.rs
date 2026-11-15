@@ -443,6 +443,7 @@ fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
                     defining(at, vec![value], if at > 0 && k == 0 { vec![(at * 4) as u32] } else { vec![] })
                 })
                 .collect(),
+            ..EmitBlock::default()
         })
         .collect();
     let succ: Vec<Vec<i64>> = (0..4000).map(|at| if at + 1 < 4000 { vec![at + 1] } else { vec![] }).collect();
@@ -641,6 +642,58 @@ fn a_select_on_the_sign_is_the_sign_mask_not_a_branch() {
         let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
         assert!(seen.contains(&"sar") && !seen.iter().any(|n| n.starts_with('j')), "{name}: {seen:?}");
     }
+}
+
+const GZIP_SELECTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 63, i32 0
+  ret i32 %r
+}
+define i32 @g(i32 %x) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 96, i32 0
+  ret i32 %r
+}
+define i32 @h(i32 %x, i32 %a) {
+  %c = icmp slt i32 %x, 0
+  %r = select i1 %c, i32 %a, i32 0
+  ret i32 %r
+}
+";
+
+/// `x < 0 ? A : 0` was `test; mov ecx, A; js; xor ecx, ecx` (the rounding bias
+/// of a signed divide by 64 written as a select, a Nib `Q(c)` conversion:
+/// stft_fixed -Os +8 instructions per bias); the pin's `foldSelectCCToShiftAnd`
+/// ("gzip trick") makes it `and (sra x, 31), A`: no branch and no `cmov`, which
+/// an `i486` has not. (A single-bit `A` is `foldSelectOfConstants`' `shl (zext
+/// c)`.)
+#[test]
+fn a_select_of_a_value_or_zero_on_the_sign_is_a_shift_and_an_and_not_a_branch() {
+    let module = crate::testing::module(GZIP_SELECTS).expect("parses");
+    for (name, shift) in [("f", "sar"), ("g", "sar"), ("h", "sar")] {
+        let done =
+            selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+        assert!(
+            seen.contains(&shift) && seen.contains(&"and") && !seen.iter().any(|n| n.starts_with('j')),
+            "{name}: {seen:?}"
+        );
+    }
+}
+
+/// m16 opts out of the gzip trick: nbody_fixed -Os grew 9 B with the shift
+/// and the and-not on a dword. `x < 0 ? A : 0` keeps its branch there.
+#[test]
+fn m16_keeps_the_branch_of_a_select_of_a_value_or_zero_on_the_sign() {
+    let module = crate::testing::module(GZIP_SELECTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.iter().any(|n| n.starts_with('j')) && !seen.contains(&"sar"), "{seen:?}");
 }
 
 /// `if (c & 1) g(); else h();` written as a compare of the masked value, in

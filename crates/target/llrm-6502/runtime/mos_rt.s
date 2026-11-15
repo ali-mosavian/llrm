@@ -153,10 +153,11 @@ udivmod8:
   bne @next
   rts
 
-; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X only.
+; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X, and Y and the bit loop for a divisor
+; of 256 or more.
 udivmod16:
   lda rc5
-  bne udivmod16c
+  bne __udivhi3c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
   ldx #16
 @next8:
@@ -176,8 +177,11 @@ udivmod16:
   lda #0
   sta rc7
   rts
-; the bit loop alone: what the compact entry points run
-udivmod16c:
+; the bit loop alone, what the compact entry points run: the quotient in rc2:rc3 and A:X, the remainder in
+; rc6:rc7. Uses A, X, Y. The remainder before step k is under 2^(k-1), so the shifted one never carries out of
+; 16 bits, whatever the divisor.
+.export __udivhi3c
+__udivhi3c:
   lda #0
   sta rc6
   sta rc7
@@ -187,24 +191,21 @@ udivmod16c:
   rol rc3
   rol rc6
   rol rc7
-  bcs @sub
-  lda rc6
-  cmp rc4
-  lda rc7
-  sbc rc5
-  bcc @keep
-@sub:
   sec
   lda rc6
   sbc rc4
-  sta rc6
+  tay
   lda rc7
   sbc rc5
+  bcc @keep
+  sty rc6
   sta rc7
   inc rc2
 @keep:
   dex
   bne @next
+  lda rc2
+  ldx rc3
   rts
 
 .export __udivqi3
@@ -238,17 +239,10 @@ __umodhi3:                      ; rs1 % rs2 -> A:X
   ldx rc7
   rts
 
-; the compact variants, called where a byte is worth more than the clocks: no short-divisor path
-.export __udivhi3c
-__udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
-  jsr udivmod16c
-  lda rc2
-  ldx rc3
-  rts
-
+; the compact variants, called where a byte is worth more than the clocks: no short-divisor path (__udivhi3c above)
 .export __umodhi3c
 __umodhi3c:                     ; rs1 % rs2 -> A:X
-  jsr udivmod16c
+  jsr __udivhi3c
   lda rc6
   ldx rc7
   rts
@@ -328,10 +322,10 @@ abs16_pair:
 __divhi3:                       ; rs1 / rs2 -> A:X
   lda rc3
   eor rc5
-  tay
+  pha                           ; the sign: the bit loop uses Y
   jsr abs16_pair
   jsr udivmod16
-  cpy #0
+  pla
   bpl @done
   neg16 rc2, rc3
 @done:
@@ -341,10 +335,11 @@ __divhi3:                       ; rs1 / rs2 -> A:X
 
 .export __modhi3
 __modhi3:                       ; rs1 % rs2 -> A:X
-  ldy rc3
+  lda rc3
+  pha
   jsr abs16_pair
   jsr udivmod16
-  cpy #0
+  pla
   bpl @done
   neg16 rc6, rc7
 @done:
@@ -357,10 +352,10 @@ __modhi3:                       ; rs1 % rs2 -> A:X
 __divhi3c:                       ; rs1 / rs2 -> A:X, compact
   lda rc3
   eor rc5
-  tay
+  pha                           ; the sign: the bit loop uses Y
   jsr abs16_pair
-  jsr udivmod16c
-  cpy #0
+  jsr __udivhi3c
+  pla
   bpl @done
   neg16 rc2, rc3
 @done:
@@ -370,10 +365,11 @@ __divhi3c:                       ; rs1 / rs2 -> A:X, compact
 
 .export __modhi3c
 __modhi3c:                       ; rs1 % rs2 -> A:X, compact
-  ldy rc3
+  lda rc3
+  pha
   jsr abs16_pair
-  jsr udivmod16c
-  cpy #0
+  jsr __udivhi3c
+  pla
   bpl @done
   neg16 rc6, rc7
 @done:
@@ -1017,16 +1013,18 @@ __ashrsi3_fast:                 ; __sa >> __sb (arithmetic) -> __sa
   rts
 
 ; ---- memory fills and copies ----------------------------------------------------------------------
-; memset(rs1 = dst, A = byte, rs2 = n), memcpy and memmove(rs1 = dst, rs2 = src, rs3 = n); each
-; returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its high
-; byte is saved (memset in rc6, the others on the hardware stack).
+; memset(rc2:rc3 = dst, A = byte, rc4:rc5 = n), memcpy and memmove(rc2:rc3 = dst, rc4:rc5 = src, A:X = n):
+; the pointers in cells (llvm-mos), n as a word; each returns dst in A:X. They walk whole pages with Y, so
+; the low byte of dst stays put and only its high byte is saved (rc6, memcpy in rc7, memmove on the
+; hardware stack).
 
 .export memset
 memset:
   ldx rc3
   stx rc6
-  ldy #0
   ldx rc5
+  ldy #0
+  cpx #0
   beq @tail
 @page:
   sta (rc2),y
@@ -1050,10 +1048,11 @@ memset:
 
 .export memcpy
 memcpy:
+  sta rc6
   lda rc3
-  pha
+  sta rc7
   ldy #0
-  ldx rc7
+  cpx #0
   beq @tail
 @page:
   lda (rc4),y
@@ -1074,8 +1073,7 @@ memcpy:
   dex
   bne @byte
 @done:
-  pla
-  tax
+  ldx rc7
   lda rc2
   rts
 
@@ -1083,21 +1081,24 @@ memcpy:
 ; the ranges overlap
 .export memmove
 memmove:
+  sta rc6
   lda rc2
   cmp rc4
   lda rc3
   sbc rc5
   bcs @down
+  lda rc6
   jmp memcpy
 @down:
   lda rc3
   pha
+  txa
   clc
-  adc rc7
+  adc rc3
   sta rc3
-  lda rc5
+  txa
   clc
-  adc rc7
+  adc rc5
   sta rc5
   ldy rc6
   beq @pages
@@ -1108,7 +1109,7 @@ memmove:
   cpy #0
   bne @tail
 @pages:
-  ldx rc7
+  cpx #0
   beq @done
 @page:
   dec rc3

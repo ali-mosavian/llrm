@@ -22,6 +22,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
 import m68k_exec_sweep as sweep  # noqa: E402
+import external_flags  # noqa: E402
 import o0_sweep  # noqa: E402
 
 ENTRY = re.compile(r"^ (\.text\S*)\s*(?:\n\s+)?0x[0-9a-f]+\s+0x([0-9a-f]+)\s+(\S+)$", re.M)
@@ -67,13 +68,18 @@ def globalize(text: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str]) -> list[str]:
+    """gcc's line with the program's own flags in gcc's spelling: `-fno-inline-functions` left out, gcc inlined what ours and the pin keep calls."""
+    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *external_flags.GCC_DIALECT, *external_flags.gcc_program_flags(flags), "-S", "-o", str(asm), str(source)]
+
+
 def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: str, cache: Path, work: Path) -> dict[str, object]:
     env = sweep.tool_env(root)
     tools = f"{root}/usr/bin/m68k-linux-gnu-"
     asm = work / f"{source.stem}.{compiler}.s"
     flags = o0_sweep.flags_of(source.read_text(), f"m68k-{cpu}")
     if compiler == "gcc":
-        cmd = [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", "-S", "-o", str(asm), str(source)]
+        cmd = gcc_command(tools, cpu, level, asm, source, flags)
         run_env = env
     elif compiler == "clang":
         pin, llc = pinned_tool("clang"), pinned_tool("llc")
@@ -135,7 +141,11 @@ def main() -> int:
     columns = {"both": ["ours", "gcc"], "all": ["ours", "gcc", "clang"]}.get(args.compiler, [args.compiler])
     print("| program | cpu | level | compiler | program B | library B | whole B | members |")
     print("|---|---|---|---|---|---|---|---|")
+    keep = os.environ.get("M68K_KEEP")  # a directory that keeps the linked .exe files for `cycles --exe`
+    if keep:
+        Path(keep).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
+        tmp = keep or tmp
         for name in args.names:
             for compiler in columns:
                 got = measure(ROOT / "tests/run/c" / f"{name}.c", args.cpu, args.level, compiler, cc, root, cache, Path(tmp))

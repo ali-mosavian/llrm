@@ -12,7 +12,7 @@ cntr = $a2
 fail = $a4
 xwant = $a5
 .bss
-stk:    .res 10
+stk:    .res 8
 .code
 _main:
     lda #<vec
@@ -26,20 +26,9 @@ _main:
     lda #0
     sta fail
 loop:
-    ldy #5                  ; a0..a5 in rc2..rc7
+    ldy #8                  ; b0..b7 on the stack
 :   lda (ptr),y
-    sta rc2,y
-    dey
-    bpl :-
-    ldy #6                  ; a6:a7 then b0..b7 on the stack
-    lda (ptr),y
-    sta stk
-    iny
-    lda (ptr),y
-    sta stk+1
-    ldy #8
-:   lda (ptr),y
-    sta stk-6,y
+    sta stk-8,y
     iny
     cpy #16
     bne :-
@@ -53,14 +42,11 @@ loop:
     sta rc8,x
     dex
     bpl :-
+    jsr load
     jsr __ledf2
     ldy #16
     jsr check
-    ldy #5
-:   lda (ptr),y
-    sta rc2,y
-    dey
-    bpl :-
+    jsr load
     jsr __gedf2
     ldy #17
     jsr check
@@ -78,6 +64,18 @@ loop:
     ora cntr+1
     bne loop
     lda fail
+    rts
+load:                       ; a0:a1 in A:X, a2..a7 in rc2..rc7
+    ldy #7
+:   lda (ptr),y
+    sta rc2-2,y
+    dey
+    cpy #1
+    bne :-
+    lda (ptr),y
+    tax
+    dey
+    lda (ptr),y
     rts
 check:                      ; A:X against the record byte at (ptr),y
     cmp (ptr),y

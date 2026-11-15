@@ -606,6 +606,8 @@ pub struct Options {
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
+    /// The module zeroes its own `_BSS`, as the runtime it links does not (the Microsoft ones').
+    pub zero_bss: bool,
 }
 
 impl Options {
@@ -768,6 +770,7 @@ fn built_from(
     let mut read_data_offset = 0;
     compiler.reserve_data_labels(&module.statements, &mut read_data_offset)?;
     compiler.reserve_labels(&module.statements)?;
+    compiler.zero_bss();
     compiler.statements(module)?;
     compiler.end_statement();
     compiler.declare_procedure_shared(module)?;
@@ -4143,6 +4146,7 @@ impl Compiler {
                             operands.push(Operand::Value(table));
                         }
                         self.emit_runtime_call("B$SCLR", Vec::new(), operands);
+                        self.zero_bss();
                     }
                     "STOP" | "RESET" => {
                         if !arguments.is_empty() {
@@ -4547,7 +4551,7 @@ impl Compiler {
                     }
                     self.emit_runtime_call("B$PEOS", Vec::new(), Vec::new());
                 }
-                Statement::Data { values, .. } => {
+                Statement::Data { text, .. } => {
                     let row = self.next_read_data_row;
                     self.next_read_data_row += 1;
                     // READ enters at the DATA statement: a block of its own, so
@@ -4560,7 +4564,7 @@ impl Compiler {
                     }
                     self.data_entries.push(self.blocks[self.current_block].id);
                     self.emit_runtime_call(&format!("$QB$DATA:{row}"), Vec::new(), Vec::new());
-                    self.append_read_data(values)?;
+                    self.append_read_data(text)?;
                 }
                 Statement::Read { destinations, .. } => {
                     for destination in destinations {
@@ -5274,9 +5278,11 @@ impl Compiler {
 
     fn append_read_data(
         &mut self,
-        values: &[Expr],
+        text: &str,
     ) -> Result<(), SemanticError> {
-        let line = values.iter().map(|value| self.read_data_constant(value)).collect::<Result<Vec<_>, _>>()?.join(", ");
+        if text.contains('\0') || !text.is_ascii() {
+            return self.fail("a DATA statement can only hold plain ASCII text");
+        }
         let index = if let Some(index) = self.data.iter().position(|object| object.name == READ_DATA_OBJECT) {
             index
         } else {
@@ -5296,31 +5302,10 @@ impl Compiler {
             self.data.len() - 1
         };
         let bytes = &mut self.data[index].bytes;
-        bytes.push(b' ');
-        bytes.extend_from_slice(line.as_bytes());
+        // The text as written, blanks and all: BC keeps it so and READ parses it at run time.
+        bytes.extend_from_slice(text.as_bytes());
         bytes.push(0);
         Ok(())
-    }
-
-    fn read_data_constant(
-        &self,
-        value: &Expr,
-    ) -> Result<String, SemanticError> {
-        match value {
-            Expr::Literal(Literal::Integer(value, _), _) => Ok(value.to_string()),
-            Expr::Literal(Literal::Real(value, _), _) => Ok(value.clone()),
-            Expr::Literal(Literal::String(value), _) => {
-                if !value.is_ascii() || value.contains(['"', '\0']) {
-                    return self.fail("a DATA string can only hold plain ASCII text without quotes for now");
-                }
-                Ok(format!("\"{value}\""))
-            }
-            Expr::Unary { op, operand, .. } if matches!(op, Unary::Positive | Unary::Negative) => {
-                let literal = self.read_data_constant(operand)?;
-                Ok(if *op == Unary::Negative { format!("-{literal}") } else { literal })
-            }
-            _ => self.fail("DATA accepts only numeric and string constants"),
-        }
     }
 
     fn if_statement(
@@ -10859,6 +10844,15 @@ impl Compiler {
         bytes: usize,
     ) {
         self.calls.last_mut().expect("a call just emitted").fills.push((operand, bytes));
+    }
+
+    /// The module zeroes its own `_BSS` where its runtime does not (the Microsoft ones: the llrm
+    /// start-up does, and CLEAR's B$SCLR zeroes BC_DATA only). The driver lays the call down only
+    /// when `_BSS` holds something.
+    fn zero_bss(&mut self) {
+        if self.options.zero_bss {
+            self.emit_runtime_call("$QB$ZBSS", Vec::new(), Vec::new());
+        }
     }
 
     fn emit_runtime_call(

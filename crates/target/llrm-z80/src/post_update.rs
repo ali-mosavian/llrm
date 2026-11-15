@@ -350,8 +350,8 @@ impl Context<'_> {
         // it unknown
         let dead = insts[i + 1..]
             .iter()
-            .find(|one| one.reads_flags || one.sets_flags)
-            .is_some_and(|one| one.sets_flags && !one.reads_flags);
+            .find(|one| one.reads_flags() || one.sets_flags())
+            .is_some_and(|one| one.sets_flags() && !one.reads_flags());
         if !dead {
             return Err("the carry of the add is read");
         }

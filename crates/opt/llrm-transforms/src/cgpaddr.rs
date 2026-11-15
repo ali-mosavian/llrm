@@ -163,6 +163,10 @@ fn lowering_for(
     analyses.outer().target().lowering().filter(|lowering| lowering.runs_cgp_step(step))
 }
 
+/// `CgpAddr` at -Os and -O1, where code bytes outrank clocks: the deviations
+/// that trade bytes for clocks (`EXT-LOAD-COST`) stay off.
+pub struct CgpAddrBytesStrict;
+
 impl FunctionPass for CgpAddr {
     fn name(&self) -> &'static str {
         "cgpaddr"
@@ -174,6 +178,34 @@ impl FunctionPass for CgpAddr {
 
     fn run(
         &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        Self::run_at(false, unit, analyses)
+    }
+}
+
+impl FunctionPass for CgpAddrBytesStrict {
+    fn name(&self) -> &'static str {
+        "cgpaddr"
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        CgpAddr::run_at(true, unit, analyses)
+    }
+}
+
+impl CgpAddr {
+    fn run_at(
+        bytes_strict: bool,
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
@@ -258,6 +290,10 @@ impl FunctionPass for CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
+        let sunk_operands = match analyses.outer().target().tti() {
+            Some(tti) => crate::cgpsinkops::free_operands_sunk(unit.context, &*tti, unit.function),
+            None => false,
+        };
         let sunk_casts = match lowering_for(analyses, CgpStep::CastSinking) {
             Some(lowering) => crate::sinkcast::casts_sunk(
                 unit.context,
@@ -272,7 +308,9 @@ impl FunctionPass for CgpAddr {
         let extended = match lowering_for(analyses, CgpStep::ExtPromotion) {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
-                let promoted = exts_optimized(unit, &*lowering, &mut state);
+                let costs_extra =
+                    !bytes_strict && analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
+                let promoted = exts_optimized(unit, &*lowering, &mut state, costs_extra);
                 ext_uses(unit, &*lowering, &mut state) | promoted
             }
             None => false,
@@ -325,6 +363,7 @@ impl FunctionPass for CgpAddr {
             || addresses
             || extended
             || sunk_casts
+            || sunk_operands
             || resunk
             || split
             || remainders
@@ -355,6 +394,7 @@ fn exts_optimized(
     unit: &mut passes::Unit,
     lowering: &dyn llrm_mir::lowering::Lowering,
     state: &mut crate::extpromotion::State,
+    ext_load_costs_extra: bool,
 ) -> bool {
     let exts: Vec<InstId> = unit
         .function
@@ -378,7 +418,15 @@ fn exts_optimized(
         {
             continue;
         }
-        changed |= crate::extpromotion::optimize_ext(unit.context, unit.layout, lowering, unit.function, state, ext);
+        changed |= crate::extpromotion::optimize_ext(
+            unit.context,
+            unit.layout,
+            lowering,
+            unit.function,
+            state,
+            ext,
+            ext_load_costs_extra,
+        );
     }
     changed
 }

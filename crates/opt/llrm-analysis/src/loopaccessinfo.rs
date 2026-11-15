@@ -27,7 +27,6 @@
 //! debug location on a remark ("Memory location is the same as accessed at"
 //! is not added), and no vector function database (`VFDatabase`).
 
-use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::LoopGraph;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
@@ -44,6 +43,7 @@ use crate::memdepchecker::{DepType, MemoryDepChecker};
 use crate::runtimecheck::{DepCandidates, RuntimePointerChecking, VectorizerParams};
 use crate::scev::backedge::ExitCountKind;
 use crate::scev::{Cx, ScalarEvolution};
+use crate::vectorutils::get_vector_intrinsic_id_for_call;
 
 /// `LoopAccessInfo`.
 pub struct LoopAccessInfo {
@@ -282,7 +282,7 @@ impl LoopAccessInfo {
                 // only vectorize a loop if it contains known function calls
                 // that don't set the flag. Therefore, it is safe to ignore
                 // this read from memory.
-                if matches!(instruction.opcode, Opcode::Call(_)) && is_vector_intrinsic_call(cx, inst) {
+                if get_vector_intrinsic_id_for_call(cx, inst).is_some() {
                     continue;
                 }
 
@@ -713,39 +713,6 @@ fn call_is_convergent(
         |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "convergent"));
     llrm_mir::valuetracking::pattern::call_info(instruction).is_some_and(|info| flag(&info.attrs))
         || llrm_mir::valuetracking::pattern::called_function(&q, instruction).is_some_and(|callee| flag(&callee.attrs))
-}
-
-// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/VectorUtils.cpp#L234
-/// `getVectorIntrinsicIDForCall(Call, TLI) != not_intrinsic`: a call of an
-/// intrinsic that is trivially vectorizable, or `lifetime.start`/`end` or
-/// `assume`.
-fn is_vector_intrinsic_call(
-    cx: &Cx,
-    inst: InstId,
-) -> bool {
-    matches!(
-        cx.query(None).intrinsic(inst),
-        Some(
-            Intrinsic::WithOverflow { .. }
-                | Intrinsic::Saturating { .. }
-                | Intrinsic::MinMax { .. }
-                | Intrinsic::Fixed { .. }
-                | Intrinsic::BitCount(_)
-                | Intrinsic::ByteSwap
-                | Intrinsic::BitReverse
-                | Intrinsic::FunnelShift { .. }
-                | Intrinsic::Abs
-                | Intrinsic::Compare { .. }
-                | Intrinsic::FMulAdd
-                | Intrinsic::CopySign
-                | Intrinsic::Unary(_)
-                | Intrinsic::LRint
-                | Intrinsic::LLRint
-                | Intrinsic::LifetimeStart
-                | Intrinsic::LifetimeEnd
-                | Intrinsic::Assume
-        )
-    )
 }
 
 #[cfg(test)]

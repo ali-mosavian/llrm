@@ -36,10 +36,10 @@ loop:\n  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]\n  %acc = phi i32 [ 0, %entr
 done:\n  ret i32 %acc2\n}\n";
 
 #[test]
-fn an_external_callee_with_a_switch_is_not_inlined_at_o1() {
+fn an_external_callee_with_a_switch_is_inlined_at_o1_for_its_clocks() {
     for cpu in ["68000", "68020"] {
         let out = assembly(PICK, cpu_of(cpu).unwrap(), Level::O1).expect("compiles");
         let main = out.split("main:").nth(1).expect("main");
-        assert!(main.contains("jsr") || main.contains("bsr"), "{cpu}: `pick` was inlined at -O1:\n{out}");
+        assert!(!main.contains("jsr") && !main.contains("bsr"), "{cpu}: `pick` stayed a call at -O1:\n{out}");
     }
 }

@@ -74,3 +74,22 @@ fn a_sign_test_of_a_pair_reads_its_high_byte() {
     let f = function(vec![vec![test]]);
     assert!(live(&f, 0, 0, reg::H) && !live(&f, 0, 0, reg::L));
 }
+
+/// `live_before` at every position of a block of 40,000 instructions stepped back from the block's end each
+/// time, 800 M steps: the printer asks at every instruction, and `select_of_constants` -O2 spent 140 M steps and
+/// half its compile there for 800 call sites. The answers come from checkpoints, `STRIDE` steps at most each.
+#[test]
+fn every_position_of_a_long_block_is_asked_without_walking_to_its_end() {
+    let n = 40_000;
+    let insts: Vec<Inst> = (0..n).map(|at| if at % 2 == 0 { def(reg::B) } else { read(reg::B) }).collect();
+    let f = function(vec![insts]);
+    let assignment = Assignment(Vec::new());
+    let start = std::time::Instant::now();
+    let live = PhysLiveness::of::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+    for at in 0..n {
+        let before = live.live_before::<Z80Registers>(&f, &assignment, &REGISTER_INFO, 0, at);
+        // `b` is read at the odd positions and written at the even ones just before
+        assert_eq!(before.is_live(&REGISTER_INFO, reg::B), at % 2 == 1, "at {at}");
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(3), "40,000 queries took {:?}", start.elapsed());
+}

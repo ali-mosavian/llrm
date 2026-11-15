@@ -23,6 +23,17 @@ pub(crate) fn pinned_mc() -> Option<String> {
 
 /// A byte as `-show-encoding` spells it: `0x91`, `0x90'A'` and `0b100101AA`
 /// where a fixup fills bits (`A` stands for a bit left zero), or `A` alone.
+/// The 128-bit arrangements and the 64-bit ones (`Q` clear).
+const ALL_ARRANGEMENTS: [Arrangement; 7] = [
+    Arrangement::B16,
+    Arrangement::H8,
+    Arrangement::S4,
+    Arrangement::D2,
+    Arrangement::B8,
+    Arrangement::H4,
+    Arrangement::S2,
+];
+
 fn fixed_byte(text: &str) -> u8 {
     if text == "A" {
         0
@@ -284,16 +295,24 @@ fn branches() {
         VectorOp::Eor,
         VectorOp::Ushl,
         VectorOp::Sshl,
+        VectorOp::Smax,
+        VectorOp::Smin,
+        VectorOp::Umax,
+        VectorOp::Umin,
+        VectorOp::Sqadd,
+        VectorOp::Uqadd,
+        VectorOp::Sqsub,
+        VectorOp::Uqsub,
     ] {
-        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
-            if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+        for lanes in ALL_ARRANGEMENTS {
+            if !op.has_lanes(lanes) {
                 continue;
             }
             all.push(Inst::VectorBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
         }
     }
-    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
-        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr, VectorShift::Usra, VectorShift::Ssra] {
+        for lanes in ALL_ARRANGEMENTS {
             let esize = lanes.lane_bits() as u8;
             // A left shift is 0..esize-1, a right one 1..esize.
             let amounts = if op == VectorShift::Shl { [0, 3, esize - 1] } else { [1, 3, esize] };
@@ -302,7 +321,152 @@ fn branches() {
             }
         }
     }
-    all.push(Inst::VectorNot { rd: Vreg(3), rn: Vreg(28) });
+    for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+        for high in [false, true] {
+            for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
+                for amount in [0, 1, lane.bits() as u8 - 1] {
+                    all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(4), rn: Vreg(27), amount });
+                }
+            }
+            for op in [
+                VectorLongOp::Uaddl,
+                VectorLongOp::Saddl,
+                VectorLongOp::Uaddw,
+                VectorLongOp::Saddw,
+                VectorLongOp::Umull,
+                VectorLongOp::Smull,
+            ] {
+                all.push(Inst::VectorLong { op, lane, high, rd: Vreg(4), rn: Vreg(27), rm: Vreg(19) });
+            }
+        }
+    }
+    for quad in [true, false] {
+        all.push(Inst::VectorNot { quad, rd: Vreg(3), rn: Vreg(28) });
+    }
+    for (name, form) in crate::vector_forms::all() {
+        use crate::vector_forms::VectorForm;
+        let _ = name;
+        match form {
+            VectorForm::Compare { op, lanes, quad } => {
+                all.push(Inst::VectorCompare { op, lanes, quad, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+            }
+            VectorForm::CompareZero { op, lanes, quad } => {
+                all.push(Inst::VectorCompareZero { op, lanes, quad, rd: Vreg(1), rn: Vreg(30) });
+            }
+            VectorForm::BitSelect { op, quad } => {
+                all.push(Inst::VectorBitSelect { op, quad, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+            }
+            VectorForm::Bsp { .. } => {}
+        }
+    }
+    for op in [VectorReduce::Addv, VectorReduce::Smaxv, VectorReduce::Sminv, VectorReduce::Umaxv, VectorReduce::Uminv] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4] {
+            all.push(Inst::VectorReduce { op, lanes, rd: Vreg(3), rn: Vreg(28) });
+        }
+    }
+    all.push(Inst::VectorReduce { op: VectorReduce::Addp, lanes: Arrangement::D2, rd: Vreg(3), rn: Vreg(28) });
+    for op in [MulAcc::Add, MulAcc::Sub] {
+        for lanes in
+            [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::B8, Arrangement::H4, Arrangement::S2]
+        {
+            all.push(Inst::VectorMulAcc { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+        }
+    }
+    for (op, lanes) in [
+        (VectorFma::Add, Arrangement::S4),
+        (VectorFma::Add, Arrangement::D2),
+        (VectorFma::Sub, Arrangement::S4),
+        (VectorFma::Sub, Arrangement::D2),
+    ] {
+        all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+        all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
+        all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
+    }
+    for (lanes, index) in [(Arrangement::D2, 1), (Arrangement::S4, 3), (Arrangement::H8, 7), (Arrangement::B16, 15)] {
+        all.push(Inst::VectorDupScalar { lanes, rd: Vreg(5), rn: Vreg(17), index });
+    }
+    for (high, wide) in [
+        (false, Arrangement::H8),
+        (true, Arrangement::H8),
+        (false, Arrangement::S4),
+        (true, Arrangement::S4),
+        (false, Arrangement::D2),
+        (true, Arrangement::D2),
+    ] {
+        let lane = match wide {
+            Arrangement::H8 => NarrowLane::B,
+            Arrangement::S4 => NarrowLane::H,
+            _ => NarrowLane::S,
+        };
+        for (op, amount) in [(VectorLongOp::Sshll, 0), (VectorLongOp::Ushll, 0), (VectorLongOp::Sshll, 3)] {
+            all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(5), rn: Vreg(17), amount });
+        }
+        all.push(Inst::VectorNarrow { high, shift: None, wide, rd: Vreg(6), rn: Vreg(30) });
+        for op in [VectorLongOp::Smull, VectorLongOp::Umull, VectorLongOp::Smlal, VectorLongOp::Umlal] {
+            all.push(Inst::VectorLong { op, lane, high, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        all.push(Inst::VectorUnzip { second: false, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        all.push(Inst::VectorUnzip { second: true, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+    }
+    for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
+        all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
+        all.push(Inst::VectorMulLane { rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
+    }
+    for (lanes, index, src) in [
+        (Arrangement::B16, 3, 9),
+        (Arrangement::H8, 5, 2),
+        (Arrangement::S4, 0, 3),
+        (Arrangement::S4, 3, 1),
+        (Arrangement::D2, 1, 0),
+    ] {
+        all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
+        all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
+        all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
+        all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
+    }
+    for lanes in ALL_ARRANGEMENTS {
+        all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
+        for op in
+            [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit]
+        {
+            if op.has_lanes(lanes) {
+                all.push(Inst::VectorIntUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
+            }
+        }
+    }
+    for (lanes, index) in [(Arrangement::B16, 15), (Arrangement::H8, 5), (Arrangement::S4, 3), (Arrangement::D2, 1)] {
+        all.push(Inst::VectorLoadLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
+    }
+    for (lanes, index) in [
+        (Arrangement::B16, 3),
+        (Arrangement::H8, 5),
+        (Arrangement::S4, 0),
+        (Arrangement::S4, 3),
+        (Arrangement::D2, 1),
+        (Arrangement::B8, 3),
+        (Arrangement::H4, 2),
+        (Arrangement::S2, 1),
+    ] {
+        all.push(Inst::VectorDupLane { lanes, rd: Vreg(5), rn: Vreg(26), index });
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
+        for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
+            all.push(Inst::VectorFpBinary { op, lanes, rd: Vreg(1), rn: Vreg(30), rm: Vreg(17) });
+        }
+        for op in [
+            VectorFpUnary::Neg,
+            VectorFpUnary::Abs,
+            VectorFpUnary::Scvtf,
+            VectorFpUnary::Ucvtf,
+            VectorFpUnary::Fcvtzs,
+            VectorFpUnary::Fcvtzu,
+            VectorFpUnary::Sqrt,
+        ] {
+            all.push(Inst::VectorFpUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
+        }
+    }
     all.push(Inst::VectorMov { rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::VectorMov { rd: Vreg(31), rn: Vreg(30) });
     for (subtract, set_flags, width) in [
@@ -464,10 +628,16 @@ fn floating_point() {
             Fill::Zero,
             Fill::Byte(0x5A),
             Fill::Byte(0xFF),
+            Fill::Byte8(0x5A),
+            Fill::Imm { invert: false, shape: ImmShape::H4(8), imm8: 3 },
+            Fill::Imm { invert: true, shape: ImmShape::H4(0), imm8: 0x81 },
             Fill::Dup(Arrangement::B16, Gpr(3)),
             Fill::Dup(Arrangement::H8, Gpr(3)),
             Fill::Dup(Arrangement::S4, Gpr(3)),
             Fill::Dup(Arrangement::D2, Gpr(3)),
+            Fill::Dup(Arrangement::B8, Gpr(3)),
+            Fill::Dup(Arrangement::H4, Gpr(3)),
+            Fill::Dup(Arrangement::S2, Gpr(3)),
             Fill::Imm { invert: false, shape: ImmShape::H8(0), imm8: 1 },
             Fill::Imm { invert: false, shape: ImmShape::S4(24), imm8: 0xff },
             Fill::Imm { invert: false, shape: ImmShape::S2(24), imm8: 0x7f },

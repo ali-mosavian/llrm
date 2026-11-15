@@ -46,8 +46,9 @@ use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo
 use llrm_codegen::backend::selectiondag::mvt::MVT;
 use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
+use llrm_codegen::model::ir::Operation;
 use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
-use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
+use llrm_codegen::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody, Phi};
 use llrm_dagisel::addr::AddrMode;
 use llrm_dagisel::interp::Selector;
 use llrm_mir::datalayout::DataLayout;
@@ -640,7 +641,11 @@ fn successors(
             if !ends && !sinks.contains(&block.at) {
                 if let Some(next) = emitted.get(i + 1) {
                     if !out.contains(&next.at) {
-                        out.push(next.at);
+                        if block.fall_first {
+                            out.insert(0, next.at);
+                        } else {
+                            out.push(next.at);
+                        }
                     }
                 }
             }
@@ -825,7 +830,7 @@ fn lowering_for(
     features: Features,
     build: impl FnOnce() -> TargetLowering,
 ) -> TargetLowering {
-    type Key = (u32, [bool; 8]);
+    type Key = (u32, [bool; 10]);
     thread_local! {
         static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -839,7 +844,9 @@ fn lowering_for(
             features.movbe,
             features.shld_slow,
             features.sse2,
+            features.vector128,
             features.soft_float,
+            features.fp_status,
         ],
     );
     TABLES.with(|tables| {
@@ -896,13 +903,17 @@ fn divide_live_limit(
     machine: &dyn llrm_mir::target::Machine,
 ) -> u32 {
     let Some(tti) = machine.tti() else { return 0 };
-    if cpu.bytes_strict() && (!cpu.size || tti.narrow_divide_live_at_size()) { tti.narrow_divide_live_limit() } else { 0 }
+    if cpu.bytes_strict() && (!cpu.size || tti.narrow_divide_live_at_size()) {
+        tti.narrow_divide_live_limit()
+    } else {
+        0
+    }
 }
 
 /// DEVIATE DIV-LIVE: for each block with a divide by a constant of a type
 /// narrower than a word, the most values live across one (a value of more
-/// than a word counts its words, the target's own). O(function) once, and only when the function
-/// has such a divide.
+/// than a word counts its words, the target's own). O(function) once, and only
+/// when the function has such a divide.
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
@@ -920,7 +931,10 @@ fn narrow_divide_live(
                 op.operands.get(1),
                 Some(llrm_mir::module::Operand::Constant(_))
             )
-            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits <= max_bits)
+            && op
+                .result
+                .and_then(|r| module.context.types.int_bits(function.value(r).ty))
+                .is_some_and(|bits| bits <= max_bits)
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
@@ -1067,13 +1081,24 @@ fn selected_in(
         let features = Features { soft_float, ..Features::default() };
         lowering_for(16, features, || TargetLowering::x86_16(features, MVT::I16))
     } else if m64 {
-        let features = Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() };
-        lowering_for(64, features, || TargetLowering::x86_64(features, MVT::I64))
+        let features = Features {
+            sse2: arch.scalar_sse(),
+            vector128: tables(arch).map.vector128(),
+            cmov: true,
+            ..Features::default()
+        };
+        lowering_for(64, features, || {
+            if features.vector128 {
+                TargetLowering::x86_64_vectors(features, MVT::I64)
+            } else {
+                TargetLowering::x86_64(features, MVT::I64)
+            }
+        })
     } else {
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
         let cmov = machine.tti().is_some_and(|tti| tti.has_cmov());
-        let features = Features { cmov, ..Features::default() };
+        let features = Features { cmov, fp_status: cpu.tests_status_word(), ..Features::default() };
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
     tli.set_small_divide(cpu.bytes_strict() && (cpu.size || arch.small_divide_at_o1()));
@@ -1114,10 +1139,18 @@ fn selected_in(
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
     builder_target.dag.absolute_symbols = !module.position_independent();
+    // The vector types are legal exactly where the table gave them a register
+    // class.
+    builder_target.legal_vectors = tli.types.legal_vectors().to_vec();
+    builder_target.dag.vectors = !builder_target.legal_vectors.is_empty();
+    builder_target.dag.add_to_or_disjoint = machine.tti().is_some_and(|tti| tti.add_to_or_disjoint());
     let builder_target = builder_target
         .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
-        .with_float_store(cpu.float_store)
+        // `-fexcess-precision=standard` rounds what the x87 keeps wider; scalar
+        // SSE has no excess precision (FLT_EVAL_METHOD 0), so the store gcc and
+        // clang never make is not made.
+        .with_float_store(cpu.float_store && !arch.scalar_sse())
         // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin:
         // minsize only). Measured 2026-11-06, m32 -Os, 71 programs, pin-exact
         // flip: 14 programs change, +203 B in all, matmul only -4 B, and four
@@ -1406,6 +1439,11 @@ fn selected_in(
         frame: &frame,
         address_mode,
         opt_size: cpu.size || cpu.min_size,
+        // A handler runs on the interrupted program's stack, which may not be
+        // the data group: no function of a module that has one reads a stack
+        // pointer through DS.
+        stack_shares_data: contracts.is_some_and(|contracts| contracts.segments.stack_shares_data)
+            && !module.functions().any(|(_, _, function)| function.calling_convention == llrm_mir::opcode::X86_INTR),
         reserved_calls: module
             .named(name)
             .and_then(|id| module.global(id).function())
@@ -1454,15 +1492,20 @@ fn selected_in(
     let fast_divide = tli.small_divide() && tli.fast_divide_in_loops();
     // DEVIATE MUL-HOT: see `X86Lowering::hot_chains`.
     let hot_mul = cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.mul_chains_hot_at_size());
-    // How often the function runs per run of the program, from its direct callers: a block of a function called
-    // from a loop runs more than once per call of the function. One where there is none to count.
+    // How often the function runs per run of the program, from its direct
+    // callers: a block of a function called from a loop runs more than once
+    // per call of the function. One where there is none to count.
     let entry_weight = if hot_mul {
         llrm_analysis::entryweight::entry_weight(module, &layout, id, &llrm_mir::callgraph::addressed(module))
     } else {
         1.0
     };
-    let frequencies =
-        (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0 || fast_divide || hot_mul).then(|| {
+    let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks)
+        || divide_bytes
+        || select_branch > 0
+        || fast_divide
+        || hot_mul)
+        .then(|| {
             let bpi = info
                 .bpi
                 .get_or_insert_with(
@@ -1479,7 +1522,16 @@ fn selected_in(
             llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
         });
     let div_live = divide_live_limit(cpu, &*machine);
-    let div_live = if div_live > 0 { narrow_divide_live(module, function, machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()), arch.object().bitness.min(32)) } else { llrm_mir::dense::IdMap::new() };
+    let div_live = if div_live > 0 {
+        narrow_divide_live(
+            module,
+            function,
+            machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()),
+            arch.object().bitness.min(32),
+        )
+    } else {
+        llrm_mir::dense::IdMap::new()
+    };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
@@ -1534,7 +1586,8 @@ fn selected_in(
                 &mut built.dag,
                 &tli,
                 &mut X86Lowering {
-                    multiply_early_out: multiply_early_out.then_some(address_mode != llrm_dagisel::addr::AddrMode::Real16),
+                    multiply_early_out: multiply_early_out
+                        .then_some(address_mode != llrm_dagisel::addr::AddrMode::Real16),
                     cmov: tli.can_use_cmov(),
                     share_products: machine.tti().is_some_and(|tti| tti.x87_share_negated_products()),
                     sse2,
@@ -1556,6 +1609,7 @@ fn selected_in(
                     i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
+                    status_word_tests: !m16 && !m64 && cpu.tests_status_word(),
                     branch_constant_selects: select_branch > 0
                         && frequencies.as_ref().is_some_and(|frequencies| {
                             frequencies.relative_to_entry(parent) >= f64::from(select_branch)
@@ -1941,6 +1995,7 @@ fn selected_in(
     body.frequencies = Some(llrm_codegen::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
+    set_branch_odds(&mut body, cpu);
     let mut inline = IndexMap::default();
     // (assembling a routine costs 1.8 M instructions, so only a call that
     // names one asks for it)
@@ -2202,6 +2257,35 @@ pub(super) fn set_odds(
     }
 }
 
+/// The two edges of a branch nobody stated odds for, from what the target
+/// knows of the branch (`Profile::branch_odds`: an x86 `jp` after a float
+/// compare is the unordered case): the diamond a select without `cmov`
+/// becomes (`EmitLoweredSelect`) has none, so each edge read 1 in 2.
+pub(super) fn set_branch_odds(
+    body: &mut LirBody,
+    cpu: &llrm_codegen::backend::cpu::Profile,
+) {
+    let mut stated: Vec<((i64, i64), f64)> = Vec::new();
+    for block in &body.blocks {
+        let Some(what) = block.insns.last().and_then(|last| last.what.as_ref()) else { continue };
+        let (Operation::Branch, Some(target), Some(name)) = (what.op, what.target, what.name.as_deref()) else {
+            continue;
+        };
+        let ways = llrm_codegen::model::lir::distinct(&block.succ);
+        let [one, two] = ways[..] else { continue };
+        if body.odds.probability(block.at, one).is_some() || body.odds.probability(block.at, two).is_some() {
+            continue;
+        }
+        let Some(chance) = cpu.branch_odds(name) else { continue };
+        let other = if target == one { two } else { one };
+        stated.push(((block.at, target), chance));
+        stated.push(((block.at, other), 1.0 - chance));
+    }
+    for ((at, to), chance) in stated {
+        body.odds.taken.insert((at, to), (chance * BlockOdds::CERTAIN).round() as u32);
+    }
+}
+
 /// A value read where some path to it defines nothing: (value, instruction).
 pub(super) fn read_before_defined(
     blocks: &[EmitBlock],
@@ -2348,5 +2432,86 @@ mod lowering_cache_tests {
         assert_eq!(tables.opcode_named("SUB"), Some(9));
         assert_eq!(tables.opcode_named("MUL"), None);
         assert!(tables.by_name.get().is_some(), "a lookup is a search of the index, not of the names");
+    }
+}
+
+#[cfg(test)]
+mod branch_odds_tests {
+    use std::sync::Arc;
+
+    use llrm_codegen::backend::cpu::Profile;
+    use llrm_codegen::model::ir::Semantics;
+
+    use super::*;
+
+    fn profile(on: bool) -> Profile {
+        Profile { unordered_branch_odds: on, ..Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0) }
+    }
+
+    fn branch(name: &str) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.into()), target: Some(2), ..Semantics::new(Operation::Branch) };
+        Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
+    }
+
+    /// `this` branches to `sink` (2) or falls into `false_at` (1), as the
+    /// diamond of a select does.
+    fn diamond(name: &str) -> LirBody {
+        let block = |at, insns, succ: &[i64]| LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, insns) };
+        LirBody::new(
+            "diamond",
+            0,
+            [block(0, vec![branch(name)], &[1, 2]), block(1, vec![], &[2]), block(2, vec![], &[])]
+                .into_iter()
+                .map(Block::from)
+                .collect(),
+            IndexMap::default(),
+            IndexMap::default(),
+        )
+    }
+
+    /// The edge of `sfm16_float_add`'s `f != f ? NaN : f` took 1 in 2, so
+    /// `MachineSink` kept the NaN constant in the hot predecessor: 5599
+    /// instructions for 4819 once the `jp` edge is the rare one it is.
+    #[test]
+    fn test_the_unordered_edge_of_a_select_diamond_is_rare() {
+        let mut body = diamond("jp");
+        set_branch_odds(&mut body, &profile(true));
+        let taken = body.odds.chance(0, &[1, 2], 2);
+        assert!((taken - 1.0 / 1_048_576.0).abs() < 1e-9, "the jp edge is the unordered case: {taken}");
+        assert!(body.odds.chance(0, &[1, 2], 1) > 0.999, "the other edge is the hot one");
+    }
+
+    /// -Os: the constant on its own edge is a block and a `jmp`; sfm16_float
+    /// grew 48 B (2099 -> 2147, bar 2108) with the odds stated there.
+    #[test]
+    fn test_a_build_for_size_keeps_the_even_split() {
+        let mut body = diamond("jp");
+        set_branch_odds(&mut body, &Profile { size: true, ..profile(true) });
+        assert!(body.odds.taken.is_empty());
+    }
+
+    #[test]
+    fn test_a_target_without_the_knob_keeps_the_even_split() {
+        let mut body = diamond("jp");
+        set_branch_odds(&mut body, &profile(false));
+        assert!(body.odds.taken.is_empty());
+    }
+
+    #[test]
+    fn test_a_branch_that_is_not_the_unordered_one_keeps_the_even_split() {
+        let mut body = diamond("jne");
+        set_branch_odds(&mut body, &profile(true));
+        assert!(body.odds.taken.is_empty());
+    }
+
+    /// Odds the builder stated (`set_odds`) are the IR's; the flags' do not
+    /// replace them.
+    #[test]
+    fn test_stated_odds_are_not_replaced() {
+        let mut body = diamond("jp");
+        body.odds.taken.insert((0, 2), BlockOdds::CERTAIN as u32 / 4);
+        set_branch_odds(&mut body, &profile(true));
+        assert_eq!(body.odds.taken.get(&(0, 2)), Some(&(BlockOdds::CERTAIN as u32 / 4)));
+        assert_eq!(body.odds.taken.len(), 1);
     }
 }

@@ -198,6 +198,7 @@ impl Options {
             self.pipeline.stable_loads,
             self.pipeline.has_min_size,
             self.pipeline.prices_bytes(),
+            self.pipeline.pre,
         )
     }
 }
@@ -624,7 +625,10 @@ pub fn optimized(
     timed("mir constant intrinsics", || {
         program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
     })?;
-    if crate::backend::memsetpattern::expands_for(options.isel) && !options.cpu()?.target().fills_by_pattern() {
+    if crate::backend::memsetpattern::expands_for(options.isel)
+        && !options.cpu()?.target().fills_by_pattern()
+        && !options.cpu()?.target().tti().is_some_and(|tti| tti.fills_pattern_at_speed())
+    {
         timed("mir memset patterns", || {
             program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
         })?;

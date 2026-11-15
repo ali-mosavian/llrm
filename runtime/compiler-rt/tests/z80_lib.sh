@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")/.."
 OUT=${1:?output directory}; OPT=${2:-Os}; LLC=${LLRM_Z80_LLC:?path of llrm-z80-llc}; CLANG=${LLRM_PIN_CLANG:-/opt/llrm-pin/bin/clang}
 DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float_si fp/f64/float_usi fp/f64/float_di fp/f64/float_udi fp/f64/pack fp/f32/pack fp/f32/extend fp/f32/trunc
+MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float_si fp/f64/float_usi fp/f64/float_di fp/f64/float_udi fp/f64/pack fp/f64/unpack fp/f32/pack fp/f32/extend fp/f32/trunc
  fp/f32/float_di fp/f32/fix_di fp/f64/fix_si fp/f64/fix_usi fp/f64/fix_di fp/f64/fix_udi
  fp/f64/cmp_cmp fp/f64/cmp_eq fp/f64/cmp_ne fp/f64/cmp_lt fp/f64/cmp_le fp/f64/cmp_ge fp/f64/cmp_gt fp/f32/neg fp/f64/neg fp/f64/unord int/clzsi2"
 mkdir -p "$OUT"; T=$(mktemp -d); trap 'rm -r $T' EXIT
@@ -19,6 +19,7 @@ for m in $MODULES; do
   sdasz80 -g -o $OUT/$n.rel $OUT/$n.s
 done
 sdasz80 -g -o "$OUT/div64.rel" config/z80/div64.s; cp config/z80/div64.s "$OUT/div64.s"
+sdasz80 -g -o "$OUT/mul64.rel" config/z80/mul64.s; cp config/z80/mul64.s "$OUT/mul64.s"
 sdasz80 -g -o "$OUT/umulhisi3.rel" config/z80/umulhisi3.s; cp config/z80/umulhisi3.s "$OUT/umulhisi3.s"
 # f32 add sub mul div, int<->float and compares are hand asm (config/z80/sf32_*.s): 1705 + 171 B for all of them, 3-14x SDCC's clocks. Like SDCC's own f32 library they keep
 # operands in static cells and are not reentrant, and they clobber IY (free in the llrm-z80 convention).

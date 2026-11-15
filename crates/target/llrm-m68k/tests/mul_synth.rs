@@ -12,7 +12,11 @@ fn mul_by(c: i32) -> String {
     )
 }
 
-fn compile(cpu: &str, level: Level, c: i32) -> String {
+fn compile(
+    cpu: &str,
+    level: Level,
+    c: i32,
+) -> String {
     assembly(&mul_by(c), cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 
@@ -24,7 +28,11 @@ define i32 @f(ptr %a, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  %i = phi i3
     )
 }
 
-fn compile_loop(cpu: &str, level: Level, c: i32) -> String {
+fn compile_loop(
+    cpu: &str,
+    level: Level,
+    c: i32,
+) -> String {
     assembly(&loop_mul_by(c), cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 
@@ -36,12 +44,14 @@ fn a_constant_that_is_not_near_a_power_of_two_is_a_chain_in_a_loop() {
     }
 }
 
+/// urem_eq at 68020 -O2 (+148 B, one build): the divide-by-3 and -5 magic
+/// numbers were 12-instruction chains, priced by clocks in code that never ran.
 /// struct_with_i64, struct_odd_sizes, switch_i64, frame_address_stack_args and
 /// register_args_truncate at 68020 -O2/-O3 grew 4 to 16 B each with no executed
 /// clock gained: the chain was credited its clocks in code that never ran.
 #[test]
 fn a_straight_line_multiply_is_decided_by_size_not_by_clocks_it_may_never_save() {
-    for c in [1000, 100, -1000, 641] {
+    for c in [1000, 100, -1000, 641, -858993459, -1431655765] {
         let out = compile("68020", Level::O2, c);
         assert!(out.contains("muls.l"), "68020 -O2 straight-line x*{c}: a chain that grew the code:\n{out}");
     }

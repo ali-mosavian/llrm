@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// bar: none (SDCC wrong value)
 // bar: not comparable (SDCC double is 32 bits: it computes a different program)
 // An unsigned 64-bit integer made a double or a float (gcc.c-torture 920710-1: "UIToFP from an i64"): at, above and below 2^63, at
 // and past 2^53, and 2^64 - 1, which rounds up to 2^64.

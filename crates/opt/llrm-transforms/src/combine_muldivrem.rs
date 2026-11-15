@@ -1177,7 +1177,7 @@ pub fn visit_mul(
 
     // (mul Op0 Op1): if Log2(Op0) folds away -> (shl Op1, Log2(Op0)), and if
     // Log2(Op1) folds away -> (shl Op0, Log2(Op1)).
-    // DEVIATE SD546 (owner anyisa, exit 2026-11-20): a size build keeps
+    // DEVIATE SD546 (owner anyisa, exit 2026-11-24; m64 spill_store_order +32 B blocks removal): a size build keeps
     // `mul X, select(c, 8, 2)` where a shift needs its count in one register;
     // the pin's `shl X, select(c, 3, 1)` (visitMul,
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp#L604)

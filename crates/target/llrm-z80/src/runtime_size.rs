@@ -69,15 +69,19 @@ pub const TYPICAL_WIDE_SHIFT: u32 = 12;
 /// 193 T a bit; the size family does 64 steps whatever the operands, 98k to
 /// 106k T. The divisor is on the stack and never in sight: the typical dividend
 /// (`TYPICAL_WIDE_DIVIDEND`) is priced.
-const WIDE_DIVIDES: [(&str, u32, u32); 8] = [
+const WIDE_DIVIDES: [(&str, u32, u32); 12] = [
     ("__udivdi3", 10900, 193),
     ("__umoddi3", 10900, 193),
     ("__divdi3", 10900, 193),
     ("__moddi3", 10900, 193),
+    ("__udivmddi4", 10900, 193),
+    ("__divmddi4", 10900, 193),
     ("__s_udivdi3", 99000, 0),
     ("__s_umoddi3", 99000, 0),
     ("__s_divdi3", 99000, 0),
     ("__s_moddi3", 99000, 0),
+    ("__s_udivmddi4", 99000, 0),
+    ("__s_divmddi4", 99000, 0),
 ];
 
 /// The dividend bits assumed for a 64-bit divide.
