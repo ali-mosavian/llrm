@@ -110,7 +110,8 @@ pub struct Options {
     /// reserved call area ([`crate::callpush`]).
     pub push_arguments: bool,
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
-    /// instruction for.
+    /// instruction for; an `any_extend` of a byte or word as a copy
+    /// (DEVIATE M68K-ANYEXT, [`crate::dagisel::anyext`]).
     pub short: bool,
     /// A `tst` is dropped past instructions that set the codes between it and
     /// the definition of its register, which move above the definition
@@ -350,10 +351,14 @@ pub fn items_with(
     // two builds of the shared `MachineCSE` are compared.
     let prefixes = Prefixes::default();
     let wants_slots = options.slot_registers;
+    // DEVIATE M68K-ONE-BUILD, continued: a speed build is not built again for
+    // the relaxation, the shared `MachineCSE` or the slot registers (-O2 68020
+    // over 165 programs: no cell passes a gcc/clang clock bar either way).
+    let one_build = !wants_size && !options.strict;
     let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
         let (plain, saved, chosen, shared) =
             items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
-        if !options.relax_classes || !saved {
+        if !options.relax_classes || !saved || one_build {
             return Ok((plain, shared, chosen));
         }
         let relaxed_options = Options { relax_classes: true, ..chosen };
@@ -368,7 +373,7 @@ pub fn items_with(
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
-    if shared {
+    if shared && !one_build {
         let (without, _, without_options) = finished(Options { shared_cse: false, ..options })?;
         if !crate::trial::keeps(&kept, &without, cpu, price) {
             trial_won(name, "shared_cse", crate::trial::keeps(&without, &kept, cpu, price));
@@ -376,7 +381,7 @@ pub fn items_with(
         }
     }
     // A function with no spill slot has nothing to move.
-    if wants_slots && prefixes.had_slots.get() {
+    if wants_slots && !one_build && prefixes.had_slots.get() {
         let (items, touched) =
             items_once(module, name, cpu, Options { slot_registers: true, ..kept_options }, &prefixes)?;
         if touched.slot_registers && crate::trial::keeps(&items, &kept, cpu, price) {
@@ -442,23 +447,24 @@ fn items_trials(
         use crate::dagisel::mulprice::Mode;
         let without = Options { mul: Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
+        let linked = crate::routine::another_function_multiplies_variables(module, name, cpu);
         if touched.mul_synthesized {
             // DEVIATE G2: the pin's shapes are judged as before (clocks
             // count wherever they run); a chain beyond them only against
             // that winner, and its clocks only inside loops
             let shapes = Options { mul: Mode::TrialPinShapes, ..options };
             let (pin, _) = items_once(module, name, cpu, shapes, prefixes)?;
-            let (base, base_options) = if crate::trial::prefers_without(&pin, &plain, cpu, price, true) {
+            let (base, base_options) = if crate::trial::prefers_without_linking(&pin, &plain, cpu, price, true, linked) {
                 (plain, without)
             } else {
                 (pin, shapes)
             };
-            if crate::trial::prefers_without(&kept, &base, cpu, price, false) {
+            if crate::trial::prefers_without_linking(&kept, &base, cpu, price, false, linked) {
                 trial_won(name, "mul", crate::trial::keeps(&base, &kept, cpu, price));
                 kept = base;
                 options = base_options;
             }
-        } else if crate::trial::prefers_without(&kept, &plain, cpu, price, true) {
+        } else if crate::trial::prefers_without_linking(&kept, &plain, cpu, price, true, linked) {
             trial_won(name, "mul", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;

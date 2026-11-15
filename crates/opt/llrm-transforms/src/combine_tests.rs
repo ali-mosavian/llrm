@@ -466,3 +466,51 @@ fn test_without_an_x87_stack_the_float_is_sunk_as_the_pin_does() {
     let text = float_sum_combined(false);
     assert!(text.find("fadd").unwrap() > text.find("br i1 %c").unwrap(), "{text}");
 }
+
+/// A widened reduction whose vector loop ran once adds its first part to a zero
+/// start: `add <4 x i32> zeroinitializer, %x` stayed (the vector operations
+/// were not visited at all), an extra `saddw` and register copy per part in
+/// tile's `-O2` rows (1,431 instructions against the pin's 980). `x + 0` and
+/// `x * 1` are `x` for vectors too.
+#[test]
+fn a_vector_identity_folds_as_the_scalar_one_does() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = add <4 x i32> zeroinitializer, %x\n  %b = mul <4 x i32> %a, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  ret <4 x i32> %x\n}\n",
+    );
+    // The reduction's first part, as tile's widened sum has it.
+    check(
+        "define <8 x i64> @f(<8 x i64> %x) {\nb0:\n  %a = add nsw <8 x i64> zeroinitializer, %x\n  ret <8 x i64> %a\n}\n",
+        "define <8 x i64> @f(<8 x i64> %x) {\nb0:\n  ret <8 x i64> %x\n}\n",
+    );
+}
+
+#[test]
+fn a_vector_multiply_by_one_and_an_and_with_all_ones_fold() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = mul <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  %b = and <4 x i32> %a, <i32 -1, i32 -1, i32 -1, i32 -1>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  ret <4 x i32> %x\n}\n",
+    );
+}
+
+/// `urem (and x, 255), 251` on vectors was folded to its dividend: the value
+/// analyses read a vector's width as 0, so its range came out as one below 251
+/// (a debug build: "attempt to subtract with overflow"). `huge` -O2 summed
+/// 319,345,180, not 5,020,780. A vector is what every lane holds, a splat
+/// constant's number, else nothing.
+#[test]
+fn a_vector_remainder_is_not_folded_by_a_range_it_does_not_have() {
+    let text = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = and <4 x i32> %x, <i32 255, i32 255, i32 255, i32 255>\n  %r = urem <4 x i32> %a, <i32 251, i32 251, i32 251, i32 251>\n  ret <4 x i32> %r\n}\n";
+    check(text, text);
+}
+
+/// A vector `urem` by a splat and an `and` with zero are not identities: the
+/// first attempt read the splat as a scalar and dropped the `urem` (huge O2
+/// returned a wrong sum).
+#[test]
+fn a_vector_operation_that_is_no_identity_stays() {
+    let urem = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = urem <4 x i32> %x, <i32 251, i32 251, i32 251, i32 251>\n  ret <4 x i32> %a\n}\n";
+    check(urem, urem);
+    let and = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = and <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %a\n}\n";
+    check(and, and);
+}

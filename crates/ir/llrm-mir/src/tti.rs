@@ -94,6 +94,37 @@ pub struct VectorTy {
     pub count: u32,
 }
 
+/// The element instruction `getVectorInstrCost` prices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaneOp {
+    Insert,
+    Extract,
+}
+
+/// `TargetTransformInfo::VectorInstrContext` (`getVectorInstrContextHint`): how
+/// the scalar of a lane instruction is made or used. An insert of a one-use
+/// load is `Load`; an extract whose only user is a store is `Store`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VectorInstrContext {
+    None,
+    Load,
+    Store,
+}
+
+/// `TargetTransformInfo::ShuffleKind` (`SK_*`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShuffleKind {
+    Broadcast,
+    Reverse,
+    Select,
+    Transpose,
+    InsertSubvector,
+    ExtractSubvector,
+    PermuteSingleSrc,
+    PermuteTwoSrc,
+    Splice,
+}
+
 /// An operand that is a `sext` or a `zext` of `src` lanes, as the pin's `Args`
 /// (the operand values of the instruction priced) show it to the widening
 /// rules of `getArithmeticInstrCost` and `getCastInstrCost`.
@@ -833,6 +864,69 @@ pub trait Tti {
         _ty: VectorTy,
         _insert: bool,
         _extract: bool,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// Whether the SLP vectorizer's tree and store chains run: only where the
+    /// target's vector costs are priced against the pin (arm64). DEVIATE SLP2
+    /// (owner arm64, exit 2026-11-24): a target with vector registers and no
+    /// priced hooks keeps its scalar code.
+    fn slp_priced(&self) -> bool {
+        false
+    }
+
+    /// `getMinVectorRegisterBitWidth`: the narrowest vector the SLP vectorizer
+    /// forms (TargetTransformInfoImpl L654: 128).
+    fn min_vector_register_bits(&self) -> u32 {
+        128
+    }
+
+    /// `getMaximumVF(ElemWidth, Opcode)`: the widest VF for `elem_bits`-bit
+    /// lanes of `opcode`; 0 where the target puts no limit.
+    fn maximum_vf(
+        &self,
+        _elem_bits: u32,
+        _opcode: crate::opcode::Opcode,
+    ) -> u32 {
+        0
+    }
+
+    /// `getStoreMinimumVF(VF, ScalarMemTy, ScalarValTy, ...)`: the VF a store
+    /// chain of `vf` lanes of `mem` is cut to at least; `vf` where the target
+    /// does not say (TargetTransformInfoImpl L672).
+    fn store_minimum_vf(
+        &self,
+        vf: u32,
+        _mem: Ty,
+        _value: Ty,
+    ) -> u32 {
+        vf
+    }
+
+    /// `getVectorInstrCost` of one `insertelement` or `extractelement` of
+    /// `ty`, at the constant lane `index` (`None`: a variable one).
+    /// `into_poison`: the vector inserted into is poison. `None`: not priced.
+    fn vector_instr_cost(
+        &self,
+        _op: LaneOp,
+        _ty: VectorTy,
+        _index: Option<u32>,
+        _into_poison: bool,
+        _context: VectorInstrContext,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getShuffleCost` of a `kind` shuffle of `ty` by `mask`. `None`: not
+    /// priced (the SLP vectorizer then does not form a tree that needs it).
+    fn shuffle_cost(
+        &self,
+        _kind: ShuffleKind,
+        _ty: VectorTy,
+        _mask: &[i32],
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
@@ -1900,11 +1994,11 @@ pub trait Tti {
         4
     }
 
-    /// DEVIATE LSR-SPILL-PRICE: whether a loop whose other values fill the
-    /// registers keeps its pressure in LSR's cost
-    /// (`Tuning::lsr_prices_spills`).
-    fn lsr_prices_spills(&self) -> bool {
-        false
+    /// DEVIATE LSR-SPILL-PRICE: how many registers past the target's the
+    /// loop's other values must need for LSR to keep the pressure in its cost
+    /// (`Tuning::lsr_spill_pressure_margin`); none: the pin's.
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
@@ -2401,7 +2495,7 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-30): `replaceCongruentIVs`
+    /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-24): `replaceCongruentIVs`
     /// maps each wide counter's truncation to the type of the header's last
     /// phi (`Phis.back()`, ScalarEvolutionExpander.cpp#L1965), which is a
     /// pointer phi when the loop has one (pointers sort to the back), and
@@ -2418,7 +2512,7 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
+    /// DEVIATE LU13 (owner z80, exit 2026-11-24: a per-class register model in
     /// the LSR cost): a call clobbers every register, so each register the
     /// loop keeps across one is a frame slot, reloaded each trip and, for a
     /// recurrence, stored each trip. The pin has no call term in
@@ -2827,7 +2921,7 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
-    /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-30): whether `indvars`
+    /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-24): whether `indvars`
     /// also widens a counter of an illegal narrow width whose chain is
     /// masked by a constant and then extended (`(i*5+3)&1023` indexing a
     /// table, `short i`). The pin sees only an extension of the counter's own
@@ -2836,7 +2930,7 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE IND-PREFIX (beyond the pin; exit 2026-11-30): an integer
+    /// DEVIATE IND-PREFIX (beyond the pin; exit 2026-11-24): an integer
     /// width `indvars_widens_narrow_counter_through_masks` also covers
     /// although it is legal, because every operation on it pays more than the
     /// register's width (the 486's operand-size prefix on 16 bits).
@@ -2951,7 +3045,7 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-30): the
+    /// DEVIATE GEP-BYTE-INDEX (owner llrm-target-6502, exit 2026-11-24): the
     /// largest object offset a byte index reaches in one address instruction
     /// (the 6502's `abs,x`: 255). An `inbounds` GEP into a global no larger
     /// than this has a byte offset (`gepbyteindex`). None: the pass is off.

@@ -2005,6 +2005,14 @@ pub fn compute_constant_range(
     for_signed: bool,
     depth: u32,
 ) -> ConstantRange {
+    // DEVIATE (vectors, w11): a vector is what every lane holds: a splat
+    // constant's number, else any.
+    if let Some(lane) = q.int_vector_lane_bits(v) {
+        return match q.int_constant(v) {
+            Some((bits, width)) => ConstantRange::single(width, bits),
+            None => ConstantRange::full(lane),
+        };
+    }
     let bit_width = q.scalar_bits(v);
     if depth == super::MAX_ANALYSIS_RECURSION_DEPTH {
         return ConstantRange::full(bit_width);
