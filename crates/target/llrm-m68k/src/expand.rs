@@ -518,7 +518,7 @@ pub fn finish_with(
                 Operand::Imm(value) => {
                     // a frame index follows the displacement it adds to
                     if let Some((_, Operand::Frame(index))) = it.peek() {
-                        let at = frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
+                        let at = frame_indices.iter().position(|one| one == index).ok_or_else(|| format!("an unknown frame index {index}"))?;
                         let (base, disp) = layout.address(at);
                         it.next();
                         let shown = value + disp + if base == Base::Sp { pushed } else { 0 };
