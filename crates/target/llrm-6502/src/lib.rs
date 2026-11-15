@@ -26,6 +26,7 @@ pub mod relax;
 pub mod routines;
 pub mod select;
 pub mod sharecmp;
+pub mod shift_forms;
 pub mod short_jump;
 pub mod sink_compare;
 pub mod staticlocals;
