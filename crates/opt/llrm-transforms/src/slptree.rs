@@ -37,7 +37,7 @@
 //! # Used by
 //! `slpvectorize`.
 
-use std::collections::HashMap;
+use llrm_mir::dense::IdMap;
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
@@ -106,9 +106,9 @@ struct Builder<'a, 'u> {
     block: BlockId,
     entries: Vec<Entry>,
     /// The entry that makes each scalar instruction.
-    made: HashMap<InstId, usize>,
+    made: IdMap<InstId, usize>,
     /// Where each instruction of the block stands.
-    position: HashMap<InstId, usize>,
+    position: IdMap<InstId, usize>,
     failed: bool,
 }
 
@@ -425,7 +425,7 @@ pub(crate) fn try_window(
     let position = positions(function);
     let values: Vec<Operand> = stores.iter().map(|store| function.instruction(*store).operands[0]).collect();
     let mut builder =
-        Builder { unit, function, block, entries: Vec::new(), made: HashMap::new(), position, failed: false };
+        Builder { unit, function, block, entries: Vec::new(), made: IdMap::new(), position, failed: false };
     // The root: the stores.
     builder
         .entries
@@ -472,8 +472,8 @@ fn schedulable(
     unit: &MemUnit,
     function: &Function,
     tree: &Tree,
-    made: &HashMap<InstId, usize>,
-    position: &HashMap<InstId, usize>,
+    made: &IdMap<InstId, usize>,
+    position: &IdMap<InstId, usize>,
 ) -> bool {
     let at = |inst: &InstId| position[inst];
     let root = &tree.entries[0];
@@ -655,7 +655,7 @@ fn cost_of(
     unit: &MemUnit,
     function: &Function,
     tree: &Tree,
-    made: &HashMap<InstId, usize>,
+    made: &IdMap<InstId, usize>,
     store_align: u64,
     tti: &dyn Tti,
     scaler: &Scaler,
@@ -829,7 +829,7 @@ fn gather_cost(
 /// it, so a gather stands before the bundle that reads it.
 #[derive(Default)]
 struct Placer {
-    cursor: HashMap<InstId, InstId>,
+    cursor: IdMap<InstId, InstId>,
 }
 
 impl Placer {
@@ -846,8 +846,8 @@ impl Placer {
 }
 
 /// Where each instruction stands in its block.
-fn positions(function: &Function) -> HashMap<InstId, usize> {
-    let mut places = HashMap::new();
+fn positions(function: &Function) -> IdMap<InstId, usize> {
+    let mut places = IdMap::new();
     for block in function.layout().to_vec() {
         for (at, inst) in function.iter_block(block).enumerate() {
             places.insert(inst, at);
