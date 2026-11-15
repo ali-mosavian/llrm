@@ -226,6 +226,8 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         "MOVDI2SSrr" => "Movd_xmm_rm32",
         "MOVDI2PDIrr" => "Movd_xmm_rm32",
         "MOV64toPQIrr" => "Movq_xmm_rm64",
+        "MOVPQIto64rr" => "Movq_rm64_xmm",
+        "MOVPDI2DIrr" => "Movd_rm32_xmm",
         _ => return None,
     })
 }

@@ -1118,6 +1118,19 @@ impl Tti for X86 {
         self.cmov
     }
 
+    /// DEVIATE D5-M16 (owner x86-m16-b, exit 2026-11-24): in real mode, with no
+    /// conditional move, each select a two-entry phi would become costs the
+    /// branch and move it lowers to. m16 grep -O1/-O2 `if (b == 10) { lines +=
+    /// inline_hit; inline_hit = 0; }` became two selects and an add run on
+    /// every byte of the scan loop (2 clk, and the byte spilled): 34.89M
+    /// clk against bcc's 33.86M, 29.72M without the fold.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        i64::from(!self.cmov && self.real_mode.is_some())
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
@@ -1695,6 +1708,23 @@ impl Tti for X86 {
         // first
         let chain = multiplier.map_or(i64::MAX, |m| 2 * (signed_digits(m) as i64 - 1).max(1));
         multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
+    }
+
+    fn reduces_outer_address_scale(
+        &self,
+        size: u128,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, counter_exit_compare_clocks, .. } =
+            self.tuning;
+        // The addressing mode scales by 1, 2, 4 or 8 for nothing; the rest of
+        // the size is a `lea` or a shift-and-add chain every trip, and the
+        // counter that stands for it also ends the loop, so the compare of the
+        // index goes too.
+        let rest = size >> size.trailing_zeros().min(3);
+        let chain = 2 * (signed_digits(rest) as i64 - 1).max(1);
+        rest > 1
+            && multiply_clocks > 0
+            && multiply_clocks.min(chain) + counter_exit_compare_clocks > loop_carried_clocks
     }
 
     fn splits_merged_conditions(&self) -> bool {

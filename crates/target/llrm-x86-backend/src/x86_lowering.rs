@@ -310,6 +310,32 @@ impl CombineHooks for X86Lowering<'_> {
         !self.i16_mul_chains || self.min_size
     }
 
+    /// `X86TargetLowering::decomposeMulByConstant` ([L3636][pin]), a vector: a multiply by `2^n + 1`, `2^n - 1`, `1 - 2^n` or
+    /// `-(2^n + 1)` is a shift and an add or subtract unless the multiply is legal and fast (`pmullw`). A scalar is
+    /// `combineMul`'s (DEVIATE M1). DEVIATE X86V2: a byte lane has no shift here, so `v16i8` keeps `LowerMUL`.
+    ///
+    /// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L3636
+    fn decompose_mul_by_constant(
+        &self,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        if !vt.is_vector() || vt == EVT::Simple(MVT::V8I16) {
+            return false;
+        }
+        let bits = vt.element().size_in_bits();
+        if bits == 8 {
+            return false;
+        }
+        let mask = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+        let power_of_two = |value: u128| (value & mask).is_power_of_two();
+        let product = c & mask;
+        power_of_two(product.wrapping_add(1))
+            || power_of_two(product.wrapping_sub(1))
+            || power_of_two(1u128.wrapping_sub(product))
+            || power_of_two(product.wrapping_add(1).wrapping_neg())
+    }
+
     /// `replaceStoreOfFPConstant`: a `double` constant is stored as an `i64`
     /// (m64) or two `i32` (m32). The pin runs it on x86 (`isFPImmLegal` keeps
     /// only +-0.0, +-1.0). Judged by all allocated bytes: m64 smaller in 9 of
@@ -798,6 +824,9 @@ impl Hooks for X86Lowering<'_> {
             ISD::BuildVector => lower_build_vector_splat(dag, node),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V4I32) => Some(lower_mul_v4i32(dag, node)),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V16I8) => Some(lower_mul_v16i8(dag, node)),
+            ISD::VecReduceAdd | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
+                lower_shuffle_reduction(dag, node)
+            }
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -3527,6 +3556,50 @@ fn lower_build_vector_splat(
     }
     let by = dag.get_constant_with(0, EVT::I8, true, false);
     Some(dag.get_node(x86isd::PSHUFD, vt, &[low, by]))
+}
+
+/// `ExpandReductions` (`getShuffleReduction`) then `LowerVECTOR_SHUFFLE`: a
+/// sum, `and`, `or` or `xor` of a 128-bit vector folds the upper half onto the
+/// lower with one shuffle and one vector operation a step, then lane 0 is read
+/// (`movd`/`movq`). The half moves down by `pshufd` (64 or 32 bits), `psrld`
+/// (16) or `psrlw` (8); lanes above the result are never read.
+fn lower_shuffle_reduction(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let base = dag.opcode(node).vec_reduce_base_opcode()?;
+    let vector = dag.operand(node, 0);
+    let vt = dag.value_type(vector);
+    let element = vt.element();
+    let (four, eight) = (EVT::Simple(MVT::V4I32), EVT::Simple(MVT::V8I16));
+    let mut current = vector;
+    let mut half_bits = vt.size_in_bits() / 2;
+    while half_bits >= element.size_in_bits() {
+        let moved = match half_bits {
+            64 | 32 => {
+                let by = dag.get_constant_with(if half_bits == 64 { 0xEE } else { 0x55 }, EVT::I8, true, false);
+                let whole = dag.get_node(ISD::BitCast, four, &[current]);
+                let shuffled = dag.get_node(x86isd::PSHUFD, four, &[whole, by]);
+                dag.get_node(ISD::BitCast, vt, &[shuffled])
+            }
+            16 | 8 => {
+                let (lanes, width) = if half_bits == 16 { (four, 16) } else { (eight, 8) };
+                let by = dag.get_constant_with(width, EVT::I8, true, false);
+                let whole = dag.get_node(ISD::BitCast, lanes, &[current]);
+                let shifted = dag.get_node(x86isd::VSRLI, lanes, &[whole, by]);
+                dag.get_node(ISD::BitCast, vt, &[shifted])
+            }
+            _ => return None,
+        };
+        current = dag.get_node(base, vt, &[current, moved]);
+        half_bits /= 2;
+    }
+    // Lane 0 of a narrow-lane vector is the low bits of the `movd` of lane 0 of the `v4i32`.
+    let (whole, lane_vt) = if element.size_in_bits() < 32 { (four, EVT::I32) } else { (vt, element) };
+    let current = if whole == vt { current } else { dag.get_node(ISD::BitCast, whole, &[current]) };
+    let zero = dag.get_constant(0, EVT::I64);
+    let lane = dag.get_node(ISD::ExtractElement, lane_vt, &[current, zero]);
+    Some(dag.get_any_ext_or_trunc(lane, dag.value_type(node)))
 }
 
 /// `LowerINSERT_VECTOR_ELT`, lane 0 of an undefined or all-zero 128-bit integer

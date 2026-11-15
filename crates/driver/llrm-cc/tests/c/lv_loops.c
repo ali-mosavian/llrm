@@ -2,12 +2,19 @@ int a[1024], b[1024];
 void add_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] += b[i]; }
 void copy_plus_one(int *d, const int *s, int n) { for (int i = 0; i < n; ++i) d[i] = s[i] + 1; }
 void multiply_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] *= b[i]; }
+void times_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 3; }
+void times_seven(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 7; }
+void times_minus_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * -3; }
 
 int sum_array(const int *a, int n) {
   int total = 0;
   for (int i = 0; i < n; i++) total += a[i];
   return total;
 }
+
+long sum_longs(const long *a, int n) { long t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+short sum_shorts(const short *a, int n) { short t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+signed char sum_bytes(const signed char *a, int n) { signed char t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
 
 void fill_rows(short t[64][64]) {
   for (int y = 0; y < 64; ++y)
