@@ -851,14 +851,15 @@ thread_local! {
 /// is one instruction there); this target picks the loop or the run at the
 /// size level from the final text, like [`arithmetic_chain_in_a`] does for a
 /// signed shift. The choice is by bytes, so it holds for every shape of
-/// shift, not one multiplier. Owner 6502, exit 2026-11-18 (renewed from
-/// 2026-11-15: the replacement, a word shift's byte roles chosen by the
-/// allocator, is in review): price the in-`a` run at emission, where the copy
-/// and the reload are known, and drop the pass. The exit also recovers the
-/// whole-function form this region form gives up (Os: `call_keeps` -11 B vs -8,
-/// `overflow_builtins` -18 vs -3, `div_constants_short` -21 and `sat_builtins`
-/// -18 vs 0, `loop_interchange` -6 vs -4): that needs liveness across blocks,
-/// which emission-time pricing has and a region does not.
+/// shift, not one multiplier. Owner 6502, exit 2026-11-24 (renewed from
+/// 2026-11-18: not retired, the pass now also chooses the byte that rides in
+/// `a` and covers straight runs, by final bytes): price the in-`a` run at
+/// emission, where the copy and the reload are known, and drop the pass. The
+/// exit also recovers the whole-function form this region form gives up (Os:
+/// `call_keeps` -11 B vs -8, `overflow_builtins` -18 vs -3,
+/// `div_constants_short` -21 and `sat_builtins` -18 vs 0, `loop_interchange` -6
+/// vs -4): that needs liveness across blocks, which emission-time pricing has
+/// and a region does not.
 pub fn shift_loop_in_a(asm: &mut Asm) {
     let mut at = 0;
     let mut references = std::collections::HashMap::<String, usize>::new();
@@ -870,91 +871,133 @@ pub fn shift_loop_in_a(asm: &mut Asm) {
         }
     }
     while at < asm.lines.len() {
-        match shift_loop(&asm.lines, at, &references) {
-            Some((first, second, p, q, count)) => {
-                let end = at + 6;
-                let lines = &asm.lines;
-                let exits = Exits::of(asm);
-                let register = if matches!(&lines[at], Line::Inst(Inst { op: Op::Ldx, .. })) {
-                    Registers::X
-                } else {
-                    Registers::Y
-                };
-                let free = dead_from(lines, end, Registers::A, &mut Default::default(), exits)
-                    && dead_from(lines, end, register, &mut Default::default(), exits)
-                    && flags_unread(lines, end);
-                if free {
-                    let ends_region = |line: &Line| match line {
-                        Line::Inst(inst) => inst.target().is_some() || matches!(inst.op, Op::Rts | Op::Jmp),
-                        _ => true,
-                    };
-                    let start = lines[..at].iter().rposition(ends_region).map_or(0, |i| i + 1);
-                    let stop = lines[end..].iter().position(ends_region).map_or(lines.len(), |i| end + i);
-                    // The region's end is read as it is: the function's own
-                    // return keeps its meaning, and a
-                    // branch or jump stays in the region, so the flags it
-                    // reads and the registers of its unknown target stay live.
-                    // Only a label (control falls through)
-                    // is closed by a branch of our own.
-                    let returns = matches!(lines.get(stop), Some(Line::Inst(Inst { op: Op::Rts, .. })));
-                    let ends_in_inst = matches!(lines.get(stop), Some(Line::Inst(_)));
-                    let stop = if ends_in_inst { stop + 1 } else { stop };
-                    let inst = |op, operand| Line::Inst(Inst { op, operand, place: 0 });
-                    let region = &lines[start..stop];
-                    let mut candidate = lines[start..at].to_vec();
-                    candidate.push(inst(Op::Lda, Operand::Direct(p.clone())));
-                    for _ in 0..count {
-                        candidate.push(inst(first, Operand::Acc));
-                        candidate.push(inst(second, Operand::Direct(q.clone())));
-                    }
-                    candidate.push(inst(Op::Sta, Operand::Direct(p.clone())));
-                    candidate.extend_from_slice(&lines[end..stop]);
-                    // a return reads every register and cell: the region's end
-                    // is not an exit that frees anything
-                    let every = cells_named(region);
-                    let close = |mut lines: Vec<Line>| {
-                        if returns {
-                            return asm.candidate_from(lines);
-                        }
-                        if !ends_in_inst {
-                            lines.push(inst(Op::Bne, Operand::Direct("__region_exit".to_owned())));
-                        }
-                        let mut closed = asm.candidate_from(lines);
-                        closed.no_a_result = false;
-                        closed.no_x_result = false;
-                        closed.no_y_result = false;
-                        closed.result_cells = every.clone();
-                        closed
-                    };
-                    SHIFT_CANDIDATE_LINES.with(|work| work.set(work.get() + candidate.len()));
-                    let mut candidate = close(candidate);
-                    crate::peephole::drop_reloads(&mut candidate);
-                    forward_cell_copy(&mut candidate);
-                    crate::peephole::drop_reloads(&mut candidate);
-                    // a word that arrives in A:X is stored to its cells and
-                    // read back (`stx c; lda c`)
-                    if crate::copyprop::enabled(std::env::var_os("LLRM_6502_MCP").as_deref()) {
-                        crate::copyprop::copy_propagation(&mut candidate);
-                    }
-                    drop_dead_stores(&mut candidate);
-                    crate::peephole::drop_dead_writes(&mut candidate);
-                    store_then_index_load(&mut candidate);
-                    if !returns && !ends_in_inst {
-                        candidate.lines.pop();
-                    }
-                    if let (Some(before), Some(after)) = (bytes_of(region), bytes_of(&candidate.lines)) {
-                        if after < before {
-                            asm.lines.splice(start..stop, candidate.lines);
-                            at = start;
-                            continue;
-                        }
-                    }
-                }
-                at = end;
-            }
-            None => at += 1,
+        let found = match shift_loop(&asm.lines, at, &references) {
+            Some((first, second, p, q, count)) => Some((first, second, p, q, count, at + 6, true)),
+            None => shift_run(&asm.lines, at)
+                .map(|(first, second, p, q, count)| (first, second, p, q, count, at + 2 * count, false)),
+        };
+        let Some((first, second, p, q, count, end, counted)) = found else {
+            at += 1;
+            continue;
+        };
+        let lines = &asm.lines;
+        let exits = Exits::of(asm);
+        let register = match &lines[at] {
+            Line::Inst(Inst { op: Op::Ldx, .. }) => Some(Registers::X),
+            Line::Inst(Inst { op: Op::Ldy, .. }) => Some(Registers::Y),
+            _ => None,
+        };
+        // the loop also clobbers its index and leaves the flags of `dex`; a
+        // run leaves the flags of its last rotate, which the rewrite keeps
+        let free = dead_from(lines, end, Registers::A, &mut Default::default(), exits)
+            && register.is_none_or(|register| {
+                dead_from(lines, end, register, &mut Default::default(), exits) && flags_unread(lines, end)
+            });
+        if !free {
+            at = end;
+            continue;
         }
+        let ends_region = |line: &Line| match line {
+            Line::Inst(inst) => inst.target().is_some() || matches!(inst.op, Op::Rts | Op::Jmp),
+            _ => true,
+        };
+        let start = lines[..at].iter().rposition(ends_region).map_or(0, |i| i + 1);
+        let stop = lines[end..].iter().position(ends_region).map_or(lines.len(), |i| end + i);
+        // The region's end is read as it is: the function's own
+        // return keeps its meaning, and a
+        // branch or jump stays in the region, so the flags it
+        // reads and the registers of its unknown target stay live.
+        // Only a label (control falls through)
+        // is closed by a branch of our own.
+        let returns = matches!(lines.get(stop), Some(Line::Inst(Inst { op: Op::Rts, .. })));
+        let ends_in_inst = matches!(lines.get(stop), Some(Line::Inst(_)));
+        let stop = if ends_in_inst { stop + 1 } else { stop };
+        let inst = |op, operand| Line::Inst(Inst { op, operand, place: 0 });
+        let region = &lines[start..stop];
+        // a return reads every register and cell: the region's end
+        // is not an exit that frees anything
+        let every = cells_named(region);
+        let close = |mut lines: Vec<Line>| {
+            if returns {
+                return asm.candidate_from(lines);
+            }
+            if !ends_in_inst {
+                lines.push(inst(Op::Bne, Operand::Direct("__region_exit".to_owned())));
+            }
+            let mut closed = asm.candidate_from(lines);
+            closed.no_a_result = false;
+            closed.no_x_result = false;
+            closed.no_y_result = false;
+            closed.result_cells = every.clone();
+            closed
+        };
+        // The byte that rides in `a` is the one that shifts alone or the one
+        // that rotates: each gives a different load and store at the ends of
+        // the run, and the word that arrives in `a` (or leaves in it) is the
+        // one to keep there. The shorter text is taken.
+        let mut best: Option<(u32, Vec<Line>)> = None;
+        // a run names cells only: a global would be read and written once
+        // instead of once a step
+        let roles: &[&String] =
+            if counted || (cell_number(&p).is_some() && cell_number(&q).is_some()) { &[&p, &q] } else { &[] };
+        for held in roles {
+            let mut candidate = lines[start..at].to_vec();
+            candidate.push(inst(Op::Lda, Operand::Direct((*held).clone())));
+            for _ in 0..count {
+                let on = |cell: &String| if cell == *held { Operand::Acc } else { Operand::Direct(cell.clone()) };
+                candidate.push(inst(first, on(&p)));
+                candidate.push(inst(second, on(&q)));
+            }
+            candidate.push(inst(Op::Sta, Operand::Direct((*held).clone())));
+            candidate.extend_from_slice(&lines[end..stop]);
+            SHIFT_CANDIDATE_LINES.with(|work| work.set(work.get() + candidate.len()));
+            let mut candidate = close(candidate);
+            crate::peephole::drop_reloads(&mut candidate);
+            forward_cell_copy(&mut candidate);
+            crate::peephole::drop_reloads(&mut candidate);
+            // a word that arrives in A:X is stored to its cells and
+            // read back (`stx c; lda c`)
+            if crate::copyprop::enabled(std::env::var_os("LLRM_6502_MCP").as_deref()) {
+                crate::copyprop::copy_propagation(&mut candidate);
+            }
+            drop_dead_stores(&mut candidate);
+            crate::peephole::drop_dead_writes(&mut candidate);
+            store_then_index_load(&mut candidate);
+            if !returns && !ends_in_inst {
+                candidate.lines.pop();
+            }
+            if let Some(size) = bytes_of(&candidate.lines) {
+                if best.as_ref().is_none_or(|(least, _)| size < *least) {
+                    best = Some((size, candidate.lines));
+                }
+            }
+        }
+        if let (Some((after, lines)), Some(before)) = (best, bytes_of(&asm.lines[start..stop])) {
+            if after < before {
+                asm.lines.splice(start..stop, lines);
+                at = start;
+                continue;
+            }
+        }
+        at = end;
     }
+}
+
+/// The run of `count` steps `first p; second q` (cells) that starts at `at`,
+/// where the line before is not the same step.
+fn shift_run(
+    lines: &[Line],
+    at: usize,
+) -> Option<(Op, Op, String, String, usize)> {
+    let (first, second, p, q) = step(lines, at)?;
+    if p == q || (at >= 2 && step(lines, at - 2) == Some((first, second, p.clone(), q.clone()))) {
+        return None;
+    }
+    let mut count = 0;
+    while step(lines, at + 2 * count) == Some((first, second, p.clone(), q.clone())) {
+        count += 1;
+    }
+    Some((first, second, p, q, count))
 }
 
 /// Every cell and symbol the instructions name.
