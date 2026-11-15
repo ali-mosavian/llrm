@@ -723,6 +723,7 @@ impl X86 {
         } else {
             "nosse"
         };
+        let cost_kind = kind;
         let kind = match kind {
             CostKind::RecipThroughput => "throughput",
             CostKind::Latency => "latency",
@@ -734,7 +735,9 @@ impl X86 {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+            None => base_intrinsic_cost(name)
+                .or_else(|| library_call_intrinsic_cost(name, cost_kind))
+                .unwrap_or(Cost::INVALID),
         }
     }
 }
