@@ -316,7 +316,7 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorFma { rd, rn, rm, .. } => {
+            Inst::VectorFma { rd, rn, rm, .. } | Inst::VectorMulAcc { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);

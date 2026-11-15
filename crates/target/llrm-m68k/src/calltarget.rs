@@ -155,8 +155,7 @@ fn price_of(
             Some(&priced) => priced,
             None => {
                 PRICED.with(|count| count.set(count.get() + 1));
-                let size = crate::encode::encode(inst)?.bytes.len();
-                let priced = (size, crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks);
+                let priced = crate::instprice::price_of(cpu, inst)?;
                 seen.insert(inst.clone(), priced);
                 priced
             }
