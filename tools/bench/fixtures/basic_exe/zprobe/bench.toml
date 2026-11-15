@@ -1,0 +1,6 @@
+description = "scratch: READ of DATA text as written"
+repetitions = 1
+references = false
+
+[region]
+bas = "BenchProbe"

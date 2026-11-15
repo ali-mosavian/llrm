@@ -30,7 +30,10 @@ fn raw_reads(source: &str) -> Vec<(usize, String)> {
     found
 }
 
-fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+fn sources(
+    dir: &Path,
+    out: &mut Vec<std::path::PathBuf>,
+) {
     for entry in std::fs::read_dir(dir).expect("a source directory") {
         let path = entry.unwrap().path();
         if path.is_dir() {
@@ -60,6 +63,8 @@ fn no_pass_reads_the_flag_fields_raw() {
     let mut files = Vec::new();
     sources(&root.join("src"), &mut files);
     sources(&root.join("../../target/llrm-z80/src"), &mut files);
+    sources(&root.join("../../target/llrm-6502/src"), &mut files);
+    sources(&root.join("../../target/llrm-m68k/src"), &mut files);
     let mut bad = Vec::new();
     for file in files {
         if file.ends_with("llrm-spike-mf/src/mfunc.rs") {

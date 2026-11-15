@@ -819,3 +819,96 @@ exit:
     let out = printed(&module);
     assert_eq!(out.matches("icmp ult i8 0, %m").count(), 1, "{out}");
 }
+
+/// A loop whose latch exits (`i < n`) and whose header also exits (`x * x > 1024`), with `x = 0` on entry: mandel -O1's
+/// `xx + yy > 1024` break.
+const EXITING_LATCH: &str = "define i32 @f(i32 %n, i32 %c) {
+b0:
+  br label %b1
+
+b1:
+  %x = phi i32 [ 0, %b0 ], [ %nx, %b3 ]
+  %i = phi i32 [ 0, %b0 ], [ %ni, %b3 ]
+  %xx = mul i32 %x, %x
+  %big = icmp sgt i32 %xx, 1024
+  br i1 %big, label %b4, label %b2
+
+b2:
+  %nx = add i32 %xx, %c
+  %ni = add i32 %i, 1
+  br label %b3
+
+b3:
+  %more = icmp ult i32 %ni, %n
+  br i1 %more, label %b1, label %b4
+
+b4:
+  %r = phi i32 [ %x, %b1 ], [ %nx, %b3 ]
+  ret i32 %r
+}
+";
+
+const EXITING_LATCH_INPUTS: &[&[i128]] = &[&[0, 1], &[1, 1], &[5, 3], &[40, 7], &[32, 100], &[3, -1]];
+
+/// `EXITING_LATCH` rotated for the machine `tti` is.
+fn rotated_exiting_latch(tti: &dyn llrm_mir::tti::Tti) -> (bool, String) {
+    let mut module = parsed(EXITING_LATCH);
+    let before = results(&module, EXITING_LATCH_INPUTS);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
+        rotation_trial: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    let rotated = rotate_function(&mut module, "f", tti, options).expect("rotates");
+    assert_eq!(results(&module, EXITING_LATCH_INPUTS), before, "{}", printed(&module));
+    (rotated, printed(&module))
+}
+
+/// m32 -O1 mandel ran 2 `imul` a pixel more than gcc (+9,757 clk): the pin leaves a loop whose latch already exits
+/// unrotated unless a header phi dies, so the header's `x * x` with `x = 0` was computed on the first iteration. m32
+/// rotates it when the whole header copy folds in the preheader (gcc's header copy), and keeps the pin's rule elsewhere.
+#[test]
+fn test_a_loop_whose_latch_exits_is_rotated_when_its_header_folds_in_the_preheader() {
+    let (pin, _) = rotated_exiting_latch(&X86::of_cpu("i486").expect("a cpu"));
+    assert!(!pin, "premise: no header phi dies, the pin leaves it");
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    assert!(tti.rotation_of_exiting_latch_when_guard_folds());
+    let (rotated, text) = rotated_exiting_latch(&*tti);
+    assert!(rotated, "{text}");
+    let entry = text.split("\n\n").next().unwrap();
+    assert!(!entry.contains("mul"), "the copy folded, the entry holds no multiply: {text}");
+}
+
+/// A header the preheader's values do not fold is a compare and a multiply copied above the loop: left as the pin has it.
+#[test]
+fn test_a_loop_whose_latch_exits_is_left_when_its_header_does_not_fold() {
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    let source = EXITING_LATCH.replace("[ 0, %b0 ], [ %nx, %b3 ]", "[ %c, %b0 ], [ %nx, %b3 ]");
+    let mut module = parsed(&source);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
+        rotation_trial: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    assert!(!rotate_function(&mut module, "f", &*tti, options).expect("rotates"));
+}

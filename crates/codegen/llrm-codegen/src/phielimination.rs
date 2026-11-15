@@ -230,7 +230,6 @@ pub fn lowered_with(
             &kept_phis(body),
             &widths,
             false,
-            &|_, _| false,
         )?;
         &split_body
     };

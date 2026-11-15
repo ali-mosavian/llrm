@@ -24,8 +24,14 @@ TEXT_ONLY = re.compile(r"\bsize\b[^|\n]*\|\s*awk\b[^\n]*(NR==2|\.text)")
 DATA_TOO = re.compile(r"\.(rodata|data)\b|\$3|\$2\+\$3|\+\s*data")
 
 
+# `$1==".text"` takes the one section: gcc's `.text.startup` (main), `.text.unlikely` and `.text.hot` are dropped, data or not (strlen_idiom gcc -O2: 38 B read, 127 B real).
+EXACT_TEXT = re.compile(r'\$1==\\?".text\\?"')
+
+
 def text_only(line: str) -> bool:
-    return bool(TEXT_ONLY.search(line)) and not DATA_TOO.search(line) and "text-only by design:" not in line
+    if "text-only by design:" in line or not TEXT_ONLY.search(line):
+        return False
+    return bool(EXACT_TEXT.search(line)) or not DATA_TOO.search(line)
 
 
 def reads(line: str) -> bool:
@@ -66,7 +72,23 @@ def test_the_text_column_reads_are_recognised():
     assert text_only("bytesA=$(size $t/o.a.o | awk 'NR==2{print $1}')")
     assert text_only("t=$(size -A \"$out\" | awk '$1==\".text\"{print $2}')")
     assert not text_only("t=$(size -A \"$o\" | awk '$1==\".text\"{print $2}')  # text-only by design: Dag and Old read the same data")
-    assert not text_only("bytes() { size -A \"$1\" | awk '$1==\".text\"||$1~/^\\.rodata/{s+=$2} END{print s+0}'; }")
+    assert text_only("bytes() { size -A \"$1\" | awk '$1==\".text\"||$1~/^\\.rodata/{s+=$2} END{print s+0}'; }"), "exact .text drops .text.startup even with rodata"
+    assert not text_only("bytes() { size -A \"$1\" | awk '$1~/^\\.text/||$1~/^\\.rodata/{s+=$2} END{print s+0}'; }")
+
+
+def test_obj_bytes_counts_a_main_in_text_startup():
+    """gcc puts `main` in `.text.startup`: obj_bytes read `.text` alone and counted 0 B for it."""
+    import shutil
+    import tempfile
+
+    if not shutil.which("gcc") or not shutil.which("size"):
+        return
+    with tempfile.TemporaryDirectory() as where:
+        source = Path(where) / "m.c"
+        source.write_text('__attribute__((section(".text.startup"))) int main(void) { return 42; }\n')
+        subprocess.run(["gcc", "-O2", "-c", str(source), "-o", f"{where}/m.o"], check=True)
+        out = subprocess.run(["bash", "-c", f'. {ROOT}/runtime/compiler-rt/tests/obj_bytes.sh; obj_bytes {where}/m.o'], capture_output=True, text=True, check=True).stdout
+    assert int(out) > 0, out
 
 
 def test_text_only_allowances_still_match_a_line_and_name_an_owner():

@@ -80,11 +80,11 @@ pub fn preserve_flags(
     for block in &mut function.blocks {
         let mut r = 0;
         while r < block.insts.len() {
-            if !block.insts[r].reads_flags || block.insts[r].sets_flags {
+            if !block.insts[r].reads_flags() || block.insts[r].sets_flags() {
                 r += 1;
                 continue;
             }
-            let Some(mut s) = block.insts[..r].iter().rposition(|inst| inst.sets_flags && !is_remade_moveq(inst))
+            let Some(mut s) = block.insts[..r].iter().rposition(|inst| inst.sets_flags() && !is_remade_moveq(inst))
             else {
                 r += 1;
                 continue;

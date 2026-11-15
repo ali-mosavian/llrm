@@ -30,7 +30,8 @@ out:
 
 /// `stpcpy` copied the destination pointer each trip (`lda rc2; sta rc6; lda
 /// rc3; sta rc7`) to store at offset 1 through the old value after the step:
-/// 44 bytes at -O2 against 33 with the store through the stepped pointer.
+/// 44 bytes at -O2 against 33 with the store through the stepped pointer (35
+/// with the destination arriving in A:X and stored to its cells).
 #[test]
 fn a_stepped_pointer_is_the_address_of_the_store_that_follows() {
     let ir = format!("target datalayout = \"{}\"\n{STPCPY}\n", datalayout());
@@ -38,5 +39,5 @@ fn a_stepped_pointer_is_the_address_of_the_store_that_follows() {
     let from = text.find("f:").unwrap();
     let body: String = text[from..].split("  rts").next().unwrap().to_owned() + "  rts\n";
     let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
-    assert!(bytes <= 33, "{bytes} B for stpcpy:\n{body}");
+    assert!(bytes <= 35, "{bytes} B for stpcpy:\n{body}");
 }

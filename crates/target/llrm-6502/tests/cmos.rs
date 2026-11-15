@@ -150,7 +150,7 @@ fn a_byte_through_a_pointer_uses_the_unindexed_mode_on_the_65c02() {
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
     let point = "  lda #<g\n  sta rc2\n  lda #>g\n  sta rc3\n";
     let get = format!("{point}  jsr getp\n");
-    let put = format!("{point}  lda #9\n  sta rc4\n  jsr putp\n  lda g\n");
+    let put = format!("{point}  lda #9\n  jsr putp\n  lda g\n");
     for (name, main, want) in [("cmos-getp", get, 7), ("cmos-putp", put, 9)] {
         for (target, cpu) in [("sim6502", Cpu::Mos6502), ("sim65c02", Cpu::W65c02)] {
             let got = common::run_on(target, name, &main, &format!("{}{G_DATA}", text(cpu))).0;
@@ -225,11 +225,12 @@ fn a_step_of_one_is_done_in_place() {
 
 const THROUGH: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  ret i8 %r\n}\n\
-    define i8 @thrice(ptr %f, i8 %x) {\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}\n\
+    define i8 @thrice(i16 %fi, i8 %x) {\n  %f = inttoptr i16 %fi to ptr\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}\n\
     define i8 @plus(i8 %x, i8 %y) {\n  %r = add i8 %x, %y\n  ret i8 %r\n}\n\
-    define i8 @both(ptr %f, i8 %x, i8 %y) {\n  %a = call i8 %f(i8 %x, i8 %y)\n  %b = call i8 %f(i8 %a, i8 %y)\n  ret i8 %b\n}";
+    define i8 @both(i16 %fi, i8 %x, i8 %y) {\n  %f = inttoptr i16 %fi to ptr\n  %a = call i8 %f(i8 %x, i8 %y)\n  %b = call i8 %f(i8 %a, i8 %y)\n  ret i8 %b\n}";
 
-/// An indirect call pushes the callee's address minus one low byte last: the
+/// An indirect call through an address in A:X (an integer word: a pointer is in
+/// cells) pushes the callee's address minus one low byte last: the
 /// low byte went through `a` (`txa; pha`), and is `phx` on the 65C02. The
 /// byte arguments wait in `a` and `x`: the push sequence keeps them (an
 /// argument in `a` waits in `y`, one in `x` leaves `x` out of the sequence).
@@ -253,8 +254,8 @@ fn an_indirect_call_pushes_x_directly_on_the_65c02() {
     assert!(nmos.contains("  txa\n  pha\n  tya\n  rts") && !nmos.contains("phx"), "{nmos}");
     assert!(cmos.contains("  phx\n  tya\n  rts") && !cmos.contains("  txa\n  pha\n  tya\n  rts"), "{cmos}");
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let main = "  lda #<twice\n  sta rc2\n  lda #>twice\n  sta rc3\n  lda #3\n  jsr thrice\n";
-    let two = "  lda #<plus\n  sta rc2\n  lda #>plus\n  sta rc3\n  ldx #7\n  lda #5\n  jsr both\n";
+    let main = "  lda #3\n  sta rc2\n  lda #<twice\n  ldx #>twice\n  jsr thrice\n";
+    let two = "  lda #5\n  sta rc2\n  lda #7\n  sta rc3\n  lda #<plus\n  ldx #>plus\n  jsr both\n";
     for (target, text, text2) in [("sim6502", nmos, nmos2), ("sim65c02", cmos, cmos2)] {
         assert_eq!(common::run_on(target, "cmos-thrice", main, &text).0, 24, "{target}");
         assert_eq!(common::run_on(target, "cmos-both", two, &text2).0, 19, "{target}");

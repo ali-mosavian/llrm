@@ -359,6 +359,7 @@ impl LoopIdiomRecognize {
                     bytes.map(|bytes| crate::loopidioms::InlineFills {
                         max_stores: run.memset_stores,
                         bytes: bytes / (groups.len() as i64).max(1),
+                        prefixed: run.env.layout.pointer(0).index_bits < 32,
                     })
                 },
             ) {

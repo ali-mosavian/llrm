@@ -81,7 +81,7 @@ fn generated_sized(
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false };
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
     let mut users = IvUsers::of(&mut se, &cx, header, &env);
     if post_inc {
         let conds: Vec<InstId> = users

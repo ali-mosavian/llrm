@@ -4,7 +4,7 @@
 //! target lacks into library calls.
 
 use llrm_mir::context::GlobalId;
-use llrm_mir::intrinsics::{BitCount, FloatFunction, Intrinsic};
+use llrm_mir::intrinsics::{BitCount, FloatFunction, Intrinsic, ReduceKind};
 use llrm_mir::libfunc::{Generic, LibFunc, TargetLibraryInfo};
 use llrm_mir::module::{GlobalKind, Instruction, Linkage, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp};
@@ -15,6 +15,34 @@ use super::super::mvt::{EVT, MVT};
 use super::{Builder, Refused, flags_of};
 
 impl Builder<'_> {
+    /// `SelectionDAGBuilder::visitVectorReduce`
+    /// ([L11286](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L11286)):
+    /// the integer kinds are one `VECREDUCE_*` node on the vector. The float
+    /// kinds (`VECREDUCE_FADD`, `VECREDUCE_SEQ_FADD`, ...) are refused by name.
+    pub(super) fn visit_vector_reduce(
+        &mut self,
+        instruction: &Instruction,
+        kind: ReduceKind,
+    ) -> Result<(), Refused> {
+        let code = match kind {
+            ReduceKind::Add => ISD::VecReduceAdd,
+            ReduceKind::Mul => ISD::VecReduceMul,
+            ReduceKind::And => ISD::VecReduceAnd,
+            ReduceKind::Or => ISD::VecReduceOr,
+            ReduceKind::Xor => ISD::VecReduceXor,
+            ReduceKind::SMax => ISD::VecReduceSMax,
+            ReduceKind::SMin => ISD::VecReduceSMin,
+            ReduceKind::UMax => ISD::VecReduceUMax,
+            ReduceKind::UMin => ISD::VecReduceUMin,
+            ReduceKind::FAdd | ReduceKind::FMul => return Err(Refused("a floating-point vector reduction")),
+        };
+        let vector = self.get_value(instruction.operands[0])?;
+        let vt = self.type_of(instruction.ty)?;
+        let node = self.dag.get_node(code, vt, &[vector]);
+        self.set_value(instruction.result.ok_or(Refused("a vector reduction without a result"))?, node);
+        Ok(())
+    }
+
     pub(super) fn visit_math(
         &mut self,
         instruction: &Instruction,

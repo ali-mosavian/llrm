@@ -1017,16 +1017,18 @@ __ashrsi3_fast:                 ; __sa >> __sb (arithmetic) -> __sa
   rts
 
 ; ---- memory fills and copies ----------------------------------------------------------------------
-; memset(rs1 = dst, A = byte, rs2 = n), memcpy and memmove(rs1 = dst, rs2 = src, rs3 = n); each
-; returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its high
-; byte is saved (memset in rc6, the others on the hardware stack).
+; memset(rc2:rc3 = dst, A = byte, rc4:rc5 = n), memcpy and memmove(rc2:rc3 = dst, rc4:rc5 = src, A:X = n):
+; the pointers in cells (llvm-mos), n as a word; each returns dst in A:X. They walk whole pages with Y, so
+; the low byte of dst stays put and only its high byte is saved (rc6, memcpy in rc7, memmove on the
+; hardware stack).
 
 .export memset
 memset:
   ldx rc3
   stx rc6
-  ldy #0
   ldx rc5
+  ldy #0
+  cpx #0
   beq @tail
 @page:
   sta (rc2),y
@@ -1050,10 +1052,11 @@ memset:
 
 .export memcpy
 memcpy:
+  sta rc6
   lda rc3
-  pha
+  sta rc7
   ldy #0
-  ldx rc7
+  cpx #0
   beq @tail
 @page:
   lda (rc4),y
@@ -1074,8 +1077,7 @@ memcpy:
   dex
   bne @byte
 @done:
-  pla
-  tax
+  ldx rc7
   lda rc2
   rts
 
@@ -1083,21 +1085,24 @@ memcpy:
 ; the ranges overlap
 .export memmove
 memmove:
+  sta rc6
   lda rc2
   cmp rc4
   lda rc3
   sbc rc5
   bcs @down
+  lda rc6
   jmp memcpy
 @down:
   lda rc3
   pha
+  txa
   clc
-  adc rc7
+  adc rc3
   sta rc3
-  lda rc5
+  txa
   clc
-  adc rc7
+  adc rc5
   sta rc5
   ldy rc6
   beq @pages
@@ -1108,7 +1113,7 @@ memmove:
   cpy #0
   bne @tail
 @pages:
-  ldx rc7
+  cpx #0
   beq @done
 @page:
   dec rc3

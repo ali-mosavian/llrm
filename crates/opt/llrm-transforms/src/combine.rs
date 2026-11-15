@@ -125,6 +125,9 @@ fn try_to_sink(
         if !sinkable(&q, inst, dest) {
             return false;
         }
+        if c.env.hooks.keeps_float_off_returning_sink && crate::combine_sink::floats_across_blocks(&q, inst, dest) {
+            return false;
+        }
         (dest, droppable_uses(&q, inst, dest))
     };
     sink(c.context, c.function, inst, dest, &dropped);
@@ -343,8 +346,14 @@ pub struct TargetHooks {
     /// its users. Off where bytes are strict: a phi of constants costs a move
     /// per edge.
     pub phi_constant_users: bool,
+    /// DEVIATE ICMPDIV-1 (`Tti::keeps_icmp_of_shared_division`).
+    pub keeps_shared_division_compare: bool,
     /// DEVIATE PHICONST-2 (`Tti::folds_phi_constant_chains`).
     pub phi_constant_chains: bool,
+    /// DEVIATE SYMPAIR-1 (`Tti::keeps_icmp_of_swapped_selects`).
+    pub keeps_swapped_select_compare: bool,
+    /// DEVIATE SINK-X87 (`combine_sink.rs`; the target has an x87 stack).
+    pub keeps_float_off_returning_sink: bool,
 }
 
 pub struct Env<'a> {
@@ -376,7 +385,8 @@ pub struct Combiner<'a> {
     /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
     /// dominating conditions while set (`foldICmpUsingKnownBits`).
     pub without_dom_conditions: bool,
-    /// The intrinsics this run declared that `env.globals` lacks, which a pattern must still read as intrinsics (`ValueTracking`'s
+    /// The intrinsics this run declared that `env.globals` lacks, which a
+    /// pattern must still read as intrinsics (`ValueTracking`'s
     /// `Query::pending_intrinsics`).
     pub pending_intrinsics: Vec<(u32, llrm_mir::valuetracking::pattern::IntrinsicId)>,
 }
@@ -584,8 +594,14 @@ pub fn visit(
     // DEVIATE COMBINE-VEC: the arithmetic visitors read integer widths (MIR had
     // no vectors), so an operation on vectors, which the loop vectorizer makes,
     // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
-    if matches!(c.function.instruction(inst).opcode, Opcode::Binary(_))
-        && matches!(c.context.types.get(c.function.instruction(inst).ty), llrm_mir::types::Type::Vector { .. })
+    if matches!(
+        c.function.instruction(inst).opcode,
+        Opcode::Binary(_) | Opcode::Cast(_)
+    )
+        && matches!(
+            c.context.types.get(c.function.instruction(inst).ty),
+            llrm_mir::types::Type::Vector { .. }
+        )
     {
         return Visit::None;
     }

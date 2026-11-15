@@ -159,9 +159,9 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
-    /// -O1 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`).
-    fn merge_local_functions_at_o1(&self) -> bool {
+    /// DEVIATE Z80-MERGEFUNC-LOCAL (owner z80, exit 2026-11-24): a local function that is the same code as another is dropped at
+    /// -O1, -O2 and -O3 too: fewer bytes, the same clocks (shl_long_by_one `twice_signed`, signbit_idioms `bit_i16`).
+    fn merge_local_functions_at_speed(&self) -> bool {
         true
     }
 
@@ -389,6 +389,12 @@ impl Tti for Z80Tti {
         if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): `compile::effective` compiles the module under the unroll
+    /// variants at -O2 and -O3 and keeps the one smaller in bytes, then clocks.
+    fn unroll_speed_trial(&self) -> bool {
+        true
+    }
+
     /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
     /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
@@ -397,6 +403,8 @@ impl Tti for Z80Tti {
 
     /// DEVIATE UP1 (the shared priced unroll, `loopunrollprice`): a full unroll is made at -O2/-O3 where the clocks it
     /// saves repay its bytes at the same rate, in place of the pin's threshold alone (0).
+    /// Audited 2026-11-13: rate 0 and this rate give identical bytes and T on all 124 `tests/run/c` programs at -O1/-O2/-O3/-Os/-Oz,
+    /// so the price refuses nothing there; it guards loops the corpus lacks. A rate of 10^9 unrolls none (the control).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         SPEED_MILLICLOCKS_PER_BYTE
     }
@@ -418,6 +426,13 @@ impl Tti for Z80Tti {
     }
 
     fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LOOP-COPY-TRIAL (owner z80, exit 2026-11-24): the module is compiled again with the copies of a
+    /// loop-holding callee at several sites of a loop refused, and the cheaper after allocation is kept
+    /// (`compile::effective`).
+    fn inline_loop_copy_trial(&self) -> bool {
         true
     }
 
@@ -544,15 +559,16 @@ impl Tti for Z80Tti {
         false
     }
 
-    // The long routines `__udivremsi4` and `__divremsi4` and the word ones
-    // (`__udivhi3` leaves the remainder in `hl`, `__divremhi4`) give both: a
-    // pair is one call. The byte routines do not.
+    // The long routines `__udivremsi4` and `__divremsi4`, the long long ones
+    // (`__udivmddi4`, `__divmddi4`) and the word ones (`__udivhi3` leaves
+    // the remainder in `hl`, `__divremhi4`) give both: a pair is one call. The
+    // byte routines do not.
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        matches!(bits, 16 | 32)
+        matches!(bits, 16 | 32 | 64)
     }
 
     fn cast_cost(

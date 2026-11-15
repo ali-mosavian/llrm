@@ -61,7 +61,7 @@ pub fn folded(
     // The trailing zeros count must not be too expensive.
     let cost = spec
         .tti
-        .intrinsic_cost(
+        .zero_poison_intrinsic_cost(
             &format!("llvm.cttz.i{width}"),
             Some(Ty::Int(width)),
             &[Ty::Int(width), Ty::Int(1)],

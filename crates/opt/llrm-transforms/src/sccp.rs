@@ -508,8 +508,11 @@ impl<'a> Rewrite<'a> {
                 if flags.contains(Flags::NSW) && flags.contains(Flags::NUW) {
                     return false;
                 }
+                // A vector trunc has no range here (DEVIATE: scalars only).
+                let Some(dest) = self.context.types.int_bits(instruction.ty) else {
+                    return false;
+                };
                 let range = self.get_range(function, instruction.operands[0]);
-                let dest = self.context.types.int_bits(instruction.ty).expect("an integer trunc");
                 if !flags.contains(Flags::NUW) && range.get_active_bits() <= dest {
                     flags.insert(Flags::NUW);
                     changed = true;

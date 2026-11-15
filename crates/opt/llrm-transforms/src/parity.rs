@@ -168,6 +168,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
     entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
+    // DEVIATE FMULADD-SPLIT: no pass of LLVM's; it runs inside every LICM slot.
+    entry("fmuladdsplit", Simplify, "fmuladd-split (no pass of LLVM)", Old, "fmuladd-split"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
     entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial> (-O3: nontrivial;trivial)", Translated, ""),

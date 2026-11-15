@@ -382,9 +382,8 @@ fn drains_visits_and_inserts_count_the_worklist() {
     assert_eq!(inserts, initial);
 
     let before = counts();
-    let mut module = parsed(
-        "define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n",
-    );
+    let mut module =
+        parsed("define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n");
     assert!(combined(&mut module));
     let [_, visits, initial, inserts] = delta(before);
     assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");
@@ -401,4 +400,69 @@ fn a_vector_operation_is_not_visited_by_the_scalar_folds() {
         );
         check(&text, &text);
     }
+}
+
+/// A vector `zext`/`sext`/`trunc` (a widened sum of bytes) reached `too_wide`,
+/// which reads an integer width, and panicked ("an integer") the compile of an
+/// extending reduction. The vector casts are left as they are.
+#[test]
+fn a_vector_cast_is_not_visited_by_the_scalar_folds() {
+    for (op, from, to) in [("zext", "i8", "i64"), ("sext", "i16", "i32"), ("trunc", "i64", "i16")] {
+        let text = format!(
+            "define <8 x {to}> @f(<8 x {from}> %x) {{\nb0:\n  %a = {op} <8 x {from}> %x to <8 x {to}>\n  ret <8 x {to}> %a\n}}\n"
+        );
+        check(&text, &text);
+    }
+}
+
+/// x_ld_horner -O2 m32: a `fadd` of two loop results was sunk to the block that
+/// returns, two floats alive across every later loop where one sum was
+/// (a spill and a reload of the multiplier each trip, +50 clk against gcc).
+/// A float stays where it is on a target with an x87 stack; the pin sinks it.
+const FLOAT_SUM: &str = "define double @f(double %a, double %b, i1 %c) {
+b0:
+  %s = fadd double %a, %b
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  ret double %s
+}
+";
+
+fn float_sum_combined(keep: bool) -> String {
+    let mut module = parsed(FLOAT_SUM);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    super::combine_on_target(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        &mut declared,
+        super::TargetHooks { keeps_float_off_returning_sink: keep, ..Default::default() },
+    );
+    printed(&module)
+}
+
+#[test]
+fn test_a_float_is_not_sunk_to_a_returning_block_on_an_x87_stack() {
+    let text = float_sum_combined(true);
+    assert!(text.find("fadd").unwrap() < text.find("br i1 %c").unwrap(), "{text}");
+}
+
+/// Control: the pin's sink, and an integer on the x87 target, are unchanged.
+#[test]
+fn test_without_an_x87_stack_the_float_is_sunk_as_the_pin_does() {
+    let text = float_sum_combined(false);
+    assert!(text.find("fadd").unwrap() > text.find("br i1 %c").unwrap(), "{text}");
 }

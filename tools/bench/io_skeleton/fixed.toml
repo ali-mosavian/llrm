@@ -1,0 +1,9 @@
+# The std.io file calls a Nib cell holds, in bytes of code: io_skeleton.nib's object less the empty program's, measured once (dist a396cb8004d2214c4682bf0d8090e3604aed49de,
+# 2026-11-14) and kept. A cell's net code is its gross less this, whatever the build under test makes of the skeleton: inlining or growing a std.io function moves the
+# cell, as it should, and never the number it is judged from. `source` is the skeleton's digest: change io_skeleton.nib and measure again.
+source = "20f2a875aeaaaa28"
+
+[bytes]
+O1 = 391
+O2 = 366
+Os = 202

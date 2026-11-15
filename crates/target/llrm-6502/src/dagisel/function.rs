@@ -48,6 +48,8 @@ pub fn builder_target() -> BuilderTarget {
         // the runtime's own routines (runtime/mos_rt.s), called by the name the
         // C library gives them
         libcalls: Some(["memcpy", "memmove", "memset"].map(|name| (name.to_owned(), 0, name.to_owned())).to_vec()),
+        // each returns dst in A:X (runtime/mos_rt.s)
+        mem_libcalls_return_dest: true,
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,

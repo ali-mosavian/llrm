@@ -71,6 +71,8 @@ fn main() {
         shld_slow: false,
         sse2: false,
         soft_float: false,
+        vector128: false,
+        fp_status: false,
     };
     let (target, tli, arch, cpu, address_mode): (_, _, &dyn llrm_target::Target, _, _) = if m16 {
         (
@@ -137,12 +139,14 @@ fn main() {
                     cmov: false,
                     sse2: false,
                     min_size: false,
-                    imul_if_smaller: false, hot_chains: false,
+                    imul_if_smaller: false,
+                    hot_chains: false,
                     three_address_adds: false,
                     i16_mul_chains: false,
                     sext_load: false,
                     zext_free: false,
                     branch_constant_selects: false,
+                    status_word_tests: false,
                     profile: None,
                 };
                 if let Err(why) = legalized(dag, &tli, &mut lowering, arch) {

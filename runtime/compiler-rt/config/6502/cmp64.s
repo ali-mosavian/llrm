@@ -1,6 +1,6 @@
 ; f64 comparisons for the 6502: int __cmpdf2 __eqdf2 __nedf2 __ltdf2 __ledf2 (1 when unordered) and __gedf2 __gtdf2 (-1 when
-; unordered), the compiler-rt contract of lib/fp/f64/cmp.c. llrm-6502 rc2-first layout (as di64.s): a0..a5 in rc2..rc7, a6:a7 at the
-; caller's stack (rc0:rc1)+0/+1, b0..b7 at (rc0:rc1)+2..9 (read only). Result -1, 0 or 1 in A:X. Scratch rc16, rc17, rc24, rc25.
+; unordered), the compiler-rt contract of lib/fp/f64/cmp.c. llrm-6502 A:X-first layout (as di64.s): a0:a1 in A:X, a2..a7 in rc2..rc7,
+; b0..b7 at the caller's stack (rc0:rc1)+0..7 (read only). Result -1, 0 or 1 in A:X. Scratch rc16, rc17, rc24, rc25.
 ; A NaN operand is tested first, on the exponent bytes; the operands then compare as sign and magnitude from the top byte down and
 ; stop at the first byte that differs (zeros of either sign are equal).
 
@@ -26,19 +26,27 @@ __eqdf2:
 __nedf2:
 __ltdf2:
 __ledf2:
-    lda #1
+    ldy #1
     bne common
 __gedf2:
 __gtdf2:
-    lda #$FF
+    ldy #$FF
 common:
-    sta un
-    ldy #0
-    lda (rc0),y
-    sta a6
-    iny
-    lda (rc0),y
-    sta a7
+    sty un
+    ldy rc6                 ; the A:X-first layout into the cells the body reads: a0..a5 in rc2..rc7, a6:a7 in a6:a7
+    sty a6
+    ldy rc7
+    sty a7
+    ldy rc5
+    sty rc7
+    ldy rc4
+    sty rc6
+    ldy rc3
+    sty rc5
+    ldy rc2
+    sty rc4
+    sta rc2
+    stx rc3
     lda a7                  ; a NaN: exponent all ones and a mantissa
     and #$7F
     cmp #$7F
@@ -58,7 +66,7 @@ common:
     beq a_ok
     jmp unordered
 a_ok:
-    ldy #9                  ; b7
+    ldy #7                  ; b7
     lda (rc0),y
     and #$7F
     cmp #$7F
@@ -72,13 +80,13 @@ a_ok:
     and #$0F
 :   dey
     ora (rc0),y
-    cpy #2
+    cpy #0
     bne :-
     cmp #0
     beq b_ok
     jmp unordered
 b_ok:
-    ldy #9
+    ldy #7
     lda (rc0),y
     eor a7
     bmi signs               ; the signs differ
@@ -142,13 +150,13 @@ signs:                      ; two zeros are equal whatever their signs; otherwis
     ora rc5
     ora rc6
     ora rc7
-    ldy #8
+    ldy #6
 :   ora (rc0),y
     dey
-    cpy #1
+    cpy #$FF
     bne :-
     sta tmp
-    ldy #9
+    ldy #7
     lda (rc0),y
     and #$7F
     ora tmp

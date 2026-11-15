@@ -185,15 +185,45 @@ fn have_no_common_bits_set_special_cases(
     Unknown
 }
 
+/// `WithCache<const Value *>`: an operand whose known bits are computed the
+/// first time they are asked and kept, so that a chain of queries about one
+/// operand (`getNoCommonBitsSetResult`, then the overflow checks of an add)
+/// computes them once. The query of the first ask is the one that counts.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/WithCache.h#L26>
+pub struct WithCache {
+    value: Operand,
+    known: std::cell::OnceCell<KnownBits>,
+}
+
+impl WithCache {
+    pub fn new(value: Operand) -> Self {
+        Self { value, known: std::cell::OnceCell::new() }
+    }
+
+    pub fn value(&self) -> Operand {
+        self.value
+    }
+
+    /// `getKnownBits(Q)`: `computeKnownBits(V, Q, 0)`, computed once.
+    pub fn known_bits(
+        &self,
+        q: &Query,
+    ) -> &KnownBits {
+        self.known.get_or_init(|| compute_known_bits(q, self.value, 0))
+    }
+}
+
 /// `getNoCommonBitsSetResult(LHSCache, RHSCache, SQ)`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L241>
 pub fn get_no_common_bits_set_result(
     q: &Query,
-    lhs: Operand,
-    rhs: Operand,
+    lhs_cache: &WithCache,
+    rhs_cache: &WithCache,
 ) -> NoCommonBitsSetResult {
     use NoCommonBitsSetResult::{Known, OnlyIfUndefIgnored, Unknown};
+    let (lhs, rhs) = (lhs_cache.value(), rhs_cache.value());
     let result = have_no_common_bits_set_special_cases(q, lhs, rhs);
     if result == Known {
         return Known;
@@ -202,7 +232,7 @@ pub fn get_no_common_bits_set_result(
     if commute_result == Known {
         return Known;
     }
-    if KnownBits::have_no_common_bits_set(&compute_known_bits(q, lhs, 0), &compute_known_bits(q, rhs, 0)) {
+    if KnownBits::have_no_common_bits_set(lhs_cache.known_bits(q), rhs_cache.known_bits(q)) {
         return Known;
     }
     if result == OnlyIfUndefIgnored || commute_result == OnlyIfUndefIgnored {
@@ -219,7 +249,7 @@ pub fn have_no_common_bits_set(
     lhs: Operand,
     rhs: Operand,
 ) -> bool {
-    get_no_common_bits_set_result(q, lhs, rhs) == NoCommonBitsSetResult::Known
+    get_no_common_bits_set_result(q, &WithCache::new(lhs), &WithCache::new(rhs)) == NoCommonBitsSetResult::Known
 }
 
 /// Whether `inst` has users and each is an `icmp` of it with zero whose
@@ -1730,6 +1760,7 @@ pub fn compute_known_bits(
     v: Operand,
     depth: u32,
 ) -> KnownBits {
+    crate::counts::bump(crate::counts::Event::KnownBitsComputed);
     let mut known = KnownBits::unknown(width_of(q, v));
     compute_known_bits_into(q, v, &mut known, depth);
     known

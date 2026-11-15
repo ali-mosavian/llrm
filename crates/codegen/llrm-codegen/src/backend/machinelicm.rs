@@ -1000,6 +1000,7 @@ pub fn hoisted(
         selectors: Vec::new(),
         data: registers.data_segment,
         through: None,
+        stack_shares_data: false,
         huge_shift: None,
         offset_bytes: 0,
         registers,

@@ -57,20 +57,22 @@ fn test_m64_object_has_a_conditional_jump_with_a_relocation_to_the_callee() {
     assert!(has(&[0x0F, 0x82, 0, 0, 0, 0]) && has(&[0x0F, 0x84, 0, 0, 0, 0]), "no jb/je rel32 in the object");
 }
 
-/// `f` is reached by a branch and by the fall-through of the last test: the
-/// branch is folded (`je f`), the fall-through stays a `jmp f` (the pin folds
-/// only a branch whose taken block it is).
-#[test]
-fn test_m64_branch_to_a_callee_also_reached_by_fall_through_is_folded_at_o2() {
-    let text = compiled_at("cond_tail_call_shared_m64.ll", "-O2");
-    assert!(text.contains("je f") && text.contains("je h") && text.contains("jmp f"), "{text}");
+/// `f` is reached by a branch and by the fall-through of the last test: the pin
+/// (BranchFolder::OptimizeBlock, the move of a no-successor block, then the
+/// fold) ends with three `je` and no `jmp`. Ours kept `jmp f` until the tail
+/// fold learned the move (#9833).
+fn assert_three_conditional_tail_jumps(level: &str) {
+    let text = compiled_at("cond_tail_call_shared_m64.ll", level);
+    assert!(text.matches("je f").count() == 2 && text.contains("je h") && !text.contains("jmp"), "{text}");
 }
 
-/// The pin folds at every size (no TC1 guard): a callee reached from a branch
-/// and a fall-through is folded at -Os too. +3 bytes over the unfolded form on
-/// b17-like code, the pin's own size.
+#[test]
+fn test_m64_branch_to_a_callee_also_reached_by_fall_through_is_folded_at_o2() {
+    assert_three_conditional_tail_jumps("-O2");
+}
+
+/// The pin folds at every size (no TC1 guard).
 #[test]
 fn test_m64_branch_to_a_callee_also_reached_by_fall_through_is_folded_at_os() {
-    let text = compiled_at("cond_tail_call_shared_m64.ll", "-Os");
-    assert!(text.contains("je f") && text.contains("je h") && text.contains("jmp f"), "{text}");
+    assert_three_conditional_tail_jumps("-Os");
 }

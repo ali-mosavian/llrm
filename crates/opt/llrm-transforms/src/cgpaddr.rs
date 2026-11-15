@@ -290,6 +290,10 @@ impl CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
+        let sunk_operands = match analyses.outer().target().tti() {
+            Some(tti) => crate::cgpsinkops::free_operands_sunk(unit.context, &*tti, unit.function),
+            None => false,
+        };
         let sunk_casts = match lowering_for(analyses, CgpStep::CastSinking) {
             Some(lowering) => crate::sinkcast::casts_sunk(
                 unit.context,
@@ -304,7 +308,8 @@ impl CgpAddr {
         let extended = match lowering_for(analyses, CgpStep::ExtPromotion) {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
-                let costs_extra = !bytes_strict && analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
+                let costs_extra =
+                    !bytes_strict && analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
                 let promoted = exts_optimized(unit, &*lowering, &mut state, costs_extra);
                 ext_uses(unit, &*lowering, &mut state) | promoted
             }
@@ -358,6 +363,7 @@ impl CgpAddr {
             || addresses
             || extended
             || sunk_casts
+            || sunk_operands
             || resunk
             || split
             || remainders

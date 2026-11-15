@@ -525,6 +525,8 @@ pub fn finish_with(
                 // The table and blocks of a table jump are for the passes and
                 // the emitted table; the instruction is `jmp (An)`.
                 Operand::Symbol(..) | Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
+                // a word table's jump names its table; the blocks are the table's
+                Operand::Block(_) if inst.kind == Kind::Op(crate::dagisel::wordjump::NAME) => continue,
                 Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
                 Operand::Block(id) => {
                     let at = function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
@@ -655,6 +657,19 @@ pub fn finish_with(
             continue;
         }
         if pushes.is_down(index) {
+            continue;
+        }
+        if let Some(load) = pushes.fused_load(index) {
+            // a kept store that moves what the load read: the store's address,
+            // then the load's memory
+            let (Kind::Op(from), Kind::Op(to)) = (insts[load].kind, inst.kind) else {
+                return Err("a fused store and load are instructions".to_owned());
+            };
+            let opcode = crate::callpush::memory_store(from, to).ok_or("a fused load has a store")?;
+            let mut moved = operands;
+            moved.pop();
+            moved.extend(convert(insts[load], pushed)?.into_iter().skip(1));
+            out.push(mc::Inst { opcode, operands: moved });
             continue;
         }
         if let Some(bytes) = pushes.cleanup(index) {
@@ -900,6 +915,29 @@ fn inst(
     mc::Inst { opcode, operands }
 }
 
+/// The plain load of `from` bits (8 or 16) through addressing mode `mode`:
+/// the row an extending load of that mode moves with.
+pub(crate) fn plain_load(
+    from: u32,
+    mode: char,
+) -> Option<&'static str> {
+    Some(match (from, mode) {
+        (8, 'o') => "MOV8do",
+        (8, 'j') => "MOV8dj",
+        (8, 'p') => "MOV8dp",
+        (8, 'f') => "MOV8df",
+        (8, 'q') => "MOV8dq",
+        (8, 'k') => "MOV8dk",
+        (16, 'o') => "MOV16do",
+        (16, 'j') => "MOV16rj",
+        (16, 'p') => "MOV16rp",
+        (16, 'f') => "MOV16rf",
+        (16, 'q') => "MOV16rq",
+        (16, 'k') => "MOV16rk",
+        _ => return None,
+    })
+}
+
 /// `ExpandMOVSZX_RR` and `ExpandMOVSZX_RM`: clear the destination and move
 /// into its low part, or move and then extend (`AddSExt`, `AddZExt`).
 ///
@@ -959,21 +997,7 @@ fn expand_extension(
         }
         return Ok(out);
     }
-    let load: &'static str = match (from, mode) {
-        (8, 'o') => "MOV8do",
-        (8, 'j') => "MOV8dj",
-        (8, 'p') => "MOV8dp",
-        (8, 'f') => "MOV8df",
-        (8, 'q') => "MOV8dq",
-        (8, 'k') => "MOV8dk",
-        (16, 'o') => "MOV16do",
-        (16, 'j') => "MOV16rj",
-        (16, 'p') => "MOV16rp",
-        (16, 'f') => "MOV16rf",
-        (16, 'q') => "MOV16rq",
-        (16, 'k') => "MOV16rk",
-        _ => return Err(format!("{name}: addressing mode {mode} is not translated")),
-    };
+    let load = plain_load(from, mode).ok_or_else(|| format!("{name}: addressing mode {mode} is not translated"))?;
     let load = match scale {
         Some(scale) => {
             crate::dagisel::scaled::scaled_name(load, scale).ok_or_else(|| format!("{name}: no scaled {load}"))?

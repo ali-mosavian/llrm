@@ -197,11 +197,8 @@ pub fn classify(
     if mnem == "sahf" {
         return "sahf";
     }
-    if mnem == "neg" {
-        return "alu_rr";
-    }
-    if mnem == "inc" || mnem == "dec" {
-        return "alu_rr";
+    if matches!(mnem, "neg" | "inc" | "dec") {
+        return if mem(dst) { "alu_mr" } else { "alu_rr" };
     }
     if mnem == "imul" {
         if !wide {

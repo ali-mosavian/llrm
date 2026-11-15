@@ -141,7 +141,7 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
+    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
@@ -516,7 +516,7 @@ impl Options {
             "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => {
                 self.strength && self.lsr
             }
-            "indvars" | "window" | "gepoffset" | "narrowrange" => self.strength,
+            "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
@@ -650,6 +650,10 @@ impl FunctionPass for Slot {
 
     fn wants_sizes(&self) -> bool {
         self.inner.wants_sizes()
+    }
+
+    fn is_required(&self) -> bool {
+        self.inner.is_required()
     }
 
     fn run(
@@ -994,10 +998,13 @@ pub(crate) fn llvm_order(
     };
     let earlycse = |name, memory_ssa| slot(name, Box::new(crate::earlycse::EarlyCse { memory_ssa }));
     // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
-    // `LLRM_NO_LICM` the slot stays and holds nothing.
+    // `LLRM_NO_LICM` the slot stays and holds nothing. DEVIATE FMULADD-SPLIT:
+    // each one splits the products it could hoist first, loops at -O1 having
+    // no other slot where the factors stand outside.
     let licm = |name, speculate| -> Box<dyn FunctionPass> {
         if applied.options.licm {
-            slot(name, Box::new(crate::licm::Licm { apply: true, speculate }))
+            let split = Box::new(crate::fmuladdsplit::FmuladdSplit { size: applied.options.prefers_size() });
+            Box::new(Together { name, parts: vec![split, Box::new(crate::licm::Licm { apply: true, speculate })] })
         } else {
             Box::new(Together { name, parts: Vec::new() })
         }
@@ -1142,6 +1149,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     inliner_follows: true,
+                    speed_rate: applied.options.prices_bytes(),
                     created: Default::default(),
                     decided: Default::default(),
                 }),
@@ -1289,6 +1297,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
                     inliner_follows: applied.options.inline.limit > 0 || applied.options.inline.last,
+                    speed_rate: applied.options.prices_bytes(),
                     created: std::rc::Rc::clone(&created),
                     decided: std::rc::Rc::clone(&decided),
                 })
@@ -1636,6 +1645,7 @@ pub fn recorded(
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
                 cp_peel_limited: applied.options.inline.cp_clone.is_none(),
+                cp_max_clones: program.target.tti().map_or(crate::ipacp::DEFAULT_MAX_CLONES, |tti| tti.ipa_cp_max_clones()),
                 ..applied.options.inline
             },
             ..applied.options.clone()
@@ -1661,7 +1671,6 @@ pub fn recorded(
     if applied.options.wanted("ports") {
         manager.add(ports::Ports);
     }
-    manager.add_program(crate::interprocedural::Stamp);
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     let mut late_stage = None;
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
@@ -1675,6 +1684,13 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
+            // What each body does to memory is stated here, as the pin's
+            // PostOrderFunctionAttrs inside the CGSCC walk: the early
+            // simplification (SROA, EarlyCSE, PromotePass, InstCombine,
+            // SimplifyCFG) ran before any callee had an attribute, so
+            // InstCombine could not sink a call of a `memory(none)` helper into
+            // one arm of an `&&`.
+            manager.add_program(crate::interprocedural::Stamp);
             // `buildInlinerPipeline` (PassBuilderPipelines.cpp:997,
             // d1106deb71cc).
             manager.compute::<GlobalsAA>();
@@ -1875,6 +1891,10 @@ pub fn recorded(
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
     }
+    // After gepoffset, which leaves the constant part of an address in its own `gep`.
+    if applied.options.wanted("gepbyteindex") {
+        manager.add(gepbyteindex::GepByteIndex);
+    }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
     // The pin's `addIRPasses` slot for SelectOptimize, before CodeGenPrepare;
@@ -1936,7 +1956,10 @@ pub fn recorded(
     {
         manager.add_program(crate::mergefunc::MergeFunctions);
     }
-    if applied.options.at_o1() && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_o1()) {
+    if applied.options.optimize
+        && !applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.merge_local_functions_at_speed())
+    {
         manager.add_program(crate::mergefunc::MergeLocalFunctions);
     }
     if applied.options.optimize {
@@ -2052,6 +2075,12 @@ fn rerun(
     fixed: &mut Fixed,
     globals_aa_held: bool,
 ) -> Result<(), String> {
+    // It does not go through the manager's loop, which skips an `optnone` body.
+    if let GlobalKind::Function(function) = &module.global(id).kind
+        && llrm_mir::passes::skipped_for_optnone(&*fixed, function)
+    {
+        return Ok(());
+    }
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
@@ -2434,6 +2463,9 @@ impl Run {
         analyses: &mut Analyses,
     ) -> bool {
         if !self.promotes && matches!(base(pass.name()), "sroa" | "promote") {
+            return false;
+        }
+        if llrm_mir::passes::skipped_for_optnone(&*pass, unit.function) {
             return false;
         }
         let name = pass.name();

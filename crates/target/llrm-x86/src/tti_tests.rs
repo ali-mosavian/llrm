@@ -258,8 +258,9 @@ fn the_x86_addressing_modes_are_those_of_the_lowering() {
 #[test]
 fn a_symbol_in_long_mode_takes_neither_a_displacement_nor_an_index() {
     let x64 = X86::of_cpu("x86-64").unwrap();
-    // DEVIATE PIE64: `@sym + reg` is refused, where the pin accepts a scale of 1.
-    assert!(x64.is_legal_addressing_mode(true, 0, false, 0) && !x64.is_legal_addressing_mode(true, 0, false, 1));
+    // `@sym + reg` (a scale of 1, or a base register) is one address to the pin.
+    assert!(x64.is_legal_addressing_mode(true, 0, false, 0) && x64.is_legal_addressing_mode(true, 0, false, 1));
+    assert!(x64.is_legal_addressing_mode(true, 0, true, 0) && !x64.is_legal_addressing_mode(true, 0, true, 2));
     assert!(!x64.is_legal_addressing_mode(true, 8, false, 1) && !x64.is_legal_addressing_mode(true, 0, false, 4));
     assert!(x64.is_legal_addressing_mode(false, 8, true, 4));
     assert_eq!(x64.number_of_gpr_registers(), 16);

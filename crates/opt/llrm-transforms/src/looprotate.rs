@@ -510,7 +510,7 @@ fn rewrite_uses_of_cloned_instructions(
 /// in the header's exit, so rotating makes it dead, or (`CheckExitCount`)
 /// rotating makes the latch's exit count computable.
 fn profitable_to_rotate_loop_exiting_latch(
-    run: &Run,
+    run: &mut Run,
     lp: Loop,
 ) -> bool {
     let function = &*run.function;
@@ -526,6 +526,16 @@ fn profitable_to_rotate_loop_exiting_latch(
         if function.users(result).iter().any(|one| function.parent(one.user) != Some(header_exit)) {
             continue;
         }
+        return true;
+    }
+    // DEVIATE RL-EXITING-LATCH (target opt-in, owner x87, exit 2026-11-24): a loop whose latch exits and whose
+    // header's copy folds away in the preheader, guard and all, is rotated: the first iteration runs without the
+    // header's work. gcc's `ch_base::copy_headers` copies the header of any loop whose exit test is in it, whatever
+    // the latch does; the pin returns "already rotated" (mandel -O1: x = y = 0 on entry, 2 `imul` per pixel).
+    if run.tti.rotation_of_exiting_latch_when_guard_folds()
+        && let Some(preheader) = lp.get_loop_preheader(run.function)
+        && guard_folds(run, header, preheader, branch).free()
+    {
         return true;
     }
     if !run.options.check_exit_count {

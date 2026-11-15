@@ -67,9 +67,11 @@ pub fn is_trivially_re_materializable(
         // use; `allUsesAvailableAt` asks at the use whether the registers still
         // hold.
         //
-        // DEVIATE RM16 (owner m16, exit 2026-11-12): the pin flags only `LEA32r` and `LEA64r`
-        // `isReMaterializable` (X86InstrArithmetic.td#L21, #L40); `LEA16r` is the real-mode form of the same
-        // instruction, and a 16-bit result of registers is made again at its late use like the 32-bit one
+        // DEVIATE RM16 (owner m16, exit 2026-11-12): the pin flags
+        // only `LEA32r` and `LEA64r`
+        // `isReMaterializable` (X86InstrArithmetic.td#L21, #L40); `LEA16r` is
+        // the real-mode form of the same instruction, and a 16-bit result of
+        // registers is made again at its late use like the 32-bit one
         // (quicksort's `hi * 2` was spilled and reloaded on every swap).
         (Operation::Address, Some("lea"), [Loc::Mem(cell)]) if !def.uses.is_empty() => {
             matches!((into.width, cell.width), (2, 2) | (4, 4)) && def.spread.is_empty() && !def.volatile
@@ -90,12 +92,13 @@ pub fn is_trivially_re_materializable(
         }
         // A load from a cell: `mayLoad` and invariant. The pin's switch takes
         // the scalar and packed SSE loads with the integer ones: `MOVSSrm`,
-        // `MOVSDrm`, `MOVAPSrm`, `MOVUPSrm`, `MOVAPDrm`, `MOVUPDrm`, `MOVDQArm`,
+        // `MOVSDrm`,
+        // `MOVAPSrm`, `MOVUPSrm`, `MOVAPDrm`, `MOVUPDrm`, `MOVDQArm`,
         // `MOVDQUrm`.
         // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L830-L860>
         (
             Operation::Move,
-            Some("mov" | "movss" | "movsd" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu"),
+            Some("mov" | "movss" | "movsd" | "movsd_x" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu"),
             [Loc::Mem(cell)],
         ) => {
             invariant
@@ -133,10 +136,15 @@ pub fn flagged_loads(body: &LirBody) -> BTreeSet<u32> {
         .filter(|one| one.invariant())
         // a plain load: an instruction that folded one also reads registers
         .filter(|one| {
-            one.what.as_ref().is_some_and(|what| {
-                matches!(what.op, crate::model::ir::Operation::Move | crate::model::ir::Operation::FloatLoad)
-                    && matches!(what.sources.as_slice(), [crate::model::ir::Loc::Mem(_)])
-            })
+            one.what
+                .as_ref()
+                .is_some_and(
+                    |what| matches!(
+                        what.op,
+                        crate::model::ir::Operation::Move | crate::model::ir::Operation::FloatLoad
+                    )
+                        && matches!(what.sources.as_slice(), [crate::model::ir::Loc::Mem(_)]),
+                )
         })
         .filter_map(|one| match one.defines.as_slice() {
             [value] if definitions.get(value) == Some(&1) => Some(*value),
@@ -363,6 +371,19 @@ mod tests {
         assert!(is_trivially_re_materializable(&load, true));
     }
 
+    /// x86-64 names the scalar double load `movsd_x` (`movsd` is the string move at 8086): the list of loads had
+    /// `movsd` only, so a double constant read from the pool was spilled across a call and reloaded from the stack,
+    /// where the pin reads the pool again (soft_double_add_sub -O1 `main` +6 B).
+    #[test]
+    fn test_a_scalar_double_load_is_made_again_under_its_x86_64_name() {
+        let cell = Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 8);
+        let mut load = def(vec![Loc::Mem(cell)], Operation::Move, "movsd_x");
+        let Some(what) = load.what.as_mut() else { unreachable!("a def has semantics") };
+        what.dests = vec![Loc::Held(Held { value: 1, width: 8, offset: 0 })];
+        assert!(is_trivially_re_materializable(&load, true));
+        assert!(!is_trivially_re_materializable(&load, false), "a load nothing proves invariant stays");
+    }
+
     /// arm64 names its literal move `MOVImm`: the predicate asked for the
     /// name `mov`, so the shared MachineLICM never hoisted a constant out of a
     /// loop on arm64 (nbody_fixed's `movz #512` stayed in the innermost loop
@@ -400,8 +421,9 @@ mod tests {
         assert!(is_trivially_re_materializable(&lea, false));
     }
 
-    /// quicksort bq16 -O2: `lea si, [edi+edi]` (`hi * 2`) was spilled before the partition loop and reloaded for
-    /// every swap, memory operands 51961 -> 67195; the pin's `LEA16r` is not `isReMaterializable`.
+    /// quicksort bq16 -O2: `lea si, [edi+edi]` (`hi * 2`) was spilled before
+    /// the partition loop and reloaded for every swap, memory operands
+    /// 51961 -> 67195; the pin's `LEA16r` is not `isReMaterializable`.
     #[test]
     fn test_a_16_bit_lea_of_registers_is_made_again() {
         let cell = Mem { base: Some(Held { value: 2, width: 4, offset: 0 }), ..Mem::new(None, 2) };
@@ -440,6 +462,7 @@ mod tests {
                     classes: &RegisterClasses::m16(),
                     basic_semantics: false,
                     address_reference_milliweight: 3000,
+                    fold_spill: None,
                 }
             ),
             BTreeSet::from([1])
@@ -582,6 +605,7 @@ mod tests {
                     classes: &RegisterClasses::m16(),
                     basic_semantics: false,
                     address_reference_milliweight: 3000,
+                    fold_spill: None,
                 }
             ),
             BTreeSet::from([1])
@@ -595,6 +619,7 @@ mod tests {
                     classes: &RegisterClasses::m16(),
                     basic_semantics: false,
                     address_reference_milliweight: 3000,
+                    fold_spill: None,
                 }
             )
             .is_empty(),

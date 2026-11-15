@@ -587,6 +587,33 @@ fn vector_float_compare_select_cast_and_scalarization_costs_are_the_pins() {
             (Some(0), Some(0), Some(0)),
             "{cpu}"
         );
+        // Conversions of one lane width past the table's rows are their
+        // halves' (`opt -passes=print<cost-model>`: 2, 4, 2, 2, 2); they had no
+        // price, so a loop with one (jpeg_single's clamp, VF 8) was not planned.
+        assert_eq!(
+            (
+                cast(FPToSI, i(32, 8), f(8)),
+                cast(FPToSI, i(32, 16), f(16)),
+                cast(SIToFP, f(8), i(32, 8)),
+                cast(FPToUI, i(32, 8), f(8)),
+                cast(FPToSI, i(64, 4), d(4))
+            ),
+            (Some(2), Some(4), Some(2), Some(2), Some(2)),
+            "{cpu}"
+        );
+        // `sitofp <N x i64> to <N x float>` scalarizes (double rounding): a
+        // conversion per lane, the lanes taken out and put in (`opt
+        // -passes=print<cost-model>`: 8, 18, 36, and the same for `uitofp`).
+        assert_eq!(
+            (
+                cast(SIToFP, f(2), i(64, 2)),
+                cast(SIToFP, f(4), i(64, 4)),
+                cast(SIToFP, f(8), i(64, 8)),
+                cast(UIToFP, f(2), i(64, 2))
+            ),
+            (Some(8), Some(18), Some(36), Some(8)),
+            "{cpu}"
+        );
         assert_eq!(
             (cast(FPExt, d(2), f(2)), cast(FPExt, d(4), f(4)), cast(FPTrunc, f(2), d(2)), cast(FPTrunc, f(4), d(4))),
             (Some(1), Some(2), Some(1), Some(2)),
@@ -647,4 +674,59 @@ fn the_interleave_factor_and_register_counts_follow_the_cpu() {
         (generic.number_of_registers(RegisterClass::Vector), generic.number_of_registers(RegisterClass::Scalar)),
         (32, 31)
     );
+}
+
+/// The horizontal step of a vector reduction, priced as the pin's AArch64 table
+/// (`CostTblNoPairwise`, `faddp` per halving, 2 for a min or max). The expected
+/// costs are `opt -mtriple=aarch64 -passes='print<cost-model>'` on the same
+/// `llvm.vector.reduce.*` calls.
+#[test]
+fn a_vector_reduction_is_priced_by_the_pins_table() {
+    use llrm_mir::intrinsics::ReduceKind;
+    use llrm_mir::tti::{CostKind, Ty, VectorTy};
+    let tti = AArch64::of_cpu("generic").expect("a cpu");
+    let cost = |kind, lane, count, ordered| {
+        tti.vector_reduction_cost(kind, VectorTy { lane, count }, ordered, CostKind::RecipThroughput).map(|c| c.value)
+    };
+    // `addv`: 2 a register, plus 1 for each split.
+    assert_eq!(cost(ReduceKind::Add, Ty::Int(16), 8, false), Some(2));
+    assert_eq!(cost(ReduceKind::Add, Ty::Int(32), 8, false), Some(3));
+    // The or/xor/and sequences of the table, and the split's extra `orr`.
+    assert_eq!(cost(ReduceKind::Or, Ty::Int(32), 4, false), Some(5));
+    assert_eq!(cost(ReduceKind::Xor, Ty::Int(8), 16, false), Some(7));
+    assert_eq!(cost(ReduceKind::And, Ty::Int(32), 8, false), Some(6));
+    // `faddp` once per halving of the register.
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Float, 4, false), Some(2));
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Double, 2, false), Some(1));
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(16), 8, false), Some(2));
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(32), 8, false), Some(3));
+    // Not the pin's table: in lane order, a multiply, a 64-bit min.
+    assert_eq!(cost(ReduceKind::FAdd, Ty::Float, 4, true), None);
+    assert_eq!(cost(ReduceKind::Mul, Ty::Int(32), 4, false), None);
+    assert_eq!(cost(ReduceKind::SMax, Ty::Int(64), 2, false), None);
+}
+
+/// `opt -passes='print<cost-model>' -cost-kind=code-size` on aarch64. Only the
+/// throughput kind was priced for a vector, so `LoopUnrollPass` could not size
+/// a vectorized loop ("loop size not computed") and left every one rolled: the
+/// two-trip `<8 x i16>` loop of bench `tile` (1909 instructions against the
+/// pin's, which unrolls it, 1506 once it is).
+#[test]
+fn vector_costs_at_code_size_are_the_pins() {
+    use llrm_mir::opcode::IntPredicate as I;
+    use llrm_mir::tti::{ArithOp::*, CastKind::*, CmpSel::*, Predicate::Int};
+    let i = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+    let f = |count| VectorTy { lane: Ty::Float, count };
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let k = CostKind::CodeSize;
+    let alu = |op, ty| tti.vector_arithmetic_cost(op, ty, k).map(|c| c.value);
+    // An integer operation is one a register; a floating-point one is `BaseT`'s
+    // 1.
+    assert_eq!((alu(Add, i(64, 2)), alu(Add, i(64, 8)), alu(And, i(32, 4))), (Some(1), Some(4), Some(1)));
+    assert_eq!((alu(Mul, i(32, 4)), alu(Shl, i(32, 4))), (Some(1), Some(1)));
+    assert_eq!((alu(FAdd, f(4)), alu(FMul, f(4)), alu(FNeg, f(4))), (Some(1), Some(1), Some(1)));
+    let cast = |kind, to, from| tti.vector_cast_cost(kind, to, from, k).map(|c| c.value);
+    assert_eq!((cast(SExt, i(64, 8), i(16, 8)), cast(ZExt, i(32, 8), i(16, 8))), (Some(6), Some(2)));
+    let cmp = |op, ty, predicate| tti.vector_cmp_sel_cost(op, ty, predicate, k).map(|c| c.value);
+    assert_eq!((cmp(ICmp, i(32, 4), Some(Int(I::Slt))), cmp(Select, i(32, 4), Some(Int(I::Slt)))), (Some(1), Some(1)));
 }

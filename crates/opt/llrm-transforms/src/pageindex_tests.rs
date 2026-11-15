@@ -302,3 +302,91 @@ done:
         assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
     }
 }
+
+/// A counted loop that walks by page ends on its index and a page count: the
+/// 16-bit counter is gone and every length, across the page boundaries, ends
+/// the loop on the trip it did before.
+#[test]
+fn a_counted_walk_ends_on_the_index_and_a_page_count() {
+    let before = llrm_mir::parse::module(TEXT).expect("parses");
+    let mut after = before.clone();
+    let changed = crate::pageindex::indexed_counting(&mut after, 8).expect("rewrites");
+    let printed = llrm_mir::print::module(&after);
+    assert_eq!(changed, vec!["f".to_owned()], "{printed}");
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+    assert!(!printed.contains("%k = phi"), "the counter still steps:\n{printed}");
+    for n in [1, 2, 255, 256, 257, 300, 511, 512, 513, 599] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}
+
+/// `strncmp`'s exit: another condition joined to the counter's test by a
+/// `select`. The buffer holds no zero byte (`%w`), or one at 300 (`%sv`).
+const OR_TEXT: &str = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [600 x i8]
+  br label %fill
+fill:
+  %i = phi i16 [ 0, %entry ], [ %i2, %fill ]
+  %p = getelementptr inbounds i8, ptr %a, i16 %i
+  %v = trunc i16 %i to i8
+  %w = or i8 %v, 1
+  %at = icmp eq i16 %i, 300
+  %sv = select i1 %at, i8 0, i8 %w
+  store i8 NEEDLE_FILL, ptr %p
+  %i2 = add i16 %i, 1
+  %c = icmp ult i16 %i2, 600
+  br i1 %c, label %fill, label %scan
+scan:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done0, label %head
+head:
+  %k = phi i16 [ %n, %scan ], [ %k2, %head ]
+  %q = phi ptr [ %a, %scan ], [ %q2, %head ]
+  %x = load i8, ptr %q
+  %big = icmp eq i8 %x, 0
+  %q2 = getelementptr inbounds nuw i8, ptr %q, i16 1
+  %k2 = add i16 %k, -1
+  %last = icmp eq i16 %k2, 0
+  %stop = select i1 %big, i1 true, i1 %last
+  br i1 %stop, label %done, label %head
+done:
+  %y = phi i8 [ %x, %head ]
+  %e = zext i8 %y to i16
+  %r = add i16 %e, %n
+  ret i16 %r
+done0:
+  ret i16 0
+}
+";
+
+/// The lengths below end the loop on the counter (the buffer holds no zero
+/// byte) at, before and after the page boundaries.
+#[test]
+fn a_counter_joined_to_another_exit_ends_on_the_index_and_a_page_count() {
+    let text = OR_TEXT.replace("NEEDLE_FILL", "%w");
+    let before = llrm_mir::parse::module(&text).expect("parses");
+    let mut after = before.clone();
+    let changed = crate::pageindex::indexed_counting(&mut after, 8).expect("rewrites");
+    let printed = llrm_mir::print::module(&after);
+    assert_eq!(changed, vec!["f".to_owned()], "{printed}");
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+    assert!(!printed.contains("%k = phi"), "the counter still steps:\n{printed}");
+    for n in [1, 2, 255, 256, 257, 300, 511, 512, 513, 599] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}
+
+/// The other exit still leaves first: byte 300 is a zero, so a longer length
+/// ends there, a page past the first boundary.
+#[test]
+fn the_other_exit_of_a_counted_walk_still_leaves_first() {
+    let text = OR_TEXT.replace("NEEDLE_FILL", "%sv");
+    let before = llrm_mir::parse::module(&text).expect("parses");
+    let mut after = before.clone();
+    let changed = crate::pageindex::indexed_counting(&mut after, 8).expect("rewrites");
+    assert_eq!(changed, vec!["f".to_owned()], "{}", llrm_mir::print::module(&after));
+    for n in [1, 255, 256, 257, 300, 301, 302, 599] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}

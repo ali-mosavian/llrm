@@ -155,7 +155,19 @@ pub fn select_function_with(
     // `divu.l` in a size build (4-6 B) where the pin's default (`isIntDivCheap`
     // false) makes the multiply-high sequence (10-14 B, `mulu.l` and shifts);
     // X86 and AArch64 return the size flag here too. Owner m68k. Exit: none.
-    let mut target = builder_target().with_int_div_cheap(size && cpu.at_least(Cpu::M68020));
+    // DEVIATE M68K-DIVSIZE-NARROW: below the 68020 the byte and word divides
+    // are still one `divs.w`/`divu.w` (4 B) in a size build, where the wide
+    // one is `__divsi3`. Owner m68k. Exit: none.
+    let mut target = builder_target()
+        .with_int_div_cheap(size && cpu.at_least(Cpu::M68020))
+        .with_int_div_cheap_narrow(if size { 16 } else { 0 });
+    // The pin's O1 has no correlated-propagation to narrow a divide of values
+    // that fit 16 bits (`narrowSDivOrSRem`, `narrowUDivOrURem`): below the
+    // 68020 that is `__divsi3`, where one `divs.w` is 158 clk. DEVIATE
+    // M68K-NARROW-DIV (same as the 6502's): owner m68k. Exit: none.
+    if !cpu.at_least(Cpu::M68020) {
+        target = target.with_narrow_divrem(EVT::I16, false);
+    }
     target.ordered_copies = indexed;
     // DEVIATE M68K-JT-PRICE (`super::switchprice`): the table's limits are the
     // level's price of a table against the compare chain, not the pin's 4
@@ -167,9 +179,30 @@ pub fn select_function_with(
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();
     let mut updates = Vec::new();
+    // DEVIATE M68K-MUL-COLD reads a block's frequency, only a speed build
+    // prices clocks
+    let frequencies = (price == crate::timing::Price::Rate).then(|| {
+        let bpi = info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &module.context,
+                        declarations: &module.globals,
+                        metadata: &module.metadata,
+                        layout: &layout,
+                    },
+                    function,
+                ),
+            );
+        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
+    });
     for &block in function.layout() {
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
+        if let Some(frequencies) = &frequencies {
+            built.dag.set_divide_frequency(frequencies.relative_to_entry(block));
+        }
         // the blocks a `switch` lowering made (`CreateMachineBasicBlock`)
         // follow the block that made them, as x86's driver lays them
         // out

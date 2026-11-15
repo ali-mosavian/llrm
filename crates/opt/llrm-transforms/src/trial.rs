@@ -39,6 +39,41 @@ thread_local! {
     static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
 }
 
+thread_local! {
+    /// Set while the trial compile of LOOP-COPY-TRIAL runs: a callee that holds a loop is not inlined at
+    /// several sites of a loop of its caller.
+    static REFUSE_LOOP_COPIES: Cell<bool> = const { Cell::new(false) };
+    /// The inlines of that kind the pass made since [`take_loop_copies`].
+    static LOOP_COPIES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// DEVIATE LOOP-COPY-TRIAL (beyond the pin; owner z80, exit 2026-11-24): whether the trial compile that
+/// refuses the copies of a loop-holding callee at several sites inside a loop is running. The pin's
+/// InlineCost prices the call away and the callee's body, never the registers the merged loop needs (its
+/// `LoopPenalty` binds minsize callers only): on the z80 each copy spilled its pointers and the module came
+/// out larger and slower (idioms -O2: 4555 B / 25.58M T against 1993 B / 24.49M T).
+pub fn refusing_loop_copies() -> bool {
+    REFUSE_LOOP_COPIES.with(Cell::get)
+}
+
+/// Runs `body` with those copies refused.
+pub fn with_refused_loop_copies<T>(body: impl FnOnce() -> T) -> T {
+    let before = REFUSE_LOOP_COPIES.with(|cell| cell.replace(true));
+    let value = body();
+    REFUSE_LOOP_COPIES.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes one inline the trial may refuse.
+pub(crate) fn note_loop_copy() {
+    LOOP_COPIES.with(|count| count.set(count.get() + 1));
+}
+
+/// The inlines [`note_loop_copy`] saw since the last call.
+pub fn take_loop_copies() -> usize {
+    LOOP_COPIES.with(|count| count.replace(0))
+}
+
 /// The trial threshold in force, if a trial compile is running.
 pub fn active() -> Option<u32> {
     TRIAL.with(Cell::get)
@@ -470,4 +505,71 @@ mod unroll_keep_tests {
         assert!(keeps_unroll_at_size(0, -1, 1, true), "strict: a smaller one stays");
         assert!(!keeps_unroll_at_size(10, 0, 1, true), "strict: a tie keeps the pass's own result");
     }
+}
+
+/// DEVIATE UNROLL-SPEED-TRIAL (beyond the pin; owner z80, exit 2026-11-24): a decision of the full unroll at -O2 and
+/// -O3 that a driver compiles the module again without, or with, and keeps the smaller object. Neither the pin's
+/// threshold nor the price (bytes added, clocks saved) can see what an unroll frees after it: one loop's copies fold
+/// the loads of the next and a whole array is deleted (z80 loop_fusion -O2: priced "adds 108 B" a loop, the object
+/// 831 B smaller), or its copies fold nothing and are copied again by the inliner (memmove_overlap -O3: `fill`, 32
+/// trips, 589 B rolled, 1329 B unrolled).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeedUnroll {
+    /// A full unroll is made only where it adds no bytes, and the inlinable-callee bypass of the price is off.
+    NoGrow,
+    /// The full unroll's threshold is this one, where the pin's -O2 is 150 and its -O3 300.
+    Wide(u32),
+}
+
+/// The threshold of [`SpeedUnroll::Wide`]: the pin's at -O3.
+pub const WIDE_THRESHOLD: u32 = 300;
+
+/// The loops of a compile at -O2 and up whose decision a variant changes, asked of each as it is decided: those
+/// unrolled that `NoGrow` would not unroll (`made`), those refused that `Wide` would unroll (`refused`). A driver
+/// compiles a variant only where its count is not 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnrollDecisions {
+    pub made: usize,
+    pub refused: usize,
+}
+
+thread_local! {
+    /// The variant of UNROLL-SPEED-TRIAL running, if any.
+    static SPEED_UNROLL: Cell<Option<SpeedUnroll>> = const { Cell::new(None) };
+    /// The decisions since [`take_speed_unrolls`].
+    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0 }) };
+}
+
+/// The UNROLL-SPEED-TRIAL variant in force, if a trial compile is running.
+pub fn speed_unroll() -> Option<SpeedUnroll> {
+    SPEED_UNROLL.with(Cell::get)
+}
+
+/// Runs `body` under `variant` (`None`: the pin's decisions).
+pub fn with_speed_unroll<T>(
+    variant: Option<SpeedUnroll>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = SPEED_UNROLL.with(|cell| cell.replace(variant));
+    let value = body();
+    SPEED_UNROLL.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes a loop unrolled (`made`) or, with known trips, refused.
+pub(crate) fn note_speed_unroll(made: bool) {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        if made {
+            seen.made += 1;
+        } else {
+            seen.refused += 1;
+        }
+        cell.set(seen);
+    });
+}
+
+/// The decisions [`note_speed_unroll`] saw since the last call.
+pub fn take_speed_unrolls() -> UnrollDecisions {
+    SPEED_UNROLLS.with(Cell::take)
 }

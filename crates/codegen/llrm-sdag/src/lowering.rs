@@ -47,6 +47,10 @@ pub enum TypeAction {
     /// DEVIATE SD13 subset only names it): the builder never creates such a value, it lowers a
     /// vector IR type this way only where the target lists the vector as a register class.
     ScalarizeVector,
+    /// A vector of two or more lanes no register class holds, whose half does
+    /// or splits again (`TypeSplitVector`): the type legalizer makes two
+    /// values of the half type.
+    SplitVector,
 }
 
 /// The simple integer types, narrowest first (the pin's `i1`..`i128` without
@@ -197,14 +201,30 @@ impl TargetLoweringInfo {
 
     /// AArch64: `addRegisterClass` of `i32` and `i64`; a compare makes an `i32`
     /// and a shift amount is an `i64`
-    /// (`AArch64TargetLowering::getSetCCResultType`). The 128-bit integer
-    /// vectors are in `FPR128` (`addQRTypeForNEON`); the builder makes one only
-    /// where `DagConfig::vectors` is on.
+    /// (`AArch64TargetLowering::getSetCCResultType`). The 128-bit integer and
+    /// float vectors are in `FPR128` (`addQRTypeForNEON`); the builder makes
+    /// one only where `DagConfig::vectors` is on.
     pub fn aarch64() -> TargetLoweringInfo {
-        TargetLoweringInfo::new(&[MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], false)
-            .with_set_cc_result(MVT::I32)
-            .with_shift_amount_type(MVT::I64)
-            .with_legal_f128()
+        TargetLoweringInfo::new(
+            &[
+                MVT::I32,
+                MVT::I64,
+                MVT::V16I8,
+                MVT::V8I16,
+                MVT::V4I32,
+                MVT::V2I64,
+                MVT::V4F32,
+                MVT::V2F64,
+                MVT::V2F32,
+                MVT::V8I8,
+                MVT::V4I16,
+                MVT::V2I32,
+            ],
+            false,
+        )
+        .with_set_cc_result(MVT::I32)
+        .with_shift_amount_type(MVT::I64)
+        .with_legal_f128()
     }
 
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.
@@ -231,6 +251,11 @@ impl TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true).with_int_size(16)
     }
 
+    /// The vector types with a register class.
+    pub fn legal_vectors(&self) -> &[MVT] {
+        &self.vectors
+    }
+
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
     pub fn type_conversion(
         &self,
@@ -248,8 +273,31 @@ impl TargetLoweringInfo {
                 }
                 None => match mvt {
                     _ if mvt.is_vector() => {
+                        // `getPreferredVectorAction`: promote the lanes to the
+                        // narrowest integer type that makes a legal vector of
+                        // as many lanes (`v4i1` is `v4i16` where `v4i8` is not
+                        // a type).
+                        let promoted = (mvt.element() == Some(MVT::I1))
+                            .then(|| {
+                                [MVT::I8, MVT::I16, MVT::I32, MVT::I64]
+                                    .into_iter()
+                                    .filter_map(|lane| MVT::vector(lane, mvt.lanes()?))
+                                    .find(|wider| self.vectors.contains(wider))
+                            })
+                            .flatten();
                         if self.vectors.contains(&mvt) {
                             (TypeAction::Legal, vt)
+                        } else if let Some(wider) = promoted {
+                            (TypeAction::PromoteInteger, EVT::Simple(wider))
+                        } else if let Some(half) = mvt
+                            .element()
+                            .zip(mvt.lanes())
+                            .and_then(|(element, lanes)| MVT::vector(element, lanes / 2))
+                            .filter(|_| !self.vectors.is_empty())
+                        {
+                            // `getTypeConversion`: split in two, if a half is a
+                            // type.
+                            (TypeAction::SplitVector, EVT::Simple(half))
                         } else {
                             (TypeAction::ScalarizeVector, EVT::Simple(mvt.element().expect("a vector")))
                         }
@@ -278,11 +326,15 @@ impl TargetLoweringInfo {
         }
     }
 
-    /// `getSetCCResultType`: one type, whatever the operands (scalars only).
+    /// `getSetCCResultType`: one type for scalars; a vector compare makes the
+    /// integer vector of its operand's lane width (AArch64).
     pub fn set_cc_result_type(
         &self,
-        _operand: EVT,
+        operand: EVT,
     ) -> EVT {
+        if operand.is_vector() {
+            return operand.change_vector_element_type_to_integer();
+        }
         EVT::Simple(self.set_cc_result)
     }
 

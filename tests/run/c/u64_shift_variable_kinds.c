@@ -1,4 +1,5 @@
 // flags: -O2 | -Os
+// bar: none (SDCC does not halt)
 /* A 64-bit value shifted left, logically right and arithmetically right by a count that is not a constant, for counts
    below, at and across whole bytes: the shift is one loop over eight bytes of the frame (a bit a trip), not a call. */
 extern void report(long value);

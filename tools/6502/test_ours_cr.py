@@ -14,6 +14,27 @@ def run(env_rt, script="ours_cr.py"):
     return subprocess.run([sys.executable, os.path.join(HERE, script), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
                           capture_output=True, text=True, env=env, timeout=120)
 
+class StoppedRunLeavesNoWorkDir(unittest.TestCase):
+    """A run stopped by SIGTERM (a guard, a timeout, a kill of the session) skipped atexit and left its o6progs-* directory:
+    five were left on 11-11 after the atexit fix, 19,011 inodes in all in /tmp (/tmp ran out of inodes, 2026-11-13)."""
+    def test_sigterm_removes_the_work_directory(self):
+        import signal, time
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = os.path.join(tmp, "mos_rt.s"); open(rt, "w").write("")
+            cc = os.path.join(tmp, "cc"); open(cc, "w").write("#!/bin/sh\nsleep 3\n"); os.chmod(cc, 0o755)
+            env = dict(os.environ, OURS_RT=rt, TMPDIR=tmp)
+            proc = subprocess.Popen([sys.executable, os.path.join(HERE, "ours_cr.py"), cc, "O2", os.devnull, "__empty__"],
+                                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.time() + 30
+                while time.time() < deadline and not [d for d in os.listdir(tmp) if d.startswith("o6progs-")]:
+                    time.sleep(0.05)
+                self.assertTrue([d for d in os.listdir(tmp) if d.startswith("o6progs-")], "the run never made its work directory")
+                proc.send_signal(signal.SIGTERM); proc.wait(timeout=60)
+                self.assertEqual([d for d in os.listdir(tmp) if d.startswith("o6progs-")], [])
+            finally:
+                if proc.poll() is None: proc.kill()
+
 def header_flags_fn():
     sys.path.insert(0, HERE)
     import flagset
