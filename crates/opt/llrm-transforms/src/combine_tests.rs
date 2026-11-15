@@ -535,9 +535,8 @@ fn a_vector_add_of_a_value_to_itself_is_a_shift() {
     );
 }
 
-
-/// The scalar text of `template` and its vector twin: `{T}` is the type, `{C:n}`
-/// the constant `n` (a splat in the vector).
+/// The scalar text of `template` and its vector twin: `{T}` is the type,
+/// `{C:n}` the constant `n` (a splat in the vector).
 fn twins(template: &str) -> (String, String) {
     let (mut scalar, mut vector) = (String::new(), String::new());
     let mut rest = template;
@@ -597,9 +596,10 @@ fn a_vector_add_folds_as_the_scalar_add_does() {
     }
 }
 
-/// As [`a_vector_add_folds_as_the_scalar_add_does`], for `sub` and `mul`: recsum's loop
-/// multiplies `(x + 3)` by a constant three times a trip, which the pin's
-/// InstCombine makes `x * 3 + 9` and these visitors left alone on vectors.
+/// As [`a_vector_add_folds_as_the_scalar_add_does`], for `sub` and `mul`:
+/// recsum's loop multiplies `(x + 3)` by a constant three times a trip, which
+/// the pin's InstCombine makes `x * 3 + 9` and these visitors left alone on
+/// vectors.
 #[test]
 fn a_vector_sub_and_mul_fold_as_the_scalar_ones_do() {
     let templates = [

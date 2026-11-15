@@ -149,7 +149,10 @@ fn binary_lanes(
     for (a, b) in left.into_iter().zip(right) {
         folded.push(binary(context, op, a, b)?);
     }
-    let zero = |lane: ConstantId| matches!(context.get(lane).kind, ConstantKind::Int(0) | ConstantKind::Zero);
+    let zero = |lane: ConstantId| matches!(
+        context.get(lane).kind,
+        ConstantKind::Int(0) | ConstantKind::Zero
+    );
     let kind = if folded.iter().all(|lane| zero(*lane)) { ConstantKind::Zero } else { ConstantKind::Aggregate(folded) };
     Some(context.constant(Constant { ty, kind }))
 }
@@ -425,7 +428,8 @@ pub fn cast(
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Float80(*bits) }))
         }
         (CastOp::BitCast, Type::Float(FloatKind::F128)) => {
-            let (ConstantKind::Int(bits), Type::Int(128)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            let (ConstantKind::Int(bits), Type::Int(128)) =
+                (&context.get(c).kind, context.types.get(context.get(c).ty))
             else {
                 return None;
             };

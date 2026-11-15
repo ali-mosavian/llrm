@@ -607,12 +607,10 @@ pub fn visit(
         Opcode::Cast(_) => true,
         _ => false,
     };
-    if skips_visitors
-        && matches!(
-            c.context.types.get(c.function.instruction(inst).ty),
-            Type::Vector { .. }
-        )
-    {
+    if skips_visitors && matches!(
+        c.context.types.get(c.function.instruction(inst).ty),
+        Type::Vector { .. }
+    ) {
         if let Some(result) = c.function.instruction(inst).result
             && let Some(found) =
                 simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)

@@ -145,7 +145,8 @@ impl Context {
         &self,
         mut constant: Constant,
     ) -> ConstantId {
-        // `ConstantVector::get`: a vector of zeros is the zero value of its type.
+        // `ConstantVector::get`: a vector of zeros is the zero value of its
+        // type.
         if let ConstantKind::Aggregate(lanes) = &constant.kind
             && matches!(self.types.get(constant.ty), Type::Vector { .. })
             && !lanes.is_empty()

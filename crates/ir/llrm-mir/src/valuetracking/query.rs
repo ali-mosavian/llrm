@@ -155,8 +155,8 @@ impl<'a> Query<'a> {
         matches!(self.context().types.get(ty), Type::Vector { .. }).then(|| self.context().types.scalar_int_bits(ty))?
     }
 
-    /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's (a vector's: its
-    /// lane's), 0 for anything else.
+    /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's (a vector's:
+    /// its lane's), 0 for anything else.
     pub fn scalar_bits(
         &self,
         operand: Operand,
