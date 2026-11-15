@@ -9,6 +9,10 @@
 //! guard, the split of the count and the remainder loop are code for nothing
 //! (floats -O2 394 B against gcc's 207 for the same clocks).
 //!
+//! A known trip count is not vetoed (partial unrolling): the copies show CVP the range of a
+//! remainder, `% 100003` narrows to 32 bits (loop_interchange -O3, -6%); the bytes it
+//! saved at -O2/-O3 are not a goal.
+//!
 //! The chain is the pin's own estimate of a loop's critical path,
 //! `SelectOptimize::computeLoopCosts`: two walks of the body, each operation
 //! costing its latency on top of its dearest operand, the second walk seeing
