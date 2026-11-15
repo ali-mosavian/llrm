@@ -1141,14 +1141,17 @@ impl SelectionDAG {
             if self.root == from {
                 self.root = to;
             }
-            for user in self.users_newest_first(from) {
+            // The pin walks the use list newest first and adds each use to `to`
+            // as it goes; the users are still updated in creation order, which
+            // fixes which of two equal nodes a CSE merge keeps.
+            let use_list_order = self.users_newest_first(from);
+            for user in self.users(from).collect::<Vec<_>>() {
                 self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
                     if *op == from {
                         *op = to;
                     }
                 }
-                self.push_use(to.node as usize, user);
                 let Some(hash) = self.key_of(user) else {
                     events.push(Rauw::Updated(user));
                     continue;
@@ -1168,6 +1171,9 @@ impl SelectionDAG {
                         self.cse_link(hash, user);
                     }
                 }
+            }
+            for user in use_list_order {
+                self.push_use(to.node as usize, user);
             }
         }
         events
