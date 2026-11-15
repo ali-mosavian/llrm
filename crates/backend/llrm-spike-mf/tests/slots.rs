@@ -42,9 +42,10 @@ fn a_copy_between_slots_in_the_offset_shape_shares_one_slot_and_goes() {
     assert_eq!(kinds.len(), 3, "the copy moves nothing: {kinds:?}");
 }
 
-/// m68k's `cmpi.b #k, (3,%sp)` read a spilled byte and named no register, so slot sharing took it for no access: two
-/// slots live together were joined and the compare read the other value (or, renumbering skipping it, a slot with no
-/// store: "an unknown frame index").
+/// m68k's `cmpi.b #k, (3,%sp)` read a spilled byte and named no register, so
+/// slot sharing took it for no access: two slots live together were joined and
+/// the compare read the other value (or, renumbering skipping it, a slot with
+/// no store: "an unknown frame index").
 #[test]
 fn a_read_folded_into_an_instruction_with_no_register_keeps_its_slot_live() {
     let fold = |slot| {

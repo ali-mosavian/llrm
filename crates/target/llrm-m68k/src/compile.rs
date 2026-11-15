@@ -133,8 +133,10 @@ pub struct Options {
     /// its range (DEVIATE SLOT-REG, [`crate::slotreg`]). On in the shipped
     /// options; `LLRM_NO_SLOT_REG` turns it off.
     pub slot_registers: bool,
-    /// An instruction reads a spilled value from its slot ([`crate::spillfold`]). A slot read that way cannot live
-    /// in an address register, so a function with spills is also built without it and the cheaper kept.
+    /// An instruction reads a spilled value from its slot
+    /// ([`crate::spillfold`]). A slot read that way cannot live
+    /// in an address register, so a function with spills is also built without
+    /// it and the cheaper kept.
     pub spill_fold: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
     /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
@@ -393,7 +395,8 @@ pub fn items_with(
         if touched.slot_registers && crate::trial::keeps(&items, &best, cpu, price) {
             best = items;
         }
-        // a slot read in place stays in the frame: the same build without the fold may move it
+        // a slot read in place stays in the frame: the same build without the
+        // fold may move it
         if touched.spill_folded {
             let options = Options { slot_registers: true, spill_fold: false, ..kept_options };
             let (items, touched) = items_once(module, name, cpu, options, &prefixes)?;
