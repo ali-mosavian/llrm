@@ -16,11 +16,11 @@
 //! preheader test of the guard on the counter's first value.
 //!
 //! Not ported from `split_loop`: a guard that is not a header phi (GCC makes
-//! the phi), `==` and `!=` against a range bound, a border or bound computed
-//! inside the loop, `<=` and `>=` exits, a stride other than one on a `!=`
-//! exit. Beyond GCC: the guard may be a compare inside a logical and/or (the
-//! mid-end folds nested ifs into a `select`), and a `<` or `>` exit must be
-//! entry-guarded (`beg < end`) so the new bound cannot wrap.
+//! the phi), `==` and `!=` against the first value or a range bound, a border
+//! or bound computed inside the loop, `<=` and `>=` exits, a stride other than
+//! one on a `!=` exit. Beyond GCC: the guard may be a compare inside a logical
+//! and/or (the mid-end folds nested ifs into a `select`), and a `<` or `>` exit
+//! must be entry-guarded (`beg < end`) so the new bound cannot wrap.
 //!
 //! # Example
 //! `for (i = 2; i < n; i++) { if (i <= 31) A; B; }` becomes
@@ -423,18 +423,12 @@ fn plan_for(
                 IntPredicate::Sle | IntPredicate::Ule => (Code::Le, Some(gpred.is_signed())),
                 IntPredicate::Sgt | IntPredicate::Ugt => (Code::Gt, Some(gpred.is_signed())),
                 IntPredicate::Sge | IntPredicate::Uge => (Code::Ge, Some(gpred.is_signed())),
-                IntPredicate::Eq | IntPredicate::Ne => {
-                    if se.get_scev(cx, border) != g_rec.start {
-                        continue;
-                    }
-                    let code = match (gpred, g_rec.step > 0) {
-                        (IntPredicate::Eq, true) => Code::Le,
-                        (IntPredicate::Eq, false) => Code::Ge,
-                        (_, true) => Code::Gt,
-                        (_, false) => Code::Lt,
-                    };
-                    (code, None)
-                }
+                // DEVIATE LSPLIT-EQ (owner arm64, exit 2026-11-24): a test of
+                // the first iteration (`==`, `!=` against the counter's first
+                // value) peels one iteration; GCC's later complete unroll
+                // folds the copy, here nothing does (fpbench -O3 +612 B,
+                // +161 instrs).
+                IntPredicate::Eq | IntPredicate::Ne => continue,
             };
             let mut hints = [exit_hint, guard_hint].into_iter().flatten();
             let signed = match (hints.next(), hints.next()) {

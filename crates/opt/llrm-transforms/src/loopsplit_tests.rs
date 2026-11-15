@@ -143,8 +143,9 @@ fn test_a_not_equal_exit_splits() {
 }
 
 #[test]
-fn test_a_test_for_the_first_iteration_splits() {
-    assert_split(&up("icmp eq i32 %i, 2", "icmp slt i32 %i.next, %n"));
+fn test_a_test_for_the_first_iteration_is_left_whole() {
+    // Peeling one iteration grew fpbench -O3 by 612 B and 161 instrs.
+    assert_whole(&up("icmp eq i32 %i, 2", "icmp slt i32 %i.next, %n"));
 }
 
 #[test]
