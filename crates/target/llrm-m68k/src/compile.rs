@@ -1049,6 +1049,9 @@ fn items_once(
         &crate::REGISTER_INFO,
         &slots,
     );
+    if options.short {
+        crate::spillhoist::hoist_spills(&mut function, &assignment);
+    }
     if options.short && options.slot_registers {
         let moved = crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots);
         touched.slot_registers = !moved.is_empty();
