@@ -494,28 +494,38 @@ impl<const STACK: bool> Target for Mos<STACK> {
         operand: usize,
         register: RegId,
     ) -> u32 {
+        if !has_form(inst.kind, inst.operands.len()) {
+            return 0;
+        }
         let priced = inst.operands.get(operand);
-        let regs: Vec<RegId> = inst
-            .operands
-            .iter()
-            .filter_map(|o| match o {
-                Operand::Def(r) | Operand::Use(r)
-                    if Some(o) == priced
-                        || matches!(
-                            (o, priced),
-                            (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
-                        ) =>
-                {
-                    let _ = r;
-                    Some(register)
-                }
-                Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
-                Operand::Def(_) | Operand::Use(_) => Some(reg::A),
-                _ => None,
-            })
-            .collect();
-        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs)
-            .map_or(0, |priced| priced.bytes + priced.cycles as u32)
+        let named = |o: &Operand| match o {
+            Operand::Def(r) | Operand::Use(r)
+                if Some(o) == priced
+                    || matches!(
+                        (o, priced),
+                        (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
+                    ) =>
+            {
+                let _ = r;
+                Some(register)
+            }
+            Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+            Operand::Def(_) | Operand::Use(_) => Some(reg::A),
+            _ => None,
+        };
+        let cost = |regs: &[RegId]| form_cost(Cpu::Mos6502, inst.kind, &inst.operands, regs);
+        let mut few = [reg::A; 8];
+        let found = if inst.operands.len() <= few.len() {
+            let mut count = 0;
+            for r in inst.operands.iter().filter_map(named) {
+                few[count] = r;
+                count += 1;
+            }
+            cost(&few[..count])
+        } else {
+            cost(&inst.operands.iter().filter_map(named).collect::<Vec<RegId>>())
+        };
+        found.map_or(0, |priced| priced.bytes + priced.cycles as u32)
     }
 
     type Class = Class;
@@ -3573,17 +3583,77 @@ fn form_text(
     })
 }
 
+/// Whether [`form_text`] writes a form for `kind` with `operands` operands.
+fn has_form(
+    kind: Kind,
+    operands: usize,
+) -> bool {
+    match kind {
+        Kind::Op("INC" | "DEC") => true,
+        Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR" | "CMP") => operands >= 3,
+        _ => false,
+    }
+}
+
+/// What a form's text depends on besides its mnemonic: the registers it names
+/// and the kind of its second operand (an immediate or a frame slot is priced
+/// by its mode, not its value).
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct FormKey {
+    cmos: bool,
+    kind: &'static str,
+    lead: Option<RegId>,
+    second: Option<Result<RegId, bool>>,
+}
+
+thread_local! {
+    static FORM_COSTS: std::cell::RefCell<HashMap<FormKey, Option<crate::timing::Estimate>>> =
+        std::cell::RefCell::new(HashMap::default());
+}
+
 /// What `kind` costs on `cpu` with `operands` in `regs`, from the timing
 /// tables: the data a hint or a join weighs (an `inc` is 1 byte and 2 clocks in
-/// `x`, 2 and 5 in a cell, 3 and 4 in `a`).
+/// `x`, 2 and 5 in a cell, 3 and 4 in `a`). The table is read once for each
+/// form: a join weighs the same few forms again and again.
 pub fn form_cost(
     cpu: Cpu,
     kind: Kind,
     operands: &[Operand],
     regs: &[RegId],
 ) -> Option<crate::timing::Estimate> {
-    let text = form_text(kind, operands, regs, cpu == Cpu::W65c02, &|slot| format!("s_{slot}"))?;
-    crate::timing::estimate(cpu, &text).ok()
+    let Kind::Op(name) = kind else { return None };
+    if !has_form(kind, operands.len()) {
+        return None;
+    }
+    let cmos = cpu == Cpu::W65c02;
+    let key = match name {
+        "INC" | "DEC" => Some(FormKey { cmos, kind: name, lead: Some(regs[0]), second: None }),
+        _ => {
+            let second = match &operands[2] {
+                Operand::Imm(_) => Some(Err(false)),
+                Operand::Frame(_) => Some(Err(true)),
+                Operand::Symbol(..) => None,
+                _ => Some(Ok(regs[2.min(regs.len() - 1)])),
+            };
+            second.map(|second| FormKey {
+                cmos,
+                kind: name,
+                lead: (name == "CMP").then(|| regs[1]),
+                second: Some(second),
+            })
+        }
+    };
+    let priced = || {
+        let text = form_text(kind, operands, regs, cmos, &|slot| format!("s_{slot}"))?;
+        crate::timing::estimate(cpu, &text).ok()
+    };
+    let Some(key) = key else { return priced() };
+    if let Some(found) = FORM_COSTS.with(|all| all.borrow().get(&key).copied()) {
+        return found;
+    }
+    let found = priced();
+    FORM_COSTS.with(|all| all.borrow_mut().insert(key, found));
+    found
 }
 
 fn register_name(register: RegId) -> String {
