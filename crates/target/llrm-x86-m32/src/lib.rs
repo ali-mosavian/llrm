@@ -347,8 +347,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         ipa_cp_clones_at_speed: true,
         // DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24): gcc's depth.
         ipa_cp_max_clones: 8,
-        // DEVIATE LSR-SPILL-PRICE (owner x86-m32-b, exit 2026-11-24).
-        lsr_prices_spills: true,
+        // DEVIATE LSR-SPILL-PRICE (owner x86-m32-b, exit 2026-11-24): two
+        // registers past the file. x_sf_sub/add/mul/i2d hold 9 other values
+        // (-6..-9%); sfm16_float_cmp holds 7 and its pointer step is not
+        // spilled (22,268 clk, +3.6% without it).
+        lsr_spill_pressure_margin: Some(2),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a

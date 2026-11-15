@@ -14,8 +14,7 @@ use crate::mc::inst::{
 };
 use crate::mc::inst::{
     Addr, Arrangement, Gpr, ImmShape, MulAcc, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
-    VectorLongOp, VectorOp,
-    VectorReduce, VectorShift,
+    VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mfunc::Callee;
 
@@ -238,7 +237,17 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
-    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin, VectorOp::Sqadd, VectorOp::Uqsub] {
+    for op in [
+        VectorOp::Add,
+        VectorOp::Mul,
+        VectorOp::And,
+        VectorOp::Eor,
+        VectorOp::Ushl,
+        VectorOp::Smax,
+        VectorOp::Umin,
+        VectorOp::Sqadd,
+        VectorOp::Uqsub,
+    ] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
             if !op.has_lanes(lanes) {
                 continue;
@@ -254,7 +263,14 @@ pub(super) fn instructions() -> Vec<Inst> {
             for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
                 out.push(Inst::VectorLongShift { op, lane, high, rd: v(0), rn: v(1), amount: 0 });
             }
-            for op in [VectorLongOp::Uaddw, VectorLongOp::Saddw, VectorLongOp::Umull, VectorLongOp::Smull] {
+            for op in [
+                VectorLongOp::Uaddl,
+                VectorLongOp::Saddl,
+                VectorLongOp::Uaddw,
+                VectorLongOp::Saddw,
+                VectorLongOp::Umull,
+                VectorLongOp::Smull,
+            ] {
                 out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
             }
         }
@@ -305,7 +321,9 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     for lanes in Arrangement::ALL {
         out.push(Inst::VectorLoadReplicate { lanes, rt: v(1), base: Gpr(3) });
-        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit] {
+        for op in
+            [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit]
+        {
             if op.has_lanes(lanes) {
                 out.push(Inst::VectorIntUnary { op, lanes, rd: v(0), rn: v(1) });
             }

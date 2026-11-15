@@ -985,12 +985,15 @@ impl NarrowLane {
 
 /// The vector operations whose result lanes are twice as wide as a narrow
 /// operand's: a shift left (`ushll`, `sshll`), an add of a narrow operand
-/// to a wide one (`uaddw`, `saddw`) and a multiply, with or without the
+/// to a wide one (`uaddw`, `saddw`), an add of two narrow ones (`uaddl`,
+/// `saddl`) and a multiply, with or without the
 /// accumulate (`umull`, `smull`, `umlal`, `smlal`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VectorLongOp {
     Ushll,
     Sshll,
+    Uaddl,
+    Saddl,
     Uaddw,
     Saddw,
     Umull,
@@ -1006,6 +1009,8 @@ impl VectorLongOp {
         match self {
             VectorLongOp::Ushll => (1, 0x0F00_A400),
             VectorLongOp::Sshll => (0, 0x0F00_A400),
+            VectorLongOp::Uaddl => (1, 0x0E20_0000),
+            VectorLongOp::Saddl => (0, 0x0E20_0000),
             VectorLongOp::Uaddw => (1, 0x0E20_1000),
             VectorLongOp::Saddw => (0, 0x0E20_1000),
             VectorLongOp::Umull => (1, 0x0E20_C000),
@@ -1019,6 +1024,8 @@ impl VectorLongOp {
         match self {
             VectorLongOp::Ushll => "ushll",
             VectorLongOp::Sshll => "sshll",
+            VectorLongOp::Uaddl => "uaddl",
+            VectorLongOp::Saddl => "saddl",
             VectorLongOp::Uaddw => "uaddw",
             VectorLongOp::Saddw => "saddw",
             VectorLongOp::Umull => "umull",
@@ -1723,7 +1730,8 @@ pub enum Inst {
         index: u8,
         base: Gpr,
     },
-    /// `fneg v.4s, v.4s`, `fabs`, `fsqrt` and the conversions; `lanes` is `S4` or `D2`.
+    /// `fneg v.4s, v.4s`, `fabs`, `fsqrt` and the conversions; `lanes` is `S4`
+    /// or `D2`.
     VectorFpUnary {
         op: VectorFpUnary,
         lanes: Arrangement,
