@@ -1464,6 +1464,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::vectorize_at_size`: `LoopVectorize` runs on an `optsize` loop.
+    fn vectorizes_at_size(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         false
     }
