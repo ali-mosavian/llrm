@@ -241,6 +241,11 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
+    /// DEVIATE UNROLL-TRIAL-NEST: see `Tti::unroll_trial_analyzed_at_speed`.
+    fn unroll_trial_analyzed_at_speed(&self) -> bool {
+        true
+    }
+
     /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the byte model
     /// is within 25% of the written bytes for two functions in three; a
     /// module over 512 instructions takes seconds to compile once

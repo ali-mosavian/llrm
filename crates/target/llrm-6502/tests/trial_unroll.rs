@@ -185,3 +185,19 @@ done:
         assert!(adds < 4 && text.contains("bne"), "{level:?}: {adds} adds, the loop was copied out:\n{text}");
     }
 }
+
+/// int64_division's nest at -O2 and -O3 kept both loops and linked `__divdi3`,
+/// `__udivdi3` and `__umoddi3`: 4,035 B for four constants. The inner loop (6
+/// trips, 1,422 units) is under the pin's threshold of 300 in the pin's own
+/// units but over this target's trial size of 1,100; held to the cost the
+/// analysis finds (1,200, boosted by 1.18 to 1,017) it is tried, and with it
+/// gone the outer loop folds. llvm-mos -O3 and the pin's x86 -O3 do the same.
+#[test]
+fn a_nest_of_constant_divisions_folds_to_its_results() {
+    for level in [Level::O2, Level::O3] {
+        let text = assembly(include_str!("data/division_nest.ll"), &Request::new(level)).unwrap();
+        let divisions = text.lines().filter(|line| line.contains("jsr __") && line.contains("div")).count();
+        let reports = text.lines().filter(|line| line.contains("jsr report")).count();
+        assert!(divisions == 0 && reports == 4, "{divisions} calls to a division, {reports} reports:\n{text}");
+    }
+}
