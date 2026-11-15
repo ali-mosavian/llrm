@@ -1516,8 +1516,7 @@ pub fn test_immediate(
     match dest {
         Loc::Reg(one) => {
             // `optimizeToFixedRegisterForm`: `test al, imm8` (`a8`) and
-            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7`
-            // form.
+            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7` form.
             let register = match (width, ACCUMULATOR.get(&width) == Some(&one.register)) {
                 (1, true) => Some("AL"),
                 (2, true) => Some("AX"),
@@ -2469,14 +2468,15 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
-        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first
-        // source.
+        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first source.
         (Loc::Reg(into), Loc::Imm(order)) if name == "pshufd" && sources.len() == 2 => {
             let code = code_of!(upper, "_XMM_XMMM128_IMM8")?;
             match &sources[0] {
-                Loc::Reg(outof) => {
-                    _assemble(&raised(create_reg_reg_i32(code, into.register, outof.register, order.value)), at, true)
-                }
+                Loc::Reg(outof) => _assemble(
+                    &raised(create_reg_reg_i32(code, into.register, outof.register, order.value)),
+                    at,
+                    true,
+                ),
                 Loc::Mem(cell) => {
                     let (built, relocated) = operand_of(cell, at.bits)?;
                     _assemble(&raised(create_reg_mem_i32(code, into.register, built, order.value)), at, relocated)

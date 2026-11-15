@@ -131,11 +131,17 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                     VectorShift::Shl => "SHL",
                     VectorShift::Ushr => "USHR",
                     VectorShift::Sshr => "SSHR",
+                    VectorShift::Usra => "USRA",
+                    VectorShift::Ssra => "SSRA",
                 },
                 lane_name(*lanes)
             ),
             vec![vreg_loc(*rd, 128)],
-            vec![vreg_loc(*rn, 128), imm(i64::from(*amount))],
+            if op.accumulates() {
+                vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), imm(i64::from(*amount))]
+            } else {
+                vec![vreg_loc(*rn, 128), imm(i64::from(*amount))]
+            },
             None,
         ),
         Inst::VectorLongShift { op, lane, high, rd, rn, amount } => semantics(
@@ -402,6 +408,9 @@ fn dup_name(arrangement: Arrangement) -> &'static str {
         Arrangement::H8 => "DUPv8i16gpr",
         Arrangement::S4 => "DUPv4i32gpr",
         Arrangement::D2 => "DUPv2i64gpr",
+        Arrangement::B8 => "DUPv8i8gpr",
+        Arrangement::H4 => "DUPv4i16gpr",
+        Arrangement::S2 => "DUPv2i32gpr",
     }
 }
 
@@ -413,6 +422,9 @@ fn lane_name(lanes: Arrangement) -> &'static str {
         Arrangement::H8 => "8i16",
         Arrangement::S4 => "4i32",
         Arrangement::D2 => "2i64",
+        Arrangement::B8 => "8i8",
+        Arrangement::H4 => "4i16",
+        Arrangement::S2 => "2i32",
     }
 }
 
@@ -473,6 +485,9 @@ fn unzip_name(
         Arrangement::H8 => "v8i16",
         Arrangement::S4 => "v4i32",
         Arrangement::D2 => "v2i64",
+        Arrangement::B8 => "v8i8",
+        Arrangement::H4 => "v4i16",
+        Arrangement::S2 => "v2i32",
     };
     format!("UZP{}{lanes}", if second { 2 } else { 1 })
 }
@@ -490,7 +505,8 @@ fn narrow_name(
         (Arrangement::S4, true) => "v8i16",
         (Arrangement::D2, false) => "v2i32",
         (Arrangement::D2, true) => "v4i32",
-        (Arrangement::B16, _) => unreachable!("no lane is narrower than a byte"),
+        (Arrangement::B16 | Arrangement::B8, _) => unreachable!("no lane is narrower than a byte"),
+        (other, high) => narrow_name(other.full(), high),
     }
 }
 
@@ -499,8 +515,10 @@ fn ins_lane(lanes: Arrangement) -> &'static str {
     match lanes {
         Arrangement::B16 => "i8",
         Arrangement::H8 => "i16",
-        Arrangement::S4 => "i32",
+        Arrangement::S4 | Arrangement::S2 => "i32",
         Arrangement::D2 => "i64",
+        Arrangement::B8 => "i8",
+        Arrangement::H4 => "i16",
     }
 }
 
@@ -540,8 +558,7 @@ fn vector_op_name(
     lanes: Arrangement,
 ) -> String {
     let stem = op.mnemonic().to_uppercase();
-    let lanes = if op.is_logical() { "16i8" } else { lane_name(lanes) };
-    format!("{stem}v{lanes}")
+    format!("{stem}v{}", lane_name(lanes))
 }
 
 const VECTOR_OPS: [VectorOp; 10] = [
@@ -557,6 +574,17 @@ const VECTOR_OPS: [VectorOp; 10] = [
     VectorOp::Sshl,
 ];
 const ARRANGEMENTS: [Arrangement; 4] = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2];
+/// The arrangements of the integer operations (three-same, shifts), which
+/// also have the 64-bit forms.
+const OP_ARRANGEMENTS: [Arrangement; 7] = [
+    Arrangement::B16,
+    Arrangement::H8,
+    Arrangement::S4,
+    Arrangement::D2,
+    Arrangement::B8,
+    Arrangement::H4,
+    Arrangement::S2,
+];
 
 pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let name = what.name.as_deref()?;
@@ -698,9 +726,9 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
         }
     }
     for op in VECTOR_OPS {
-        for lanes in ARRANGEMENTS {
+        for lanes in OP_ARRANGEMENTS {
             if name == vector_op_name(op, lanes)
-                && (!op.is_logical() || lanes == Arrangement::B16)
+                && (!op.is_logical() || lanes.full() == Arrangement::B16)
                 && !(op == VectorOp::Mul && lanes == Arrangement::D2)
             {
                 return Some(Inst::VectorBinary {
@@ -743,15 +771,22 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             }
         }
     }
-    for (stem, op) in [("SHL", VectorShift::Shl), ("USHR", VectorShift::Ushr), ("SSHR", VectorShift::Sshr)] {
-        for lanes in ARRANGEMENTS {
+    for (stem, op) in [
+        ("SHL", VectorShift::Shl),
+        ("USHR", VectorShift::Ushr),
+        ("SSHR", VectorShift::Sshr),
+        ("USRA", VectorShift::Usra),
+        ("SSRA", VectorShift::Ssra),
+    ] {
+        for lanes in OP_ARRANGEMENTS {
             if name == format!("{stem}v{}_shift", lane_name(lanes)) {
+                let at = usize::from(op.accumulates());
                 return Some(Inst::VectorShift {
                     op,
                     lanes,
                     rd: vreg_of(dest?),
-                    rn: vreg_of(&s[0]),
-                    amount: value_of(&s[1]) as u8,
+                    rn: vreg_of(&s[at]),
+                    amount: value_of(&s[at + 1]) as u8,
                 });
             }
         }

@@ -241,7 +241,7 @@ fn program(
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
             for module in &mut program.modules {
-                crate::staticlocals::applied(module, request.level != Level::Os)?;
+                crate::staticlocals::applied(module)?;
             }
         }
     }
@@ -408,6 +408,29 @@ pub fn selected() -> usize {
     SELECTED.with(std::cell::Cell::get)
 }
 
+/// The bytes the initialised data in `text` takes in the image: what a trial
+/// that folds a table away saves, which the functions' own bytes leave out.
+/// Zero-filled `.res` of the BSS is not in the image.
+pub fn data_bytes(text: &str) -> i64 {
+    let mut in_image = true;
+    let mut total = 0;
+    for line in text.lines().map(str::trim) {
+        if let Some(segment) = line.strip_prefix(".segment") {
+            in_image = !segment.contains("BSS");
+        } else if in_image {
+            let count = |rest: &str| rest.split(',').filter(|one| !one.trim().is_empty()).count() as i64;
+            if let Some(rest) = line.strip_prefix(".byte") {
+                total += count(rest);
+            } else if let Some(rest) = line.strip_prefix(".word").or_else(|| line.strip_prefix(".addr")) {
+                total += 2 * count(rest);
+            } else if let Some(rest) = line.strip_prefix(".res") {
+                total += rest.trim().split(',').next().and_then(|n| n.trim().parse::<i64>().ok()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
+
 /// A program's assembly and, when asked for, its price: the clocks and bytes
 /// of the functions as the pass that wrote them estimates them.
 struct Assembled {
@@ -529,16 +552,7 @@ fn tail(
             let mut other = select_function(looped, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(
-                module,
-                name,
-                &other,
-                looped,
-                &selection,
-                request,
-                crate::routines::copy_prices().byte_clocks.0,
-                false,
-            )? {
+            if cheaper(module, name, &other, looped, &selection, request, false)? {
                 selection = other;
                 as_called = false;
                 source = Some(looped);
@@ -548,16 +562,7 @@ fn tail(
             let mut other = select_function(paged, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(
-                module,
-                name,
-                &other,
-                paged,
-                &selection,
-                request,
-                crate::routines::copy_prices().page_byte_clocks,
-                true,
-            )? {
+            if cheaper(module, name, &other, paged, &selection, request, true)? {
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
@@ -568,8 +573,7 @@ fn tail(
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
             let kept = source.unwrap_or(module);
-            let rate = crate::routines::copy_prices().page_byte_clocks;
-            if cheaper(kept, name, &other, counted, &selection, request, rate, true)? {
+            if cheaper(kept, name, &other, counted, &selection, request, true)? {
                 selection = other;
                 counted_chosen = true;
                 source = Some(counted);
@@ -587,16 +591,7 @@ fn tail(
                 other.zero_page = request.platform.zero_page;
                 other.tuning = request.level.tuning();
                 let kept = source.unwrap_or(module);
-                if cheaper(
-                    kept,
-                    name,
-                    &other,
-                    split,
-                    &selection,
-                    request,
-                    crate::routines::copy_prices().page_byte_clocks,
-                    true,
-                )? {
+                if cheaper(kept, name, &other, split, &selection, request, true)? {
                     selection = other;
                     range_chosen = true;
                     source = Some(split);
@@ -633,6 +628,9 @@ fn tail(
         let weights = estimate_weights(module, &names, &sources, &program.layout);
         let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
         (clocks, bytes) = (run as i64, size as i64);
+    }
+    if price {
+        bytes += data_bytes(&data.0);
     }
     let mut text = pieces.concat();
     for (name, label) in &data.1 {
@@ -671,7 +669,6 @@ fn trial_unrolled(
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial candidates: {} functions, {units} units", eligible.len());
     }
-    let rate = tti.as_ref().map_or(0, |tti| tti.unroll_milliclocks_per_byte());
     let other = trial::with(limit, || program(text, request))?;
     let growth = instructions(&other).saturating_sub(instructions(&built));
     if !trial_fits(growth) {
@@ -682,7 +679,7 @@ fn trial_unrolled(
     }
     let (kept, tried) = (tail(built, request, true, false)?, tail(other, request, true, false)?);
     let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
-    let pays = trial_pays(request.level, rate, saved, added);
+    let pays = trial_pays(request.level, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial unroll: {added:+} bytes, {saved:+} clocks saved: {}", if pays { "kept" } else { "put back" });
     }
@@ -711,12 +708,11 @@ fn instructions(program: &Program) -> usize {
 /// fitted.
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
-/// Whether a trial that saved `saved` clocks for `added` bytes is kept. Bytes
-/// only at size, as everywhere else; at speed a byte is worth `rate`
-/// thousandths of a clock.
+/// Whether a trial that saved `saved` clocks for `added` bytes is kept: bytes
+/// first at every level (user ruling 2026-11-14), so one that adds none, and
+/// saves no fewer clocks, or one that removes some.
 pub fn trial_pays(
     level: Level,
-    rate: i64,
     saved: i64,
     added: i64,
 ) -> bool {
@@ -724,17 +720,15 @@ pub fn trial_pays(
         return false;
     }
     match level {
-        Level::Os => added < 0 || (added == 0 && saved >= 0),
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
         Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added),
-        _ => saved * 1000 >= added * rate,
+        _ => added < 0 || (added == 0 && saved >= 0),
     }
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
-/// `selected`: the clocks (a trip through a loop weighs ten) and the bytes at
-/// `routines.toml`'s price. A function either
-/// can't be priced for keeps its calls.
+/// `selected`: fewer bytes, the clocks (a trip through a loop weighs ten) only
+/// breaking a tie. A function either can't be priced for keeps its calls.
 fn cheaper(
     module: &llrm_mir::module::Module,
     name: &str,
@@ -742,12 +736,10 @@ fn cheaper(
     alt_module: &llrm_mir::module::Module,
     selected: &crate::dagisel::function::Selection,
     request: &Request,
-    speed_byte_clocks: u64,
     strict_at_o1: bool,
 ) -> Result<bool, String> {
     let prices = crate::routines::copy_prices();
     let routines = [("memcpy", prices.call_clocks), ("memset", prices.call_clocks)];
-    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { speed_byte_clocks };
     let original = module;
     let cost = |module: &llrm_mir::module::Module, selection| -> Option<(u64, u64)> {
         let text = crate::select::function_text(module, name, selection).ok()?;
@@ -781,16 +773,16 @@ fn cheaper(
     };
     let (alt_cost, kept_cost) = (cost(alt_module, alt), cost(module, selected));
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
-        eprintln!(
-            "cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}, {byte} clocks a byte"
-        );
+        eprintln!("cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}");
     }
     Ok(match (alt_cost, kept_cost) {
         // -O1 keeps no more bytes and no more clocks (6502-UNROLL-O1)
         (Some(alt), Some(kept)) if strict_at_o1 && request.level == Level::O1 => {
             alt.0 <= kept.0 && alt.1 <= kept.1 && alt != kept
         }
-        (Some(alt), Some(kept)) => alt.0 + byte * alt.1 < kept.0 + byte * kept.1,
+        // bytes first at every level, clocks break a tie (user ruling
+        // 2026-11-14)
+        (Some(alt), Some(kept)) => (alt.1, alt.0) < (kept.1, kept.0),
         _ => false,
     })
 }

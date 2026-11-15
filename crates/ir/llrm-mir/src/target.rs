@@ -575,6 +575,8 @@ pub struct Tuning {
     /// 2026-11-24): and at -O2, where gcc has none: queens m32 151807 ->
     /// 139804 clk for +293 B, m64 -9.4% instructions for +830 B.
     pub ipa_cp_clones_at_speed: bool,
+    /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function.
+    pub ipa_cp_max_clones: usize,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -776,6 +778,7 @@ impl Tuning {
         recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
         ipa_cp_clones_at_speed: false,
+        ipa_cp_max_clones: 4,
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,
