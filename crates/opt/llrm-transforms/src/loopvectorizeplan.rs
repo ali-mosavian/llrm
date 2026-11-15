@@ -156,6 +156,10 @@ pub struct LoopFacts {
     pub opt_size: bool,
     /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
     pub has_reductions: bool,
+    /// The recurrence types' widths of the reductions
+    /// (`collectElementTypesForWidening`: a loop without loads or stores has
+    /// only these to take the widest type from).
+    pub reduction_bits: Vec<u32>,
 }
 
 /// The chosen factors.
@@ -203,10 +207,17 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
     }
 }
 
-/// `getSmallestAndWidestTypes` (L513): the loads' and stores' lane widths; the
-/// widest starts at 8.
-fn smallest_and_widest(recipes: &[Recipe]) -> (u32, u32) {
+/// `getSmallestAndWidestTypes` (L513): the loads' and stores' lane widths and
+/// the reductions' recurrence types; the widest starts at 8.
+fn smallest_and_widest(
+    recipes: &[Recipe],
+    reduction_bits: &[u32],
+) -> (u32, u32) {
     let (mut smallest, mut widest) = (u32::MAX, 8);
+    for &bits in reduction_bits {
+        smallest = smallest.min(bits);
+        widest = widest.max(bits);
+    }
     for recipe in recipes {
         if matches!(
             recipe,
@@ -288,12 +299,13 @@ fn iteration_cost(
     // recipe's vectors (a conversion's source too) are one register or two
     // (`SplitVectorResult` of a 256-bit type). Integer vectors of half a
     // register (the D registers) and of four registers are taken too: those
-    // MVTs exist. Owner llrm-arm64-vec, exit LV-X4.
+    // MVTs exist; eight registers (a `<16 x i64>` sum of bytes) split to them
+    // (`SplitVectorResult`). Owner llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
     let taken = |lane: Ty| {
         let bits = u64::from(lane_bits(lane)) * u64::from(vf);
         [register_bits, 2 * register_bits].contains(&bits)
-            || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits].contains(&bits))
+            || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
     };
     if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
         return Err(NotTaken);
@@ -378,8 +390,8 @@ fn iteration_cost(
                     unknown(tti.vector_cmp_sel_cost(CmpSel::Select, vector(lane), predicate, kind))?
                 }
             }
-            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free, the
-            // step an `add` of the vector.
+            // `VPWidenIntOrFpInductionRecipe::computeCost`: the phi is free,
+            // the step an `add` of the vector.
             Recipe::Induction { lane, truncated_from } => {
                 if vf == 1 {
                     truncated_from.map_or(Cost::FREE, |src| tti.cast_cost(CastKind::Trunc, lane, src, kind))
@@ -711,7 +723,7 @@ fn max_vf_of(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> u64 {
-    let (smallest, widest) = smallest_and_widest(&facts.recipes);
+    let (smallest, widest) = smallest_and_widest(&facts.recipes, &facts.reduction_bits);
     // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits /
     // WidestType).
     let mut max_safe = bit_floor(facts.max_safe_width_in_bits / u64::from(widest));
@@ -739,6 +751,41 @@ fn choose_with(
         return Err(NotPlanned("Vectorization is possible but not beneficial"));
     }
     Ok(Plan { vf, ic: select_interleave_count(tti, facts, vf, cost) })
+}
+
+/// `AArch64Subtarget::EpilogueVectorizationMinVF` (every target's default): the
+/// lanes a main loop covers (`VF x IC`) before its remainder is widened too.
+const EPILOGUE_MIN_VF: u64 = 16;
+
+/// `LoopVectorizationPlanner::selectBestEpiloguePlan`: the vector factor of the
+/// loop that takes the remainder of a main loop planned as `main`, or none.
+/// The main loop must cover at least `EPILOGUE_MIN_VF` lanes
+/// (`isEpilogueVectorizationProfitable`); the epilogue's factor is no wider
+/// than the main loop's, and where the trip count is known no wider than the
+/// iterations left over (`SkipVF`: such a loop would never run); the cheapest
+/// per lane of those wins.
+pub fn epilogue_vf(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    main: Plan,
+) -> Option<u32> {
+    if facts.opt_size || !tti.vectorizes_epilogues() {
+        return None;
+    }
+    let lanes = u64::from(main.vf) * u64::from(main.ic);
+    if lanes < EPILOGUE_MIN_VF {
+        return None;
+    }
+    let mut cap = u64::from(main.vf);
+    if facts.trip_count != 0 {
+        let remaining = facts.trip_count % lanes;
+        if remaining == 0 {
+            return None;
+        }
+        cap = cap.min(bit_floor(remaining));
+    }
+    let (vf, _) = best_vf(tti, facts, cap, true, false);
+    (vf > 1).then_some(vf)
 }
 
 /// The constant trip count under which the pin allows no epilogue

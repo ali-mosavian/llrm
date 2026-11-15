@@ -180,3 +180,14 @@ fn a_byte_multiply_from_memory_assembles() {
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
+
+/// The splat constant of a vector loop is read from the pool before the loop: it was reloaded (`movaps xmm, $K`) on
+/// every trip, because machine LICM left every xmm value in the loop.
+#[test]
+fn a_vector_constant_is_loaded_before_the_loop() {
+    let text = assembly("x86_64-linux", "-O2");
+    let add = body(&text, "add_five");
+    let (before, inside) = add.split_once("align 16").expect("a loop");
+    assert!(before.contains("$K"), "{add}");
+    assert!(!inside.contains("$K"), "{add}");
+}

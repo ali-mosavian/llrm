@@ -44,3 +44,5 @@ void multiply_bytes(void) { for (unsigned long i = 0; i < 4096; ++i) pa[i] = pb[
 void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsigned char *z) {
   for (int i = 0; i < 4096; ++i) x[i] = y[i] * z[i];
 }
+
+void add_five(void) { for (int i = 0; i < 1024; ++i) a[i] += 5; }
