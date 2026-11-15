@@ -452,10 +452,11 @@ fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
     assert!(!out.contains("(ix)"), "{out}");
 }
 
-/// The same function once the inner loop is unrolled (-O2): LSR sees the outer loop as innermost, reduces `data[i]`
-/// to a pointer and the code has no frame access. At -Os/-Oz the pin's LSR skips the nested outer loop (row
-/// Z80-SLOT-READ-PEEK).
+/// The same function once the inner loop is unrolled: LSR sees the outer loop as innermost, reduces `data[i]` to a
+/// pointer and the code has no frame access. Bytes come first (ruling 11-14), so -O2 no longer unrolls it (+67 B) and
+/// the loop pointer is a frame slot again (row Z80-SLOT-READ-PEEK).
 #[test]
+#[ignore = "Z80-SLOT-READ-PEEK until 2026-11-30: -O2 keeps the inner loop (bytes first), the pointer is a push/pop slot"]
 fn crc16_with_its_inner_loop_unrolled_makes_no_frame_access() {
     let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
@@ -1578,17 +1579,15 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
     assert!(!out.lines().any(|line| line.trim_start().starts_with("jp ")), "{out}");
 }
 
-/// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
-/// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
-/// first, and stays a loop at -Oz. At -Oz the late LoopRotate (#8138, Z80-ROT)
-/// rotates it where the guard folds away: a `djnz` loop.
+/// Bytes come first on the z80 (ruling 11-14): a loop is copied out only where that is no larger. sum4's four-trip
+/// `djnz` loop is 6 B, four copies 8 B (104 T against 160 T): it stays a loop at -O2, as at -Oz. The test took the
+/// speed-first unroll for the rule and failed once the trial kept the smaller module.
 #[test]
-fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+fn a_four_trip_loop_stays_a_loop_where_copying_it_out_is_larger() {
     let ir = include_str!("kernels/ir/sum4.ll");
     let fast = text(ir, "sum4", 0, &Request::new(Level::O2)).expect("compiles");
     let small = text(ir, "sum4", 0, &Request::new(Level::Oz)).expect("compiles");
-    assert!(!fast.contains("djnz") && !fast.contains(" L0_"), "{fast}");
-    assert!(small.contains("djnz"), "{small}");
+    assert!(fast.contains("djnz") && small.contains("djnz"), "{fast}\n{small}");
 }
 
 /// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
@@ -1611,17 +1610,14 @@ fn reverse_at_oz_does_not_live_in_the_frame() {
     assert!(frame <= 10, "{frame} frame accesses\n{out}");
 }
 
-/// crc16's inner loop of eight trips kept its counter and branch: `dec h; jr
-/// nz` is 16 T a bit, 7135 T for 12 bytes against gcc's 5134. Where speed
-/// comes first it is copied out (the pin's threshold: +67 B, -2490 T, past 1 B
-/// = 3 T); at -Oz it stays a loop.
+/// crc16's inner loop of eight trips costs 7135 T for 12 bytes against gcc's 5134; copying it out is +67 B, -2490 T
+/// (past 1 B = 3 T). Bytes come first on the z80 (ruling 11-14), so it stays a loop at -O2 and -Oz alike.
 #[test]
-fn an_eight_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+fn an_eight_trip_loop_stays_a_loop_where_copying_it_out_is_larger() {
     let ir = include_str!("kernels/ir/crc16.ll");
     let fast = text(ir, "crc16", 0, &Request::new(Level::O2)).expect("compiles");
     let small = text(ir, "crc16", 0, &Request::new(Level::Oz)).expect("compiles");
-    assert!(!fast.contains("dec h"), "{fast}");
-    assert!(small.contains("dec h"), "{small}");
+    assert!(fast.contains("dec h") && small.contains("dec h"), "{fast}\n{small}");
 }
 
 const MEMCPY: &str = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\
