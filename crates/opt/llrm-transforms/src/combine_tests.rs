@@ -485,6 +485,25 @@ fn a_vector_identity_folds_as_the_scalar_one_does() {
     );
 }
 
+#[test]
+fn a_vector_multiply_by_one_and_an_and_with_all_ones_fold() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = mul <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  %b = and <4 x i32> %a, <i32 -1, i32 -1, i32 -1, i32 -1>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  ret <4 x i32> %x\n}\n",
+    );
+}
+
+/// `urem (and x, 255), 251` on vectors was folded to its dividend: the value
+/// analyses read a vector's width as 0, so its range came out as one below 251
+/// (a debug build: "attempt to subtract with overflow"). `huge` -O2 summed
+/// 319,345,180, not 5,020,780. A vector is what every lane holds, a splat
+/// constant's number, else nothing.
+#[test]
+fn a_vector_remainder_is_not_folded_by_a_range_it_does_not_have() {
+    let text = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = and <4 x i32> %x, <i32 255, i32 255, i32 255, i32 255>\n  %r = urem <4 x i32> %a, <i32 251, i32 251, i32 251, i32 251>\n  ret <4 x i32> %r\n}\n";
+    check(text, text);
+}
+
 /// A vector `urem` by a splat and an `and` with zero are not identities: the
 /// first attempt read the splat as a scalar and dropped the `urem` (huge O2
 /// returned a wrong sum).
