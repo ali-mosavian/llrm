@@ -293,15 +293,16 @@ fn an_optsize_loop_stays_scalar_even_when_vf_divides_the_trip_count() {
 #[test]
 fn a_symbolic_trip_count_is_checked_at_run_time() {
     let text = run(include_str!("../tests/lv/symbolic_trip.ll"));
-    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load <4 x i16>"), 1, "{text}");
     assert_eq!(count(&text, "load i16"), 1, "{text}");
     assert!(text.contains("%min.iters.check2 = icmp ult i64 %n, 16"), "{text}");
     assert!(text.contains("%n.mod.vf = and i64 %n, 15"), "{text}");
     assert!(text.contains("%n.vec = sub i64 %n, %n.mod.vf"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %n.vec"), "{text}");
     assert!(text.contains("%cmp.n = icmp eq i64 %n, %n.vec"), "{text}");
-    // Its remainder is widened in turn: that loop's `n < 8` comes first.
-    assert!(text.contains("%iter.check = icmp ult i64 %n, 8"), "{text}");
+    // Its remainder is widened in turn, at 4 lanes as the pin: that loop's `n < 4` comes first.
+    assert!(text.contains("%iter.check = icmp ult i64 %n, 4"), "{text}");
     assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ]"), "{text}");
     assert!(text.contains("br i1 %min.iters.check2, label %vector.ph1, label %vector.ph"), "{text}");
 }
@@ -326,7 +327,8 @@ fn the_loops_it_made_are_not_widened_again() {
     assert_eq!(count(&once, "llvm.loop.isvectorized"), 2, "{once}");
     assert_eq!(count(&once, "llvm.loop.unroll.runtime.disable"), 2, "{once}");
     let twice = run(&once);
-    assert_eq!(count(&twice, "load <8 x i16>"), 3, "{twice}");
+    assert_eq!(count(&twice, "load <8 x i16>"), 2, "{twice}");
+    assert_eq!(count(&twice, "load <4 x i16>"), 1, "{twice}");
 }
 
 /// The store 80 elements ahead of the load bounds the safe distance: the pin
@@ -390,7 +392,7 @@ fn an_exit_phi_takes_an_arm_from_each_way_out() {
         .replace("define void", "define i32")
         .replace("ret void", "%r = phi i32 [ 7, %loop ]\n  ret i32 %r");
     let text = run(&source);
-    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
     assert!(
         text.contains("%r = phi i32 [ 7, %middle.block ], [ 7, %middle.block1 ], [ 7, %loop.scalar.scalar ]"),
         "{text}"
@@ -613,8 +615,9 @@ fn an_induction_read_as_a_value_is_widened() {
 fn an_induction_that_starts_at_a_run_time_value_is_widened() {
     let text = run(INDUCTION_START);
     assert!(text.contains("induction = add <8 x i16>"), "{text}");
-    assert_eq!(count(&text, "phi <8 x i16>"), 2, "{text}");
-    assert_eq!(count(&text, "store <8 x i16>"), 3, "{text}");
+    assert_eq!(count(&text, "phi <8 x i16>"), 1, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x i16>"), 1, "{text}");
 }
 
 /// A count-down loop that reads its induction as a value (recsum's
@@ -667,7 +670,8 @@ fn a_reverse_copy_is_widened_on_the_lowest_addresses_without_a_shuffle() {
 #[test]
 fn a_reverse_copy_from_a_run_time_start_counts_its_iterations_down() {
     let text = run(REVERSE_SYMBOLIC);
-    assert_eq!(count(&text, "load <8 x i16>"), 3, "{text}");
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load <4 x i16>"), 1, "{text}");
     assert!(text.contains("n.trip = sub i64 %n, -1"), "{text}");
     assert!(text.contains("ind.end = sub i64 %n, %n.vec"), "{text}");
     assert!(text.contains("bc.resume.val"), "{text}");
@@ -900,7 +904,7 @@ fn the_remainder_of_a_vector_loop_is_widened_in_turn() {
 #[test]
 fn a_short_trip_skips_both_vector_loops_in_one_check() {
     let text = run(EPILOGUE_SUM_DYNAMIC);
-    let first = text.find("%iter.check = icmp ult i64 %n, 8").unwrap_or_else(|| panic!("{text}"));
+    let first = text.find("%iter.check = icmp ult i64 %n, 4").unwrap_or_else(|| panic!("{text}"));
     let main = text.find("icmp ult i64 %n, 16").unwrap_or_else(|| panic!("{text}"));
     assert!(first < main, "{text}");
     assert!(text.contains("br i1 %iter.check, label %scalar.ph1, label %vector.main.loop.iter.check"), "{text}");
