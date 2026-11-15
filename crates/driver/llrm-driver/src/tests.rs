@@ -5877,24 +5877,6 @@ fn a_loop_latch_joining_two_arms_is_copied_into_each_at_o2() {
     assert_eq!(copies, 2, "the latch is shared by the arms: {listing}");
 }
 
-/// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
-/// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
-/// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
-#[test]
-fn counted_loops_that_are_smaller_unrotated_stay_unrotated_at_os() {
-    let text = include_str!("tests_data/prefix_sums.ll");
-    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_prefix").unwrap();
-    let object = llrm_codegen::backend::objbuild::written_in(
-        &built,
-        "prefix_sums.ll",
-        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
-        format,
-        llrm_target::Target::objects(&llrm_x86_m32::M32),
-    )
-    .unwrap();
-    assert!(object.len() < 310, "{} bytes: {}", object.len(), llrm_codegen::backend::masm::text(&built).unwrap());
-}
-
 /// x86-m32 x_crc32 -Os: the table-driven loop is counted, its copied guard does not fold, and the unrotated
 /// trial was a few bytes smaller, so the loop stayed unrotated and paid a taken `jmp` a trip (+7.5% clocks
 /// against clang). ROTATION-HOT keeps the rotated loop when it runs less for at most 4 B a loop.
@@ -5909,6 +5891,31 @@ fn a_counted_loop_that_runs_less_rotated_stays_rotated_at_m32_os() {
         listing.lines().position(|label| label == format!("{target}:")).is_some_and(|label| label < at)
     });
     assert!(!back, "a loop is unrotated, a jmp back to its guard: {listing}");
+}
+
+/// x86-m32 x_prefix -Os: the outer loop's rotation copies its guard into two
+/// exits, so neither SCEV nor the induction proof counts its 4 trips, and the
+/// rotated body was priced with the heuristic's 32 where the unrotated one was
+/// priced with 4: the trial saw the rotated code run 3.9x more (12,810 against
+/// 3,297) and kept the smaller, slower object (58,870 clk against 50,427). Both
+/// shapes are priced with the same trips. DEVIATE ROTATION-HOT.
+#[test]
+fn a_nest_whose_rotation_hides_its_trip_count_is_priced_like_its_unrotated_shape() {
+    let text = include_str!("tests_data/prefix_sums.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_prefix").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().collect();
+    let backward_jumps = lines
+        .iter()
+        .enumerate()
+        .filter(|(at, line)| {
+            let Some(target) = line.trim().strip_prefix("jmp ") else { return false };
+            lines.iter().position(|label| *label == format!("{target}:")).is_some_and(|label| label < *at)
+        })
+        .count();
+    // The outer loop closes with one `jmp`; an unrotated inner loop closes with
+    // one each.
+    assert!(backward_jumps <= 2, "{backward_jumps} loops pay a taken jmp a trip: {listing}");
 }
 
 /// COMBINED-TRIAL: the -Os trials were nested wrappers, each re-running the mid-end and the backend over the whole
@@ -5961,7 +5968,11 @@ fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
     let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
     compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
     let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
-    assert_eq!(selections, 6, "{selections} selections of three functions");
+    // Two assemblies for the rotation trial, whatever it keeps, and a third
+    // where the kept module folded a leaf (LEAF-FOLD-TRIAL assembles that
+    // one again): the rotated nest is kept now that it is priced like the
+    // unrotated one, and it folds a leaf.
+    assert_eq!(selections, 9, "{selections} selections of three functions");
 }
 
 /// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our

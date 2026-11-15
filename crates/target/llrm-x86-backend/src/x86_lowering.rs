@@ -3540,6 +3540,18 @@ fn lower_build_vector_splat(
         return Some(node);
     }
     let first = *lanes.first()?;
+    // `LowerBUILD_VECTOR`, one non-zero lane and it is lane 0: `movd`/`movq`
+    // with the rest zeroed (`VZEXT_MOVL`); what `insertelement` of a scalar
+    // into a zero vector becomes once combined.
+    let is_zero = |dag: &SelectionDAG, lane: SDValue| dag.is_undef(lane) || dag.constant(lane) == Some(0);
+    if dag.constant(first).is_none()
+        && !dag.is_undef(first)
+        && lanes[1..].iter().all(|lane| is_zero(dag, *lane))
+        && let Some(lane_vt) = integer_lane_of_v128(vt)
+        && dag.value_type(first) == lane_vt
+    {
+        return Some(scalar_in_lane0(dag, vt, lane_vt, first, true));
+    }
     if lanes.iter().any(|lane| *lane != first) || dag.constant(first).is_some() || dag.is_undef(first) {
         return None;
     }
@@ -3627,6 +3639,19 @@ fn lower_insert_vector_elt(
     if !zero_rest && !dag.is_undef(vector) {
         return None;
     }
+    Some(scalar_in_lane0(dag, vt, lane_vt, element, zero_rest))
+}
+
+/// A scalar as lane 0 of a 128-bit integer vector: `movd`/`movq`, with
+/// `VZEXT_MOVL` when the rest is zero (a zero-extended byte or word goes
+/// through an `i32` and a `v4i32`).
+fn scalar_in_lane0(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    lane_vt: EVT,
+    element: SDValue,
+    zero_rest: bool,
+) -> SDValue {
     let (wide_vt, wide) = match lane_vt {
         EVT::I8 | EVT::I16 => {
             let wide = if zero_rest {
@@ -3642,7 +3667,18 @@ fn lower_insert_vector_elt(
     if zero_rest {
         low = dag.get_node(x86isd::VZEXT_MOVL, wide_vt, &[low]);
     }
-    Some(if wide_vt == vt { low } else { dag.get_node(ISD::BitCast, vt, &[low]) })
+    if wide_vt == vt { low } else { dag.get_node(ISD::BitCast, vt, &[low]) }
+}
+
+/// The lane type of a 128-bit integer vector.
+fn integer_lane_of_v128(vt: EVT) -> Option<EVT> {
+    Some(match vt {
+        EVT::Simple(MVT::V16I8) => EVT::I8,
+        EVT::Simple(MVT::V8I16) => EVT::I16,
+        EVT::Simple(MVT::V4I32) => EVT::I32,
+        EVT::Simple(MVT::V2I64) => EVT::I64,
+        _ => return None,
+    })
 }
 
 /// The 128-bit integer vector of `bits`-bit lanes.

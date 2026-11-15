@@ -227,6 +227,9 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         "MOVDI2PDIrr" => "Movd_xmm_rm32",
         "MOV64toPQIrr" => "Movq_xmm_rm64",
         "MOVPQIto64rr" => "Movq_rm64_xmm",
+        // `movq xmm, m64` (the upper lane zeroed) and `movq m64, xmm`.
+        "MOVQI2PQIrm" => "Movq_xmm_xmmm64",
+        "MOVPQI2QImr" => "Movq_xmmm64_xmm",
         "MOVPDI2DIrr" => "Movd_rm32_xmm",
         _ => return None,
     })
@@ -305,6 +308,9 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
 pub fn memory_bytes(name: &str) -> Option<u32> {
     // `MOV8mr_NOREX` stores `AH`: the byte store it stands for.
     let name = name.strip_suffix("_NOREX").unwrap_or(name);
+    if matches!(name, "MOVQI2PQIrm" | "MOVPQI2QImr") {
+        return Some(8);
+    }
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the
