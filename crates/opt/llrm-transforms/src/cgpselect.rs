@@ -220,7 +220,7 @@ fn sunk_into_join(
             continue;
         }
         let value = function.instruction(inst).result.expect("a result");
-        let users = function.users(value).snapshot();
+        let users = function.users(value);
         let reads_only_in_join = !users.is_empty()
             && users.iter().all(|used| {
                 function.parent(used.user) == Some(join) && function.instruction(used.user).opcode != Opcode::Phi
