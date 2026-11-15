@@ -24,7 +24,8 @@
 //! DEVIATE (no LLVM pass; GCC `tree-ssa-threadbackward.cc`): paths are `q`,
 //! `p`, `bb` only (GCC's `max-fsm-thread-length` is 10); the facts are the
 //! ranges of branch edges that dominate `q` (GCC asks ranger); the path may
-//! not be copied past `max-fsm-thread-path-insns` (100) instructions.
+//! not copy more than `max-jump-thread-duplication-stmts` (15) instructions;
+//! a function with `optsize` or `minsize` is left alone.
 
 use llrm_analysis::ssaupdaterbulk::SsaUpdaterBulk;
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
