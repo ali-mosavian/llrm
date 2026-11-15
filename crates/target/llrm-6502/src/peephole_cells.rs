@@ -851,14 +851,15 @@ thread_local! {
 /// is one instruction there); this target picks the loop or the run at the
 /// size level from the final text, like [`arithmetic_chain_in_a`] does for a
 /// signed shift. The choice is by bytes, so it holds for every shape of
-/// shift, not one multiplier. Owner 6502, exit 2026-11-18 (renewed from
-/// 2026-11-15: the replacement, a word shift's byte roles chosen by the
-/// allocator, is in review): price the in-`a` run at emission, where the copy
-/// and the reload are known, and drop the pass. The exit also recovers the
-/// whole-function form this region form gives up (Os: `call_keeps` -11 B vs -8,
-/// `overflow_builtins` -18 vs -3, `div_constants_short` -21 and `sat_builtins`
-/// -18 vs 0, `loop_interchange` -6 vs -4): that needs liveness across blocks,
-/// which emission-time pricing has and a region does not.
+/// shift, not one multiplier. Owner 6502, exit 2026-11-24 (renewed from
+/// 2026-11-18: not retired, the pass now also chooses the byte that rides in
+/// `a` and covers straight runs, by final bytes): price the in-`a` run at
+/// emission, where the copy and the reload are known, and drop the pass. The
+/// exit also recovers the whole-function form this region form gives up (Os:
+/// `call_keeps` -11 B vs -8, `overflow_builtins` -18 vs -3,
+/// `div_constants_short` -21 and `sat_builtins` -18 vs 0, `loop_interchange` -6
+/// vs -4): that needs liveness across blocks, which emission-time pricing has
+/// and a region does not.
 pub fn shift_loop_in_a(asm: &mut Asm) {
     let mut at = 0;
     let mut references = std::collections::HashMap::<String, usize>::new();
