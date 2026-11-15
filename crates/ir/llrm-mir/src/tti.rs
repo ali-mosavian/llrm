@@ -1160,6 +1160,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a one-slot frame is released by `add` when
+    /// callee-saved registers are restored, as the pin does: `emitEpilogue` stands at the first callee-saved `pop`, where
+    /// `findDeadCallerSavedReg` answers 0. False: a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
+    fn frame_slot_add_with_saved(&self) -> bool {
+        false
+    }
+
     /// DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24): the instruction
     /// units an -Os trial must save, beyond a tie, for a copy that runs at most
     /// once per run of the program and whose callee stays. The units count a
