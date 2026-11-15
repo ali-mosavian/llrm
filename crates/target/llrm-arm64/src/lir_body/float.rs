@@ -251,13 +251,24 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
             None,
         ),
-        Inst::VectorNarrow { high, wide, rd, rn } => semantics(
-            if *high { Operation::Binary } else { Operation::Unary },
-            format!("XTN{}", narrow_name(*wide, *high)),
-            vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
-            if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] },
-            None,
-        ),
+        Inst::VectorNarrow { high, shift, wide, rd, rn } => {
+            let mut sources =
+                if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] };
+            let name = match shift {
+                Some(amount) => {
+                    sources.push(imm(i64::from(*amount)));
+                    format!("SHRN{}_shift", narrow_name(*wide, *high))
+                }
+                None => format!("XTN{}", narrow_name(*wide, *high)),
+            };
+            semantics(
+                if *high || shift.is_some() { Operation::Binary } else { Operation::Unary },
+                name,
+                vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
+                sources,
+                None,
+            )
+        }
         Inst::VectorFmulLane { lanes, rd, rn, rm, index } => semantics(
             Operation::Binary,
             format!("FMULv{}_indexed", if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }),
@@ -716,7 +727,17 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     ] {
         let narrow = narrow_name(wide, high);
         if name == format!("XTN{narrow}") {
-            return Some(Inst::VectorNarrow { high, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+            return Some(Inst::VectorNarrow { high, shift: None, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+        }
+        if name == format!("SHRN{narrow}_shift") {
+            let at = usize::from(high);
+            return Some(Inst::VectorNarrow {
+                high,
+                shift: Some(value_of(&s[at + 1]) as u8),
+                wide,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[at]),
+            });
         }
     }
     for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {

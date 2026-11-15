@@ -945,33 +945,28 @@ impl TargetLowering {
         // A `BUILD_VECTOR` is selected by no pattern: the legalizer expands a
         // constant one to a pool load (`ExpandBUILD_VECTOR`) and any other
         // through the stack (`ExpandVectorBuildThroughStack`). DEVIATE X86V3
-        // (owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR): the pin's `LowerBUILD_VECTOR` makes a splat
-        // `movd` + `pshufd` and the rest `punpck`/`pinsr`; the stack form is
-        // correct and slower.
-        t.set_ops(
-            &[ISD::BuildVector],
-            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
-            Action::Expand,
-        );
-        // `LowerBUILD_VECTOR`: a splat of a scalar is `movd` + `pshufd`; the other builds (and
-        // the constant ones, a pool load) stay the expansion. DEVIATE X86V3 now covers only
-        // the 8- and 16-bit lanes and the non-splat builds.
+        // (owner llrm-target-x86-m64-b, exit 2026-11-20, the C2 PR): the pin's
+        // `LowerBUILD_VECTOR` makes a splat `movd` + `pshufd` and the
+        // rest `punpck`/`pinsr`; the stack form is correct and slower.
+        t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
+        // `LowerBUILD_VECTOR`: a splat of a scalar is `movd` + `pshufd`; the
+        // other builds (and the constant ones, a pool load) stay the
+        // expansion. DEVIATE X86V3 now covers only the 8- and 16-bit
+        // lanes and the non-splat builds.
         t.set_ops(&[ISD::BuildVector], &[MVT::V4I32, MVT::V2I64], Action::Custom);
-        // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the odd lanes.
+        // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
+        // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
         // `LowerShift`: a shift by a constant splat is `VSHLI`/`VSRLI`/`VSRAI`;
         // `psraq` is AVX-512, so a 64-bit arithmetic shift is left to the
         // expansion.
-        t.set_ops(
-            &[ISD::Shl, ISD::Srl],
-            &[MVT::V8I16, MVT::V4I32, MVT::V2I64],
-            Action::Custom,
-        );
+        t.set_ops(&[ISD::Shl, ISD::Srl], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
-        // `ExpandReductions` makes a reduction shuffles and `extractelement`; no
-        // shuffle is selected here, so the DAG folds the spilled lanes
-        // (`expandVecReduce`). DEVIATE X86V4 (owner llrm-target-x86-m64-b, exit
-        // 2026-11-24, the C3 PR: shuffle selection).
+        // `ExpandReductions` makes a reduction shuffles and `extractelement`;
+        // no shuffle is selected here, so the DAG folds the spilled
+        // lanes (`expandVecReduce`). DEVIATE X86V4 (owner
+        // llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR: shuffle
+        // selection).
         t.set_ops(
             &[
                 ISD::VecReduceAdd,
@@ -1068,6 +1063,12 @@ impl TargetLowering {
         // `addTypeForNEON`: the shifts are lowered to `VSHL`/`VLSHR`/`VASHR`
         // (`LowerVectorSRA_SRL_SHL`).
         t.set_ops(&[Shl, Srl, Sra], &vectors, Custom);
+        // `addTypeForNEON` does the same for the 64-bit vectors.
+        t.set_ops(
+            &[Shl, Srl, Sra, BuildVector, VectorShuffle, InsertVectorElt],
+            &[MVT::V8I8, MVT::V4I16, MVT::V2I32],
+            Custom,
+        );
         // `LowerMUL`: the widening multiplies (`SMULL`, `UMULL`); `v2i64` has
         // no multiply of its own.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);
@@ -1150,7 +1151,12 @@ impl TargetLowering {
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1465
         t.set_ops(&[MulHU, MulHS], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Legal);
-        t.set_ops(&[MulHU, MulHS], &[MVT::V2I64], Expand);
+        t.set_ops(&[MulHU, MulHS], &[MVT::V2I64, MVT::V8I8, MVT::V4I16, MVT::V2I32], Expand);
+        t.set_ops(
+            &[UMulLoHi, SMulLoHi],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V8I8, MVT::V4I16, MVT::V2I32],
+            Expand,
+        );
         t.set_ops(&[UMulLoHi, SMulLoHi], &words, Expand);
         if features.cssc {
             t.set_ops(&[CtPop, CtTz, Abs, SMax, UMax, SMin, UMin], &words, Legal);
