@@ -24,6 +24,7 @@
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
 mod counts;
+mod csv;
 mod family;
 mod m68020;
 mod m68030;

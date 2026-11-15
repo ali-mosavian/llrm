@@ -23,93 +23,24 @@
 //! 5. `trap #n` is Table 8.2.17's exception entry (20 clocks), not the handler;
 //!    the rest of that table, `rte`, `callm` and `rtm` are not priced.
 
-use std::collections::HashMap;
-use std::sync::LazyLock;
-
-use super::table::{Cell, key, parse_cell, split_csv};
+use super::table::{Cell, key, parse_cell};
 use super::{Mode, Operand, Size, mode, places, size_of};
 
-struct Row {
-    instruction: String,
-    operands: String,
-    mark: String,
-    cache: String,
-}
-
-/// The rows of the instruction tables 8.2.7 to 8.2.16.
-static ROWS: LazyLock<Vec<Row>> = LazyLock::new(|| {
-    let files = [
-        include_str!("m68020/t8.2.7.csv"),
-        include_str!("m68020/t8.2.8.csv"),
-        include_str!("m68020/t8.2.9.csv"),
-        include_str!("m68020/t8.2.10.csv"),
-        include_str!("m68020/t8.2.11.csv"),
-        include_str!("m68020/t8.2.12.csv"),
-        include_str!("m68020/t8.2.13.csv"),
-        include_str!("m68020/t8.2.14.csv"),
-        include_str!("m68020/t8.2.15.csv"),
-        include_str!("m68020/t8.2.16.csv"),
-        include_str!("m68020/t8.2.17.csv"),
-    ];
-    files
-        .iter()
-        .flat_map(|text| text.lines().skip(1))
-        .map(split_csv)
-        .map(|mut fields| Row {
-            instruction: std::mem::take(&mut fields[0]),
-            operands: std::mem::take(&mut fields[1]),
-            mark: std::mem::take(&mut fields[2]),
-            cache: std::mem::take(&mut fields[4]),
-        })
-        .collect()
-});
-
-/// An effective address table: `(mode label, cache cell)`.
-fn grid(text: &str) -> Vec<(String, String)> {
-    text.lines().skip(1).map(split_csv).map(|mut fields| (key(&fields[0]), std::mem::take(&mut fields[2]))).collect()
-}
-
-struct Grids {
-    fetch: Vec<(String, String)>,
-    fetch_immediate: Vec<(String, String)>,
-    calculate: Vec<(String, String)>,
-    calculate_immediate: Vec<(String, String)>,
-    jump: Vec<(String, String)>,
-    moves: Vec<Vec<String>>,
-    /// The first column and the first row of `moves` by label, as `strip`
-    /// reads them in `move_clocks`.
-    move_columns: HashMap<String, usize>,
-    move_rows: HashMap<String, usize>,
-}
+include!(concat!(env!("OUT_DIR"), "/m68020_tables.rs"));
 
 fn move_label(text: &str) -> String {
     key(text.split(" or ").next().unwrap_or(text))
 }
 
-fn first_by_label<'a>(labels: impl Iterator<Item = &'a String>) -> HashMap<String, usize> {
-    let mut found = HashMap::new();
-    for (at, label) in labels.enumerate() {
-        found.entry(move_label(label)).or_insert(at);
-    }
-    found
+fn position(
+    table: &[(&str, usize)],
+    label: &str,
+) -> Option<usize> {
+    table.binary_search_by(|(name, _)| (*name).cmp(label)).ok().map(|at| table[at].1)
 }
 
-static GRIDS: LazyLock<Grids> = LazyLock::new(|| {
-    let moves: Vec<Vec<String>> = include_str!("m68020/t8.2.6-cache.csv").lines().map(split_csv).collect();
-    Grids {
-        fetch: grid(include_str!("m68020/t8.2.1.csv")),
-        fetch_immediate: grid(include_str!("m68020/t8.2.2.csv")),
-        calculate: grid(include_str!("m68020/t8.2.3.csv")),
-        calculate_immediate: grid(include_str!("m68020/t8.2.4.csv")),
-        jump: grid(include_str!("m68020/t8.2.5.csv")),
-        move_columns: first_by_label(moves[0].iter()),
-        move_rows: first_by_label(moves[1..].iter().map(|fields| &fields[0])),
-        moves,
-    }
-});
-
 fn lookup(
-    grid: &[(String, String)],
+    grid: &[(&str, &str)],
     label: &str,
 ) -> Option<u32> {
     let label = key(label);
@@ -149,7 +80,7 @@ fn fetch(
     mode: Mode,
     size: Size,
 ) -> Option<u32> {
-    lookup(&GRIDS.fetch, label(mode, size))
+    lookup(FETCH, label(mode, size))
 }
 
 /// 8.2.2 and 8.2.4: `#<data>.W|L,<destination>`; a byte immediate is the word
@@ -182,7 +113,7 @@ fn fetch_immediate(
     mode: Mode,
     size: Size,
 ) -> Option<u32> {
-    lookup(&GRIDS.fetch_immediate, &immediate_label(mode, size)?)
+    lookup(FETCH_IMMEDIATE, &immediate_label(mode, size)?)
 }
 
 fn calculate(mode: Mode) -> Option<u32> {
@@ -191,13 +122,13 @@ fn calculate(mode: Mode) -> Option<u32> {
         Mode::AbsL => "<data>.L",
         other => label(other, Size::W),
     };
-    lookup(&GRIDS.calculate, label)
+    lookup(CALCULATE, label)
 }
 
 fn calculate_immediate(mode: Mode) -> Option<u32> {
     // the table prints no `-(An)` row; it is `(An)+`'s (limit 5)
     let mode = if mode == Mode::Pre { Mode::Post } else { mode };
-    lookup(&GRIDS.calculate_immediate, &immediate_label(mode, Size::W)?)
+    lookup(CALCULATE_IMMEDIATE, &immediate_label(mode, Size::W)?)
 }
 
 fn jump(mode: Mode) -> Option<u32> {
@@ -205,7 +136,7 @@ fn jump(mode: Mode) -> Option<u32> {
         Mode::Disp | Mode::PcDisp => "(d16,An)",
         other => label(other, Size::W),
     };
-    lookup(&GRIDS.jump, label)
+    lookup(JUMP, label)
 }
 
 /// The effective address time a row's mark asks for.
@@ -226,22 +157,14 @@ fn marked(
     }
 }
 
-/// The first row of each (instruction, operands) pair by [`key`]: a lookup
-/// that compared every row normalized two labels per row, a quarter of a
-/// compile's instructions.
-static ROW_INDEX: LazyLock<HashMap<(String, String), usize>> = LazyLock::new(|| {
-    let mut index = HashMap::new();
-    for (at, row) in ROWS.iter().enumerate() {
-        index.entry((key(&row.instruction), key(&row.operands))).or_insert(at);
-    }
-    index
-});
-
 fn row(
     instruction: &str,
     operands: &str,
-) -> Option<&'static Row> {
-    ROW_INDEX.get(&(key(instruction), key(operands))).map(|&at| &ROWS[at])
+) -> Option<(&'static str, &'static str)> {
+    let (instruction, operands) = (key(instruction), key(operands));
+    let at = ROW_INDEX.binary_search_by(|(i, o, _)| (*i, *o).cmp(&(instruction.as_str(), operands.as_str()))).ok()?;
+    let (_, _, row) = ROW_INDEX[at];
+    Some((ROWS[row].2, ROWS[row].3))
 }
 
 /// A row's cache clocks, `+ n * registers`, with the effective address time of
@@ -253,10 +176,10 @@ fn price(
     size: Size,
     registers: u32,
 ) -> Option<u32> {
-    let row = row(instruction, operands)?;
-    let text: String = row.cache.chars().filter(|c| !c.is_whitespace()).collect();
+    let (mark, cache) = row(instruction, operands)?;
+    let text: String = cache.chars().filter(|c| !c.is_whitespace()).collect();
     let Cell { base, per, .. } = parse_cell(&text)?;
-    Some(base + per * registers + marked(&row.mark, ea, size)?)
+    Some(base + per * registers + marked(mark, ea, size)?)
 }
 
 /// A row named whole (`DBcc (cc = True)`), no operands column.
@@ -280,11 +203,10 @@ fn move_clocks(
         Mode::Imm => return None,
         other => label(other, size),
     };
-    let moves = &GRIDS.moves;
     // the matrix labels PC displacement and index with the address register
     // forms
-    let column = *GRIDS.move_columns.get(&move_label(destination_label))?;
-    let found = &moves[1 + *GRIDS.move_rows.get(&move_label(source_label))?];
+    let column = position(MOVE_COLUMNS, &move_label(destination_label))?;
+    let found = MOVES[1 + position(MOVE_ROWS, &move_label(source_label))?];
     parse_cell(&found[column]).map(|cell| cell.base)
 }
 
