@@ -207,14 +207,20 @@ impl Tti for Mos6502 {
         true
     }
 
+    fn write_only_after_late_unroll(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
 
-    /// An inline at -O2/-O3 that grows the code is refused: bytes first at every level (user ruling
-    /// 2026-11-14), at the rate no clocks can repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit
-    /// 2026-11-24, row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M clocks (div_constants_long) and
-    /// tail_calls +12.6k clocks for 944 B; a price by clocks a byte weighs a loop at about 32 trips.
+    /// An inline at -O2/-O3 that grows the code is refused: bytes first at
+    /// every level (user ruling 2026-11-14), at the rate no clocks can
+    /// repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit 2026-11-24,
+    /// row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M
+    /// clocks (div_constants_long) and tail_calls +12.6k clocks for 944 B;
+    /// a price by clocks a byte weighs a loop at about 32 trips.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         1 << 40
     }

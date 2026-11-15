@@ -1487,6 +1487,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE WRITEONLY-LATE (beyond the pin; owner 6502, exit 2026-11-24, row
+    /// 6502-INLINE-RATE): whether the stores of a global no body loads any more
+    /// are removed after the late unroll as well. The pin's GlobalOpt runs
+    /// before it, so an array the unrolled loops fold every read of keeps its
+    /// stores (loop_fusion -O2 inlined and unrolled: 1,237 B against 133 B).
+    fn write_only_after_late_unroll(&self) -> bool {
+        false
+    }
+
     /// Whether an -Os caller's SZ2 trial is decided by the bytes alone: the
     /// copies stay when they leave the module smaller, the dying callee
     /// counted once. Only where `function_bytes` is calibrated against objects
