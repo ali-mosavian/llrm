@@ -39,6 +39,8 @@
 //! docs/architecture.
 
 use llrm_mir::tti::*;
+use llrm_sdag::lowering::{TargetLoweringInfo, TypeAction};
+use llrm_sdag::mvt::{EVT, MVT};
 
 /// X86's scalar profile: which tables its CPU reads.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -394,16 +396,15 @@ const SSE2_INTEGER_CASTS: [(CastKind, (u32, u32), (u32, u32), i64); 23] = [
     (CastKind::Trunc, (32, 4), (64, 2), 1),
 ];
 
-/// `getTypeLegalizationCost` of an integer vector of 8 to 64-bit lanes and a power-of-two lane count: a type under
-/// 128 bits is widened to a register (`X86TargetLowering::getPreferredVectorAction` widens every vector but one lane);
-/// a wider one is split to registers, each its own operation.
+/// `getTypeLegalizationCost` of an integer vector of 8 to 64-bit lanes and a
+/// power-of-two lane count: the registers it takes ([`xmm_pieces`]) and the
+/// register type of each.
 fn legalized_vector(ty: VectorTy) -> Option<(i64, (u32, u32))> {
     let Ty::Int(bits @ (8 | 16 | 32 | 64)) = ty.lane else { return None };
     if !ty.count.is_power_of_two() || ty.count < 2 {
         return None;
     }
-    let total = bits * ty.count;
-    Some((i64::from(total.div_ceil(128)), (bits, 128 / bits)))
+    Some((xmm_pieces(ty)?, (bits, 128 / bits)))
 }
 
 /// `getTypeLegalizationCost` for the scalar types: how many operations of what
@@ -783,14 +784,34 @@ impl X86 {
     }
 }
 
-/// `getTypeLegalizationCost(<count x lane>).first` of an integer vector of
-/// whole XMM registers: the registers it takes. Lanes of 8 to 64 bits, a
-/// power-of-two count and a total that is a multiple of 128 bits only.
+/// The legalizer's view of the SSE2 vector registers: what
+/// `getTypeLegalizationCost` asks the target's types.
+static SSE2_TYPES: std::sync::LazyLock<TargetLoweringInfo> = std::sync::LazyLock::new(TargetLoweringInfo::x86_64_sse2);
+
+/// `getTypeLegalizationCost(<count x lane>).first` of an integer vector of 8 to
+/// 64-bit lanes: the registers it takes. A vector under 128 bits is widened to
+/// one register (`TypeWidenVector`), a wider one split in halves until
+/// a half is a register. A type with no `MVT` (a count beyond `v128i8`) is
+/// priced by its size alone.
 fn xmm_pieces(ty: VectorTy) -> Option<i64> {
+    fn registers(
+        types: &TargetLoweringInfo,
+        vt: EVT,
+    ) -> Option<i64> {
+        match types.type_conversion(vt) {
+            (TypeAction::Legal, _) => Some(1),
+            (TypeAction::WidenVector, wide) => registers(types, wide),
+            (TypeAction::SplitVector, half) => Some(2 * registers(types, half)?),
+            _ => None,
+        }
+    }
     let lane = match ty.lane {
         Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
         _ => return None,
     };
+    if let Some(mvt) = MVT::integer(lane).and_then(|element| MVT::vector(element, ty.count)) {
+        return registers(&SSE2_TYPES, EVT::Simple(mvt));
+    }
     let total = u64::from(lane) * u64::from(ty.count);
     (ty.count.is_power_of_two() && total >= 128 && total % 128 == 0).then(|| (total / 128) as i64)
 }
@@ -798,6 +819,10 @@ fn xmm_pieces(ty: VectorTy) -> Option<i64> {
 impl Tti for X86 {
     fn name(&self) -> &'static str {
         "X86"
+    }
+
+    fn selects_sub_register_vectors(&self) -> bool {
+        self.vector_values()
     }
 
     fn inline_threshold_override(&self) -> Option<i64> {
@@ -1370,10 +1395,10 @@ impl Tti for X86 {
     }
 
     /// `X86TTIImpl::getMemoryOpCost` of a contiguous vector access of whole XMM
-    /// registers (`movups`): one per register. A type that is not a multiple of
-    /// 128 bits, or a lane that is not an integer of 8 to 64 bits, is not
-    /// priced (DEVIATE X86V1, owner llrm-target-x86-m64-b, exit 2026-11-20,
-    /// the C2 PR: the pin widens or scalarizes it; isel here takes none).
+    /// registers (`movups`): one per register; a type under a register is one
+    /// `movq` or `movd` (widened). A lane that is not an integer of 8 to 64
+    /// bits, or a count with no `MVT`, is not priced (DEVIATE X86V1, owner
+    /// llrm-target-x86-m64-b, exit 2026-11-30).
     fn vector_memory_op_cost(
         &self,
         op: MemoryOp,
@@ -2381,4 +2406,23 @@ fn signed_digits(n: u128) -> u32 {
         n >>= 1;
     }
     count
+}
+
+#[cfg(test)]
+mod pieces_tests {
+    use super::*;
+
+    /// A vector under a register was priced as none (`<8 x i8>`: no
+    /// `getTypeLegalizationCost`), so no loop stored one: `copy_runs`' init
+    /// loops stayed scalar. The target widens it to one register
+    /// (`TypeWidenVector`); a wider one splits.
+    #[test]
+    fn a_vector_under_a_register_is_one_piece_and_a_wider_one_is_split() {
+        let pieces = |bits: u32, count: u32| xmm_pieces(VectorTy { lane: Ty::Int(bits), count });
+        assert_eq!([pieces(8, 8), pieces(16, 4), pieces(32, 2)], [Some(1); 3]);
+        assert_eq!([pieces(8, 16), pieces(16, 8), pieces(32, 4), pieces(64, 2)], [Some(1); 4]);
+        assert_eq!([pieces(8, 32), pieces(16, 16), pieces(32, 8), pieces(64, 4)], [Some(2); 4]);
+        assert_eq!(pieces(8, 64), Some(4));
+        assert_eq!(xmm_pieces(VectorTy { lane: Ty::Float, count: 4 }), None);
+    }
 }

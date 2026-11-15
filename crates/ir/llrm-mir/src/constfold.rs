@@ -119,6 +119,9 @@ pub fn binary(
     c2: ConstantId,
 ) -> Option<ConstantId> {
     let ty = context.get(c1).ty;
+    if let Some(folded) = binary_by_lane(context, op, c1, c2, ty) {
+        return folded;
+    }
     let ones = |width: u32| mask(width);
     // The identity values first: no-ops that return the other value, a poison
     // one included.
@@ -216,6 +219,63 @@ pub fn binary(
         _ => return None,
     };
     Some(context.constant(Constant { ty, kind: ConstantKind::Int(folded & mask(width)) }))
+}
+
+/// The element `index` of a fixed vector constant: a member of the list, or the
+/// one value a splat (`Zero`, `Undef`, `Poison`) holds in every lane.
+fn lane(
+    context: &Context,
+    vector: ConstantId,
+    index: usize,
+    element: TypeId,
+) -> Option<ConstantId> {
+    let constant = context.get(vector);
+    Some(match &constant.kind {
+        ConstantKind::Aggregate(members) => *members.get(index)?,
+        ConstantKind::Zero | ConstantKind::Null => null_value(context, element),
+        ConstantKind::Undef => undef(context, element),
+        ConstantKind::Poison => poison(context, element),
+        _ => return None,
+    })
+}
+
+/// The `isa<FixedVectorType>` arm of `ConstantFoldBinaryInstruction`
+/// ([ConstantFold.cpp:928](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L928)):
+/// each lane of a vector built lane by lane is folded with the same lane of the
+/// other. A splat of both is one fold of its value. `None` outside the arm,
+/// `Some(None)` where a lane does not fold.
+fn binary_by_lane(
+    context: &Context,
+    op: BinaryOp,
+    c1: ConstantId,
+    c2: ConstantId,
+    ty: TypeId,
+) -> Option<Option<ConstantId>> {
+    let Type::Vector { element, count } = *context.types.get(ty) else { return None };
+    let by_list = |c: ConstantId| matches!(context.get(c).kind, ConstantKind::Aggregate(_));
+    if !by_list(c1) && !by_list(c2) {
+        return None;
+    }
+    let lanes: Option<Vec<ConstantId>> = (0..count as usize)
+        .map(|at| binary(context, op, lane(context, c1, at, element)?, lane(context, c2, at, element)?))
+        .collect();
+    Some(lanes.map(|lanes| vector_of(context, ty, lanes)))
+}
+
+/// `ConstantVector::get`: a vector whose lanes are all zero is
+/// `zeroinitializer`, the form the rest of the pipeline looks for (an
+/// `Aggregate` of zeros is none of them).
+fn vector_of(
+    context: &Context,
+    ty: TypeId,
+    lanes: Vec<ConstantId>,
+) -> ConstantId {
+    let kind = if lanes.iter().all(|&lane| is_null_value(context, lane)) {
+        ConstantKind::Zero
+    } else {
+        ConstantKind::Aggregate(lanes)
+    };
+    context.constant(Constant { ty, kind })
 }
 
 /// The `HasScalarUndefOrScalableVectorUndef` switch of
@@ -951,6 +1011,32 @@ fn not_poison(
 mod tests {
     use super::*;
     use crate::context::{ConstantExpr, GlobalId};
+
+    /// The induction vectors of an unrolled vectorized loop (`<0..7> + <8, ..>`
+    /// per trip) stayed `add`s: the fold read only a splat, so `copy_runs`'
+    /// fully unrolled init loop computed its constants at run time
+    /// (`pmullw`, `paddw`, +4.8% instructions over the pin).
+    #[test]
+    fn a_vector_built_lane_by_lane_folds_with_another_lane_by_lane() {
+        let context = Context::new();
+        let i16 = context.types.int(16);
+        let vector = context.types.intern(Type::Vector { element: i16, count: 4 });
+        let make = |lanes: &[u128]| {
+            let members =
+                lanes.iter().map(|&one| context.constant(Constant { ty: i16, kind: ConstantKind::Int(one) })).collect();
+            context.constant(Constant { ty: vector, kind: ConstantKind::Aggregate(members) })
+        };
+        let ramp = make(&[0, 1, 2, 3]);
+        let splat = make(&[8, 8, 8, 8]);
+        let zero = context.constant(Constant { ty: vector, kind: ConstantKind::Zero });
+        assert_eq!(binary(&context, BinaryOp::Add, ramp, splat), Some(make(&[8, 9, 10, 11])));
+        assert_eq!(binary(&context, BinaryOp::Mul, splat, ramp), Some(make(&[0, 8, 16, 24])));
+        assert_eq!(binary(&context, BinaryOp::Sub, ramp, make(&[3, 3, 3, 3])), Some(make(&[65533, 65534, 65535, 0])));
+        // Lanes that all come out zero are `zeroinitializer`, the form the rest
+        // look for.
+        assert_eq!(binary(&context, BinaryOp::Sub, ramp, ramp), Some(zero));
+        assert_eq!(binary(&context, BinaryOp::Add, ramp, make(&[8, 7, 6, 5])), Some(make(&[8, 8, 8, 8])));
+    }
 
     fn unknown(
         context: &Context,

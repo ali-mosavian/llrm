@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <sys/mman.h>
 static unsigned char buf[200];
 __attribute__((noinline)) int run_sum(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
 __attribute__((noinline)) int run_xor(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t ^= a[i] * 3; return t; }
@@ -38,6 +39,10 @@ void t16_8(void *, const void *), t32_8(void *, const void *), t32_16(void *, co
 void set_lanes(void *b, void *w, void *d, unsigned char x, unsigned short y, unsigned z);
 int stack_copy(int n);
 int square_sum(int n);
+void add_u8x8(void *, const void *, const void *), sub_u16x4(void *, const void *, const void *);
+void xor_u32x2(void *, const void *, const void *), set_u8x8(void *);
+void fill_ramp(void);
+unsigned char ramp_at(int);
 int main(void) {
     int bad = 0;
     for (int dir = 0; dir < 2; dir++)
@@ -161,6 +166,25 @@ int main(void) {
             pattern_bytes(pat, n);
             for (unsigned i = 0; i < 300; i++) if (pat[i] != (i < n ? (unsigned char)((i & 3) + ((i >> 2) & 1)) : 0xEE)) bad++;
         }
+    }
+    {
+        /* Each buffer ends where an unmapped page begins: an access past its 8 bytes faults. */
+        unsigned char *page = mmap(0, 4 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        mprotect(page + 3 * 4096, 4096, PROT_NONE);
+        unsigned char *x = page + 3 * 4096 - 8, *y = page + 2 * 4096 - 8, *o = page + 1 * 4096 - 8;
+        for (int i = 0; i < 8; i++) x[i] = (unsigned char)(i * 37 + 250), y[i] = (unsigned char)(i * 91 + 7);
+        add_u8x8(o, x, y);
+        for (int i = 0; i < 8; i++) if (o[i] != (unsigned char)(x[i] + y[i])) bad++;
+        unsigned short *hx = (unsigned short *)x, *hy = (unsigned short *)y, *ho = (unsigned short *)o;
+        sub_u16x4(ho, hx, hy);
+        for (int i = 0; i < 4; i++) if (ho[i] != (unsigned short)(hx[i] - hy[i])) bad++;
+        unsigned *wx = (unsigned *)x, *wy = (unsigned *)y, *wo = (unsigned *)o;
+        xor_u32x2(wo, wx, wy);
+        for (int i = 0; i < 2; i++) if (wo[i] != (wx[i] ^ wy[i])) bad++;
+        set_u8x8(o);
+        for (int i = 0; i < 8; i++) if (o[i] != i + 1) bad++;
+        fill_ramp();
+        for (int i = 0; i < 48; i++) if (ramp_at(i) != (unsigned char)(i * 5 - 20)) bad++;
     }
     printf("bad %d\n", bad);
 }
