@@ -13,7 +13,7 @@ use crate::mc::inst::{
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
-    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp,
+    Addr, Arrangement, Gpr, ImmShape, MulAcc, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp,
     VectorReduce, VectorShift,
 };
 use crate::mfunc::Callee;
@@ -237,7 +237,9 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
-    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin] {
+    for op in
+        [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin]
+    {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
             if !op.has_lanes(lanes) {
                 continue;
@@ -264,11 +266,18 @@ pub(super) fn instructions() -> Vec<Inst> {
     for (_, form) in crate::vector_forms::all() {
         use crate::vector_forms::VectorForm;
         out.push(match form {
-            VectorForm::Compare { op, lanes, quad } => Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) },
-            VectorForm::CompareZero { op, lanes, quad } => Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) },
+            VectorForm::Compare { op, lanes, quad } => {
+                Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) }
+            }
+            VectorForm::CompareZero { op, lanes, quad } => {
+                Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) }
+            }
             VectorForm::BitSelect { op, quad } => Inst::VectorBitSelect { op, quad, rd: v(0), rn: v(1), rm: v(2) },
             VectorForm::Bsp { quad } => Inst::VectorBsp { quad, rd: v(0), mask: v(3), rn: v(1), rm: v(2) },
         });
+    }
+    for (op, lanes) in [(MulAcc::Add, Arrangement::S4), (MulAcc::Sub, Arrangement::B8)] {
+        out.push(Inst::VectorMulAcc { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
     }
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
@@ -393,6 +402,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBsp { .. } => "VectorBsp",
         Inst::VectorLongShift { .. } => "VectorLongShift",
         Inst::VectorLong { .. } => "VectorLong",
+        Inst::VectorMulAcc { .. } => "VectorMulAcc",
         Inst::VectorFma { .. } => "VectorFma",
         Inst::VectorInsGpr { .. } => "VectorInsGpr",
         Inst::VectorInsLane { .. } => "VectorInsLane",
@@ -421,7 +431,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 72] = [
+const ALL: [&str; 73] = [
     "Mark",
     "Label",
     "Cfi",
@@ -472,6 +482,7 @@ const ALL: [&str; 72] = [
     "VectorBsp",
     "VectorLongShift",
     "VectorLong",
+    "VectorMulAcc",
     "VectorFma",
     "VectorInsGpr",
     "VectorInsLane",

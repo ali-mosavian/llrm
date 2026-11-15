@@ -499,6 +499,16 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let sz = u32::from(*lanes == Arrangement::D2);
             0x4E20_0400 | u << 29 | a << 23 | sz << 22 | vreg(*rm)? << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorMulAcc { op, lanes, rd, rn, rm } => {
+            let u = u32::from(*op == MulAcc::Sub);
+            0x0E20_9400
+                | lanes.q() << 30
+                | u << 29
+                | lanes.size() << 22
+                | vreg(*rm)? << 16
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
         Inst::VectorFma { op, lanes, rd, rn, rm } => {
             let a = u32::from(*op == VectorFma::Sub);
             let sz = u32::from(*lanes == Arrangement::D2);

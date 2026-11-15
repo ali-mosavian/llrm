@@ -525,7 +525,11 @@ impl VectorOp {
         if self.is_logical() {
             return lanes.full() == Arrangement::B16;
         }
-        let no_doubles = matches!(self, VectorOp::Mul | VectorOp::Smax | VectorOp::Smin | VectorOp::Umax | VectorOp::Umin);
+        let no_doubles =
+            matches!(
+                self,
+                VectorOp::Mul | VectorOp::Smax | VectorOp::Smin | VectorOp::Umax | VectorOp::Umin
+            );
         !(no_doubles && lanes == Arrangement::D2)
     }
 
@@ -739,6 +743,22 @@ impl VectorFma {
         match self {
             VectorFma::Add => "fmla",
             VectorFma::Sub => "fmls",
+        }
+    }
+}
+
+/// `mla` and `mls`: `rd += rn * rm` and `rd -= rn * rm`, every integer lane.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum MulAcc {
+    Add,
+    Sub,
+}
+
+impl MulAcc {
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            MulAcc::Add => "mla",
+            MulAcc::Sub => "mls",
         }
     }
 }
@@ -1476,6 +1496,15 @@ pub enum Inst {
     /// v.4s`; `lanes` is `S4` or `D2`.
     VectorFpBinary {
         op: VectorFpOp,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// `mla v.4s, v.4s, v.4s`: `rd` is read and written; `lanes` has 8 to
+    /// 32-bit lanes.
+    VectorMulAcc {
+        op: MulAcc,
         lanes: Arrangement,
         rd: Vreg,
         rn: Vreg,

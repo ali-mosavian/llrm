@@ -17,6 +17,8 @@
 //!   MULSUB_OP2       t = mul a, b ; r = sub c, t   =>  r = msub a, b, c
 //!   MULSUB_OP1       t = mul a, b ; r = sub t, c   =>  n = sub zr, c ; r = madd a, b, n
 //!   MULADDWI/MULSUBWI  t = mul a, b ; r = add/sub t, #i  =>  n = mov ±i ; r = madd a, b, n
+//!   MULADDv_OP1/OP2    t = mul.v a, b ; r = add.v t, c  =>  r = c ; mla r, a, b
+//!   MULSUBv_OP2        t = mul.v a, b ; r = sub.v c, t  =>  r = c ; mls r, a, b
 //! ```
 //!
 //! The shared pass takes a replacement only when it does not lengthen the
@@ -37,10 +39,15 @@
 //! tables): the resources test accepts every replacement; each fusion removes
 //! an instruction.
 //!
+//! DEVIATE MC-V1 (owner w11, exit 2026-11-24): `MULSUBv_OP1` (`sub t, c`, the
+//! pin's `neg` and `mla`) is not made: there is no vector `neg` here. The
+//! indexed `mla`/`mls` are not made either.
+//!
 //! DEVIATE MC-P (owner w15, review 2026-11-07): the flag-setting forms and the
-//! vector patterns are not made. The floating-point patterns need the
-//! `contract` flag on the `fadd`/`fsub` (`isCombineInstrCandidateFP`), which
-//! `MFunc` does not carry; `fmuladd` is already fused in selection.
+//! integer vector patterns of the `_indexed` kind are not made. The
+//! floating-point patterns need the `contract` flag on the `fadd`/`fsub`
+//! (`isCombineInstrCandidateFP`), which `MFunc` does not carry; `fmuladd` is
+//! already fused in selection.
 //!
 //! # Runs
 //! After `prepass` (which sinks and drops dead flag settings) and before the
@@ -68,7 +75,28 @@ enum Kind {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Pattern {
+enum Pattern {
+    Scalar(ScalarPattern),
+    /// `mla`/`mls` of a vector product and the register it is combined with.
+    Vector {
+        subtract: bool,
+        mul: usize,
+        other: Vreg,
+        lanes: Arrangement,
+    },
+}
+
+impl Pattern {
+    fn mul(self) -> usize {
+        match self {
+            Pattern::Scalar(pattern) => pattern.mul,
+            Pattern::Vector { mul, .. } => mul,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScalarPattern {
     kind: Kind,
     /// The index of the `mul` in the block.
     mul: usize,
@@ -106,6 +134,14 @@ impl Counts {
         let key = Reg::Gpr(reg);
         reg.is_virtual() && self.defs.get(&key) == Some(&1) && self.uses.get(&key) == Some(&1)
     }
+
+    fn single_vector(
+        &self,
+        reg: Vreg,
+    ) -> bool {
+        let key = Reg::Fpr(reg);
+        reg.is_virtual() && self.defs.get(&key) == Some(&1) && self.uses.get(&key) == Some(&1)
+    }
 }
 
 struct Block<'a> {
@@ -133,6 +169,10 @@ fn latency(op: &Op) -> u32 {
             Inst::AddSubShifted { shift, amount, .. } if !(*shift == Shift::Lsl && *amount == 0) => 2,
             Inst::AddSubExtended { .. } => 2,
             Inst::Load { .. } => 2,
+            // A510 ASIMD: `(ADD|SUB|NEG)v` 3, `MULv` (`WriteVq`)
+            // and `ML[AS]v` 4.
+            Inst::VectorBinary { op: VectorOp::Add | VectorOp::Sub, .. } => 3,
+            Inst::VectorBinary { op: VectorOp::Mul, .. } | Inst::VectorMulAcc { .. } => 4,
             Inst::FpBinary { op: FpBinary::Div, size: FpSize::D, .. } => 22,
             Inst::FpBinary { op: FpBinary::Div, .. } => 13,
             Inst::FpBinary { .. } | Inst::FpFused { .. } => 4,
@@ -219,7 +259,68 @@ impl Block<'_> {
         if expand_imm::mov_imm(value, bits, Gpr::R31).len() != 1 {
             return vec![];
         }
-        vec![Pattern { kind: Kind::Immediate(value), mul, other: Gpr::R31, width }]
+        vec![Pattern::Scalar(ScalarPattern { kind: Kind::Immediate(value), mul, other: Gpr::R31, width })]
+    }
+}
+
+impl Block<'_> {
+    /// `MULADDv_OP1/OP2` and `MULSUBv_OP2` of `getMaddPatterns`: the add or
+    /// subtract of a lane-wise product read nowhere else.
+    fn vector_patterns(
+        &self,
+        root: usize,
+        subtract: bool,
+        lanes: Arrangement,
+        rn: Vreg,
+        rm: Vreg,
+    ) -> Vec<Pattern> {
+        // `sub c, t` (`rm` the product) is `mls`; `sub t, c` needs a `neg`.
+        let candidates: &[(Vreg, Vreg)] = if subtract { &[(rm, rn)] } else { &[(rn, rm), (rm, rn)] };
+        let mut found = vec![];
+        for &(product, other) in candidates {
+            if !product.is_virtual() || !other.is_virtual() {
+                continue;
+            }
+            let Some(mul) = self.ops[..root].iter().rposition(|op| op.defs_and_uses().0.contains(&Reg::Fpr(product)))
+            else {
+                continue;
+            };
+            let Op::I(Inst::VectorBinary { op: VectorOp::Mul, lanes: l, rd, rn: a, rm: b }) = self.ops[mul] else {
+                continue;
+            };
+            if l != lanes || rd != product || !self.counts.single_vector(product) {
+                continue;
+            }
+            let stable = [a, b]
+                .iter()
+                .all(
+                    |reg| reg.is_virtual()
+                        && !self.ops[mul + 1..root].iter().any(|op| op.defs_and_uses().0.contains(&Reg::Fpr(*reg))),
+                );
+            if stable {
+                found.push(Pattern::Vector { subtract, mul, other, lanes });
+            }
+        }
+        found
+    }
+
+    /// `genFusedMultiply` of `MLAv`/`MLSv`: the accumulator is a copy of the
+    /// other operand, which the instruction then changes.
+    fn generate_vector(
+        &mut self,
+        root: usize,
+        pattern: Pattern,
+    ) -> Option<Replacement> {
+        let Pattern::Vector { subtract, mul, other, lanes } = pattern else { return None };
+        let Op::I(Inst::VectorBinary { rd, .. }) = self.ops[root] else { return None };
+        let Op::I(Inst::VectorBinary { rn: a, rm: b, .. }) = self.ops[mul] else { return None };
+        let made = vec![
+            Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(other) },
+            Op::I(Inst::VectorMulAcc { op: if subtract { MulAcc::Sub } else { MulAcc::Add }, lanes, rd, rn: a, rm: b }),
+        ];
+        let inserted = made.iter().map(node_of).collect();
+        self.pending = made;
+        Some(Replacement { inserted, deleted: vec![mul, root] })
     }
 }
 
@@ -235,6 +336,11 @@ impl CombinerIsa for Block<'_> {
         &self,
         root: usize,
     ) -> Vec<Pattern> {
+        if let Op::I(Inst::VectorBinary { op: op @ (VectorOp::Add | VectorOp::Sub), lanes, rn, rm, .. }) =
+            self.ops[root]
+        {
+            return self.vector_patterns(root, op == VectorOp::Sub, lanes, rn, rm);
+        }
         if let Op::I(Inst::AddSubImm { op, width, rn, imm12, shift12, .. }) = self.ops[root] {
             return self.immediate_pattern(root, op, width, rn, u64::from(imm12) << if shift12 { 12 } else { 0 });
         }
@@ -267,7 +373,7 @@ impl CombinerIsa for Block<'_> {
             let stable =
                 readable(other) && [a, b].iter().all(|reg| readable(*reg) && !self.defined_between(mul, root, *reg));
             if stable {
-                found.push(Pattern { kind, mul, other, width });
+                found.push(Pattern::Scalar(ScalarPattern { kind, mul, other, width }));
             }
         }
         found
@@ -279,6 +385,7 @@ impl CombinerIsa for Block<'_> {
         root: usize,
         pattern: Pattern,
     ) -> Option<Replacement> {
+        let Pattern::Scalar(pattern) = pattern else { return self.generate_vector(root, pattern) };
         let (Op::I(Inst::AddSubShifted { rd, .. }) | Op::I(Inst::AddSubImm { rd, .. })) = self.ops[root] else {
             return None;
         };
@@ -320,7 +427,7 @@ impl CombinerIsa for Block<'_> {
         _replacement: &Replacement,
     ) {
         let (_, loc) = self.ops.remove(root);
-        self.ops.remove(pattern.mul);
+        self.ops.remove(pattern.mul());
         for (index, op) in std::mem::take(&mut self.pending).into_iter().enumerate() {
             self.ops.insert_at(root - 1 + index, op, loc);
         }
