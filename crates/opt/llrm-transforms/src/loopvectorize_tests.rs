@@ -6,9 +6,21 @@ use super::LoopVectorize;
 use crate::testing::parsed;
 
 fn run(source: &str) -> String {
+    run_with(source, false)
+}
+
+/// [`run`] with the compares and selects the arm64 backend does not select yet.
+fn run_compares(source: &str) -> String {
+    run_with(source, true)
+}
+
+fn run_with(
+    source: &str,
+    compares: bool,
+) -> String {
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares });
     manager
         .run_module(
             &mut module,
@@ -208,7 +220,7 @@ fn a_tiny_trip_count_is_not_interleaved() {
 fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     let mut module = crate::testing::parsed(COPY);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: true });
+    manager.add(LoopVectorize { always: true, only_when_forced: true, compares: false });
     manager
         .run_module(
             &mut module,
@@ -565,6 +577,8 @@ fn a_memory_check_keeps_the_remainder_of_a_divisible_constant_trip() {
 const INDUCTION_TRUNC: &str = include_str!("../tests/lv/induction_trunc.ll");
 const INDUCTION_VALUE: &str = include_str!("../tests/lv/induction_value.ll");
 const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");
+const INDUCTION_VALUE_REVERSE: &str = include_str!("../tests/lv/induction_value_reverse.ll");
+const INDUCTION_VALUE_REVERSE_STORE: &str = include_str!("../tests/lv/induction_value_reverse_store.ll");
 
 /// `a[i] = ((i * 7) & 255) | 0x700` over `i16` (scroll's init loop) stayed
 /// scalar ("A value the loop computes that is not widened": the `trunc` of the
@@ -601,6 +615,29 @@ fn an_induction_that_starts_at_a_run_time_value_is_widened() {
     assert!(text.contains("induction = add <8 x i16>"), "{text}");
     assert_eq!(count(&text, "phi <8 x i16>"), 2, "{text}");
     assert_eq!(count(&text, "store <8 x i16>"), 3, "{text}");
+}
+
+/// A count-down loop that reads its induction as a value (recsum's
+/// `(n * 3) % 11`) stayed scalar ("The induction is read as a value in a loop
+/// that counts down"); the pin takes VF 4, IC 4 on a `<4 x i32>` `vec.ind`
+/// that starts at `<1999, 1998, 1997, 1996>` and steps by -4 a part.
+#[test]
+fn a_count_down_induction_read_as_a_value_is_widened() {
+    let text = run(INDUCTION_VALUE_REVERSE);
+    assert!(text.contains("<i32 1999, i32 1998, i32 1997, i32 1996>"), "{text}");
+    assert_eq!(count(&text, "step.add = add <4 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "vec.ind.next = add <4 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "mul <4 x i32>"), 4, "{text}");
+}
+
+/// `a[i] = i` counting down: a `vec.ind` in iteration order stored at the
+/// lowest address first would write each lane to the wrong element (the pin
+/// reverses it); the loop stays scalar until LV-R1.
+#[test]
+fn a_count_down_induction_stored_through_a_reverse_access_stays_scalar() {
+    let text = run(INDUCTION_VALUE_REVERSE_STORE);
+    assert_eq!(count(&text, "vec.ind"), 0, "{text}");
+    assert_eq!(count(&text, "store <"), 0, "{text}");
 }
 
 const REVERSE_COPY: &str = include_str!("../tests/lv/reverse_copy.ll");
@@ -955,4 +992,59 @@ exit:
     let after_text = run(source);
     assert!(after_text.contains("llvm.vector.reduce.add"), "the sum was not widened:\n{after_text}");
     assert_eq!(format!("{:?}", answer(&after_text)), format!("{before:?}"), "{after_text}");
+}
+
+const SELECT_CLAMP: &str = include_str!("../tests/lv/select_clamp.ll");
+const FLOAT_CLAMP: &str = include_str!("../tests/lv/float_clamp.ll");
+const FLOAT_SELECT: &str = include_str!("../tests/lv/float_select.ll");
+
+/// `b[i] = a[i] > 100 ? 100 : a[i]` stayed scalar ("An instruction the
+/// vectorizer does not widen yet": the `icmp`/`select`); the pin takes VF 4,
+/// IC 2 (`opt -passes=loop-vectorize`: two `icmp sgt <4 x i32>`, two `select
+/// <4 x i1>`, step 8).
+#[test]
+fn an_integer_compare_and_select_are_widened() {
+    let text = run_compares(SELECT_CLAMP);
+    assert_eq!(count(&text, "icmp sgt <4 x i32>"), 2, "{text}");
+    assert_eq!(count(&text, "select <4 x i1>"), 2, "{text}");
+    assert_eq!(count(&text, "store <4 x i32>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `c[i] = a[i] < b[i] ? a[i] : b[i]` over `float`: the pin takes VF 4, IC 2
+/// (two `fcmp olt <4 x float>`, two `select <4 x i1>`).
+#[test]
+fn a_float_compare_and_select_are_widened() {
+    let text = run_compares(FLOAT_SELECT);
+    assert_eq!(count(&text, "fcmp olt <4 x float>"), 2, "{text}");
+    assert_eq!(count(&text, "select <4 x i1>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// jpeg_single's clamp (`fadd`, two `fcmp`, two `select`, `fptosi`, `trunc` to
+/// `i8`, over 8 trips) stayed scalar ("A binary result used other than by a
+/// store or a binary operation", +1.48M instructions at -O2); the pin takes VF
+/// 8, IC 1 (one `fptosi <8 x float> to <8 x i32>`, one `trunc <8 x i32> to <8 x
+/// i8>`, a `select <8 x i1>` of `<8 x i8>` stored whole).
+#[test]
+fn a_clamp_through_fptosi_and_trunc_is_widened() {
+    let text = run_compares(FLOAT_CLAMP);
+    assert_eq!(count(&text, "fcmp ole <8 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "fcmp oge <8 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "select <8 x i1>"), 2, "{text}");
+    assert_eq!(count(&text, "fptosi <8 x float>"), 1, "{text}");
+    assert_eq!(count(&text, "trunc <8 x i32>"), 1, "{text}");
+    assert_eq!(count(&text, "store <8 x i8>"), 1, "{text}");
+    assert_eq!(count(&text, "load float"), 0, "{text}");
+}
+
+const SELECT_INVARIANT: &str = include_str!("../tests/lv/select_invariant.ll");
+
+/// DEVIATE LV-S1: a select by a loop-invariant condition stays scalar (the pin
+/// widens it with the scalar `i1`); a splatted condition would be a different
+/// recipe.
+#[test]
+fn a_select_by_a_loop_invariant_condition_stays_scalar() {
+    let text = run_compares(SELECT_INVARIANT);
+    assert_eq!(count(&text, "<4 x i32>"), 0, "{text}");
 }

@@ -14,7 +14,7 @@ pub fn model(cpu: &str) -> Option<&'static SchedModel> {
 }
 
 /// `(opcode, scheduling class)`, by opcode; the class number is the same in every model.
-static OPCODE_CLASS: [(u16, u16); 2226] = [
+static OPCODE_CLASS: [(u16, u16); 2232] = [
     (8, 0),
     (9, 0),
     (10, 0),
@@ -213,10 +213,16 @@ static OPCODE_CLASS: [(u16, u16); 2226] = [
     (2186, 1866),
     (2187, 1866),
     (2188, 1867),
+    (2189, 1868),
+    (2190, 1869),
+    (2191, 1870),
+    (2192, 1871),
     (2193, 493),
     (2194, 494),
     (2201, 1471),
     (2206, 1467),
+    (2222, 806),
+    (2223, 807),
     (2224, 1244),
     (2229, 1544),
     (2230, 1544),
@@ -2245,7 +2251,7 @@ static OPCODE_CLASS: [(u16, u16); 2226] = [
 
 /// Opcodes only a pattern of a live type or under a dynamic atom (`[types] live`, `[dynamic]` in the record) emits: a target that has the atom
 /// false (the vector flag off) leaves them unmodeled, as when the pattern was pruned.
-static DYNAMIC_ONLY: [u16; 1289] = [
+static DYNAMIC_ONLY: [u16; 1295] = [
     534,
     535,
     1774,
@@ -2290,6 +2296,12 @@ static DYNAMIC_ONLY: [u16; 1289] = [
     2186,
     2187,
     2188,
+    2189,
+    2190,
+    2191,
+    2192,
+    2222,
+    2223,
     2350,
     2351,
     2352,
@@ -4181,6 +4193,8 @@ pub static CORTEX_A510_MODEL: SchedModel = SchedModel {
         (797, SchedClass::Resolved(2)),
         (798, SchedClass::Resolved(2)),
         (799, SchedClass::Resolved(2)),
+        (806, SchedClass::Resolved(2)),
+        (807, SchedClass::Resolved(2)),
         (808, SchedClass::Resolved(2)),
         (809, SchedClass::Resolved(2)),
         (810, SchedClass::Resolved(2)),
@@ -4753,6 +4767,10 @@ pub static CORTEX_A510_MODEL: SchedModel = SchedModel {
         (1865, SchedClass::Resolved(14)),
         (1866, SchedClass::Resolved(14)),
         (1867, SchedClass::Resolved(14)),
+        (1868, SchedClass::Resolved(2)),
+        (1869, SchedClass::Resolved(2)),
+        (1870, SchedClass::Resolved(2)),
+        (1871, SchedClass::Resolved(2)),
         (1872, SchedClass::Resolved(2)),
         (1873, SchedClass::Resolved(2)),
         (1874, SchedClass::Resolved(14)),
@@ -5153,6 +5171,8 @@ pub static CYCLONE_MODEL: SchedModel = SchedModel {
         (797, SchedClass::Resolved(48)),
         (798, SchedClass::Resolved(48)),
         (799, SchedClass::Resolved(48)),
+        (806, SchedClass::Resolved(48)),
+        (807, SchedClass::Resolved(48)),
         (808, SchedClass::Resolved(68)),
         (809, SchedClass::Resolved(68)),
         (810, SchedClass::Resolved(68)),
@@ -5725,6 +5745,10 @@ pub static CYCLONE_MODEL: SchedModel = SchedModel {
         (1865, SchedClass::Resolved(48)),
         (1866, SchedClass::Resolved(48)),
         (1867, SchedClass::Resolved(48)),
+        (1868, SchedClass::Resolved(48)),
+        (1869, SchedClass::Resolved(48)),
+        (1870, SchedClass::Resolved(48)),
+        (1871, SchedClass::Resolved(48)),
         (1872, SchedClass::Resolved(48)),
         (1873, SchedClass::Resolved(48)),
         (1874, SchedClass::Resolved(48)),
