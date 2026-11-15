@@ -76,9 +76,8 @@ fn a_speed_level_multiply_chain_adds_no_trial_builds() {
     let report = String::from_utf8_lossy(&out.stderr);
     assert!(report.contains("mul_trial true"), "the multiply was not a chain:\n{report}");
     let builds = report.lines().filter(|line| line.trim_end() == "[builds] f").count();
-    // the first build, the relaxed-class build, and both again without the
-    // shared CSE
-    assert!(builds <= 4, "{builds} builds:\n{report}");
+    // the one build: no relaxed-class, shared-CSE or slot-register build
+    assert!(builds <= 1, "{builds} builds:\n{report}");
 }
 
 /// A -Os function whose constants were rematerialised was built a third time
