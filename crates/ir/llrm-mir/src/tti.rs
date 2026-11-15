@@ -1370,6 +1370,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-INLINE-TRIAL (speed): whether a copy the -O2/-O3 byte rate
+    /// refused within the trial's band is built inlined as well, the driver
+    /// keeping the finished code that is smaller. The rate prices the copy
+    /// alone, not what it folds (a constant, a dead callee). Only with a
+    /// byte rate (`speed_inline_milliclocks_per_byte`) and
+    /// `opt_size_inline_trial_limits`.
+    fn speed_inline_finished_trial(&self) -> bool {
+        false
+    }
+
     /// Whether an -Os caller's SZ2 trial is decided by the bytes alone: the
     /// copies stay when they leave the module smaller, the dying callee
     /// counted once. Only where `function_bytes` is calibrated against objects

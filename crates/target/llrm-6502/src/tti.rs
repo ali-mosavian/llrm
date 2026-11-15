@@ -199,6 +199,14 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// DEVIATE OS-INLINE-TRIAL (speed; owner 6502, exit 2026-11-24, row
+    /// 6502-INLINE-RATE): a copy the rate refused is built inlined as well
+    /// and kept where the backend writes the chain smaller (memcpy_libcall
+    /// -O2: `same` folded into `main`, 100 B).
+    fn speed_inline_finished_trial(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
