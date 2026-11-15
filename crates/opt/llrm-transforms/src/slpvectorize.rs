@@ -15,11 +15,13 @@
 //! vector store stands at the last store of the window, with the address and
 //! alignment of the first.
 //!
-//! DEVIATE SLP1 (owner w12, exit 2026-11-24): the values of a window are
-//! constants only. The tree of loads and arithmetic (`buildTreeRec`
-//! l.12052, `getEntryCost` l.16168), gathers and scheduling beyond "nothing
-//! between the first and last store touches memory" are the next steps of
-//! the series.
+//! A window whose values are not all constants is a tree of the loads,
+//! arithmetic, casts, compares, selects and `llvm.fmuladd` that make them
+//! (`slptree`); the first such window that pays is made and the function is
+//! looked at again, so no plan names a scalar another has gone from.
+//!
+//! DEVIATE SLP1 (owner arm64, exit 2026-11-24): the narrower tree
+//! `slptree` states.
 //!
 //! # Runs
 //! At the pin's `slp-vectorizer` slot (`PassBuilderPipelines.cpp` l.1455).
@@ -33,7 +35,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::tti::{CostKind, MemoryOp, Tti, Ty, VectorTy};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
@@ -72,7 +74,9 @@ fn chains(
     function: &Function,
     block: BlockId,
 ) -> Vec<(TypeId, Vec<Seed>)> {
-    let mut groups: Vec<(Operand, TypeId, Vec<Seed>)> = Vec::new();
+    // One object, one variable index (the stores of a row of an image share
+    // the column), one type.
+    let mut groups: Vec<((Operand, Option<llrm_mir::module::ValueId>, i64), TypeId, Vec<Seed>)> = Vec::new();
     for (order, inst) in function.iter_block(block).enumerate() {
         let instruction = function.instruction(inst);
         let Opcode::Store { align, volatile: false } = instruction.opcode else { continue };
@@ -80,13 +84,12 @@ fn chains(
         let Some(ty) = function.operand_type(unit.context, value) else { continue };
         let Some((_, bytes)) = lane_of(unit.context, ty) else { continue };
         let reference = MemRef::at(unit, instruction.operands[1], bytes as u32);
-        let Some(root) = reference.root.filter(|_| reference.base.is_none() && reference.segment.is_none()) else {
-            continue;
-        };
+        let Some(root) = reference.root.filter(|_| reference.segment.is_none()) else { continue };
+        let key = (root, reference.base, reference.scale);
         let seed = Seed { store: inst, order, disp: reference.disp, align, value };
-        match groups.iter_mut().find(|group| group.0 == root && group.1 == ty) {
+        match groups.iter_mut().find(|group| group.0 == key && group.1 == ty) {
             Some(group) => group.2.push(seed),
-            None => groups.push((root, ty, vec![seed])),
+            None => groups.push((key, ty, vec![seed])),
         }
     }
     let mut runs = Vec::new();
@@ -223,6 +226,7 @@ fn vectorize(
 fn run_function(
     context: &mut Context,
     layout: &DataLayout,
+    declared: &mut Declared,
     function: &mut Function,
     outer: &Outer,
     tti: &dyn Tti,
@@ -265,7 +269,63 @@ fn run_function(
     for (ty, window) in &plan {
         vectorize(context, function, *ty, window);
     }
-    !plan.is_empty()
+    let mut changed = !plan.is_empty();
+    // One tree at a time, the function read again after each.
+    while let Some((tree, align)) = next_tree(context, layout, function, outer, tti) {
+        crate::slptree::emit(context, declared, function, &tree, align);
+        changed = true;
+    }
+    changed
+}
+
+/// The first window of stores, by `vectorizeStores`' order, whose values make a
+/// tree that pays.
+fn next_tree(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    outer: &Outer,
+    tti: &dyn Tti,
+) -> Option<(crate::slptree::Tree, Option<u64>)> {
+    let unit = MemUnit::within(context, layout, function, outer);
+    let mut session = llrm_analysis::scev::analysis::ScevSession::of(context, function, outer);
+    session.ask_within(context, layout, &outer.globals, &outer.metadata, function, |se, cx| {
+        let scaler = crate::slptree::Scaler::new(se, cx);
+        for block in function.layout().to_vec() {
+            for (ty, run) in chains(&unit, function, block) {
+                let (lane, bytes) = lane_of(unit.context, ty).expect("a lane type");
+                let widest = (u64::from(tti.vector_register_bits()) / (bytes * 8)).max(1);
+                let mut vf = (widest.min(run.len() as u64)).next_power_of_two();
+                if vf > widest.min(run.len() as u64) {
+                    vf /= 2;
+                }
+                let floor = tti.store_minimum_vf(2, lane, lane).max(2);
+                while vf >= u64::from(floor).max(2) {
+                    for window in run.windows(vf as usize) {
+                        if window.iter().all(|seed| matches!(seed.value, Operand::Constant(_))) {
+                            continue;
+                        }
+                        let stores: Vec<InstId> = window.iter().map(|seed| seed.store).collect();
+                        let align = window[0].align;
+                        if let Some(tree) = crate::slptree::try_window(
+                            &unit,
+                            function,
+                            block,
+                            &stores,
+                            ty,
+                            align.unwrap_or(bytes),
+                            tti,
+                            &scaler,
+                        ) {
+                            return Some((tree, align));
+                        }
+                    }
+                    vf /= 2;
+                }
+            }
+        }
+        None
+    })
 }
 
 /// Store chains to vector stores, on a target with vector registers.
@@ -291,7 +351,7 @@ impl FunctionPass for SlpVectorize {
             .tti()
             .is_some_and(
                 |tti| tti.slp_priced() && tti.vector_register_bits() > 0 && outer.target().has_vector_mir() && {
-                    let stores = run_function(unit.context, unit.layout, unit.function, &outer, &*tti);
+                    let stores = run_function(unit.context, unit.layout, unit.declared, unit.function, &outer, &*tti);
                     let reductions = crate::slpreduction::run_function(
                         unit.context,
                         unit.layout,

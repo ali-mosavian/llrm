@@ -81,8 +81,10 @@ pub enum Recipe {
     /// An access whose addresses are not consecutive and not a pattern the
     /// pin widens (an interleave group, a reversal, a uniform address): one
     /// scalar access per lane (`CM_Scalarize`), a load's lanes put together
-    /// by inserts, a store's taken apart by extracts.
-    Scalarized { op: MemoryOp, lane: Ty },
+    /// by inserts, a store's taken apart by extracts. `stride_bytes`: the
+    /// step of the address, which the target prices the address by
+    /// (`getAddressComputationCost`).
+    Scalarized { op: MemoryOp, lane: Ty, stride_bytes: Option<i64> },
     /// A cast; `folded`: the scalar one is part of the load it extends (LVI1);
     /// `users`: what reads an extension, which may absorb it
     /// (`GetUserAbsorbedCastCost`).
@@ -377,18 +379,27 @@ fn iteration_cost(
                     tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
                 }
             }
-            Recipe::Scalarized { op, lane } => {
+            Recipe::Scalarized { op, lane, stride_bytes } => {
                 let access = tti.memory_op_cost(op, lane, kind, false);
                 if vf == 1 {
                     Cost { value: access.value + address, valid: access.valid }
                 } else {
-                    let overhead = unknown(tti.scalarization_overhead(
+                    // `getMemInstScalarizationCost`: the lanes' address and
+                    // access, the value's inserts (a load) or extracts (a
+                    // store), and the pointers' extracts where the target
+                    // takes addresses from a vector.
+                    let mut overhead = unknown(tti.scalarization_overhead(
                         vector(lane),
                         op == MemoryOp::Load,
                         op == MemoryOp::Store,
                         kind,
                     ))?;
-                    Cost { value: i64::from(vf) * (access.value + address) + overhead.value, valid: access.valid }
+                    if op == MemoryOp::Store || tti.prefers_vectorized_addressing() {
+                        let pointers = unknown(tti.scalarization_overhead(vector(Ty::Pointer), false, true, kind))?;
+                        overhead.value += pointers.value;
+                    }
+                    let lane_address = tti.scalarized_address_cost(stride_bytes, kind).value;
+                    Cost { value: i64::from(vf) * (access.value + lane_address) + overhead.value, valid: access.valid }
                 }
             }
             Recipe::Cast { kind: cast, dst, src, folded, ref users } => {
@@ -440,6 +451,9 @@ fn iteration_cost(
         };
         if !cost.valid {
             return Err(NotTaken);
+        }
+        if vf > 1 && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("Cost of {} for VF {vf}: {:?}", cost.value, recipe);
         }
         total += cost.value;
     }
@@ -505,10 +519,31 @@ fn best_vf(
     optimistic: bool,
 ) -> (u32, i64) {
     let scalar = iteration_cost(tti, &facts.recipes, 1, backend_limits, false).expect("the scalar loop is priced");
+    let debug = llrm_support::debug::enabled("loop-vectorize-cost");
+    if debug {
+        eprintln!("LV: Scalar loop costs: {scalar}.");
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for recipe in &facts.recipes {
+            let text = format!("{recipe:?}");
+            let name = text.split([' ', '{', '(']).next().unwrap_or("?").to_string();
+            match counts.iter_mut().find(|(one, _)| *one == name) {
+                Some(entry) => entry.1 += 1,
+                None => counts.push((name, 1)),
+            }
+        }
+        eprintln!("LV: recipes {counts:?}");
+    }
     let mut best = (scalar, 1u64, scalar);
     let mut vf = 2u64;
     while vf <= max_vf {
-        if let Ok(cost) = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic) {
+        let priced = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic);
+        if debug {
+            match &priced {
+                Ok(cost) => eprintln!("Cost for VF {vf}: {cost}"),
+                Err(_) => eprintln!("Cost for VF {vf}: not priced"),
+            }
+        }
+        if let Ok(cost) = priced {
             let candidate = (cost, vf, scalar);
             if is_more_profitable(candidate, best, facts.trip_count, true) {
                 best = candidate;
