@@ -591,7 +591,7 @@ pub fn visit(
     {
         return Visit::None;
     }
-    // DEVIATE COMBINE-VEC (owner w11, exit 2026-12-05): the arithmetic visitors
+    // DEVIATE COMBINE-VEC (owner w11, exit 2026-11-24): the arithmetic visitors
     // read integer widths, so an operation on vectors, which the loop
     // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
     // visitors are enabled by operation, each with its own identity sweep.
