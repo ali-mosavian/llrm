@@ -135,6 +135,14 @@ thread_local! {
     static LOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Instructions `is_read_clobber` has put to the alias analysis.
     static CLOBBERS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Objects `object_of` has made for a location.
+    static OBJECTS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The objects this thread's walks have made for locations, for a test that
+/// `is_overwrite` makes one only where the two writes share a root.
+pub fn objects_made() -> usize {
+    OBJECTS_MADE.with(std::cell::Cell::get)
 }
 
 /// The locations this thread's walks have worked out, for a test that an
@@ -765,6 +773,7 @@ impl<'a> Dse<'a> {
         &self,
         loc: &Location,
     ) -> Option<llrm_analysis::memory::ObjectRef> {
+        OBJECTS_MADE.with(|count| count.set(count.get() + 1));
         llrm_analysis::memory::object_of(self.aa.unit(), loc.reference.root?)
     }
 
@@ -911,11 +920,10 @@ impl<'a> Dse<'a> {
         if !self.loop_independent(dead_inst, killing_inst, dead) {
             return Overwrite::Unknown;
         }
-        let (dead_object, killing_object) = (self.object_of(dead), self.object_of(killing));
         let same_object = self.same_object(dead, killing);
         // The killing store overwrites the whole object.
         if same_object {
-            if let Some(object) = killing_object.filter(Self::is_identified) {
+            if let Some(object) = self.object_of(killing).filter(Self::is_identified) {
                 if object.extent == Some(i64::from(killing.reference.width)) {
                     return Overwrite::Complete;
                 }
@@ -938,7 +946,6 @@ impl<'a> Dse<'a> {
                 Overwrite::Unknown
             };
         }
-        let _ = (dead_object, killing_object);
         // A base plus constant offset on both sides.
         let (d, k) = (&dead.reference, &killing.reference);
         if d.root != k.root || d.base.is_some() || k.base.is_some() || d.segment != k.segment {
@@ -1581,10 +1588,14 @@ impl<'a> Dse<'a> {
                 .argument_attrs
                 .first()
                 .and_then(|attrs| {
-                    attrs.iter().find_map(|attr| match attr {
-                        Attribute::Int(name, value) if name == "align" => Some(*value),
-                        _ => None,
-                    })
+                    attrs
+                        .iter()
+                        .find_map(
+                            |attr| match attr {
+                                Attribute::Int(name, value) if name == "align" => Some(*value),
+                                _ => None,
+                            },
+                        )
                 })
                 .unwrap_or(1),
             _ => 1,

@@ -135,6 +135,11 @@ punpcklbw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpcklbw_xmm_xmmm128
 punpckhbw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhbw_xmm_xmmm128
 packuswb	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Packuswb_xmm_xmmm128
 packsswb	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Packsswb_xmm_xmmm128
+punpcklwd	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpcklwd_xmm_xmmm128
+punpckhwd	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhwd_xmm_xmmm128
+punpckhdq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhdq_xmm_xmmm128
+punpckhqdq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhqdq_xmm_xmmm128
+packssdw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Packssdw_xmm_xmmm128
 pand	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Pand_xmm_xmmm128
 pandn	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Pandn_xmm_xmmm128
 por	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Por_xmm_xmmm128

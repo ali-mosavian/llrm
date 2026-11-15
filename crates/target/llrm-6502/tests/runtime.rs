@@ -252,6 +252,28 @@ fn signed_word_division_by_a_long_divisor_keeps_its_sign() {
     assert_eq!(word("modhir", &two_words(1000, 65236), "__modhi3"), 100);
 }
 
+/// -4829 / 37 = -130 r -19 through the compact signed divide took 843 and 840
+/// clocks (2026-11-15), 13 more than before the compact divide took Y: the
+/// result was reloaded from the cells after the sign, a negative one went
+/// through a 13-byte `neg16` and a reload, and the loop's keep path (a trial
+/// subtract that is thrown away) cost 16 clocks a step. The limits sit under
+/// what the routines took before the regression (830 and 825 negative, 796 and
+/// 791 positive).
+#[test]
+fn a_signed_word_divide_by_a_byte_takes_no_more_clocks_than_before_the_compact_loop() {
+    let spent = |name: &str, routine: &str, a: u16, b: u16| {
+        let setup = two_words(a, b);
+        common::cycles_with(name, &format!("{setup}  jsr {routine}\n"), "")
+            - common::cycles_with(&format!("{name}-setup"), &setup, "")
+    };
+    for (routine, negative_limit, positive_limit) in [("__divhi3c", 822, 785), ("__modhi3c", 819, 788)] {
+        let n = spent(&format!("sdiv-{routine}-n"), routine, 60707, 37);
+        let p = spent(&format!("sdiv-{routine}-p"), routine, 4829, 37);
+        assert!(n <= negative_limit, "{routine}: -4829 / 37 took {n} clocks (limit {negative_limit})");
+        assert!(p <= positive_limit, "{routine}: 4829 / 37 took {p} clocks (limit {positive_limit})");
+    }
+}
+
 /// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling
 /// over the bit loop alone) gives the fast routines' answers, for divisors
 /// under and over 256: -1000 / 7 = -142 r -6, 7 / -2 = -3 r 1, -1000 / -300 = 3
@@ -869,5 +891,8 @@ fn the_fast_multiply_saves_what_hotmultiply_prices() {
     let shapes = [25u32, 0x1234, 0x0019_660D, 0x9E37_79B9];
     let saved: Vec<i64> = shapes.iter().map(|&b| call("__mulsi3", b) - call("__mulsi3_fast", b)).collect();
     let mean = saved.iter().sum::<i64>() as f64 / saved.len() as f64;
-    assert_eq!(mean.round(), llrm_6502::hotmultiply::SAVED_CLOCKS);
+    // sim65 charges a clock a page crossing, so the mean moves with where the
+    // runtime lies (615 and 586 over the same routines): a price within 10%
+    let priced = llrm_6502::hotmultiply::SAVED_CLOCKS;
+    assert!((mean - priced).abs() <= priced / 10.0, "the fast multiply saves {mean} clocks a call, priced at {priced}");
 }

@@ -831,6 +831,33 @@ fn slp_runs_on_arm64() {
     assert!(AArch64::of_cpu("generic").unwrap().slp_priced());
 }
 
+/// `zext`/`sext` of a vector of `i1` (BasicTTI's split, `<N x i1>` promoted to
+/// bytes), the pin's `print<cost-model>`: 3, 15, 1, 3 (sext), 1, 1, 1, 7. Before
+/// the mask source was priced the loop vectorizer left a loop that counts a
+/// compare (`n += x == 0`) scalar.
+#[test]
+fn extensions_of_a_mask_cost_what_the_pin_says() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let cost = |kind, dst_lane, dst_count, src_count| {
+        tti.vector_ext_cost(
+            kind,
+            VectorTy { lane: Ty::Int(dst_lane), count: dst_count },
+            VectorTy { lane: Ty::Int(1), count: src_count },
+            &[],
+            CostKind::RecipThroughput,
+        )
+        .map(|c| c.value)
+    };
+    assert_eq!(cost(CastKind::ZExt, 16, 16, 16), Some(3));
+    assert_eq!(cost(CastKind::ZExt, 64, 16, 16), Some(15));
+    assert_eq!(cost(CastKind::ZExt, 8, 16, 16), Some(1));
+    assert_eq!(cost(CastKind::SExt, 16, 16, 16), Some(3));
+    assert_eq!(cost(CastKind::ZExt, 16, 8, 8), Some(1));
+    assert_eq!(cost(CastKind::ZExt, 32, 4, 4), Some(1));
+    assert_eq!(cost(CastKind::ZExt, 64, 2, 2), Some(1));
+    assert_eq!(cost(CastKind::ZExt, 32, 16, 16), Some(7));
+}
+
 /// `opt -passes='print<cost-model>' -cost-kind=throughput` on aarch64: an
 /// extension or truncation wider than a register is `BaseT`'s split (the casts
 /// of the halves twice, 1 for the split unless both split), and a reduction of

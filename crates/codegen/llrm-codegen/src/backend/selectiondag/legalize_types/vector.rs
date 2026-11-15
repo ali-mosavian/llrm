@@ -118,12 +118,17 @@ impl TypeLegalizer<'_> {
         let (src_bits, dest_bits) = (src_vt.element().size_in_bits(), dest_vt.element().size_in_bits());
         if src_vt.lanes() % 2 == 0 && src_bits * 2 < dest_bits {
             let EVT::Simple(src_mvt) = src_vt else { return None };
-            let new_src = MVT::vector(MVT::integer(src_bits * 2)?, src_mvt.lanes()?).map(EVT::Simple)?;
+            // `widenIntegerVectorElementType`: a lane with no `MVT` (the `i2`
+            // of a mask) is not a legal type, so the two steps are not taken.
+            let new_src = MVT::integer(src_bits * 2)
+                .and_then(|lane| MVT::vector(lane, src_mvt.lanes()?))
+                .map(EVT::Simple);
             // A half with no `MVT` (`v4i8`) is not a legal type.
             let split_src = MVT::vector(src_mvt.element()?, src_mvt.lanes()? / 2).map(EVT::Simple);
-            let (split_lo, _) = split_dest(new_src)?;
+            let split_lo = new_src.and_then(|new_src| split_dest(new_src)).map(|(lo, _)| lo);
             let legal = |this: &Self, vt: EVT| this.action(vt) == TypeAction::Legal;
-            if legal(self, src_vt)
+            if let (Some(new_src), Some(split_lo)) = (new_src, split_lo)
+                && legal(self, src_vt)
                 && !split_src.is_some_and(|half| legal(self, half))
                 && legal(self, new_src)
                 && legal(self, split_lo)

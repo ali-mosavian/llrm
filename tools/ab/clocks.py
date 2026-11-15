@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """clocks.py DIST LEVEL OUT.json [FILE...]: user-mode instructions of tests/run/c programs, ours (DIST/llrm-cc) against gcc and clang.
 
-One run of the whole program, minus the same link's empty main. The output must equal the .out file.
+One run of the whole program, minus the same link's empty main. The output must equal the .lp64.out file where there is one, else the .out file.
 
 A count is read the one way for every column and every run (`count`): the binary is copied to a path of one fixed length, run
 under `env -i` with ASLR off, and the least of three runs is taken. The libc start-up scales with the length of argv[0] (+56
@@ -47,6 +47,16 @@ def count(exe: Path, repeats: int = REPEATS) -> int | None:
         return min(runs) if runs else None
     finally:
         shutil.rmtree(home, ignore_errors=True)
+
+
+def expected_output(source: Path) -> str | None:
+    """What the program prints on an LP64 target (x86_64): `NAME.lp64.out` where the program prints different values for a
+    64-bit `long`, else `NAME.out`. The ILP32 file read for 24 programs made 42 cells "not ok" for ours, gcc and clang
+    alike, and left them out of every count (2026-11-15)."""
+    for suffix in (".lp64.out", ".out"):
+        if source.with_suffix(suffix).exists():
+            return source.with_suffix(suffix).read_text()
+    return None
 
 
 def moved(was: int, now: int, tolerance: float = MOVED) -> bool:
@@ -112,7 +122,7 @@ def main(argv: list[str]) -> int:
 
     def one(source: Path):
         tag, row = source.stem, {}
-        want = source.with_suffix(".out").read_text() if source.with_suffix(".out").exists() else None
+        want = expected_output(source)
         for column in ("ours", "gcc", "clang"):
             exe, why = build(column, source, tag)
             if not exe:

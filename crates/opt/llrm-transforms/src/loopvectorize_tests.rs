@@ -3,6 +3,7 @@
 //! copy of 1920 is VF 8, IC 2), and the ones it leaves alone.
 
 use super::LoopVectorize;
+use llrm_mir::target::{Machine as _, Neutral};
 use crate::testing::parsed;
 
 fn run(source: &str) -> String {
@@ -269,21 +270,88 @@ fn no_remainder_is_made_where_the_pin_allows_none() {
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
 }
 
-/// DEVIATE LV-OS: an optsize loop whose trip count VF divides was widened and
-/// added bytes at -Os (histo +4, scroll +4, jpeg_fixed +24); it stays scalar.
+/// `isScalarEpilogueAllowed`: an optsize loop whose trip count VF divides is
+/// widened with no remainder (IC 1; it was left scalar, instructions lost at
+/// -Os: scroll 1.3M -> 175k); one that needs a runtime check is not.
 #[test]
-fn an_optsize_loop_stays_scalar_even_when_vf_divides_the_trip_count() {
-    let text = run(&COPY.replace(
+fn an_optsize_loop_is_widened_when_vf_divides_the_trip_count() {
+    for attribute in ["optsize", "minsize"] {
+        let define = format!("define void @f(ptr noalias %a, ptr noalias %b, i64 %n) {attribute}");
+        let text = run(&COPY.replace("define void @f(ptr noalias %a, ptr noalias %b, i64 %n)", &define));
+        assert_eq!(count(&text, "load <8 x i16>"), 1, "{attribute}: {text}");
+        assert_eq!(count(&text, "load i16"), 0, "{attribute}: {text}");
+    }
+    let text = run(&MEMCHECK_COPY.replace("i64 %n) {", "i64 %n) optsize {"));
+    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+}
+
+/// x86 prices vectors too; its tuning says whether an optsize loop is widened.
+struct X86At(std::rc::Rc<llrm_x86::tti::X86>);
+
+impl llrm_mir::target::Machine for X86At {
+    fn has_vector_mir(&self) -> bool {
+        true
+    }
+
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(self.0.clone())
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        Neutral.spaces()
+    }
+
+    fn foreign_span(
+        &self,
+        a: (i64, i64),
+        b: (i64, i64),
+        c: i64,
+    ) -> Option<(i64, i64)> {
+        Neutral.foreign_span(a, b, c)
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        Neutral.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        Neutral.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        Neutral.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        Neutral.address_forms()
+    }
+}
+
+fn run_x86(
+    source: &str,
+    at_size: bool,
+) -> String {
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { vectorize_at_size: at_size, ..llrm_mir::target::Tuning::PIN });
+    let mut module = parsed(source);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false });
+    manager.run_module(&mut module, std::rc::Rc::new(X86At(std::rc::Rc::new(tti)))).unwrap();
+    crate::testing::printed(&module)
+}
+
+/// Retiring LV-OS made 15 m64 -Os corpus files 5-50% bigger (byval_struct 183 ->
+/// 269 B): a target whose tuning says no keeps its optsize loops scalar.
+#[test]
+fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
+    let optsize = COPY.replace(
         "define void @f(ptr noalias %a, ptr noalias %b, i64 %n)",
         "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize",
-    ));
-    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
-    let text = run(&COPY.replace(
-        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n)",
-        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) minsize",
-    ));
-    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
-    assert_eq!(count(&run(COPY), "<8 x i16>") > 0, true);
+    );
+    assert!(count(&run_x86(&optsize, true), "x i16>") > 0, "the premise: the pin widens it");
+    assert_eq!(count(&run_x86(&optsize, false), "x i16>"), 0);
+    assert!(count(&run_x86(COPY, false), "x i16>") > 0, "a loop at speed is widened either way");
 }
 
 /// A trip count `n` the loop is given: the pin checks `n < 16` (minimum
@@ -1059,4 +1127,20 @@ const SELECT_INVARIANT: &str = include_str!("../tests/lv/select_invariant.ll");
 fn a_select_by_a_loop_invariant_condition_stays_scalar() {
     let text = run_compares(SELECT_INVARIANT);
     assert_eq!(count(&text, "<4 x i32>"), 0, "{text}");
+}
+
+const COUNT_AND_SUM: &str = include_str!("../tests/lv/count_and_sum_of_zeros.ll");
+
+/// `n += x == 0; s += x == 0 ? i : 0` stayed scalar ("A comparison used other
+/// than by the condition of a select": the count reads the compare through a
+/// `zext i1`). The pin takes VF 16, IC 1 (`<16 x i64>` values take eight
+/// registers each, so nothing is interleaved) and widens the count as
+/// `zext <16 x i1> to <16 x i16>`.
+#[test]
+fn a_count_of_a_compare_beside_a_select_sum_is_widened_without_interleaving() {
+    let text = run_compares(COUNT_AND_SUM);
+    assert_eq!(count(&text, "= zext <16 x i1>"), 1, "{text}");
+    assert_eq!(count(&text, "load <16 x i8>"), 1, "{text}");
+    assert_eq!(count(&text, "select <16 x i1>"), 1, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
 }
