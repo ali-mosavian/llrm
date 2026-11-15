@@ -97,11 +97,12 @@ pub struct CpuTable {
     /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard and no three-block minimum
     /// (T14 and D1 of jumps-tailmerge-check.md lifted). Off: the guards stand.
     pub tail_merge_pin_faithful: bool,
-    /// Runs of equal literal stores outside loops share a register at -O2/-O3 too, where
-    /// the bytes outweigh the clock of loading it (DEVIATE ISS1, owner
-    /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
-    /// `MOV32mi`s.
+    /// Runs of equal literal stores outside loops share a register where bytes are strict (DEVIATE ISS1,
+    /// owner x86-m32, exit 2026-11-30); -Os always. Off: the pin's `MOV32mi`s.
     pub share_literal_stores: bool,
+    /// The same at -O1 to -O3, where the bytes outweigh the clock of loading the register. Off where
+    /// clocks decide the cell: the `xor` and the register stores cost more than the immediates.
+    pub share_literal_stores_at_speed: bool,
     /// A `movzx` of a register into itself is `and r, mask` where the flags are dead and bytes
     /// are priced at speed: gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND`, set for the 486 and Pentium
     /// (DEVIATE ZEXT-AND, owner x86-m32-b, exit 2026-11-24). Off: the pin's `movzx`.
@@ -277,6 +278,7 @@ impl Timings {
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "share_literal_stores_at_speed") => table.share_literal_stores_at_speed = number()? != 0,
                     ("scalars", "zero_extend_with_and") => table.zero_extend_with_and = number()? != 0,
                     ("scalars", "pool_data_strict") => table.pool_data_strict = number()? != 0,
                     ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,
