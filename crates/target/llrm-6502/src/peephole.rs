@@ -792,8 +792,7 @@ fn nz_dead_from(
     from: usize,
     seen: &mut HashSet<usize>,
 ) -> bool {
-    let to =
-        |inst: &Inst| inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+    let to = |inst: &Inst| inst.target().and_then(|label| Line::label_position(lines, label));
     let mut at = from;
     while let Some(line) = lines.get(at) {
         if !seen.insert(at) {
@@ -2273,18 +2272,12 @@ pub(crate) fn dead_from(
                 }
             }
             (Op::Jmp, _) => {
-                return inst
-                    .target()
-                    .is_some_and(
-                        |label| lines
-                            .iter()
-                            .position(|l| *l == Line::Label(label.to_owned()))
-                            .is_some_and(|to| dead_from(lines, to, bit, seen, exits)),
-                    );
+                return inst.target().is_some_and(|label| {
+                    Line::label_position(lines, label).is_some_and(|to| dead_from(lines, to, bit, seen, exits))
+                });
             }
             (op, _) if op.opposite().is_some() || op == Op::Bra => {
-                let target =
-                    inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+                let target = inst.target().and_then(|label| Line::label_position(lines, label));
                 let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen, exits));
                 if op == Op::Bra {
                     return taken;
@@ -2645,16 +2638,13 @@ pub(crate) fn carry_dead_from(
                 return inst
                     .target()
                     .is_some_and(
-                        |label| lines
-                            .iter()
-                            .position(|l| *l == Line::Label(label.to_owned()))
-                            .is_some_and(|to| carry_dead_from(lines, to, seen)),
+                        |label| Line::label_position(lines, label).is_some_and(|to| carry_dead_from(lines, to, seen)),
                     );
             }
             Op::Beq | Op::Bne | Op::Bmi | Op::Bpl | Op::Bra => {
                 let taken = inst
                     .target()
-                    .and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())))
+                    .and_then(|label| Line::label_position(lines, label))
                     .is_some_and(|to| carry_dead_from(lines, to, seen));
                 if inst.op == Op::Bra || !taken {
                     return taken;
