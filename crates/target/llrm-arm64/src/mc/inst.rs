@@ -362,23 +362,53 @@ pub enum Barrier {
     IshSt,
 }
 
-/// The lane layout of a 128-bit vector: `16b`, `8h`, `4s`, `2d`.
+/// The lane layout of a vector: `16b`, `8h`, `4s`, `2d` of 128 bits and `8b`,
+/// `4h`, `2s` of 64 (a `D` register, the upper half zero).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Arrangement {
     B16,
     H8,
     S4,
     D2,
+    B8,
+    H4,
+    S2,
 }
 
 impl Arrangement {
+    /// `Q` of the encodings: set for a 128-bit arrangement.
+    pub(super) fn q(self) -> u32 {
+        u32::from(self.full() == self)
+    }
+
+    /// The 128-bit arrangement of the same lanes.
+    pub fn full(self) -> Arrangement {
+        match self {
+            Arrangement::B8 => Arrangement::B16,
+            Arrangement::H4 => Arrangement::H8,
+            Arrangement::S2 => Arrangement::S4,
+            other => other,
+        }
+    }
+
+    /// The 64-bit arrangement of the same lanes, if there is one (`2d` has
+    /// none: `1d` is a scalar).
+    pub fn half(self) -> Option<Arrangement> {
+        match self {
+            Arrangement::B16 | Arrangement::B8 => Some(Arrangement::B8),
+            Arrangement::H8 | Arrangement::H4 => Some(Arrangement::H4),
+            Arrangement::S4 | Arrangement::S2 => Some(Arrangement::S2),
+            Arrangement::D2 => None,
+        }
+    }
+
     /// `imm5` of `dup` (general): the lane size as the position of its lowest
     /// set bit.
     pub(super) fn imm5(self) -> u32 {
         match self {
-            Arrangement::B16 => 0b00001,
-            Arrangement::H8 => 0b00010,
-            Arrangement::S4 => 0b00100,
+            Arrangement::B16 | Arrangement::B8 => 0b00001,
+            Arrangement::H8 | Arrangement::H4 => 0b00010,
+            Arrangement::S4 | Arrangement::S2 => 0b00100,
             Arrangement::D2 => 0b01000,
         }
     }
@@ -396,7 +426,8 @@ impl Arrangement {
             (Arrangement::S4, true) => "8h",
             (Arrangement::D2, false) => "2s",
             (Arrangement::D2, true) => "4s",
-            (Arrangement::B16, _) => unreachable!("no lane is narrower than a byte"),
+            (Arrangement::B16 | Arrangement::B8, _) => unreachable!("no lane is narrower than a byte"),
+            (other, high) => other.full().narrowed(high),
         }
     }
 
@@ -406,6 +437,9 @@ impl Arrangement {
             Arrangement::H8 => "8h",
             Arrangement::S4 => "4s",
             Arrangement::D2 => "2d",
+            Arrangement::B8 => "8b",
+            Arrangement::H4 => "4h",
+            Arrangement::S2 => "2s",
         }
     }
 }
@@ -595,6 +629,16 @@ pub enum VectorShift {
     Shl,
     Ushr,
     Sshr,
+    /// `usra`, `ssra`: the shifted lanes are added to `rd`, which is read.
+    Usra,
+    Ssra,
+}
+
+impl VectorShift {
+    /// The destination is also a source.
+    pub fn accumulates(self) -> bool {
+        matches!(self, VectorShift::Usra | VectorShift::Ssra)
+    }
 }
 
 /// The lane of the narrow operand of a long or wide vector operation: the
@@ -715,9 +759,9 @@ impl Arrangement {
     /// The lane size in bits.
     pub fn lane_bits(self) -> u32 {
         match self {
-            Arrangement::B16 => 8,
-            Arrangement::H8 => 16,
-            Arrangement::S4 => 32,
+            Arrangement::B16 | Arrangement::B8 => 8,
+            Arrangement::H8 | Arrangement::H4 => 16,
+            Arrangement::S4 | Arrangement::S2 => 32,
             Arrangement::D2 => 64,
         }
     }
@@ -725,9 +769,9 @@ impl Arrangement {
     /// `size` of the three-same encodings.
     pub(super) fn size(self) -> u32 {
         match self {
-            Arrangement::B16 => 0,
-            Arrangement::H8 => 1,
-            Arrangement::S4 => 2,
+            Arrangement::B16 | Arrangement::B8 => 0,
+            Arrangement::H8 | Arrangement::H4 => 1,
+            Arrangement::S4 | Arrangement::S2 => 2,
             Arrangement::D2 => 3,
         }
     }
