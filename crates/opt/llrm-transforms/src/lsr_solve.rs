@@ -55,6 +55,16 @@ use crate::lsr_collect::Collection;
 use crate::lsr_use::{Cost, Kind};
 
 impl Collection<'_, '_> {
+    /// DEVIATE LSR-SPILL-PRICE: the loop's other values alone need more than
+    /// every register the target has (gcc's ivopts, `regs_used` past
+    /// `target_avail_regs` in `estimate_reg_pressure_cost`, which prices spills
+    /// only past it), so each register the rewrite holds is a spill. The
+    /// cost model has no price for one.
+    fn spills_are_priced(&self) -> bool {
+        // Spills cost clocks, not bytes: a size build keeps the pin's choice.
+        self.tti.lsr_prices_spills() && !self.size && self.pressure_units() > self.tti.number_of_gpr_registers()
+    }
+
     /// `SolveRecurse`: decide use `workspace.len()`, then the rest.
     #[allow(clippy::too_many_arguments)]
     fn solve_recurse(
@@ -267,11 +277,12 @@ impl Collection<'_, '_> {
             // DEVIATE LU14: `SolveRecurse` requires of a use the registers the
             // uses before it chose, so a cheaper combination that starts with
             // a later use is never rated (rcflip's RAMP loop: 4 instructions
-            // against 2 with the uses the other way round). The uses are also taken
-            // in the opposite order, and its solution kept where it costs less
-            // by the target's comparator; a tie keeps the pin's order. A
-            // target opts in (`lsr_solves_both_use_orders`). Cost: one more
-            // search per instance.
+            // against 2 with the uses the other way round). The uses are also
+            // taken in the opposite order, and its solution kept
+            // where it costs less by the target's comparator; a tie
+            // keeps the pin's order. A target opts in
+            // (`lsr_solves_both_use_orders`). Cost: one more search
+            // per instance.
             if self.uses.len() > 1 && !solution.is_empty() && self.tti.lsr_solves_both_use_orders() {
                 let (other, other_cost) = self.search(se, &reversed);
                 // It must save an instruction over the first order's solution
@@ -292,7 +303,12 @@ impl Collection<'_, '_> {
             // base and an index, the cut tells no solution from
             // another; search again without it.
             let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());
-            if solution.is_empty() || budget >= 2 || solution_cost.c.num_regs <= budget || self.pressure_units() == 0 {
+            if solution.is_empty()
+                || budget >= 2
+                || solution_cost.c.num_regs <= budget
+                || self.pressure_units() == 0
+                || self.spills_are_priced()
+            {
                 break;
             }
             self.ignore_pressure.set(true);
@@ -313,10 +329,20 @@ impl Collection<'_, '_> {
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         // DEVIATE LU15: a loop with an address keeps the solution that
         // reduces it, where the target says so.
-        let spared = self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
-        if self.baseline_cost.is_less(self.tti, &solution_cost)
-            && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
-                || spills && self.tti.lsr_drops_spilling_solution())
+        let spared =
+            self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
+        // DEVIATE LSR-SPILL-PRICE: a loop whose other values fill the
+        // registers keeps its pressure in the cost (no search with it cut), and
+        // a rewrite that does not rate better than the loop as written is
+        // dropped: each register it adds is a spill the rating cannot tell
+        // apart (gcc's ivopts, `estimate_reg_pressure_cost`).
+        let saturated_tie = self.spills_are_priced()
+            && self.uses.iter().any(|u| u.kind == Kind::Address)
+            && !solution_cost.is_less(self.tti, &self.baseline_cost);
+        if saturated_tie
+            || self.baseline_cost.is_less(self.tti, &solution_cost)
+                && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
+                    || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();
         }

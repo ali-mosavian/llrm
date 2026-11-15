@@ -104,16 +104,19 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
         // DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): fill_nest
-        // -O2 filled 4096 words by a loop, 5 clk a word, where `rep stosw` is 4.
+        // -O2 filled 4096 words by a loop, 5 clk a word, where `rep stosw`
+        // is 4.
         fills_pattern_at_speed: true,
         libc_memcpy: true,
         pops_arguments_at_size: false,
         // DEVIATE X87-FCMP-AH at -O1 (owner x87-c, exit 2026-11-24): `sahf`,
-        // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16 O1
-        // keeps the test until its counted cells are judged.
+        // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16
+        // O1 keeps the test until its counted cells are judged.
         keeps_sahf_where_bytes_are_held: true,
-        // DEVIATE RL-EXITING-LATCH (owner x87, exit 2026-11-24): `LoopRotate` also rotates a loop whose latch exits
-        // when its header copy folds away in the preheader, as gcc's header copy does (mandel -O1: 2 `imul` a pixel).
+        // DEVIATE RL-EXITING-LATCH (owner x87, exit 2026-11-24): `LoopRotate`
+        // also rotates a loop whose latch exits when its header copy folds away
+        // in the preheader, as gcc's header copy does (mandel -O1: 2 `imul` a
+        // pixel).
         rotate_exiting_latch_when_guard_folds: true,
         // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop
         // header of at most 4 instructions, not the pin's 16 (the copy is a
@@ -161,8 +164,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // is +1601 B and stays rolled.
         unroll_trial_at_o1: Some(150),
         unroll_trial_nests_only: true,
-        // DEVIATE UNROLL-OS-TRIAL (owner x86-m32, exit 2026-11-24): see `Tuning::unroll_trial_at_size`. gcc
-        // completely peels a small loop at -Os when the code does not grow (x_life: the 3x3 window, 360 -> 347 B).
+        // DEVIATE UNROLL-OS-TRIAL (owner x86-m32, exit 2026-11-24):
+        // see `Tuning::unroll_trial_at_size`. gcc completely peels a small loop
+        // at -Os when the code does not grow (x_life: the 3x3 window, 360 ->
+        // 347 B).
         unroll_trial_at_size: Some(30),
         // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1):
         // the -O1 rule analyses the folds of up to 16 trips,
@@ -180,7 +185,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
-        // DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24): see `Tuning::mul_chains_hot_at_size`.
+        // DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24):
+        // see `Tuning::mul_chains_hot_at_size`.
         mul_chains_hot_at_size: true,
         // DEVIATE LFTR1 (owner w12, review 2026-12-20):
         // see `Tuning::lftr_any_stride`.
@@ -206,12 +212,16 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
         lsr_size_order: true,
-        // DEVIATE IU1-M32 (owner w12, exit 2026-11-24): the m64 entry at m32; see
-        // `Tti::lsr_users_in_use_list_order`. x_transpose -O1 139,335 -> 122,886 clk, 237 -> 217 B.
+        // DEVIATE IU1-M32 (owner w12, exit 2026-11-24): the m64 entry at m32;
+        // see
+        // `Tti::lsr_users_in_use_list_order`. x_transpose -O1 139,335 ->
+        // 122,886 clk, 237 -> 217 B.
         lsr_users_in_use_list_order: true,
-        // DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see `Tuning::lsr_phi_operand_uses`.
+        // DEVIATE LSR-PHI (owner x87, exit 2026-11-24):
+        // see `Tuning::lsr_phi_operand_uses`.
         lsr_phi_operand_uses: true,
-        // DEVIATE LU14 (owner x86-m32, exit 2026-11-30): see `Tuning::lsr_both_use_orders`.
+        // DEVIATE LU14 (owner x86-m32, exit 2026-11-30):
+        // see `Tuning::lsr_both_use_orders`.
         lsr_both_use_orders: true,
         // DEVIATE FMULADD-SPLIT (owner x87-c, exit 2026-11-24): see
         // `Tti::splits_invariant_fmuladd`.
@@ -337,6 +347,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         ipa_cp_clones_at_speed: true,
         // DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24): gcc's depth.
         ipa_cp_max_clones: 8,
+        // DEVIATE LSR-SPILL-PRICE (owner x86-m32-b, exit 2026-11-24).
+        lsr_prices_spills: true,
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a
