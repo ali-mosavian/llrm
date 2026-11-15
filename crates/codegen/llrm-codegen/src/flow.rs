@@ -76,6 +76,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
+    "KnownZero",
     "BreakFalseDeps",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
@@ -155,6 +156,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
+    ("KnownZero", "copyprop@18"),
     ("BreakFalseDeps", "breakfalsedeps@19"),
 ];
 
@@ -399,6 +401,8 @@ pub fn machine_with<'a>(
         }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
+        // Beyond the pin (GCC's postreload-cse): a move of a zero the register holds.
+        Box::new(crate::backend::knownzero::KnownZero),
         // The pin's pre-emit pass: the distances are those of the final order.
         Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];
