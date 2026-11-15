@@ -598,14 +598,14 @@ fn extract(
                     recipes.push(if stride == 1 {
                         Recipe::Load { lane, align }
                     } else {
-                        Recipe::Scalarized { op: MemoryOp::Load, lane }
+                        Recipe::Scalarized { op: MemoryOp::Load, lane, stride_bytes: Some(stride * size as i64) }
                     });
                 } else {
                     stored = Some(source_of(data.operands[0], &widened)?);
                     recipes.push(if stride == 1 {
                         Recipe::Store { lane, align }
                     } else {
-                        Recipe::Scalarized { op: MemoryOp::Store, lane }
+                        Recipe::Scalarized { op: MemoryOp::Store, lane, stride_bytes: Some(stride * size as i64) }
                     });
                 }
                 if is_load {

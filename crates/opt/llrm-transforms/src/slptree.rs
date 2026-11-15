@@ -40,6 +40,8 @@
 use std::collections::HashMap;
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
+use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_mir::loopinfo::Loop;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
@@ -183,7 +185,7 @@ impl Builder<'_, '_> {
     ) -> Option<InstId> {
         let Operand::Value(id) = operand else { return None };
         match self.function.value(id).def {
-            ValueDef::Instruction(inst) if self.function.parent(inst) == Some(self.block) => Some(inst),
+            ValueDef::Instruction(inst) if self.function.parent(inst).is_some() => Some(inst),
             _ => None,
         }
     }
@@ -307,6 +309,11 @@ impl Builder<'_, '_> {
                 _ => return self.gather(lanes, lane_ty),
             }
         }
+        // A bundle stands in one block; the tree may span several.
+        let home = self.function.parent(insts[0]);
+        if insts.iter().any(|inst| self.function.parent(*inst) != home) {
+            return self.gather(lanes, lane_ty);
+        }
         let first = self.function.instruction(insts[0]).clone();
         let same = |one: &llrm_mir::module::Instruction, two: &llrm_mir::module::Instruction| {
             one.ty == two.ty && one.opcode == two.opcode
@@ -420,8 +427,9 @@ pub(crate) fn try_window(
     store_ty: TypeId,
     align: u64,
     tti: &dyn Tti,
+    scaler: &Scaler,
 ) -> Option<Tree> {
-    let position: HashMap<InstId, usize> = function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)).collect();
+    let position = positions(function);
     let values: Vec<Operand> = stores.iter().map(|store| function.instruction(*store).operands[0]).collect();
     let mut builder = Builder {
         unit,
@@ -446,16 +454,24 @@ pub(crate) fn try_window(
     let child = builder.build(values, 1);
     builder.entries[0].operands = vec![child];
     if builder.failed || builder.entries.len() < 2 || builder.entries[child].kind == Kind::Gather {
+        llrm_support::debug!(
+            "slp",
+            "tree x{}: {} entries, root {:?}{}",
+            stores.len(),
+            builder.entries.len(),
+            builder.entries[child].kind,
+            if builder.failed { ", a lane used as a gather" } else { "" }
+        );
         return None;
     }
     let tree = Tree { entries: builder.entries, block };
     let made = builder.made;
     let position = builder.position;
-    if !schedulable(function, &tree, &made, &position) {
+    if !schedulable(unit, function, &tree, &made, &position) {
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
     }
-    let cost = cost_of(unit, function, &tree, &made, align, tti)?;
+    let cost = cost_of(unit, function, &tree, &made, align, tti, scaler)?;
     llrm_support::debug!("slp", "tree of {} entries x{}: cost {cost}", tree.entries.len(), stores.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
@@ -463,46 +479,65 @@ pub(crate) fn try_window(
 /// DEVIATE SLP3: the scalars of the tree can stand as vectors where the last of
 /// each bundle is.
 fn schedulable(
+    unit: &MemUnit,
     function: &Function,
     tree: &Tree,
     made: &HashMap<InstId, usize>,
     position: &HashMap<InstId, usize>,
 ) -> bool {
     let at = |inst: &InstId| position[inst];
-    let mut loads = Vec::new();
-    let mut stores = Vec::new();
-    for entry in &tree.entries {
-        match entry.kind {
-            Kind::Load => loads.extend(entry.insts.iter().map(at)),
-            Kind::Store => stores.extend(entry.insts.iter().map(at)),
-            _ => {}
-        }
-    }
-    let (first_store, last_store) = (*stores.iter().min().expect("stores"), *stores.iter().max().expect("stores"));
-    if loads.iter().any(|load| *load > first_store) {
-        return false;
-    }
-    let first = loads.iter().copied().min().unwrap_or(first_store).min(first_store);
-    let tree_places: Vec<usize> = made.keys().map(at).collect();
-    for (order, inst) in function.iter_block(tree.block).enumerate() {
-        if order < first || order > last_store || tree_places.contains(&order) {
-            continue;
-        }
-        let writes = matches!(
-            function.instruction(inst).opcode,
-            Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg
-        );
-        let reads = matches!(function.instruction(inst).opcode, Opcode::Load { .. });
-        if writes || (reads && order > first_store) {
+    let root = &tree.entries[0];
+    let seed = function.parent(root.insts[0]).expect("a placed store");
+    let (first_store, last_store) =
+        (root.insts.iter().map(at).min().expect("stores"), root.insts.iter().map(at).max().expect("stores"));
+    // A call of an intrinsic that computes each lane from its arguments
+    // (`isTriviallyVectorizable`) touches no memory.
+    let pure_call = |inst: InstId| {
+        llrm_mir::memory::callee(unit.context, function, inst)
+            .and_then(|callee| unit.globals.get(callee.0 as usize)?.intrinsic())
+            .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable)
+    };
+    let touches = |inst: InstId| match function.instruction(inst).opcode {
+        Opcode::Call(_) => !pure_call(inst),
+        Opcode::Store { .. } | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg | Opcode::Load { .. } => true,
+        _ => false,
+    };
+    // The stores move to the last: nothing else between them touches memory.
+    for (order, inst) in function.iter_block(seed).enumerate() {
+        if order > first_store && order < last_store && !made.contains_key(&inst) && touches(inst) {
+            llrm_support::debug!("slp", "tree: {:?} stands between the stores", function.instruction(inst).opcode);
             return false;
         }
     }
-    // A user outside the tree stands after its bundle's last scalar.
     for entry in &tree.entries {
-        if entry.kind == Kind::Gather || entry.kind == Kind::Store {
+        if matches!(entry.kind, Kind::Gather | Kind::Store) {
             continue;
         }
-        let last = entry.insts.iter().map(at).max().expect("a bundle");
+        let block = function.parent(entry.insts[0]).expect("a placed bundle");
+        let (first, last) = (
+            entry.insts.iter().map(at).min().expect("a bundle"),
+            entry.insts.iter().map(at).max().expect("a bundle"),
+        );
+        if entry.kind == Kind::Load {
+            // Loads of the seed block stand before its first store; the loads
+            // move down to the last, past nothing that writes.
+            if block == seed && last > first_store {
+                llrm_support::debug!("slp", "tree: a load stands after the first store");
+                return false;
+            }
+            for (order, inst) in function.iter_block(block).enumerate() {
+                let writes = match function.instruction(inst).opcode {
+                    Opcode::Call(_) => !pure_call(inst),
+                    Opcode::Store { .. } | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg => true,
+                    _ => false,
+                };
+                if order > first && order < last && !made.contains_key(&inst) && writes {
+                    llrm_support::debug!("slp", "tree: a write stands among the loads");
+                    return false;
+                }
+            }
+        }
+        // A user outside the tree stands after its bundle's last scalar.
         for inst in &entry.insts {
             let Some(result) = function.instruction(*inst).result else { continue };
             for used in function.users(result).iter() {
@@ -510,10 +545,10 @@ fn schedulable(
                     continue;
                 }
                 match function.parent(used.user) {
-                    Some(block) if block == tree.block => {
-                        if position[&used.user] <= last
-                            || matches!(function.instruction(used.user).opcode, Opcode::Phi)
+                    Some(user_block) if user_block == block => {
+                        if position[&used.user] <= last || matches!(function.instruction(used.user).opcode, Opcode::Phi)
                         {
+                            llrm_support::debug!("slp", "tree: a user stands before its bundle's last scalar");
                             return false;
                         }
                     }
@@ -526,6 +561,106 @@ fn schedulable(
     true
 }
 
+/// `getScaleToLoopIterations`: how often an entry's cost is paid
+/// (`-slp-cost-loop-trip-count` 2). DEVIATE SLP4 (owner arm64, exit
+/// 2026-11-24): `getLoopEstimatedTripCount` (profile weights) is not read; a
+/// loop without a constant trip count counts 2.
+pub(crate) struct Scaler<'a> {
+    se: std::cell::RefCell<&'a mut ScalarEvolution>,
+    cx: &'a Cx<'a>,
+}
+
+const LOOP_TRIP_COUNT: u64 = 2;
+
+impl<'a> Scaler<'a> {
+    pub(crate) fn new(
+        se: &'a mut ScalarEvolution,
+        cx: &'a Cx<'a>,
+    ) -> Self {
+        Self { se: std::cell::RefCell::new(se), cx }
+    }
+
+    /// `getLoopTripCount`.
+    fn trip_count(
+        &self,
+        function: &Function,
+        one: &Loop<'_>,
+    ) -> u64 {
+        let counted = u64::from(self.se.borrow_mut().get_small_constant_trip_count(self.cx, one.get_header()));
+        match counted {
+            0 => LOOP_TRIP_COUNT,
+            count if one.get_exiting_block(function).is_none() => count.min(LOOP_TRIP_COUNT),
+            count => count,
+        }
+    }
+
+    /// `getLoopNestScale`: the trip counts of the loop and those around it.
+    fn nest_scale(
+        &self,
+        function: &Function,
+        innermost: Option<Loop<'_>>,
+    ) -> u64 {
+        let mut scale = 1u64;
+        let mut at = innermost;
+        while let Some(one) = at {
+            scale = scale.saturating_mul(self.trip_count(function, &one).max(1));
+            at = one.get_parent_loop();
+        }
+        scale
+    }
+
+    /// The scale of what `scalars` make at `block`: the innermost loop around
+    /// it in which one of them varies (`findInnermostNonInvariantLoop`).
+    fn scale_at(
+        &self,
+        function: &Function,
+        block: BlockId,
+        scalars: &[Operand],
+    ) -> u64 {
+        let mut at = self.cx.loops.get_loop_for(block);
+        while let Some(one) = at {
+            if scalars.iter().any(|scalar| !one.is_loop_invariant(function, *scalar)) {
+                break;
+            }
+            at = one.get_parent_loop();
+        }
+        self.nest_scale(function, at)
+    }
+}
+
+/// `getScaleToLoopIterations(TE)`: a bundle's cost by the block it stands in; a
+/// gather by the block of the bundle that reads it.
+fn entry_scale(
+    function: &Function,
+    tree: &Tree,
+    at: usize,
+    scaler: &Scaler,
+) -> u64 {
+    let entry = &tree.entries[at];
+    match entry.kind {
+        Kind::Gather => {
+            // The bundle that reads it, past gathers.
+            let mut user = tree.entries.iter().position(|one| one.operands.contains(&at));
+            while let Some(found) = user {
+                if tree.entries[found].kind != Kind::Gather {
+                    let block = function.parent(tree.entries[found].insts[0]).expect("a placed bundle");
+                    return scaler.scale_at(function, block, &entry.lanes);
+                }
+                user = tree.entries.iter().position(|one| one.operands.contains(&found));
+            }
+            1
+        }
+        Kind::Store => {
+            let block = function.parent(entry.insts[0]).expect("a placed store");
+            scaler.scale_at(function, block, &[])
+        }
+        _ => {
+            let block = function.parent(entry.insts[0]).expect("a placed bundle");
+            scaler.scale_at(function, block, &entry.lanes)
+        }
+    }
+}
+
 /// `getTreeCost`: the entries' vector costs less their scalars', and the
 /// extracts of the lanes used outside. `None`: a price the target lacks.
 fn cost_of(
@@ -535,11 +670,55 @@ fn cost_of(
     made: &HashMap<InstId, usize>,
     store_align: u64,
     tti: &dyn Tti,
+    scaler: &Scaler,
 ) -> Option<i64> {
     let kind = CostKind::RecipThroughput;
     let context = unit.context;
     let mut total = 0i64;
-    for entry in &tree.entries {
+    for (at, entry) in tree.entries.iter().enumerate() {
+        let Some(priced) = entry_cost(unit, function, tree, entry, store_align, tti) else {
+            llrm_support::debug!("slp", "entry {:?} x{}: not priced", entry.kind, entry.lanes.len());
+            return None;
+        };
+        total += priced * entry_scale(function, tree, at, scaler) as i64;
+        // The lanes some user outside the tree reads are extracted.
+        if !matches!(entry.kind, Kind::Gather | Kind::Store) {
+            let lane = lane_ty_of(context, entry.lane_ty)?;
+            let vector = VectorTy { lane, count: entry.lanes.len() as u32 };
+            for (index, inst) in entry.insts.iter().enumerate() {
+                let Some(result) = function.instruction(*inst).result else { continue };
+                // The first user outside fixes the scale (`ExtractCostCalculated`).
+                if let Some(used) = function.users(result).iter().find(|used| !made.contains_key(&used.user)) {
+                    let extract = tti.vector_instr_cost(
+                        LaneOp::Extract,
+                        vector,
+                        Some(index as u32),
+                        false,
+                        VectorInstrContext::None,
+                        kind,
+                    )?;
+                    let block = function.parent(used.user)?;
+                    let scale = scaler.scale_at(function, block, &[Operand::Value(result)]);
+                    total += extract.valid.then_some(extract.value)? * scale as i64;
+                }
+            }
+        }
+    }
+    Some(total)
+}
+
+/// `getEntryCost`: the vector of `entry` less its scalars.
+fn entry_cost(
+    unit: &MemUnit,
+    function: &Function,
+    tree: &Tree,
+    entry: &Entry,
+    store_align: u64,
+    tti: &dyn Tti,
+) -> Option<i64> {
+    let kind = CostKind::RecipThroughput;
+    let context = unit.context;
+    {
         let lane = lane_ty_of(context, entry.lane_ty)?;
         let count = entry.lanes.len() as u32;
         let vector = VectorTy { lane, count };
@@ -592,26 +771,8 @@ fn cost_of(
             Kind::Gather => gather_cost(context, tti, entry, vector, kind)?,
         };
         llrm_support::debug!("slp", "entry {:?} x{}: {}", entry.kind, count, entry_cost);
-        total += entry_cost;
-        // The lanes some user outside the tree reads are extracted.
-        if !matches!(entry.kind, Kind::Gather | Kind::Store) {
-            for (index, inst) in entry.insts.iter().enumerate() {
-                let Some(result) = function.instruction(*inst).result else { continue };
-                if function.users(result).iter().any(|used| !made.contains_key(&used.user)) {
-                    let extract = tti.vector_instr_cost(
-                        LaneOp::Extract,
-                        vector,
-                        Some(index as u32),
-                        false,
-                        VectorInstrContext::None,
-                        kind,
-                    )?;
-                    total += valid(extract)?;
-                }
-            }
-        }
+        Some(entry_cost)
     }
-    Some(total)
 }
 
 /// The predicate of the compare that feeds the lanes of a select.
@@ -686,6 +847,17 @@ impl Placer {
     }
 }
 
+/// Where each instruction stands in its block.
+fn positions(function: &Function) -> HashMap<InstId, usize> {
+    let mut places = HashMap::new();
+    for block in function.layout().to_vec() {
+        for (at, inst) in function.iter_block(block).enumerate() {
+            places.insert(inst, at);
+        }
+    }
+    places
+}
+
 fn vector_of(
     context: &mut Context,
     element: TypeId,
@@ -709,8 +881,7 @@ pub(crate) fn emit(
     tree: &Tree,
     store_align: Option<u64>,
 ) {
-    let position: HashMap<InstId, usize> =
-        function.iter_block(tree.block).enumerate().map(|(at, inst)| (inst, at)).collect();
+    let position = positions(function);
     let last_of = |entry: &Entry| *entry.insts.iter().max_by_key(|inst| position[*inst]).expect("a bundle");
     let mut placer = Placer::default();
     // The vector of each entry, children first.

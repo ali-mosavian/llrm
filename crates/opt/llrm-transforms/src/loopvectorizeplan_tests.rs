@@ -146,8 +146,8 @@ fn a_loop_of_scattered_floats_is_priced_as_the_pin_prices_it() {
     let tti = AArch64::of_cpu("apple-m1").unwrap();
     let uno = FloatPredicate::Uno;
     let recipes = vec![
-        Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
-        Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
+        Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float, stride_bytes: Some(8) },
+        Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float, stride_bytes: Some(8) },
         Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float, ext: [None, None], second: Default::default() },
         Recipe::Compare { op: CmpSel::FCmp, lane: Ty::Float, predicate: Predicate::Float(uno) },
         Recipe::Cast { kind: CastKind::BitCast, dst: Ty::Int(32), src: Ty::Float, folded: false, users: Vec::new() },
@@ -203,4 +203,24 @@ fn an_epilogue_is_narrower_than_the_lanes_of_the_main_loop() {
     let facts = facts(8, 0, false);
     assert!(epilogue_vf(&tti, &facts, Plan { vf: 16, ic: 1 }).is_none_or(|vf| vf < 16));
     assert!(epilogue_vf(&tti, &facts, Plan { vf: 16, ic: 2 }).is_none_or(|vf| vf <= 16));
+}
+
+/// `opt -debug-only=loop-vectorize -force-vector-width=8` on a store of
+/// bytes, `o[i * 8]`, `o[i * 100]` and of floats at stride 8: the scalarized
+/// store costs 48, 120 and 44. Ours was 32 whatever the stride: the pointers'
+/// extracts and the address of a step of 65 bytes or more (10 a lane) were
+/// not counted, so jpeg_single's idct y-loop (VF 8 at stride 3 x 40 bytes)
+/// priced 967 against the pin's 1668 and was widened.
+#[test]
+fn a_scalarized_store_is_priced_as_the_pin_prices_it() {
+    let tti = AArch64::of_cpu("apple-m1").unwrap();
+    // The loop's control is the same for each; only the store differs.
+    let store = |lane, stride_bytes| {
+        iteration_cost(&tti, &[Recipe::Scalarized { op: MemoryOp::Store, lane, stride_bytes }], 8, false, false).unwrap()
+    };
+    let bytes = store(Ty::Int(8), Some(8));
+    assert_eq!(store(Ty::Int(8), Some(100)) - bytes, 120 - 48);
+    assert_eq!(store(Ty::Int(8), None) - bytes, 120 - 48);
+    assert_eq!(store(Ty::Float, Some(32)) - bytes, 44 - 48);
+    assert_eq!(store(Ty::Int(8), Some(-100)) - bytes, 0);
 }

@@ -74,7 +74,9 @@ fn chains(
     function: &Function,
     block: BlockId,
 ) -> Vec<(TypeId, Vec<Seed>)> {
-    let mut groups: Vec<(Operand, TypeId, Vec<Seed>)> = Vec::new();
+    // One object, one variable index (the stores of a row of an image share
+    // the column), one type.
+    let mut groups: Vec<((Operand, Option<llrm_mir::module::ValueId>, i64), TypeId, Vec<Seed>)> = Vec::new();
     for (order, inst) in function.iter_block(block).enumerate() {
         let instruction = function.instruction(inst);
         let Opcode::Store { align, volatile: false } = instruction.opcode else { continue };
@@ -82,13 +84,12 @@ fn chains(
         let Some(ty) = function.operand_type(unit.context, value) else { continue };
         let Some((_, bytes)) = lane_of(unit.context, ty) else { continue };
         let reference = MemRef::at(unit, instruction.operands[1], bytes as u32);
-        let Some(root) = reference.root.filter(|_| reference.base.is_none() && reference.segment.is_none()) else {
-            continue;
-        };
+        let Some(root) = reference.root.filter(|_| reference.segment.is_none()) else { continue };
+        let key = (root, reference.base, reference.scale);
         let seed = Seed { store: inst, order, disp: reference.disp, align, value };
-        match groups.iter_mut().find(|group| group.0 == root && group.1 == ty) {
+        match groups.iter_mut().find(|group| group.0 == key && group.1 == ty) {
             Some(group) => group.2.push(seed),
-            None => groups.push((root, ty, vec![seed])),
+            None => groups.push((key, ty, vec![seed])),
         }
     }
     let mut runs = Vec::new();
@@ -287,39 +288,44 @@ fn next_tree(
     tti: &dyn Tti,
 ) -> Option<(crate::slptree::Tree, Option<u64>)> {
     let unit = MemUnit::within(context, layout, function, outer);
-    for block in function.layout().to_vec() {
-        for (ty, run) in chains(&unit, function, block) {
-            let (lane, bytes) = lane_of(unit.context, ty).expect("a lane type");
-            let widest = (u64::from(tti.vector_register_bits()) / (bytes * 8)).max(1);
-            let mut vf = (widest.min(run.len() as u64)).next_power_of_two();
-            if vf > widest.min(run.len() as u64) {
-                vf /= 2;
-            }
-            let floor = tti.store_minimum_vf(2, lane, lane).max(2);
-            while vf >= u64::from(floor).max(2) {
-                for window in run.windows(vf as usize) {
-                    if window.iter().all(|seed| matches!(seed.value, Operand::Constant(_))) {
-                        continue;
-                    }
-                    let stores: Vec<InstId> = window.iter().map(|seed| seed.store).collect();
-                    let align = window[0].align;
-                    if let Some(tree) = crate::slptree::try_window(
-                        &unit,
-                        function,
-                        block,
-                        &stores,
-                        ty,
-                        align.unwrap_or(bytes),
-                        tti,
-                    ) {
-                        return Some((tree, align));
-                    }
+    let mut session = llrm_analysis::scev::analysis::ScevSession::of(context, function, outer);
+    session.ask_within(context, layout, &outer.globals, &outer.metadata, function, |se, cx| {
+        let scaler = crate::slptree::Scaler::new(se, cx);
+        for block in function.layout().to_vec() {
+            for (ty, run) in chains(&unit, function, block) {
+                let (lane, bytes) = lane_of(unit.context, ty).expect("a lane type");
+                let widest = (u64::from(tti.vector_register_bits()) / (bytes * 8)).max(1);
+                let mut vf = (widest.min(run.len() as u64)).next_power_of_two();
+                if vf > widest.min(run.len() as u64) {
+                    vf /= 2;
                 }
-                vf /= 2;
+                let floor = tti.store_minimum_vf(2, lane, lane).max(2);
+                while vf >= u64::from(floor).max(2) {
+                    for window in run.windows(vf as usize) {
+                        if window.iter().all(|seed| matches!(seed.value, Operand::Constant(_))) {
+                            continue;
+                        }
+                        let stores: Vec<InstId> = window.iter().map(|seed| seed.store).collect();
+                        let align = window[0].align;
+                        if let Some(tree) = crate::slptree::try_window(
+                            &unit,
+                            function,
+                            block,
+                            &stores,
+                            ty,
+                            align.unwrap_or(bytes),
+                            tti,
+                            &scaler,
+                        ) {
+                            return Some((tree, align));
+                        }
+                    }
+                    vf /= 2;
+                }
             }
         }
-    }
-    None
+        None
+    })
 }
 
 /// Store chains to vector stores, on a target with vector registers.

@@ -45,3 +45,17 @@ fn eight_clamped_bytes_of_fmuladds_become_one_vector_store() {
     assert!(text.contains("store <8 x i8>"), "{text}");
     assert_eq!(text.matches("store i8").count(), 0, "{text}");
 }
+
+/// The coefficient loads stand in the block before the loop (LICM hoisted
+/// them); the pin makes their `<8 x float>` load there and the rest in the
+/// body. jpeg_single -O3's tree took only loads of its own block: eight
+/// gathers at 12 each, +7 for the tree, and the idct stayed scalar.
+#[test]
+fn loads_in_an_earlier_block_are_one_vector_load_there() {
+    let text = run(include_str!("../tests/slp/idct_clamp_row8_two_blocks.ll"));
+    let (entry, body) = text.split_once("body:").expect("two blocks");
+    assert!(entry.contains("load <8 x float>"), "{text}");
+    assert!(body.contains("@llvm.fmuladd.v8f32"), "{text}");
+    assert!(body.contains("store <8 x i8>"), "{text}");
+    assert_eq!(text.matches("load float").count(), 1, "{text}");
+}
