@@ -307,6 +307,32 @@ impl CombineHooks for X86Lowering<'_> {
         !self.i16_mul_chains || self.min_size
     }
 
+    /// `X86TargetLowering::decomposeMulByConstant` ([L3636][pin]), a vector: a multiply by `2^n + 1`, `2^n - 1`, `1 - 2^n` or
+    /// `-(2^n + 1)` is a shift and an add or subtract unless the multiply is legal and fast (`pmullw`). A scalar is
+    /// `combineMul`'s (DEVIATE M1). DEVIATE X86V2: a byte lane has no shift here, so `v16i8` keeps `LowerMUL`.
+    ///
+    /// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L3636
+    fn decompose_mul_by_constant(
+        &self,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        if !vt.is_vector() || vt == EVT::Simple(MVT::V8I16) {
+            return false;
+        }
+        let bits = vt.element().size_in_bits();
+        if bits == 8 {
+            return false;
+        }
+        let mask = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+        let power_of_two = |value: u128| (value & mask).is_power_of_two();
+        let product = c & mask;
+        power_of_two(product.wrapping_add(1))
+            || power_of_two(product.wrapping_sub(1))
+            || power_of_two(1u128.wrapping_sub(product))
+            || power_of_two(product.wrapping_add(1).wrapping_neg())
+    }
+
     /// `replaceStoreOfFPConstant`: a `double` constant is stored as an `i64`
     /// (m64) or two `i32` (m32). The pin runs it on x86 (`isFPImmLegal` keeps
     /// only +-0.0, +-1.0). Judged by all allocated bytes: m64 smaller in 9 of

@@ -22,6 +22,9 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 extern unsigned char pa[4096], pb[4096];
 void multiply_arrays(void);
 extern int a[1024], b[1024];
+void times_three(void);
+void times_seven(void);
+void times_minus_three(void);
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -47,6 +50,14 @@ int main(void) {
         for (int i = 0; i < n; i++) { s += ints[i]; x ^= ints[i] * 3; }
         if (run_sum(ints, n) != s || run_xor(ints, n) != x) bad++;
     }
+    /* A multiply by 2^n +- 1 is a shift and an add or subtract: every lane must still be the product. */
+    for (int i = 0; i < 1024; i++) { b[i] = i * 100003 - 51200000; }
+    times_three();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * 3u)) bad++;
+    times_seven();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * 7u)) bad++;
+    times_minus_three();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * (unsigned)-3)) bad++;
     if (stack_copy(63) * 100 + stack_copy(5) != 303 || square_sum(5) != 30 || square_sum(50) != 40425) bad++;
     for (int i = 0; i < 1024; i++) { sa[i] = (short)(i * 31 - 7000); sb[i] = (short)(i * 17 + 3); }
     multiply_shorts();
