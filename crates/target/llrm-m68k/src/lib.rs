@@ -44,6 +44,7 @@ pub mod mac;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
+pub mod mirdump;
 pub mod moveqremat;
 pub mod narrow;
 pub mod narrow_add;
