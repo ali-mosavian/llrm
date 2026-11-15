@@ -405,9 +405,30 @@ pub fn prefers_without(
     price: Price,
     cold_clocks: bool,
 ) -> bool {
-    let (Some(with_cost), Some(without_cost)) = (price_of(with, cpu, cold_clocks), price_of(without, cpu, cold_clocks)) else {
+    prefers_without_linking(with, without, cpu, price, cold_clocks, true)
+}
+
+/// [`prefers_without`], the program linking `__mulsi3` once if a build calls it: `linked` says it is linked
+/// whatever the choice (the module multiplies two variables); else the build that calls it is charged the
+/// routine's bytes. A function priced by its own items looked 18 B smaller with the call (`div8_os` -Os 68000:
+/// 754 -> 800 B linked, 5.3 -> 7.5 M clocks).
+pub fn prefers_without_linking(
+    with: &[Item],
+    without: &[Item],
+    cpu: Cpu,
+    price: Price,
+    cold_clocks: bool,
+    linked: bool,
+) -> bool {
+    let (Some(mut with_cost), Some(mut without_cost)) = (price_of(with, cpu, cold_clocks), price_of(without, cpu, cold_clocks)) else {
         return false;
     };
+    let routine = |items: &[Item]| if linked || !calls_mulsi3(&[(String::new(), items.to_vec())]) { 0 } else { crate::routine::mulsi3_bytes(cpu) };
+    with_cost.0 += routine(with);
+    without_cost.0 += routine(without);
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial prefers_without: with {with_cost:?} without {without_cost:?}");
+    }
     !price.beats(cpu, with_cost, without_cost)
 }
 
