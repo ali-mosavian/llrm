@@ -82,8 +82,33 @@ pub fn another_function_multiplies_variables(
             let instruction = function.instruction(inst);
             matches!(instruction.opcode, Opcode::Binary(BinaryOp::Mul))
                 && !instruction.operands.iter().any(|operand| matches!(operand, Operand::Constant(_)))
+                && !is_halfword_product(module, function, instruction)
         })
     })
+}
+
+/// Whether `instruction`, a multiply, is the product of two operands each a sign (or each a zero) extension from
+/// at most 16 bits: `muls.w` or `mulu.w`, which never calls `__mulsi3` (`(long) raw * sval` in `qlight`, whose
+/// `* 1000000L` then kept the call and linked the routine for nothing else).
+fn is_halfword_product(
+    module: &llrm_mir::module::Module,
+    function: &llrm_mir::module::Function,
+    instruction: &llrm_mir::module::Instruction,
+) -> bool {
+    use llrm_mir::module::{Operand, ValueDef};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    let extension = |operand: &Operand| {
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(def) = function.value(*value).def else { return None };
+        let cast = function.instruction(def);
+        let Opcode::Cast(op @ (CastOp::SExt | CastOp::ZExt)) = cast.opcode else { return None };
+        let from = function.operand_type(&module.context, cast.operands[0])?;
+        module.context.types.int_bits(from).filter(|&bits| bits <= 16).map(|_| op)
+    };
+    match instruction.operands.as_slice() {
+        [left, right] => extension(left).is_some() && extension(left) == extension(right),
+        _ => false,
+    }
 }
 
 /// The bytes of `__mulsi3` a trial charges the build of `except` that calls it: none where another function
