@@ -199,6 +199,8 @@ pub struct Threshold {
     /// The loop hint counts only bounds the unroller takes whole (IPACP-LOOPS):
     /// the target's default for `cp_clone`; a flag given is gcc's own.
     pub cp_peel_limited: bool,
+    /// The most clones ipa-cp makes of one function (`Tti::ipa_cp_max_clones`).
+    pub cp_max_clones: usize,
     /// `-f[no-]inline-recursive`: gcc's recursive inlining and peeling (a
     /// recursive function copied into itself to depth 3, a recursive callee's
     /// own calls inlined in the copy, its tail-call elimination deferred until
@@ -212,7 +214,7 @@ pub struct Threshold {
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, single: false, min_size: false, last: true, cp_clone: None, cp_hint_clones: true, cp_peel_limited: false, recursive: None }
+        Self { limit, single: false, min_size: false, last: true, cp_clone: None, cp_hint_clones: true, cp_peel_limited: false, cp_max_clones: crate::ipacp::DEFAULT_MAX_CLONES, recursive: None }
     }
 
     /// Nothing inlines, the last call of a function included.

@@ -51,6 +51,12 @@ impl Combiner<'_> {
         if self.canonicalize_constant_arg0(call) {
             return Visit::Changed;
         }
+        if self.is_stack_restore(call) {
+            let restored = self.visit_stack_restore(call);
+            if restored != Visit::None {
+                return restored;
+            }
+        }
         let visited = match self.intrinsic_of(call) {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
             Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),

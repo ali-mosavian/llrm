@@ -503,6 +503,8 @@ intrinsics! {
     Assume => "assume",
     Vscale => "vscale",
     LaunderInvariantGroup => "launder.invariant.group",
+    StackSave => "stacksave",
+    StackRestore => "stackrestore",
     Aarch64Irg => "aarch64.irg",
     Aarch64Tagp => "aarch64.tagp",
     AmdgcnMakeBufferRsrc => "amdgcn.make.buffer.rsrc",

@@ -76,11 +76,7 @@ pub fn casts_branched(
 enum Site {
     /// `select c, K, %v` of integers where `%v` is a conversion nothing else
     /// reads: the conversion goes to the path that does not take `K`.
-    Arm {
-        cast: InstId,
-        select: InstId,
-        constant_is_true: bool,
-    },
+    Arm { cast: InstId, select: InstId, constant_is_true: bool },
     Convert {
         cast: InstId,
         select: InstId,
@@ -172,7 +168,10 @@ fn arm_site(
         return None;
     }
     let constant = |arm: Operand| {
-        matches!(arm, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_)))
+        matches!(
+            arm,
+            Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_))
+        )
     };
     let (constant_is_true, other) = match (constant(yes), constant(no)) {
         (true, false) => (true, no),
@@ -181,10 +180,60 @@ fn arm_site(
     };
     let Operand::Value(value) = other else { return None };
     let ValueDef::Instruction(cast) = function.value(value).def else { return None };
-    (matches!(function.instruction(cast).opcode, Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI))
+    (matches!(
+        function.instruction(cast).opcode,
+        Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI)
+    )
         && function.parent(cast) == Some(block)
         && function.users(value).has_one_use())
     .then_some(Site::Arm { cast, select, constant_is_true })
+}
+
+/// `Sink.cpp` (`SinkInstruction`), for the join a diamond just made: a pure
+/// instruction of `home` that only `join` reads moves to the start of `join`,
+/// after its phis, so what it computes is next to its readers.
+/// `splitBasicBlock` leaves what follows the select in `join` and what precedes
+/// it in `home`: the six constant selects of sfm16_float stayed behind the
+/// branch of a conversion and their sum went after it, so no `add` folded into
+/// a branch and each term was held in a register or a stack slot across the
+/// diamond.
+fn sunk_into_join(
+    function: &mut Function,
+    home: BlockId,
+    join: BlockId,
+) {
+    let pure = |function: &Function, inst: InstId| {
+        let one = function.instruction(inst);
+        one.result.is_some()
+            && (matches!(
+                one.opcode,
+                Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Select
+            )
+                || matches!(
+                    one.opcode,
+                    Opcode::Binary(op) if !matches!(op, BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem | BinaryOp::FRem)
+                ))
+    };
+    let list: Vec<InstId> = function.iter_block(home).collect();
+    for &inst in list.iter().rev() {
+        if !pure(function, inst) {
+            continue;
+        }
+        let value = function.instruction(inst).result.expect("a result");
+        let users = function.users(value);
+        let reads_only_in_join = !users.is_empty()
+            && users.iter().all(|used| {
+                function.parent(used.user) == Some(join) && function.instruction(used.user).opcode != Opcode::Phi
+            });
+        if !reads_only_in_join {
+            continue;
+        }
+        let first = function
+            .iter_block(join)
+            .find(|&other| function.instruction(other).opcode != Opcode::Phi)
+            .expect("a join with a terminator");
+        function.move_to(inst, Position::Before(first)).expect("a placed instruction");
+    }
 }
 
 /// The conversion, with the select and compare only it reads, moves to a block
@@ -252,6 +301,7 @@ fn arm_branched(
     let value = function.instruction(phi).result.expect("a phi's value");
     function.replace_all_uses_with(result, Operand::Value(value));
     function.erase(select).expect("nothing reads it now");
+    sunk_into_join(function, home, join);
     let _ = other;
 }
 
@@ -343,6 +393,7 @@ fn compare_branched(
     let value = function.instruction(phi).result.expect("a phi's value");
     function.replace_all_uses_with(result, Operand::Value(value));
     function.erase(select).expect("nothing reads it now");
+    sunk_into_join(function, home, join);
 }
 
 fn branched(
@@ -397,6 +448,7 @@ fn branched(
     function.replace_all_uses_with(result, Operand::Value(value));
     function.erase(cast).expect("nothing reads it now");
     function.erase(select).expect("nothing reads it now");
+    sunk_into_join(function, home, join);
     // A select only the conversion reads moves with it: the next round finds
     // the pair in one block.
     if let Operand::Value(value) = other
@@ -437,8 +489,12 @@ impl FunctionPass for SelectArms {
             .outer()
             .target()
             .tti()
-            .is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms() && (!size || tti.sinks_select_arms_for_size()));
-        let fused = |bits: u32, signed: bool| analyses.outer().target().tti().is_some_and(|tti| tti.has_div_rem_op(bits, signed));
+            .is_some_and(
+                |tti| !tti.has_cmov() && tti.sinks_select_arms() && (!size || tti.sinks_select_arms_for_size()),
+            );
+        let fused = |bits: u32, signed: bool| {
+            analyses.outer().target().tti().is_some_and(|tti| tti.has_div_rem_op(bits, signed))
+        };
         if wanted && select_arms_sunk(unit.context, unit.function, &fused) {
             PreservedAnalyses::none()
         } else {
@@ -609,17 +665,13 @@ fn sunk(
         function.insert(back, Position::End(side)).expect("an unplaced instruction");
         (side, Operand::Block(side))
     };
-    // The true arm's block first after `home`: it is the branch's fallthrough, as
-    // `EmitLoweredSelect` places the false copy after the branch to the join.
+    // The true arm's block first after `home`: it is the branch's fallthrough,
+    // as `EmitLoweredSelect` places the false copy after the branch to the
+    // join.
     let (no_from, no_target) = side_of(function, no);
     let (yes_from, yes_target) = side_of(function, yes);
-    let branch = function.create_instruction(
-        Opcode::Br,
-        void,
-        vec![condition, yes_target, no_target],
-        Flags::default(),
-        None,
-    );
+    let branch =
+        function.create_instruction(Opcode::Br, void, vec![condition, yes_target, no_target], Flags::default(), None);
     function.insert(branch, Position::End(home)).expect("an unplaced instruction");
     let phi = function.create_instruction(
         Opcode::Phi,
@@ -632,6 +684,7 @@ fn sunk(
     let value = function.instruction(phi).result.expect("a phi's value");
     function.replace_all_uses_with(result, Operand::Value(value));
     function.erase(select).expect("nothing reads it now");
+    sunk_into_join(function, home, join);
 }
 
 #[cfg(test)]

@@ -15,6 +15,13 @@ extern short sa[1024], sb[1024];
 void shift_ints(void);
 extern int si[1024];
 extern unsigned ui[1024];
+void fill_value(int *a, int v, int n);
+void fill_long_value(long *a, long v, int n);
+void multiply_bytes(void);
+void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsigned char *z);
+extern unsigned char pa[4096], pb[4096];
+void multiply_arrays(void);
+extern int a[1024], b[1024];
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -50,6 +57,30 @@ int main(void) {
         for (int i = 0; i < 1024; i++) want[i] = (int)((unsigned)si[i] << 3) + (si[i] >> 2) + (int)(ui[i] >> 5);
         shift_ints();
         for (int i = 0; i < 1024; i++) if (si[i] != want[i]) bad++;
+    }
+    {
+        static int wi[300];
+        static long wl[300];
+        for (int n = 0; n < 130; n += 3) {
+            fill_value(wi, 0x1234567 + n, n);
+            fill_long_value(wl, 0x123456789abcdefL - n, n);
+            for (int i = 0; i < n; i++) if (wi[i] != 0x1234567 + n || wl[i] != 0x123456789abcdefL - n) bad++;
+        }
+    }
+    for (int i = 0; i < 1024; i++) { a[i] = i * 1000003 - 700000000; b[i] = 123456789 - i * 77777; }
+    {
+        static int want[1024];
+        for (int i = 0; i < 1024; i++) want[i] = (int)((unsigned)a[i] * (unsigned)b[i]);
+        multiply_arrays();
+        for (int i = 0; i < 1024; i++) if (a[i] != want[i]) bad++;
+    }
+    {
+        static unsigned char x[4096], y[4096], z[4096];
+        multiply_bytes();
+        for (int i = 0; i < 4096; i++) if (pa[i] != (unsigned char)(i * 13 + 5) || pb[i] != pa[i]) bad++;
+        for (int i = 0; i < 4096; i++) y[i] = (unsigned char)(i * 7 + 3), z[i] = (unsigned char)(i * 31 + 11);
+        multiply_byte_arrays(x, y, z);
+        for (int i = 0; i < 4096; i++) if (x[i] != (unsigned char)(y[i] * z[i])) bad++;
     }
     printf("bad %d\n", bad);
 }
