@@ -821,3 +821,36 @@ b0:
     );
     assert!(!text.contains("store i8 12"), "{text}");
 }
+
+/// A memset cut at its start kept `align 16` on its moved destination: `memset(@a + 2, 0, 126) align 16` was stored
+/// with `movaps` at an address 2 bytes off a 16-byte boundary, a segfault (pattern_fill -O3 once the loop around it
+/// unrolled). The pin keeps the alignment true: a cut of less than one alignment is not made, a longer one is made as
+/// far as a multiple of it (`tryToShorten`).
+#[test]
+fn a_memset_is_cut_only_where_its_alignment_stays_true() {
+    let two_bytes = "  store i16 1, ptr @a\n";
+    let twenty_bytes = "  store i64 1, ptr @a
+  %p = getelementptr i8, ptr @a, i64 8
+  store i64 2, ptr %p
+  %q = getelementptr i8, ptr @a, i64 16
+  store i32 3, ptr %q
+";
+    for (stores, length, destination) in
+        [(two_bytes, "i64 128", "ptr align 16 @a"), (twenty_bytes, "i64 112", "ptr align 16 %0")]
+    {
+        let after = promoted(&format!(
+            "@a = global [64 x i16] zeroinitializer, align 16
+
+define void @f() {{
+b0:
+  call void @llvm.memset.p0.i64(ptr align 16 @a, i8 0, i64 128, i1 false)
+{stores}  ret void
+}}
+
+declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+"
+        ));
+        let call = after.lines().find(|line| line.contains("call void @llvm.memset")).expect("a memset stays");
+        assert!(call.contains(length) && call.contains(destination), "{after}");
+    }
+}
