@@ -939,6 +939,23 @@ impl SelectionDAG {
         self.live_users(value.node).filter(move |&user| self.nodes[user as usize].ops.contains(&value))
     }
 
+    /// The nodes that read `value`, newest use first, once each: a use list
+    /// in the pin's order (`addToList` puts a use at the head, so the list
+    /// runs from the use added last). `ReplaceAllUsesWith` walks it and adds
+    /// each use to the new value in turn, which reverses it.
+    pub fn users_newest_first(
+        &self,
+        value: SDValue,
+    ) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for &user in self.uses.get(value.node as usize).into_iter().flatten().rev() {
+            if !self.is_deleted(user) && self.nodes[user as usize].ops.contains(&value) && !out.contains(&user) {
+                out.push(user);
+            }
+        }
+        out
+    }
+
     /// Whether anything reads `value`: `users(value).next().is_some()`
     /// without collecting and sorting them.
     pub fn has_users(
@@ -1124,6 +1141,10 @@ impl SelectionDAG {
             if self.root == from {
                 self.root = to;
             }
+            // The pin walks the use list newest first and adds each use to `to`
+            // as it goes; the users are still updated in creation order, which
+            // fixes which of two equal nodes a CSE merge keeps.
+            let use_list_order = self.users_newest_first(from);
             for user in self.users(from).collect::<Vec<_>>() {
                 self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
@@ -1131,7 +1152,6 @@ impl SelectionDAG {
                         *op = to;
                     }
                 }
-                self.push_use(to.node as usize, user);
                 let Some(hash) = self.key_of(user) else {
                     events.push(Rauw::Updated(user));
                     continue;
@@ -1151,6 +1171,9 @@ impl SelectionDAG {
                         self.cse_link(hash, user);
                     }
                 }
+            }
+            for user in use_list_order {
+                self.push_use(to.node as usize, user);
             }
         }
         events
@@ -1320,7 +1343,9 @@ impl SelectionDAG {
             return self.constant(value);
         }
         let first = self.constant(self.operand(value, 0))?;
-        (1..self.value_type(value).lanes()).all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first)).then_some(first)
+        (1..self.value_type(value).lanes())
+            .all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first))
+            .then_some(first)
     }
 
     pub fn is_opaque(
