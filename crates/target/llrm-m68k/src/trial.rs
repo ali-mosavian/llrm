@@ -285,7 +285,12 @@ pub fn keeps_linking(
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial keeps: with {with_cost:?} without {without_cost:?}");
     }
-    price.beats(cpu, with_cost, without_cost)
+    // at -Os both axes count: bytes grow only for a far larger share of the clocks ([`pays_by`])
+    if price == Price::Size {
+        pays_by(with_cost, without_cost, UNROLL_CLOCK_SHARE)
+    } else {
+        price.beats(cpu, with_cost, without_cost)
+    }
 }
 
 /// Bytes and clocks of `functions` (name, items): each function's clocks run once per call from the others, by the
@@ -365,18 +370,33 @@ fn pays(
     with: (usize, u32),
     without: (usize, u32),
 ) -> bool {
+    pays_by(with, without, 1.5)
+}
+
+/// How many times the share of bytes an unrolled loop grows by the share of clocks it saves must be: the unroll trial
+/// priced `known_loads_walks` at +0.2 % bytes for -29 % clocks (145 times) and put it back for 4 B, a program that then
+/// ran 5 times the instructions; the pairs that cost bytes for clocks at 1.7 to 10 times (`spill_store_order` +27 %
+/// for -45 %) are worth less than the bytes at -Os.
+const UNROLL_CLOCK_SHARE: f64 = 16.0;
+
+/// [`pays`] with the clocks falling by at least `share` times the share the bytes grow by.
+fn pays_by(
+    with: (usize, u32),
+    without: (usize, u32),
+    share: f64,
+) -> bool {
     let ((with_bytes, with_clocks), (bytes, clocks)) = (with, without);
     if (with_bytes, with_clocks) < (bytes, clocks) {
         return true;
     }
-    let grown = (with_bytes.saturating_sub(bytes)) as u64;
-    let saved = u64::from(clocks.saturating_sub(with_clocks));
-    with_bytes * 100 <= bytes * HEADROOM_PERCENT && with_clocks < clocks && grown * u64::from(clocks) * 3 <= saved * bytes as u64 * 2
+    let grown = (with_bytes.saturating_sub(bytes)) as f64;
+    let saved = f64::from(clocks.saturating_sub(with_clocks));
+    with_bytes * 100 <= bytes * HEADROOM_PERCENT && with_clocks < clocks && grown / bytes as f64 * share <= saved / f64::from(clocks)
 }
 
 #[cfg(test)]
 mod pays_tests {
-    use super::pays;
+    use super::{UNROLL_CLOCK_SHARE, pays, pays_by};
 
     /// The -Os trial priced these pairs (`LLRM_DEBUG=trial`, bytes and weighted clocks of the differing functions).
     /// With the ceiling alone `loop_versioning`, `loop_interchange` and `stack_arrays_copy` were kept and then sat
@@ -391,6 +411,18 @@ mod pays_tests {
         assert!(!pays((108, 649), (98, 730)), "stack_arrays_copy 68020: +10 % for -11 % went 2 B over gcc's bar");
         assert!(pays((90, 900), (100, 1000)), "smaller and faster");
         assert!(!pays((100, 1000), (100, 1000)), "a tie goes to the plain build");
+    }
+
+    /// The -Os unroll trial priced these pairs (`LLRM_DEBUG=trial`): unrolled against the loop. The bytes-first rule put
+    /// `known_loads_walks` back for 4 B and the program ran 75185 instructions against 32920 (-Os 68000).
+    #[test]
+    fn an_unroll_costs_bytes_only_for_a_far_larger_share_of_clocks() {
+        let unroll = |with, without| pays_by(with, without, UNROLL_CLOCK_SHARE);
+        assert!(unroll((1996, 192910), (1992, 272731)), "known_loads_walks: +0.2 % bytes for -29 % clocks");
+        assert!(!unroll((384, 9151), (302, 16735)), "spill_store_order: +27 % for -45 %");
+        assert!(!unroll((122, 492), (104, 902)), "byval_inline: +17 % for -45 %");
+        assert!(!unroll((110, 5876), (106, 9372)), "rep_count: +3.8 % for -37 %");
+        assert!(unroll((2066, 204767), (2212, 310206)), "fewer bytes and clocks");
     }
 }
 
