@@ -99,3 +99,16 @@ fn the_no_growth_variant_prices_nests_at_o3() {
     let bytes = module_prices(ir, &chosen).unwrap().0;
     assert!(bytes <= 750, "{bytes} B kept at -O3 (-O2: 698)");
 }
+
+const MUL_WORDS: &str = include_str!("kernels/ir/mul_words_to_long.ll");
+
+/// mul_words_to_long -O3: the pin unrolls the 10-trip loop of calls whose table loads fold (207 B; 137 B rolled, SDCC
+/// 197 B). The no-growth variant priced the copies at 0 B: the analysis had folded the table's loads out of the bytes
+/// it counts and the promoted-load credit took them out again (51 B added, priced 0).
+#[test]
+fn an_unroll_whose_table_loads_are_already_folded_is_not_credited_twice() {
+    let unrolled = Request::new(Level::O3);
+    let chosen = effective(MUL_WORDS, &unrolled).expect("chooses");
+    let (before, after) = (module_prices(MUL_WORDS, &unrolled).unwrap().0, module_prices(MUL_WORDS, &chosen).unwrap().0);
+    assert!(after + 40 <= before, "{before} B kept as {after} B");
+}
