@@ -1184,6 +1184,9 @@ pub struct OperationCosts {
     /// The product of two values extended from the word (`i32` by `i32` into `i64`), the form a fixed-point multiply
     /// expands to. 0: priced as `multiply_wide`.
     pub multiply_widening: i64,
+    /// An integer shifted by a variable count when it is wider than the target's word (an `i64` on a 32-bit CPU): the
+    /// CPU's whole sequence, both halves and the count's test against the word. 0: priced as `shift` per word.
+    pub shift_wide: i64,
     /// Percent by which a constant divide's multiply-high sequence must cost
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
@@ -1452,6 +1455,7 @@ impl Default for OperationCosts {
             divide_long: 1,
             multiply_wide: 0,
             multiply_widening: 0,
+            shift_wide: 0,
             divide_margin: 0,
             multiply_high: 1,
             shift: 1,
