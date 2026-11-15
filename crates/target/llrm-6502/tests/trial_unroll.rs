@@ -79,16 +79,19 @@ fn an_unroll_that_folds_nothing_is_put_back() {
     assert!(xors < 8, "{xors} xors: the 16 trips were copied out:\n{text}");
 }
 
-/// `fcmp_all` was unrolled to 85,508 bytes more at 23 clk/B: it pays by the
-/// rate and would not fit the 64 KiB address space. A trial is put back past
-/// the growth limit whatever it saves, at either level.
+/// `fcmp_all` was unrolled to 85,508 bytes more at 23 clk/B and would not fit
+/// the 64 KiB address space. A trial that grows the code is put back whatever
+/// it saves, at every level: bytes come first, so 8,000 bytes for 100,000
+/// clocks was kept at -O2 at 3 clk/B (2026-11-14).
 #[test]
-fn a_trial_that_grows_the_code_past_the_limit_is_put_back() {
+fn a_trial_that_grows_the_code_is_put_back() {
     use llrm_6502::driver::trial_pays;
-    assert!(trial_pays(Level::O2, 3000, 100_000, 8_000));
-    assert!(!trial_pays(Level::O2, 3000, 2_008_446, 85_508));
-    assert!(trial_pays(Level::Os, 0, 0, -1));
-    assert!(!trial_pays(Level::Os, 0, 1_000_000, 17_000));
+    assert!(!trial_pays(Level::O2, 100_000, 8_000));
+    assert!(!trial_pays(Level::O3, 2_008_446, 85_508));
+    assert!(!trial_pays(Level::Os, 1_000_000, 17_000));
+    assert!(trial_pays(Level::O2, 0, -1));
+    assert!(trial_pays(Level::Os, 0, -1));
+    assert!(trial_pays(Level::O3, 5, 0));
 }
 
 /// `fcmp_all`'s trial took 14 s of selection to price 85,508 bytes more: a 4
@@ -144,4 +147,14 @@ fn a_four_trip_loop_is_priced_at_four_trips() {
     let asm = assembly(&module(FOUR_TRIPS), &Request::new(Level::O2)).unwrap();
     let calls = asm.lines().filter(|line| line.trim() == "jsr report").count();
     assert_eq!(calls, 1, "the loop was unrolled to {calls} calls:\n{asm}");
+}
+
+/// The trial priced the functions' bytes only: static_pointers' unroll folds a
+/// 6-byte switch table away for 3 bytes of code, was put back as +3 B, and the
+/// program was 196 B against 193 (2026-11-14).
+#[test]
+fn a_trial_prices_the_initialised_data_too() {
+    use llrm_6502::driver::data_bytes;
+    let text = ".segment \"RODATA\"\nt:\n  .byte 11,12,30,6,40,13\n  .word 1,2\n.segment \"BSS\"\nb: .res 9\n.segment \"DATA\"\nd:\n  .res 3\n";
+    assert_eq!(data_bytes(text), 6 + 4 + 3);
 }
