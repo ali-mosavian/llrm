@@ -469,6 +469,13 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE MERGEFUNC-OS (owner m68k, exit 2026-11-24; z80 and x86 m32 have it): `MergeFunctions` is off in the
+    /// pin's pipeline; at -Os two functions of one body are one, the other a `bra` to it. gcc's `-fipa-icf` folds
+    /// them (shift_int32_variable: `shl`/`shl2`, `shr`/`shr2`, `sar`/`sar2`).
+    fn merge_functions_at_size(&self) -> bool {
+        true
+    }
+
     /// -Os counts bytes and clocks against the best compiler's (user ruling
     /// 2026-11-14): a call the size bound refused is built inlined too, and
     /// kept where the finished code is faster within the bytes ceiling.
