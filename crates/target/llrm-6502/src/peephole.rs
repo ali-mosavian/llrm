@@ -144,6 +144,19 @@ pub fn run_with(
     run_passes(asm, known_loads);
 }
 
+/// The passes that follow the choice of layout: a byte they save must not tip
+/// that choice, as the transfer of known constants must not
+/// (`alloc::emit_on`'s `wins`), so they run on the text kept, not on the texts
+/// it is priced on.
+///
+/// `LLRM_6502_TAILMERGE=0` is the kill switch, for an A/B of one binary.
+pub fn after_layout(asm: &mut Asm) {
+    if crate::copyprop::enabled(std::env::var_os("LLRM_6502_TAILMERGE").as_deref()) {
+        crate::tail_merge::merge_opposite_tails(asm);
+        crate::short_jump::jump_to_branch(asm);
+    }
+}
+
 /// `(run_with(asm, false), run_with(asm, true))` on one copy of `asm`: the
 /// passes before the first that reads `known_loads` run once for both.
 pub fn run_pair(asm: &Asm) -> (Asm, Asm) {
