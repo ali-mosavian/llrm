@@ -110,3 +110,29 @@ fn consecutive_accesses_form_no_group() {
     let body = "  %p0 = getelementptr inbounds i32, ptr %p, i64 %i\n  store i32 %a, ptr %p0, align 4\n";
     assert_eq!(groups(body), (Vec::<String>::new(), false));
 }
+
+/// The pin's own example (`canReorderMemAccessesForInterleavedGroups`):
+/// `A[j] = a; A[j-1] = b; A[j-3] = c; A[j] = d` at stride 2 makes one store
+/// group, as the pin's `opt -passes=loop-vectorize` does (one wide store).
+#[test]
+fn a_store_over_a_member_does_not_split_the_pins_example_group() {
+    let body = "  %j = shl nuw nsw i64 %i, 1\n  %g0 = getelementptr inbounds i32, ptr %p, i64 %j\n  \
+                store i32 %a, ptr %g0, align 4\n  %j1 = sub nsw i64 %j, 1\n  \
+                %g1 = getelementptr inbounds i32, ptr %p, i64 %j1\n  store i32 %b, ptr %g1, align 4\n  \
+                %j3 = sub nsw i64 %j, 3\n  %g3 = getelementptr inbounds i32, ptr %p, i64 %j3\n  \
+                store i32 %a, ptr %g3, align 4\n  store i32 %b, ptr %g0, align 4\n";
+    assert_eq!(groups(body), (vec!["store x2 m2".to_string()], false));
+}
+
+/// A store to the slot between two loads of one stride-2 stream keeps the
+/// loads out of one group (hoisting the second over the store is illegal);
+/// the store's own group has a gap and is released. The pin: two wide loads.
+#[test]
+fn a_store_between_two_loads_keeps_them_in_separate_groups() {
+    let body = "  %j = shl nuw nsw i64 %i, 1\n  %g0 = getelementptr inbounds i32, ptr %p, i64 %j\n  \
+                %x = load i32, ptr %g0, align 4\n  %j1 = or disjoint i64 %j, 1\n  \
+                %g1 = getelementptr inbounds i32, ptr %p, i64 %j1\n  store i32 %a, ptr %g1, align 4\n  \
+                %y = load i32, ptr %g1, align 4\n  %s = add i32 %x, %y\n  \
+                %pq = getelementptr inbounds i32, ptr %q, i64 %i\n  store i32 %s, ptr %pq, align 4\n";
+    assert_eq!(groups(body), (vec!["load x2 m1+epilogue".to_string(); 2], true));
+}
