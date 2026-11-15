@@ -165,8 +165,9 @@ fn compiled_with<T>(
 }
 
 /// What a finished module is expected to execute: instructions and memory operands as `executed::work`, the
-/// branches and jumps at their clocks on the CPU (a rotation trades a taken `jmp` for a copied guard, which the
-/// work alone does not see). `None` where the model has no answer.
+/// branches, jumps and x87 exchanges at their clocks on the CPU (a rotation
+/// trades a taken `jmp` for a copied guard, and can add `fxch`es to the loop,
+/// which the work alone does not see). `None` where the model has no answer.
 fn rotation_work(
     built: &masm::Module,
     options: &Options,
@@ -178,7 +179,8 @@ fn rotation_work(
         .map(|one| {
             let done = executed::executed(&one.body)?;
             let jumps = done.jump_cycles(cpu).ok()?;
-            Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
+            let exchanges = done.exchange_cycles(cpu).ok()?;
+            Some(done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges)
         })
         .sum::<Option<f64>>()
 }
