@@ -962,18 +962,20 @@ impl TargetLowering {
         // expansion.
         t.set_ops(&[ISD::Shl, ISD::Srl], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
-        // `ExpandReductions` makes a reduction shuffles and `extractelement`;
-        // no shuffle is selected here, so the DAG folds the spilled
-        // lanes (`expandVecReduce`). DEVIATE X86V4 (owner
-        // llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR: shuffle
-        // selection).
+        // `ExpandReductions` (`getShuffleReduction`) makes a sum, `and`, `or` or
+        // `xor` a shuffle and an operation a step, then `extractelement`.
+        t.set_ops(
+            &[ISD::VecReduceAdd, ISD::VecReduceAnd, ISD::VecReduceOr, ISD::VecReduceXor],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Custom,
+        );
+        // The product and the minima and maxima stay `expandVecReduce`: the
+        // spilled lanes folded as scalars. DEVIATE X86V4 (owner
+        // llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles those too
+        // (a vector multiply, `pcmpgt` and blend steps).
         t.set_ops(
             &[
-                ISD::VecReduceAdd,
                 ISD::VecReduceMul,
-                ISD::VecReduceAnd,
-                ISD::VecReduceOr,
-                ISD::VecReduceXor,
                 ISD::VecReduceSMax,
                 ISD::VecReduceSMin,
                 ISD::VecReduceUMax,

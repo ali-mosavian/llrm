@@ -75,6 +75,25 @@ fn a_sum_loop_is_vector_with_a_folded_total() {
     assert!(sum.contains("paddd"), "{sum}");
 }
 
+/// A vector sum is folded by shuffles, as the pin's `ExpandReductions` does
+/// (`pshufd` for the 64- and 32-bit halves, `psrld` and `psrlw` for the 16- and
+/// 8-bit ones, then `movd`): it was spilled to the stack and every lane loaded
+/// (`[rsp-24]`, two `add`s and a `mov`).
+#[test]
+fn a_vector_total_is_folded_by_shuffles_and_not_spilled_to_the_stack() {
+    let text = assembly("x86_64-linux", "-O2");
+    for (name, shift) in
+        [("sum_array", None), ("sum_longs", None), ("sum_shorts", Some("psrld")), ("sum_bytes", Some("psrlw"))]
+    {
+        let sum = body(&text, name);
+        assert!(sum.contains("pshufd") && (sum.contains("movd") || sum.contains("movq")), "{name}: {sum}");
+        assert!(!sum.contains("rsp"), "{name} spills the vector: {sum}");
+        if let Some(shift) = shift {
+            assert!(sum.contains(shift), "{name} lacks {shift}: {sum}");
+        }
+    }
+}
+
 /// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]

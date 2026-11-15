@@ -2,6 +2,11 @@
 static unsigned char buf[200];
 __attribute__((noinline)) int run_sum(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
 __attribute__((noinline)) int run_xor(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t ^= a[i] * 3; return t; }
+__attribute__((noinline)) long run_sum_l(const long *a, int n) { long t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) short run_sum_s(const short *a, int n) { short t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) signed char run_sum_b(const signed char *a, int n) { signed char t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) int run_or(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t |= a[i]; return t; }
+__attribute__((noinline)) int run_and(const int *a, int n) { int t = -1; for (int i = 0; i < n; i++) t &= a[i]; return t; }
 __attribute__((noinline)) void fwd(unsigned char *dst, const unsigned char *src, unsigned long n) {
     unsigned long i;
     for (i = 0; i < n; i++) dst[i] = src[i];
@@ -46,6 +51,19 @@ int main(void) {
         int s = 0, x = 0;
         for (int i = 0; i < n; i++) { s += ints[i]; x ^= ints[i] * 3; }
         if (run_sum(ints, n) != s || run_xor(ints, n) != x) bad++;
+    }
+    {
+        /* Every lane differs, so a reduction that folds the wrong lanes gives another total. */
+        static long longs[300]; static short shorts[300]; static signed char bytes[300]; static int words[300], masks[300];
+        for (int i = 0; i < 300; i++) {
+            longs[i] = (long)i * 1000000007L - 5; shorts[i] = (short)(i * 211 - 300); bytes[i] = (signed char)(i * 7 + 1);
+            words[i] = (1 << (i % 31)) | (i * 3); masks[i] = ~(1 << (i % 29));
+        }
+        for (int n = 0; n < 300; n++) {
+            long l = 0; short s = 0; signed char b = 0; int o = 0, a = -1;
+            for (int i = 0; i < n; i++) { l += longs[i]; s = (short)(s + shorts[i]); b = (signed char)(b + bytes[i]); o |= words[i]; a &= masks[i]; }
+            if (run_sum_l(longs, n) != l || run_sum_s(shorts, n) != s || run_sum_b(bytes, n) != b || run_or(words, n) != o || run_and(masks, n) != a) bad++;
+        }
     }
     if (stack_copy(63) * 100 + stack_copy(5) != 303 || square_sum(5) != 30 || square_sum(50) != 40425) bad++;
     for (int i = 0; i < 1024; i++) { sa[i] = (short)(i * 31 - 7000); sb[i] = (short)(i * 17 + 3); }
