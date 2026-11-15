@@ -537,6 +537,23 @@ fn x86_rows_price_bytes_at_speed_at_o1_unless_told_otherwise() {
     }
 }
 
+/// DEVIATE PRE-O1: the x86-16 rows give their backend `-ftree-pre` at -O1 (m16
+/// grep -O1 reloaded and respilled the scan loop's state, 40.16M clk against
+/// -O2's 34.89M, which GVN-PRE makes the same), unless the command line states
+/// either spelling; no other row, and no other level, does.
+#[test]
+fn x86_16_rows_run_pre_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-ftree-pre");
+    for row in table.keys() {
+        assert_eq!(has(&llc(row, "-O1 -c x.c")), row.starts_with("x86_16-"), "{row}");
+        for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-tree-pre -c x.c"] {
+            assert!(!has(&llc(row, line)), "{row} {line}");
+        }
+    }
+}
+
 /// A dist read the description files from the checkout it was built in, so
 /// deleting or moving the checkout failed every compile (2345 of 3911 cells of
 /// a post-merge A/B). Every description targets.toml names is embedded: the
