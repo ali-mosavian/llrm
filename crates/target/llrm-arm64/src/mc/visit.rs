@@ -296,6 +296,26 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
+            Inst::VectorCompare { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorCompareZero { rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorBitSelect { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorBsp { rd, mask, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(mask), Role::Use);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
             Inst::VectorFma { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
@@ -359,7 +379,7 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
             }
             Inst::VectorLongShift { rd, rn, .. }
-            | Inst::VectorNot { rd, rn }
+            | Inst::VectorNot { rd, rn, .. }
             | Inst::VectorFpUnary { rd, rn, .. }
             | Inst::VectorReduce { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);

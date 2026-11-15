@@ -15,7 +15,7 @@ fn every_x86_cpu_machine_has_a_tti() {
     for arch in llrm_driver::all() {
         for cpu in arch.cpus() {
             let profile = tuned_optimizing(
-                &*arch, cpu, false, false, false, true, false, false, false, false, false, false, false,
+                &*arch, cpu, false, false, false, true, false, false, false, false, false, false, false, false,
             )
             .unwrap_or_else(|why| panic!("{}: {why}", arch.name()));
             checked += 1;

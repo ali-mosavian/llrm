@@ -13,6 +13,7 @@ pub mod description;
 pub mod divconst;
 pub mod driver;
 pub mod emit;
+pub mod expand_pseudo;
 pub mod expand_imm;
 pub mod facts;
 pub mod flagcse;
@@ -44,6 +45,7 @@ mod tti_sink;
 #[cfg(test)]
 mod tti_tests;
 mod tti_vector;
+pub mod vector_forms;
 
 use llrm_lir::registers::RegId;
 

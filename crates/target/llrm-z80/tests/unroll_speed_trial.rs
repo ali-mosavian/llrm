@@ -130,8 +130,8 @@ const SWITCH_TABLE: &str = include_str!("data/switch_table_in_code_o2.ll");
 /// switch_table_in_code -O2: `step` (a switch of six arms) was inlined into the
 /// 9-trip loop of `main` where the call's clocks repaid the growth, and stays
 /// as a function: 874 B against SDCC's 787 (736 B at -O1, no inline). The
-/// variant that takes neither that grows the module is smaller, and the driver
-/// takes it.
+/// variant that takes neither an inline nor an unroll that grows the module is
+/// smaller, and the driver takes it.
 #[test]
 fn an_inline_that_only_grows_the_module_is_refused() {
     let inlined = Request::new(Level::O2);
