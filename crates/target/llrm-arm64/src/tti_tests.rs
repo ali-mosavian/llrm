@@ -691,3 +691,28 @@ fn a_vector_reduction_is_priced_by_the_pins_table() {
     assert_eq!(cost(ReduceKind::Mul, Ty::Int(32), 4, false), None);
     assert_eq!(cost(ReduceKind::SMax, Ty::Int(64), 2, false), None);
 }
+
+/// `opt -passes='print<cost-model>' -cost-kind=code-size` on aarch64. Only the
+/// throughput kind was priced for a vector, so `LoopUnrollPass` could not size
+/// a vectorized loop ("loop size not computed") and left every one rolled: the
+/// two-trip `<8 x i16>` loop of bench `tile` (1909 instructions against the
+/// pin's, which unrolls it, 1506 once it is).
+#[test]
+fn vector_costs_at_code_size_are_the_pins() {
+    use llrm_mir::opcode::IntPredicate as I;
+    use llrm_mir::tti::{ArithOp::*, CastKind::*, CmpSel::*, Predicate::Int};
+    let i = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+    let f = |count| VectorTy { lane: Ty::Float, count };
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let k = CostKind::CodeSize;
+    let alu = |op, ty| tti.vector_arithmetic_cost(op, ty, k).map(|c| c.value);
+    // An integer operation is one a register; a floating-point one is `BaseT`'s
+    // 1.
+    assert_eq!((alu(Add, i(64, 2)), alu(Add, i(64, 8)), alu(And, i(32, 4))), (Some(1), Some(4), Some(1)));
+    assert_eq!((alu(Mul, i(32, 4)), alu(Shl, i(32, 4))), (Some(1), Some(1)));
+    assert_eq!((alu(FAdd, f(4)), alu(FMul, f(4)), alu(FNeg, f(4))), (Some(1), Some(1), Some(1)));
+    let cast = |kind, to, from| tti.vector_cast_cost(kind, to, from, k).map(|c| c.value);
+    assert_eq!((cast(SExt, i(64, 8), i(16, 8)), cast(ZExt, i(32, 8), i(16, 8))), (Some(6), Some(2)));
+    let cmp = |op, ty, predicate| tti.vector_cmp_sel_cost(op, ty, predicate, k).map(|c| c.value);
+    assert_eq!((cmp(ICmp, i(32, 4), Some(Int(I::Slt))), cmp(Select, i(32, 4), Some(Int(I::Slt)))), (Some(1), Some(1)));
+}

@@ -288,3 +288,139 @@ pub fn narrow_compares(
         function.blocks[site.block].insts[site.at] = op_inst(site.row, desc, operands);
     }
 }
+
+/// The word row a counter's long step becomes, and its signed step.
+fn counter_step(inst: &Inst) -> Option<(&'static str, i64)> {
+    let [Operand::Def(_), Operand::Use(_), Operand::Imm(k)] = &inst.operands[..] else { return None };
+    match inst.kind {
+        Kind::Op("ADDQ32di") if *k != 0 => Some(("ADDQ16di", *k)),
+        Kind::Op("ADD32di") if *k != 0 => Some(("ADD16di", *k)),
+        Kind::Op("SUBQ32di") if *k != 0 => Some(("SUBQ16di", -*k)),
+        Kind::Op("SUB32di") if *k != 0 => Some(("SUB16di", -*k)),
+        _ => None,
+    }
+}
+
+/// Whether the value `register` holds after `from` is read by an instruction
+/// of the blocks control can reach before one defines it again. The end of the
+/// function reads it (a result register), a call does not.
+fn read_after(
+    function: &MFunction,
+    assignment: &Assignment,
+    following: &[Vec<usize>],
+    register: RegId,
+    start: &[usize],
+) -> bool {
+    let mut seen = vec![false; function.blocks.len()];
+    let mut pending: Vec<usize> = start.to_vec();
+    while let Some(block) = pending.pop() {
+        if std::mem::replace(&mut seen[block], true) {
+            continue;
+        }
+        let mut defined = false;
+        for inst in &function.blocks[block].insts {
+            let touches = |wanted: bool| {
+                inst.operands.iter().any(|operand| match operand {
+                    Operand::Use(reg) if wanted => root(assignment, reg) == register,
+                    Operand::Def(reg) if !wanted => root(assignment, reg) == register,
+                    _ => false,
+                })
+            };
+            if touches(true) {
+                return true;
+            }
+            if touches(false) {
+                defined = true;
+                break;
+            }
+        }
+        if defined {
+            continue;
+        }
+        if following[block].is_empty() {
+            return true;
+        }
+        pending.extend(&following[block]);
+    }
+    false
+}
+
+/// The word steps of the loop counters of one-block loops: `subq.l #2, %d0;
+/// bne` over a register that starts at a constant and that only the step and
+/// the exit test read is `subq.w`: the long value is the word's, sign
+/// extended, for the whole of a trip count that ends at zero, and no one reads
+/// the upper half.
+///
+/// DEVIATE IV-NARROW-MF (owner m68k, exit none: the pin carries the counter at
+/// its type's width; gcc narrows one it proves small): `addq`/`subq` on a data
+/// register is 4 clk as a word against 8 as a long on the 68000, in the same
+/// two bytes (tile -O2: 34 clk a trip against gcc's 32).
+pub fn narrow_counters(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let following = successors(function);
+    let mut predecessors = vec![Vec::new(); function.blocks.len()];
+    for (from, targets) in following.iter().enumerate() {
+        for &to in targets {
+            predecessors[to].push(from);
+        }
+    }
+    let equal = crate::ccr::flag_bit("Z");
+    let mut rewrites = Vec::new();
+    for (block, body) in function.blocks.iter().enumerate() {
+        if !following[block].contains(&block) {
+            continue;
+        }
+        'candidates: for (at, inst) in body.insts.iter().enumerate() {
+            let Some((row, step)) = counter_step(inst) else { continue };
+            let [Operand::Def(def), Operand::Use(base), _] = &inst.operands[..] else { continue };
+            let register = root(assignment, def);
+            if register != root(assignment, base) || !crate::flags::is_data(register) {
+                continue;
+            }
+            if flags_read_after(&body.insts, at) != Some(equal) {
+                continue;
+            }
+            // nothing else of the loop touches it
+            for (other, one) in body.insts.iter().enumerate() {
+                let touches = one.operands.iter().any(|operand| match operand {
+                    Operand::Use(reg) | Operand::Def(reg) => root(assignment, reg) == register,
+                    _ => false,
+                });
+                if touches && other != at || one.call {
+                    continue 'candidates;
+                }
+            }
+            // every way in starts it at a constant the step walks to zero
+            let entries: Vec<usize> = predecessors[block].iter().copied().filter(|&p| p != block).collect();
+            if entries.is_empty() {
+                continue;
+            }
+            for &entry in &entries {
+                let start = function.blocks[entry].insts.iter().rev().find(|one| {
+                    one.call
+                        || one.operands.iter().any(|operand| matches!(operand, Operand::Def(reg) if root(assignment, reg) == register))
+                });
+                let Some(Inst { kind: Kind::Op("MOV32ri" | "MOVI32ri"), operands, .. }) = start else {
+                    continue 'candidates;
+                };
+                let [Operand::Def(_), Operand::Imm(k)] = operands[..] else { continue 'candidates };
+                if k == 0 || k.abs() > 0x7FFF || k % step != 0 || (k > 0) == (step > 0) {
+                    continue 'candidates;
+                }
+            }
+            // and the value after the test is read by the step alone
+            let leaves: Vec<usize> = following[block].iter().copied().filter(|&next| next != block).collect();
+            if read_after(function, assignment, &following, register, &leaves) {
+                continue;
+            }
+            rewrites.push((block, at, row));
+        }
+    }
+    for (block, at, row) in rewrites {
+        let Some(desc) = local::code_of(row).and_then(local::desc) else { continue };
+        let operands = function.blocks[block].insts[at].operands.clone();
+        function.blocks[block].insts[at] = op_inst(row, desc, operands);
+    }
+}

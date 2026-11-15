@@ -412,10 +412,17 @@ fn items_trials(
             touched.shared_cse
         );
     }
-    if !touched.any() {
+    let wants_size = size_build(module, name, options);
+    // DEVIATE M68K-ONE-BUILD (owner m68k, exit 2026-12-20): the pin builds a
+    // function once. At -O2/-O3 each optional rewrite is kept as the first
+    // build has it (the cold-chain price, `M68K-MUL-COLD`, answers what the
+    // multiply trial did); the size and -O1 builds still try each rewrite
+    // both ways. The shared-CSE trial stays: dropping it grew
+    // div_constants_short +232 B. -O2 68020 over 165 programs: -154 B, 10
+    // smaller, 6 larger; matmul 4472 M to 2258 M instructions.
+    if !touched.any() || (!wants_size && !options.strict) {
         return Ok((kept, saved, options, touched.shared_cse));
     }
-    let wants_size = size_build(module, name, options);
     let price = crate::timing::Price::of(wants_size);
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
@@ -856,6 +863,9 @@ fn items_once(
             function.returns_twice =
                 module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
             if options.short {
+                // `addMachineSSAOptimization`: what selection built and nothing
+                // reads, before the selects become branches
+                llrm_spike_mf::dead_machine_instruction_elim(&mut function);
                 crate::cmpelim::eliminate_tests(
                     &mut function,
                     options.hoist_flag_setters,
@@ -879,11 +889,7 @@ fn items_once(
                 // priced inside the pass (`Price`), so a function it changed is
                 // not built again
                 if options.sext_adds {
-                    crate::sextacc::sign_extended_words(
-                        &mut function,
-                        cpu,
-                        crate::timing::Price::of(wants_size),
-                    );
+                    crate::sextacc::sign_extended_words(&mut function, cpu, crate::timing::Price::of(wants_size));
                 }
                 if options.class_split {
                     touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
@@ -974,6 +980,7 @@ fn items_once(
         crate::constreg::immediate_from_free_register(&mut function, &assignment);
         crate::narrow_add::narrow_adds(&mut function, &assignment);
         crate::narrow_add::narrow_compares(&mut function, &assignment);
+        crate::narrow_add::narrow_counters(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
@@ -993,12 +1000,7 @@ fn items_once(
     }
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
-        crate::spillmove::spills_as_moves(
-            &mut function,
-            &assignment,
-            cpu,
-            crate::timing::Price::of(wants_size),
-        );
+        crate::spillmove::spills_as_moves(&mut function, &assignment, cpu, crate::timing::Price::of(wants_size));
     }
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
