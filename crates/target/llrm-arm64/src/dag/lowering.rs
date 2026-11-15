@@ -74,7 +74,7 @@ pub(super) fn int_cc(
 }
 
 /// `changeFPCCToAArch64CC`: the condition, and a second one to OR with it.
-fn fp_cc(code: CondCode) -> (u128, Option<u128>) {
+pub(super) fn fp_cc(code: CondCode) -> (u128, Option<u128>) {
     match code {
         CondCode::SetEq | CondCode::SetOEq => (cc::EQ, None),
         CondCode::SetGt | CondCode::SetOGt => (cc::GT, None),

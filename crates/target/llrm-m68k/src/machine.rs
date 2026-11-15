@@ -91,6 +91,11 @@ impl Machine for M68kMachine {
         crate::opcosts::size_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
     }
 
+    /// The Os inline trial's byte estimate prices a value wider than the word per word ([`crate::opcosts::trial_costs`]).
+    fn trial_costs(&self) -> OperationCosts {
+        crate::opcosts::trial_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
+    }
+
     /// `d0`..`d7`, `a0`..`a5`.
     fn registers(&self) -> i64 {
         14
@@ -454,6 +459,12 @@ impl Tti for M68k {
     /// A size build refuses an inline of a callee that stays when it grows
     /// the code (SZ1): the callee's bytes against the call sequence's.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// -Os counts bytes and clocks against the best compiler's (user ruling 2026-11-14): a call the size bound
+    /// refused is built inlined too, and kept where the finished code is faster within the bytes ceiling.
+    fn opt_size_inline_finished_trial(&self) -> bool {
         true
     }
 

@@ -669,6 +669,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether the backend selects a vector `icmp`, `fcmp` and `select`: the
+    /// loop vectorizer widens them only where it does. DEVIATE: the pin's
+    /// targets all do; here each backend says when its selector has them.
+    fn selects_vector_compares(&self) -> bool {
+        false
+    }
+
     /// `getNumberOfRegisters(ClassID)`: 0 where the target has no vector
     /// registers.
     fn number_of_registers(
@@ -1082,6 +1089,14 @@ pub trait Tti {
     /// cheaper after allocation. The pin's InlineCost has no price for the registers the merged loops lose
     /// (its `LoopPenalty` is added at minsize callers alone). False: the cost decides.
     fn inline_loop_copy_trial(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL-CLOCKS (owner m68k, exit 2026-11-24): whether an -Os call the target's size bound
+    /// alone refused (the pin's cost accepts it) is built inlined as well, the driver keeping the finished code
+    /// that prices better (fewer clocks within the target's bytes ceiling). False: the bound's
+    /// verdict stands.
+    fn opt_size_inline_finished_trial(&self) -> bool {
         false
     }
 

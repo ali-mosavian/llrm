@@ -228,6 +228,24 @@ pub fn shared_save_gain(n: u32) -> i64 {
     6 * i64::from(n) + 2 - 11
 }
 
+/// What a `jsr` of the runtime routine `callee` destroys: `a`, `x`, `y` and the
+/// cells its text names, with the pairs over them, so a value may stay in any
+/// other scratch cell across the call. `None`: the convention's own set.
+///
+/// DEVIATE 6502-IPRA-RT (owner 6502, exit 2026-11-24): the pin runs without
+/// IPRA (`-enable-ipra`, `RegUsageInfo`); gcc's `-fipa-ra` is on.
+fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTreeSet<RegId>>> {
+    // the size levels call the compact variant in its place
+    let mut cells = crate::routines::cells_named(callee)?;
+    if let Some(compact) = crate::routines::compact_variant(callee) {
+        cells.extend(crate::routines::cells_named(compact)?);
+    }
+    let mut set: std::collections::BTreeSet<RegId> = [reg::A, reg::X, reg::Y].into_iter().collect();
+    set.extend(cells.iter().map(|&n| rc(n)));
+    set.extend(pairs().filter(|&pair| cells.iter().any(|&n| lane(pair, 0) == rc(n) || lane(pair, 1) == rc(n))));
+    Some(std::sync::Arc::new(set))
+}
+
 fn imaginary() -> u8 {
     IMAGINARY.with(|n| n.get())
 }
@@ -1244,6 +1262,17 @@ impl Builder {
         );
         jsr.call = true;
         self.push(jsr);
+    }
+
+    /// `jsr routine`, a runtime routine: it destroys only what its text names.
+    fn call_runtime(
+        &mut self,
+        routine: &str,
+    ) {
+        self.call(routine);
+        if let Some(Inst { call_clobbers, .. }) = self.function.blocks[self.current].insts.last_mut() {
+            *call_clobbers = runtime_clobbers(routine);
+        }
     }
 
     /// `jsr (pointer)`: the same, entering the callee through the pair that
@@ -2838,7 +2867,7 @@ pub fn build_with_places(
                 let (d, x, y) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?, b.byte(name(&o[2])?)?);
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
-                b.call(routine);
+                b.call_runtime(routine);
                 b.copy(d, Reg::Phys(reg::A));
             }
             // the quotient comes back in A (and X), the remainder in rc6 (and
@@ -2850,7 +2879,7 @@ pub fn build_with_places(
                 let (x, y) = (b.byte(name(&o[2])?)?, b.byte(name(&o[3])?)?);
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
-                b.call("__udivmodqi4");
+                b.call_runtime("__udivmodqi4");
                 b.copy(q, Reg::Phys(reg::A));
                 b.copy(r, Reg::Phys(rc(6)));
             }
@@ -2863,7 +2892,7 @@ pub fn build_with_places(
                 b.copy(Reg::Phys(rc(3)), xh);
                 b.copy(Reg::Phys(rc(4)), yl);
                 b.copy(Reg::Phys(rc(5)), yh);
-                b.call("__udivhi3");
+                b.call_runtime("__udivhi3");
                 b.copy(ql, Reg::Phys(reg::A));
                 b.copy(qh, Reg::Phys(reg::X));
                 b.copy(rl, Reg::Phys(rc(6)));
@@ -2879,7 +2908,7 @@ pub fn build_with_places(
                 }
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
-                b.call(if code == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" });
+                b.call_runtime(if code == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" });
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
@@ -2911,7 +2940,7 @@ pub fn build_with_places(
                     b.copy(Reg::Phys(rc(4)), yl);
                     b.copy(Reg::Phys(rc(5)), yh);
                 }
-                b.call(routine);
+                b.call_runtime(routine);
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
@@ -3426,7 +3455,10 @@ fn live_after(
         }
         // a call writes every register it does not preserve, results included
         if inst.call {
-            defs.extend(Mos::<false>::caller_saved());
+            match &inst.call_clobbers {
+                Some(known) => defs.extend(known.iter().copied()),
+                None => defs.extend(Mos::<false>::caller_saved()),
+            }
         }
         (defs, reads)
     };
@@ -3485,17 +3517,47 @@ pub fn parallel_move(
     moves: &[(RegId, RegId)],
     a_live: bool,
 ) {
+    parallel_move_with(out, moves, a_live, None);
+}
+
+/// `parallel_move` with `spare`, an index register nothing live holds: a move
+/// of a cell to a cell goes through it (`ldx c; stx d`) and `a` is saved only
+/// for a move that has no other way (`x` to `y`, or a cell to a cell with no
+/// spare). A move into or out of a cell or `a` leaves `a` alone.
+pub fn parallel_move_with(
+    out: &mut Asm,
+    moves: &[(RegId, RegId)],
+    a_live: bool,
+    spare: Option<&str>,
+) {
     let mut pending: Vec<(RegId, Option<RegId>)> =
         moves.iter().filter(|(d, s)| d != s).map(|(d, s)| (*d, Some(*s))).collect();
     if pending.is_empty() {
         return;
     }
+    let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
+    // a move reading what another writes, or a cycle, goes through `a` and
+    // the stack
+    let independent = pending
+        .iter()
+        .enumerate()
+        .all(|(i, (d, _))| pending.iter().enumerate().all(|(j, (_, s))| i == j || *s != Some(*d)));
+    let spare = spare.filter(|name| {
+        independent
+            && pending.iter().all(|(d, s)| register_name(*d) != *name && s.is_none_or(|s| register_name(s) != *name))
+    });
     let a_is_dest = pending.iter().any(|(d, _)| *d == reg::A);
-    let save = a_live && !a_is_dest;
+    let scratch_a = |d: RegId, s: Option<RegId>| match s {
+        Some(s) if direct(d) && direct(s) => d != reg::A && s != reg::A,
+        Some(s) if !direct(d) && !direct(s) => spare.is_none(),
+        _ => false,
+    };
+    let save = a_live && !a_is_dest && (!independent || pending.iter().any(|(d, s)| scratch_a(*d, *s)));
     if save {
         out.push_str("  pha\n");
     }
-    let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
+    // `a` is live and left alone: a cell to a cell goes through the spare
+    let through_spare = a_live && !save && !a_is_dest;
     while !pending.is_empty() {
         let a_wanted = |skip: usize, pending: &[(RegId, Option<RegId>)]| {
             pending.iter().enumerate().any(|(i, (_, s))| i != skip && *s == Some(reg::A))
@@ -3515,7 +3577,7 @@ pub fn parallel_move(
             Some(i) => {
                 let (d, s) = pending.remove(i);
                 match s {
-                    Some(s) => move_byte(out, d, s, false, None, None),
+                    Some(s) => move_byte(out, d, s, through_spare, spare, None),
                     None => {
                         out.push_str("  pla\n");
                         move_byte(out, d, reg::A, false, None, None);
@@ -4023,7 +4085,7 @@ fn emit_with<const STACK: bool>(
             match (inst.kind, &inst.operands[..]) {
                 (Kind::Copy, _) if is_word(regs[0]) && is_word(regs[1]) => {
                     let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
-                    parallel_move(&mut out, &moves, a_live);
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 // a word copied into a byte is its low half (`trunc`
                 // at -O0); `lane` of a byte register named a cell no pair has
@@ -4039,10 +4101,11 @@ fn emit_with<const STACK: bool>(
                         .into_iter()
                         .filter(|(to, _)| after[b][i].contains(to))
                         .collect();
-                    parallel_move(&mut out, &moves, a_live);
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 (Kind::Op("PACK"), _) => {
-                    parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
+                    let moves = [(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])];
+                    parallel_move_with(&mut out, &moves, a_live, spare);
                 }
                 // d := s + k on a pair: the low byte bumped, the high on carry
                 (Kind::Op("PADD"), [_, _, Operand::Imm(k), ..]) => {
@@ -4316,12 +4379,19 @@ fn emit_with<const STACK: bool>(
                         r if r == reg::Y => out.push_str("  tya\n"),
                         r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                     };
-                    load(&mut out, regs[2]);
+                    let index = |r: RegId| r == reg::X || r == reg::Y;
+                    // both bytes zero is `ora` of the two, one loaded: the byte
+                    // in an index register is the one to load, `txa; ora lo`
+                    // (3 B) and not `lda lo; bne; txa` (5 B)
+                    let swap =
+                        matches!((low, high), (Operand::Imm(0), Operand::Imm(0))) && !index(regs[2]) && index(regs[3]);
+                    let (first, second) = if swap { (regs[3], regs[2]) } else { (regs[2], regs[3]) };
+                    load(&mut out, first);
                     match (low, high) {
                         // against zero the loads set the flag: both bytes zero
                         // is `lda lo; ora hi`
-                        (Operand::Imm(0), Operand::Imm(0)) if regs[3] != reg::X && regs[3] != reg::Y => {
-                            writeln!(out, "  ora {}", register_name(regs[3])).unwrap();
+                        (Operand::Imm(0), Operand::Imm(0)) if !index(second) => {
+                            writeln!(out, "  ora {}", register_name(second)).unwrap();
                         }
                         (Operand::Imm(0), Operand::Imm(0)) => {
                             writeln!(out, "  bne _cz{made}").unwrap();

@@ -55,6 +55,12 @@ pub fn mulsi3_clocks(
     }
 }
 
+/// Bytes of `__mulsi3` a program that calls it links (assembled `mulsi3.s`, 2026-11-15): 54 at the 68000 and
+/// 68010, 12 from the 68020. A trial counts them against a build that calls the routine and another that does not.
+pub fn mulsi3_bytes(cpu: crate::dagisel::hooks::Cpu) -> usize {
+    if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 12 } else { 54 }
+}
+
 /// [`mulsi3_clocks`] with `b` = 1: the floor a trial counts for a call.
 pub fn mulsi3_floor(cpu: crate::dagisel::hooks::Cpu) -> u32 {
     mulsi3_clocks(cpu, 1)

@@ -1,5 +1,6 @@
-# llvm-mos's convention, simplified: bytes and words in the imaginary registers from rc2 (rc0:rc1 is the soft stack
-# pointer, which the callee keeps), a result in A, A:X or A:X:rc2:rc3. Whatever does not fit goes in static frame
+# llvm-mos's convention, simplified: bytes in a, x and the imaginary registers from rc2 (rc0:rc1 is the soft stack
+# pointer, which the callee keeps), an integer word in A:X or the next pair, a pointer in the pairs from rc2 only,
+# a result in A, A:X or A:X:rc2:rc3. Whatever does not fit goes in static frame
 # cells (stack args, no stack pointer arithmetic on the hardware stack).
 default = "mos"
 private = "mos"
@@ -14,6 +15,7 @@ order = "left-to-right"
 cleanup = "caller"
 argument_registers = ["a", "x", "rc2", "rc3", "rc4", "rc5", "rc6", "rc7"]
 wide_pairs = [["a", "x"], ["rc2", "rc3"], ["rc4", "rc5"], ["rc6", "rc7"]]
+pointer_pairs = [["rc2", "rc3"], ["rc4", "rc5"], ["rc6", "rc7"]]
 backfill = true
 return_address_bytes = 2
 first_argument_offset = 0

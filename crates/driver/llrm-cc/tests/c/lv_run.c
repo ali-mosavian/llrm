@@ -17,6 +17,9 @@ extern int si[1024];
 extern unsigned ui[1024];
 void fill_value(int *a, int v, int n);
 void fill_long_value(long *a, long v, int n);
+void multiply_bytes(void);
+void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsigned char *z);
+extern unsigned char pa[4096], pb[4096];
 void multiply_arrays(void);
 extern int a[1024], b[1024];
 int stack_copy(int n);
@@ -70,6 +73,14 @@ int main(void) {
         for (int i = 0; i < 1024; i++) want[i] = (int)((unsigned)a[i] * (unsigned)b[i]);
         multiply_arrays();
         for (int i = 0; i < 1024; i++) if (a[i] != want[i]) bad++;
+    }
+    {
+        static unsigned char x[4096], y[4096], z[4096];
+        multiply_bytes();
+        for (int i = 0; i < 4096; i++) if (pa[i] != (unsigned char)(i * 13 + 5) || pb[i] != pa[i]) bad++;
+        for (int i = 0; i < 4096; i++) y[i] = (unsigned char)(i * 7 + 3), z[i] = (unsigned char)(i * 31 + 11);
+        multiply_byte_arrays(x, y, z);
+        for (int i = 0; i < 4096; i++) if (x[i] != (unsigned char)(y[i] * z[i])) bad++;
     }
     printf("bad %d\n", bad);
 }

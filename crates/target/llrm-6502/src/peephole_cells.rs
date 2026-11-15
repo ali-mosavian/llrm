@@ -49,6 +49,20 @@ fn caller_saved(n: u8) -> bool {
     n >= 2 && !(8..=15).contains(&n)
 }
 
+/// Whether `inst`, a `jsr`, leaves the scratch cell `rcn` (`n >= 16`) as it
+/// was: a runtime routine whose text names no such cell
+/// (`routines::cells_named`; the allocator keeps a value there across it).
+fn call_keeps_scratch(
+    inst: &Inst,
+    n: u8,
+) -> bool {
+    n >= 16
+        && matches!(
+            &inst.operand,
+            Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
+}
+
 fn straight(op: Op) -> bool {
     use Op::*;
     matches!(
@@ -103,10 +117,12 @@ fn straight(op: Op) -> bool {
 /// every `rts`, and a call neither reads nor changes it (the callee saves it on
 /// entry and restores it), so the scan goes on past a `jsr`.
 /// `float_conversions_loop` kept a `ldy #0; sty rc10` that only the restore
-/// ever followed. A `pla` is straight (the epilogue's restore); a `pha` is not:
-/// `pha; pha; rts` is a call through a pointer, and the `rts` there reads the
-/// argument cells (`function_table`, `static_pointers` miscompiled by 3 B of
-/// stores).
+/// ever followed. A `pla` is straight (the epilogue's restore); a `pha` is
+/// straight too, and counts a byte on the stack: `pha; pha; rts` is a call
+/// through a pointer, and an `rts` with a byte pushed reads the argument cells
+/// (`function_table`, `static_pointers` miscompiled by 3 B of stores). A save
+/// of `a` around a dead copy (`pha; lda rc4; sta rc7; pla`) no longer hides the
+/// store from this scan.
 ///
 /// The pin's analogue is the liveness of a physical register at a return
 /// (`DeadMachineInstructionElim.cpp`, `LivePhysRegs`): a def with no use on any
@@ -117,6 +133,20 @@ fn cell_dead_from(
     cell: &str,
     results: &BTreeSet<String>,
     seen: &mut BTreeSet<usize>,
+) -> bool {
+    dead_from_pushed(lines, from, cell, results, seen, 0)
+}
+
+/// [`cell_dead_from`] with `pushed` bytes on the stack above where it began: a
+/// `pha` is straight while a `pla` of the same function pulls it back, but an
+/// `rts` with a byte still pushed is a jump through it.
+fn dead_from_pushed(
+    lines: &[Line],
+    from: usize,
+    cell: &str,
+    results: &BTreeSet<String>,
+    seen: &mut BTreeSet<usize>,
+    mut pushed: u32,
 ) -> bool {
     let Some(n) = cell_number(cell) else { return false };
     // the soft stack pointer is read by every frame access
@@ -136,7 +166,18 @@ fn cell_dead_from(
             Line::Inst(inst) => inst,
         };
         if inst.op == Op::Rts {
-            return !callee_saved && !results.contains(cell);
+            return pushed == 0 && !callee_saved && !results.contains(cell);
+        }
+        if inst.op == Op::Jsr && pushed > 0 {
+            return false;
+        }
+        if inst.op == Op::Pha {
+            pushed += 1;
+            continue;
+        }
+        if inst.op == Op::Pla {
+            pushed = pushed.saturating_sub(1);
+            continue;
         }
         if inst.op == Op::Jsr && callee_saved {
             continue;
@@ -144,6 +185,9 @@ fn cell_dead_from(
         // a call clobbers the scratch cells above the callee-saved ones and
         // reads none of them
         if inst.op == Op::Jsr && n >= 16 {
+            if call_keeps_scratch(inst, n) {
+                continue;
+            }
             return true;
         }
         // a call of a routine that names no cell reads none of them
@@ -160,10 +204,10 @@ fn cell_dead_from(
             lines.iter().position(|l| *l == Line::Label(name.to_owned()))
         };
         if inst.op == Op::Jmp || inst.op == Op::Bra {
-            return label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen));
+            return label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, results, seen, pushed));
         }
         if inst.op.opposite().is_some() {
-            if !label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen)) {
+            if !label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, results, seen, pushed)) {
                 return false;
             }
             continue;
@@ -184,6 +228,74 @@ fn cell_dead_from(
         }
     }
     false
+}
+
+/// `lda rc8; pha` on entry and `pla; sta rc8` before each return of a
+/// callee-saved cell nothing else in the function names: the uses were dead
+/// stores [`drop_dead_stores`] removed after the allocator chose the cell, and
+/// the save of the caller's value guards nothing (6 B in `main` of
+/// `memmove_overlap`).
+///
+/// The pin saves the callee-saved registers the function modifies after
+/// allocation (`PrologEpilogInserter`, `calculateSavedRegisters`).
+pub fn drop_unused_saves(asm: &mut Asm) {
+    let shared = asm
+        .lines
+        .iter()
+        .any(
+            |line| matches!(
+                line,
+                Line::Inst(Inst { op: Op::Jsr, operand: Operand::Direct(n), .. }) if n.contains("csave") || n.contains("crest")
+            ),
+        );
+    if shared {
+        return;
+    }
+    for n in 8..=15u8 {
+        let cell = format!("rc{n}");
+        let (mut saves, mut restores, mut other) = (Vec::new(), Vec::new(), false);
+        let mut at = 0;
+        while at < asm.lines.len() {
+            match &asm.lines[at] {
+                Line::Raw(text) => other |= text.contains(&cell),
+                Line::Label(_) => {}
+                Line::Inst(inst) => {
+                    let next = asm.lines.get(at + 1).and_then(Line::inst);
+                    if inst.op == Op::Lda
+                        && inst.operand == Operand::Direct(cell.clone())
+                        && next.is_some_and(|next| next.op == Op::Pha)
+                    {
+                        saves.push(at);
+                        at += 1;
+                    } else if inst.op == Op::Pla
+                        && next.is_some_and(|next| next.op == Op::Sta && next.operand == Operand::Direct(cell.clone()))
+                    {
+                        restores.push(at);
+                        at += 1;
+                    } else {
+                        other |= match &inst.operand {
+                            Operand::Direct(c) => *c == cell,
+                            Operand::Indexed(c, _) => cell_number(c).is_some(),
+                            Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) => {
+                                cell_number(c).is_some_and(|m| m == n || m + 1 == n)
+                            }
+                            _ => false,
+                        };
+                    }
+                }
+            }
+            at += 1;
+        }
+        if other || saves.is_empty() || restores.is_empty() {
+            continue;
+        }
+        let mut gone: Vec<usize> = saves.iter().flat_map(|at| [*at, *at + 1]).collect();
+        gone.extend(restores.iter().flat_map(|at| [*at, *at + 1]));
+        gone.sort_unstable();
+        for at in gone.into_iter().rev() {
+            asm.lines.remove(at);
+        }
+    }
 }
 
 pub fn drop_dead_stores(asm: &mut Asm) {
@@ -386,6 +498,9 @@ fn spill_copy_once(
             // a call clobbers a caller-saved cell and reads none above the
             // argument cells
             if inst.op == Op::Jsr {
+                if call_keeps_scratch(inst, n) {
+                    continue;
+                }
                 if n <= 7 {
                     return false;
                 }

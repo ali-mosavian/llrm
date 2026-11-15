@@ -40,6 +40,7 @@ use llrm_codegen::backend::selectiondag::actions::TargetLowering;
 use llrm_codegen::backend::selectiondag::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::known_bits::{known_bits, max_significant_bits};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 
@@ -73,6 +74,12 @@ pub mod x86isd {
     pub const PSHUFD: ISD = ISD::Target(714);
     /// `X86ISD::UNPCKL`: the low lanes of two vectors interleaved (`punpckl*`).
     pub const UNPCKL: ISD = ISD::Target(779);
+    /// `X86ISD::UNPCKH`: the high lanes of two vectors interleaved (`punpckh*`).
+    pub const UNPCKH: ISD = ISD::Target(778);
+    /// `X86ISD::PACKSS`: the lanes of two vectors narrowed by half with signed saturation (`packss*`).
+    pub const PACKSS: ISD = ISD::Target(698);
+    /// `X86ISD::PACKUS`: the lanes of two vectors narrowed by half with unsigned saturation (`packus*`).
+    pub const PACKUS: ISD = ISD::Target(699);
     /// `X86ISD::PMULUDQ`: the unsigned products of the even `i32` lanes, as `v2i64`.
     pub const PMULUDQ: ISD = ISD::Target(710);
     pub const VSHLI: ISD = ISD::Target(933);
@@ -787,6 +794,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::Shl | ISD::Srl | ISD::Sra if dag.value_type(node).is_vector() => lower_vector_shift(dag, node),
             ISD::BuildVector => lower_build_vector_splat(dag, node),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V4I32) => Some(lower_mul_v4i32(dag, node)),
+            ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V16I8) => Some(lower_mul_v16i8(dag, node)),
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -3530,6 +3538,72 @@ fn lower_mul_v4i32(
     // The low half of each 64-bit product: {0, 2, 2, 3}, then the evens' and the odds' first two lanes interleaved.
     let (evens, odds) = (shuffle(dag, evens, 0xE8), shuffle(dag, odds, 0xE8));
     dag.get_node(x86isd::UNPCKL, four, &[evens, odds])
+}
+
+/// `LowerMUL` for `v16i8` without SSSE3 ([L30470][pin]): each half is unpacked
+/// to `v8i16` (the high bytes are whatever the unpack leaves, the low byte of a
+/// product does not depend on them), multiplied by `pmullw`, masked to its low
+/// bytes and packed. A constant multiplier is unpacked at compile time.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30470
+fn lower_mul_v16i8(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (bytes, words) = (EVT::Simple(MVT::V16I8), EVT::Simple(MVT::V8I16));
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    // `getUnpackl/h(A, undef)`: the operand serves as its own undef half, as
+    // the pin's allocator makes it.
+    let halves = |dag: &mut SelectionDAG, value: SDValue| -> [SDValue; 2] {
+        if dag.opcode(value) == ISD::BuildVector {
+            let lanes = dag.node(value).ops.clone();
+            let widen = |dag: &mut SelectionDAG, lanes: &[SDValue]| {
+                let words_of: Vec<SDValue> = lanes
+                    .iter()
+                    .map(|lane| match dag.constant(*lane) {
+                        Some(byte) => dag.get_constant_with(byte & 0xFF, EVT::I16, false, false),
+                        None => dag.get_undef(EVT::I16),
+                    })
+                    .collect();
+                dag.get_build_vector(words, &words_of)
+            };
+            if lanes.iter().all(|lane| dag.constant(*lane).is_some() || dag.is_undef(*lane)) {
+                return [widen(dag, &lanes[..8]), widen(dag, &lanes[8..])];
+            }
+        }
+        let low = dag.get_node(x86isd::UNPCKL, bytes, &[value, value]);
+        let high = dag.get_node(x86isd::UNPCKH, bytes, &[value, value]);
+        [dag.get_node(ISD::BitCast, words, &[low]), dag.get_node(ISD::BitCast, words, &[high])]
+    };
+    let ([a_low, a_high], [b_low, b_high]) = (halves(dag, a), halves(dag, b));
+    let low = dag.get_node(ISD::Mul, words, &[a_low, b_low]);
+    let high = dag.get_node(ISD::Mul, words, &[a_high, b_high]);
+    get_pack_bytes(dag, low, high)
+}
+
+/// `getPack` of two `v8i16` into a `v16i8` (SSE2: `UsePackUS` for bytes):
+/// packed as is when both halves already fit a byte, else masked to their low
+/// bytes first.
+fn get_pack_bytes(
+    dag: &mut SelectionDAG,
+    low: SDValue,
+    high: SDValue,
+) -> SDValue {
+    let (bytes, words) = (EVT::Simple(MVT::V16I8), EVT::Simple(MVT::V8I16));
+    let active = |dag: &SelectionDAG, value: SDValue| {
+        let known = known_bits(dag, value);
+        known.width - (known.zero << (128 - known.width)).leading_ones().min(known.width)
+    };
+    if active(dag, low) <= 8 && active(dag, high) <= 8 {
+        return dag.get_node(x86isd::PACKUS, bytes, &[low, high]);
+    }
+    if max_significant_bits(dag, low) <= 8 && max_significant_bits(dag, high) <= 8 {
+        return dag.get_node(x86isd::PACKSS, bytes, &[low, high]);
+    }
+    let mask = dag.get_constant_with(0xFF, words, false, false);
+    let (low, high) = (dag.get_node(ISD::And, words, &[low, mask]), dag.get_node(ISD::And, words, &[high, mask]));
+    dag.get_node(x86isd::PACKUS, bytes, &[low, high])
 }
 
 /// `LowerShift` for a vector shifted by a constant splat
