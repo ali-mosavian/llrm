@@ -523,7 +523,15 @@ impl Placer {
                 continue;
             }
             let theirs = self.freq[from] * self.prob(from, to);
-            if theirs * HOT >= candidate * (1.0 - HOT) {
+            // DEVIATE LOOP-TOP-JMP: a loop's exit falls into what follows it
+            // unless another block's edge to it is hotter; the pin's ratio
+            // gave a guard's edge block (12 in 32) the latch above it.
+            let ends_loop = self.succ[block].iter().any(|&one| one == block || one == self.head(chain));
+            let better = match self.top {
+                Some(_) if ends_loop => theirs > candidate,
+                _ => theirs * HOT >= candidate * (1.0 - HOT),
+            };
+            if better {
                 return true;
             }
         }

@@ -2833,3 +2833,16 @@ fn test_the_latch_stays_below_the_inner_loop_it_falls_from() {
     let priced = order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 }));
     assert!(at(&priced, 6) == at(&priced, 5) + 1, "the inner loop falls into the latch: {priced:?}");
 }
+
+/// Control: the clock weights and the exit rule are for a loop's top and a
+/// loop's exit; a diamond's join keeps the pin's order (sfm16_float_cmp -O2
+/// ran 1,364 clk longer when every join took the hotter-edge rule).
+#[test]
+fn test_a_diamond_is_placed_as_the_pin_does_under_the_loop_top_clocks() {
+    use super::placement::TopClocks;
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&weighted_diamond(0.7), false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    assert_eq!(order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 })), order(None));
+}

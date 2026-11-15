@@ -76,8 +76,8 @@ line_fill_clocks       -   =    =    -    -    -    -    -
 # The most instructions placement's tail duplication copies (the pin: 2, 4 at -O3; 1 at -Os already). Real mode weighs
 # bytes over clocks, and a copied compare-and-branch tail costs both (qlight, grep, 25 c programs at -O2/-O3: -84 B, -3.1M clk).
 tail_dup_placement_threshold 1 1 1 1 1 1 1 1
-# DEVIATE LOOP-TOP-JMP (owner x87-b, exit 2026-11-24): see CpuTable::loop_top_prices_jumps.
-loop_top_prices_jumps   1    1    1    1    1    1    1    1
+# DEVIATE LOOP-TOP-JMP (owner x87-b): see CpuTable::loop_top_prices_jumps. Off in m16 until its A/B (88 programs change).
+loop_top_prices_jumps   0    0    0    0    0    0    0    0
 pairing                 =    =    =    =    =    =    =    =
 # The -O2 ranking counts data bytes strictly (worse_cells.py DATA_AXES): FF2 makes no new pool cell. recfloat -O2 +4 B data.
 pool_data_strict        1    1    1    1    1    1    1    1

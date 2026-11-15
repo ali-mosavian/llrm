@@ -48,7 +48,9 @@ pub struct CpuTable {
     /// `jcc - jcc_not_taken`, and a fall-through lost costs a whole `jmp`.
     /// The pin counts each as one (`FallThroughGains`) and put the latch of
     /// x_ld_dot above its header, so the inner loop's exit took a `jmp` every
-    /// outer trip. Off: the pin's count.
+    /// outer trip. A loop's exit also falls into what follows it unless
+    /// another block's edge to it is hotter (`hasBetterLayoutPredecessor`'s
+    /// ratio gave the guard's edge block the latch). Off: the pin's count.
     pub loop_top_prices_jumps: bool,
     /// Two-address commuting ties the operand the result goes back into (a
     /// loop's back-edge copy) even where the operand was read earlier in the

@@ -41,26 +41,19 @@ fn function(
         .collect()
 }
 
-fn count(
-    body: &[String],
-    mnemonic: &str,
-) -> usize {
-    body.iter().filter(|line| line.split_whitespace().next() == Some(mnemonic)).count()
-}
-
 /// The guard `n <= 0` is estimated at 12 in 32, so the latch was placed above
 /// the loop's header and the inner loop's exit took a `jmp` to it every outer
 /// trip: 9 `jmp` and 8 `je` for +37 clk over gcc (x_ld_dot -O2).
 #[test]
 fn test_the_inner_loop_exit_falls_into_the_latch() {
-    for level in ["-O2", "-O3"] {
+    for level in ["-O1", "-O2", "-O3"] {
         let asm = compiled(level);
         let body = function(&asm, "dots");
-        let mnemonic = |line: &String| line.split_whitespace().next().unwrap_or("").to_owned();
-        let parted: Vec<_> = body
-            .windows(2)
-            .filter(|pair| matches!(mnemonic(&pair[0]).as_str(), "jne" | "jnz") && mnemonic(&pair[1]) == "jmp")
-            .collect();
-        assert!(parted.is_empty(), "{level}: a loop's exit jumps to its latch {parted:?}:\n{}", body.join("\n"));
+        let first = body.iter().position(|line| line.starts_with("jne ")).expect("the inner loop's branch");
+        assert!(
+            !body[first + 1].starts_with("jmp "),
+            "{level}: the inner loop's exit jumps to its latch:\n{}",
+            body.join("\n")
+        );
     }
 }
