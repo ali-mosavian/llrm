@@ -57,3 +57,17 @@ fn test_the_inner_loop_exit_falls_into_the_latch() {
         );
     }
 }
+
+/// An inner loop of two arms that join in the latch: the latch, copied into
+/// both arms, goes above the header, so the exit falls into the outer latch.
+/// With the latch below, both arms ended `jne header; jmp exit` (x_cordic
+/// -O1/-O2: 50,653 clk against 48,939).
+#[test]
+fn test_a_two_arm_inner_loop_exit_is_not_a_jump() {
+    for level in ["-O1", "-O2"] {
+        let asm = compiled(level);
+        let body = function(&asm, "cordic");
+        let jumped = body.windows(2).any(|pair| pair[0].starts_with("jne ") && pair[1].starts_with("jmp "));
+        assert!(!jumped, "{level}: an arm's exit jumps after its `jne`:\n{}", body.join("\n"));
+    }
+}
