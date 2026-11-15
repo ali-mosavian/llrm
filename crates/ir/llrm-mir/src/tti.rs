@@ -803,6 +803,21 @@ pub trait Tti {
         None
     }
 
+    /// `getExtendedReductionCost` of `llvm.vector.reduce.add` of `vec` extended
+    /// to the lane `result`, where the target has a native form (AArch64's
+    /// `uaddlv`, `uaddlp`). `None`: `BaseT`'s: the reduction of the extended
+    /// vector and the extension.
+    fn vector_extended_reduction_cost(
+        &self,
+        _kind: crate::intrinsics::ReduceKind,
+        _unsigned: bool,
+        _result: Ty,
+        _vec: VectorTy,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
     /// `getArithmeticInstrCost` of a vector operation whose operands `args` are
     /// extensions (the widening forms: `smull`, `uaddl`, ...). `Err(())`: the
     /// pin's cost depends on known bits this port does not compute. The
