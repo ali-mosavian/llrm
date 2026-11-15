@@ -282,14 +282,19 @@ fn the_reductions_return_what_a_scalar_loop_returns() {
     assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stdout));
 }
 
-/// The kinds with no NEON lowering are refused by name, not miscompiled:
-/// `mul` and the `v2i64` min and max wait for `expandVecReduce`.
+/// The kinds with no NEON lowering (`mul`, the `v2i64` min and max) were
+/// refused by name ("VecReduceMul"). Their halves are 64-bit vectors or
+/// scalars now, and each is reduced lane by lane.
 #[test]
-fn a_reduction_with_no_lowering_is_refused_by_name() {
-    for (source, said) in [(ir("mul", 4, 32), "VecReduceMul"), (ir("smax", 2, 64), "VecReduceSMax")] {
-        let why = ours(&source).expect_err("refused");
-        assert!(why.contains(said), "{why}");
-    }
+fn a_reduction_with_no_neon_lowering_is_expanded_by_lanes() {
+    let asm = ours(&ir("smax", 2, 64)).expect("lowers");
+    assert!(asm.contains("csel") && asm.contains(", gt"), "{asm}");
+}
+
+#[test]
+fn a_v4i32_multiply_reduction_is_the_product_of_its_lanes() {
+    let asm = ours(&ir("mul", 4, 32)).expect("lowers");
+    assert_eq!(asm.matches("madd").count(), 3, "{asm}");
 }
 
 /// `ADDXrr`/`ADDWrr` are pseudos, and their operands were not constrained to
