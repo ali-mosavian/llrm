@@ -484,3 +484,14 @@ fn a_vector_identity_folds_as_the_scalar_one_does() {
         "define <8 x i64> @f(<8 x i64> %x) {\nb0:\n  ret <8 x i64> %x\n}\n",
     );
 }
+
+/// A vector `urem` by a splat and an `and` with zero are not identities: the
+/// first attempt read the splat as a scalar and dropped the `urem` (huge O2
+/// returned a wrong sum).
+#[test]
+fn a_vector_operation_that_is_no_identity_stays() {
+    let urem = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = urem <4 x i32> %x, <i32 251, i32 251, i32 251, i32 251>\n  ret <4 x i32> %a\n}\n";
+    check(urem, urem);
+    let and = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = and <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %a\n}\n";
+    check(and, and);
+}
