@@ -90,7 +90,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 
 ## LV-X2: integer binary operations (2026-11-11)
 
-- **LV-OS (2026-11-11, oversight ruling): no vectorizing at -Os/-Oz** (`optsize`/`minsize`). The pin widens an optsize loop whose trip count VF divides; flag on that added bytes at Os (histo +4, scroll +4, jpeg_fixed +24, jpeg_single +16). Owner llrm-arm64-vec, exit 2026-11-24: the cause card, then the gate goes.
+- **LV-OS (2026-11-11, retired 2026-11-15): no vectorizing at -Os/-Oz.** Gone: an optsize loop whose trip count VF divides is widened as the pin does (`isScalarEpilogueAllowed`); bytes grow on 6 Os cells, row ARM64-LVOS-BYTES.
 
 - Pass: LoopVectorize `VPWidenRecipe` (widen `add`, `sub`, `mul`, `and`, `or`, `xor`, `shl`, `lshr`, `ashr` over loaded and loop-invariant operands); NEON `addTypeForNEON`, `LowerVectorSRA_SRL_SHL`.
 - Planner: the PIN rows already priced `add`; `mul <2 x i64>` is invalid (the pin leaves it scalar).
@@ -133,7 +133,7 @@ Slices (pin function in the PR body; each: fail-first, per-target md5 identity, 
 4. **Strided accesses** (`CM_Scalarize` replicate recipes, `VPReplicateRecipe`, the pin's `getMemInstScalarizationCost` already priced in #9473): jpeg_single pass 1 (`cosine[x][u]`), stft `tw[j*stride]`.
 5. **Binary result used by other than store/binary** (select, compare, reduction users): jpeg_fixed :165, reductions (`VPReductionPHIRecipe`, horizontal add).
 6. **Runtime alias checks** (`vector.memcheck`, `RuntimePointerChecking::generateChecks`, LV-M1): stft :52/:74, the O3 gcc bar. Own slice.
-LV-OS gate stays (DEVIATE LV-OS, exit 2026-11-24 cause card). Bytes at O2 vs gcc: jpeg_single +980 B, jpeg_fixed +1,540 B (O2 rate cells: +0.3 net per byte, 294/462 instrs against gaps of 1.33M/0.95M); gcc does not unroll at O2, not a vector cause.
+Bytes at O2 vs gcc: jpeg_single +980 B, jpeg_fixed +1,540 B (O2 rate cells: +0.3 net per byte, 294/462 instrs against gaps of 1.33M/0.95M); gcc does not unroll at O2, not a vector cause.
 
 ## LV-W2: what blocks the counted loops after slices 1-4 (2026-11-13, head 65d632f9a8; owner llrm-arm64-vec)
 

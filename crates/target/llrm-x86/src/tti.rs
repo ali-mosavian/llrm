@@ -1285,6 +1285,10 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    fn vectorizes_at_size(&self) -> bool {
+        self.tuning.vectorize_at_size
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
