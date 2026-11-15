@@ -1861,7 +1861,14 @@ impl FunctionPass for LoopVectorize {
                                 None
                             }
                             Ok(chosen)
-                                if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits(), widen_compares) =>
+                                if !tti.selects_sub_register_vectors()
+                                    && !fills_registers(
+                                        &cx,
+                                        &widening,
+                                        chosen.vf,
+                                        tti.vector_register_bits(),
+                                        widen_compares,
+                                    ) =>
                             {
                                 // DEVIATE LV-D6 (owner llrm-arm64-vec, exit
                                 // LV-W4): a

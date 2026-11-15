@@ -789,6 +789,13 @@ pub trait Tti {
         true
     }
 
+    /// The backend selects a vector under a register (`<8 x i8>`): the pin's
+    /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
+    /// whose backend takes none keeps the loop scalar.
+    fn selects_sub_register_vectors(&self) -> bool {
+        false
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
