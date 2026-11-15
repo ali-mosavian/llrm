@@ -1233,7 +1233,7 @@ mod tests {
         let one = CALLING.native();
         assert_eq!(
             (one.name.as_str(), CONVENTIONS.as_slice()),
-            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "sysv32"][..])
+            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "localregparm32", "sysv32"][..])
         );
         assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
         assert_eq!(
