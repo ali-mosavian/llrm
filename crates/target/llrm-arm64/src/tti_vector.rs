@@ -500,6 +500,10 @@ pub(crate) fn scalarization_overhead(
     if cost_kind != CostKind::RecipThroughput {
         return None;
     }
+    // A vector of pointers (the address of a scalarized store): every lane is
+    // priced, lane 0 too (`getMemInstScalarizationCost` of the pin's opt:
+    // 44 for 8 floats, 48 for 8 bytes at stride 8).
+    let ty = if ty.lane == Ty::Pointer { VectorTy { lane: Ty::Int(64), ..ty } } else { ty };
     let (_, lane) = vector_pieces(ty)?;
     let moves = i64::from(insert) + i64::from(extract);
     let register_lanes = (128 / lane).min(ty.count);

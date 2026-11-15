@@ -1089,6 +1089,25 @@ pub trait Tti {
         Cost::BASIC
     }
 
+    /// `getAddressComputationCost` of one lane of a scalarized access
+    /// (`getMemInstScalarizationCost`, which passes a vector of pointers and
+    /// the pointer's SCEV): `stride_bytes` is the constant step of the
+    /// address between iterations, `None` where it is not one.
+    fn scalarized_address_cost(
+        &self,
+        stride_bytes: Option<i64>,
+        kind: CostKind,
+    ) -> Cost {
+        let _ = stride_bytes;
+        self.address_computation_cost(kind)
+    }
+
+    /// `prefersVectorizedAddressing`: a scalarized load takes its pointers
+    /// apart from a vector (a target with gathers). A store does so always.
+    fn prefers_vectorized_addressing(&self) -> bool {
+        true
+    }
+
     /// What a call of a function the target lowers to a call, with
     /// `arguments` arguments, costs: one unit for the call and one per
     /// argument, as the pin's `TargetTransformInfoImplBase` prices it.
