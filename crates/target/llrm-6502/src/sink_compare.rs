@@ -11,18 +11,19 @@
 //!   tay; clc; adc #65; cpy #26; bcs L; tax     cmp #26; bcs L; clc; adc #65; tax
 //! ```
 //!
-//! Translation: LLVM's `MachineSink` moves an instruction into the one
-//! successor that uses its result; this is its form on the expanded 6502 text,
-//! for the instructions that write only `a` and the flags (`DEVIATE`: the
-//! pin's pass works on virtual registers before they are allocated and
-//! expanded; exit: the 6502 on the shared machine pipeline).
+//! Pass: LLVM's `MachineSink` moves an instruction into the one successor
+//! that uses its result. DEVIATE SINK-COMPARE (owner 6502, exit 2026-12-15):
+//! it works on the expanded 6502 text, for the instructions that write only `a`
+//! and the flags, and the fall-through must leave the flags unread (it sees the
+//! work's, not the compare's) and the work must not read the carry it enters
+//! with. Exit: the 6502 on the shared machine pipeline (6502-a).
 //!
 //! # Runs
 //! In [`crate::peephole`]'s suffix, before [`crate::reassociate`], which then
 //! drops the `clc` the compare's branch made redundant.
 
 use crate::asm::{Asm, Inst, Line, Op, Operand, Registers};
-use crate::peephole::{Exits, dead_from, references};
+use crate::peephole::{Exits, carry_dead_from, dead_from, flags_unread_after, references};
 
 /// An instruction that writes only `a` and the flags and may be skipped where
 /// `a` is dead: no store, no volatile read.
@@ -63,6 +64,18 @@ fn reads_overflow(asm: &Asm) -> bool {
         )
 }
 
+/// Whether the first instruction of `run` that touches the carry reads it.
+fn reads_carry_first(run: &[Line]) -> bool {
+    for line in run {
+        match line {
+            Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }) => return false,
+            Line::Inst(Inst { op: Op::Adc | Op::Sbc | Op::Rol | Op::Ror, .. }) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 pub fn sink_past_compare(asm: &mut Asm) {
     if reads_overflow(asm) || asm.lines.iter().any(|line| matches!(line, Line::Raw(_))) {
         return;
@@ -91,8 +104,17 @@ fn sinkable(
     if !matches!(compare.op, Op::Cpx | Op::Cpy) || !plain(compare) {
         return None;
     }
-    let run = (0..branch - 1).rev().map_while(|at| inst_at(lines, at).filter(|inst| only_a(inst))).count();
+    let mut run = (0..branch - 1).rev().map_while(|at| inst_at(lines, at).filter(|inst| only_a(inst))).count();
+    // the compare's carry reaches the work after the move: it may not read the
+    // carry the work was entered with
+    while run > 0 && reads_carry_first(&lines[branch - 1 - run..branch - 1]) {
+        run -= 1;
+    }
     if run == 0 {
+        return None;
+    }
+    // the fall-through now sees the work's flags, not the compare's
+    if !flags_unread_after(lines, branch + 1) || !carry_dead_from(lines, branch + 1, &mut Default::default()) {
         return None;
     }
     let label = jump.target()?;

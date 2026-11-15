@@ -14,12 +14,11 @@
 //!   clc; txa; adc #224; tax            =>   adc #65; tax
 //! ```
 //!
-//! Translation: LLVM's `DAGCombiner::visitADD` and `Reassociate` re-associate
-//! `(x + c1) + c2` over one value; here the first sum is a different SSA value
-//! (the range test's), so the machine text is where its register is seen.
-//! DEVIATE REASSOC: the pin re-associates in the DAG, before the 6502's compare
-//! is chosen. Exit: the range test's `sub` shares its node with the fold
-//! (`rangesplit` / DAG combine), then drop this.
+//! Pass: LLVM's `DAGCombiner::visitADD` and `Reassociate` fold `(x + c1) + c2`
+//! of one value. DEVIATE REASSOC (owner 6502, exit 2026-12-15): here the two
+//! sums are separate nodes (the range test's `x - 97` and the fold's `x - 32`),
+//! so the machine text is where one register holds both. Exit: the DAG combine
+//! reuses the sibling `(add x, c1)` node, then this goes.
 //!
 //! # Runs
 //! In [`crate::peephole`]'s suffix, after copy propagation.

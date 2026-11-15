@@ -108,6 +108,22 @@ fn work_on_a_that_the_branch_target_reads_stays() {
     assert_eq!(sunk(text), text);
 }
 
+/// The fall-through reads the compare's zero flag: after the move it would read
+/// the work's (a three-way compare).
+#[test]
+fn a_fall_through_that_reads_the_compares_flags_keeps_the_work() {
+    let text = "  tay\n  lda #1\n  cpy rc2\n  bcc L\n  beq M\n  tax\nL:\n  lda #0\n  rts\nM:\n  rts\n";
+    assert_eq!(sunk(text), text);
+}
+
+/// The work adds the carry it was entered with: after the move that is the
+/// compare's.
+#[test]
+fn work_that_reads_the_carry_it_enters_with_keeps_its_place() {
+    let text = "  tay\n  adc #3\n  cpy #26\n  bcs L\n  tax\nL:\n  lda #0\n  rts\n";
+    assert_eq!(sunk(text), text);
+}
+
 #[test]
 fn a_fall_through_label_others_reach_keeps_the_work() {
     let text = "  tay\n  clc\n  adc #65\n  cpy #26\n  bcs L\nM:\n  tax\nL:\n  lda #0\n  bne M\n  rts\n";
