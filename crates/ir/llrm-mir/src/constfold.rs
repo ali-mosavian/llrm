@@ -110,6 +110,53 @@ fn undef(
     context.constant(Constant { ty, kind: ConstantKind::Undef })
 }
 
+/// The lanes of a vector constant: `getAggregateElement` of each.
+fn lanes_of(
+    context: &Context,
+    id: ConstantId,
+    element: TypeId,
+    count: usize,
+) -> Option<Vec<ConstantId>> {
+    let constant = context.get(id);
+    match &constant.kind {
+        ConstantKind::Aggregate(lanes) if lanes.len() == count => Some(lanes.clone()),
+        ConstantKind::Zero | ConstantKind::Null => {
+            let zero = context.constant(Constant { ty: element, kind: ConstantKind::Zero });
+            let zero = if context.types.int_bits(element).is_some() { context.int(element, 0) } else { zero };
+            Some(vec![zero; count])
+        }
+        ConstantKind::Poison => Some(vec![poison(context, element); count]),
+        ConstantKind::Undef => Some(vec![undef(context, element); count]),
+        _ => None,
+    }
+}
+
+/// `ConstantFoldBinaryInstruction` of fixed vectors
+/// ([ConstantFold.cpp:699](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L699)):
+/// the operation of each pair of lanes, none left unfolded.
+fn binary_lanes(
+    context: &Context,
+    op: BinaryOp,
+    c1: ConstantId,
+    c2: ConstantId,
+    ty: TypeId,
+    element: TypeId,
+    count: usize,
+) -> Option<ConstantId> {
+    context.types.int_bits(element)?;
+    let (left, right) = (lanes_of(context, c1, element, count)?, lanes_of(context, c2, element, count)?);
+    let mut folded = Vec::with_capacity(count);
+    for (a, b) in left.into_iter().zip(right) {
+        folded.push(binary(context, op, a, b)?);
+    }
+    let zero = |lane: ConstantId| matches!(
+        context.get(lane).kind,
+        ConstantKind::Int(0) | ConstantKind::Zero
+    );
+    let kind = if folded.iter().all(|lane| zero(*lane)) { ConstantKind::Zero } else { ConstantKind::Aggregate(folded) };
+    Some(context.constant(Constant { ty, kind }))
+}
+
 /// `ConstantFoldBinaryInstruction`
 /// ([ConstantFold.cpp:637](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L637)).
 pub fn binary(
@@ -119,6 +166,9 @@ pub fn binary(
     c2: ConstantId,
 ) -> Option<ConstantId> {
     let ty = context.get(c1).ty;
+    if let Type::Vector { element, count } = context.types.get(ty).clone() {
+        return binary_lanes(context, op, c1, c2, ty, element, count as usize);
+    }
     let ones = |width: u32| mask(width);
     // The identity values first: no-ops that return the other value, a poison
     // one included.
@@ -378,7 +428,8 @@ pub fn cast(
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Float80(*bits) }))
         }
         (CastOp::BitCast, Type::Float(FloatKind::F128)) => {
-            let (ConstantKind::Int(bits), Type::Int(128)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            let (ConstantKind::Int(bits), Type::Int(128)) =
+                (&context.get(c).kind, context.types.get(context.get(c).ty))
             else {
                 return None;
             };
@@ -972,6 +1023,39 @@ mod tests {
     ) -> ConstantId {
         let ty = context.types.int(width);
         context.constant(Constant { ty, kind: ConstantKind::Int(value) })
+    }
+
+    /// `<3, 3> + <4, 4>` stayed an unfolded expression: `binary` read the
+    /// width of a vector's type as that of a number, so `(x + 3) + 4` on
+    /// vectors never became `x + 7` (recsum's loop on arm64). The operation
+    /// is that of each pair of lanes.
+    #[test]
+    fn a_vector_of_numbers_folds_lane_by_lane() {
+        let context = Context::new();
+        let i32 = context.types.int(32);
+        let vector = context.types.intern(Type::Vector { element: i32, count: 4 });
+        let splat = |value: i128| context.int(vector, value);
+        assert_eq!(binary(&context, BinaryOp::Add, splat(3), splat(4)), Some(splat(7)));
+        assert_eq!(binary(&context, BinaryOp::Sub, splat(3), splat(3)), Some(splat(0)));
+        let lanes = |values: [i128; 4]| {
+            let lanes = values.iter().map(|value| context.int(i32, *value)).collect();
+            context.constant(Constant { ty: vector, kind: ConstantKind::Aggregate(lanes) })
+        };
+        assert_eq!(binary(&context, BinaryOp::Mul, lanes([1, 2, 3, 4]), splat(2)), Some(lanes([2, 4, 6, 8])));
+    }
+
+    /// `<0, 0, 0, 0>` was an aggregate that `m_Zero` did not see, so `0 - x`
+    /// of a vector built from lanes was no negation, and `(0 - x) * (0 - y)`
+    /// stayed. A vector of zeros is the zero value of its type.
+    #[test]
+    fn a_vector_of_zeros_is_the_zero_value() {
+        let context = Context::new();
+        let i32 = context.types.int(32);
+        let vector = context.types.intern(Type::Vector { element: i32, count: 4 });
+        let zero = context.int(i32, 0);
+        let lanes = context.constant(Constant { ty: vector, kind: ConstantKind::Aggregate(vec![zero; 4]) });
+        assert_eq!(lanes, context.int(vector, 0));
+        assert_eq!(context.get(lanes).kind, ConstantKind::Zero);
     }
 
     /// `X * 0`, `X | -1`, `0 << X`, `0 / X`, `X % 1` and `X / 0` fold with `X`

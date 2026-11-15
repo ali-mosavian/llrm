@@ -1992,18 +1992,18 @@ define i32 @f(i32 %a) {
 }
 ";
 
-/// At `-Os` the pin splits `x * 11` into `lea; lea` (8 B) where gcc keeps the
-/// 3-byte `imul` (x_gcd -Os, DEVIATE MUL-OS): m32 keeps one `imul` at `-Os`,
-/// and splits it at speed.
+/// At `-Os` the pin splits `x * 11` into `lea; lea` and keeps the `imul` at
+/// `-Oz` only. m32 kept one `imul` at `-Os` (DEVIATE MUL-OS, gcc's bytes): the
+/// four products of lru -Os cost 201 clk against 143 for clang's chains.
 #[test]
-fn at_os_a_multiply_by_eleven_stays_one_imul_on_m32() {
+fn at_os_a_multiply_by_eleven_is_the_pins_chain_on_m32() {
     let module = crate::testing::module(TIMES_ELEVEN).expect("parses");
     let imuls = |size: bool| {
         let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", size).expect("a cpu");
         let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
         done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count()
     };
-    assert_eq!(imuls(true), 1, "-Os: one imul");
+    assert_eq!(imuls(true), 0, "-Os: the chain");
     assert_eq!(imuls(false), 0, "speed: the chain");
 }
 
