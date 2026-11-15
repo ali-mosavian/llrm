@@ -939,6 +939,19 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-OUTER: whether an outer loop's address stepped by `size`
+    /// bytes an iteration (`g[i]` over elements of `size`) is reduced to a
+    /// counter: what the addressing mode's scale does not absorb is computed
+    /// every trip (gcc's ivopts reduces every loop). false: the pin's, which
+    /// leaves a loop with a subloop alone.
+    fn reduces_outer_address_scale(
+        &self,
+        size: u128,
+    ) -> bool {
+        let _ = size;
+        false
+    }
+
     /// DEVIATE LSR-OUTER: whether reducing a multiply of the outer loop's
     /// counter (by `multiplier`, none: not a constant) to a counter stepped by
     /// it pays: the clocks of the cheaper of the multiply and its shift-and-add

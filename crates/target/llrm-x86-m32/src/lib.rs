@@ -202,6 +202,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // see `Tuning::multiply_clocks`.
         multiply_clocks: costs.multiply,
         loop_carried_clocks: costs.store + costs.load,
+        counter_exit_compare_clocks: costs.add,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
