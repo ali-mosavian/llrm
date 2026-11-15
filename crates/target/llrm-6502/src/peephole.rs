@@ -279,6 +279,12 @@ fn run_suffix(
     if crate::copyprop::enabled(std::env::var_os("LLRM_6502_MCP").as_deref()) {
         crate::copyprop::copy_propagation(asm);
     }
+    // `LLRM_6502_REASSOC=0` is the kill switch, for an A/B of one binary
+    if crate::copyprop::enabled(std::env::var_os("LLRM_6502_REASSOC").as_deref()) {
+        crate::sink_compare::sink_past_compare(asm);
+        crate::sink_compare::compare_the_copy(asm);
+        crate::reassociate::reassociate_adds(asm);
+    }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
     // the dead stores left a save with nothing between its `pha` and `pla`
@@ -299,7 +305,7 @@ fn run_suffix(
 }
 
 /// How many lines name `label`: a branch or jump to it, or a directive.
-fn references(
+pub(crate) fn references(
     lines: &[Line],
     label: &str,
 ) -> usize {
@@ -786,8 +792,7 @@ fn nz_dead_from(
     from: usize,
     seen: &mut HashSet<usize>,
 ) -> bool {
-    let to =
-        |inst: &Inst| inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+    let to = |inst: &Inst| inst.target().and_then(|label| Line::label_position(lines, label));
     let mut at = from;
     while let Some(line) = lines.get(at) {
         if !seen.insert(at) {
@@ -2267,18 +2272,12 @@ pub(crate) fn dead_from(
                 }
             }
             (Op::Jmp, _) => {
-                return inst
-                    .target()
-                    .is_some_and(
-                        |label| lines
-                            .iter()
-                            .position(|l| *l == Line::Label(label.to_owned()))
-                            .is_some_and(|to| dead_from(lines, to, bit, seen, exits)),
-                    );
+                return inst.target().is_some_and(|label| {
+                    Line::label_position(lines, label).is_some_and(|to| dead_from(lines, to, bit, seen, exits))
+                });
             }
             (op, _) if op.opposite().is_some() || op == Op::Bra => {
-                let target =
-                    inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+                let target = inst.target().and_then(|label| Line::label_position(lines, label));
                 let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen, exits));
                 if op == Op::Bra {
                     return taken;
@@ -2323,7 +2322,7 @@ const LEFT: CarryOut = CarryOut { shifts: [Op::Asl, Op::Rol], masked: false, bra
 const RIGHT: CarryOut = CarryOut { shifts: [Op::Lsr, Op::Ror], masked: true, branches: [Op::Beq, Op::Bne] };
 
 /// Whether the instruction writes register `bit`.
-fn writes_register(
+pub(crate) fn writes_register(
     inst: &Inst,
     bit: Registers,
 ) -> bool {
@@ -2586,7 +2585,7 @@ fn step_of(
 /// Whether the carry is written before it is read, along every path from
 /// `lines[from]`. A call or a return counts as a write: no routine takes the
 /// carry in, and none leaves it for a caller to read.
-fn carry_dead_from(
+pub(crate) fn carry_dead_from(
     lines: &[Line],
     from: usize,
     seen: &mut HashSet<usize>,
@@ -2639,16 +2638,13 @@ fn carry_dead_from(
                 return inst
                     .target()
                     .is_some_and(
-                        |label| lines
-                            .iter()
-                            .position(|l| *l == Line::Label(label.to_owned()))
-                            .is_some_and(|to| carry_dead_from(lines, to, seen)),
+                        |label| Line::label_position(lines, label).is_some_and(|to| carry_dead_from(lines, to, seen)),
                     );
             }
             Op::Beq | Op::Bne | Op::Bmi | Op::Bpl | Op::Bra => {
                 let taken = inst
                     .target()
-                    .and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())))
+                    .and_then(|label| Line::label_position(lines, label))
                     .is_some_and(|to| carry_dead_from(lines, to, seen));
                 if inst.op == Op::Bra || !taken {
                     return taken;
