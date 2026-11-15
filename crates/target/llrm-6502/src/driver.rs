@@ -286,7 +286,9 @@ fn trial_inlined(
         .tti()
         .and_then(|tti| tti.opt_size_inline_trial_limits())
         .map_or(0, |(_, instructions)| instructions);
-    if request.level != Level::Os || sites.is_empty() {
+    let at_speed = matches!(request.level, Level::O2 | Level::O3)
+        && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
+    if !(request.level == Level::Os || at_speed) || sites.is_empty() {
         return Ok((built, Vec::new()));
     }
     if instructions(&built) > limit {
