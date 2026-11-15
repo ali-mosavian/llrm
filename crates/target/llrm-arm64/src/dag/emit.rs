@@ -886,16 +886,26 @@ fn vector_inst(
         }
     }
     // `UZP1v8i16`: two sources, no tied register.
-    for (second, lanes) in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
-        .into_iter()
-        .flat_map(|lanes| [(false, lanes), (true, lanes)])
+    for (second, lanes) in [
+        Arrangement::B16,
+        Arrangement::H8,
+        Arrangement::S4,
+        Arrangement::D2,
+        Arrangement::B8,
+        Arrangement::H4,
+        Arrangement::S2,
+    ]
+    .into_iter()
+    .flat_map(|lanes| [(false, lanes), (true, lanes)])
     {
         let lane = match lanes {
             Arrangement::B16 => "v16i8",
             Arrangement::H8 => "v8i16",
             Arrangement::S4 => "v4i32",
             Arrangement::D2 => "v2i64",
-            Arrangement::B8 | Arrangement::H4 | Arrangement::S2 => unreachable!("listed above"),
+            Arrangement::B8 => "v8i8",
+            Arrangement::H4 => "v4i16",
+            Arrangement::S2 => "v2i32",
         };
         if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
             return Some(match operands {
@@ -2341,6 +2351,37 @@ impl Emitter<'_> {
                     .map(|&op| self.operand(op))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|why| format!("{name}: {why}"))?;
+                // A vector operand nothing defines (the undefined half of a
+                // widened vector) reads any register: the one the instruction
+                // reads otherwise, as the pin's coalescer leaves it.
+                let live: Vec<&SDValue> = node
+                    .ops
+                    .iter()
+                    .filter(|op| {
+                        let vt = self.dag.value_type(**op);
+                        (vt != EVT::OTHER || self.dag.opcode(**op) == ISD::BasicBlock) && vt != EVT::GLUE
+                    })
+                    .collect();
+                let undefined = |op: &SDValue| {
+                    self.dag.value_type(*op).is_vector()
+                        && matches!(
+                            self.dag.opcode(*op),
+                            ISD::Undef | ISD::Poison
+                        ) || matches!(
+                            self.dag.opcode(*op),
+                            ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF") && self.dag.value_type(*op).is_vector()
+                        )
+                };
+                if let Some(defined) = live.iter().zip(&operands).find_map(|(op, operand)| match operand {
+                    Operand::Fpr(register) if !undefined(op) => Some(*register),
+                    _ => None,
+                }) {
+                    for (op, operand) in live.iter().zip(operands.iter_mut()) {
+                        if undefined(op) && matches!(operand, Operand::Fpr(_)) {
+                            *operand = Operand::Fpr(defined);
+                        }
+                    }
+                }
                 self.constrain_register_classes(code, node, &mut operands);
                 if let Some(size) = name
                     .strip_prefix("FCMPE")
@@ -2570,6 +2611,16 @@ impl Emitter<'_> {
                             imms: *imms as u8,
                         }));
                         self.values.insert((id, 0), rd);
+                        return Ok(());
+                    }
+                    // A vector or float value nothing defines (the undefined half
+                    // of a widened vector) is a float register.
+                    ("IMPLICIT_DEF", []) if in_float_file(node.values[0]) => {
+                        let one = self.mf.fpr();
+                        if is_quad(node.values[0]) {
+                            self.mf.wide.push(Reg::Fpr(one));
+                        }
+                        self.fvalues.insert((id, 0), one);
                         return Ok(());
                     }
                     ("IMPLICIT_DEF", []) => {

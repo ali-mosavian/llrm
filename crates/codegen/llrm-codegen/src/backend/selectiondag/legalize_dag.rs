@@ -475,6 +475,45 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_store(chain, truncated, ptr, info))
     }
 
+    /// `LegalizeLoadOps` and `LegalizeStoreOps` where `getLoadExtAction` or
+    /// `getTruncStoreAction` is `Custom`: the target's lowering replaces the
+    /// access; where it declines the access is expanded as usual.
+    fn custom_extending_access(
+        &mut self,
+        node: SDValue,
+    ) -> bool {
+        let NodeData::Mem(info) = self.dag.node(node).data else { return false };
+        let custom = match self.dag.opcode(node) {
+            ISD::Load => match (info.ext, self.dag.value_type(node), info.mem_vt) {
+                (Some(ext), EVT::Simple(wide), EVT::Simple(mem)) => self.tli.load_ext_action(ext, wide, mem) == Action::Custom,
+                _ => false,
+            },
+            ISD::Store => match (self.dag.value_type(self.dag.operand(node, 1)), info.mem_vt) {
+                (EVT::Simple(wide), EVT::Simple(mem)) => {
+                    self.dag.value_type(self.dag.operand(node, 1)).bits_gt(info.mem_vt)
+                        && self.tli.trunc_store_action(wide, mem) == Action::Custom
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !custom {
+            return false;
+        }
+        let Some(result) = self.hooks.lower_operation(self.dag, node) else { return false };
+        if result != node {
+            let results = self.dag.node(node).values.len() as u8;
+            if results > 1 && self.dag.node(result).values.len() == results as usize {
+                for res in 0..results {
+                    self.replace_node(SDValue { node: node.node, res }, SDValue { node: result.node, res });
+                }
+            } else {
+                self.replace_node(node, result);
+            }
+        }
+        true
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
@@ -487,6 +526,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
+        }
+        if self.custom_extending_access(node) {
+            return Ok(());
         }
         if let Some(store) = self.promote_sub_byte_trunc_store(node).or_else(|| self.expand_trunc_store(node)) {
             self.replace_node(node, store);

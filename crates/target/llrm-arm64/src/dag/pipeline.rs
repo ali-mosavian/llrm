@@ -464,9 +464,10 @@ impl LegalizeHooks for Aarch64Lowering {
             // only when it is volatile or atomic
             // (`ldxp`/`stxp`, `LowerStore128`); every other is declined, and
             // the legalizer splits it.
-            ISD::Load | ISD::Store => match dag.node(node).data {
+            ISD::Load => return super::vector::lower_small_vector_ext_load(dag, node),
+            ISD::Store => match dag.node(node).data {
                 NodeData::Mem(info) if info.volatile || info.ordering.is_some() => None,
-                _ => return None,
+                _ => return super::vector::lower_truncate_vector_store(dag, node),
             },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
             // `LowerINSERT_VECTOR_ELT`: a constant lane in range is as it is

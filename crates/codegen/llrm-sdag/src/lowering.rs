@@ -273,18 +273,24 @@ impl TargetLoweringInfo {
                 }
                 None => match mvt {
                     _ if mvt.is_vector() => {
-                        // `getPreferredVectorAction`: promote the lanes to the
-                        // narrowest integer type that makes a legal vector of
-                        // as many lanes (`v4i1` is `v4i16` where `v4i8` is not
-                        // a type).
-                        let promoted = (mvt.element() == Some(MVT::I1))
-                            .then(|| {
+                        // `getPreferredVectorAction` (power-of-two lanes) and
+                        // `computeRegisterProperties`: promote the lanes to the
+                        // narrowest wider integer type that makes a legal
+                        // vector of as many lanes (`v4i1` is `v4i16` where
+                        // `v4i8` is not a type, `v4i8` is `v4i16`, `v2i8` is
+                        // `v2i32`).
+                        let promoted = mvt
+                            .element()
+                            .zip(mvt.lanes())
+                            .filter(|&(element, lanes)| lanes.is_power_of_two() && EVT::Simple(element).is_integer())
+                            .and_then(|(element, lanes)| {
+                                let bits = EVT::Simple(element).size_in_bits();
                                 [MVT::I8, MVT::I16, MVT::I32, MVT::I64]
                                     .into_iter()
-                                    .filter_map(|lane| MVT::vector(lane, mvt.lanes()?))
+                                    .filter(|&lane| EVT::Simple(lane).size_in_bits() > bits)
+                                    .filter_map(|lane| MVT::vector(lane, lanes))
                                     .find(|wider| self.vectors.contains(wider))
-                            })
-                            .flatten();
+                            });
                         if self.vectors.contains(&mvt) {
                             (TypeAction::Legal, vt)
                         } else if let Some(wider) = promoted {

@@ -784,7 +784,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
+    for (second, lanes) in OP_ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
         if name == unzip_name(second, lanes) {
             return Some(Inst::VectorUnzip {
                 second,
