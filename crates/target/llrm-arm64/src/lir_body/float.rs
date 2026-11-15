@@ -422,6 +422,7 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             let (name, sources) = match fill {
                 Fill::Zero => ("MOVIv2d".to_string(), vec![]),
                 Fill::Byte(byte) => ("MOVIv16b".to_string(), vec![imm(i64::from(*byte))]),
+                Fill::Byte8(byte) => ("MOVIv8b_ns".to_string(), vec![imm(i64::from(*byte))]),
                 Fill::Dup(arrangement, register) => {
                     let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
                     (dup_name(*arrangement).to_string(), vec![gpr_loc(*register, width)])
@@ -431,6 +432,7 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                         ImmShape::H8(shift) => ("8i16", shift),
                         ImmShape::S4(shift) => ("4i32", shift),
                         ImmShape::S2(shift) => ("2i32", shift),
+                        ImmShape::H4(shift) => ("4i16", shift),
                         ImmShape::S4Msl(shift) => ("4s_msl", shift),
                     };
                     let stem = if *invert { "MVNI" } else { "MOVI" };
@@ -441,7 +443,7 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             };
             let narrow = matches!(
                 fill,
-                Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
+                Fill::MaskD(_) | Fill::Byte8(_) | Fill::Imm { shape: ImmShape::S2(_) | ImmShape::H4(_), .. }
             );
             let width = if narrow { 64 } else { 128 };
             semantics(Operation::Move, name, vec![vreg_loc(*rd, width)], sources, None)
@@ -910,6 +912,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     match name {
         "ORRv16b" => return Some(Inst::VectorMov { rd: vreg_of(dest?), rn: vreg_of(&s[0]) }),
         "MOVIv2d" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Zero }),
+        "MOVIv8b_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte8(value_of(&s[0]) as u8) }),
         "MOVIv16b" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte(value_of(&s[0]) as u8) }),
         "MOVIv2d_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Mask(value_of(&s[0]) as u8) }),
         "MOVID" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::MaskD(value_of(&s[0]) as u8) }),
@@ -937,6 +940,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             "8i16" => ImmShape::H8(shift),
             "4i32" => ImmShape::S4(shift),
             "2i32" => ImmShape::S2(shift),
+            "4i16" => ImmShape::H4(shift),
             "4s_msl" => ImmShape::S4Msl(shift),
             _ => continue,
         };
