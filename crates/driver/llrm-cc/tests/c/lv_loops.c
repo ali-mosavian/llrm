@@ -2,6 +2,9 @@ int a[1024], b[1024];
 void add_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] += b[i]; }
 void copy_plus_one(int *d, const int *s, int n) { for (int i = 0; i < n; ++i) d[i] = s[i] + 1; }
 void multiply_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] *= b[i]; }
+void times_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 3; }
+void times_seven(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 7; }
+void times_minus_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * -3; }
 
 int sum_array(const int *a, int n) {
   int total = 0;

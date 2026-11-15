@@ -4746,13 +4746,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
             return Some(self.dag.get_constant(0, vt));
         }
-        let is_const = |dag: &SelectionDAG, v: SDValue| dag.constant(v).is_some() && !dag.is_opaque(v);
+        // `isConstOrConstSplat`: a vector of one constant is the constant, at the width of its lane.
+        let is_const = |dag: &SelectionDAG, v: SDValue| dag.const_or_splat(v).is_some() && !dag.is_opaque(v);
         if is_const(self.dag, n0) && !is_const(self.dag, n1) {
             return Some(self.dag.get_node(ISD::Mul, vt, &[n1, n0]));
         }
-        let c1 = self.dag.constant(n1);
+        let c1 = self.dag.const_or_splat(n1);
         let opaque = self.dag.is_opaque(n1);
-        let width = vt.size_in_bits();
+        let width = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
         let ones = super::fold::mask(width);
         match c1 {
             Some(0) => return Some(n1),
@@ -4936,7 +4937,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         vt: EVT,
         c: u128,
     ) -> Option<SDValue> {
-        let width = vt.size_in_bits();
+        let width = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
         let ones = super::fold::mask(width);
         let negative = c >> (width - 1) & 1 == 1;
         let mut magnitude = if negative { c.wrapping_neg() & ones } else { c };
