@@ -1394,6 +1394,7 @@ fn staged(
         registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
         registers.slot_dead_checked = entry.is_some_and(|one| one.frame_slot_sibling);
     }
+    registers.slot_add_with_saved = target.cpu.target().tti().is_some_and(|tti| tti.frame_slot_add_with_saved());
     registers.align = target.facts.stack_alignment(target.arch, name);
     registers.object_align = target.facts.object_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
