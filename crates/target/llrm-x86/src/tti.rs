@@ -1077,6 +1077,19 @@ impl Tti for X86 {
         self.cmov
     }
 
+    /// DEVIATE D5-M16 (owner x86-m16-b, exit 2026-11-24): in real mode, with no
+    /// conditional move, each select a two-entry phi would become costs the
+    /// branch and move it lowers to. m16 grep -O1/-O2 `if (b == 10) { lines +=
+    /// inline_hit; inline_hit = 0; }` became two selects and an add run on
+    /// every byte of the scan loop (2 clk, and the byte spilled): 34.89M
+    /// clk against bcc's 33.86M, 29.72M without the fold.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        i64::from(!self.cmov && self.real_mode.is_some())
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
@@ -1184,8 +1197,8 @@ impl Tti for X86 {
         self.tuning.ipa_cp_max_clones
     }
 
-    fn lsr_prices_spills(&self) -> bool {
-        self.tuning.lsr_prices_spills
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        self.tuning.lsr_spill_pressure_margin
     }
 
     fn recursive_tre_first(&self) -> (bool, bool) {

@@ -499,6 +499,11 @@ pub fn run(
     let memo = safety::SafetyMemo::default();
     for one in shape.loops.iter() {
         let header = cfg::block(one.header);
+        // A loop pass manager run for one loop (LPM1's, per loop): the others
+        // are not looked at yet.
+        if !crate::loopfilter::allows(header) {
+            continue;
+        }
         // No instruction to start from: nothing is asked of the graph.
         if !seeded(unit.function, &shape, &innermost, one) {
             continue;

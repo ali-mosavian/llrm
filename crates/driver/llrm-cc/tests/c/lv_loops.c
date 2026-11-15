@@ -12,6 +12,10 @@ int sum_array(const int *a, int n) {
   return total;
 }
 
+long sum_longs(const long *a, int n) { long t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+short sum_shorts(const short *a, int n) { short t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+signed char sum_bytes(const signed char *a, int n) { signed char t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+
 void fill_rows(short t[64][64]) {
   for (int y = 0; y < 64; ++y)
     for (int x = 0; x < 64; ++x) t[y][x] = 4660;
@@ -49,3 +53,13 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 }
 
 void add_five(void) { for (int i = 0; i < 1024; ++i) a[i] += 5; }
+
+/* A byte accumulator seeded from an argument and folded with a loop-invariant byte: the seed is lane 0 of a zero
+   vector and the operand a broadcast (`insertelement`), which had no x86 lowering (known_loads_walks). */
+unsigned char xor_toggle_count(unsigned char n)
+{
+    unsigned char x = n;
+    for (unsigned char i = 0; i < n; i++)
+        x ^= 1;
+    return x;
+}

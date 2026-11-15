@@ -45,7 +45,7 @@ use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Ope
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::simplify::simplify_instruction_in;
-use llrm_mir::types::TypeId;
+use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
@@ -591,18 +591,26 @@ pub fn visit(
     {
         return Visit::None;
     }
-    // DEVIATE COMBINE-VEC: the arithmetic visitors read integer widths (MIR had
-    // no vectors), so an operation on vectors, which the loop vectorizer makes,
-    // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
+    // DEVIATE COMBINE-VEC (owner w11, exit 2026-11-24): the arithmetic visitors
+    // read integer widths, so an operation on vectors, which the loop
+    // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
+    // visitors are enabled by operation, each with its own identity sweep.
     if matches!(
         c.function.instruction(inst).opcode,
         Opcode::Binary(_) | Opcode::Cast(_)
     )
         && matches!(
             c.context.types.get(c.function.instruction(inst).ty),
-            llrm_mir::types::Type::Vector { .. }
+            Type::Vector { .. }
         )
     {
+        if let Some(result) = c.function.instruction(inst).result
+            && let Some(found) =
+                simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
+            && found != Operand::Value(result)
+        {
+            return Visit::Replace(found);
+        }
         return Visit::None;
     }
     // The table is 'static: the opcode (a clone per visit, a Box for calls) is

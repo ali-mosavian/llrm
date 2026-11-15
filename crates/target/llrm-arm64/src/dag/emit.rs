@@ -733,8 +733,9 @@ fn vector_inst(
         });
     }
     // `LD1Rv4s`: the lane at the address replicated into every lane of `rd`.
-    if let Some(lanes) =
-        name.strip_prefix("LD1Rv").and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
+    if let Some(lanes) = name
+        .strip_prefix("LD1Rv")
+        .and_then(|suffix| Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == suffix))
     {
         return Some(match operands {
             [Operand::Reg(base)] => Ok(Inst::VectorLoadReplicate { lanes, rt: rd, base: *base }),
@@ -775,11 +776,14 @@ fn vector_inst(
             _ => wrong(),
         });
     }
-    // `USHLLv8i8_shift`, `UADDWv16i8_v8i16`, `SMULLv4i16_v4i32`: a narrow
-    // operand (a half of a vector, with `2`) into wide lanes.
+    // `USHLLv8i8_shift`, `UADDLv8i8_v8i16`, `UADDWv16i8_v8i16`,
+    // `SMULLv4i16_v4i32`: a narrow operand (a half of a vector, with `2`)
+    // into wide lanes.
     for op in [
         VectorLongOp::Ushll,
         VectorLongOp::Sshll,
+        VectorLongOp::Uaddl,
+        VectorLongOp::Saddl,
         VectorLongOp::Uaddw,
         VectorLongOp::Saddw,
         VectorLongOp::Umull,
@@ -2109,6 +2113,16 @@ impl Emitter<'_> {
                 }));
                 self.sp_copies.insert(rd);
                 self.values.insert((id, 0), rd);
+                Ok(())
+            }
+            // `IMPLICIT_DEF`: a vector or float value nothing defines, a half
+            // of a widened vector that is `undef`.
+            ISD::Undef | ISD::Poison if in_float_file(node.values[0]) => {
+                let one = self.mf.fpr();
+                if is_quad(node.values[0]) {
+                    self.mf.wide.push(Reg::Fpr(one));
+                }
+                self.fvalues.insert((id, 0), one);
                 Ok(())
             }
             ISD::CopyFromReg if in_float_file(node.values[0]) => {

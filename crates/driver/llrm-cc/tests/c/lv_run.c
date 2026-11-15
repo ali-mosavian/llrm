@@ -2,6 +2,11 @@
 static unsigned char buf[200];
 __attribute__((noinline)) int run_sum(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
 __attribute__((noinline)) int run_xor(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t ^= a[i] * 3; return t; }
+__attribute__((noinline)) long run_sum_l(const long *a, int n) { long t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) short run_sum_s(const short *a, int n) { short t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) signed char run_sum_b(const signed char *a, int n) { signed char t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) int run_or(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t |= a[i]; return t; }
+__attribute__((noinline)) int run_and(const int *a, int n) { int t = -1; for (int i = 0; i < n; i++) t &= a[i]; return t; }
 __attribute__((noinline)) void fwd(unsigned char *dst, const unsigned char *src, unsigned long n) {
     unsigned long i;
     for (i = 0; i < n; i++) dst[i] = src[i];
@@ -25,6 +30,8 @@ extern int a[1024], b[1024];
 void times_three(void);
 void times_seven(void);
 void times_minus_three(void);
+unsigned char xor_toggle_count(unsigned char n);
+void set_lanes(void *b, void *w, void *d, unsigned char x, unsigned short y, unsigned z);
 int stack_copy(int n);
 int square_sum(int n);
 int main(void) {
@@ -58,6 +65,19 @@ int main(void) {
     for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * 7u)) bad++;
     times_minus_three();
     for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * (unsigned)-3)) bad++;
+    {
+        /* Every lane differs, so a reduction that folds the wrong lanes gives another total. */
+        static long longs[300]; static short shorts[300]; static signed char bytes[300]; static int words[300], masks[300];
+        for (int i = 0; i < 300; i++) {
+            longs[i] = (long)i * 1000000007L - 5; shorts[i] = (short)(i * 211 - 300); bytes[i] = (signed char)(i * 7 + 1);
+            words[i] = (1 << (i % 31)) | (i * 3); masks[i] = ~(1 << (i % 29));
+        }
+        for (int n = 0; n < 300; n++) {
+            long l = 0; short s = 0; signed char b = 0; int o = 0, a = -1;
+            for (int i = 0; i < n; i++) { l += longs[i]; s = (short)(s + shorts[i]); b = (signed char)(b + bytes[i]); o |= words[i]; a &= masks[i]; }
+            if (run_sum_l(longs, n) != l || run_sum_s(shorts, n) != s || run_sum_b(bytes, n) != b || run_or(words, n) != o || run_and(masks, n) != a) bad++;
+        }
+    }
     if (stack_copy(63) * 100 + stack_copy(5) != 303 || square_sum(5) != 30 || square_sum(50) != 40425) bad++;
     for (int i = 0; i < 1024; i++) { sa[i] = (short)(i * 31 - 7000); sb[i] = (short)(i * 17 + 3); }
     multiply_shorts();
@@ -92,6 +112,17 @@ int main(void) {
         for (int i = 0; i < 4096; i++) y[i] = (unsigned char)(i * 7 + 3), z[i] = (unsigned char)(i * 31 + 11);
         multiply_byte_arrays(x, y, z);
         for (int i = 0; i < 4096; i++) if (x[i] != (unsigned char)(y[i] * z[i])) bad++;
+    }
+    for (int n = 0; n < 256; n++) if (xor_toggle_count((unsigned char)n) != (unsigned char)(n ^ (n & 1))) bad++;
+    {
+        unsigned char b[16] __attribute__((aligned(16))), w8[16] __attribute__((aligned(16))), d8[16] __attribute__((aligned(16)));
+        for (int i = 0; i < 16; i++) b[i] = w8[i] = d8[i] = (unsigned char)(i + 1);
+        set_lanes(b, w8, d8, 0xAB, 0xCDEF, 0x12345678u);
+        for (int i = 0; i < 16; i++) {
+            if (b[i] != (i == 5 ? 0xAB : i + 1)) bad++;
+            if (w8[i] != (i == 6 ? 0xEF : i == 7 ? 0xCD : i + 1)) bad++;
+            if (d8[i] != (i == 8 ? 0x78 : i == 9 ? 0x56 : i == 10 ? 0x34 : i == 11 ? 0x12 : i + 1)) bad++;
+        }
     }
     printf("bad %d\n", bad);
 }

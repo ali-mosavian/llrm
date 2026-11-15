@@ -163,6 +163,8 @@ pub struct Profile {
     pub tail_dup_threshold: Option<usize>,
     /// `tail_dup_hot_threshold` of the target's table (DEVIATE TAILDUP-HOT).
     pub tail_dup_hot_size: Option<usize>,
+    /// `loop_top_prices_jumps` of the target's table (DEVIATE LOOP-TOP-JMP).
+    pub loop_top_prices_jumps: bool,
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
@@ -208,9 +210,10 @@ pub struct Profile {
     pub post_ra_tail_duplicate: bool,
     /// `TimingTable::tail_merge_pin_faithful`.
     pub tail_merge_pin_faithful: bool,
-    /// Equal literal stores share a register at the speed levels too
-    /// (`TimingTable::share_literal_stores`).
+    /// Equal literal stores share a register where bytes are strict (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
+    /// `TimingTable::share_literal_stores_at_speed`.
+    pub share_literal_stores_at_speed: bool,
     /// `TimingTable::zero_extend_with_and`.
     pub zero_extend_with_and: bool,
     /// Pool data bytes are strict (`TimingTable::pool_data_strict`).
@@ -419,6 +422,7 @@ impl Profile {
             aggressive: false,
             tail_dup_threshold: None,
             tail_dup_hot_size: None,
+            loop_top_prices_jumps: false,
             commute_loop_carried: false,
             widen_word_immediate: false,
             three_address_to_known_register: false,
@@ -435,6 +439,7 @@ impl Profile {
             post_ra_tail_duplicate: false,
             tail_merge_pin_faithful: false,
             share_literal_stores: false,
+            share_literal_stores_at_speed: false,
             zero_extend_with_and: false,
             pool_data_strict: false,
             size_one_is_xor_inc: false,
@@ -543,6 +548,19 @@ impl Profile {
             back_edge_clocks: back.max(0) as f64,
             clocks_per_byte: per_byte as f64 / 1000.0,
         })
+    }
+
+    /// What placement's choice of a loop's top weighs fall-throughs by
+    /// (DEVIATE LOOP-TOP-JMP): the clocks a `jmp` costs, and what a taken
+    /// conditional branch costs over one not taken. Not for size.
+    pub fn loop_top_clocks(&self) -> Option<crate::backend::jumps::placement::TopClocks> {
+        if !self.loop_top_prices_jumps || self.size || !self.has_speed_goal() {
+            return None;
+        }
+        let jump = self.cost("jmp_short").ok()?;
+        let saved = self.cost("jcc").ok()? - self.cost("jcc_not_taken").ok()?;
+        (jump > 0 && saved > 0)
+            .then_some(crate::backend::jumps::placement::TopClocks { jump_clocks: jump as f64, saved_clocks: saved as f64 })
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at
@@ -760,6 +778,7 @@ fn _profile(
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
+        loop_top_prices_jumps: table.loop_top_prices_jumps,
         commute_loop_carried: table.commute_loop_carried,
         widen_word_immediate: table.widen_word_immediate,
         three_address_to_known_register: table.three_address_to_known_register,
@@ -768,6 +787,7 @@ fn _profile(
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         tail_merge_pin_faithful: table.tail_merge_pin_faithful,
         share_literal_stores: table.share_literal_stores,
+        share_literal_stores_at_speed: table.share_literal_stores_at_speed,
         zero_extend_with_and: table.zero_extend_with_and,
         pool_data_strict: table.pool_data_strict,
         size_one_is_xor_inc: table.size_one_is_xor_inc,

@@ -140,6 +140,22 @@ pub fn forget_inline_saves() {
     INLINE_SAVES.with(|set| set.borrow_mut().clear());
 }
 
+/// Every choice outside a selection that the text of a function depends on
+/// (see [`with_shared_saves`], [`with_fast_division`] and the others): two
+/// compiles of one selection under equal flags write the same text.
+pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
+    (
+        SPIKE.with(|a| a.get()),
+        SHARED_SAVES.with(|a| a.get()),
+        FAST_DIVISION.with(|a| a.get()),
+        FAST_MULTIPLY.with(|a| a.get()),
+        SIZE_FAST_DIVISION.with(|a| a.get()),
+        COMPACT_DIVISION16.with(|a| a.get()),
+        WIDE_COMMUTE.with(|a| a.get()),
+        INLINE_SAVES.with(|set| set.borrow().contains(name)),
+    )
+}
+
 /// Whether the allocation just made took a choice only the wider rule makes.
 pub fn wide_commuted() -> bool {
     WIDE_COMMUTED.with(|a| a.get())
@@ -3705,35 +3721,37 @@ fn emit_on(
         let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
         better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
     };
-    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, true)?;
+    let (mut code, mut priced, mut slots, sunk, shared, moved, mut finished) = run(function.clone(), true, true, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
     let mut place = true;
     if moved
-        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false)
+        && let Ok((other, other_priced, other_slots, _, _, _, other_finished)) =
+            run(function.clone(), true, true, false)
         && wins((&code, &priced, &slots), (&other, &other_priced, &other_slots))
     {
-        (code, priced, slots, place) = (other, other_priced, other_slots, false);
+        (code, priced, slots, place, finished) = (other, other_priced, other_slots, false, other_finished);
     }
     if !sunk && !shared {
-        return Ok((code, slots));
+        return Ok((finished, slots));
     }
     // each change is kept only where it is no larger and no slower than the
     // function without it
-    let mut best = (code, priced, slots);
+    let mut best = (code, priced, slots, finished);
     let mut variants = vec![(false, false)];
     if sunk && shared {
         variants.extend([(true, false), (false, true)]);
     }
     for (sink, share) in variants {
-        let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), sink, share, place) else {
+        let Ok((other, other_priced, other_slots, _, _, _, other_finished)) = run(function.clone(), sink, share, place)
+        else {
             continue;
         };
         if wins((&best.0, &best.1, &best.2), (&other, &other_priced, &other_slots)) {
-            best = (other, other_priced, other_slots);
+            best = (other, other_priced, other_slots, other_finished);
         }
     }
-    Ok((best.0, best.2))
+    Ok((best.3, best.2))
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
@@ -3933,7 +3951,7 @@ fn emit_with<const STACK: bool>(
     share: bool,
     place: bool,
     source: Option<(&str, Option<u32>)>,
-) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool), String> {
+) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool, String), String> {
     EMITS.with(|runs| runs.set(runs.get() + 1));
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
@@ -4005,6 +4023,7 @@ fn emit_with<const STACK: bool>(
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
     let mut out = Asm::new();
     let mut made = 0;
+    let mut sites: Vec<crate::shift_forms::Site> = Vec::new();
     let mut pending: Option<i64> = None;
     // A call that returns at once is a jump: the callee's `rts` returns from
     // here. `__csave` keeps the return address, and a frame to release stands
@@ -4312,42 +4331,54 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
                 (Kind::Op("LOADC"), _) => out.push_str("  lsr a\n"),
                 (Kind::Op(step @ ("SHL1" | "SRL1")), _) => {
-                    let (first, second) = if step == "SHL1" { ("asl", "rol") } else { ("lsr", "ror") };
+                    use crate::asm::Op as Mn;
+                    use crate::shift_forms::{Counter, Form, Site};
+                    let (first, second) = if step == "SHL1" { (Mn::Asl, Mn::Rol) } else { (Mn::Lsr, Mn::Ror) };
                     let (low, high) = (register_name(regs[0]), register_name(regs[2]));
                     let (one, two) = if step == "SHL1" { (low, high) } else { (high, low) };
-                    // a run of shifts is shorter as a counted loop (nine bytes,
-                    // against four a shift) when an index
-                    // register is free to count; it takes 5 clocks a shift and
-                    // one more than the run, so it is
-                    // chosen where each byte it saves costs no more clocks than
-                    // the level's rate
+                    // a run of shifts is written in the cells, as a counted
+                    // loop (nine bytes, against four a shift; it takes 5 clocks
+                    // a shift and one more than the run, so it is offered where
+                    // each byte it saves costs no more clocks than the level's
+                    // rate) or with a byte in `a`; `shift_forms::choose` takes
+                    // the form the cleaned text is shortest in
                     let run = block.insts[i..]
                         .iter()
                         .take_while(|next| next.kind == inst.kind && next.operands == inst.operands)
                         .count();
                     let (saved, slower) = (4 * run as i64 - 9, 5 * run as u32 + 1);
                     let pays = saved > 0 && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;
-                    // the byte that shifts alone rides in `a` for a run: 7
-                    // clocks a step where memory is 10 (`asl a; rol hi` against
-                    // `asl lo; rol hi`), for the two bytes of the load and
-                    // the store; a byte longer under three steps
-                    let in_a = run >= if TUNING.with(|t| t.get()).clocks_per_byte > 1 { 5 } else { 3 };
-                    match spare {
-                        Some(index) if pays => {
-                            made += 1;
-                            writeln!(out, "  ld{index} #{run}\n_sh{made}:\n  {first} {one}\n  {second} {two}\n  de{index}\n  bne _sh{made}").unwrap();
-                            repeated = run - 1;
-                        }
-                        _ if in_a && !a_live => {
-                            writeln!(out, "  lda {one}").unwrap();
-                            for _ in 0..run {
-                                writeln!(out, "  {first} a\n  {second} {two}").unwrap();
-                            }
-                            writeln!(out, "  sta {one}").unwrap();
-                            repeated = run - 1;
-                        }
-                        _ => writeln!(out, "  {first} {one}\n  {second} {two}").unwrap(),
-                    }
+                    let counter = spare
+                        .filter(|_| pays)
+                        .map(
+                            |index| {
+                                made += 1;
+                                let x = index == "x";
+                                Counter {
+                                    load: if x { Mn::Ldx } else { Mn::Ldy },
+                                    step: if x { Mn::Dex } else { Mn::Dey },
+                                    label: made,
+                                }
+                            },
+                        );
+                    let mut site = Site {
+                        block: b,
+                        start: out.lines.len(),
+                        end: 0,
+                        first,
+                        second,
+                        one,
+                        two,
+                        run,
+                        counter,
+                        a_dead: !after[b][i + run - 1].contains(&reg::A),
+                        place: out.place,
+                        base: if counter.is_some() { Form::Loop } else { Form::Cells },
+                    };
+                    out.lines.extend(crate::shift_forms::lines_of(&site, site.base));
+                    site.end = out.lines.len();
+                    sites.push(site);
+                    repeated = run - 1;
                 }
                 // `lda give; asl|lsr a` leaves the bit in the carry; the word
                 // rotates it in
@@ -4725,11 +4756,52 @@ fn emit_with<const STACK: bool>(
             }
         }
     }
+    if !sites.is_empty() {
+        let exits: Vec<crate::shift_forms::Exit> = function
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(b, block)| {
+                let closing = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+                let mut exit = crate::shift_forms::Exit {
+                    terminators: starts[b][closing],
+                    end: *starts[b].last().unwrap(),
+                    ..Default::default()
+                };
+                for &live in after[b].last().into_iter().flatten() {
+                    match live {
+                        r if r == reg::A => exit.a = true,
+                        r if r == reg::X => exit.x = true,
+                        r if r == reg::Y => exit.y = true,
+                        r if is_pair(r) => {
+                            exit.cells.insert(register_name(lane(r, 0)));
+                            exit.cells.insert(register_name(lane(r, 1)));
+                        }
+                        r if is_cell(r) => {
+                            exit.cells.insert(register_name(r));
+                        }
+                        _ => {}
+                    }
+                }
+                exit
+            })
+            .collect();
+        out.cmos = cmos;
+        out.no_a_result = !returns_a;
+        out.a_callees = a_callees.clone();
+        out.no_x_result = !returns_x;
+        out.x_callees = x_callees.clone();
+        out.no_y_result = !returns_y;
+        out.y_callees = y_callees.clone();
+        out.result_cells = result_cells.clone();
+        crate::shift_forms::choose(&mut out, &sites, &exits);
+    }
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
     out.cmos = cmos;
     let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells);
-    let (priced, text) = finish_pair(out, lines_of, tails);
-    Ok((own_labels(&text, &function.name), own_labels(&priced, &function.name), slots, sunk, shared, moved))
+    let (priced, text, finished) = finish_pair(out, lines_of, tails);
+    let named = |text: &str| own_labels(text, &function.name);
+    Ok((named(&text), named(&priced), slots, sunk, shared, moved, named(&finished)))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -4739,7 +4811,7 @@ fn own_labels(
     text: &str,
     name: &str,
 ) -> String {
-    const KINDS: [&str; 6] = ["_pa", "_cmt", "_cmd", "_cz", "_sh", "_far"];
+    const KINDS: [&str; 7] = ["_pa", "_cmt", "_cmd", "_cz", "_sh", "_far", "_tm"];
     let mut out = String::with_capacity(text.len() + 64);
     let mut rest = text;
     while let Some(at) = rest.find('_') {
@@ -4767,9 +4839,10 @@ fn own_labels(
     out
 }
 
-/// The function's text twice: priced (the transfer of a known constant left
-/// out, no line rows) and kept. The peepholes before the first that tells them
-/// apart run once.
+/// The function's text three times: priced (the transfer of a known constant
+/// left out, no line rows), kept, and finished (kept, and the passes after the
+/// layout choice: what is written, as the choice was made without them). The
+/// peepholes before the first that tells them apart run once.
 fn finish_pair(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
@@ -4779,7 +4852,7 @@ fn finish_pair(
         (bool, std::collections::BTreeSet<String>),
         std::collections::BTreeSet<String>,
     ),
-) -> (String, String) {
+) -> (String, String, String) {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
     code.no_x_result = no_x_result;
@@ -4790,10 +4863,14 @@ fn finish_pair(
     let (mut priced, mut kept) = crate::peephole::run_pair(&code);
     crate::relax::relax(&mut priced);
     crate::relax::relax(&mut kept);
+    let kept_text = kept.text();
+    // after the layout choice, on the relaxed text: the passes only shrink it
+    let changed = crate::peephole::after_layout(&mut kept);
     if let Some((file, scope, places)) = lines_of {
         kept.lines = with_lines(kept.lines, file, scope, places);
     }
-    (priced.text(), kept.text())
+    let finished = if changed || lines_of.is_some() { kept.text() } else { kept_text.clone() };
+    (priced.text(), kept_text, finished)
 }
 
 /// `.dbg line` ahead of each instruction whose line is not the one before it

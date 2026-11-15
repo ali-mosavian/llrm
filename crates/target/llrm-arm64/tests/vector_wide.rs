@@ -394,3 +394,71 @@ fn the_reduced_wide_product_loop_matches_the_pin() {
         assert_eq!(ours, without_counter(theirs), "ours:\n{text}\npin:\n{pinned}");
     }
 }
+
+/// The sum of two sign-extended `<4 x i16>` (tile's O2 row sum) failed with
+/// "SADDLv4i16_v4i32 has no arm64 instruction yet": it is one `saddl`.
+#[test]
+fn a_sum_of_two_extended_vectors_is_saddl() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %p, ptr %q) {\n\
+         entry:\n\
+         \x20 %x = load <4 x i16>, ptr %p, align 8\n\
+         \x20 %y = load <4 x i16>, ptr %q, align 8\n\
+         \x20 %xs = sext <4 x i16> %x to <4 x i32>\n\
+         \x20 %ys = sext <4 x i16> %y to <4 x i32>\n\
+         \x20 %s = add nsw <4 x i32> %xs, %ys\n\
+         \x20 store <4 x i32> %s, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert_eq!(count_dest(&text, "saddl", ".4s"), 1, "{text}");
+}
+
+/// The pin's `-O3` row sum of bench `tile` (forty sign-extended halfwords as
+/// `<32 x i16>` and `<8 x i16>` loads, the tail added into the low lanes of
+/// the wide sum, one `reduce.add.v32i64`) was refused: "vector with no
+/// register class" (`v32i64` was no type) and "a shufflevector that changes
+/// the lane count" (`visitShuffleVector`'s concat and extract). It is `saddl`
+/// pairs and one `addp`, nothing spilled, as the pin's.
+#[test]
+fn the_pins_tile_row_sum_is_saddl_pairs_and_one_addp() {
+    let text = assembly(
+        "define i64 @f(ptr %p, ptr %q) {\n\
+         \x20 %v = load <32 x i16>, ptr %p, align 2\n\
+         \x20 %w = load <8 x i16>, ptr %q, align 2\n\
+         \x20 %s = sext <32 x i16> %v to <32 x i64>\n\
+         \x20 %t = sext <8 x i16> %w to <8 x i64>\n\
+         \x20 %lo = shufflevector <32 x i64> %s, <32 x i64> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>\n\
+         \x20 %a = add nsw <8 x i64> %lo, %t\n\
+         \x20 %wide = shufflevector <8 x i64> %a, <8 x i64> poison, <32 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison>\n\
+         \x20 %m = shufflevector <32 x i64> %wide, <32 x i64> %s, <32 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 40, i32 41, i32 42, i32 43, i32 44, i32 45, i32 46, i32 47, i32 48, i32 49, i32 50, i32 51, i32 52, i32 53, i32 54, i32 55, i32 56, i32 57, i32 58, i32 59, i32 60, i32 61, i32 62, i32 63>\n\
+         \x20 %r = call i64 @llvm.vector.reduce.add.v32i64(<32 x i64> %m)\n\
+         \x20 ret i64 %r\n}\n\
+         declare i64 @llvm.vector.reduce.add.v32i64(<32 x i64>)\n",
+    );
+    assert!(count_dest(&text, "saddl", ".2d") + count_dest(&text, "saddl2", ".2d") >= 8, "{text}");
+    assert_eq!(count(&text, "addp", ".2d"), 1, "{text}");
+    assert!(!text.contains("[sp"), "spilled:\n{text}");
+}
+
+/// A `shufflevector` whose mask is not as long as its inputs: the low half
+/// of a vector (`EXTRACT_SUBVECTOR`), a vector widened with undefined lanes,
+/// two vectors joined (`CONCAT_VECTORS`) and a gather that is none of them.
+#[test]
+fn a_shuffle_of_another_length_than_its_inputs_is_selected() {
+    let text = assembly(
+        "define void @f(ptr %p, ptr %q, ptr %d, ptr %e) {\n\
+         \x20 %x = load <8 x i32>, ptr %p, align 16\n\
+         \x20 %y = load <8 x i32>, ptr %q, align 16\n\
+         \x20 %hi = shufflevector <8 x i32> %x, <8 x i32> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>\n\
+         \x20 %gather = shufflevector <8 x i32> %x, <8 x i32> %y, <4 x i32> <i32 0, i32 13, i32 2, i32 9>\n\
+         \x20 %cat = shufflevector <4 x i32> %hi, <4 x i32> %gather, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>\n\
+         \x20 %wide = shufflevector <4 x i32> %hi, <4 x i32> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 poison, i32 poison, i32 poison, i32 poison>\n\
+         \x20 store <8 x i32> %cat, ptr %d, align 16\n\
+         \x20 store <8 x i32> %wide, ptr %e, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    // The undefined half of `%wide` is no store; the rest are `str q` or `stp
+    // q`.
+    assert!(text.matches("stp q").count() + text.matches("str q").count() >= 2, "{text}");
+    assert!(!text.contains("[sp"), "{text}");
+}

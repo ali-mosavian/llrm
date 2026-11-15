@@ -4513,6 +4513,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        // `visitSTORE`: "Turn 'store undef, Ptr' -> nothing."
+        if self.dag.is_undef(value) && !info.volatile {
+            return Some(chain);
+        }
         // DEVIATE SD256: the call argument the builder cast to its bits stays
         // a float store when the load can never become an integer load
         // (`visit_bitcast`: volatile or extending): the cast alone would cost
@@ -5050,7 +5054,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SignExtend | ISD::AnyExtend if sext_legal => {
                 let small = lane(self.dag.value_type(n00)).size_in_bits();
                 if small <= ext_bits
-                    || lane(self.dag.value_type(n00)).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00) + 1
+                    || lane(self.dag.value_type(n00)).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00)
+                        + 1
                         <= ext_bits
                 {
                     return Some(self.dag.get_node(ISD::SignExtend, vt, &[n00]));
@@ -5127,6 +5132,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
         let extended = self.dag.get_ext_load(LoadExt::ZExtLoad, wide, chain, ptr, MemInfo { ext: None, ..info });
         self.add_to_worklist(node.node);
+        // The pin folds the AND away first (`CombineTo(N, N0)`) when its mask
+        // keeps every bit of the memory type, then replaces the load: the
+        // AND's users join the load's use list before the load's go to the
+        // new one, which fixes the order `CreateVirtualRegisters` reads.
+        let low = super::fold::mask(mem.size_in_bits());
+        if info.ext == Some(LoadExt::ExtLoad) && super::known_bits::known_bits(self.dag, mask).one & low == low {
+            self.replace_value(node, load);
+        }
         self.replace_value(load, extended);
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
         Some(node)
