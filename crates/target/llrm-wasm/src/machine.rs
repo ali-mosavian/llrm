@@ -199,6 +199,12 @@ impl Tti for Wasm {
         false
     }
 
+    /// The pin's `TotalAllocaSizeRecursiveCaller` (1024 bytes) decides, not a refusal of every
+    /// frame: wasm's shadow stack is in linear memory, as a flat target's is.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        true
+    }
+
     /// A callee the -O1 size bound refused is tried inline as at -Os, the copy staying where the
     /// caller comes out smaller: the pin's `inline_cost` shrinks a caller whose inlined copy
     /// folds, which the bound's static size cannot see (`call_keeps`, `switch_header_marker_loop`).

@@ -355,6 +355,9 @@ pub struct DagConfig {
     /// until the judge has seen them. Exit: x86 judged, no later than
     /// 2026-11-20.
     pub add_to_or_disjoint: bool,
+    /// `aggressivelyPreferBuildVectorSources`: `visitINSERT_VECTOR_ELT` also
+    /// rebuilds from a `BUILD_VECTOR` that has other users.
+    pub prefers_build_vector_sources: bool,
     /// A signed divide or remainder whose operands fit this narrower legal
     /// type is made at that type ([`super::narrow_divrem`]); `None` keeps the
     /// wide divide. Set by the targets whose narrow routine is the cheaper.
@@ -411,6 +414,7 @@ impl Default for DagConfig {
             big_endian: false,
             fma_faster: false,
             add_to_or_disjoint: false,
+            prefers_build_vector_sources: false,
             narrow_divrem: None,
             narrow_srem_overflow_defined: false,
             use_aa: false,
