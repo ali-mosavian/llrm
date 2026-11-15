@@ -48,7 +48,10 @@ use crate::combine_shared::{query, replace_operand};
 
 /// `InstCombiner::isCanonicalPredicate`, the `fcmp` cases.
 fn is_canonical_fcmp_predicate(pred: FloatPredicate) -> bool {
-    !matches!(pred, FloatPredicate::One | FloatPredicate::Ole | FloatPredicate::Oge)
+    !matches!(
+        pred,
+        FloatPredicate::One | FloatPredicate::Ole | FloatPredicate::Oge
+    )
 }
 
 impl Combiner<'_> {

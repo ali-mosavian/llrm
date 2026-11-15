@@ -216,7 +216,8 @@ fn a_scalarized_store_is_priced_as_the_pin_prices_it() {
     let tti = AArch64::of_cpu("apple-m1").unwrap();
     // The loop's control is the same for each; only the store differs.
     let store = |lane, stride_bytes| {
-        iteration_cost(&tti, &[Recipe::Scalarized { op: MemoryOp::Store, lane, stride_bytes }], 8, false, false).unwrap()
+        iteration_cost(&tti, &[Recipe::Scalarized { op: MemoryOp::Store, lane, stride_bytes }], 8, false, false)
+            .unwrap()
     };
     let bytes = store(Ty::Int(8), Some(8));
     assert_eq!(store(Ty::Int(8), Some(100)) - bytes, 120 - 48);

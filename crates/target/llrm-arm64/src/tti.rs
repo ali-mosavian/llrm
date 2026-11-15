@@ -1005,7 +1005,11 @@ impl Tti for AArch64 {
     ) -> Cost {
         const NEON_NON_CONST_STRIDE_OVERHEAD: i64 = 10;
         const MAX_MERGE_DISTANCE: i64 = 64;
-        Cost::of(if stride_bytes.is_some_and(|step| step < MAX_MERGE_DISTANCE + 1) { 1 } else { NEON_NON_CONST_STRIDE_OVERHEAD })
+        Cost::of(if stride_bytes.is_some_and(|step| step < MAX_MERGE_DISTANCE + 1) {
+            1
+        } else {
+            NEON_NON_CONST_STRIDE_OVERHEAD
+        })
     }
 
     /// `AArch64TTIImpl::prefersVectorizedAddressing`: `ST->hasSVE()`.

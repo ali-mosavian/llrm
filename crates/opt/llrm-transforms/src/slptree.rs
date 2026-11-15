@@ -41,10 +41,10 @@ use std::collections::HashMap;
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_mir::loopinfo::Loop;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::Declared;
@@ -281,10 +281,7 @@ impl Builder<'_, '_> {
         lanes: Vec<Operand>,
         depth: usize,
     ) -> usize {
-        let lane_ty = self
-            .function
-            .operand_type(self.context(), lanes[0])
-            .expect("a typed lane");
+        let lane_ty = self.function.operand_type(self.context(), lanes[0]).expect("a typed lane");
         let first_lane = lanes[0];
         // Constants, and one value in every lane, are gathers (a constant
         // vector costs nothing, `getGatherCost`).
@@ -371,13 +368,7 @@ impl Builder<'_, '_> {
             return self.gather(lanes, lane_ty);
         }
         let entry = self.entries.len();
-        self.entries.push(Entry {
-            kind,
-            lanes: lanes.clone(),
-            insts: insts.clone(),
-            operands: Vec::new(),
-            lane_ty,
-        });
+        self.entries.push(Entry { kind, lanes: lanes.clone(), insts: insts.clone(), operands: Vec::new(), lane_ty });
         for inst in &insts {
             self.made.insert(*inst, entry);
         }
@@ -401,8 +392,10 @@ impl Builder<'_, '_> {
             Type::Float(FloatKind::Double) => 8,
             _ => return false,
         };
-        let refs: Vec<MemRef> =
-            insts.iter().map(|inst| MemRef::at(self.unit, self.function.instruction(*inst).operands[0], bytes)).collect();
+        let refs: Vec<MemRef> = insts
+            .iter()
+            .map(|inst| MemRef::at(self.unit, self.function.instruction(*inst).operands[0], bytes))
+            .collect();
         let Some(root) = refs[0].root else { return false };
         refs.iter().all(|one| one.root == Some(root) && one.segment.is_none() && one.base == refs[0].base)
             && refs.windows(2).all(|pair| pair[1].disp == pair[0].disp + i64::from(bytes))
@@ -431,23 +424,20 @@ pub(crate) fn try_window(
 ) -> Option<Tree> {
     let position = positions(function);
     let values: Vec<Operand> = stores.iter().map(|store| function.instruction(*store).operands[0]).collect();
-    let mut builder = Builder {
-        unit,
-        function,
-        block,
-        entries: Vec::new(),
-        made: HashMap::new(),
-        position,
-        failed: false,
-    };
+    let mut builder =
+        Builder { unit, function, block, entries: Vec::new(), made: HashMap::new(), position, failed: false };
     // The root: the stores.
-    builder.entries.push(Entry {
-        kind: Kind::Store,
-        lanes: values.clone(),
-        insts: stores.to_vec(),
-        operands: Vec::new(),
-        lane_ty: store_ty,
-    });
+    builder
+        .entries
+        .push(
+            Entry {
+                kind: Kind::Store,
+                lanes: values.clone(),
+                insts: stores.to_vec(),
+                operands: Vec::new(),
+                lane_ty: store_ty,
+            },
+        );
     for store in stores {
         builder.made.insert(*store, 0);
     }
@@ -514,10 +504,8 @@ fn schedulable(
             continue;
         }
         let block = function.parent(entry.insts[0]).expect("a placed bundle");
-        let (first, last) = (
-            entry.insts.iter().map(at).min().expect("a bundle"),
-            entry.insts.iter().map(at).max().expect("a bundle"),
-        );
+        let (first, last) =
+            (entry.insts.iter().map(at).min().expect("a bundle"), entry.insts.iter().map(at).max().expect("a bundle"));
         if entry.kind == Kind::Load {
             // Loads of the seed block stand before its first store; the loads
             // move down to the last, past nothing that writes.
@@ -687,7 +675,8 @@ fn cost_of(
             let vector = VectorTy { lane, count: entry.lanes.len() as u32 };
             for (index, inst) in entry.insts.iter().enumerate() {
                 let Some(result) = function.instruction(*inst).result else { continue };
-                // The first user outside fixes the scale (`ExtractCostCalculated`).
+                // The first user outside fixes the scale
+                // (`ExtractCostCalculated`).
                 if let Some(used) = function.users(result).iter().find(|used| !made.contains_key(&used.user)) {
                     let extract = tti.vector_instr_cost(
                         LaneOp::Extract,
@@ -739,11 +728,23 @@ fn entry_cost(
             }
             Kind::Binary(op) => {
                 let wide = valid(tti.vector_arithmetic_cost(arith_of(*op), vector, kind)?)?;
-                wide - n * valid(tti.arithmetic_cost(arith_of(*op), lane, kind, Default::default(), Default::default()))?
+                wide - n * valid(tti.arithmetic_cost(
+                    arith_of(*op),
+                    lane,
+                    kind,
+                    Default::default(),
+                    Default::default(),
+                ))?
             }
             Kind::FMulAdd => {
                 let wide = valid(tti.vector_arithmetic_cost(ArithOp::FMul, vector, kind)?)?;
-                wide - n * valid(tti.arithmetic_cost(ArithOp::FMul, lane, kind, Default::default(), Default::default()))?
+                wide - n * valid(tti.arithmetic_cost(
+                    ArithOp::FMul,
+                    lane,
+                    kind,
+                    Default::default(),
+                    Default::default(),
+                ))?
             }
             Kind::Cast(op, source) => {
                 let cast = cast_kind_of(*op)?;
@@ -760,7 +761,8 @@ fn entry_cost(
                 // A compare's lane type is its operands'.
                 let operand = function.operand_type(context, function.instruction(entry.insts[0]).operands[0])?;
                 let operand = lane_ty_of(context, operand)?;
-                let wide = valid(tti.vector_cmp_sel_cost(op, VectorTy { lane: operand, count }, Some(predicate), kind)?)?;
+                let wide =
+                    valid(tti.vector_cmp_sel_cost(op, VectorTy { lane: operand, count }, Some(predicate), kind)?)?;
                 wide - n * valid(tti.cmp_sel_cost_for(op, operand, kind, Some(predicate)))?
             }
             Kind::Select => {
@@ -810,12 +812,8 @@ fn gather_cost(
         valid(tti.vector_instr_cost(LaneOp::Insert, vector, Some(index), index == 0, VectorInstrContext::None, kind)?)
     };
     if entry.lanes.iter().all(|lane| *lane == entry.lanes[0]) {
-        let shuffle = valid(tti.shuffle_cost(
-            ShuffleKind::Broadcast,
-            vector,
-            &vec![0; vector.count as usize],
-            kind,
-        )?)?;
+        let shuffle =
+            valid(tti.shuffle_cost(ShuffleKind::Broadcast, vector, &vec![0; vector.count as usize], kind)?)?;
         return Some(insert(0)? + shuffle);
     }
     let mut total = 0;
@@ -938,13 +936,16 @@ pub(crate) fn emit(
                     Kind::FCmp(predicate) => Opcode::FCmp(*predicate),
                     Kind::Select => Opcode::Select,
                     Kind::FMulAdd => {
-                        let function_type = context.types.intern(Type::Function {
-                            returns: vector_ty,
-                            parameters: vec![vector_ty; 3],
-                            variadic: false,
-                        });
-                        let name =
-                            format!("llvm.fmuladd.{}", llrm_mir::intrinsics::mangle(&context.types, vector_ty));
+                        let function_type = context
+                            .types
+                            .intern(
+                                Type::Function {
+                                    returns: vector_ty,
+                                    parameters: vec![vector_ty; 3],
+                                    variadic: false,
+                                },
+                            );
+                        let name = format!("llvm.fmuladd.{}", llrm_mir::intrinsics::mangle(&context.types, vector_ty));
                         let callee = declared.declare(&name, function_type);
                         let pointer = context.types.ptr(0);
                         let mut with_callee = operands.clone();
@@ -1007,12 +1008,17 @@ pub(crate) fn emit(
         let vector = vectors[at].expect("a vector");
         for (lane, inst) in entry.insts.iter().enumerate() {
             let Some(result) = function.instruction(*inst).result else { continue };
-            let outside: Vec<_> =
-                function.users(result).iter().filter(|used| !tree_insts.contains(&used.user)).map(|used| (used.user, used.index)).collect();
+            let outside: Vec<_> = function
+                .users(result)
+                .iter()
+                .filter(|used| !tree_insts.contains(&used.user))
+                .map(|used| (used.user, used.index))
+                .collect();
             if outside.is_empty() {
                 continue;
             }
-            let index = Operand::Constant(context.constant(Constant { ty: i32_ty, kind: ConstantKind::Int(lane as u128) }));
+            let index =
+                Operand::Constant(context.constant(Constant { ty: i32_ty, kind: ConstantKind::Int(lane as u128) }));
             let Operand::Value(vector_value) = vector else { continue };
             let ValueDef::Instruction(defined) = function.value(vector_value).def else { continue };
             let extract = function.create_instruction(
@@ -1102,7 +1108,10 @@ fn is_zero(
     context: &Context,
     id: llrm_mir::context::ConstantId,
 ) -> bool {
-    matches!(context.get(id).kind, ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero | ConstantKind::Null)
+    matches!(
+        context.get(id).kind,
+        ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero | ConstantKind::Null
+    )
 }
 
 #[cfg(test)]
