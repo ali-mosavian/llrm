@@ -393,6 +393,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorBinary { rd, rn, rm, .. })
             | Op::I(Inst::VectorFpBinary { rd, rn, rm, .. })
             | Op::I(Inst::VectorFma { rd, rn, rm, .. })
+            | Op::I(Inst::VectorMulAcc { rd, rn, rm, .. })
             | Op::I(Inst::VectorFmaLane { rd, rn, rm, .. })
             | Op::I(Inst::VectorFmulLane { rd, rn, rm, .. })
             | Op::I(Inst::VectorMulLane { rd, rn, rm, .. }) => {

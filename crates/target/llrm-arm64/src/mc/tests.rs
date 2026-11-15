@@ -358,6 +358,13 @@ fn branches() {
         }
     }
     all.push(Inst::VectorReduce { op: VectorReduce::Addp, lanes: Arrangement::D2, rd: Vreg(3), rn: Vreg(28) });
+    for op in [MulAcc::Add, MulAcc::Sub] {
+        for lanes in
+            [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::B8, Arrangement::H4, Arrangement::S2]
+        {
+            all.push(Inst::VectorMulAcc { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
+        }
+    }
     for (op, lanes) in [
         (VectorFma::Add, Arrangement::S4),
         (VectorFma::Add, Arrangement::D2),
