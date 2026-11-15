@@ -61,7 +61,7 @@ pub fn runs(module: &Module) -> f64 {
 /// 16-step bit loop), over four shapes (sim65, `k_tosudivax`): 60707 / 37 saves
 /// 352, 40000 / 300 saves -6, 65535 / 2 saves 522, 9999 / 1000 saves -6; the
 /// mean is 215 (measured against the compact loop before it returned its own
-/// quotient and subtracted once, 2026-11-15). The speed routine is 39 bytes
+/// quotient and subtracted once, 2026-11-15). The speed routine is 35 bytes
 /// over the compact one.
 pub const SAVED_AT_SPEED_16: f64 = 215.0;
 
@@ -87,6 +87,22 @@ fn runs_of_width(
         }
         let depths = block_depths(function);
         let called = calls.get(&index).copied().unwrap_or(1.0);
+        // a remainder beside the division of the same operands is the same call
+        // (`__divmodsi4`, the unsigned divide leaves it in `__sr`)
+        let quotients: Vec<_> = function
+            .layout()
+            .iter()
+            .flat_map(|block| function.iter_block(*block))
+            .filter_map(|inst| {
+                let instruction = function.instruction(inst);
+                let signed = match instruction.opcode {
+                    Opcode::Binary(BinaryOp::UDiv) => false,
+                    Opcode::Binary(BinaryOp::SDiv) => true,
+                    _ => return None,
+                };
+                Some((signed, instruction.operands.get(0).copied(), instruction.operands.get(1).copied()))
+            })
+            .collect();
         for block in function.layout() {
             for inst in function.iter_block(*block) {
                 let instruction = function.instruction(inst);
@@ -95,6 +111,17 @@ fn runs_of_width(
                 else {
                     continue;
                 };
+                let paired = |signed| {
+                    let (a, b) = (instruction.operands.get(0).copied(), instruction.operands.get(1).copied());
+                    width == 32 && quotients.iter().any(|&(s, x, y)| s == signed && x == a && y == b)
+                };
+                if match instruction.opcode {
+                    Opcode::Binary(BinaryOp::URem) => paired(false),
+                    Opcode::Binary(BinaryOp::SRem) => paired(true),
+                    _ => false,
+                } {
+                    continue;
+                }
                 let long = instruction
                     .result
                     .is_some_and(|result| module.context.types.int_bits(function.value(result).ty) == Some(width));

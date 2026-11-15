@@ -17,8 +17,8 @@
 //! splat of a scalar (`DUP`); `DUPLANE` and the other masks are declined.
 //! Exit: the rest of both lowerings, with reverse (`REV64`) first.
 
-use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::SDNodeFlags;
+use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
@@ -202,6 +202,12 @@ pub fn lower_build_vector(
         // "isOnlyLowElement && !isIntOrFPConstant(Value)"
         return Some(dag.get_node(ISD::ScalarToVector, vt, &[first]));
     }
+    // `MaybeLowHalfZeroHigh`: a 128-bit vector whose low half repeats one
+    // non-constant value and whose high half is zero is the low half
+    // concatenated with zeros, `FMOV Dd, Dn` (the move clears the upper half).
+    if let Some(done) = low_half_zero_high(dag, vt, &ops) {
+        return Some(done);
+    }
     let one_value = defined.iter().all(|&lane| lane == first);
     if one_value {
         // "Use DUP for non-constant splats."
@@ -226,6 +232,42 @@ pub fn lower_build_vector(
         }
     }
     Some(vec)
+}
+
+/// `LowerBUILD_VECTOR`'s `MaybeLowHalfZeroHigh` block.
+///
+/// DEVIATE VEC8 (owner arm64, exit 2026-11-24): a vector of two `f64` lanes is
+/// not made (the half is a `v1f64`, which is no type here); one of `i64` lanes
+/// is the `FMOVDXr` the pin's pattern selects.
+fn low_half_zero_high(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    ops: &[SDValue],
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::mvt::MVT;
+    let lane = vt.element();
+    let (bits, half) = (lane.size_in_bits(), ops.len() / 2);
+    if vt.size_in_bits() != 128 || ops.iter().any(|&one| dag.is_undef(one)) {
+        return None;
+    }
+    let first = ops[0];
+    let low_repeats = ops[..half].iter().all(|&one| one == first);
+    let high_zero = ops[half..].iter().all(|&one| lane_constant(dag, one, bits) == Some(0));
+    if !low_repeats || !high_zero || lane_constant(dag, first, bits).is_some() {
+        return None;
+    }
+    if bits == 64 {
+        // The pin's half is a `v1i64`, which is no type here: its
+        // `concat_vectors (scalar_to_vector x), zeros` is selected as `fmov
+        // d, x`, which clears the upper half; so is this `SCALAR_TO_VECTOR`.
+        return lane.is_integer().then(|| dag.get_node(ISD::ScalarToVector, vt, &[first]));
+    }
+    let EVT::Simple(lane_mvt) = lane else { return None };
+    let half_vt = EVT::Simple(MVT::vector(lane_mvt, half as u32)?);
+    let zero_lane = if lane.is_floating_point() { dag.get_constant_fp(0, lane) } else { dag.get_constant(0, lane) };
+    let zero = dag.get_splat_build_vector(half_vt, zero_lane);
+    let low = dag.get_node(ISD::Target(aarch64_isd::DUP), half_vt, &[first]);
+    Some(dag.get_node(ISD::ConcatVectors, vt, &[low, zero]))
 }
 
 /// `UnrollVectorOp`: one scalar operation per lane, put together by a

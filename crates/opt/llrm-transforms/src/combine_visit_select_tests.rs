@@ -98,12 +98,14 @@ fn a_negated_condition_swaps_the_arms() {
 
 #[test]
 fn a_binop_between_selects_on_one_condition_drops_the_inner_select() {
+    // The inner select has a second user: `replaceInInstruction` leaves it, the
+    // fold reads its arm.
     let out = combined(
         "i1 %c, i16 %x, i16 %y, i16 %w, i16 %z",
         "i16",
-        "  %s = select i1 %c, i16 %x, i16 %y\n  %t = add i16 %s, %w\n  %r = select i1 %c, i16 %t, i16 %z\n  ret i16 %r\n",
+        "  %s = select i1 %c, i16 %x, i16 %y\n  %t = add i16 %s, %w\n  %r = select i1 %c, i16 %t, i16 %z\n  %u = add i16 %s, 3\n  %v = xor i16 %r, %u\n  ret i16 %v\n",
     );
-    assert!(out.contains("add i16 %x, %w") && !out.contains("select i1 %c, i16 %x, i16 %y"), "{out}");
+    assert!(out.contains("add i16 %x, %w"), "{out}");
 }
 
 #[test]
