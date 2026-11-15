@@ -238,9 +238,7 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
-    for op in
-        [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin]
-    {
+    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl, VectorOp::Smax, VectorOp::Umin, VectorOp::Sqadd, VectorOp::Uqsub] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
             if !op.has_lanes(lanes) {
                 continue;
@@ -307,7 +305,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     for lanes in Arrangement::ALL {
         out.push(Inst::VectorLoadReplicate { lanes, rt: v(1), base: Gpr(3) });
-        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt] {
+        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit] {
             if op.has_lanes(lanes) {
                 out.push(Inst::VectorIntUnary { op, lanes, rd: v(0), rn: v(1) });
             }
@@ -326,7 +324,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     out.push(Inst::VectorDupLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), index: 0 });
     out.push(Inst::VectorDupLane { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
             out.push(Inst::VectorFpBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         }
