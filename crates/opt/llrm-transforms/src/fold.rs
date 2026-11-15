@@ -142,10 +142,29 @@ impl FunctionPass for Fold {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // EXPERIMENT (never lands): LLRM_EXP_FOLD = none | canonical | nonumbers | nofloat | count.
+        let mode = std::env::var("LLRM_EXP_FOLD").unwrap_or_default();
+        thread_local!(static LAST: std::cell::RefCell<std::collections::HashMap<String, u128>> = Default::default());
+        let name = format!("{:p}", unit.function as *const _);
+        let before = llrm_mir::print::fingerprint(unit.function);
+        let same_as_last_end = LAST.with(|last| last.borrow().get(&name) == Some(&before));
+        if mode == "none" {
+            return PreservedAnalyses::all();
+        }
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
-        let folded = _folded(unit.context, unit.layout, unit.function, analyses, &calls);
+        let folded = if mode == "canonical" {
+            false
+        } else {
+            _folded(unit.context, unit.layout, unit.function, analyses, &calls, &mode)
+        };
         let swapped = canonical::compares(unit.context, unit.function);
-        if folded | swapped | canonical::identities(unit.context, unit.function) {
+        let identities = canonical::identities(unit.context, unit.function);
+        if mode == "count" {
+            eprintln!("FOLDCALL folded={folded} swapped={swapped} identities={identities} same_as_last_end={same_as_last_end} insts={}", unit.function.walk().count());
+            let after = llrm_mir::print::fingerprint(unit.function);
+            LAST.with(|last| last.borrow_mut().insert(name.clone(), after));
+        }
+        if folded | swapped | identities {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -170,7 +189,7 @@ pub fn folded(
     outer: &Outer,
     calls: &Calls,
 ) -> bool {
-    _folded(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), calls)
+    _folded(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), calls, "")
 }
 
 /// `folded`, `analyses` holding what is known of `function`.
@@ -180,17 +199,18 @@ fn _folded(
     function: &mut Function,
     analyses: &mut Analyses,
     calls: &Calls,
+    mode: &str,
 ) -> bool {
     // Before the facts are asked, so that they see the constants.
     let edges = edges::conditions_decided(context, function);
     if edges {
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
-    let numbers = _numbers(context, layout, function, analyses, calls);
+    let numbers = mode != "nonumbers" && _numbers(context, layout, function, analyses, calls);
     if numbers {
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
-    floatfold::_folded(context, layout, function, analyses, calls) | numbers | edges
+    (mode != "nofloat" && floatfold::_folded(context, layout, function, analyses, calls)) | numbers | edges
 }
 
 /// `folded`'s integers: consts' answers, a counted float loop's exit
@@ -218,6 +238,15 @@ fn _numbers(
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))
     };
     let mut rewritten = BTreeSet::new();
+    if std::env::var("LLRM_EXP_FOLD").as_deref() == Ok("kinds") {
+        for (value, _) in &values {
+            let kind = match function.value(*value).def {
+                llrm_mir::module::ValueDef::Instruction(def) => format!("{:?}", function.instruction(def).opcode),
+                _ => "other".to_owned(),
+            };
+            eprintln!("FOLDKIND {}", kind.split(['(', ' ', '{']).next().unwrap_or(""));
+        }
+    }
     for (value, number) in &values {
         rewritten.extend(function.users(*value).iter().map(|one| one.user));
         let constant = context.int(function.value(*value).ty, _bits(number));
