@@ -17,7 +17,7 @@
 //! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 //! `foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
-//! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the two-select fold,
+//! `foldICmpCommutative`, `foldCmpSelectOfConstants`,
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 //! `dyn_castNegVal` select fold.
 //!
@@ -292,8 +292,9 @@ pub fn visit_icmp(
     if let Some(r) = crate::combine_icmp_minmax::fold_icmp_with_min_max(c, inst, pred.swapped(), op1, op0) {
         return r;
     }
-    // `if (I.isCommutative())`: `matchSymmetricPair`, the pair of selects that swap their arms
-    // compares as the two arms (`icmp ne (select c, a, b), (select c, b, a)` is `icmp ne a, b`).
+    // `if (I.isCommutative())`: `matchSymmetricPair`, the pair of selects that
+    // swap their arms compares as the two arms (`icmp ne (select c, a, b),
+    // (select c, b, a)` is `icmp ne a, b`).
     if matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
         && !c.env.hooks.keeps_swapped_select_compare
         && let Some((x, y)) = match_symmetric_pair(&query(c, Some(inst)), op0, op1)
@@ -310,7 +311,10 @@ pub fn visit_icmp(
         return r;
     }
     // OWED: the other arms of foldICmpInstWithConstantNotInt, the rest of
-    // foldICmpCommutative, foldCmpSelectOfConstants and the two-select fold.
+    // foldICmpCommutative, foldCmpSelectOfConstants.
+    if let Some(r) = crate::combine_icmp_selects::fold_icmp_of_selects(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_sub_add_pair(c, inst, pred, op0, op1) {
         return r;
     }
