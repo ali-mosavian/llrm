@@ -81,6 +81,8 @@ struct Placer {
     active: u32,
     serial: u32,
     optimize_size: bool,
+    /// DEVIATE LOOP-TOP-JMP: fall-throughs weighed in clocks; `None`: the pin's count.
+    top: Option<TopClocks>,
     entry: usize,
     /// The loop's blocks in layout order (`BlockFilterSet`), and where
     /// `getFirstUnplacedBlock` stands in them and in the function.
@@ -136,6 +138,16 @@ pub struct HotTailDup {
     pub clocks_per_byte: f64,
 }
 
+/// DEVIATE LOOP-TOP-JMP: what `findBestLoopTop` weighs a fall-through by
+/// (the pin counts each as one): the clocks of a `jmp`, which a fall-through
+/// lost costs, and of a taken conditional branch over one not taken, which a
+/// fall-through gained saves.
+#[derive(Clone, Copy, Debug)]
+pub struct TopClocks {
+    pub jump_clocks: f64,
+    pub saved_clocks: f64,
+}
+
 /// Bytes of an x86 instruction on average, to price a copy by its length in
 /// instructions.
 const AVERAGE_INSN_BYTES: f64 = 3.0;
@@ -172,6 +184,7 @@ pub(super) fn order(
     aggressive: bool,
     tail_dup: Option<usize>,
     hot: Option<HotTailDup>,
+    top: Option<TopClocks>,
     epilogue: usize,
     ext_tsp: bool,
 ) -> (Vec<Block>, BlockOdds) {
@@ -184,6 +197,7 @@ pub(super) fn order(
         }
     }
     let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
+    placer.top = top;
     placer.epilogue = epilogue;
     for found in natural {
         let Some(&header) = index.get(&found.header) else { continue };
@@ -257,6 +271,7 @@ impl Placer {
             active: 0,
             serial: 0,
             optimize_size: size,
+            top: None,
             entry,
             members: Vec::new(),
             next_member: 0,
@@ -873,7 +888,13 @@ impl Placer {
                 from_pred = 0.0;
             }
         }
-        let (gains, lost) = (back_edge + other, to_top + to_exit + from_pred);
+        let (gains, lost) = match self.top {
+            Some(clocks) => (
+                (back_edge + other) * clocks.saved_clocks,
+                (to_top + to_exit + from_pred) * clocks.jump_clocks,
+            ),
+            None => (back_edge + other, to_top + to_exit + from_pred),
+        };
         if gains > lost { gains - lost } else { 0.0 }
     }
 
