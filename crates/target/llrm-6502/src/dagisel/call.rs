@@ -49,9 +49,15 @@ enum Location {
     Stack(i64),
 }
 
-fn kind(vt: EVT) -> Result<Kind, Refused> {
+/// A pointer (`ArgFlags.isPointer()`) takes the pointer pairs, as llvm-mos's
+/// `CCIfPtr`: `(zp),y` walks it, and A:X cannot be that.
+fn kind(
+    vt: EVT,
+    pointer: bool,
+) -> Result<Kind, Refused> {
     match vt {
         EVT::I8 => Ok(Kind::Word),
+        EVT::I16 if pointer => Ok(Kind::Pointer),
         EVT::I16 => Ok(Kind::Wide),
         other => Err(Refused::Type(other)),
     }
@@ -74,9 +80,10 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    pointers: &[bool],
     fixed: usize,
 ) -> Result<(Vec<Location>, i64), Refused> {
-    let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
+    let kinds = vts.iter().zip(pointers).map(|(&vt, &pointer)| kind(vt, pointer)).collect::<Result<Vec<_>, _>>()?;
     let placement = convention.place_variadic(&kinds, &[], fixed);
     let places = placement
         .places
@@ -153,7 +160,8 @@ pub fn lower_call(
     let convention = abi::mos();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
     let fixed = outs.iter().position(|out| out.variadic).unwrap_or(outs.len());
-    let (targets, bytes) = locations(&convention, &vts, fixed)?;
+    let pointers: Vec<bool> = outs.iter().map(|out| out.pointer).collect();
+    let (targets, bytes) = locations(&convention, &vts, &pointers, fixed)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
     // `LowerMemOpCallTo`: the stack arguments are stored at `rs0 + offset`.
     let mut stores = Vec::new();
@@ -252,7 +260,8 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts, vts.len())?;
+    let pointers: Vec<bool> = ins.iter().map(|arg| arg.pointer).collect();
+    let (sources, _) = locations(&convention, &vts, &pointers, vts.len())?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -302,7 +311,7 @@ pub fn lower_return(
     let mut operands = vec![chain];
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
     for &vt in &vts {
-        kind(vt)?;
+        kind(vt, false)?;
     }
     let mut registers = result_registers(&convention, &vts).into_iter();
     for (out, &vt) in outs.iter().zip(&vts) {
@@ -393,6 +402,7 @@ impl TargetCalling for MosCalling {
         named: &[In],
     ) -> Option<i64> {
         let vts: Vec<EVT> = named.iter().map(|arg| arg.vt).collect();
-        locations(&abi::mos(), &vts, vts.len()).ok().map(|(_, bytes)| bytes)
+        let pointers: Vec<bool> = named.iter().map(|arg| arg.pointer).collect();
+        locations(&abi::mos(), &vts, &pointers, vts.len()).ok().map(|(_, bytes)| bytes)
     }
 }
