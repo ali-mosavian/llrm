@@ -27,7 +27,13 @@ import corpus_targets  # noqa: E402
 from flagset import program_flags  # noqa: E402
 
 LEVELS = ["O1", "O2", "O3", "Os"]
-COMPILERS = ["cc65", "sdcc", "llvm-mos"]
+COMPILERS = ["cc65", "sdcc", "llvm-mos"]  # the bars of bars.rs (llvm-mos with -fno-lto)
+LTO = "llvm-mos-lto"  # llvm-mos' default link (LTO): the sensitivity bar; the counted line is given with and without it
+ALL = COMPILERS + [LTO]
+
+
+def family(compiler):
+    return "llvm-mos" if compiler == LTO else compiler
 BARS = HERE / "prog_bars.tsv"
 CORPUS = Path(os.environ.get("PROG_BARS_CORPUS", ROOT / "tests" / "run" / "c"))
 MOS = Path(os.environ.get("LLVM_MOS", os.path.expanduser("~/scratch/fetch-llvm-mos-sdk/x/llvm-mos")))
@@ -50,7 +56,7 @@ def flags(compiler, level):
         "cc65": {"O1": [], "O2": ["-O"], "O3": ["-Oirs"], "Os": ["-O"]},
         "sdcc": {"O1": [], "O2": [], "O3": ["--opt-code-speed"], "Os": ["--opt-code-size"]},
         "llvm-mos": {"O1": ["-O1"], "O2": ["-O2"], "O3": ["-O3"], "Os": ["-Os"]},
-    }[compiler][level]
+    }[family(compiler)][level] + (["-flto"] if compiler == LTO else [])
 
 
 def expected_of(path):
@@ -126,7 +132,7 @@ def driver_c(compiler, want, check):
         s += "static const long expect[%d] = {%s};\n" % (max(n, 1), ",".join(f"{v}L" for v in want) if n else "0")
     s += "int main(void)\n{\n    log_init();\n    prog_main();\n"
     if check:
-        s += (f"    report(0x5A5A5A5AL);\n    {{ unsigned char i; for (i = 0; i < {n}; i++) if (logbuf[i] != expect[i]) {finish('1 + (i < 250 ? i : 249)')}\n"
+        s += (f"    report(0x5A5A5A5AL);\n    {{ unsigned i; for (i = 0; i < {n}; i++) if (logbuf[i] != expect[i]) {finish('1 + (i < 250 ? i : 249)')}\n"
               f"      if (logbuf[{n}] != 0x5A5A5A5AL) {finish(251)} }}\n")
     s += "    " + finish(0) + "\n}\n"
     return s
@@ -199,11 +205,15 @@ _report:
 
 # ---- one build -------------------------------------------------------------------------------------------------------------------
 
+RUN_TIMEOUT = 120  # ours_cr halts a run at 120 s too
+TIMEOUT = -1000  # a status no program exits with (the driver's own are 0..251)
+
+
 def sh(cmd, cwd, timeout=300):
     try:
         return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(cmd, 124, "", "timeout")
+        return subprocess.CompletedProcess(cmd, TIMEOUT, "", "timeout")
 
 
 def clean(text):
@@ -220,8 +230,10 @@ def first_error(r):
 
 
 def run_cycles(cmd, cwd):
-    r = sh(cmd, cwd, timeout=120)  # ours_cr halts a run at 120 s too
+    r = sh(cmd, cwd, timeout=RUN_TIMEOUT)
     text = r.stdout + r.stderr
+    if "Maximum number of cycles" in text:  # sim65 gives up with exit 126, which is also the driver's "report #125 differs"
+        return TIMEOUT, None, None
     m = re.findall(r"(\d+) cycles", text)
     ins = re.search(r"(\d+) instructions", text)
     return r.returncode, (int(m[-1]) if m else None), (int(ins.group(1)) if ins else None)
@@ -229,11 +241,13 @@ def run_cycles(cmd, cwd):
 
 def build(compiler, level, w, prog_c, extra_defs, fl_clang, which, want, check):
     """Compile prog_c (or the empty floor program) with `compiler` and link it with the driver; returns (image path, None) or (None, why)."""
+    lto = compiler == LTO
+    compiler = family(compiler)
     src = prog_c if which == "prog" else None
     if which == "floor":
         (w / "floor.c").write_text("void prog_main(void) {}\n")
         src = w / "floor.c"
-    lvl = flags(compiler, level)
+    lvl = [f for f in flags(LTO if lto else compiler, level) if f != "-flto"]
     defs = ["-Dmain=prog_main", *extra_defs]
     if compiler != "llvm-mos" and src is not None:  # no __attribute__ in cc65 or sdcc (cc65 takes no function-like -D): a copy with the macro first
         (w / f"{which}-src.c").write_text(PRELUDE + Path(src).read_text())
@@ -250,10 +264,11 @@ def build(compiler, level, w, prog_c, extra_defs, fl_clang, which, want, check):
                  ["sdcc", "-mmos6502", "--fsigned-char", *lvl, *defs, "-c", str(src), "-o", f"{tag}.rel"]]
         link = ["sdcc", "-mmos6502", "drv.rel", "rep.rel", f"{tag}.rel", "-o", f"{tag}.ihx"]
     else:
-        base = [str(MOS / "bin/mos-sim-clang"), *lvl, "-fno-lto", "-fsigned-char"]
+        mode = "-flto" if lto else "-fno-lto"
+        base = [str(MOS / "bin/mos-sim-clang"), *lvl, mode, "-fsigned-char"]
         steps = [[*base, "-c", "driver.c", "-o", "drv.o"], [*base, "-c", "rep.s", "-o", "rep.o"],
                  [*base, *fl_clang, *defs, "-c", str(src), "-o", f"{tag}.o"]]
-        link = [str(MOS / "bin/mos-sim-clang"), *lvl, "-fno-lto", "-Wl,-u,report", "drv.o", "rep.o", f"{tag}.o", "-o", f"{tag}.bin"]
+        link = [str(MOS / "bin/mos-sim-clang"), *lvl, mode, "-Wl,-u,report", "drv.o", "rep.o", f"{tag}.o", "-o", f"{tag}.bin"]
     for step in steps:
         r = sh(step, w)
         if r.returncode:
@@ -289,6 +304,7 @@ def instructions(compiler, image, w):
 
 def measure(compiler, level, name):
     """(bytes, clocks, insns, note) of one cell; bytes None for an n/a or wrong cell, the reason in note."""
+    fam = family(compiler)
     path = CORPUS / f"{name}.c"
     src = path.read_text()
     want = expected_of(path)
@@ -306,21 +322,21 @@ def measure(compiler, level, name):
             if image is None:
                 return None, None, None, "n/a: " + na_class(src, why)
             built[(which, check)] = image
-        rc, _, _ = run(compiler, built[("prog", True)], w)
-        if rc == 124:
-            return None, None, None, "n/a: no halt in 120 s"
+        rc, _, _ = run(fam, built[("prog", True)], w)
+        if rc == TIMEOUT:
+            return None, None, None, f"n/a: no halt (sim65 cycle cap or {RUN_TIMEOUT} s)"
         if rc != 0:
             return None, None, None, "wrong: " + (f"report #{rc - 1} differs" if 1 <= rc <= 250 else "a different number of reports" if rc == 251 else f"no clean exit (exit {rc})")
         pimg, fimg = built[("prog", False)], built[("floor", False)]
-        rc, pc, _ = run(compiler, pimg, w)
-        rf, fc, _ = run(compiler, fimg, w)
+        rc, pc, _ = run(fam, pimg, w)
+        rf, fc, _ = run(fam, fimg, w)
         if pc is None or fc is None or rc != 0 or rf != 0:
             return None, None, None, f"n/a: no halt (exit {rc}/{rf})"
-        nb = image_bytes(compiler, pimg) - image_bytes(compiler, fimg) + 1  # + the floor main's own rts, as ours counts its main
-        pi, fi = instructions(compiler, pimg, w), instructions(compiler, fimg, w)
+        nb = image_bytes(fam, pimg) - image_bytes(fam, fimg) + 1  # + the floor main's own rts, as ours counts its main
+        pi, fi = instructions(fam, pimg, w), instructions(fam, fimg, w)
         if nb <= 0:
             return None, None, None, f"n/a: measured {nb} B (floor subtraction)"
-        return nb, pc - fc, (pi - fi if pi is not None and fi is not None else None), ("32-bit double, same output" if re.search(r"\b(double|float)\b", src) and compiler != "llvm-mos" else "")
+        return nb, pc - fc, (pi - fi if pi is not None and fi is not None else None), ("32-bit double, same output" if re.search(r"\b(double|float)\b", src) and fam != "llvm-mos" else "")
     finally:
         shutil.rmtree(w, True)
 
@@ -338,6 +354,7 @@ def load_bars(path):
 
 
 def write_bars(path, rows):
+    rows = {k: [*v[:4], clean(v[4])] if len(v) > 4 else v for k, v in rows.items()}
     out = ["# prog\tcompiler\tlevel\tflags\tbytes\tcycles\tinsns\tnote (external results; see prog_bars.py; `bars --refresh` rebuilds; n/a rows: no number, the reason)"]
     for k in sorted(rows):
         out.append("\t".join([*k, *rows[k]]))
@@ -366,7 +383,7 @@ def cmd_bars(a):
     jobs = []
     for n in names:
         for lv in levels:
-            for c in COMPILERS:
+            for c in ALL:
                 old = rows.get((n, c, lv))
                 if a.refresh or old is None or old[0] != flag_text(c, lv):
                     jobs.append((n, c, lv))
@@ -404,79 +421,93 @@ def counted(ours_bytes, bars):
     return None if not have else ours_bytes is not None and ours_bytes <= min(have)
 
 
+CAVEATS = [
+    "ours: ours_cr.py, llrm-cc 6502-sim65 with -fwhole-program, product runtime archive (mkrt.py), one code layout (pad 0); bars: cc65 2.18, sdcc 4.5.0, llvm-mos 24.0.0git",
+    "bytes: linked image minus the same image with an empty main (+ its rts); BSS not counted. A routine the empty image already links (cc65's pushax) is free to the program, so a bar is never larger than the whole",
+    "clocks: run minus the empty-main run on both sides; ours, cc65 and sdcc in sim65 -c, llvm-mos in mos-sim --cycles (two simulators); ours' floor is overlay/__void__.c",
+    "levels: cc65 O1 no optimizer, O2 = Os (-O), O3 -Oirs; sdcc O1 = O2 (default), O3 --opt-code-speed, Os --opt-code-size (changes few cells); llvm-mos -O1/-O2/-O3/-Os",
+    "llvm-mos bar = -fno-lto as bars.rs; llvm-mos-lto (its default LTO link, prog_main inlined into the driver's main) is a fourth bar, `counted incl. LTO` below uses it too; ours gets -fwhole-program",
+    "a cell whose reports differ from the .out is `wrong`, not a bar: cc65 miscompiles by-value structs and mixed-width compound assignment; sdcc has static (non-reentrant) parameters, so recursion is wrong (idiv_loop_os passes with __reentrant), other sdcc wrong cells not isolated",
+    "n/a: the compiler cannot build the program (i64, float/double, builtins, bit-field and call-argument limits; sdcc's zero page overflows at 438 B > 256 on mul/div constants); cc65 and sdcc have no __attribute__ and none of clang's predefined macros (a prelude defines them); `-f` flags of the program reach llvm-mos only",
+    "programs whose best bar is under ~100 B were folded to constants by llvm-mos (int64_division 62 B): a real gap, not an instrument fault",
+]
+
+
 def cmd_matrix(a):
     import json
     names = programs()
     bars = load_bars(a.bars)
-    rows, summary = [], {}
+    rows = []
+    # per level and bar set: counted, clocks, over-bar list, programs without a bar
+    summary = {lv: {k: dict(counted=0, total=0, clk=0, clk_total=0, over=[], clk_over=[], nobar=[]) for k in ("main", "lto")} for lv in LEVELS}
+    status = {lv: {} for lv in LEVELS}
     for lv in LEVELS:
         res = {n: (v, d) for n, v, d in json.load(open(Path(a.ours) / f"ours-{lv}.tsv.json"))}
-        floor = res.get("__void__", (None, {}))[1]
-        floor_c = floor.get("clks", 0) if isinstance(floor, dict) else 0
-        floor_i = floor.get("insns") if isinstance(floor, dict) else None
-        s = summary[lv] = dict(counted=0, total=0, nobar=0, notours=[], over=[], clk=0, clk_total=0, clk_over=[], status={})
+        floor = res["__void__"][1]
         for n in names:
             v, d = res.get(n, ("MISSING", ""))
             if v in ("N/A", "NO-OUT"):  # not a 6502 program (`// targets:`) or a helper: out of the corpus
                 continue
             ob = d["bytes"] if v == "PASS" else None
-            oc = d["clks"] - floor_c if v == "PASS" else None
-            oi = d["insns"] - floor_i if v == "PASS" and d.get("insns") and floor_i else None
-            ext = {c: bars.get((n, c, lv)) for c in COMPILERS}
-            have = {c: int(r[1]) for c, r in ext.items() if r and r[1] != "n/a"}
-            best = min(have, key=have.get) if have else None
-            rows.append((n, lv, "ours", ob, oc, oi, "" if v == "PASS" else f"{v}: {d}" if v != "NO-OUT" else "NO-OUT"))
-            for c in COMPILERS:
+            oc = d["clks"] - floor["clks"] if v == "PASS" else None
+            oi = d["insns"] - floor["insns"] if v == "PASS" and d.get("insns") and floor.get("insns") else None
+            ext = {c: bars.get((n, c, lv)) for c in ALL}
+            best = lambda cs: min((c for c in cs if ext[c] and ext[c][1] != "n/a"), key=lambda c: int(ext[c][1]), default=None)
+            rows.append((n, lv, "ours", ob, oc, oi, "" if v == "PASS" else f"{v}: {d}"))
+            for c in ALL:
                 r = ext[c]
                 if r is None:
                     continue
-                note = clean(r[4]) if r[1] == "n/a" else "; ".join(x for x in ("best bar by bytes" if c == best else "", r[4]) if x)
-                rows.append((n, lv, c, None if r[1] == "n/a" else int(r[1]), None if r[1] == "n/a" else int(r[2]), None if r[3] == "-" else int(r[3]), note))
-            for c in COMPILERS:
-                r = ext[c]
-                if r is not None:
-                    kind = "ok" if r[1] != "n/a" else r[4].split(": ")[0] if r[4].startswith("wrong") else "n/a " + (r[4].split(": ")[1] if r[4].startswith("n/a: ") else "")
-                    s["status"][(c, kind)] = s["status"].get((c, kind), 0) + 1
-            clk = {c: int(r[2]) for c, r in ext.items() if r and r[1] != "n/a"}
-            if clk and oc is not None:
-                s["clk_total"] += 1
-                if oc <= min(clk.values()):
-                    s["clk"] += 1
+                ok = r[1] != "n/a"
+                tag = [t for t, cs in (("best bar by bytes", COMPILERS), ("best bar by bytes incl. LTO", ALL)) if best(cs) == c]
+                note = "; ".join(tag[:1] + ([r[4]] if r[4] else [])) if ok else clean(r[4])
+                rows.append((n, lv, c, int(r[1]) if ok else None, int(r[2]) if ok else None, int(r[3]) if ok and r[3] != "-" else None, note))
+                kind = "ok" if ok else r[4].split(": ")[0] if r[4].startswith("wrong") else "n/a " + (r[4].split(": ")[1] if r[4].startswith("n/a: ") else "")
+                status[lv][(c, kind)] = status[lv].get((c, kind), 0) + 1
+            for key, cs in (("main", COMPILERS), ("lto", ALL)):
+                s = summary[lv][key]
+                have = {c: int(ext[c][1]) for c in cs if ext[c] and ext[c][1] != "n/a"}
+                clk = {c: int(ext[c][2]) for c in have}
+                if not have:
+                    s["nobar"].append(n)
+                    continue
+                s["total"] += 1
+                if counted(ob, have.values()):
+                    s["counted"] += 1
                 else:
-                    cb = min(clk, key=clk.get)
-                    s["clk_over"].append((oc / clk[cb], n, oc, clk[cb], cb))
-            if not have:
-                s["nobar"] += 1
-                s["nobar_list"] = s.get("nobar_list", []) + [n]
-                continue
-            s["total"] += 1
-            if counted(ob, have.values()):
-                s["counted"] += 1
-            else:
-                if ob is None:
-                    s["notours"].append(n)
-                else:
-                    s["over"].append((ob - have[best], n, ob, have[best], best))
-    head = [f"# 6502 program-corpus counted line, generated {a.date}; release/next {a.tip}; ours = tools/6502/ours_cr.py (llrm-cc 6502-sim65, product runtime archive, pad 0), bars = tools/6502/prog_bars.tsv (cc65 2.18, sdcc 4.5.0, llvm-mos 24.0.0git)",
-            "# counted: " + ", ".join(f"{lv} {summary[lv]['counted']}/{summary[lv]['total']}" for lv in LEVELS) + " (programs with at least one bar; ours <= min bar bytes, tie counts)",
-            "# clocks (second goal): " + ", ".join(f"{lv} {summary[lv]['clk']}/{summary[lv]['clk_total']}" for lv in LEVELS) + " (ours net clocks <= min bar clocks over the cells that have bytes bars)",
-            "# bytes = linked image minus the same image with an empty main; clocks = run minus the empty-main run (ours netted by its __void__ run, an empty main); cells whose output differs from .out are `wrong`, not bars"]
+                    cb = min(have, key=have.get)
+                    s["over"].append((ob - have[cb] if ob is not None else None, n, ob, have[cb], cb))
+                if oc is not None:
+                    s["clk_total"] += 1
+                    if oc <= min(clk.values()):
+                        s["clk"] += 1
+                    else:
+                        cb = min(clk, key=clk.get)
+                        s["clk_over"].append((oc / clk[cb], n, oc, clk[cb], cb))
+    line = lambda key, what: ", ".join(f"{lv} {summary[lv][key][what]}/{summary[lv][key]['clk_total' if what == 'clk' else 'total']}" for lv in LEVELS)
+    head = [f"# 6502 program-corpus counted line, generated {a.date}; release/next {a.tip}",
+            f"# counted: {line('main', 'counted')} (programs with at least one bar; ours <= min bar bytes, tie counts)",
+            f"# counted incl. llvm-mos LTO bar: {line('lto', 'counted')}",
+            f"# clocks (second goal): {line('main', 'clk')} (ours net clocks <= min bar clocks); incl. LTO: {line('lto', 'clk')}",
+            *[f"# {c}" for c in CAVEATS]]
     out = head + ["target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote"]
-    order = {"ours": 0, "cc65": 1, "sdcc": 2, "llvm-mos": 3}
+    order = {"ours": 0, **{c: i + 1 for i, c in enumerate(ALL)}}
     rows.sort(key=lambda r: (r[0], LEVELS.index(r[1]), order[r[2]]))
     f = lambda x: "-" if x is None else str(x)
     for n, lv, c, b, cy, ins, note in rows:
         out.append("\t".join(["6502", n, lv, c, f(b), f(cy), f(ins), note]))
     Path(a.out).write_text("\n".join(out) + "\n")
     for lv in LEVELS:
-        s = summary[lv]
-        print(f"{lv}: counted {s['counted']}/{s['total']}; clocks {s['clk']}/{s['clk_total']}; no bar {s['nobar']} {s.get('nobar_list', [])}; ours missing {s['notours']}")
-        for (c, kind), k in sorted(s["status"].items()):
-            print(f"   {c:9} {kind[:70]:70} {k}")
+        for key in ("main", "lto"):
+            s = summary[lv][key]
+            print(f"{lv} {key}: counted {s['counted']}/{s['total']}; clocks {s['clk']}/{s['clk_total']}; no bar {s['nobar']}")
+        for (c, kind), k in sorted(status[lv].items()):
+            print(f"   {c:13} {kind[:70]:70} {k}")
+        s = summary[lv]["main"]
         for ratio, n, oc, bc, c in sorted(s["clk_over"], reverse=True)[:5]:
             print(f"   clocks over: {n} ours {oc} vs {c} {bc} (x{ratio:.2f})")
-        for d, n, ob, bb, c in sorted(s["over"], reverse=True)[:15]:
-            print(f"   {n}: ours {ob} vs {c} {bb} (+{d})")
+        for d, n, ob, bb, c in sorted(s["over"], key=lambda x: -(x[0] or 0))[:15]:
+            print(f"   over: {n}: ours {ob} vs {c} {bb} (+{d})")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import prog_bars as pb
 
 HAVE = {"cc65": shutil.which("cc65") and shutil.which("sim65"), "sdcc": shutil.which("sdcc") and shutil.which("sim65"),
         "llvm-mos": (pb.MOS / "bin/mos-sim-clang").exists()}
+HAVE[pb.LTO] = HAVE["llvm-mos"]
 
 
 def measure(compiler, source, want, level="O2"):
@@ -45,7 +46,7 @@ class Instrument(unittest.TestCase):
     SRC = "extern void report(long v);\nint main(void)\n{\n    report(0x01020304L);\n    report(-2L);\n    return 0;\n}\n"
 
     def each(self, f):
-        for compiler in pb.COMPILERS:
+        for compiler in pb.ALL:
             if HAVE[compiler]:
                 with self.subTest(compiler=compiler):
                     f(compiler)
@@ -62,6 +63,34 @@ class Instrument(unittest.TestCase):
             self.assertTrue(note.startswith("wrong"), note)
             bytes_, _, _, note = measure(c, self.SRC, [0x01020304, -2, 5])
             self.assertTrue(note.startswith("wrong"), note)
+        self.each(check)
+
+    def test_a_program_with_over_255_reports_is_checked_not_looped_on(self):
+        """The check loop indexed with `unsigned char`: overflow_builtins (324 reports) never ended on a right answer, read `no halt`
+        and dropped out of the bars (llvm-mos, 2026-11-15)."""
+        src = "extern void report(long v);\nint main(void)\n{\n    int i;\n    for (i = 0; i < 300; i++) report(i * 3L);\n    return 0;\n}\n"
+        def check(c):
+            self.assertIsNotNone(measure(c, src, [i * 3 for i in range(300)])[0], c)
+        self.each(check)
+
+    def test_a_difference_at_report_123_is_wrong_not_a_timeout(self):
+        """The driver exits 1 + index (124 for report #123) and a timeout was also 124: the cell read `no halt`, not `wrong`."""
+        src = "extern void report(long v);\nint main(void)\n{\n    int i;\n    for (i = 0; i < 130; i++) report(i);\n    return 0;\n}\n"
+        want = list(range(130))
+        want[123] = -1
+        def check(c):
+            note = measure(c, src, want)[3]
+            self.assertEqual(note, "wrong: report #123 differs", c)
+        self.each(check)
+
+    def test_a_program_that_never_halts_is_n_a(self):
+        def check(c):
+            old, pb.RUN_TIMEOUT = pb.RUN_TIMEOUT, 3
+            try:
+                note = measure(c, "volatile int v;\nint main(void)\n{\n    for (;;) v = 1;\n}\n", [])[3]
+            finally:
+                pb.RUN_TIMEOUT = old
+            self.assertTrue(note.startswith("n/a: no halt"), note)
         self.each(check)
 
     def test_the_floor_cancels_exactly(self):
