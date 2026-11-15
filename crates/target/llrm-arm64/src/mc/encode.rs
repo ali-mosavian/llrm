@@ -611,6 +611,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
             Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
+            Fill::Byte8(byte) => 0x0F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
             Fill::Dup(arrangement, source) => {
                 0x0E00_0C00 | arrangement.q() << 30 | arrangement.imm5() << 16 | reg(*source)? << 5 | vreg(*rd)?
             }
@@ -618,7 +619,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             // is `mvni`'s.
             Fill::Imm { invert, shape, imm8 } => {
                 0x0F00_0400
-                    | u32::from(!matches!(shape, ImmShape::S2(_))) << 30
+                    | u32::from(!matches!(shape, ImmShape::S2(_) | ImmShape::H4(_))) << 30
                     | u32::from(*invert) << 29
                     | shape.cmode() << 12
                     | u32::from(imm8 >> 5) << 16
