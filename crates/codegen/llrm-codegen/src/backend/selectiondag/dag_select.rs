@@ -187,6 +187,17 @@ pub fn do_instruction_selection_with(
         }
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select(&mut adapter, node) == Outcome::CannotSelect {
+            // The identity patterns of `X86InstrVecCompiler.td` (`(v2i64 (bitconvert (v4i32 VR128:$src))) ->
+            // $src`), for a target whose matcher has none: a bitcast of a vector to another of the same size
+            // changes the type the users matched on, not the register.
+            let at = SDValue { node, res: 0 };
+            if adapter.dag.nodes()[node as usize].opcode == ISD::BitCast {
+                let (to, from) = (adapter.dag.value_type(at), adapter.dag.value_type(adapter.dag.operand(at, 0)));
+                if to.is_vector() && from.is_vector() && to.size_in_bits() == from.size_in_bits() {
+                    adapter.drop_assertion(node);
+                    continue;
+                }
+            }
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
         if let Some(why) = adapter.refusal() {

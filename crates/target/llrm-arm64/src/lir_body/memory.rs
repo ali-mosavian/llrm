@@ -237,9 +237,9 @@ pub(super) fn to(
             let mut at = Mem::new(
                 None,
                 match lanes {
-                    Arrangement::B16 => 8,
-                    Arrangement::H8 => 16,
-                    Arrangement::S4 => 32,
+                    Arrangement::B16 | Arrangement::B8 => 8,
+                    Arrangement::H8 | Arrangement::H4 => 16,
+                    Arrangement::S4 | Arrangement::S2 => 32,
                     Arrangement::D2 => 64,
                 },
             );
@@ -247,9 +247,9 @@ pub(super) fn to(
             let name = format!(
                 "ST1{}",
                 match lanes {
-                    Arrangement::B16 => "i8",
-                    Arrangement::H8 => "i16",
-                    Arrangement::S4 => "i32",
+                    Arrangement::B16 | Arrangement::B8 => "i8",
+                    Arrangement::H8 | Arrangement::H4 => "i16",
+                    Arrangement::S4 | Arrangement::S2 => "i32",
                     Arrangement::D2 => "i64",
                 }
             );
