@@ -148,9 +148,9 @@ fn a_byte_through_a_pointer_uses_the_unindexed_mode_on_the_65c02() {
     assert!(nmos.contains("  ldy #0\n  lda (rc2),y\n") && nmos.contains("  sta (rc2),y\n"), "{nmos}");
     assert!(cmos.contains("  lda (rc2)\n") && cmos.contains("  sta (rc2)\n"), "{cmos}");
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let point = "  lda #<g\n  ldx #>g\n";
+    let point = "  lda #<g\n  sta rc2\n  lda #>g\n  sta rc3\n";
     let get = format!("{point}  jsr getp\n");
-    let put = format!("  lda #9\n  sta rc2\n{point}  jsr putp\n  lda g\n");
+    let put = format!("{point}  lda #9\n  jsr putp\n  lda g\n");
     for (name, main, want) in [("cmos-getp", get, 7), ("cmos-putp", put, 9)] {
         for (target, cpu) in [("sim6502", Cpu::Mos6502), ("sim65c02", Cpu::W65c02)] {
             let got = common::run_on(target, name, &main, &format!("{}{G_DATA}", text(cpu))).0;
@@ -212,7 +212,7 @@ fn a_step_of_one_is_done_in_place() {
             assert_eq!(got, want, "{function}({arg}) on {target}");
         }
         for (function, want) in [("bumpp", 8), ("dropp", 6)] {
-            let main = format!("  lda #<g\n  ldx #>g\n  jsr {function}\n  lda g\n");
+            let main = format!("  lda #<g\n  sta rc2\n  lda #>g\n  sta rc3\n  jsr {function}\n  lda g\n");
             let got = common::run_on(target, &format!("step-{function}"), &main, &format!("{text}{G_DATA}")).0;
             assert_eq!(got, want, "{function} on {target}");
         }
@@ -225,11 +225,12 @@ fn a_step_of_one_is_done_in_place() {
 
 const THROUGH: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  ret i8 %r\n}\n\
-    define i8 @thrice(ptr %f, i8 %x) {\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}\n\
+    define i8 @thrice(i16 %fi, i8 %x) {\n  %f = inttoptr i16 %fi to ptr\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}\n\
     define i8 @plus(i8 %x, i8 %y) {\n  %r = add i8 %x, %y\n  ret i8 %r\n}\n\
-    define i8 @both(ptr %f, i8 %x, i8 %y) {\n  %a = call i8 %f(i8 %x, i8 %y)\n  %b = call i8 %f(i8 %a, i8 %y)\n  ret i8 %b\n}";
+    define i8 @both(i16 %fi, i8 %x, i8 %y) {\n  %f = inttoptr i16 %fi to ptr\n  %a = call i8 %f(i8 %x, i8 %y)\n  %b = call i8 %f(i8 %a, i8 %y)\n  ret i8 %b\n}";
 
-/// An indirect call pushes the callee's address minus one low byte last: the
+/// An indirect call through an address in A:X (an integer word: a pointer is in
+/// cells) pushes the callee's address minus one low byte last: the
 /// low byte went through `a` (`txa; pha`), and is `phx` on the 65C02. The
 /// byte arguments wait in `a` and `x`: the push sequence keeps them (an
 /// argument in `a` waits in `y`, one in `x` leaves `x` out of the sequence).

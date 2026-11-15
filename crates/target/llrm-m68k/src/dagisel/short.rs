@@ -30,7 +30,6 @@ use llrm_support::hash::HashSet;
 use super::asm::{AsmOperand, asm};
 use super::enc::{Enc, Piece, encoding};
 use super::generated::instrinfo;
-use super::generated::m68k_m68000::MACHINE_OPCODES;
 
 /// Codes of the short instructions, above those of the writebacks.
 pub const FIRST: u16 = 0xF100;
@@ -107,8 +106,12 @@ fn leak(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }
 
+/// The machine code of each quick form's base, in `QUICKS` order.
+static BASE_CODES: LazyLock<Vec<Option<u16>>> =
+    LazyLock::new(|| QUICKS.iter().map(|one| instrinfo_code(one.base)).collect());
+
 fn instrinfo_code(name: &str) -> Option<u16> {
-    MACHINE_OPCODES.iter().find(|(_, one)| *one == name).map(|(code, _)| *code)
+    super::opcodes::code_of(name)
 }
 
 /// The names of the short instructions.
@@ -317,8 +320,7 @@ fn narrow_node(
     node: u32,
 ) {
     let ISD::Machine(code) = adapter.dag.node(Value { node, res: 0 }).opcode else { return };
-    let Some(one) = QUICKS.iter().position(|one| instrinfo_code(one.base).is_some_and(|base| u32::from(base) == code))
-    else {
+    let Some(one) = BASE_CODES.iter().position(|base| base.is_some_and(|base| u32::from(base) == code)) else {
         return;
     };
     let Some(base) = instrinfo_code(QUICKS[one].base).and_then(instrinfo::desc) else { return };

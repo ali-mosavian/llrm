@@ -5,8 +5,9 @@ use llrm_target::calling::{Calling, Convention};
 
 use crate::REGISTER_INFO;
 
-/// The `mos` convention: arguments in a, x, rc2.., results in A:X. A word
-/// takes the first free pair of `wide_pairs`, A:X first.
+/// The `mos` convention: arguments in a, x, rc2.., results in A:X. An integer
+/// word takes the first free pair of `wide_pairs`, A:X first; a pointer the
+/// first free of `pointer_pairs`, which has no A:X.
 pub fn mos() -> Convention {
     let calling = Calling::parse(crate::CALLING).expect("calling.toml");
     calling.conventions.into_iter().find(|one| one.name == "mos").expect("convention mos")

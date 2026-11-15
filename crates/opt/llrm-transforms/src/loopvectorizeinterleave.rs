@@ -99,7 +99,9 @@ pub(crate) fn divisor_info(
     divisor: Operand,
     ty: Ty,
 ) -> llrm_mir::tti::OperandInfo {
-    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem) = (divisor, ty, op) else {
+    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) =
+        (divisor, ty, op)
+    else {
         return Default::default();
     };
     match context.get(id).kind {

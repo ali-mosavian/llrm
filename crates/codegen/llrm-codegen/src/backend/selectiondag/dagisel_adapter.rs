@@ -168,6 +168,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FCopySign => pin::FCOPYSIGN,
         SetCC => pin::SETCC,
         Select => pin::SELECT,
+        VSelect => pin::VSELECT,
         SelectCC => pin::SELECT_CC,
         BrCC => pin::BR_CC,
         BrCond => pin::BRCOND,
@@ -296,6 +297,9 @@ fn our_vt(
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
         (mvt::f128, EVT::Simple(MVT::F128)),
+        // `ADDVv8i16v` leaves its `h` result in a floating-point register,
+        // typed `f16` in the pin; here it is the 16-bit value it holds.
+        (mvt::f16, EVT::I16),
         (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
@@ -830,24 +834,7 @@ impl Dag for DagisAdapter<'_> {
         value: PinValue,
         ones: bool,
     ) -> bool {
-        let value = ours(value);
-        if self.dag.opcode(value) != ISD::BuildVector {
-            return false;
-        }
-        // `isBuildVectorAllZeros`/`AllOnes`: every defined lane is the constant
-        // (its low lane bits; a float's, `bitcastToAPInt`), and one is defined.
-        let lane_bits = self.dag.value_type(value).element().size_in_bits();
-        let mask = (1u128 << lane_bits) - 1;
-        let lanes = &self.dag.node(value).ops;
-        lanes.iter().any(|&lane| !self.dag.is_undef(lane))
-            && lanes.iter().all(|&lane| {
-                self.dag.is_undef(lane)
-                    || self
-                        .dag
-                        .constant(lane)
-                        .or_else(|| self.dag.fp_constant(lane))
-                        .is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
-            })
+        self.dag.is_build_vector_all(ours(value), ones)
     }
     fn mem_operands(
         &self,

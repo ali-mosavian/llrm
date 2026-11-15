@@ -83,6 +83,8 @@ enum Arg {
     Byte(String),
     /// the low and the high byte, as operands (`#<sym`, `#>sym`)
     Word(String, String),
+    /// a pointer: the same operands, in a pair of cells (never `a`, `x`)
+    Pointer(String, String),
 }
 
 fn byte(value: u16) -> Arg {
@@ -93,14 +95,19 @@ fn w16(value: u16) -> Arg {
     Arg::Word(format!("#{}", value & 0xFF), format!("#{}", value >> 8))
 }
 
-/// The address of a symbol, a word.
+/// A pointer to a fixed address.
+fn ptr(value: u16) -> Arg {
+    Arg::Pointer(format!("#{}", value & 0xFF), format!("#{}", value >> 8))
+}
+
+/// The address of a symbol, a pointer.
 fn sym(name: &str) -> Arg {
-    Arg::Word(format!("#<{name}"), format!("#>{name}"))
+    Arg::Pointer(format!("#<{name}"), format!("#>{name}"))
 }
 
 /// The setup of a call: a byte takes the first free of `a`, `x`, `rc2`...; a
-/// word the first free pair of (`a`,`x`), (`rc2`,`rc3`)...; `x` and then `a`
-/// are loaded last.
+/// word the first free pair of (`a`,`x`), (`rc2`,`rc3`)... and a pointer the
+/// first free of (`rc2`,`rc3`)...; `x` and then `a` are loaded last.
 fn args(arguments: &[Arg]) -> String {
     let mut slots: [Option<&str>; 8] = [None; 8];
     for argument in arguments {
@@ -109,8 +116,9 @@ fn args(arguments: &[Arg]) -> String {
                 let at = slots.iter().position(Option::is_none).expect("a free register");
                 slots[at] = Some(value);
             }
-            Arg::Word(low, high) => {
-                let at = (0..8).step_by(2).find(|at| slots[*at].is_none()).expect("a free pair");
+            Arg::Word(low, high) | Arg::Pointer(low, high) => {
+                let first = if matches!(argument, Arg::Pointer(..)) { 2 } else { 0 };
+                let at = (first..8).step_by(2).find(|at| slots[*at].is_none()).expect("a free pair");
                 slots[at] = Some(low);
                 slots[at + 1] = Some(high);
             }
@@ -246,14 +254,15 @@ fn a_word_select_returns_the_larger_word() {
 }
 
 /// A value live across a runtime call cannot stay in a register the routine
-/// clobbers: it goes to a slot and comes back. a = 5: t = 6, r = 5 * 11 = 55,
-/// t + r = 61; 11 is not `2^n +- 1` times a power of two, so it stays a call.
+/// clobbers: `__mulqi3` names `rc2`, `rc3`, so it stays in another scratch cell
+/// (`rc4`). a = 5: t = 6, r = 5 * 11 = 55, t + r = 61; 11 is not `2^n +- 1`
+/// times a power of two, so it stays a call.
 #[test]
 fn a_value_live_across_a_call_survives_it() {
     let ir =
         "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
     let text = compile(ir, "across");
-    assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
+    assert!(text.contains("jsr __mulqi3") && !text.contains("s_across_"), "{text}");
     assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
 }
 
@@ -357,8 +366,8 @@ fn a_sum_through_a_pointer_runs_on_the_allocator() {
     assert_eq!(common::run_with("alloc-sump", &format!("{setup}  jsr sump\n"), &format!("{text}{data}")), 9);
 }
 
-/// A pointer live across a call is spilled as a pair and comes back whole:
-/// the second read through it sees the same bytes. data = 3 1 4 1:
+/// A pointer live across a call comes back whole: the second read through it
+/// sees the same bytes. data = 3 1 4 1:
 /// 4 + 55 + 1 = 60.
 #[test]
 fn a_pointer_live_across_a_call_survives_it() {
@@ -376,8 +385,9 @@ fn a_pointer_live_across_a_call_survives_it() {
     let text = compile(ir, "keep");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
     let setup = &args(&[sym("vals"), byte(5)]);
-    // the pair is kept in callee-saved cells, saved around the body
-    assert!(text.contains("pha") && text.contains("sta rc9"), "no spill:\n{text}");
+    // `__mulqi3` names `rc2`, `rc3`: the pair stays in a scratch pair it leaves
+    // alone, saved nowhere
+    assert!(text.contains("jsr __mulqi3") && !text.contains("pha") && !text.contains("rc9"), "{text}");
     assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
 }
 
@@ -731,7 +741,7 @@ fn a_pointer_bumped_in_a_loop_stays_a_pair() {
         assert!(text.contains(if k == 1 { "inc rc" } else { "bcc walk_pa" }), "k={k}: {text}");
         assert!(!text.contains("tay") && !text.contains("s_walk"), "k={k}: {text}");
         for (p, n) in [(0x0100u16, 4u16), (0x01FE, 2), (0x01FF, 3), (0x12FF, 1)] {
-            let setup = args(&[w16(p), byte(n)]);
+            let setup = args(&[ptr(p), byte(n)]);
             let low = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n"), &text);
             let high = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n  txa\n"), &text);
             assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), p + k * n, "k={k} p={p:#06x} n={n}");
@@ -1007,6 +1017,21 @@ fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
     );
 }
 
+/// digits kept its counter in `rc8` across the divide call, saved on entry and
+/// restored at the return (12 of its 105 bytes). The runtime divide names only
+/// `rc2`..`rc7`, so on a platform with scratch cells the counter stays in one
+/// of them, unsaved.
+#[test]
+fn a_value_across_a_runtime_call_lives_in_a_scratch_cell_the_routine_leaves_alone() {
+    let text = compile_on(DIGITS, "digits", 32);
+    assert!(!text.contains("pha") && !text.contains("rc8"), "{text}");
+    // digits(40000) = 5, digits(99) = 2, digits(100) = 3, digits(5) = 1
+    for (v, want) in [(40000u32, 5), (99, 2), (100, 3), (5, 1)] {
+        let main = format!("  lda #{}\n  ldx #{}\n  jsr digits\n", v & 0xFF, v >> 8);
+        assert_eq!(common::run_with(&format!("alloc-scratch-{v}"), &main, &text), want, "digits({v})\n{text}");
+    }
+}
+
 /// The word result of `name` for a word argument in rc2:rc3 (low byte in A,
 /// high byte in X).
 fn run_word(
@@ -1280,7 +1305,7 @@ fn a_zero_or_sign_test_does_not_compare_again() {
         let run = |x: u16, y: u16| {
             let setup = match name {
                 "sum" => bytes(&[x, y]),
-                _ => format!("  lda #{x}\n  sta $0300\n{}", args(&[w16(0x0300)])),
+                _ => format!("  lda #{x}\n  sta $0300\n{}", args(&[ptr(0x0300)])),
             };
             common::run_with("alloc-nzt", &format!("{setup}  jsr {name}\n"), &text)
         };
@@ -2155,7 +2180,7 @@ define i16 @sloadx(ptr %p) {
     for name in ["sload", "sloadx"] {
         let text = compile_within_ten_seconds(ir, name);
         for byte in [0u16, 5, 0x7F, 0x80, 0xFF] {
-            let setup = format!("  lda #{byte}\n  sta $0300\n{}", args(&[w16(0x0300)]));
+            let setup = format!("  lda #{byte}\n  sta $0300\n{}", args(&[ptr(0x0300)]));
             let extended = byte as u8 as i8 as i16 as u16;
             let want = i32::from(if name == "sloadx" { extended ^ 1456 } else { extended });
             let low = common::run_with(&format!("alloc-{name}-{byte}"), &format!("{setup}  jsr {name}\n"), &text);

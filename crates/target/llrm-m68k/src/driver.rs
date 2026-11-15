@@ -238,31 +238,14 @@ fn lowered(
 ) -> Result<Lowered, String> {
     use llrm_transforms::trial;
     let _ = trial::take();
-    let base = lowered_once(text, cpu, level, dump, policy)?;
-    let (noted, units) = trial::take();
-    let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
-        M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
-    } else {
-        // DEVIATE UNROLL-NEST-TRIAL (-O2, -O3): the pin's threshold, for the
-        // loops with a subloop
-        M68kMachine { cpu }
-            .tti()
-            .filter(|tti| tti.unroll_trial_nests_at_speed())
-            .map(|_| llrm_transforms::loopunrollpass::pin_full_unroll_threshold(if level == Level::O3 { 3 } else { 2 }))
-    };
-    let plain = |module: Module| Lowered { module, kept: None };
-    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(plain(base)) };
-    let Ok(other) = trial::with(limit, || lowered_once(text, cpu, level, None, policy)) else { return Ok(plain(base)) };
-    let _ = trial::take();
-    let cut = trial::differing(&base, &other);
-    if cut.is_empty() {
-        return Ok(plain(base));
-    }
+    let _ = trial::take_refused();
+    let mut base = lowered_once(text, cpu, level, dump, policy)?;
+    let (mut noted, mut units) = trial::take();
     let small = matches!(level, Level::Os | Level::Oz);
     // Each side's differing functions are lowered in the side's own module,
     // the build the output makes of them: what the price sees is what is
     // printed, and the kept side's items are not built twice.
-    let lower = |module: &Module| -> Result<Kept, String> {
+    let lower = |module: &Module, cut: &std::collections::BTreeSet<String>| -> Result<Kept, String> {
         let libcalls = backend.libcalls.unwrap_or_else(|| crate::compile::libcalls_for(module, cpu, backend));
         // `differing` also names globals and a function one side lost
         let defined: Vec<String> = module
@@ -274,10 +257,76 @@ fn lowered(
         Ok(Kept { libcalls, items })
     };
     let flat = |kept: &Kept| -> Vec<Item> { kept.items.iter().flat_map(|(_, items)| items.iter().cloned()).collect() };
+    // DEVIATE OS-INLINE-TRIAL-CLOCKS (`Tti::opt_size_inline_finished_trial`): the calls the -Os size bound alone
+    // refused, inlined in a second compile, kept where the finished code is faster within the bytes ceiling
+    // (`trial::keeps_within_headroom`). A module with no such call is compiled once.
+    let sites = trial::take_refused();
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial inline {level:?}: {} refused site(s)", sites.len());
+    }
+    let mut inlined: Vec<trial::Site> = Vec::new();
+    let mut base_kept: Option<Kept> = None;
+    // only a program: a library unit has no entry to weigh the clocks against, and its functions run an unknown
+    // number of times (the runtime's -Os objects grew up to 18 % for the same clocks)
+    let is_program = base.functions().any(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() == Some("main"));
+    if small && is_program && !sites.is_empty() {
+        if let Ok(other) = trial::with_inlined(&sites, || lowered_once(text, cpu, level, None, policy)) {
+            let other_notes = trial::take();
+            let _ = trial::take_refused();
+            let cut = trial::differing(&base, &other);
+            if !cut.is_empty() {
+                let (with, without) = (lower(&other, &cut)?, lower(&base, &cut)?);
+                let rest_calls_mulsi3 = || {
+                    let rest: std::collections::BTreeSet<String> = other
+                        .functions()
+                        .filter(|(_, _, function)| !function.is_declaration())
+                        .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
+                        .collect();
+                    lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+                };
+                let pays = crate::trial::keeps_within_headroom(&with.items, &without.items, rest_calls_mulsi3, cpu);
+                if llrm_support::debug::enabled("trial") {
+                    eprintln!("trial inline {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
+                }
+                if pays {
+                    (base, base_kept, inlined) = (other, Some(with), sites);
+                    (noted, units) = other_notes;
+                } else {
+                    base_kept = Some(without);
+                }
+            }
+        }
+    }
+    let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
+        M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
+    } else {
+        // DEVIATE UNROLL-NEST-TRIAL (-O2, -O3): the pin's threshold, for the
+        // loops with a subloop
+        M68kMachine { cpu }
+            .tti()
+            .filter(|tti| tti.unroll_trial_nests_at_speed())
+            .map(|_| llrm_transforms::loopunrollpass::pin_full_unroll_threshold(if level == Level::O3 { 3 } else { 2 }))
+    };
+    let plain = |module: Module, kept: Option<Kept>| Lowered { module, kept };
+    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(plain(base, base_kept)) };
+    let Ok(other) = trial::with_inlined(&inlined, || trial::with(limit, || lowered_once(text, cpu, level, None, policy))) else { return Ok(plain(base, base_kept)) };
+    let _ = trial::take();
+    let cut = trial::differing(&base, &other);
+    if cut.is_empty() {
+        return Ok(plain(base, base_kept));
+    }
     // A lowering that fails is the compile's error, not a verdict: it was once
     // swallowed here and every trial put the unroll back.
-    let (with, without) = (lower(&other)?, lower(&base)?);
-    let pays = crate::trial::keeps(&flat(&with), &flat(&without), cpu, crate::timing::Price::of(small));
+    let (with, without) = (lower(&other, &cut)?, lower(&base, &cut)?);
+    let rest_calls_mulsi3 = || {
+        let rest: std::collections::BTreeSet<String> = other
+            .functions()
+            .filter(|(_, _, function)| !function.is_declaration())
+            .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
+            .collect();
+        lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+    };
+    let pays = crate::trial::keeps_linking(&with.items, &without.items, rest_calls_mulsi3, cpu, crate::timing::Price::of(small));
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }

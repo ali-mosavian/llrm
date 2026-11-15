@@ -153,10 +153,11 @@ udivmod8:
   bne @next
   rts
 
-; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X only.
+; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X, and Y and the bit loop for a divisor
+; of 256 or more.
 udivmod16:
   lda rc5
-  bne udivmod16c
+  bne __udivhi3c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
   ldx #16
 @next8:
@@ -176,8 +177,11 @@ udivmod16:
   lda #0
   sta rc7
   rts
-; the bit loop alone: what the compact entry points run
-udivmod16c:
+; the bit loop alone, what the compact entry points run: the quotient in rc2:rc3 and A:X, the remainder in
+; rc6:rc7. Uses A, X, Y. The remainder before step k is under 2^(k-1), so the shifted one never carries out of
+; 16 bits, whatever the divisor.
+.export __udivhi3c
+__udivhi3c:
   lda #0
   sta rc6
   sta rc7
@@ -187,24 +191,21 @@ udivmod16c:
   rol rc3
   rol rc6
   rol rc7
-  bcs @sub
-  lda rc6
-  cmp rc4
-  lda rc7
-  sbc rc5
-  bcc @keep
-@sub:
   sec
   lda rc6
   sbc rc4
-  sta rc6
+  tay
   lda rc7
   sbc rc5
+  bcc @keep
+  sty rc6
   sta rc7
   inc rc2
 @keep:
   dex
   bne @next
+  lda rc2
+  ldx rc3
   rts
 
 .export __udivqi3
@@ -238,17 +239,10 @@ __umodhi3:                      ; rs1 % rs2 -> A:X
   ldx rc7
   rts
 
-; the compact variants, called where a byte is worth more than the clocks: no short-divisor path
-.export __udivhi3c
-__udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
-  jsr udivmod16c
-  lda rc2
-  ldx rc3
-  rts
-
+; the compact variants, called where a byte is worth more than the clocks: no short-divisor path (__udivhi3c above)
 .export __umodhi3c
 __umodhi3c:                     ; rs1 % rs2 -> A:X
-  jsr udivmod16c
+  jsr __udivhi3c
   lda rc6
   ldx rc7
   rts
@@ -328,10 +322,10 @@ abs16_pair:
 __divhi3:                       ; rs1 / rs2 -> A:X
   lda rc3
   eor rc5
-  tay
+  pha                           ; the sign: the bit loop uses Y
   jsr abs16_pair
   jsr udivmod16
-  cpy #0
+  pla
   bpl @done
   neg16 rc2, rc3
 @done:
@@ -341,10 +335,11 @@ __divhi3:                       ; rs1 / rs2 -> A:X
 
 .export __modhi3
 __modhi3:                       ; rs1 % rs2 -> A:X
-  ldy rc3
+  lda rc3
+  pha
   jsr abs16_pair
   jsr udivmod16
-  cpy #0
+  pla
   bpl @done
   neg16 rc6, rc7
 @done:
@@ -357,10 +352,10 @@ __modhi3:                       ; rs1 % rs2 -> A:X
 __divhi3c:                       ; rs1 / rs2 -> A:X, compact
   lda rc3
   eor rc5
-  tay
+  pha                           ; the sign: the bit loop uses Y
   jsr abs16_pair
-  jsr udivmod16c
-  cpy #0
+  jsr __udivhi3c
+  pla
   bpl @done
   neg16 rc2, rc3
 @done:
@@ -370,10 +365,11 @@ __divhi3c:                       ; rs1 / rs2 -> A:X, compact
 
 .export __modhi3c
 __modhi3c:                       ; rs1 % rs2 -> A:X, compact
-  ldy rc3
+  lda rc3
+  pha
   jsr abs16_pair
-  jsr udivmod16c
-  cpy #0
+  jsr __udivhi3c
+  pla
   bpl @done
   neg16 rc6, rc7
 @done:
@@ -1017,70 +1013,68 @@ __ashrsi3_fast:                 ; __sa >> __sb (arithmetic) -> __sa
   rts
 
 ; ---- memory fills and copies ----------------------------------------------------------------------
-; memset(A:X = dst, rc2 = byte, rc4:rc5 = n), memcpy and memmove(A:X = dst, rc2:rc3 = src, rc4:rc5 = n);
-; each returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its
-; high byte is saved (memset in rc3, the others on the hardware stack). The destination pointer is rc6:rc7.
+; memset(rc2:rc3 = dst, A = byte, rc4:rc5 = n), memcpy and memmove(rc2:rc3 = dst, rc4:rc5 = src, A:X = n):
+; the pointers in cells (llvm-mos), n as a word; each returns dst in A:X. They walk whole pages with Y, so
+; the low byte of dst stays put and only its high byte is saved (rc6, memcpy in rc7, memmove on the
+; hardware stack).
 
 .export memset
 memset:
-  sta rc6
-  stx rc7
-  stx rc3
-  lda rc2
-  ldy #0
+  ldx rc3
+  stx rc6
   ldx rc5
+  ldy #0
+  cpx #0
   beq @tail
 @page:
-  sta (rc6),y
+  sta (rc2),y
   iny
   bne @page
-  inc rc7
+  inc rc3
   dex
   bne @page
 @tail:
   ldx rc4
   beq @done
 @byte:
-  sta (rc6),y
+  sta (rc2),y
   iny
   dex
   bne @byte
 @done:
-  ldx rc3
-  lda rc6
+  ldx rc6
+  lda rc2
   rts
 
 .export memcpy
 memcpy:
   sta rc6
-  stx rc7
-  txa
-  pha
+  lda rc3
+  sta rc7
   ldy #0
-  ldx rc5
+  cpx #0
   beq @tail
 @page:
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   iny
   bne @page
+  inc rc5
   inc rc3
-  inc rc7
   dex
   bne @page
 @tail:
-  ldx rc4
+  ldx rc6
   beq @done
 @byte:
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   iny
   dex
   bne @byte
 @done:
-  pla
-  tax
-  lda rc6
+  ldx rc7
+  lda rc2
   rts
 
 ; dst below src copies upward; otherwise downward, from the last byte, which is safe whether or not
@@ -1088,41 +1082,42 @@ memcpy:
 .export memmove
 memmove:
   sta rc6
-  stx rc7
-  cmp rc2
-  txa
-  sbc rc3
+  lda rc2
+  cmp rc4
+  lda rc3
+  sbc rc5
   bcs @down
   lda rc6
   jmp memcpy
 @down:
-  lda rc7
-  pha
-  clc
-  adc rc5
-  sta rc7
   lda rc3
+  pha
+  txa
+  clc
+  adc rc3
+  sta rc3
+  txa
   clc
   adc rc5
-  sta rc3
-  ldy rc4
+  sta rc5
+  ldy rc6
   beq @pages
 @tail:
   dey
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   cpy #0
   bne @tail
 @pages:
-  ldx rc5
+  cpx #0
   beq @done
 @page:
-  dec rc7
   dec rc3
+  dec rc5
 @byte:
   dey
-  lda (rc2),y
-  sta (rc6),y
+  lda (rc4),y
+  sta (rc2),y
   cpy #0
   bne @byte
   dex
@@ -1130,7 +1125,7 @@ memmove:
 @done:
   pla
   tax
-  lda rc6
+  lda rc2
   rts
 
 ; ---- speed variants of the 32-bit division (after the other routines: their addresses, and the
