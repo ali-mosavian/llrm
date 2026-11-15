@@ -100,10 +100,13 @@ fn matches_the_pin(source: &str) -> String {
     text
 }
 
-/// DEVIATE VEC3 (owner llrm-arm64-vec, exit 2026-11-27): the pin's middle end
-/// rewrites `icmp ule <vector>, zeroinitializer` to `eq` (`cmeq #0`); ours
-/// leaves it a `cmhs` against a zero register. Not compared against zero.
-const ULE_ZERO: &str = "ule";
+/// DEVIATE VEC3 (owner llrm-arm64-vec, exit 2026-11-27): compares against zero
+/// that the pin folds are not compared against zero.
+/// - `ule` is rewritten to `eq` (`cmeq #0`) by the pin's instcombine; ours stays `cmhs`.
+/// - `uge`/`ult` are constants: ours does not fold `sext` of a constant
+///   `build_vector` (`movi` + `sshll`) and does not turn a 64-bit zero store into
+///   `str xzr` (`replaceZeroVectorStore`).
+const FOLDED_BY_PIN_AGAINST_ZERO: [&str; 3] = ["ule", "uge", "ult"];
 
 const PREDICATES: [&str; 10] = ["eq", "ne", "sgt", "sge", "slt", "sle", "ugt", "uge", "ult", "ule"];
 
@@ -123,7 +126,7 @@ fn integer_compares_of_128_bit_vectors_are_cm_instructions() {
 #[test]
 fn integer_compares_against_zero_are_the_zero_forms() {
     for vector in ["<16 x i8>", "<8 x i16>", "<4 x i32>", "<2 x i64>"] {
-        for pred in PREDICATES.into_iter().filter(|&pred| pred != ULE_ZERO) {
+        for pred in PREDICATES.into_iter().filter(|pred| !FOLDED_BY_PIN_AGAINST_ZERO.contains(pred)) {
             matches_the_pin(&ir(pred, vector, false));
         }
     }
@@ -135,7 +138,7 @@ fn integer_compares_of_64_bit_vectors_are_cm_instructions() {
     for vector in ["<8 x i8>", "<4 x i16>", "<2 x i32>"] {
         for pred in PREDICATES {
             matches_the_pin(&ir(pred, vector, true));
-            if pred != ULE_ZERO {
+            if !FOLDED_BY_PIN_AGAINST_ZERO.contains(&pred) {
                 matches_the_pin(&ir(pred, vector, false));
             }
         }
