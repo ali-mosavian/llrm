@@ -335,6 +335,8 @@ pub(super) fn instructions() -> Vec<Inst> {
     for fill in [
         Fill::Zero,
         Fill::Byte(0xa5),
+        Fill::Byte8(0xa5),
+        Fill::Imm { invert: false, shape: ImmShape::H4(8), imm8: 3 },
         Fill::Dup(Arrangement::B16, rn),
         Fill::Dup(Arrangement::H8, rn),
         Fill::Dup(Arrangement::D2, rn),
