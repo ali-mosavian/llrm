@@ -3061,6 +3061,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        // `visitADD`: "fold (add x, 0) -> x, vector edition".
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.value_type(node).is_vector() {
+            if self.dag.is_build_vector_all(n1, false) {
+                return Some(n0);
+            }
+            if self.dag.is_build_vector_all(n0, false) {
+                return Some(n1);
+            }
+        }
         let flags = self.dag.node(node).flags;
         self.visit_add_like(node, flags)
     }
