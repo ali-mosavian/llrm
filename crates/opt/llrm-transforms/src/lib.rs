@@ -302,6 +302,7 @@ pub mod jumptableswitch;
 pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
+pub mod backwardthreading;
 pub mod knownpred;
 pub mod lcssa;
 pub mod lftr;
