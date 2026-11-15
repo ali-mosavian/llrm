@@ -97,10 +97,8 @@ fn a_vector_narrower_than_a_register_is_widened_and_moved_by_movq() {
     }
 }
 
-/// The vectors an unrolled vector loop stores are constants: `<0, 1, ..> + <8,
-/// ..>` per trip was left as `add`s of constant vectors (the fold read only
-/// splats), so `copy_runs`' init loops computed them with `paddb`/`pmullw` at
-/// run time (+4.8% instructions in `main` over the pin).
+/// The vectors an unrolled vector loop stores are constants (`<0, 1, ..> + <8, ..>` per trip folds, #10074): with the
+/// sub-register vectors widened, `copy_runs`' init loops are stored constants and not `paddb`/`pmullw` at run time.
 #[test]
 fn the_vectors_a_fully_unrolled_ramp_loop_stores_are_constants() {
     let text = assembly_of("lv_narrow.c", "x86_64-linux", "-O2");
