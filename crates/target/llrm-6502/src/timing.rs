@@ -115,8 +115,69 @@ pub fn instruction(
     mnemonic: &str,
     operand: &str,
 ) -> Option<Cost> {
+    cost_in_mode(cpu, mnemonic, mode(mnemonic, operand)?)
+}
+
+/// [`instruction`] of an instruction the passes hold, its mode read from the
+/// operand's variant and not from its text printed and read back. It prices
+/// every form the same: `tests/timing_typed.rs` compares the two.
+pub fn of(
+    cpu: Cpu,
+    inst: &crate::asm::Inst,
+) -> Option<Cost> {
+    let mnemonic = inst.op.name();
+    cost_in_mode(cpu, mnemonic, mode_of(mnemonic, &inst.operand)?)
+}
+
+/// [`mode`] of an operand that is already parsed.
+fn mode_of(
+    mnemonic: &str,
+    operand: &crate::asm::Operand,
+) -> Option<Mode> {
+    use crate::asm::{Index, Operand};
+    if matches!(
+        mnemonic,
+        "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra"
+    ) {
+        return Some(Mode::Relative);
+    }
+    Some(match operand {
+        Operand::None => Mode::Implied,
+        Operand::Acc => Mode::Accumulator,
+        Operand::Imm(_) => Mode::Immediate,
+        Operand::IndirectY(name) => return zero_page(name).then_some(Mode::IndirectY),
+        Operand::IndirectX(name) => return zero_page(name).then_some(Mode::IndirectX),
+        Operand::Indirect(name) => {
+            if mnemonic == "jmp" {
+                Mode::AbsoluteIndirect
+            } else if zero_page(name) {
+                Mode::ZeroPageIndirect
+            } else {
+                return None;
+            }
+        }
+        Operand::Direct(name) => {
+            if zero_page(name) {
+                Mode::ZeroPage
+            } else {
+                Mode::Absolute
+            }
+        }
+        Operand::Indexed(name, index) => match (index, zero_page(name)) {
+            (Index::X, true) => Mode::ZeroPageX,
+            (Index::X, false) => Mode::AbsoluteX,
+            (Index::Y, true) => Mode::ZeroPageY,
+            (Index::Y, false) => Mode::AbsoluteY,
+        },
+    })
+}
+
+fn cost_in_mode(
+    cpu: Cpu,
+    mnemonic: &str,
+    m: Mode,
+) -> Option<Cost> {
     let cmos = cpu == Cpu::W65c02;
-    let m = mode(mnemonic, operand)?;
     let read = matches!(
         mnemonic,
         "lda" | "ldx" | "ldy" | "adc" | "sbc" | "and" | "ora" | "eor" | "cmp" | "cpx" | "cpy" | "bit"
@@ -303,7 +364,14 @@ pub fn estimate(
 }
 
 thread_local! {
+    static LINES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LABEL_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The lines [`estimate_calling`] has read for their control flow on this
+/// thread, for a test that each is read once and not once per loop it is in.
+pub fn lines_read() -> usize {
+    LINES_READ.with(std::cell::Cell::get)
 }
 
 /// The lines [`estimate_calling`] has looked at for labels on this thread, for
@@ -347,49 +415,53 @@ pub fn estimate_weighted(
         }
     }
     let label_at = |name: &str| labels.get(name).copied();
+    // what each line does to control flow, read once: the loop test below asks
+    // it again for every line a backward branch's walk visits. A branch or
+    // jump to a label of the text goes there; `jmp`, `bra`, `rts` and `rti`
+    // do not run on to the next line.
+    let flow: Vec<(bool, Option<usize>)> = lines
+        .iter()
+        .map(|line| {
+            LINES_READ.with(|read| read.set(read.get() + 1));
+            let mut parts = line.split_whitespace();
+            let mnemonic = parts.next();
+            let target =
+                matches!(
+                    mnemonic,
+                    Some("bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp")
+                )
+                    .then(|| parts.next().and_then(label_at))
+                    .flatten();
+            (!matches!(mnemonic, Some("jmp" | "bra" | "rts" | "rti")), target)
+        })
+        .collect();
     // a backward branch makes the lines from its label to it a loop, if the
     // code at the label can run on to the branch: a branch up to a block that
     // ends in `rts` is an exit placed above the code, not a loop
-    let branch_target = |line: &str| {
-        let mut parts = line.split_whitespace();
-        let mnemonic = parts.next()?;
-        matches!(
-            mnemonic,
-            "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp"
-        )
-            .then(|| parts.next().and_then(label_at))
-            .flatten()
-    };
-    let reaches = |from: usize, to: usize| {
-        let mut seen = vec![false; lines.len()];
+    let mut seen = vec![0usize; lines.len()];
+    let mut walks = 0;
+    let mut reaches = |from: usize, to: usize| {
+        walks += 1;
         let mut work = vec![from];
         while let Some(at) = work.pop() {
             if at == to {
                 return true;
             }
-            if at >= lines.len() || std::mem::replace(&mut seen[at], true) {
+            if at >= lines.len() || std::mem::replace(&mut seen[at], walks) == walks {
                 continue;
             }
-            let mnemonic = lines[at].split_whitespace().next();
-            if !matches!(mnemonic, Some("jmp" | "bra" | "rts" | "rti")) {
+            let (runs_on, target) = flow[at];
+            if runs_on {
                 work.push(at + 1);
             }
-            work.extend(branch_target(lines[at]));
+            work.extend(target);
         }
         false
     };
     let mut depth = vec![0u32; lines.len()];
     let mut backward = vec![false; lines.len()];
-    for (at, line) in lines.iter().enumerate() {
-        let mut parts = line.split_whitespace();
-        let (Some(mnemonic), Some(target)) = (parts.next(), parts.next()) else { continue };
-        if !matches!(
-            mnemonic,
-            "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp"
-        ) {
-            continue;
-        }
-        if let Some(to) = label_at(target).filter(|to| *to <= at && reaches(*to, at)) {
+    for (at, &(_, target)) in flow.iter().enumerate() {
+        if let Some(to) = target.filter(|to| *to <= at && reaches(*to, at)) {
             backward[at] = true;
             for d in &mut depth[to..=at] {
                 *d += 1;
