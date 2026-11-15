@@ -337,17 +337,6 @@ abs16_pair:
   tya
 .endmacro
 
-; rs := -rs for the pair at (lo, hi), stored back
-.macro neg16 lo, hi
-  sec
-  lda #0
-  sbc lo
-  sta lo
-  lda #0
-  sbc hi
-  sta hi
-.endmacro
-
 ; the result comes back from the divide in A:X; the sign is the N flag on the stack (the bit loop uses Y, `plp` leaves A)
 .export __divhi3
 __divhi3:                       ; rs1 / rs2 -> A:X
