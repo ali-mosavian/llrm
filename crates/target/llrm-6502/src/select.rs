@@ -184,12 +184,12 @@ thread_local! {
 /// writes: the pricing of a layout, of a multiply or a callee-save choice asks
 /// for the same text again, and the allocator and the peephole passes are the
 /// bulk of a compile. The modules the texts are keyed by must outlive it.
-pub struct TextCache(());
+pub struct TextCache(alloc::AllocationCache);
 
 impl TextCache {
     pub fn new() -> TextCache {
         TEXTS.with(|texts| *texts.borrow_mut() = Some(HashMap::default()));
-        TextCache(())
+        TextCache(alloc::AllocationCache::new())
     }
 }
 
@@ -1160,7 +1160,7 @@ fn priced(
 /// DEVIATE 6502-DIV-16 (owner llrm-target-6502, exit 2026-11-24): the pin's
 /// `__udivhi3` is one routine. Reason: bytes first on this target at every
 /// level (user ruling 2026-11-14); the compact routine is 39 bytes smaller and
-/// 215 clocks slower a call on average (`hotdivision::SAVED_AT_SPEED_16`).
+/// slower a call on average (`hotdivision::saved_at_speed_16`).
 fn speed_division16_pays(
     module: &Module,
     parts: &[(&str, &Selection)],
@@ -1173,8 +1173,9 @@ fn speed_division16_pays(
     let (clocks, bytes) = priced(module, parts, compact)?;
     // the priced clocks leave out the routine's own run
     let runs = crate::hotdivision::runs16(module);
-    let clocks = clocks + (runs * crate::hotdivision::CLOCKS_COMPACT_16) as u64;
-    let saved = (runs * crate::hotdivision::SAVED_AT_SPEED_16) as u64;
+    let cpu = parts.first().map_or(crate::dagisel::hooks::Cpu::Mos6502, |(_, selection)| selection.cpu);
+    let clocks = clocks + (runs * crate::hotdivision::clocks_compact_16(cpu)) as u64;
+    let saved = (runs * crate::hotdivision::saved_at_speed_16(cpu)) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }
 
