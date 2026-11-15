@@ -1031,13 +1031,21 @@ pub(crate) fn emit(
             }
         }
     }
-    // The scalars: each goes where nothing reads it, users first.
+    // The scalars: each goes where nothing reads it; a user may stand in a
+    // block after its operand's, so the rest are taken again.
     let mut doomed: Vec<InstId> = tree_insts;
-    doomed.sort_by_key(|inst| std::cmp::Reverse(position[inst]));
-    for inst in doomed {
-        let used = function.instruction(inst).result.is_some_and(|result| function.users(result).iter().next().is_some());
-        if !used {
-            function.erase(inst).expect("a tree scalar");
+    loop {
+        let before = doomed.len();
+        doomed.retain(|inst| {
+            let used =
+                function.instruction(*inst).result.is_some_and(|result| function.users(result).iter().next().is_some());
+            if !used {
+                function.erase(*inst).expect("a tree scalar");
+            }
+            used
+        });
+        if doomed.is_empty() || doomed.len() == before {
+            break;
         }
     }
     let _ = ValueId(0);
