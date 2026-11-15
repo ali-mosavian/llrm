@@ -61,28 +61,63 @@ pub fn share_percent() -> u64 {
 /// The pin's analogue is the call's operand list: only the registers it lists
 /// are read (`MachineInstr::implicit_operands`, `LivePhysRegs`).
 pub fn leaves_cells_alone(name: &str) -> bool {
-    use std::collections::HashMap;
-    static ANSWERS: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);
-    let mut answers = ANSWERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    *answers.get_or_insert_default().entry(name.to_owned()).or_insert_with(|| scanned_leaves_cells_alone(name))
+    cells_named(name).is_some_and(|cells| cells.is_empty())
 }
 
-fn scanned_leaves_cells_alone(name: &str) -> bool {
-    use std::collections::{HashMap, HashSet};
+/// The `rcN` cells a call of the runtime routine `name` may read or write: the
+/// ones its text and its callees' name. `None` when that is not known (not a
+/// runtime routine, a cell reached by index, a macro that names one, a span
+/// that falls through its last line). Its registers `a`, `x`, `y` are the
+/// caller's to treat as clobbered.
+///
+/// The pin's analogue is the call's register mask from the callee's own use
+/// (`RegUsageInfo`, `-enable-ipra`; gcc's `-fipa-ra`).
+pub fn cells_named(name: &str) -> Option<std::collections::BTreeSet<u8>> {
+    use std::collections::{BTreeSet, HashMap};
+    type Answers = HashMap<String, Option<BTreeSet<u8>>>;
+    static ANSWERS: std::sync::Mutex<Option<Answers>> = std::sync::Mutex::new(None);
+    let mut answers = ANSWERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    answers.get_or_insert_default().entry(name.to_owned()).or_insert_with(|| scan_cells(name)).clone()
+}
+
+fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
+    use std::collections::{BTreeSet, HashMap, HashSet};
     struct Runtime {
         routines: HashMap<&'static str, &'static str>,
         macros: HashMap<&'static str, bool>,
     }
     static RUNTIME: std::sync::OnceLock<Runtime> = std::sync::OnceLock::new();
-    fn mentions_cell(text: &str) -> bool {
-        text.lines().any(|line| {
+    /// The cells a line names, or `None` for one reached by index.
+    fn cells_of(text: &str) -> Option<Vec<u8>> {
+        let mut found = Vec::new();
+        for line in text.lines() {
             let code = line.split(';').next().unwrap_or("");
-            code.match_indices("rc").any(|(at, _)| {
+            if code.match_indices("rs").any(|(at, _)| {
+                !code[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_')
+                    && code[at + 2..].starts_with(|c: char| c.is_ascii_digit())
+            }) {
+                return None;
+            }
+            for (at, _) in code.match_indices("rc") {
                 let before = code[..at].chars().next_back();
-                let after = code[at + 2..].chars().next();
-                !before.is_some_and(|c| c.is_alphanumeric() || c == '_') && after.is_some_and(|c| c.is_ascii_digit())
-            })
-        })
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let digits: String = code[at + 2..].chars().take_while(char::is_ascii_digit).collect();
+                if digits.is_empty() {
+                    continue;
+                }
+                let after = &code[at + 2 + digits.len()..];
+                if after
+                    .strip_prefix(',')
+                    .is_some_and(|index| matches!(index.trim().to_ascii_lowercase().as_str(), "x" | "y"))
+                {
+                    return None;
+                }
+                found.push(digits.parse().ok()?);
+            }
+        }
+        Some(found)
     }
     let runtime = RUNTIME.get_or_init(|| {
         let source: &'static str = crate::RUNTIME;
@@ -102,7 +137,7 @@ fn scanned_leaves_cells_alone(name: &str) -> bool {
                 macro_start = Some((&source[offset + 7..offset + 7 + name.len()], offset));
             } else if code.starts_with(".endmacro") {
                 if let Some((name, from)) = macro_start.take() {
-                    macros.insert(name, mentions_cell(&source[from..offset]));
+                    macros.insert(name, cells_of(&source[from..offset]).is_none_or(|cells| !cells.is_empty()));
                 }
             } else if margin && macro_start.is_none() {
                 if let Some(label) = code.strip_suffix(':').filter(|label| !label.contains(char::is_whitespace)) {
@@ -116,31 +151,39 @@ fn scanned_leaves_cells_alone(name: &str) -> bool {
         }
         Runtime { routines, macros }
     });
+    let mut cells = BTreeSet::new();
     let mut seen = HashSet::new();
     let mut pending = vec![name];
     while let Some(routine) = pending.pop() {
         if !seen.insert(routine) {
             continue;
         }
-        let Some(text) = runtime.routines.get(routine) else { return false };
-        if mentions_cell(text) {
-            return false;
+        let text = runtime.routines.get(routine)?;
+        cells.extend(cells_of(text)?);
+        // the span must end in a return or a jump: a fall-through is a callee
+        // the scan did not follow
+        let last = text
+            .lines()
+            .map(|line| line.split(';').next().unwrap_or("").trim())
+            .rfind(|code| !code.is_empty() && !code.ends_with(':') && !code.starts_with('.'))?;
+        if !(last == "rts" || last.starts_with("jmp ")) {
+            return None;
         }
         for line in text.lines() {
             let code = line.split(';').next().unwrap_or("").trim();
             let mut words = code.split_whitespace();
             let (Some(op), arg) = (words.next(), words.next()) else { continue };
             if runtime.macros.get(op).is_some_and(|&mentions| mentions) {
-                return false;
+                return None;
             }
-            if matches!(op, "jsr" | "jmp") {
-                match arg {
-                    Some(target) if !target.starts_with('@') => pending.push(target),
-                    Some(_) => {}
-                    None => return false,
-                }
+            // a call, a jump or a branch to another routine's label (`bne
+            // udivmod16c`)
+            if let Some(target) = arg.filter(|target| runtime.routines.contains_key(target)) {
+                pending.push(target);
+            } else if matches!(op, "jsr" | "jmp") && arg.is_none_or(|target| !target.starts_with('@')) {
+                return None;
             }
         }
     }
-    true
+    Some(cells)
 }

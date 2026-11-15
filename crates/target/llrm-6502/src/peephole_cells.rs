@@ -49,6 +49,20 @@ fn caller_saved(n: u8) -> bool {
     n >= 2 && !(8..=15).contains(&n)
 }
 
+/// Whether `inst`, a `jsr`, leaves the scratch cell `rcn` (`n >= 16`) as it
+/// was: a runtime routine whose text names no such cell
+/// (`routines::cells_named`; the allocator keeps a value there across it).
+fn call_keeps_scratch(
+    inst: &Inst,
+    n: u8,
+) -> bool {
+    n >= 16
+        && matches!(
+            &inst.operand,
+            Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
+}
+
 fn straight(op: Op) -> bool {
     use Op::*;
     matches!(
@@ -171,6 +185,9 @@ fn dead_from_pushed(
         // a call clobbers the scratch cells above the callee-saved ones and
         // reads none of them
         if inst.op == Op::Jsr && n >= 16 {
+            if call_keeps_scratch(inst, n) {
+                continue;
+            }
             return true;
         }
         // a call of a routine that names no cell reads none of them
@@ -481,6 +498,9 @@ fn spill_copy_once(
             // a call clobbers a caller-saved cell and reads none above the
             // argument cells
             if inst.op == Op::Jsr {
+                if call_keeps_scratch(inst, n) {
+                    continue;
+                }
                 if n <= 7 {
                     return false;
                 }
