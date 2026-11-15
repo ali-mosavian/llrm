@@ -162,7 +162,7 @@ fn a_pair_remainder_survives_a_later_word_division() {
 /// The same with the later divide unsigned: `x % 3` (a pair's rc6:rc7) against
 /// `x % c` read rc6 after both, so it compared the second remainder with
 /// itself and said equal (10 % 3 against 10 % 7: exit 0, want 1). release/next
-/// compiles div_constants_short's unsigned function so.
+/// before #10072 compiled div_constants_short's unsigned function so.
 #[test]
 fn a_pair_remainder_is_not_compared_with_a_later_remainder_of_itself() {
     let ir = "@x = global i16 10\n@c = global i16 7\n@k = global i16 3\n\
