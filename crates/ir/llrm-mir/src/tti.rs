@@ -1167,6 +1167,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a one-slot frame is released by `add` when
+    /// callee-saved registers are restored, as the pin does: `emitEpilogue` stands at the first callee-saved `pop`, where
+    /// `findDeadCallerSavedReg` answers 0. False: a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
+    fn frame_slot_add_with_saved(&self) -> bool {
+        false
+    }
+
     /// DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24): the instruction
     /// units an -Os trial must save, beyond a tie, for a copy that runs at most
     /// once per run of the program and whose callee stays. The units count a
@@ -1523,6 +1530,15 @@ pub trait Tti {
     /// byte rate (`speed_inline_milliclocks_per_byte`) and
     /// `opt_size_inline_trial_limits`.
     fn speed_inline_finished_trial(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE WRITEONLY-LATE (beyond the pin; owner 6502, exit 2026-11-24, row
+    /// 6502-INLINE-RATE): whether the stores of a global no body loads any more
+    /// are removed after the late unroll as well. The pin's GlobalOpt runs
+    /// before it, so an array the unrolled loops fold every read of keeps its
+    /// stores (loop_fusion -O2 inlined and unrolled: 1,237 B against 133 B).
+    fn write_only_after_late_unroll(&self) -> bool {
         false
     }
 

@@ -887,6 +887,10 @@ impl Tti for X86 {
         self.tuning.inline_trial_keeps_shrinking_copy
     }
 
+    fn frame_slot_add_with_saved(&self) -> bool {
+        self.tuning.frame_slot_add_with_saved
+    }
+
     fn inline_trial_cold_margin(&self) -> i64 {
         self.tuning.inline_trial_cold_margin
     }
