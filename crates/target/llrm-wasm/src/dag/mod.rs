@@ -44,7 +44,8 @@ pub(crate) fn value_type(
     }
 }
 
-/// An `i128` or an `f128` (softened to the `i128` of its bits): two `i64` parts.
+/// An `i128` or an `f128` (softened to the `i128` of its bits): two `i64`
+/// parts.
 pub(crate) fn is_wide(ty: &Type) -> bool {
     matches!(ty, Type::Int(128) | Type::Float(FloatKind::F128))
 }
@@ -204,11 +205,13 @@ pub fn compile_function_with(
         if crate::early_tail_duplicate::early_tail_duplicate(&mut f) {
             remove_unreachable_blocks(&mut f);
         }
+        f.sync_preds();
         crate::stack_coloring::stack_coloring(&mut f, blocks.first().map_or(&[], |block| &block.stack_colors));
         crate::dead_mi::dead_machine_instruction_elim(&mut f);
         crate::machine_licm::machine_licm(&mut f);
         crate::machine_cse::machine_cse(&mut f);
         crate::machine_sink::machine_sink(&mut f);
+        f.sync_preds();
         crate::peephole_opt::peephole_opt(&mut f);
         crate::dead_mi::dead_machine_instruction_elim(&mut f);
         f.edge_probs.clear();
@@ -217,9 +220,11 @@ pub fn compile_function_with(
         crate::phi_elimination::split_phi_edges(&mut f);
     }
     phi_elimination(&mut f);
+    f.sync_preds();
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
     late_eh_prepare(&mut f);
+    f.sync_preds();
     // The pin turns off `RegisterCoalescer` at -O1.
     if matches!(
         options.level,
@@ -236,8 +241,9 @@ pub fn compile_function_with(
         // until neither changes anything.
         for _ in 0..=f.blocks.len() {
             let mut changed = crate::tail_merge::tail_merge(&mut f, for_size);
-            changed |= crate::branch_fold::forward_branch_only_blocks(&mut f);
+            f.sync_preds();
             changed |= crate::branch_fold::fold_branches(&mut f);
+            f.sync_preds();
             if !changed {
                 break;
             }
@@ -355,4 +361,34 @@ fn library_callees(
         found.entry(name.clone()).or_insert((params, results));
     }
     found
+}
+
+#[cfg(test)]
+mod isel_preds_tests {
+    use super::*;
+
+    /// `even` of tail_calls.c: the return block `%20` is reached from `%13`,
+    /// `%19` and `%4`.
+    const EVEN: &str = "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"\ntarget triple = \"wasm32\"\n\ndefine i32 @even(i32 %0, i32 %1) {\n  %3 = icmp eq i32 %0, 0\n  br i1 %3, label %4, label %6\n\n4:\n  %5 = add nsw i32 %1, 1\n  br label %20\n\n6:\n  %7 = add nsw i32 %0, -1\n  %8 = shl nsw i32 %1, 1\n  %9 = or disjoint i32 %8, 1\n  br label %10\n\n10:\n  %11 = phi i32 [ %7, %6 ], [ %16, %15 ]\n  %12 = phi i32 [ %9, %6 ], [ %18, %15 ]\n  switch i32 %11, label %15 [\n    i32 0, label %19\n    i32 1, label %13\n  ]\n\n13:\n  %14 = add nsw i32 %12, 4\n  br label %20\n\n15:\n  %16 = add nsw i32 %11, -2\n  %17 = shl i32 %12, 1\n  %18 = add i32 %17, 7\n  br label %10\n\n19:\n  br label %20\n\n20:\n  %21 = phi i32 [ %5, %4 ], [ %14, %13 ], [ %12, %19 ]\n  ret i32 %21\n}\n";
+
+    /// The pin's `MBB.predecessors()` of the return block, `llc -O2
+    /// -print-after=finalize-isel`: `bb.4, bb.6, bb.1`. Selection goes in
+    /// reverse post-order (the loop first, the early exit last), so the early
+    /// exit's edge is the last made. In block-number order (`bb.1, bb.4,
+    /// bb.6`) BranchFolder moved the return block after the early exit, and
+    /// the function kept a branch where the pin has `return` (tail_calls -Os,
+    /// +2 instructions).
+    #[test]
+    fn the_predecessors_of_a_block_are_in_the_order_selection_made_their_edges() {
+        let module = crate::driver::module(EVEN, Width::W32).expect("IR");
+        let blocks = function::select_function(&module, "even", Width::W32, false, true, &ModuleFacts::of(&module))
+            .expect("selected");
+        let (params, results) = signature(&module, "even", Width::W32).expect("signature");
+        let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
+        let f = emit::emit("even", &params, &results, &blocks, &names);
+        // Ours makes one more block for the switch than the pin's jump table:
+        // the return block is `bb.8`, and `%13`, `%19`, `%4` are `bb.5`,
+        // `bb.7`, `bb.1`.
+        assert_eq!(f.preds[8], [5, 7, 1], "{:?}", f.preds);
+    }
 }

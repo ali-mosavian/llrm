@@ -46,3 +46,15 @@ fn two_byte_lanes_added_compile() {
     )
     .unwrap();
 }
+
+/// A halfword lane sign-extended to an `i64` stopped `pattern_fill.c` at -O2
+/// (`machine opcode SMOVvi16to64 has no arm64 instruction yet`): one `smov`.
+#[test]
+fn a_halfword_lane_sign_extended_to_i64_is_an_smov() {
+    let text = compile(
+        "define i64 @f(ptr %p) {\n  %v = load <8 x i16>, ptr %p, align 16\n  %e = extractelement <8 x i16> %v, i64 3\n  \
+         %z = sext i16 %e to i64\n  ret i64 %z\n}\n",
+    )
+    .unwrap();
+    assert!(text.contains("smov"), "{text}");
+}

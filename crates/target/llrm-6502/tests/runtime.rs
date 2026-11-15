@@ -871,5 +871,8 @@ fn the_fast_multiply_saves_what_hotmultiply_prices() {
     let shapes = [25u32, 0x1234, 0x0019_660D, 0x9E37_79B9];
     let saved: Vec<i64> = shapes.iter().map(|&b| call("__mulsi3", b) - call("__mulsi3_fast", b)).collect();
     let mean = saved.iter().sum::<i64>() as f64 / saved.len() as f64;
-    assert_eq!(mean.round(), llrm_6502::hotmultiply::SAVED_CLOCKS);
+    // sim65 charges a clock a page crossing, so the mean moves with where the
+    // runtime lies (615 and 586 over the same routines): a price within 10%
+    let priced = llrm_6502::hotmultiply::SAVED_CLOCKS;
+    assert!((mean - priced).abs() <= priced / 10.0, "the fast multiply saves {mean} clocks a call, priced at {priced}");
 }

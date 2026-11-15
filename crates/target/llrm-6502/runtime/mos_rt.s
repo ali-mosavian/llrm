@@ -153,10 +153,9 @@ udivmod8:
   bne @next
   rts
 
-; rs1 / rs2 -> A:X, the quotient also in rc2:rc3, the remainder in rc6:rc7. Uses A and X, and Y and the bit loop
-; for a divisor of 256 or more.
-.export __udivhi3
-__udivhi3:
+; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X, and Y and the bit loop for a divisor
+; of 256 or more.
+udivmod16:
   lda rc5
   bne __udivhi3c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
@@ -177,8 +176,6 @@ __udivhi3:
   sta rc6
   lda #0
   sta rc7
-  lda rc2
-  ldx rc3
   rts
 ; the bit loop alone, what the compact entry points run: the quotient in rc2:rc3 and A:X, the remainder in
 ; rc6:rc7. Uses A, X, Y. The remainder before step k is under 2^(k-1), so the shifted one never carries out of
@@ -228,9 +225,16 @@ __udivmodqi4:                   ; rc2 / rc3 -> A, the remainder in rc6
 __umodqi3:                      ; rc2 % rc3 -> A
   jmp udivmod8
 
+.export __udivhi3
+__udivhi3:                      ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
+  jsr udivmod16
+  lda rc2
+  ldx rc3
+  rts
+
 .export __umodhi3
 __umodhi3:                      ; rs1 % rs2 -> A:X
-  jsr __udivhi3
+  jsr udivmod16
   lda rc6
   ldx rc7
   rts
@@ -293,7 +297,6 @@ __modqi3:                       ; rc2 % rc3 -> A
 
 ; rs1 := |rs1|, rs2 := |rs2|: the pair at rc4:rc5, then the one at rc2:rc3
 abs16_pair:
-  ; reaches rc2 rc3 rc4 rc5
   ldx #2
 @next:
   lda rc3,x
@@ -310,6 +313,17 @@ abs16_pair:
   dex
   bpl @next
   rts
+
+; rs := -rs for the pair at (lo, hi)
+.macro neg16 lo, hi
+  sec
+  lda #0
+  sbc lo
+  sta lo
+  lda #0
+  sbc hi
+  sta hi
+.endmacro
 
 ; A:X := -(hi:lo); the carry chain runs through Y, so the result is returned as it is made
 .macro negax lo, hi
@@ -341,7 +355,9 @@ __divhi3:                       ; rs1 / rs2 -> A:X
   eor rc5
   php
   jsr abs16_pair
-  jsr __udivhi3
+  jsr udivmod16
+  lda rc2
+  ldx rc3
   plp
   bpl @done
   negax rc2, rc3
@@ -353,7 +369,7 @@ __modhi3:                       ; rs1 % rs2 -> A:X
   lda rc3
   php
   jsr abs16_pair
-  jsr __udivhi3
+  jsr udivmod16
   plp
   bpl @pos
   negax rc6, rc7

@@ -64,6 +64,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoopSlots",
     "Scheduler",
     "Coalescer",
+    "JoinStackPointer",
     "MachineScheduler",
     "MachineSink",
     "PeepholeOptimizer",
@@ -144,6 +145,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FloatAlloc", "floatalloc@8"),
     ("TwoAddress", "twoaddr@9"),
     ("Coalescer", "coalesce@10"),
+    ("JoinStackPointer", "coalesce@10"),
     ("RegAlloc", "allocate@11"),
     ("ParallelCopy", "parcopy@12"),
     ("Prologue", "prologue@13"),
@@ -315,6 +317,8 @@ pub fn machine_with<'a>(
             unoptimized: !target.optimized,
             classes: Some(Rc::clone(classes)),
         }),
+        // `joinReservedPhysReg`: a copy of the stack pointer nothing moves it from.
+        Box::new(crate::backend::joinsp::JoinStackPointer { stack: registers.stack }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
