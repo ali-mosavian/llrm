@@ -394,7 +394,7 @@ fn drains_visits_and_inserts_count_the_worklist() {
 /// widened add. The vector operations are left as they are.
 #[test]
 fn a_vector_operation_is_not_visited_by_the_scalar_folds() {
-    for op in ["add", "sub", "mul", "shl", "lshr", "ashr", "and", "or", "xor"] {
+    for op in ["sub", "mul", "shl", "lshr", "ashr", "and", "or", "xor"] {
         let text = format!(
             "define <8 x i16> @f(<8 x i16> %x, <8 x i16> %y) {{\nb0:\n  %a = {op} <8 x i16> %x, %y\n  ret <8 x i16> %a\n}}\n"
         );
@@ -513,4 +513,86 @@ fn a_vector_operation_that_is_no_identity_stays() {
     check(urem, urem);
     let and = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = and <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %a\n}\n";
     check(and, and);
+}
+
+/// recsum's inner loop on arm64 added two constants to a vector one after the
+/// other (`(x + 3) + 4`): the visitors read integer widths and skipped
+/// vectors, so the pair stayed (two `add`s a trip, 8,776 instructions against
+/// clang's 7,780). The sum of the constants is one lane-wise constant.
+#[test]
+fn a_vector_add_of_two_constants_is_one_add() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = add <4 x i32> %x, <i32 3, i32 3, i32 3, i32 3>\n  %b = add <4 x i32> %a, <i32 4, i32 4, i32 4, i32 4>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %b = add <4 x i32> %x, <i32 7, i32 7, i32 7, i32 7>\n  ret <4 x i32> %b\n}\n",
+    );
+}
+
+#[test]
+fn a_vector_add_of_a_value_to_itself_is_a_shift() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = add <4 x i32> %x, %x\n  ret <4 x i32> %a\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %0 = shl <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %0\n}\n",
+    );
+}
+
+
+/// The scalar text of `template` and its vector twin: `{T}` is the type, `{C:n}`
+/// the constant `n` (a splat in the vector).
+fn twins(template: &str) -> (String, String) {
+    let (mut scalar, mut vector) = (String::new(), String::new());
+    let mut rest = template;
+    while let Some(at) = rest.find('$') {
+        let (before, after) = rest.split_at(at);
+        scalar.push_str(before);
+        vector.push_str(before);
+        let end = after[1..].find('$').expect("a closing $") + 1;
+        let key = &after[1..end];
+        if key == "T" {
+            scalar.push_str("i32");
+            vector.push_str("<4 x i32>");
+        } else {
+            let number = key.strip_prefix("C:").expect("$T$ or $C:n$");
+            scalar.push_str(number);
+            vector.push_str(&format!("<i32 {number}, i32 {number}, i32 {number}, i32 {number}>"));
+        }
+        rest = &after[end + 1..];
+    }
+    scalar.push_str(rest);
+    vector.push_str(rest);
+    (scalar, vector)
+}
+
+/// The vector twin of what a scalar program combines to, as the scalar one.
+fn as_scalar(text: &str) -> String {
+    let mut text = text.replace("<4 x i32>", "i32").replace("zeroinitializer", "0");
+    for number in -9..=99 {
+        let splat = format!("<i32 {number}, i32 {number}, i32 {number}, i32 {number}>");
+        text = text.replace(&splat, &number.to_string());
+    }
+    text
+}
+
+/// A vector operation is what the scalar one is, lane by lane: the visitors
+/// the pin's InstCombine runs on a splat give the result they give on the
+/// scalar. Each template is a scalar shape the add visitors know.
+#[test]
+fn a_vector_add_folds_as_the_scalar_add_does() {
+    let templates = [
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add $T$ %x, $C:3$\n  %b = add $T$ %a, $C:4$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add $T$ %x, %x\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %n = sub $T$ $C:0$, %y\n  %a = add $T$ %x, %n\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %s = shl $T$ %y, $C:2$\n  %a = add $T$ %x, %s\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %n = xor $T$ %x, $C:-1$\n  %a = add $T$ %n, $C:1$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = and $T$ %x, %y\n  %o = or $T$ %x, %y\n  %s = add $T$ %a, %o\n  ret $T$ %s\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add nsw $T$ %x, $C:5$\n  %b = add nuw $T$ %a, $C:6$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = sub $T$ %x, %y\n  %b = add $T$ %a, %y\n  ret $T$ %b\n}\n",
+    ];
+    for template in templates {
+        let (scalar, vector) = twins(template);
+        let mut one = parsed(&scalar);
+        combined(&mut one);
+        let mut other = parsed(&vector);
+        combined(&mut other);
+        assert_eq!(as_scalar(&printed(&other)), printed(&one), "{template}");
+    }
 }

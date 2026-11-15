@@ -546,6 +546,12 @@ fn simplifies_itself(opcode: &Opcode) -> bool {
     )
 }
 
+/// The binary operations whose visitors run on vectors: those audited lane by
+/// lane (DEVIATE COMBINE-VEC), each with its own identity sweep.
+fn vector_visited(op: BinaryOp) -> bool {
+    matches!(op, BinaryOp::Add)
+}
+
 /// `InstCombinerImpl::run`'s per-instruction step: what the instruction
 /// simplifies to, else the first `visit*` of its opcode that acts.
 pub fn visit(
@@ -595,10 +601,13 @@ pub fn visit(
     // read integer widths, so an operation on vectors, which the loop
     // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
     // visitors are enabled by operation, each with its own identity sweep.
-    if matches!(
-        c.function.instruction(inst).opcode,
-        Opcode::Binary(_) | Opcode::Cast(_)
-    )
+    let operation = c.function.instruction(inst).opcode.clone();
+    let skips_visitors = match operation {
+        Opcode::Binary(op) => !vector_visited(op),
+        Opcode::Cast(_) => true,
+        _ => false,
+    };
+    if skips_visitors
         && matches!(
             c.context.types.get(c.function.instruction(inst).ty),
             Type::Vector { .. }
