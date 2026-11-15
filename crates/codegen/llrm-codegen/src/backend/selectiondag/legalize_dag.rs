@@ -1079,6 +1079,45 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_load(vt, chain, slot, info))
     }
 
+    /// `ExpandINSERT_VECTOR_ELT`: the vector is stored to a stack slot, the
+    /// element over its lane, and the slot loaded back as the vector.
+    /// Little-endian, a power-of-two lane count, a constant index (the builder
+    /// refuses any other).
+    fn expand_insert_vector_elt(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let (vector, element, index) =
+            (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let lane = vt.element();
+        let lane_bytes = lane.size_in_bits() / 8;
+        let count = vt.lanes();
+        if lane_bytes == 0 || !count.is_power_of_two() || self.dag.config().big_endian {
+            return None;
+        }
+        let cell = self.dag.create_stack_temporary(vt.size_in_bits() / 8, 16);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let whole = MemInfo {
+            mem_vt: vt,
+            align: 16,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let entry = self.dag.entry_node();
+        let spill = self.dag.get_store(entry, vector, slot, whole);
+        let value =
+            if self.dag.value_type(element) == lane { element } else { self.dag.get_sext_or_trunc(element, lane) };
+        let at = u32::try_from(self.dag.constant(index)?).ok()? % count;
+        let to = self.dag.get_object_ptr_offset(slot, i64::from(at * lane_bytes));
+        let put = self.dag.get_store(spill, value, to, MemInfo { mem_vt: lane, align: lane_bytes.min(16), ..whole });
+        Some(self.dag.get_load(vt, put, slot, whole))
+    }
+
     /// `TargetLowering::expandVecReduce`: the vector is spilled and its lanes
     /// are folded with the reduction's scalar operation, halving the lane
     /// count each step (lane `i` with lane `i + n / 2`), so a sum of four is
@@ -1215,6 +1254,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::VSelect => self.expand_vselect(node).map(|selected| vec![selected]),
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
+            ISD::InsertVectorElt => self.expand_insert_vector_elt(node).map(|loaded| vec![loaded]),
             reduction if reduction.vec_reduce_base_opcode().is_some() => {
                 self.expand_vec_reduce(node).map(|total| vec![total])
             }

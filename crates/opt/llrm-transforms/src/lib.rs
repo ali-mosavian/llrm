@@ -424,6 +424,7 @@ pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
 pub mod slpcompares;
+pub mod slpvectorize;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
