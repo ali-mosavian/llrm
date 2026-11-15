@@ -37,11 +37,10 @@
 //! # Used by
 //! `slpvectorize`.
 
-use llrm_mir::dense::IdMap;
-
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
