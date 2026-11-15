@@ -36,9 +36,9 @@ fn routine_code(routine: &str) -> &'static str {
     &body[..end]
 }
 
-/// Bytes `routine` adds to an image (`mos_rt.s`): its code up to the next
-/// `.export`, and the tail it ends in with a `jmp`.
-pub fn library_bytes(routine: &str) -> u32 {
+/// Bytes the runtime label `routine` adds to an image: its own code, up to the
+/// next label.
+fn label_bytes(routine: &str) -> u32 {
     // the routine's macros are defined elsewhere in the file
     let mut macros = String::new();
     let mut inside = false;
@@ -51,25 +51,16 @@ pub fn library_bytes(routine: &str) -> u32 {
         }
         inside &= !word.starts_with(".endmacro");
     }
-    let priced =
-        |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
     let text = routine_code(routine);
-    let own = priced(text);
-    let tail = text
-        .lines()
-        .map(|line| line.split(';').next().unwrap_or("").trim())
-        .filter(|line| !line.is_empty())
-        .next_back();
-    match tail.and_then(|line| line.strip_prefix("jmp ")) {
-        Some(label) if !label.starts_with('@') => {
-            let from =
-                crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
-            let body = &crate::RUNTIME[from..];
-            let end = body.find("\n  rts").unwrap_or_else(|| panic!("`{label}` has no rts")) + "\n  rts".len();
-            own + priced(&body[..end])
-        }
-        _ => own,
-    }
+    estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes
+}
+
+/// Bytes a call of `routine` adds to an image (`mos_rt.s`): the routine and the
+/// routines it calls or jumps to, as the link takes them.
+pub fn library_bytes(routine: &str) -> u32 {
+    let mut found = std::collections::BTreeSet::from([routine.to_owned()]);
+    links_callees(&mut found);
+    found.iter().map(|one| label_bytes(one)).sum()
 }
 
 /// A 32-bit multiply call, in clocks (`__mulsi3`, sim65): what each removed
@@ -150,7 +141,11 @@ fn linked(
     let mut found = std::collections::BTreeSet::new();
     for (name, selection) in names.iter().zip(selections) {
         let text = crate::select::function_text(module, name, selection)?;
-        for target in text.lines().filter_map(|line| line.trim().strip_prefix("jsr ")).map(str::trim) {
+        for target in text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("jsr ").or_else(|| line.trim().strip_prefix("jmp ")))
+            .map(str::trim)
+        {
             if names.iter().all(|one| one != target) && crate::RUNTIME.contains(&format!("\n{target}:")) {
                 found.insert(target.to_owned());
             }
@@ -170,6 +165,7 @@ fn links_callees(found: &mut std::collections::BTreeSet<String>) {
             // udivmod16c`) links it too
             let callee = code
                 .strip_prefix("jsr ")
+                .or_else(|| code.strip_prefix("jmp "))
                 .or_else(|| {
                     ["bne ", "beq ", "bcc ", "bcs ", "bmi ", "bpl ", "bvc ", "bvs "]
                         .iter()
@@ -252,7 +248,7 @@ pub fn widen_when_it_pays(
         .map(|(at, one)| again.iter().find(|(to, _)| *to == at).map_or(*one, |(_, other)| other))
         .collect();
     let library = |routines: &std::collections::BTreeSet<String>| -> i64 {
-        routines.iter().map(|one| i64::from(library_bytes(one))).sum()
+        routines.iter().map(|one| i64::from(label_bytes(one))).sum()
     };
     let net = growth + library(&linked(module, names, &widened)?) - library(&linked(module, names, &current)?);
     if net <= 0 {
@@ -300,5 +296,5 @@ pub fn image_of_texts(
 
 /// The bytes the routines add to an image.
 pub fn image_bytes(routines: &std::collections::BTreeSet<String>) -> i64 {
-    routines.iter().map(|one| i64::from(library_bytes(one))).sum()
+    routines.iter().map(|one| i64::from(label_bytes(one))).sum()
 }

@@ -308,6 +308,14 @@ fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTr
     Some(std::sync::Arc::new(set))
 }
 
+/// The names a `jsr callee` may be written as: `emit_with` resolves the entry
+/// of a long operation (`_fast`, `_fast_byte`, `_fast_small`) after the
+/// allocation, and the registers the call reads are the same in each.
+fn entries_of(callee: &str) -> Vec<String> {
+    let base = callee.strip_suffix("_byte").unwrap_or(callee);
+    ["_fast", "_fast_byte", "_fast_small", ""].iter().map(|entry| format!("{base}{entry}")).collect()
+}
+
 fn imaginary() -> u8 {
     IMAGINARY.with(|n| n.get())
 }
@@ -1347,6 +1355,19 @@ impl Builder {
         }
     }
 
+    /// `jsr entry`, a name `emit_with` resolves to a variant of the runtime
+    /// routine `routine`: the variants name the same cells.
+    fn call_runtime_entry(
+        &mut self,
+        entry: &str,
+        routine: &str,
+    ) {
+        self.call(entry);
+        if let Some(Inst { call_clobbers, .. }) = self.function.blocks[self.current].insts.last_mut() {
+            *call_clobbers = runtime_clobbers(routine);
+        }
+    }
+
     /// `jsr (pointer)`: the same, entering the callee through the pair that
     /// holds its address.
     fn call_through(
@@ -1972,9 +1993,10 @@ fn cell_of(name: &str) -> &str {
 /// The pin's `DAGCombiner::useDivRem`
 /// ([DAGCombiner.cpp#L5112](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5112))
 /// makes one `DIVREM` node of the two, and its libcall (`__divmodsi4`) returns
-/// both; the runtime's divides leave the remainder beside the quotient (`__sr`,
-/// `rc6:rc7`). Only copies and constants stand between the two, and none of
-/// them touches a cell of either, so the first call makes both results.
+/// both; the runtime's divides leave the remainder beside the quotient
+/// (rc4..rc7, `rc6:rc7` of the word divide). Only copies and constants stand
+/// between the two, and none of them touches a cell of either, so the first
+/// call makes both results.
 ///
 /// DEVIATE 6502-DIVREM-PAIR (owner 6502, exit 2026-11-24): the pair is made
 /// over the instructions, not in the combiner. Reason: the node of a long pair
@@ -2721,7 +2743,14 @@ pub fn build_with_places(
                     ],
                 ));
             }
-            // 32 bits through `__sa` and `__sb` (runtime/mos_rt.s)
+            // 32 bits as a call of the `mos` convention (runtime/mos_rt.s): the
+            // first operand in A:X:rc2:rc3, the second in rc4..rc7, the result
+            // in A:X:rc2:rc3
+            //
+            // The pin lowers a libcall through the target's calling convention
+            // (`TargetLowering::makeLibCall`, `LowerCallTo`), so its operands
+            // are copies to the argument registers and the allocator joins each
+            // to the value's own register.
             code @ (op::MUL32
             | op::UDIV32
             | op::SDIV32
@@ -2731,11 +2760,12 @@ pub fn build_with_places(
             | op::SRL32
             | op::SRA32) => {
                 // a division and its remainder are one call: the routine leaves
-                // the remainder in `__sr`
+                // the remainder in rc4..rc7
                 let partner = division_partner(items, at);
                 let routine = match (code, partner) {
                     (op::MUL32, _) => "__mulsi3",
-                    (op::UDIV32 | op::UREM32, Some(_)) | (op::UDIV32, None) => "__udivsi3",
+                    (op::UDIV32 | op::UREM32, Some(_)) => "__udivmodsi4",
+                    (op::UDIV32, None) => "__udivsi3",
                     (op::SDIV32 | op::SREM32, Some(_)) => "__divmodsi4",
                     (op::SDIV32, None) => "__divsi3",
                     (op::UREM32, None) => "__umodsi3",
@@ -2753,59 +2783,55 @@ pub fn build_with_places(
                         .iter()
                         .all(|cell| b.constants.get(cell) == Some(&0))
                 };
-                let routine = if byte_divisor { format!("{routine}_byte") } else { routine.to_owned() };
-                let acc = Reg::Phys(reg::A);
-                let mut stores = Vec::new();
-                for (at, source) in [name(&o[2])?, name(&o[3])?].into_iter().enumerate() {
-                    let (low, high) = b.read_word(source)?;
-                    stores.push((format!("__sa+{}", 2 * at), low));
-                    stores.push((format!("__sa+{}", 2 * at + 1), high));
-                }
+                let called = if byte_divisor { format!("{routine}_byte") } else { routine.to_owned() };
+                let mut arguments = Vec::new();
+                let (first, second) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
                 if matches!(code, op::SHL32 | op::SRL32 | op::SRA32) {
-                    stores.push(("__sb".to_owned(), b.byte(name(&o[4])?)?));
+                    arguments.push((rc(4), b.byte(name(&o[4])?)?));
                 } else {
-                    for (at, source) in [name(&o[4])?, name(&o[5])?].into_iter().enumerate() {
-                        let (low, high) = b.read_word(source)?;
-                        stores.push((format!("__sb+{}", 2 * at), low));
-                        stores.push((format!("__sb+{}", 2 * at + 1), high));
+                    let (low, high) = (b.read_word(name(&o[4])?)?, b.read_word(name(&o[5])?)?);
+                    for (n, value) in [low.0, low.1, high.0, high.1].into_iter().enumerate() {
+                        arguments.push((rc(4 + n as u8), value));
                     }
                 }
-                for (symbol, value) in stores {
-                    b.copy(acc, value);
-                    b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                // the operand in `a` and `x` last: they carry the other copies
+                arguments.push((rc(2), second.0));
+                arguments.push((rc(3), second.1));
+                arguments.push((reg::X, first.1));
+                arguments.push((reg::A, first.0));
+                for (to, value) in arguments {
+                    b.copy(Reg::Phys(to), value);
                 }
-                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine, 0)]);
-                jsr.call = true;
-                b.push(jsr);
-                // the words each result goes to: the quotient is in `__sa` and
-                // the remainder in `__sr` after a pair; a lone
-                // remainder is in `__sa`
-                let own_from = match (code, partner) {
-                    (op::UREM32 | op::SREM32, Some(_)) => "__sr",
-                    _ => "__sa",
-                };
-                let mut results = vec![(own_from, name(&o[0])?.to_owned(), name(&o[1])?.to_owned())];
+                b.call_runtime_entry(&called, routine);
+                // the quotient comes back in A:X:rc2:rc3 and the remainder of a
+                // pair in rc4..rc7; a lone remainder is the result in
+                // A:X:rc2:rc3
+                const QUOTIENT: [RegId; 4] = [reg::A, reg::X, reg::RC2, reg::RC3];
+                const REMAINDER: [RegId; 4] = [reg::RC4, reg::RC5, reg::RC6, reg::RC7];
+                let own_is_remainder = partner.is_some() && matches!(code, op::UREM32 | op::SREM32);
+                let mut results = vec![(
+                    if own_is_remainder { REMAINDER } else { QUOTIENT },
+                    name(&o[0])?.to_owned(),
+                    name(&o[1])?.to_owned(),
+                )];
                 if let Some(to) = partner {
                     let Item::Inst(other) = &items[to] else { unreachable!() };
                     joined.insert(to);
-                    let other_from = if own_from == "__sr" { "__sa" } else { "__sr" };
                     results.push((
-                        other_from,
+                        if own_is_remainder { QUOTIENT } else { REMAINDER },
                         name(&other.operands[0])?.to_owned(),
                         name(&other.operands[1])?.to_owned(),
                     ));
                 }
                 for (from, low, high) in results {
                     let (first, second) = (b.write_word(&low)?, b.write_word(&high)?);
-                    for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
-                        let symbol = if n == 0 { from.to_owned() } else { format!("{from}+{n}") };
-                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
-                        b.copy(to, acc);
+                    for (to, from) in [first.0, first.1, second.0, second.1].into_iter().zip(from) {
+                        b.copy(to, Reg::Phys(from));
                     }
                 }
             }
-            // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
-            // words in `__sa` and `__sb`, the product in `__sa`
+            // a widening multiply (`__umulhisi3`, `__mulhisi3`): the
+            // operands' words in A:X and rc4:rc5, the product in A:X:rc2:rc3
             code @ (op::UMULW16 | op::SMULW16) => {
                 // a multiplier whose high byte is known zero is a byte: the
                 // entry that walks to its last set
@@ -2817,22 +2843,18 @@ pub fn build_with_places(
                     (false, true) => "__mulhisi3_byte",
                     (false, false) => "__mulhisi3",
                 };
-                let acc = Reg::Phys(reg::A);
-                for (to, source) in [("__sa", name(&o[2])?), ("__sb", name(&o[3])?)] {
-                    let (low, high) = b.read_word(source)?;
-                    for (symbol, value) in [(to.to_owned(), low), (format!("{to}+1"), high)] {
-                        b.copy(acc, value);
-                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
-                    }
+                let (first, second) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
+                b.copy(Reg::Phys(rc(4)), second.0);
+                // the byte entries read only the low byte
+                if !byte {
+                    b.copy(Reg::Phys(rc(5)), second.1);
                 }
-                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine.to_owned(), 0)]);
-                jsr.call = true;
-                b.push(jsr);
-                let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
-                for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
-                    let symbol = if n == 0 { "__sa".to_owned() } else { format!("__sa+{n}") };
-                    b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
-                    b.copy(to, acc);
+                b.copy(Reg::Phys(reg::X), first.1);
+                b.copy(Reg::Phys(reg::A), first.0);
+                b.call_runtime(routine);
+                let (low, high) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
+                for (to, from) in [low.0, low.1, high.0, high.1].into_iter().zip([reg::A, reg::X, reg::RC2, reg::RC3]) {
+                    b.copy(to, Reg::Phys(from));
                 }
             }
             op::CMP32 => {
@@ -4489,17 +4511,17 @@ fn emit_with<const STACK: bool>(
                     // `_byte` marks the byte-divisor entry of the four
                     // divisions only: a program's own function may end in it
                     let (callee, byte) = match callee.strip_suffix("_byte") {
-                        Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4")) => {
-                            (base, true)
-                        }
+                        Some(
+                            base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4"
+                            | "__udivmodsi4"),
+                        ) => (base, true),
                         _ => (callee.as_str(), false),
                     };
                     let speed = TUNING.with(|t| t.get()).fast_routines;
-                    let division =
-                        matches!(
-                            callee,
-                            "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4"
-                        );
+                    let division = matches!(
+                        callee,
+                        "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4" | "__udivmodsi4"
+                    );
                     let entry = if !speed
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
                         && !(division && SIZE_FAST_DIVISION.with(|f| f.get()))
@@ -4932,7 +4954,7 @@ fn emit_with<const STACK: bool>(
             && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A))
         {
             a_callees.insert(callee.clone());
-            a_callees.insert(format!("{callee}_fast"));
+            a_callees.extend(entries_of(callee));
         }
     }
     let returns_x = function
@@ -4949,7 +4971,7 @@ fn emit_with<const STACK: bool>(
             && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::X))
         {
             x_callees.insert(callee.clone());
-            x_callees.insert(format!("{callee}_fast"));
+            x_callees.extend(entries_of(callee));
         }
     }
     let returns_y = function
@@ -4966,7 +4988,7 @@ fn emit_with<const STACK: bool>(
             && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::Y))
         {
             y_callees.insert(callee.clone());
-            y_callees.insert(format!("{callee}_fast"));
+            y_callees.extend(entries_of(callee));
         }
     }
     // the cells a return reads: the bytes of a long result
