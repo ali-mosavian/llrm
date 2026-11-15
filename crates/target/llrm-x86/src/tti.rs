@@ -1639,6 +1639,23 @@ impl Tti for X86 {
         multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
     }
 
+    fn reduces_outer_address_scale(
+        &self,
+        size: u128,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, counter_exit_compare_clocks, .. } =
+            self.tuning;
+        // The addressing mode scales by 1, 2, 4 or 8 for nothing; the rest of
+        // the size is a `lea` or a shift-and-add chain every trip, and the
+        // counter that stands for it also ends the loop, so the compare of the
+        // index goes too.
+        let rest = size >> size.trailing_zeros().min(3);
+        let chain = 2 * (signed_digits(rest) as i64 - 1).max(1);
+        rest > 1
+            && multiply_clocks > 0
+            && multiply_clocks.min(chain) + counter_exit_compare_clocks > loop_carried_clocks
+    }
+
     fn splits_merged_conditions(&self) -> bool {
         self.tuning.split_merged_conditions
     }

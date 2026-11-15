@@ -71,3 +71,19 @@ fn test_a_two_arm_inner_loop_exit_is_not_a_jump() {
         assert!(!jumped, "{level}: an arm's exit jumps after its `jne`:\n{}", body.join("\n"));
     }
 }
+
+/// `x[r] += 1` over 12-byte elements in an outer loop: the address was
+/// `lea edx,[eax+eax*2]` and a scaled index every trip, where gcc steps a
+/// counter by 12 (x_ld_dot -O1/-O2: +16 clk over gcc, a pointer loop -8).
+#[test]
+fn test_an_outer_loops_scaled_address_is_a_counter() {
+    for level in ["-O1", "-O2", "-O3"] {
+        let asm = compiled(level);
+        let body = function(&asm, "dots");
+        assert!(
+            !body.iter().any(|line| line.starts_with("lea ")),
+            "{level}: a `lea` per outer trip:\n{}",
+            body.join("\n")
+        );
+    }
+}
