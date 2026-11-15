@@ -42,7 +42,7 @@ fn split_dest(vt: EVT) -> Option<(EVT, EVT)> {
 
 /// The nodes of one result type and operands of that type: `SplitVecRes_BinOp`
 /// and `SplitVecRes_TernaryOp`.
-fn is_elementwise(op: ISD) -> bool {
+pub(super) fn is_elementwise(op: ISD) -> bool {
     matches!(
         op,
         ISD::Add

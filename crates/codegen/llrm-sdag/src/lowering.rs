@@ -51,6 +51,10 @@ pub enum TypeAction {
     /// or splits again (`TypeSplitVector`): the type legalizer makes two
     /// values of the half type.
     SplitVector,
+    /// A vector that a register class holds with more lanes
+    /// (`TypeWidenVector`): the legalizer makes one value of the wider
+    /// type, its extra lanes undefined.
+    WidenVector,
 }
 
 /// The simple integer types, narrowest first (the pin's `i1`..`i128` without
@@ -77,7 +81,11 @@ pub struct TargetLoweringInfo {
     /// `f128` has a register class (AArch64 `FPR128`), no arithmetic: its
     /// operations are library calls on `q` registers.
     legal_f128: bool,
-    /// The vector types a register class holds (`addRegisterClass(MVT::v16i8, &X86::VR128RegClass)`).
+    /// `getPreferredVectorAction` is `TypeWidenVector` for every vector of two
+    /// or more lanes that is not an `i1` vector (x86).
+    widen_vectors: bool,
+    /// The vector types a register class holds (`addRegisterClass(MVT::v16i8,
+    /// &X86::VR128RegClass)`).
     vectors: Vec<MVT>,
 }
 
@@ -123,6 +131,7 @@ impl TargetLoweringInfo {
             int_size: 32,
             narrow_library_shift: false,
             legal_f128: false,
+            widen_vectors: false,
             vectors: legal.iter().copied().filter(|vt| vt.is_vector()).collect(),
         }
     }
@@ -136,6 +145,11 @@ impl TargetLoweringInfo {
 
     /// `f128` is a legal type (`addRegisterClass(MVT::f128,
     /// &AArch64::FPR128RegClass)`).
+    pub fn with_widen_vectors(mut self) -> TargetLoweringInfo {
+        self.widen_vectors = true;
+        self
+    }
+
     pub fn with_legal_f128(mut self) -> TargetLoweringInfo {
         self.legal_f128 = true;
         self
@@ -244,6 +258,7 @@ impl TargetLoweringInfo {
             &[MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
             false,
         )
+        .with_widen_vectors()
     }
 
     /// m16: the same registers, and the far pointer (SD2).
@@ -254,6 +269,28 @@ impl TargetLoweringInfo {
     /// The vector types with a register class.
     pub fn legal_vectors(&self) -> &[MVT] {
         &self.vectors
+    }
+
+    /// `computeRegisterProperties`, the `TypeWidenVector` case: a power-of-two
+    /// count of lanes widens to the narrowest legal vector of the same
+    /// element with more lanes, any other count to the next power of two if
+    /// that is legal.
+    fn widened_vector(
+        &self,
+        mvt: MVT,
+    ) -> Option<MVT> {
+        let (element, lanes) = (mvt.element()?, mvt.lanes()?);
+        if !self.widen_vectors || lanes == 1 || element == MVT::I1 {
+            return None;
+        }
+        if lanes.is_power_of_two() {
+            MVT::vectors()
+                .filter(|wider| wider.element() == Some(element) && wider.lanes() > Some(lanes))
+                .filter(|wider| self.vectors.contains(wider))
+                .min_by_key(|wider| wider.lanes())
+        } else {
+            MVT::vector(element, lanes.next_power_of_two()).filter(|wider| self.vectors.contains(wider))
+        }
     }
 
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
@@ -287,6 +324,8 @@ impl TargetLoweringInfo {
                             .flatten();
                         if self.vectors.contains(&mvt) {
                             (TypeAction::Legal, vt)
+                        } else if let Some(wider) = self.widened_vector(mvt) {
+                            (TypeAction::WidenVector, EVT::Simple(wider))
                         } else if let Some(wider) = promoted {
                             (TypeAction::PromoteInteger, EVT::Simple(wider))
                         } else if let Some(half) = mvt
@@ -404,5 +443,19 @@ mod tests {
         assert_eq!(x86.set_cc_result_type(EVT::I64), EVT::I8);
         let wide = TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false).with_set_cc_result(MVT::I32);
         assert_eq!(wide.set_cc_result_type(EVT::I64), EVT::I32);
+    }
+
+    /// A vector under a register has no action but widening on x86
+    /// (`getPreferredVectorAction`): `v8i8` was a split down to a lane with
+    /// no register, and the compile stopped.
+    #[test]
+    fn x86_widens_a_vector_under_a_register_and_arm64_holds_it() {
+        let x86 = TargetLoweringInfo::x86_64_sse2();
+        for (narrow, wide) in [(MVT::V8I8, MVT::V16I8), (MVT::V4I16, MVT::V8I16), (MVT::V2I32, MVT::V4I32)] {
+            assert_eq!(x86.type_conversion(narrow.into()), (TypeAction::WidenVector, wide.into()));
+        }
+        assert_eq!(x86.type_action(MVT::V32I8.into()), TypeAction::SplitVector);
+        assert_eq!(x86.type_action(MVT::V16I8.into()), TypeAction::Legal);
+        assert_eq!(TargetLoweringInfo::aarch64().type_action(MVT::V8I8.into()), TypeAction::Legal);
     }
 }

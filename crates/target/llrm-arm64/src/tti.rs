@@ -994,6 +994,29 @@ impl Tti for AArch64 {
         crate::tti_vector::cmp_sel_cost(op, ty, predicate, cost_kind)
     }
 
+    /// `AArch64TTIImpl::getAddressComputationCost`
+    /// ([L5318](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5318)),
+    /// asked with a vector of pointers: a step that is not a constant under
+    /// 65 bytes costs `NeonNonConstStrideOverhead` (10), any other 1.
+    fn scalarized_address_cost(
+        &self,
+        stride_bytes: Option<i64>,
+        _kind: CostKind,
+    ) -> Cost {
+        const NEON_NON_CONST_STRIDE_OVERHEAD: i64 = 10;
+        const MAX_MERGE_DISTANCE: i64 = 64;
+        Cost::of(if stride_bytes.is_some_and(|step| step < MAX_MERGE_DISTANCE + 1) {
+            1
+        } else {
+            NEON_NON_CONST_STRIDE_OVERHEAD
+        })
+    }
+
+    /// `AArch64TTIImpl::prefersVectorizedAddressing`: `ST->hasSVE()`.
+    fn prefers_vectorized_addressing(&self) -> bool {
+        false
+    }
+
     fn scalarization_overhead(
         &self,
         ty: VectorTy,
@@ -1017,6 +1040,20 @@ impl Tti for AArch64 {
         _value: Ty,
     ) -> u32 {
         crate::tti_vector::store_minimum_vf(vf, mem)
+    }
+
+    /// `AArch64TTIImpl::getShuffleCost`
+    /// ([L6978](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6978)),
+    /// `SK_Broadcast`: a `dup`, one for each register the vector takes. Every
+    /// other kind is not priced (DEVIATE SLP1 of `slptree`).
+    fn shuffle_cost(
+        &self,
+        kind: llrm_mir::tti::ShuffleKind,
+        ty: VectorTy,
+        _mask: &[i32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::shuffle_cost(kind, ty, cost_kind)
     }
 
     fn vector_instr_cost(

@@ -789,6 +789,13 @@ pub trait Tti {
         true
     }
 
+    /// The backend selects a vector under a register (`<8 x i8>`): the pin's
+    /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
+    /// whose backend takes none keeps the loop scalar.
+    fn selects_sub_register_vectors(&self) -> bool {
+        false
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
@@ -1089,6 +1096,25 @@ pub trait Tti {
         Cost::BASIC
     }
 
+    /// `getAddressComputationCost` of one lane of a scalarized access
+    /// (`getMemInstScalarizationCost`, which passes a vector of pointers and
+    /// the pointer's SCEV): `stride_bytes` is the constant step of the
+    /// address between iterations, `None` where it is not one.
+    fn scalarized_address_cost(
+        &self,
+        stride_bytes: Option<i64>,
+        kind: CostKind,
+    ) -> Cost {
+        let _ = stride_bytes;
+        self.address_computation_cost(kind)
+    }
+
+    /// `prefersVectorizedAddressing`: a scalarized load takes its pointers
+    /// apart from a vector (a target with gathers). A store does so always.
+    fn prefers_vectorized_addressing(&self) -> bool {
+        true
+    }
+
     /// What a call of a function the target lowers to a call, with
     /// `arguments` arguments, costs: one unit for the call and one per
     /// argument, as the pin's `TargetTransformInfoImplBase` prices it.
@@ -1157,6 +1183,13 @@ pub trait Tti {
     /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
     /// +1.2M instructions when the copies were kept).
     fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a one-slot frame is released by `add` when
+    /// callee-saved registers are restored, as the pin does: `emitEpilogue` stands at the first callee-saved `pop`, where
+    /// `findDeadCallerSavedReg` answers 0. False: a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
+    fn frame_slot_add_with_saved(&self) -> bool {
         false
     }
 
@@ -1516,6 +1549,15 @@ pub trait Tti {
     /// byte rate (`speed_inline_milliclocks_per_byte`) and
     /// `opt_size_inline_trial_limits`.
     fn speed_inline_finished_trial(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE WRITEONLY-LATE (beyond the pin; owner 6502, exit 2026-11-24, row
+    /// 6502-INLINE-RATE): whether the stores of a global no body loads any more
+    /// are removed after the late unroll as well. The pin's GlobalOpt runs
+    /// before it, so an array the unrolled loops fold every read of keeps its
+    /// stores (loop_fusion -O2 inlined and unrolled: 1,237 B against 133 B).
+    fn write_only_after_late_unroll(&self) -> bool {
         false
     }
 

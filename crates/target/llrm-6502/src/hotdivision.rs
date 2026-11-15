@@ -53,30 +53,63 @@ pub const SAVED_AT_SIZE: f64 = 2700.0;
 /// The static runs of the 32-bit divisions of `module` that are not by a known
 /// byte: 10 per level of loop depth, times the runs of the function.
 pub fn runs(module: &Module) -> f64 {
-    runs_of_width(module, 32)
+    runs_of_width(module, 32, None)
+}
+
+/// [`runs`] with each block weighing what `weights::block_weights` says (a
+/// counted loop its trips), the units the module's priced clocks are in. A
+/// static ten trips a loop put the saving of 200 trips of divides against
+/// the clocks of 200 (div_constants_long -Os: 2.9% of its clocks, 54% run).
+pub fn runs_priced(
+    module: &Module,
+    weights: &std::collections::HashMap<usize, Vec<u64>>,
+) -> f64 {
+    runs_of_width(module, 32, Some(weights))
+}
+
+/// The four shapes the 16-bit divisions are priced over (dividend, divisor):
+/// a byte divisor of 6 bits and of 2, a wide one (the speed routine runs the
+/// bit loop and gains nothing), a divisor of 1000.
+pub const SHAPES_16: [(u16, u16); 4] = [(60707, 37), (40000, 300), (65535, 2), (9999, 1000)];
+
+/// The clocks of `routine` (a word divide of `mos_rt.s`) on `shape`, by running
+/// its text (`routine_clocks`).
+fn clocks_16(
+    cpu: crate::dagisel::hooks::Cpu,
+    routine: &str,
+    (a, b): (u16, u16),
+) -> f64 {
+    let cells = [(2, a as u8), (3, (a >> 8) as u8), (4, b as u8), (5, (b >> 8) as u8)];
+    let run = crate::routine_clocks::run(cpu, routine, &cells).unwrap_or_else(|e| panic!("{routine} on {a}/{b}: {e}"));
+    run.clocks as f64
+}
+
+/// What a call of the compact 16-bit division (`__udivhi3c`, the 16-step bit
+/// loop) costs on average over [`SHAPES_16`], read from the runtime's text.
+pub fn clocks_compact_16(cpu: crate::dagisel::hooks::Cpu) -> f64 {
+    SHAPES_16.iter().map(|&shape| clocks_16(cpu, "__udivhi3c", shape)).sum::<f64>() / SHAPES_16.len() as f64
 }
 
 /// What a call saves at speed, in clocks, when the speed 16-bit division (a
-/// byte divisor takes a short path) is called and not the compact one (the
-/// 16-step bit loop), over four shapes (sim65, `k_tosudivax`): 60707 / 37 saves
-/// 352, 40000 / 300 saves -6, 65535 / 2 saves 522, 9999 / 1000 saves -6; the
-/// mean is 215 (measured against the compact loop before it returned its own
-/// quotient and subtracted once, 2026-11-15). The speed routine is 39 bytes
-/// over the compact one.
-pub const SAVED_AT_SPEED_16: f64 = 215.0;
-
-/// What a call of the compact 16-bit division costs on average over the same
-/// four shapes: 866, 818, 1106 and 794 clocks.
-pub const CLOCKS_COMPACT_16: f64 = 896.0;
+/// byte divisor takes a short path) is called and not the compact one, over
+/// [`SHAPES_16`], read from the runtime's text: a divisor under 256 saves
+/// hundreds of clocks, one of 256 or more costs the speed routine its test.
+/// The speed routine is 39 bytes over the compact one.
+pub fn saved_at_speed_16(cpu: crate::dagisel::hooks::Cpu) -> f64 {
+    let sum: f64 =
+        SHAPES_16.iter().map(|&shape| clocks_16(cpu, "__udivhi3c", shape) - clocks_16(cpu, "__udivhi3", shape)).sum();
+    sum / SHAPES_16.len() as f64
+}
 
 /// [`runs`] of the 16-bit divisions.
 pub fn runs16(module: &Module) -> f64 {
-    runs_of_width(module, 16)
+    runs_of_width(module, 16, None)
 }
 
 fn runs_of_width(
     module: &Module,
     width: u32,
+    priced: Option<&std::collections::HashMap<usize, Vec<u64>>>,
 ) -> f64 {
     let calls = call_weights(module);
     let mut runs = 0.0;
@@ -88,7 +121,7 @@ fn runs_of_width(
         let depths = block_depths(function);
         let called = calls.get(&index).copied().unwrap_or(1.0);
         // a remainder beside the division of the same operands is the same call
-        // (`__divmodsi4`, the unsigned divide leaves it in `__sr`)
+        // (`__divmodsi4`, `__udivmodsi4`: the remainder comes back in rc4..rc7)
         let quotients: Vec<_> = function
             .layout()
             .iter()
@@ -130,8 +163,15 @@ fn runs_of_width(
                     Some(Operand::Constant(id)) if matches!(module.context.get(*id).kind, ConstantKind::Int(1..=255))
                 );
                 if long && !byte {
-                    let at = function.parent(inst).and_then(|b| depths.get(&llrm_analysis::cfg::id(b))).copied();
-                    runs += called * weight(at.unwrap_or(0));
+                    let block = function.parent(inst);
+                    runs += called
+                        * match priced.and_then(|weights| weights.get(&index)) {
+                            Some(weights) => block.and_then(|b| weights.get(b.0 as usize)).map_or(1.0, |w| *w as f64),
+                            None => {
+                                let at = block.and_then(|b| depths.get(&llrm_analysis::cfg::id(b))).copied();
+                                weight(at.unwrap_or(0))
+                            }
+                        };
                 }
             }
         }

@@ -113,6 +113,52 @@ thread_local! {
     static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Whether the last allocation made a choice only the wider rule makes.
     static WIDE_COMMUTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ALLOCATED: std::cell::RefCell<Option<HashMap<String, Vec<Allocated>>>> = const { std::cell::RefCell::new(None) };
+    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One allocation: the function as it went in, the inputs the allocator reads
+/// besides it, and what came out.
+struct Allocated {
+    stack: bool,
+    tuning: Tuning,
+    imaginary: u8,
+    spike: bool,
+    input: MFunction<Class>,
+    output: MFunction<Class>,
+    assignment: llrm_spike_mf::regalloc::Assignment,
+    slots: Vec<(i32, Class)>,
+}
+
+/// While it lives, [`allocate`] remembers each allocation it makes. The
+/// variants of one function (a layout, a sink, a callee-save choice, a speed
+/// routine) most often reach the allocator with the very function an earlier
+/// run gave it, and the allocator is a third of a compile.
+pub struct AllocationCache(());
+
+impl AllocationCache {
+    pub fn new() -> AllocationCache {
+        ALLOCATED.with(|all| *all.borrow_mut() = Some(HashMap::default()));
+        AllocationCache(())
+    }
+}
+
+impl Default for AllocationCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for AllocationCache {
+    fn drop(&mut self) {
+        ALLOCATED.with(|all| *all.borrow_mut() = None);
+    }
+}
+
+/// How many times this thread ran the register allocator (not found in the
+/// [`AllocationCache`]): what a test counts instead of seconds.
+pub fn allocations() -> usize {
+    ALLOCATIONS.with(std::cell::Cell::get)
 }
 
 /// `f` with the wider `commute_accumulator` rule on or off. It is a guess
@@ -260,6 +306,14 @@ fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTr
     set.extend(cells.iter().map(|&n| rc(n)));
     set.extend(pairs().filter(|&pair| cells.iter().any(|&n| lane(pair, 0) == rc(n) || lane(pair, 1) == rc(n))));
     Some(std::sync::Arc::new(set))
+}
+
+/// The names a `jsr callee` may be written as: `emit_with` resolves the entry
+/// of a long operation (`_fast`, `_fast_byte`, `_fast_small`) after the
+/// allocation, and the registers the call reads are the same in each.
+fn entries_of(callee: &str) -> Vec<String> {
+    let base = callee.strip_suffix("_byte").unwrap_or(callee);
+    ["_fast", "_fast_byte", "_fast_small", ""].iter().map(|entry| format!("{base}{entry}")).collect()
 }
 
 fn imaginary() -> u8 {
@@ -448,28 +502,38 @@ impl<const STACK: bool> Target for Mos<STACK> {
         operand: usize,
         register: RegId,
     ) -> u32 {
+        if !has_form(inst.kind, inst.operands.len()) {
+            return 0;
+        }
         let priced = inst.operands.get(operand);
-        let regs: Vec<RegId> = inst
-            .operands
-            .iter()
-            .filter_map(|o| match o {
-                Operand::Def(r) | Operand::Use(r)
-                    if Some(o) == priced
-                        || matches!(
-                            (o, priced),
-                            (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
-                        ) =>
-                {
-                    let _ = r;
-                    Some(register)
-                }
-                Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
-                Operand::Def(_) | Operand::Use(_) => Some(reg::A),
-                _ => None,
-            })
-            .collect();
-        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs)
-            .map_or(0, |priced| priced.bytes + priced.cycles as u32)
+        let named = |o: &Operand| match o {
+            Operand::Def(r) | Operand::Use(r)
+                if Some(o) == priced
+                    || matches!(
+                        (o, priced),
+                        (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
+                    ) =>
+            {
+                let _ = r;
+                Some(register)
+            }
+            Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+            Operand::Def(_) | Operand::Use(_) => Some(reg::A),
+            _ => None,
+        };
+        let cost = |regs: &[RegId]| form_cost(Cpu::Mos6502, inst.kind, &inst.operands, regs);
+        let mut few = [reg::A; 8];
+        let found = if inst.operands.len() <= few.len() {
+            let mut count = 0;
+            for r in inst.operands.iter().filter_map(named) {
+                few[count] = r;
+                count += 1;
+            }
+            cost(&few[..count])
+        } else {
+            cost(&inst.operands.iter().filter_map(named).collect::<Vec<RegId>>())
+        };
+        found.map_or(0, |priced| priced.bytes + priced.cycles as u32)
     }
 
     type Class = Class;
@@ -1291,6 +1355,19 @@ impl Builder {
         }
     }
 
+    /// `jsr entry`, a name `emit_with` resolves to a variant of the runtime
+    /// routine `routine`: the variants name the same cells.
+    fn call_runtime_entry(
+        &mut self,
+        entry: &str,
+        routine: &str,
+    ) {
+        self.call(entry);
+        if let Some(Inst { call_clobbers, .. }) = self.function.blocks[self.current].insts.last_mut() {
+            *call_clobbers = runtime_clobbers(routine);
+        }
+    }
+
     /// `jsr (pointer)`: the same, entering the callee through the pair that
     /// holds its address.
     fn call_through(
@@ -1916,9 +1993,10 @@ fn cell_of(name: &str) -> &str {
 /// The pin's `DAGCombiner::useDivRem`
 /// ([DAGCombiner.cpp#L5112](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5112))
 /// makes one `DIVREM` node of the two, and its libcall (`__divmodsi4`) returns
-/// both; the runtime's divides leave the remainder beside the quotient (`__sr`,
-/// `rc6:rc7`). Only copies and constants stand between the two, and none of
-/// them touches a cell of either, so the first call makes both results.
+/// both; the runtime's divides leave the remainder beside the quotient
+/// (rc4..rc7, `rc6:rc7` of the word divide). Only copies and constants stand
+/// between the two, and none of them touches a cell of either, so the first
+/// call makes both results.
 ///
 /// DEVIATE 6502-DIVREM-PAIR (owner 6502, exit 2026-11-24): the pair is made
 /// over the instructions, not in the combiner. Reason: the node of a long pair
@@ -2665,7 +2743,14 @@ pub fn build_with_places(
                     ],
                 ));
             }
-            // 32 bits through `__sa` and `__sb` (runtime/mos_rt.s)
+            // 32 bits as a call of the `mos` convention (runtime/mos_rt.s): the
+            // first operand in A:X:rc2:rc3, the second in rc4..rc7, the result
+            // in A:X:rc2:rc3
+            //
+            // The pin lowers a libcall through the target's calling convention
+            // (`TargetLowering::makeLibCall`, `LowerCallTo`), so its operands
+            // are copies to the argument registers and the allocator joins each
+            // to the value's own register.
             code @ (op::MUL32
             | op::UDIV32
             | op::SDIV32
@@ -2675,11 +2760,12 @@ pub fn build_with_places(
             | op::SRL32
             | op::SRA32) => {
                 // a division and its remainder are one call: the routine leaves
-                // the remainder in `__sr`
+                // the remainder in rc4..rc7
                 let partner = division_partner(items, at);
                 let routine = match (code, partner) {
                     (op::MUL32, _) => "__mulsi3",
-                    (op::UDIV32 | op::UREM32, Some(_)) | (op::UDIV32, None) => "__udivsi3",
+                    (op::UDIV32 | op::UREM32, Some(_)) => "__udivmodsi4",
+                    (op::UDIV32, None) => "__udivsi3",
                     (op::SDIV32 | op::SREM32, Some(_)) => "__divmodsi4",
                     (op::SDIV32, None) => "__divsi3",
                     (op::UREM32, None) => "__umodsi3",
@@ -2697,59 +2783,55 @@ pub fn build_with_places(
                         .iter()
                         .all(|cell| b.constants.get(cell) == Some(&0))
                 };
-                let routine = if byte_divisor { format!("{routine}_byte") } else { routine.to_owned() };
-                let acc = Reg::Phys(reg::A);
-                let mut stores = Vec::new();
-                for (at, source) in [name(&o[2])?, name(&o[3])?].into_iter().enumerate() {
-                    let (low, high) = b.read_word(source)?;
-                    stores.push((format!("__sa+{}", 2 * at), low));
-                    stores.push((format!("__sa+{}", 2 * at + 1), high));
-                }
+                let called = if byte_divisor { format!("{routine}_byte") } else { routine.to_owned() };
+                let mut arguments = Vec::new();
+                let (first, second) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
                 if matches!(code, op::SHL32 | op::SRL32 | op::SRA32) {
-                    stores.push(("__sb".to_owned(), b.byte(name(&o[4])?)?));
+                    arguments.push((rc(4), b.byte(name(&o[4])?)?));
                 } else {
-                    for (at, source) in [name(&o[4])?, name(&o[5])?].into_iter().enumerate() {
-                        let (low, high) = b.read_word(source)?;
-                        stores.push((format!("__sb+{}", 2 * at), low));
-                        stores.push((format!("__sb+{}", 2 * at + 1), high));
+                    let (low, high) = (b.read_word(name(&o[4])?)?, b.read_word(name(&o[5])?)?);
+                    for (n, value) in [low.0, low.1, high.0, high.1].into_iter().enumerate() {
+                        arguments.push((rc(4 + n as u8), value));
                     }
                 }
-                for (symbol, value) in stores {
-                    b.copy(acc, value);
-                    b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                // the operand in `a` and `x` last: they carry the other copies
+                arguments.push((rc(2), second.0));
+                arguments.push((rc(3), second.1));
+                arguments.push((reg::X, first.1));
+                arguments.push((reg::A, first.0));
+                for (to, value) in arguments {
+                    b.copy(Reg::Phys(to), value);
                 }
-                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine, 0)]);
-                jsr.call = true;
-                b.push(jsr);
-                // the words each result goes to: the quotient is in `__sa` and
-                // the remainder in `__sr` after a pair; a lone
-                // remainder is in `__sa`
-                let own_from = match (code, partner) {
-                    (op::UREM32 | op::SREM32, Some(_)) => "__sr",
-                    _ => "__sa",
-                };
-                let mut results = vec![(own_from, name(&o[0])?.to_owned(), name(&o[1])?.to_owned())];
+                b.call_runtime_entry(&called, routine);
+                // the quotient comes back in A:X:rc2:rc3 and the remainder of a
+                // pair in rc4..rc7; a lone remainder is the result in
+                // A:X:rc2:rc3
+                const QUOTIENT: [RegId; 4] = [reg::A, reg::X, reg::RC2, reg::RC3];
+                const REMAINDER: [RegId; 4] = [reg::RC4, reg::RC5, reg::RC6, reg::RC7];
+                let own_is_remainder = partner.is_some() && matches!(code, op::UREM32 | op::SREM32);
+                let mut results = vec![(
+                    if own_is_remainder { REMAINDER } else { QUOTIENT },
+                    name(&o[0])?.to_owned(),
+                    name(&o[1])?.to_owned(),
+                )];
                 if let Some(to) = partner {
                     let Item::Inst(other) = &items[to] else { unreachable!() };
                     joined.insert(to);
-                    let other_from = if own_from == "__sr" { "__sa" } else { "__sr" };
                     results.push((
-                        other_from,
+                        if own_is_remainder { QUOTIENT } else { REMAINDER },
                         name(&other.operands[0])?.to_owned(),
                         name(&other.operands[1])?.to_owned(),
                     ));
                 }
                 for (from, low, high) in results {
                     let (first, second) = (b.write_word(&low)?, b.write_word(&high)?);
-                    for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
-                        let symbol = if n == 0 { from.to_owned() } else { format!("{from}+{n}") };
-                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
-                        b.copy(to, acc);
+                    for (to, from) in [first.0, first.1, second.0, second.1].into_iter().zip(from) {
+                        b.copy(to, Reg::Phys(from));
                     }
                 }
             }
-            // a widening multiply (`__umulhisi3`, `__mulhisi3`): the operands'
-            // words in `__sa` and `__sb`, the product in `__sa`
+            // a widening multiply (`__umulhisi3`, `__mulhisi3`): the
+            // operands' words in A:X and rc4:rc5, the product in A:X:rc2:rc3
             code @ (op::UMULW16 | op::SMULW16) => {
                 // a multiplier whose high byte is known zero is a byte: the
                 // entry that walks to its last set
@@ -2761,22 +2843,18 @@ pub fn build_with_places(
                     (false, true) => "__mulhisi3_byte",
                     (false, false) => "__mulhisi3",
                 };
-                let acc = Reg::Phys(reg::A);
-                for (to, source) in [("__sa", name(&o[2])?), ("__sb", name(&o[3])?)] {
-                    let (low, high) = b.read_word(source)?;
-                    for (symbol, value) in [(to.to_owned(), low), (format!("{to}+1"), high)] {
-                        b.copy(acc, value);
-                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
-                    }
+                let (first, second) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
+                b.copy(Reg::Phys(rc(4)), second.0);
+                // the byte entries read only the low byte
+                if !byte {
+                    b.copy(Reg::Phys(rc(5)), second.1);
                 }
-                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine.to_owned(), 0)]);
-                jsr.call = true;
-                b.push(jsr);
-                let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
-                for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
-                    let symbol = if n == 0 { "__sa".to_owned() } else { format!("__sa+{n}") };
-                    b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
-                    b.copy(to, acc);
+                b.copy(Reg::Phys(reg::X), first.1);
+                b.copy(Reg::Phys(reg::A), first.0);
+                b.call_runtime(routine);
+                let (low, high) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
+                for (to, from) in [low.0, low.1, high.0, high.1].into_iter().zip([reg::A, reg::X, reg::RC2, reg::RC3]) {
+                    b.copy(to, Reg::Phys(from));
                 }
             }
             op::CMP32 => {
@@ -3527,17 +3605,77 @@ fn form_text(
     })
 }
 
+/// Whether [`form_text`] writes a form for `kind` with `operands` operands.
+fn has_form(
+    kind: Kind,
+    operands: usize,
+) -> bool {
+    match kind {
+        Kind::Op("INC" | "DEC") => true,
+        Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR" | "CMP") => operands >= 3,
+        _ => false,
+    }
+}
+
+/// What a form's text depends on besides its mnemonic: the registers it names
+/// and the kind of its second operand (an immediate or a frame slot is priced
+/// by its mode, not its value).
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct FormKey {
+    cmos: bool,
+    kind: &'static str,
+    lead: Option<RegId>,
+    second: Option<Result<RegId, bool>>,
+}
+
+thread_local! {
+    static FORM_COSTS: std::cell::RefCell<HashMap<FormKey, Option<crate::timing::Estimate>>> =
+        std::cell::RefCell::new(HashMap::default());
+}
+
 /// What `kind` costs on `cpu` with `operands` in `regs`, from the timing
 /// tables: the data a hint or a join weighs (an `inc` is 1 byte and 2 clocks in
-/// `x`, 2 and 5 in a cell, 3 and 4 in `a`).
+/// `x`, 2 and 5 in a cell, 3 and 4 in `a`). The table is read once for each
+/// form: a join weighs the same few forms again and again.
 pub fn form_cost(
     cpu: Cpu,
     kind: Kind,
     operands: &[Operand],
     regs: &[RegId],
 ) -> Option<crate::timing::Estimate> {
-    let text = form_text(kind, operands, regs, cpu == Cpu::W65c02, &|slot| format!("s_{slot}"))?;
-    crate::timing::estimate(cpu, &text).ok()
+    let Kind::Op(name) = kind else { return None };
+    if !has_form(kind, operands.len()) {
+        return None;
+    }
+    let cmos = cpu == Cpu::W65c02;
+    let key = match name {
+        "INC" | "DEC" => Some(FormKey { cmos, kind: name, lead: Some(regs[0]), second: None }),
+        _ => {
+            let second = match &operands[2] {
+                Operand::Imm(_) => Some(Err(false)),
+                Operand::Frame(_) => Some(Err(true)),
+                Operand::Symbol(..) => None,
+                _ => Some(Ok(regs[2.min(regs.len() - 1)])),
+            };
+            second.map(|second| FormKey {
+                cmos,
+                kind: name,
+                lead: (name == "CMP").then(|| regs[1]),
+                second: Some(second),
+            })
+        }
+    };
+    let priced = || {
+        let text = form_text(kind, operands, regs, cmos, &|slot| format!("s_{slot}"))?;
+        crate::timing::estimate(cpu, &text).ok()
+    };
+    let Some(key) = key else { return priced() };
+    if let Some(found) = FORM_COSTS.with(|all| all.borrow().get(&key).copied()) {
+        return found;
+    }
+    let found = priced();
+    FORM_COSTS.with(|all| all.borrow_mut().insert(key, found));
+    found
 }
 
 fn register_name(register: RegId) -> String {
@@ -4373,17 +4511,17 @@ fn emit_with<const STACK: bool>(
                     // `_byte` marks the byte-divisor entry of the four
                     // divisions only: a program's own function may end in it
                     let (callee, byte) = match callee.strip_suffix("_byte") {
-                        Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4")) => {
-                            (base, true)
-                        }
+                        Some(
+                            base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4"
+                            | "__udivmodsi4"),
+                        ) => (base, true),
                         _ => (callee.as_str(), false),
                     };
                     let speed = TUNING.with(|t| t.get()).fast_routines;
-                    let division =
-                        matches!(
-                            callee,
-                            "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4"
-                        );
+                    let division = matches!(
+                        callee,
+                        "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4" | "__udivmodsi4"
+                    );
                     let entry = if !speed
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
                         && !(division && SIZE_FAST_DIVISION.with(|f| f.get()))
@@ -4816,7 +4954,7 @@ fn emit_with<const STACK: bool>(
             && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A))
         {
             a_callees.insert(callee.clone());
-            a_callees.insert(format!("{callee}_fast"));
+            a_callees.extend(entries_of(callee));
         }
     }
     let returns_x = function
@@ -4833,7 +4971,7 @@ fn emit_with<const STACK: bool>(
             && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::X))
         {
             x_callees.insert(callee.clone());
-            x_callees.insert(format!("{callee}_fast"));
+            x_callees.extend(entries_of(callee));
         }
     }
     let returns_y = function
@@ -4850,7 +4988,7 @@ fn emit_with<const STACK: bool>(
             && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::Y))
         {
             y_callees.insert(callee.clone());
-            y_callees.insert(format!("{callee}_fast"));
+            y_callees.extend(entries_of(callee));
         }
     }
     // the cells a return reads: the bytes of a long result
@@ -5052,6 +5190,49 @@ pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
 fn allocate<const STACK: bool>(
     function: &mut MFunction<Class>
 ) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    let (tuning, imaginary, spike) = (TUNING.with(|t| t.get()), IMAGINARY.with(|n| n.get()), spike_asked());
+    let same = |one: &Allocated| {
+        one.stack == STACK
+            && one.tuning == tuning
+            && one.imaginary == imaginary
+            && one.spike == spike
+            && one.input == *function
+    };
+    let found = ALLOCATED.with(|all| {
+        let all = all.borrow();
+        let one = all.as_ref()?.get(&function.name)?.iter().find(|one| same(one))?;
+        Some((one.output.clone(), one.assignment.clone(), one.slots.clone()))
+    });
+    if let Some((output, assignment, slots)) = found {
+        *function = output;
+        return Ok((assignment, slots));
+    }
+    let remembered = ALLOCATED.with(|all| all.borrow().is_some()).then(|| function.clone());
+    let (assignment, slots) = allocate_once::<STACK>(function)?;
+    if let Some(input) = remembered {
+        let one = Allocated {
+            stack: STACK,
+            tuning,
+            imaginary,
+            spike,
+            input,
+            output: function.clone(),
+            assignment: assignment.clone(),
+            slots: slots.clone(),
+        };
+        ALLOCATED.with(|all| {
+            if let Some(all) = all.borrow_mut().as_mut() {
+                all.entry(function.name.clone()).or_default().push(one);
+            }
+        });
+    }
+    Ok((assignment, slots))
+}
+
+fn allocate_once<const STACK: bool>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    ALLOCATIONS.with(|count| count.set(count.get() + 1));
     // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
     // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
     let only = std::env::var("LLRM_6502_GREEDY_ONLY").ok();

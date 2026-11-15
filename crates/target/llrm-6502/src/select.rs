@@ -184,12 +184,12 @@ thread_local! {
 /// writes: the pricing of a layout, of a multiply or a callee-save choice asks
 /// for the same text again, and the allocator and the peephole passes are the
 /// bulk of a compile. The modules the texts are keyed by must outlive it.
-pub struct TextCache(());
+pub struct TextCache(alloc::AllocationCache);
 
 impl TextCache {
     pub fn new() -> TextCache {
         TEXTS.with(|texts| *texts.borrow_mut() = Some(HashMap::default()));
-        TextCache(())
+        TextCache(alloc::AllocationCache::new())
     }
 }
 
@@ -322,7 +322,7 @@ pub fn module_text(
     // a module whose divisions are cold calls the speed routines with the
     // small wide path
     let wide = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
             .iter()
             .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
@@ -338,7 +338,7 @@ pub fn module_text(
     // module's choice by the share of its clocks it saves
     let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
     let compact_division = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
             .iter()
             .any(|name| text.contains(&format!(" {name}\n")))
     };
@@ -1114,7 +1114,7 @@ fn lower(
     }
 }
 
-/// At size the speed multiply (`hotmultiply::FAST_BYTES` more, linked once) is
+/// At size the speed multiply (`hotmultiply::fast_bytes` more, linked once) is
 /// the module's choice by the share of its clocks it saves against the share of
 /// its bytes it adds (`mulimage::pays_by_share`): the static runs of its
 /// multiplies times what a call saves, against the module priced as it stands.
@@ -1129,7 +1129,7 @@ fn fast_multiply_pays_at_size(
 ) -> Result<bool, String> {
     let (clocks, bytes) = priced(module, parts, texts)?;
     let saved = (crate::hotmultiply::runs(module) * crate::hotmultiply::SAVED_CLOCKS) as u64;
-    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::FAST_BYTES as i64), clocks, bytes))
+    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::fast_bytes() as i64), clocks, bytes))
 }
 
 /// The module as it stands, in estimated clocks and bytes
@@ -1160,7 +1160,7 @@ fn priced(
 /// DEVIATE 6502-DIV-16 (owner llrm-target-6502, exit 2026-11-24): the pin's
 /// `__udivhi3` is one routine. Reason: bytes first on this target at every
 /// level (user ruling 2026-11-14); the compact routine is 39 bytes smaller and
-/// 215 clocks slower a call on average (`hotdivision::SAVED_AT_SPEED_16`).
+/// slower a call on average (`hotdivision::saved_at_speed_16`).
 fn speed_division16_pays(
     module: &Module,
     parts: &[(&str, &Selection)],
@@ -1173,8 +1173,9 @@ fn speed_division16_pays(
     let (clocks, bytes) = priced(module, parts, compact)?;
     // the priced clocks leave out the routine's own run
     let runs = crate::hotdivision::runs16(module);
-    let clocks = clocks + (runs * crate::hotdivision::CLOCKS_COMPACT_16) as u64;
-    let saved = (runs * crate::hotdivision::SAVED_AT_SPEED_16) as u64;
+    let cpu = parts.first().map_or(crate::dagisel::hooks::Cpu::Mos6502, |(_, selection)| selection.cpu);
+    let clocks = clocks + (runs * crate::hotdivision::clocks_compact_16(cpu)) as u64;
+    let saved = (runs * crate::hotdivision::saved_at_speed_16(cpu)) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }
 
@@ -1195,6 +1196,19 @@ fn fast_division_pays_at_size(
     let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, faster))
         - crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
     let (clocks, bytes) = priced(module, parts, compact)?;
-    let saved = (crate::hotdivision::runs(module) * crate::hotdivision::SAVED_AT_SIZE) as u64;
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let weights: std::collections::HashMap<usize, Vec<u64>> = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(|(index, global)| match &global.kind {
+            llrm_mir::module::GlobalKind::Function(function) if function.entry().is_some() => {
+                Some((index, crate::weights::block_weights(module, function, &layout)))
+            }
+            _ => None,
+        })
+        .collect();
+    let saved = (crate::hotdivision::runs_priced(module, &weights) * crate::hotdivision::SAVED_AT_SIZE) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }
