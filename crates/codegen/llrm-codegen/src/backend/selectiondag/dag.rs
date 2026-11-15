@@ -939,6 +939,23 @@ impl SelectionDAG {
         self.live_users(value.node).filter(move |&user| self.nodes[user as usize].ops.contains(&value))
     }
 
+    /// The nodes that read `value`, newest use first, once each: a use list
+    /// in the pin's order (`addToList` puts a use at the head, so the list
+    /// runs from the use added last). `ReplaceAllUsesWith` walks it and adds
+    /// each use to the new value in turn, which reverses it.
+    pub fn users_newest_first(
+        &self,
+        value: SDValue,
+    ) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for &user in self.uses.get(value.node as usize).into_iter().flatten().rev() {
+            if !self.is_deleted(user) && self.nodes[user as usize].ops.contains(&value) && !out.contains(&user) {
+                out.push(user);
+            }
+        }
+        out
+    }
+
     /// Whether anything reads `value`: `users(value).next().is_some()`
     /// without collecting and sorting them.
     pub fn has_users(
@@ -1124,7 +1141,7 @@ impl SelectionDAG {
             if self.root == from {
                 self.root = to;
             }
-            for user in self.users(from).collect::<Vec<_>>() {
+            for user in self.users_newest_first(from) {
                 self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
                     if *op == from {
