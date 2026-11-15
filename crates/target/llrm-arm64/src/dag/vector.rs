@@ -95,6 +95,10 @@ fn constant_build_vector(
         if from == vt { mov } else { dag.get_node(ISD::Target(aarch64_isd::NVCAST), vt, &[mov]) }
     };
     let imm = |dag: &mut SelectionDAG, value: u64| dag.get_constant(u128::from(value), EVT::I32);
+    // The modified-immediate forms make a vector of the size asked: a 64-bit
+    // vector is made as one (`MOVIv2i32`), not as a 128-bit one cast down.
+    let wide = vt.size_in_bits() == 128;
+    let (t32, t16, t8) = if wide { (MVT::V4I32, MVT::V8I16, MVT::V16I8) } else { (MVT::V2I32, MVT::V4I16, MVT::V8I8) };
     // `tryAdvSIMDModImm64`
     let attempt = |dag: &mut SelectionDAG, bits: u64, inverted: bool| -> Option<SDValue> {
         let (opcode_shift, opcode_msl, opcode_byte) = if inverted {
@@ -116,7 +120,7 @@ fn constant_build_vector(
         ];
         if let Some(&(_, shift, value)) = word.iter().find(|(is, ..)| *is) {
             let (value, shift) = (imm(dag, value), imm(dag, shift));
-            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(MVT::V4I32), &[value, shift]);
+            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(t32), &[value, shift]);
             return Some(nvcast(dag, mov));
         }
         // `tryAdvSIMDModImm321s`: types 7 and 8, the shifted ones.
@@ -124,14 +128,14 @@ fn constant_build_vector(
             [(modimm::type7(bits), 264u64, (bits & 0xff00) >> 8), (modimm::type8(bits), 272, (bits & 0xff_0000) >> 16)];
         if let Some(&(_, shift, value)) = ones.iter().find(|(is, ..)| *is) {
             let (value, shift) = (imm(dag, value), imm(dag, shift));
-            let mov = dag.get_node(ISD::Target(opcode_msl), EVT::Simple(MVT::V4I32), &[value, shift]);
+            let mov = dag.get_node(ISD::Target(opcode_msl), EVT::Simple(t32), &[value, shift]);
             return Some(nvcast(dag, mov));
         }
         // `tryAdvSIMDModImm16`: types 5 and 6.
         let half = [(modimm::type5(bits), 0u64, bits & 0xff), (modimm::type6(bits), 8, (bits & 0xff00) >> 8)];
         if let Some(&(_, shift, value)) = half.iter().find(|(is, ..)| *is) {
             let (value, shift) = (imm(dag, value), imm(dag, shift));
-            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(MVT::V8I16), &[value, shift]);
+            let mov = dag.get_node(ISD::Target(opcode_shift), EVT::Simple(t16), &[value, shift]);
             return Some(nvcast(dag, mov));
         }
         // `tryAdvSIMDModImm8`: type 9, `MOVI` of a byte (the pin tries no
@@ -140,7 +144,7 @@ fn constant_build_vector(
             && modimm::type9(bits)
         {
             let value = imm(dag, bits & 0xff);
-            let mov = dag.get_node(ISD::Target(opcode), EVT::Simple(MVT::V16I8), &[value]);
+            let mov = dag.get_node(ISD::Target(opcode), EVT::Simple(t8), &[value]);
             return Some(nvcast(dag, mov));
         }
         None

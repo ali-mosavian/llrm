@@ -494,13 +494,19 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let base = if *second { 0x0E00_5800 } else { 0x0E00_1800 };
             base | lanes.q() << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
-        Inst::VectorNarrow { high, wide, rd, rn } => {
+        Inst::VectorNarrow { high, shift: None, wide, rd, rn } => {
             let size = match wide {
                 Arrangement::H8 => 0,
                 Arrangement::S4 => 1,
                 _ => 2,
             };
             0x0E21_2800 | u32::from(*high) << 30 | size << 22 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        // `shrn`: `immh:immb` is twice the narrow lane's bits less the shift.
+        Inst::VectorNarrow { high, shift: Some(shift), wide, rd, rn } => {
+            let narrow_bits = wide.lane_bits() / 2;
+            let immhb = 2 * narrow_bits - u32::from(*shift);
+            0x0F00_8400 | u32::from(*high) << 30 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
             let index = u32::from(*index);
