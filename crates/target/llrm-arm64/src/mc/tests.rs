@@ -383,7 +383,7 @@ fn branches() {
         for (op, amount) in [(VectorLongOp::Sshll, 0), (VectorLongOp::Ushll, 0), (VectorLongOp::Sshll, 3)] {
             all.push(Inst::VectorLongShift { op, lane, high, rd: Vreg(5), rn: Vreg(17), amount });
         }
-        all.push(Inst::VectorNarrow { high, wide, rd: Vreg(6), rn: Vreg(30) });
+        all.push(Inst::VectorNarrow { high, shift: None, wide, rd: Vreg(6), rn: Vreg(30) });
         for op in [VectorLongOp::Smull, VectorLongOp::Umull, VectorLongOp::Smlal, VectorLongOp::Umlal] {
             all.push(Inst::VectorLong { op, lane, high, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
         }
@@ -410,6 +410,19 @@ fn branches() {
     }
     for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
+        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt] {
+            if op.has_lanes(lanes) {
+                all.push(Inst::VectorIntUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
+            }
+        }
+    }
+    for (lanes, index) in [
+        (Arrangement::B16, 15),
+        (Arrangement::H8, 5),
+        (Arrangement::S4, 3),
+        (Arrangement::D2, 1),
+    ] {
+        all.push(Inst::VectorLoadLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for (lanes, index) in [
         (Arrangement::B16, 3),
@@ -434,6 +447,7 @@ fn branches() {
             VectorFpUnary::Ucvtf,
             VectorFpUnary::Fcvtzs,
             VectorFpUnary::Fcvtzu,
+            VectorFpUnary::Sqrt,
         ] {
             all.push(Inst::VectorFpUnary { op, lanes, rd: Vreg(4), rn: Vreg(27) });
         }

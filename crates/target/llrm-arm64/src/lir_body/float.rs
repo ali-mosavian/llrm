@@ -7,7 +7,7 @@ use crate::mc::inst::Cond;
 use crate::vector_forms::VectorForm;
 use crate::mc::inst::{
     Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, NarrowLane, Rounding, VectorFma,
-    VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 
 const UNARY: [(FpUnary, &str); 11] = [
@@ -251,13 +251,24 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
             None,
         ),
-        Inst::VectorNarrow { high, wide, rd, rn } => semantics(
-            if *high { Operation::Binary } else { Operation::Unary },
-            format!("XTN{}", narrow_name(*wide, *high)),
-            vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
-            if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] },
-            None,
-        ),
+        Inst::VectorNarrow { high, shift, wide, rd, rn } => {
+            let mut sources =
+                if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] };
+            let name = match shift {
+                Some(amount) => {
+                    sources.push(imm(i64::from(*amount)));
+                    format!("SHRN{}_shift", narrow_name(*wide, *high))
+                }
+                None => format!("XTN{}", narrow_name(*wide, *high)),
+            };
+            semantics(
+                if *high || shift.is_some() { Operation::Binary } else { Operation::Unary },
+                name,
+                vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
+                sources,
+                None,
+            )
+        }
         Inst::VectorFmulLane { lanes, rd, rn, rm, index } => semantics(
             Operation::Binary,
             format!("FMULv{}_indexed", if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }),
@@ -315,6 +326,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vector_fp_name(op.mnemonic(), *lanes),
             vec![vreg_loc(*rd, 128)],
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
+        Inst::VectorIntUnary { op, lanes, rd, rn } => semantics(
+            Operation::Unary,
+            vector_int_unary_name(*op, *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128)],
             None,
         ),
         Inst::VectorFpUnary { op, lanes, rd, rn } => semantics(
@@ -596,13 +614,14 @@ const VECTOR_REDUCES: [VectorReduce; 6] = [
 ];
 
 const VECTOR_FP_OPS: [VectorFpOp; 4] = [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div];
-const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
+const VECTOR_FP_UNARY: [VectorFpUnary; 7] = [
     VectorFpUnary::Neg,
     VectorFpUnary::Abs,
     VectorFpUnary::Scvtf,
     VectorFpUnary::Ucvtf,
     VectorFpUnary::Fcvtzs,
     VectorFpUnary::Fcvtzu,
+    VectorFpUnary::Sqrt,
 ];
 
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
@@ -613,6 +632,15 @@ fn vector_op_name(
     let stem = op.mnemonic().to_uppercase();
     format!("{stem}v{}", lane_name(lanes))
 }
+
+fn vector_int_unary_name(
+    op: VectorIntUnary,
+    lanes: Arrangement,
+) -> String {
+    format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes))
+}
+
+const VECTOR_INT_UNARY: [VectorIntUnary; 3] = [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt];
 
 const VECTOR_OPS: [VectorOp; 14] = [
     VectorOp::Add,
@@ -699,7 +727,17 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     ] {
         let narrow = narrow_name(wide, high);
         if name == format!("XTN{narrow}") {
-            return Some(Inst::VectorNarrow { high, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+            return Some(Inst::VectorNarrow { high, shift: None, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+        }
+        if name == format!("SHRN{narrow}_shift") {
+            let at = usize::from(high);
+            return Some(Inst::VectorNarrow {
+                high,
+                shift: Some(value_of(&s[at + 1]) as u8),
+                wide,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[at]),
+            });
         }
     }
     for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
@@ -809,6 +847,13 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                     rn: vreg_of(&s[0]),
                     rm: vreg_of(&s[1]),
                 });
+            }
+        }
+    }
+    for op in VECTOR_INT_UNARY {
+        for lanes in OP_ARRANGEMENTS {
+            if name == vector_int_unary_name(op, lanes) && op.has_lanes(lanes) {
+                return Some(Inst::VectorIntUnary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
             }
         }
     }

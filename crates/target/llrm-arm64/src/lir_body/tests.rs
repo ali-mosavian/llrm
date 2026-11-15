@@ -13,7 +13,7 @@ use crate::mc::inst::{
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
-    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp,
+    Addr, Arrangement, Gpr, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp,
     VectorReduce, VectorShift,
 };
 use crate::mfunc::Callee;
@@ -278,7 +278,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     out.push(Inst::VectorMulLane { rd: v(0), rn: v(1), rm: v(2), index: 1 });
     out.push(Inst::VectorDupScalar { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
     for (high, wide) in [(false, Arrangement::H8), (true, Arrangement::S4), (false, Arrangement::D2)] {
-        out.push(Inst::VectorNarrow { high, wide, rd: v(0), rn: v(1) });
+        out.push(Inst::VectorNarrow { high, shift: None, wide, rd: v(0), rn: v(1) });
     }
     for (high, lane) in [(false, NarrowLane::B), (true, NarrowLane::H), (false, NarrowLane::S)] {
         for op in [VectorLongOp::Umlal, VectorLongOp::Smlal] {
@@ -297,6 +297,14 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     for lanes in Arrangement::ALL {
         out.push(Inst::VectorLoadReplicate { lanes, rt: v(1), base: Gpr(3) });
+        for op in [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt] {
+            if op.has_lanes(lanes) {
+                out.push(Inst::VectorIntUnary { op, lanes, rd: v(0), rn: v(1) });
+            }
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        out.push(Inst::VectorLoadLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
     }
     for (op, lanes) in [
         (VectorReduce::Addv, Arrangement::B16),
@@ -319,6 +327,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             VectorFpUnary::Ucvtf,
             VectorFpUnary::Fcvtzs,
             VectorFpUnary::Fcvtzu,
+            VectorFpUnary::Sqrt,
         ] {
             out.push(Inst::VectorFpUnary { op, lanes, rd: v(0), rn: v(1) });
         }
@@ -399,6 +408,8 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorUmov { .. } => "VectorUmov",
         Inst::VectorStoreLane { .. } => "VectorStoreLane",
         Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
+        Inst::VectorIntUnary { .. } => "VectorIntUnary",
+        Inst::VectorLoadLane { .. } => "VectorLoadLane",
         Inst::VectorFmaLane { .. } => "VectorFmaLane",
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
         Inst::VectorMulLane { .. } => "VectorMulLane",
@@ -421,7 +432,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 72] = [
+const ALL: [&str; 74] = [
     "Mark",
     "Label",
     "Cfi",
@@ -478,6 +489,8 @@ const ALL: [&str; 72] = [
     "VectorUmov",
     "VectorStoreLane",
     "VectorLoadReplicate",
+    "VectorIntUnary",
+    "VectorLoadLane",
     "VectorFmaLane",
     "VectorFmulLane",
     "VectorMulLane",

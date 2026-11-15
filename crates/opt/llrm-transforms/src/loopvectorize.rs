@@ -579,6 +579,8 @@ fn extract(
                     // divisor is safe to speculate; a non-zero constant is.
                     BinaryOp::UDiv => ArithOp::UDiv,
                     BinaryOp::URem => ArithOp::URem,
+                    BinaryOp::SDiv => ArithOp::SDiv,
+                    BinaryOp::SRem => ArithOp::SRem,
                     _ => return Err(Skipped("A binary operation the vectorizer does not widen yet")),
                 };
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
@@ -617,10 +619,17 @@ fn extract(
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
                 let second = interleave::divisor_info(cx.context, op, data.operands[1], lane);
-                if matches!(op, BinaryOp::UDiv | BinaryOp::URem)
-                    && !(second.constant && second.value != Some(0) && matches!(operands[1], Source::Splat(_)))
+                // `isSafeToSpeculativelyExecute`: a signed divide must not be by
+                // -1 either (the minimum overflows).
+                let divides = matches!(op, BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem);
+                let by_minus_one = matches!(op, BinaryOp::SDiv | BinaryOp::SRem) && second.value == Some(-1);
+                if divides
+                    && !(second.constant
+                        && second.value != Some(0)
+                        && !by_minus_one
+                        && matches!(operands[1], Source::Splat(_)))
                 {
-                    return Err(Skipped("A division by a value that is not a non-zero constant"));
+                    return Err(Skipped("A division by a value that is not a safe non-zero constant"));
                 }
                 let ext = [ext_of(data.operands[0]), ext_of(data.operands[1])];
                 recipes.push(Recipe::Binary { op: arith, lane, ext, second });
