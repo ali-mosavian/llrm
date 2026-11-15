@@ -14,9 +14,12 @@
 //! that replaces them.
 //!
 //! Translation: `BranchFolder::TailMergeBlocks` (`BranchFolding.cpp`).
-//! DEVIATE: it runs on the expanded instructions of one function, where LLVM
-//! merges machine blocks; the merged tail stays where the latch had it and the
-//! other block jumps into it. Exit: D-6502 of #6259.
+//! DEVIATE 6502-TAIL-MERGE (owner 6502, exit 2026-11-24): it runs on the
+//! expanded instructions of one function, where LLVM merges machine blocks; the
+//! merged tail stays where the latch had it and the other block jumps into it.
+//! After the layout choice, so its bytes do not tip it (`alloc::emit_on`).
+//! Exit: D-6502 of #6259 puts the 6502 on the shared pipeline, whose
+//! `TailMergeBlocks` the loop tests then go through.
 //!
 //! # Example
 //! ```text
@@ -34,6 +37,8 @@
 //!
 //! # Runs
 //! [`crate::peephole::after_layout`], before [`crate::short_jump`].
+
+use llrm_support::hash::HashMap;
 
 use crate::asm::{Asm, Inst, Line, Op, Operand};
 
@@ -141,6 +146,13 @@ fn merge_once(asm: &mut Asm) -> bool {
             )
         })
         .collect();
+    // the branches that go to each label: a latch is found by the loop's head
+    let mut going_to: HashMap<&str, Vec<usize>> = HashMap::default();
+    for &at in &branches {
+        if let Line::Inst(inst) = &lines[at] {
+            going_to.entry(inst.target().unwrap_or_default()).or_default().push(at);
+        }
+    }
     for &entry in &branches {
         let Line::Inst(first) = &lines[entry] else { continue };
         let (Some(opposite), Some(exit)) = (first.op.opposite(), first.target()) else { continue };
@@ -148,12 +160,9 @@ fn merge_once(asm: &mut Asm) -> bool {
         while let Some(Line::Label(name)) = lines.get(entry + 1 + heads.len()) {
             heads.push(name.as_str());
         }
-        if heads.is_empty() {
-            continue;
-        }
-        for &latch in &branches {
+        for &latch in heads.iter().filter_map(|head| going_to.get(head)).flatten() {
             let Line::Inst(back) = &lines[latch] else { continue };
-            if latch == entry || back.op != opposite || !back.target().is_some_and(|head| heads.contains(&head)) {
+            if latch == entry || back.op != opposite {
                 continue;
             }
             if !falls_to(lines, latch + 1, exit) {
@@ -195,6 +204,10 @@ fn merge_once(asm: &mut Asm) -> bool {
 }
 
 /// Each loop test that its latch repeats, jumped into at the latch.
-pub fn merge_opposite_tails(asm: &mut Asm) {
-    while merge_once(asm) {}
+pub fn merge_opposite_tails(asm: &mut Asm) -> bool {
+    let mut merged = false;
+    while merge_once(asm) {
+        merged = true;
+    }
+    merged
 }

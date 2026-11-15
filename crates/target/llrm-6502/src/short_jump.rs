@@ -9,13 +9,14 @@
 //! register alone, when the flags are written again at `t` before they are
 //! read.
 //!
-//! The target must be within reach with room to spare: [`crate::relax`] runs
-//! after this and lengthens a branch that misses.
+//! The target must be within reach with room to spare, as it runs on the
+//! relaxed text and a branch that missed would be long.
 //!
-//! DEVIATE: LLVM has no pass of this shape; its `BranchFolder` keeps the
-//! unconditional branch and the target's `analyzeBranch` never reads the flags
-//! of a fall-through. Reason: 6502 `jmp` is three bytes against a branch's two
-//! and the flags are free to read. Exit: none; it is the 6502's size rule.
+//! DEVIATE 6502-TAIL-MERGE (owner 6502, exit 2026-11-24): LLVM keeps the
+//! unconditional branch and never reads the flags a fall-through leaves; on the
+//! 6502 `jmp` is three bytes against a branch's two and the flags are free.
+//! Exit: D-6502 of #6259 moves it to the shared post-allocation jump
+//! optimisation (`jumps/branchfold`), where the flag fact is a target hook.
 //!
 //! # Example
 //! ```text
@@ -27,6 +28,8 @@
 //!
 //! # Runs
 //! [`crate::peephole::after_layout`], after [`crate::tail_merge`].
+
+use llrm_support::hash::HashMap;
 
 use crate::asm::{Asm, Index, Inst, Line, Op, Operand, Registers};
 
@@ -164,8 +167,19 @@ fn index_load_above(
 }
 
 /// Each `jmp` taken where a flag is known, as the branch on it.
-pub fn jump_to_branch(asm: &mut Asm) {
+pub fn jump_to_branch(asm: &mut Asm) -> bool {
+    // no label moves: a load moved down passes no label
+    let labels: HashMap<String, usize> = asm
+        .lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| match line {
+            Line::Label(name) => Some((name.clone(), at)),
+            _ => None,
+        })
+        .collect();
     let mut at = 0;
+    let mut changed = false;
     while at < asm.lines.len() {
         let here = at;
         at += 1;
@@ -173,7 +187,7 @@ pub fn jump_to_branch(asm: &mut Asm) {
         if jump.op != Op::Jmp {
             continue;
         }
-        let Some(target) = jump.target().and_then(|label| Line::label_position(&asm.lines, label)) else { continue };
+        let Some(&target) = jump.target().and_then(|label| labels.get(label)) else { continue };
         if bytes_between(&asm.lines, here + 1, target) > REACH {
             continue;
         }
@@ -203,5 +217,7 @@ pub fn jump_to_branch(asm: &mut Asm) {
         let Line::Inst(jump) = &asm.lines[here] else { continue };
         let operand = jump.operand.clone();
         asm.lines[here] = Line::Inst(Inst::new(branch, operand));
+        changed = true;
     }
+    changed
 }

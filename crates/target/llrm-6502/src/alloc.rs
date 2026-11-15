@@ -4808,16 +4808,16 @@ fn finish_pair(
     code.y_callees = y_callees;
     code.result_cells = result_cells;
     let (mut priced, mut kept) = crate::peephole::run_pair(&code);
-    let mut finished = kept.clone();
-    crate::peephole::after_layout(&mut finished);
-    for asm in [&mut priced, &mut kept, &mut finished] {
-        crate::relax::relax(asm);
-    }
+    crate::relax::relax(&mut priced);
+    crate::relax::relax(&mut kept);
+    let kept_text = kept.text();
+    // after the layout choice, on the relaxed text: the passes only shrink it
+    let changed = crate::peephole::after_layout(&mut kept);
     if let Some((file, scope, places)) = lines_of {
         kept.lines = with_lines(kept.lines, file, scope, places);
-        finished.lines = with_lines(finished.lines, file, scope, places);
     }
-    (priced.text(), kept.text(), finished.text())
+    let finished = if changed || lines_of.is_some() { kept.text() } else { kept_text.clone() };
+    (priced.text(), kept_text, finished)
 }
 
 /// `.dbg line` ahead of each instruction whose line is not the one before it

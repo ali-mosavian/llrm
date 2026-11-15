@@ -192,3 +192,27 @@ fn the_passes_run_after_the_layout() {
     after_layout(&mut asm);
     assert_eq!(asm.text().matches("lda (rc4),y").count(), 1, "{}", asm.text());
 }
+
+/// k_strrchr at -O2 went from 38 to 40 B (+17 cy) when these passes ran inside
+/// the passes the layout choice is priced on: the jump-in layout got two bytes
+/// smaller, was kept, and kept the variants from reaching the 38 B layout. They
+/// run after the choice (`peephole::after_layout`). Needs `llrm-cc` built
+/// (`LLRM_CC`).
+#[test]
+fn strrchr_keeps_its_layout_when_the_passes_shrink_another() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("strrchr-layout");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/hand/strrchr.c");
+    let made = std::process::Command::new(common::pipeline::llrm_cc())
+        .current_dir(&dir)
+        .args(["--target=6502-sim65", "-O2", "-S", "-w", "-o", "o.s"])
+        .arg(&src)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let text = std::fs::read_to_string(dir.join("o.s")).unwrap();
+    let from = text.find("k_strrchr:").unwrap();
+    let body: String = text[from..].split("  rts").next().unwrap().to_owned() + "  rts\n";
+    let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= 38, "{bytes} B:\n{body}");
+}

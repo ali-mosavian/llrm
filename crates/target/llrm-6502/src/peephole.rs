@@ -150,11 +150,16 @@ pub fn run_with(
 /// it is priced on.
 ///
 /// `LLRM_6502_TAILMERGE=0` is the kill switch, for an A/B of one binary.
-pub fn after_layout(asm: &mut Asm) {
-    if crate::copyprop::enabled(std::env::var_os("LLRM_6502_TAILMERGE").as_deref()) {
-        crate::tail_merge::merge_opposite_tails(asm);
-        crate::short_jump::jump_to_branch(asm);
+///
+/// Whether anything changed. They run on the relaxed text: they only shrink
+/// it, so no branch they leave is out of reach.
+pub fn after_layout(asm: &mut Asm) -> bool {
+    if !crate::copyprop::enabled(std::env::var_os("LLRM_6502_TAILMERGE").as_deref()) {
+        return false;
     }
+    let merged = crate::tail_merge::merge_opposite_tails(asm);
+    let shortened = crate::short_jump::jump_to_branch(asm);
+    merged || shortened
 }
 
 /// `(run_with(asm, false), run_with(asm, true))` on one copy of `asm`: the
