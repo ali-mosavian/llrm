@@ -55,8 +55,8 @@ pub fn share_percent() -> u64 {
 
 /// Whether a call of the runtime routine `name` reads and writes none of the
 /// `rcN` cells: its text and the routines it calls name none (the 32-bit
-/// routines name rc2..rc7, their arguments). A store to an argument cell before such
-/// a call is not an argument.
+/// routines name rc2..rc7, their arguments). A store to an argument cell before
+/// such a call is not an argument.
 ///
 /// The pin's analogue is the call's operand list: only the registers it lists
 /// are read (`MachineInstr::implicit_operands`, `LivePhysRegs`).
