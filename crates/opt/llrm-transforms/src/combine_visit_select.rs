@@ -26,12 +26,7 @@
 //! `foldSelectToCmp` (`foldSelectCmpBitcasts` ... `foldSelectEqualityTest`);
 //! `FoldSelectWithAndOrCond` is `combine_select_andor`.
 //!
-//! DEVIATE 3: `replaceInInstruction` (the arms' instructions that read the
-//! condition get its value) is not made:
-//! `isSafeToSpeculativelyExecuteWithVariableReplaced` is private to
-//! `lazyvalueinfo.rs`.
-//!
-//! DEVIATE 4: when the operands of a select swap, its `prof` branch weights
+//! DEVIATE 3: when the operands of a select swap, its `prof` branch weights
 //! are dropped, not swapped.
 //!
 //! # Example
@@ -202,6 +197,12 @@ fn cond_known_in_arms(
             replace_operand(c, inst, slot, simpler);
             return Some(Visit::Changed);
         }
+    }
+    // The one-use chain that feeds an arm reads the condition's value.
+    if c.replace_in_instruction(sel.if_true, sel.cond, yes, 0)
+        || c.replace_in_instruction(sel.if_false, sel.cond, no, 0)
+    {
+        return Some(Visit::Changed);
     }
     None
 }
