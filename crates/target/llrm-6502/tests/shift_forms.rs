@@ -259,3 +259,22 @@ define i16 @f5(i16 %x) noinline {\n  %s = lshr i16 %x, 3\n  %r = xor i16 %s, %x\
         assert_eq!(failed, 0, "{level:?}: case {failed} (of 4 inputs a function) is wrong");
     }
 }
+
+/// The byte in `a` is what the compare after the shift reads: with the run
+/// in `a` the compare saw the shifted byte (2026-11-15).
+#[test]
+fn a_shift_run_beside_a_compare_keeps_the_byte_in_a() {
+    let defs = "\
+define i16 @f0(i8 %c, i8 %d, i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %z = zext i8 %c to i16\n  %e = icmp eq i16 %s, %z\n  %r = select i1 %e, i16 7, i16 9\n  ret i16 %r\n}
+define i16 @f1(i8 %c, i8 %d, i16 %x) noinline {\n  %s = shl i16 %x, 3\n  %z = zext i8 %c to i16\n  %e = icmp ult i16 %z, %s\n  %r = select i1 %e, i16 7, i16 9\n  ret i16 %r\n}
+";
+    let call = |function: usize, c: u8, d: u8, x: u16| -> (String, u16) {
+        let s = x << 3;
+        let hit = if function == 0 { s == u16::from(c) } else { u16::from(c) < s };
+        (format!("i8 {}, i8 {}, i16 {}", c as i8, d as i8, x as i16), if hit { 7 } else { 9 })
+    };
+    for level in [Level::O2, Level::Os] {
+        let failed = failing_case("compare", level, defs, call, 2);
+        assert_eq!(failed, 0, "{level:?}: case {failed} (of 4 inputs a function) is wrong");
+    }
+}
