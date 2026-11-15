@@ -598,14 +598,14 @@ fn extract(
                     recipes.push(if stride == 1 {
                         Recipe::Load { lane, align }
                     } else {
-                        Recipe::Scalarized { op: MemoryOp::Load, lane }
+                        Recipe::Scalarized { op: MemoryOp::Load, lane, stride_bytes: Some(stride * size as i64) }
                     });
                 } else {
                     stored = Some(source_of(data.operands[0], &widened)?);
                     recipes.push(if stride == 1 {
                         Recipe::Store { lane, align }
                     } else {
-                        Recipe::Scalarized { op: MemoryOp::Store, lane }
+                        Recipe::Scalarized { op: MemoryOp::Store, lane, stride_bytes: Some(stride * size as i64) }
                     });
                 }
                 if is_load {
@@ -1861,7 +1861,14 @@ impl FunctionPass for LoopVectorize {
                                 None
                             }
                             Ok(chosen)
-                                if !fills_registers(&cx, &widening, chosen.vf, tti.vector_register_bits(), widen_compares) =>
+                                if !tti.selects_sub_register_vectors()
+                                    && !fills_registers(
+                                        &cx,
+                                        &widening,
+                                        chosen.vf,
+                                        tti.vector_register_bits(),
+                                        widen_compares,
+                                    ) =>
                             {
                                 // DEVIATE LV-D6 (owner llrm-arm64-vec, exit
                                 // LV-W4): a

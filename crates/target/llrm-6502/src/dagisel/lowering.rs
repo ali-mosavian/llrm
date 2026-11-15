@@ -371,6 +371,13 @@ fn lower_long(
     }
     let shift = matches!(opcode, mosisd::SHL32 | mosisd::SRL32 | mosisd::SRA32);
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    // a product commutes: two arguments go in their own order, the first where
+    // the routine takes its first operand (InstCombine puts the later argument
+    // on the left, and the call then swapped four bytes with four)
+    let (a, b) = match (opcode, incoming_register(dag, a), incoming_register(dag, b)) {
+        (mosisd::MUL32, Some(x), Some(y)) if x > y => (b, a),
+        _ => (a, b),
+    };
     if shift && dag.constant(b).is_some() {
         return None;
     }
@@ -443,6 +450,24 @@ fn lower_widening_multiply(
         EVT::I32,
         &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
     ))
+}
+
+/// The virtual register an argument (or the low half of a long one) is copied
+/// from.
+fn incoming_register(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> Option<u32> {
+    if dag.opcode(value) == ISD::BuildPair {
+        return incoming_register(dag, dag.operand(value, 0));
+    }
+    if dag.opcode(value) != ISD::CopyFromReg {
+        return None;
+    }
+    match dag.node(dag.operand(value, 1)).data {
+        NodeData::Register(register) => Some(register),
+        _ => None,
+    }
 }
 
 /// A bit in memory is a byte with the upper bits zero, as the pin's type

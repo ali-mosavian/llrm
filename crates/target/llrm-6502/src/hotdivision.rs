@@ -53,7 +53,18 @@ pub const SAVED_AT_SIZE: f64 = 2700.0;
 /// The static runs of the 32-bit divisions of `module` that are not by a known
 /// byte: 10 per level of loop depth, times the runs of the function.
 pub fn runs(module: &Module) -> f64 {
-    runs_of_width(module, 32)
+    runs_of_width(module, 32, None)
+}
+
+/// [`runs`] with each block weighing what `weights::block_weights` says (a
+/// counted loop its trips), the units the module's priced clocks are in. A
+/// static ten trips a loop put the saving of 200 trips of divides against
+/// the clocks of 200 (div_constants_long -Os: 2.9% of its clocks, 54% run).
+pub fn runs_priced(
+    module: &Module,
+    weights: &std::collections::HashMap<usize, Vec<u64>>,
+) -> f64 {
+    runs_of_width(module, 32, Some(weights))
 }
 
 /// The four shapes the 16-bit divisions are priced over (dividend, divisor):
@@ -92,12 +103,13 @@ pub fn saved_at_speed_16(cpu: crate::dagisel::hooks::Cpu) -> f64 {
 
 /// [`runs`] of the 16-bit divisions.
 pub fn runs16(module: &Module) -> f64 {
-    runs_of_width(module, 16)
+    runs_of_width(module, 16, None)
 }
 
 fn runs_of_width(
     module: &Module,
     width: u32,
+    priced: Option<&std::collections::HashMap<usize, Vec<u64>>>,
 ) -> f64 {
     let calls = call_weights(module);
     let mut runs = 0.0;
@@ -109,7 +121,7 @@ fn runs_of_width(
         let depths = block_depths(function);
         let called = calls.get(&index).copied().unwrap_or(1.0);
         // a remainder beside the division of the same operands is the same call
-        // (`__divmodsi4`, the unsigned divide leaves it in `__sr`)
+        // (`__divmodsi4`, `__udivmodsi4`: the remainder comes back in rc4..rc7)
         let quotients: Vec<_> = function
             .layout()
             .iter()
@@ -151,8 +163,15 @@ fn runs_of_width(
                     Some(Operand::Constant(id)) if matches!(module.context.get(*id).kind, ConstantKind::Int(1..=255))
                 );
                 if long && !byte {
-                    let at = function.parent(inst).and_then(|b| depths.get(&llrm_analysis::cfg::id(b))).copied();
-                    runs += called * weight(at.unwrap_or(0));
+                    let block = function.parent(inst);
+                    runs += called
+                        * match priced.and_then(|weights| weights.get(&index)) {
+                            Some(weights) => block.and_then(|b| weights.get(b.0 as usize)).map_or(1.0, |w| *w as f64),
+                            None => {
+                                let at = block.and_then(|b| depths.get(&llrm_analysis::cfg::id(b))).copied();
+                                weight(at.unwrap_or(0))
+                            }
+                        };
                 }
             }
         }
