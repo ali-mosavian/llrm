@@ -302,6 +302,7 @@ pub trait CombineHooks {
     /// target measures it or the pin gains it.
     fn synth_mul_chain(
         &self,
+        _dag: &SelectionDAG,
         _vt: EVT,
         _c: u128,
     ) -> Option<MulPlan> {
@@ -2546,7 +2547,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        let op = self.dag.opcode(node);
+        let mut op = self.dag.opcode(node);
+        // `tryToFoldExtOfLoad`'s `NonNegZExt`: a `zext nneg` of a plain load
+        // that a signed compare reads is a `sextload`, so the compare needs
+        // no mask.
+        if op == ISD::ZeroExtend
+            && info.ext.is_none()
+            && self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+            && self.dag.users(load).any(|user| {
+                let user = SDValue { node: user, res: 0 };
+                self.dag.opcode(user) == ISD::SetCC
+                    && matches!(
+                        self.dag.node(self.dag.operand(user, 2)).data,
+                        NodeData::CondCode(cc) if cc.is_signed_int()
+                    )
+            })
+        {
+            op = ISD::SignExtend;
+        }
         let wanted = match op {
             ISD::ZeroExtend => LoadExt::ZExtLoad,
             ISD::SignExtend => LoadExt::SExtLoad,
@@ -3572,7 +3590,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `x << 8` over `sub nuw a, select(c, 0, b)` left the freeze on the
     /// `sub`, which arm64's `performConditionalSubCombine` then no longer
     /// turned into `subs; csel` (sfm16_float* +4 B). Exit: that combine
-    /// reads through the freeze, then `shl`. Owner wasm-3, review 2026-12-10.
+    /// reads through the freeze, then `shl`. Owner wasm-3, exit 2026-11-24.
     fn cannot_create_undef_or_poison_without_flags(
         &self,
         op: SDValue,
@@ -4720,7 +4738,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(decomposed);
                 }
             }
-            if let Some(plan) = self.hooks.synth_mul_chain(vt, c) {
+            if let Some(plan) = self.hooks.synth_mul_chain(self.dag, vt, c) {
                 return Some(self.build_mul_plan(&plan, n0, vt));
             }
         }
