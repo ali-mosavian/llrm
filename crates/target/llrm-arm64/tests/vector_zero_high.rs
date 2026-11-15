@@ -74,3 +74,18 @@ store <4 x i32> %v, ptr %p, align 16\n  ret void\n}\n",
     assert_eq!(code.len(), 3, "ldr, str, ret: {text}");
     assert!(code[0].starts_with("ldr d"), "{text}");
 }
+
+/// tile -O2: two inserts into one shared zero vector were a `mov` of the zero
+/// register and an `ins` each (`aggressivelyPreferBuildVectorSources`: the
+/// combine rebuilds from a `BUILD_VECTOR` with other users too).
+#[test]
+fn two_inserts_into_one_zero_vector_are_one_fmov_each() {
+    let text = assembly(
+        "define void @e(i64 %x, i64 %y, ptr %p, ptr %q) {\n  %a = insertelement <2 x i64> zeroinitializer, i64 %x, i64 0\n  \
+%b = insertelement <2 x i64> zeroinitializer, i64 %y, i64 0\n  store <2 x i64> %a, ptr %p, align 16\n  \
+store <2 x i64> %b, ptr %q, align 16\n  ret void\n}\n",
+    );
+    let code = body(&text, "e");
+    assert_eq!(code.iter().filter(|line| line.starts_with("fmov d")).count(), 2, "{text}");
+    assert!(code.iter().all(|line| !line.starts_with("ins ") && !line.starts_with("mov v")), "{text}");
+}
