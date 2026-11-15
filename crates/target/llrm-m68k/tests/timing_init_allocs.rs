@@ -1,7 +1,6 @@
-//! The 68020 tables parse once, with one allocation per cell they keep: a
-//! parse that cloned every field and rebuilt every key cost ~0.4M instructions
-//! (6115 allocations, now 4534) of a 123M compile (grep, -O2) before the first
-//! instruction was priced.
+//! The 68020 tables are statics built by `build.rs`: the first price parsed
+//! their CSVs at run time, 6115 allocations and ~1.7M instructions of every
+//! compile (grep -O2: 123M), 4534 after cheaper parsing; 15 now.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,7 +29,7 @@ unsafe impl GlobalAlloc for Counting {
 static A: Counting = Counting;
 
 #[test]
-fn the_first_price_on_a_68020_allocates_no_more_than_the_tables_it_keeps() {
+fn the_first_price_on_a_68020_allocates_almost_nothing() {
     let before = ALLOCS.load(Ordering::Relaxed);
     llrm_m68k::timing::cost_on(llrm_m68k::isa::Cpu::M68020, "move.l %d1, %d0", 2, false).unwrap();
     llrm_m68k::timing::cost_on(llrm_m68k::isa::Cpu::M68020, "add.l (%a0), %d0", 2, false).unwrap();
@@ -38,5 +37,4 @@ fn the_first_price_on_a_68020_allocates_no_more_than_the_tables_it_keeps() {
     assert!(made <= LIMIT, "{made} allocations to build the 68020 tables, limit {LIMIT}");
 }
 
-/// 6115 before the fix, 4534 after.
-const LIMIT: usize = 5000;
+const LIMIT: usize = 100;
