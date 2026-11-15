@@ -954,13 +954,13 @@ fn a_word_shifted_right_by_seven_is_one_shift_left() {
     assert!(!text.contains("lsr rc") && text.matches("ror").count() == 0, "seven right shifts:\n{text}");
 }
 
-/// A run of shifts of a word keeps the byte that shifts alone in `a`: `asl a;
-/// rol hi` is 7 clocks a step, `asl lo; rol hi` is 10.
+/// A run of shifts of a word keeps one byte in `a` (`asl a; rol hi` is 7
+/// clocks a step, `asl lo; rol hi` is 10): the low byte, which arrives there.
 #[test]
 fn a_run_of_word_shifts_carries_one_byte_in_the_accumulator() {
     let ir = module("define i16 @shr3(i16 %x) {\n  %r = lshr i16 %x, 3\n  ret i16 %r\n}");
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("lsr a\n  ror rc2"), "the shifts go through memory:\n{text}");
+    assert!(text.contains("lsr rc3\n  ror a") && !text.contains("ror rc"), "the shifts go through memory:\n{text}");
 }
 
 /// gcd's `if (a > b) a -= b; else b -= a;` was folded into two selects
