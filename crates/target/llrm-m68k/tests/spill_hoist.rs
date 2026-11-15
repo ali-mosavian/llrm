@@ -54,3 +54,21 @@ fn a_reload_into_a_register_the_compare_reads_stays() {
     let order = run(vec![compare(reg::D0, reg::D5), reload(reg::D0), branch()]);
     assert_eq!(order, ["Op(\"CMP8dd\")", "Op(\"MOVM32mp_P\")", "Op(\"Bne8\")"]);
 }
+
+/// llvm-reduce of known_loads_walks `f` (-Os, 68000): `cmpi.b #1,(11,%sp); movem.l (20,%sp),%d7; bne` kept the
+/// 6 B `movem` (a `move` would set the codes the branch reads); hoisted it is a 4 B `move.l` above the compare.
+#[test]
+fn a_reduced_function_has_no_spill_access_between_a_compare_and_its_branch() {
+    use llrm_m68k::driver::{Level, assembly, cpu_of, object};
+    let ir = include_str!("fixtures/reload_between_compare_and_branch.ll");
+    let cpu = cpu_of("68000").unwrap();
+    let asm = assembly(ir, cpu, Level::Os).expect("compiles");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let blocked = lines
+        .windows(2)
+        .filter(|pair| (pair[0].starts_with("cmp") || pair[0].starts_with("tst")) && pair[1].starts_with("movem.l") && pair[1].contains(",%sp)"))
+        .count();
+    assert_eq!(blocked, 0, "a movem sits between a compare and its branch:\n{asm}");
+    let size = object(ir, cpu, Level::Os, "t.ll").expect("compiles").len();
+    assert!(size <= 788, "the object is {size} B (788 B hoisted)");
+}
