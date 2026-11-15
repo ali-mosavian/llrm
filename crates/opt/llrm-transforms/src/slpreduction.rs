@@ -243,7 +243,10 @@ fn worthwhile(
         .and_then(valid)
     else {
         llrm_support::debug!("slp", "reduction x{width}: the vector load is not priced");
-        { llrm_support::debug!("slp", "reduction x{width}: a cost is not priced (line {})", line!()); return false; }
+        {
+            llrm_support::debug!("slp", "reduction x{width}: a cost is not priced (line {})", line!());
+            return false;
+        }
     };
     let Some(scalar_load) = valid(tti.memory_op_cost(MemoryOp::Load, load_lane, kind, false)) else { return false };
     let mut total = vector_load - scalar_load * i64::from(width);
@@ -251,19 +254,22 @@ fn worthwhile(
     let reduced = lane_ty(reduced_bits);
     let narrow = VectorTy { lane: load_lane, count: width };
     let wide = VectorTy { lane: reduced, count: width };
-    let extend = window[0].cast.map(|(_, op)| match op {
-        CastOp::SExt => CastKind::SExt,
-        _ => CastKind::ZExt,
-    });
+    let extend = window[0]
+        .cast
+        .map(
+            |(_, op)| match op {
+                CastOp::SExt => CastKind::SExt,
+                _ => CastKind::ZExt,
+            },
+        );
     // `getReductionCost`: the vector side less the scalar chain.
-    let Some(arith) = valid(tti.arithmetic_cost(
-        arith_of(op),
-        reduced,
-        kind,
-        OperandInfo::default(),
-        OperandInfo::default(),
-    )) else {
-        { llrm_support::debug!("slp", "reduction x{width}: a cost is not priced (line {})", line!()); return false; }
+    let Some(arith) =
+        valid(tti.arithmetic_cost(arith_of(op), reduced, kind, OperandInfo::default(), OperandInfo::default()))
+    else {
+        {
+            llrm_support::debug!("slp", "reduction x{width}: a cost is not priced (line {})", line!());
+            return false;
+        }
     };
     let scalar_chain = arith * i64::from(width - 1);
     let cast_of = |extend: Option<CastKind>| -> Option<i64> {
@@ -289,7 +295,12 @@ fn worthwhile(
             Some(cost) => cost,
             None => {
                 let Some(reduce) = tti
-                    .vector_reduction_cost(reduce_kind(op).expect("a reduction"), wide_or(narrow, wide, extend), false, kind)
+                    .vector_reduction_cost(
+                        reduce_kind(op).expect("a reduction"),
+                        wide_or(narrow, wide, extend),
+                        false,
+                        kind,
+                    )
                     .and_then(valid)
                 else {
                     llrm_support::debug!("slp", "reduction x{width}: the reduction is not priced");
@@ -303,8 +314,7 @@ fn worthwhile(
             }
         }
     } else {
-        let Some(add) = tti.vector_arithmetic_cost(arith_of(op), narrow, kind).and_then(valid)
-        else {
+        let Some(add) = tti.vector_arithmetic_cost(arith_of(op), narrow, kind).and_then(valid) else {
             llrm_support::debug!("slp", "reduction x{width}: the vector operation is not priced");
             return false;
         };
@@ -315,7 +325,12 @@ fn worthwhile(
         add + cast
     };
     total += vector - scalar_chain;
-    llrm_support::debug!("slp", "reduction x{width}: loads {}, reduction {} less chain {scalar_chain}: {total}", vector_load - scalar_load * i64::from(width), vector);
+    llrm_support::debug!(
+        "slp",
+        "reduction x{width}: loads {}, reduction {} less chain {scalar_chain}: {total}",
+        vector_load - scalar_load * i64::from(width),
+        vector
+    );
     total < -COST_THRESHOLD
 }
 
@@ -336,12 +351,16 @@ fn movable(
 ) -> bool {
     let first = window.iter().map(|leaf| position(function, block, leaf.load)).min().expect("a window");
     let last = window.iter().map(|leaf| position(function, block, leaf.load)).max().expect("a window");
-    function.iter_block(block).skip(first).take(last - first + 1).all(|inst| {
-        !matches!(
-            function.instruction(inst).opcode,
-            Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg
+    function
+        .iter_block(block)
+        .skip(first)
+        .take(last - first + 1)
+        .all(
+            |inst| !matches!(
+                function.instruction(inst).opcode,
+                Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg
+            ),
         )
-    })
 }
 
 fn position(
@@ -487,7 +506,8 @@ fn rewrite(
         total = Some(match total {
             None => (vector, part.width),
             Some((so_far, so_far_width)) => {
-                // The wider part keeps the lanes: the narrower is added to its low ones.
+                // The wider part keeps the lanes: the narrower is added to its
+                // low ones.
                 let ((wide, wide_width), (narrow, narrow_width)) = if so_far_width >= part.width {
                     ((so_far, so_far_width), (vector, part.width))
                 } else {
@@ -518,7 +538,9 @@ fn rewrite(
                         result_ty,
                         op,
                         narrow_poison,
-                        (0..wide_width as i32).map(|lane| if (lane as usize) < narrow_width { lane } else { -1 }).collect(),
+                        (0..wide_width as i32)
+                            .map(|lane| if (lane as usize) < narrow_width { lane } else { -1 })
+                            .collect(),
                     );
                     let mask = (0..wide_width as i32)
                         .map(|lane| if (lane as usize) < narrow_width { wide_width as i32 + lane } else { lane })
@@ -574,8 +596,11 @@ fn rewrite(
             taken.into_iter().partition(|inst| matches!(function.instruction(*inst).opcode, Opcode::Cast(_)));
         [casts, loads].concat()
     };
-    let taken_values: Vec<Operand> =
-        parts.iter().flat_map(|part| slice[part.start..part.start + part.width].iter()).map(|leaf| leaf.value).collect();
+    let taken_values: Vec<Operand> = parts
+        .iter()
+        .flat_map(|part| slice[part.start..part.start + part.width].iter())
+        .map(|leaf| leaf.value)
+        .collect();
     for value in chain.values.iter().rev().filter(|value| !taken_values.contains(value)) {
         let made = function.create_instruction(
             Opcode::Binary(chain.op),
@@ -610,7 +635,10 @@ fn erase_if_dead(
     let Operand::Value(id) = operand else { return };
     let ValueDef::Instruction(inst) = function.value(id).def else { return };
     if function.is_erased(inst)
-        || !matches!(function.instruction(inst).opcode, Opcode::GetElementPtr { .. } | Opcode::Cast(_))
+        || !matches!(
+            function.instruction(inst).opcode,
+            Opcode::GetElementPtr { .. } | Opcode::Cast(_)
+        )
         || !function.users(id).is_empty()
     {
         return;

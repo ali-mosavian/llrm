@@ -206,7 +206,10 @@ pub(crate) fn cast_cost(
     // `BasicTTIImplBase::getCastInstrCost`: a conversion between integer and
     // float lanes of one width, wider than the table's rows, is its halves'
     // (both types split, so the split is free).
-    if matches!(kind, CastKind::SIToFP | CastKind::UIToFP | CastKind::FPToSI | CastKind::FPToUI)
+    if matches!(
+        kind,
+        CastKind::SIToFP | CastKind::UIToFP | CastKind::FPToSI | CastKind::FPToUI
+    )
         && vector_pieces(dst).zip(vector_pieces(src)).is_some_and(|((_, to), (_, from))| to == from)
     {
         return ext_cast_cost(kind, dst, src);

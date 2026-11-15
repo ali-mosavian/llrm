@@ -851,7 +851,11 @@ fn wide_vector_casts_and_extended_reductions_are_the_pins() {
         let reduce = tti.vector_reduction_cost(ReduceKind::Add, i(64, 32), false, k).map(|c| c.value);
         assert_eq!(reduce, Some(17), "{cpu}");
         // The native `uaddlv`/`uaddlp` forms are narrower than this: `BaseT`'s.
-        assert_eq!(tti.vector_extended_reduction_cost(ReduceKind::Add, false, Ty::Int(64), i(16, 32), k), None, "{cpu}");
+        assert_eq!(
+            tti.vector_extended_reduction_cost(ReduceKind::Add, false, Ty::Int(64), i(16, 32), k),
+            None,
+            "{cpu}"
+        );
         let native = tti.vector_extended_reduction_cost(ReduceKind::Add, true, Ty::Int(32), i(8, 16), k);
         assert_eq!(native.map(|c| c.value), Some(2), "{cpu}");
     }
