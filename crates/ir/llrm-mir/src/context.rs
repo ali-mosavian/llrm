@@ -143,8 +143,16 @@ impl Context {
     #[inline]
     pub fn constant(
         &self,
-        constant: Constant,
+        mut constant: Constant,
     ) -> ConstantId {
+        // `ConstantVector::get`: a vector of zeros is the zero value of its type.
+        if let ConstantKind::Aggregate(lanes) = &constant.kind
+            && matches!(self.types.get(constant.ty), Type::Vector { .. })
+            && !lanes.is_empty()
+            && lanes.iter().all(|lane| matches!(self.get(*lane).kind, ConstantKind::Int(0)))
+        {
+            constant.kind = ConstantKind::Zero;
+        }
         let found = self.interned.borrow().get(&constant).copied();
         if let Some(id) = found {
             return id;

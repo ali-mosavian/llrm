@@ -101,12 +101,12 @@ fn parts(
     (instruction.operands[0], instruction.operands[1], instruction.flags)
 }
 
-/// The width of the integer `v` (a scalar: MIR has no vectors).
+/// The width of the integer `v`, or of the lane of an integer vector.
 fn width(
     c: &Combiner,
     v: Operand,
 ) -> u32 {
-    c.context.types.int_bits(c.type_of(v)).expect("an integer")
+    c.context.types.scalar_int_bits(c.type_of(v)).expect("an integer")
 }
 
 /// The number `v` is and its width (`m_APInt`).

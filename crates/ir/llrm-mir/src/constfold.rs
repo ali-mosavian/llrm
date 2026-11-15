@@ -1040,6 +1040,20 @@ mod tests {
         assert_eq!(binary(&context, BinaryOp::Mul, lanes([1, 2, 3, 4]), splat(2)), Some(lanes([2, 4, 6, 8])));
     }
 
+    /// `<0, 0, 0, 0>` was an aggregate that `m_Zero` did not see, so `0 - x`
+    /// of a vector built from lanes was no negation, and `(0 - x) * (0 - y)`
+    /// stayed. A vector of zeros is the zero value of its type.
+    #[test]
+    fn a_vector_of_zeros_is_the_zero_value() {
+        let context = Context::new();
+        let i32 = context.types.int(32);
+        let vector = context.types.intern(Type::Vector { element: i32, count: 4 });
+        let zero = context.int(i32, 0);
+        let lanes = context.constant(Constant { ty: vector, kind: ConstantKind::Aggregate(vec![zero; 4]) });
+        assert_eq!(lanes, context.int(vector, 0));
+        assert_eq!(context.get(lanes).kind, ConstantKind::Zero);
+    }
+
     /// `X * 0`, `X | -1`, `0 << X`, `0 / X`, `X % 1` and `X / 0` fold with `X`
     /// not a number; they stayed unfolded (the builder made the
     /// instruction) because the number test came first.

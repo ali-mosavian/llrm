@@ -394,7 +394,7 @@ fn drains_visits_and_inserts_count_the_worklist() {
 /// widened add. The vector operations are left as they are.
 #[test]
 fn a_vector_operation_is_not_visited_by_the_scalar_folds() {
-    for op in ["sub", "mul", "shl", "lshr", "ashr", "and", "or", "xor"] {
+    for op in ["shl", "lshr", "ashr", "and", "or", "xor"] {
         let text = format!(
             "define <8 x i16> @f(<8 x i16> %x, <8 x i16> %y) {{\nb0:\n  %a = {op} <8 x i16> %x, %y\n  ret <8 x i16> %a\n}}\n"
         );
@@ -586,6 +586,33 @@ fn a_vector_add_folds_as_the_scalar_add_does() {
         "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = and $T$ %x, %y\n  %o = or $T$ %x, %y\n  %s = add $T$ %a, %o\n  ret $T$ %s\n}\n",
         "define $T$ @f($T$ %x) {\nb0:\n  %a = add nsw $T$ %x, $C:5$\n  %b = add nuw $T$ %a, $C:6$\n  ret $T$ %b\n}\n",
         "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = sub $T$ %x, %y\n  %b = add $T$ %a, %y\n  ret $T$ %b\n}\n",
+    ];
+    for template in templates {
+        let (scalar, vector) = twins(template);
+        let mut one = parsed(&scalar);
+        combined(&mut one);
+        let mut other = parsed(&vector);
+        combined(&mut other);
+        assert_eq!(as_scalar(&printed(&other)), printed(&one), "{template}");
+    }
+}
+
+/// As [`a_vector_add_folds_as_the_scalar_add_does`], for `sub` and `mul`: recsum's loop
+/// multiplies `(x + 3)` by a constant three times a trip, which the pin's
+/// InstCombine makes `x * 3 + 9` and these visitors left alone on vectors.
+#[test]
+fn a_vector_sub_and_mul_fold_as_the_scalar_ones_do() {
+    let templates = [
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = sub $T$ %x, $C:5$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = sub $T$ %x, %x\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = add $T$ %x, %y\n  %b = sub $T$ %a, %y\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %n = sub $T$ $C:0$, %x\n  %b = sub $T$ $C:0$, %n\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = mul $T$ %x, $C:8$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = mul $T$ %x, $C:-1$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = mul $T$ %x, $C:3$\n  %b = mul $T$ %a, $C:5$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add $T$ %x, $C:3$\n  %b = mul $T$ %a, $C:5$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = mul $T$ %x, $C:3$\n  %b = add $T$ %a, %x\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = sub $T$ $C:0$, %x\n  %b = sub $T$ $C:0$, %y\n  %c = mul $T$ %a, %b\n  ret $T$ %c\n}\n",
     ];
     for template in templates {
         let (scalar, vector) = twins(template);

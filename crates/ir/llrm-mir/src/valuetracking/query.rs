@@ -155,13 +155,19 @@ impl<'a> Query<'a> {
         matches!(self.context().types.get(ty), Type::Vector { .. }).then(|| self.context().types.scalar_int_bits(ty))?
     }
 
-    /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's, 0 for anything
-    /// else.
+    /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's (a vector's: its
+    /// lane's), 0 for anything else.
     pub fn scalar_bits(
         &self,
         operand: Operand,
     ) -> u32 {
-        match self.type_of(operand).map(|ty| self.context().types.get(ty)) {
+        let types = &self.context().types;
+        let mut ty = self.type_of(operand).map(|ty| types.get(ty));
+        // `getScalarSizeInBits`: the lane of a vector.
+        if let Some(Type::Vector { element, .. }) = ty {
+            ty = Some(types.get(*element));
+        }
+        match ty {
             Some(Type::Int(bits)) => *bits,
             Some(Type::Pointer(space)) => self.layout.pointer(*space).bits,
             _ => 0,
