@@ -74,3 +74,16 @@ fn trips_through_the_threaded_path_run_on_each_others_values() {
     let (out, changed) = threaded(&text);
     assert!(changed, "{out}");
 }
+
+/// A target that ranks bytes first turns the pass off
+/// (`Options::backward_threading`): z80 and 6502 `idioms` grew 188 and 619
+/// bytes with it on.
+#[test]
+fn a_target_that_turns_it_off_keeps_the_path_unthreaded() {
+    let before = parsed(COLUMNS);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.add(BackwardThreading::from_env().when(false));
+    manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
+    assert_eq!(printed(&module), printed(&before));
+}

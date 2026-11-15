@@ -47,6 +47,10 @@ impl Level {
     }
 
     fn options(self) -> Options {
+        Options { backward_threading: false, ..self.mid_end() }
+    }
+
+    fn mid_end(self) -> Options {
         match self {
             Self::O0 => Options::none(),
             Self::O1 => Options::basic(),

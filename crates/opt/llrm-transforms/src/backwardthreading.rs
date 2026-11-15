@@ -57,6 +57,13 @@ impl BackwardThreading {
     pub fn from_env() -> Self {
         Self { enabled: !llrm_support::env_flag!("LLRM_NO_BACKTHREAD"), max_threads: MAX_THREADS }
     }
+
+    pub fn when(
+        self,
+        on: bool,
+    ) -> Self {
+        Self { enabled: self.enabled && on, ..self }
+    }
 }
 
 impl FunctionPass for BackwardThreading {
