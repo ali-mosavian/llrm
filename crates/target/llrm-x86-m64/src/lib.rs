@@ -478,11 +478,13 @@ impl llrm_target::Target for M64 {
                             // DEVIATE UP1-REG at m64 (owner m64, exit 2026-11-20): promoted
                             // arrays that exceed the registers are not free (fpbench -O2
                             // +815 B for -75 clocks). The byte rate follows the clock pricing.
-                            // DEVIATE UP1 at m64 (owner m64, exit 2026-11-20, with
-                            // x86-m32's): a full unroll repays its bytes at 312
-                            // milliclocks a byte, the m64 net rate (fpbench -O2:
-                            // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
-                            unroll_milliclocks_per_byte: 312,
+                            // UP1 is retired at m64: bytes are not counted at -O1..-O3
+                            // (ruling 2026-11-14), so a full unroll is the pin's threshold,
+                            // not a price. At 312 milliclocks a byte `rotate_small` kept its
+                            // 3-trip outer loop ("saves 18 clk, adds 241 B") and ran 6351
+                            // instructions; unrolled, 4442 (clang 5116 at -O3). The x86-m32 target
+                            // keeps its own rate.
+                            unroll_milliclocks_per_byte: 0,
                             unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
                             // `mov m64, imm32`: sign-extended.
