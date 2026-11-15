@@ -62,3 +62,22 @@ fn a_vector_freeze_of_a_possibly_poison_value_lowers() {
     let asm = driver::assembly(FREEZE_IR, Platform::Linux, Level::O2).expect("lowers");
     assert!(asm.contains("fcvtzs"), "{asm}");
 }
+
+/// `select i1 c, <4 x i32> a, <4 x i32> b` (the mid-end makes one of a
+/// vector select on a splat condition) stopped lowering: "Unsupported { op:
+/// Select, ty: V4I32, what: convert node to libcall" (the dag_debug loop).
+#[test]
+fn a_vector_select_on_a_scalar_condition_lowers() {
+    let ir = r#"target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu"
+define void @f(i1 %c, ptr %p, ptr %q, ptr %o) {
+  %a = load <4 x i32>, ptr %p, align 16
+  %b = load <4 x i32>, ptr %q, align 16
+  %s = select i1 %c, <4 x i32> %a, <4 x i32> %b
+  store <4 x i32> %s, ptr %o, align 16
+  ret void
+}
+"#;
+    let asm = driver::assembly(ir, Platform::Linux, Level::O2).expect("lowers");
+    assert!(asm.contains("and") || asm.contains("bsl") || asm.contains("bit") || asm.contains("bif"), "{asm}");
+}
