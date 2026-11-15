@@ -932,6 +932,17 @@ impl Tti for AArch64 {
         crate::tti_vector::reduction_cost(kind, ty, ordered, cost_kind)
     }
 
+    fn vector_extended_reduction_cost(
+        &self,
+        kind: llrm_mir::intrinsics::ReduceKind,
+        unsigned: bool,
+        result: Ty,
+        vec: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::extended_reduction_cost(kind, unsigned, result, vec, cost_kind)
+    }
+
     fn vector_cast_cost(
         &self,
         kind: CastKind,

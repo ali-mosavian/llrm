@@ -452,6 +452,14 @@ fn slot_access<C>(
 ) -> Option<(usize, bool)> {
     let slot = inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None })?;
     let at = slots.iter().position(|(s, _)| *s == slot)?;
+    // a read folded into an instruction that names no register (`cmpi #k,
+    // slot`) or leads with a use (`cmp slot, reg`) is a read, whatever its
+    // first operand is
+    match (inst.may_store, inst.may_load) {
+        (true, false) => return Some((at, true)),
+        (false, true) => return Some((at, false)),
+        _ => {}
+    }
     match inst.operands.iter().find(|o| matches!(o, Operand::Use(_) | Operand::Def(_)))? {
         Operand::Use(_) => Some((at, true)),
         _ => Some((at, false)),

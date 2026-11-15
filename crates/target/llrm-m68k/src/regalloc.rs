@@ -206,6 +206,15 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         })
     }
 
+    /// `foldMemoryOperand` ([`crate::spillfold`]).
+    fn fold_spill(
+        inst: &llrm_spike_mf::Inst,
+        register: Reg,
+        slot: i32,
+    ) -> Option<llrm_spike_mf::Inst> {
+        crate::spillfold::fold(inst, register, slot)
+    }
+
     /// `getLoadRegOpcode`.
     fn spill_load(
         _class: Class,
