@@ -5458,12 +5458,13 @@ mod tests {
     fn test_a_register_only_a_later_block_names_is_saved_there() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
+        let bx = || Loc::Reg(ir::Reg { register: RegId::BX, width: 2 });
         let blocks = vec![
             lir::LirBlock {
                 succ: vec![3, 2].into(),
                 ..lir::LirBlock::new(
                     1,
-                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![Loc::Reg(ir::Reg { register: RegId::BX, width: 2 })])), insn(2, branch)],
+                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![bx()])), insn(2, branch)],
                 )
             },
             lir::LirBlock::new(
