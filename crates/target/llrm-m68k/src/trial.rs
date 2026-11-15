@@ -264,7 +264,7 @@ pub fn keeps(
 
 /// [`keeps`] for functions that differ in whether they call `__mulsi3`: the program links the routine once if anything
 /// calls it, so the side that calls it and the other that does not differ by its bytes, unless a function outside
-/// the trial calls it too (`rest_calls_mulsi3`, asked only then). `switch_empty_cases` -Os 68000: `seen * 3 + i` six
+/// the trial calls it too (`rest_calls_mulsi3`, asked only then); only where bytes decide (`Price::Size`). `switch_empty_cases` -Os 68000: `seen * 3 + i` six
 /// times unrolled is `seen * 729`, a call, 42 B against the loop's 60 B, 96 B linked against 60 B.
 pub fn keeps_linking(
     with: &[(String, Vec<Item>)],
@@ -278,7 +278,7 @@ pub fn keeps_linking(
         return false;
     };
     let (links_with, links_without) = (calls_mulsi3(with), calls_mulsi3(without));
-    if links_with != links_without && !rest_calls_mulsi3() {
+    if price == Price::Size && links_with != links_without && !rest_calls_mulsi3() {
         let routine = crate::routine::mulsi3_bytes(cpu);
         if links_with { with_cost.0 += routine } else { without_cost.0 += routine }
     }
