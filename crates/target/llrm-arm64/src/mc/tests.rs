@@ -424,6 +424,11 @@ fn branches() {
         all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
         all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
         all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
+        for wide in [false, true] {
+            if lanes != Arrangement::D2 && (wide || lanes != Arrangement::S4) {
+                all.push(Inst::VectorSmov { lanes, wide, rd: Gpr(9), rn: Vreg(21), index });
+            }
+        }
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for lanes in ALL_ARRANGEMENTS {

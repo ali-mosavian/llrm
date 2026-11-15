@@ -519,6 +519,11 @@ UMOVvi8                  move     r/x,i         -                        fp_arit
 UMOVvi16                 move     r/x,i         -                        fp_arith   - - - -/-                UMOVvi16
 UMOVvi32                 move     r/x,i         -                        fp_arith   - - - -/-                UMOVvi32
 UMOVvi64                 move     r/x,i         -                        fp_arith   - - - -/-                UMOVvi64
+SMOVvi8to32              move     r/x,i         -                        fp_arith   - - - -/-                SMOVvi8to32
+SMOVvi8to64              move     r/x,i         -                        fp_arith   - - - -/-                SMOVvi8to64
+SMOVvi16to32             move     r/x,i         -                        fp_arith   - - - -/-                SMOVvi16to32
+SMOVvi16to64             move     r/x,i         -                        fp_arith   - - - -/-                SMOVvi16to64
+SMOVvi32to64             move     r/x,i         -                        fp_arith   - - - -/-                SMOVvi32to64
 INSvi8gpr                move     x/x,i,r       -                        fp_arith   - - - -/-                INSvi8gpr
 INSvi8lane               move     x/x,i,x,i     -                        fp_arith   - - - -/-                INSvi8lane
 INSvi16gpr               move     x/x,i,r       -                        fp_arith   - - - -/-                INSvi16gpr
