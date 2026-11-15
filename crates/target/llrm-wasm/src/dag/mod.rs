@@ -242,8 +242,6 @@ pub fn compile_function_with(
         for _ in 0..=f.blocks.len() {
             let mut changed = crate::tail_merge::tail_merge(&mut f, for_size);
             f.sync_preds();
-            changed |= crate::branch_fold::forward_branch_only_blocks(&mut f);
-            f.sync_preds();
             changed |= crate::branch_fold::fold_branches(&mut f);
             f.sync_preds();
             if !changed {
