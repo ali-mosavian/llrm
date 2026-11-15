@@ -252,9 +252,40 @@ pub fn keeps(
     price: Price,
 ) -> bool {
     match (price_of(with, cpu, true), price_of(without, cpu, true)) {
-        (Some(with_cost), Some(without_cost)) => price.beats(cpu, with_cost, without_cost),
+        (Some(with_cost), Some(without_cost)) => {
+            if llrm_support::debug::enabled("trial") {
+                eprintln!("trial keeps: with {with_cost:?} without {without_cost:?}");
+            }
+            price.beats(cpu, with_cost, without_cost)
+        }
         _ => false,
     }
+}
+
+/// [`keeps`] for functions that differ in whether they call `__mulsi3`: the program links the routine once if anything
+/// calls it, so the side that calls it and the other that does not differ by its bytes, unless a function outside
+/// the trial calls it too (`rest_calls_mulsi3`, asked only then); only where bytes decide (`Price::Size`). `switch_empty_cases` -Os 68000: `seen * 3 + i` six
+/// times unrolled is `seen * 729`, a call, 42 B against the loop's 60 B, 96 B linked against 60 B.
+pub fn keeps_linking(
+    with: &[(String, Vec<Item>)],
+    without: &[(String, Vec<Item>)],
+    rest_calls_mulsi3: impl FnOnce() -> bool,
+    cpu: Cpu,
+    price: Price,
+) -> bool {
+    let flat = |functions: &[(String, Vec<Item>)]| -> Vec<Item> { functions.iter().flat_map(|(_, items)| items.iter().cloned()).collect() };
+    let (Some(mut with_cost), Some(mut without_cost)) = (price_of(&flat(with), cpu, true), price_of(&flat(without), cpu, true)) else {
+        return false;
+    };
+    let (links_with, links_without) = (calls_mulsi3(with), calls_mulsi3(without));
+    if price == Price::Size && links_with != links_without && !rest_calls_mulsi3() {
+        let routine = crate::routine::mulsi3_bytes(cpu);
+        if links_with { with_cost.0 += routine } else { without_cost.0 += routine }
+    }
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial keeps: with {with_cost:?} without {without_cost:?}");
+    }
+    price.beats(cpu, with_cost, without_cost)
 }
 
 /// Bytes and clocks of `functions` (name, items): each function's clocks run once per call from the others, by the
