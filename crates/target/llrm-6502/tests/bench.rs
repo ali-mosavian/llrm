@@ -11,7 +11,11 @@
 //! is. The result is checked against a hand-derived value first.
 //!
 //! Needs cc65, clang (msp430 front end), LLVM 20 `opt`, cl65 and sim65.
+//! `the_bars_at_every_level` grades ours at O1, O2, O3 and Os against the smallest
+//! external at that level (`bench/bars.rs`).
 
+#[path = "bench/bars.rs"]
+mod bars;
 mod common;
 #[path = "bench/llvmmos.rs"]
 mod llvmmos;
@@ -169,8 +173,15 @@ fn work_dir(
     root.join(format!("bench{level}-pad{pad}")).join(name)
 }
 
+thread_local! {
+    /// The level a bar run (`bars.rs`) builds at on this thread; it replaces
+    /// `BENCH_OURS` in the scratch directory's name.
+    static WORK_LEVEL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
 fn work(name: &str) -> PathBuf {
-    let level = std::env::var("BENCH_OURS").unwrap_or_default();
+    let level =
+        WORK_LEVEL.with(|l| l.borrow().clone()).unwrap_or_else(|| std::env::var("BENCH_OURS").unwrap_or_default());
     let pad = std::env::var("BENCH_PAD").unwrap_or_default();
     let dir = work_dir(Path::new(env!("CARGO_TARGET_TMPDIR")), &level, &pad, name);
     std::fs::create_dir_all(&dir).unwrap();
@@ -651,8 +662,8 @@ fn table4() {
             other(&|| hand_row(kernel)),
             ours_row(kernel, ours_level("-O2"), "o2"),
             other(&|| ours_row(kernel, ours_level("-O2"), "o2m")),
-            other(&|| sdcc::row(kernel, false)),
-            other(&|| sdcc::row(kernel, true)),
+            other(&|| sdcc::row(kernel, &[], false)),
+            other(&|| sdcc::row(kernel, &[], true)),
             other(&|| llvmmos::row(kernel, "-O2", false)),
             other(&|| llvmmos::row(kernel, "-Os", false)),
             other(&|| llvmmos::row(kernel, "-O2", true)),
@@ -719,8 +730,8 @@ fn table3() {
             hand,
             ours_row(kernel, ours_level("-O2"), "o2"),
             ours_row(kernel, ours_level("-O2"), "o2m"),
-            sdcc::row(kernel, false),
-            sdcc::row(kernel, true),
+            sdcc::row(kernel, &[], false),
+            sdcc::row(kernel, &[], true),
             llvmmos::row(kernel, "-O2", false),
             llvmmos::row(kernel, "-Os", false),
             llvmmos::row(kernel, "-O2", true),
@@ -764,8 +775,8 @@ fn table(
             ours_row(kernel, "-Os", "os"),
             cc65_row(kernel, &[cc65_optimize()], "c1m"),
             ours_row(kernel, ours_level("-O2"), "o2m"),
-            sdcc::row(kernel, false),
-            sdcc::row(kernel, true),
+            sdcc::row(kernel, &[], false),
+            sdcc::row(kernel, &[], true),
             llvmmos::row(kernel, "-O2", false),
             llvmmos::row(kernel, "-Os", false),
             llvmmos::row(kernel, "-O2", true),
@@ -821,7 +832,7 @@ fn the_hand_corpus() {
 #[test]
 #[ignore = "needs sdcc and sim65"]
 fn the_sdcc_column_prices_an_empty_call_by_hand() {
-    let row = sdcc::row(&KERNELS[0], false).unwrap();
+    let row = sdcc::row(&KERNELS[0], &[], false).unwrap();
     assert_eq!((row.bytes, row.cycles), (3, 14));
 }
 

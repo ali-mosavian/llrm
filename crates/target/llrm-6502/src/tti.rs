@@ -203,13 +203,13 @@ impl Tti for Mos6502 {
         true
     }
 
-    // Rule 2 (user 11-04, a byte of growth must buy 3 clocks at -O2/-O3) is
-    // off: `speed_inline_milliclocks_per_byte` stays 0. DEVIATE 6502-RATE:
-    // the frequency the rule weighs with caps a loop at about 32 trips,
-    // where div_constants_long runs 1500, so it priced 6.8 KB for 4.05M
-    // clocks (600 clk/B) and tail_calls +12.6k clocks for 944 B. Owner:
-    // llrm-target-6502. Exit: a frequency that knows the trip count,
-    // 2026-11-20.
+    /// An inline at -O2/-O3 that grows the code is refused: bytes first at every level (user ruling
+    /// 2026-11-14), at the rate no clocks can repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit
+    /// 2026-11-24, row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M clocks (div_constants_long) and
+    /// tail_calls +12.6k clocks for 944 B; a price by clocks a byte weighs a loop at about 32 trips.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        1 << 40
+    }
 
     /// A full unroll at -O2/-O3 may add no byte: bytes first at every level
     /// (user ruling 2026-11-14), on the real clock and byte tables
