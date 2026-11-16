@@ -46,6 +46,17 @@ fn virt(reg: Reg) -> Option<u32> {
     if let Reg::Virt(v) = reg { Some(v) } else { None }
 }
 
+thread_local! {
+    /// Instructions `commute_accumulator` visited to count reads.
+    static COMMUTE_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Instructions this thread's `commute_accumulator` runs visited to count the
+/// reads of the registers (what a test bounds).
+pub fn commute_visits() -> u64 {
+    COMMUTE_VISITS.with(std::cell::Cell::get)
+}
+
 fn uses(inst: &Inst) -> impl Iterator<Item = u32> + '_ {
     inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { virt(*r) } else { None })
 }
@@ -456,6 +467,11 @@ const MAX_BLOCKS_BACK: usize = 4;
 pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) -> bool {
     let mut beyond = false;
     let facts = Facts::of(function);
+    // how many instructions that do not work on memory in place read each
+    // register: counted once, when the first wide candidate asks, as the pin
+    // reads a use count off the register's use list, and kept in step with each
+    // swap below
+    let mut op_reads: Option<Vec<u32>> = None;
     let mut preds = vec![Vec::new(); function.blocks.len()];
     for (from, succs) in successors(function).iter().enumerate() {
         for &to in succs {
@@ -515,22 +531,12 @@ pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) -> boo
             // (a copy, or an instruction that writes memory in place), and
             // `second` may come from any register that moves to `P`
             // in one transfer
-            let reads_by_ops = |reg: u32| {
-                function
-                    .blocks
-                    .iter()
-                    .flat_map(|block| &block.insts)
-                    .filter(|inst| uses(inst).any(|u| u == reg))
-                    .filter(|inst| match inst.kind {
-                        Kind::Op(name) => !T::writes_memory_in_place(name),
-                        _ => false,
-                    })
-                    .count()
-            };
             let wide = !single
                 && T::commutes_beyond_one_use()
-                && reads_by_ops(first) == 0
-                && reads_by_ops(second) == 1
+                && {
+                    let reads = op_reads.get_or_insert_with(|| count_op_reads::<T>(function));
+                    reads[first as usize] == 0 && reads[second as usize] == 1
+                }
                 && from_second.is_some()
                 && !is_p(from_first)
                 && facts.stored_without_a_copy::<T>(function, &preds, first, true);
@@ -539,6 +545,16 @@ pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) -> boo
             }
             let Some(held) = T::meet(function.classes[first as usize], wanted) else { continue };
             beyond |= wide;
+            // the instruction at `at` reads `first` now, not `second`
+            if let Some(reads) = op_reads.as_mut()
+                && matches!(
+                    function.blocks[b].insts[at].kind,
+                    Kind::Op(name) if !T::writes_memory_in_place(name)
+                )
+            {
+                reads[second as usize] -= 1;
+                reads[first as usize] += 1;
+            }
             function.classes[first as usize] = held;
             function.classes[second as usize] = T::any();
             function.blocks[b].insts[load].operands[1] = Operand::Use(Reg::Virt(second));
@@ -546,6 +562,28 @@ pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) -> boo
         }
     }
     beyond
+}
+
+/// How many instructions that do not work on memory in place read each
+/// virtual register.
+fn count_op_reads<T: Target>(function: &MFunction<T::Class>) -> Vec<u32> {
+    let mut reads = vec![0u32; function.classes.len()];
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        COMMUTE_VISITS.with(|visits| visits.set(visits.get() + 1));
+        if !matches!(inst.kind, Kind::Op(name) if !T::writes_memory_in_place(name)) {
+            continue;
+        }
+        for (at, operand) in inst.operands.iter().enumerate() {
+            let Operand::Use(Reg::Virt(read)) = operand else { continue };
+            // an instruction that reads a register twice reads it once
+            let again =
+                inst.operands[..at].iter().any(|before| matches!(before, Operand::Use(Reg::Virt(r)) if r == read));
+            if !again {
+                reads[*read as usize] += 1;
+            }
+        }
+    }
+    reads
 }
 
 impl Facts {
