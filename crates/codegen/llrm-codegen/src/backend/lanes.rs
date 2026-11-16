@@ -54,7 +54,7 @@ use llrm_lir::registers::{RegId, Regs};
 /// One byte of a register root, or one flag bit against `RegId::None`.
 pub type Lane = (RegId, u32);
 
-const REGISTERS: usize = 256;
+const REGISTERS: usize = llrm_lir::registers::REGISTER_IDS;
 
 struct Table {
     // Every lane, in bit order.
@@ -106,7 +106,8 @@ impl Table {
     /// for each root, which each of its views names.
     fn of_file(regs: Regs) -> Table {
         let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
-        let entries = || regs.table.iter().flatten();
+        // A tuple is its members' lanes, not a root with lanes of its own.
+        let entries = || regs.table.iter().flatten().filter(|entry| entry.members.is_empty());
         lanes.extend(entries().filter(|entry| entry.root == entry.id).map(|entry| (entry.id, 0)));
         lanes.sort();
         assert!(lanes.len() <= 128, "{} lanes of a register file are more than a mask holds", lanes.len());
@@ -135,7 +136,8 @@ impl Table {
     /// lane for each byte of each root. A view covers the bytes `lane / 8 ..
     /// (lane + bits) / 8` of its root (the 6502's `rc3` is byte 1 of `rs1`).
     fn of_bytes(regs: Regs) -> Table {
-        let entries = || regs.table.iter().flatten();
+        // A tuple is its members' lanes, not a root with lanes of its own.
+        let entries = || regs.table.iter().flatten().filter(|entry| entry.members.is_empty());
         let bytes_of = |entry: &llrm_lir::registers::Entry| ((entry.bits / 8).max(1)) as usize;
         let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
         for root in entries().filter(|entry| entry.root == entry.id) {
