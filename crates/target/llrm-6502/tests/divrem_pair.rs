@@ -1,12 +1,13 @@
 //! A long division and the remainder of the same operands are one call: the
-//! runtime's divide leaves the remainder in `__sr` (`__divmodsi4` for the
-//! signed). `has_div_rem_op` was false for them, so DivRemPairs made `x % c` of
-//! `x - x / c * c`: `use(x / 5, x % 5)` was a call and 100 bytes of shifts and
-//! adds, `x % 100` a second call, `__mulsi3` (div_constants_long: 24,535 B
-//! against cc65's 13,862, 2026-11-15).
+//! runtime's divide leaves the remainder in rc4..rc7 (`__divmodsi4`,
+//! `__udivmodsi4`). `has_div_rem_op` was false for them, so DivRemPairs made `x
+//! % c` of `x - x / c * c`: `use(x / 5, x % 5)` was a call and 100 bytes of
+//! shifts and adds, `x % 100` a second call, `__mulsi3` (div_constants_long:
+//! 24,535 B against cc65's 13,862, 2026-11-15).
 
 mod common;
 
+use common::Result32;
 use common::pipeline::datalayout;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{Level, Request, assembly};
@@ -43,24 +44,28 @@ fn calls(
     text: &str,
     routine: &str,
 ) -> usize {
-    text.lines().filter(|line| line.trim().starts_with(&format!("jsr {routine}"))).count()
+    // a call in tail position is a `jmp`
+    text.lines()
+        .filter(|line| ["jsr", "jmp"].iter().any(|op| line.trim().starts_with(&format!("{op} {routine}"))))
+        .count()
 }
 
 /// Four divisors (a variable, a byte, a power-ish constant and one above a
 /// byte), both signs, four levels: one runtime call divides and the remainder
-/// is read from `__sr`; no second divide, no multiply.
+/// is read from rc4..rc7; no second divide, no multiply.
 #[test]
 fn a_division_and_its_remainder_are_one_call() {
     for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
         for signed in [false, true] {
             for divisor in ["%y", "5", "100", "1000"] {
                 let text = asm(&pair(signed, divisor), level);
-                let divides: usize = ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__mulsi3"]
-                    .iter()
-                    .map(|routine| calls(&text, routine))
-                    .sum();
+                let divides: usize =
+                    ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4", "__mulsi3"]
+                        .iter()
+                        .map(|routine| calls(&text, routine))
+                        .sum();
                 assert_eq!(divides, 1, "{level:?} signed {signed} / {divisor}:\n{text}");
-                assert!(text.contains("__sr"), "{level:?} signed {signed} / {divisor}:\n{text}");
+                assert!(text.contains("divmodsi4"), "{level:?} signed {signed} / {divisor}:\n{text}");
             }
         }
     }
@@ -85,29 +90,8 @@ fn a_lone_remainder_is_not_a_pair() {
     assert_eq!(calls(&text, "__divmodsi4"), 0, "{text}");
 }
 
-fn long_cell(
-    name: &str,
-    routine: &str,
-    a: u32,
-    b: u32,
-    cell: &str,
-) -> u32 {
-    let mut setup = String::new();
-    for (to, value) in [("__sa", a), ("__sb", b)] {
-        for at in 0..4 {
-            setup += &format!("  lda #{}\n  sta {to}+{at}\n", (value >> (8 * at)) & 0xFF);
-        }
-    }
-    (0..4)
-        .map(|at| {
-            let main = format!("{setup}  jsr {routine}\n  lda {cell}+{at}\n");
-            (common::run_with_runtime(&format!("{name}-{cell}-{at}"), &main) as u32) << (8 * at)
-        })
-        .sum()
-}
-
-/// The signed routines of every variant give the quotient in `__sa` and the
-/// remainder, of the dividend's sign, in `__sr`: negative dividends and
+/// The signed routines of every variant give the quotient in A:X:rc2:rc3 and
+/// the remainder, of the dividend's sign, in rc4..rc7: negative dividends and
 /// divisors, 1, -1, the extremes, a divisor of a byte and above.
 #[test]
 fn the_signed_pair_routines_leave_both_results() {
@@ -118,24 +102,24 @@ fn the_signed_pair_routines_leave_both_results() {
                 continue;
             }
             let name = format!("{routine}-{a}-{b}").replace('-', "m");
-            let q = long_cell(&name, routine, a as u32, b as u32, "__sa");
-            let r = long_cell(&name, routine, a as u32, b as u32, "__sr");
+            let q = common::long_call(&format!("{name}-q"), routine, a as u32, b as u32, Result32::Value);
+            let r = common::long_call(&format!("{name}-r"), routine, a as u32, b as u32, Result32::Remainder);
             assert_eq!((q as i32, r as i32), (a / b, a % b), "{routine} {a} / {b}");
         }
     }
 }
 
-/// The unsigned routines leave the remainder in `__sr` as well.
+/// The unsigned pair routines leave the remainder in rc4..rc7 as well.
 #[test]
-fn the_unsigned_routines_leave_the_remainder_in_sr() {
-    for routine in ["__udivsi3", "__udivsi3_fast", "__udivsi3_fast_small", "__udivsi3_fast_byte"] {
+fn the_unsigned_pair_routines_leave_the_remainder_in_rc4() {
+    for routine in ["__udivmodsi4", "__udivmodsi4_fast", "__udivmodsi4_fast_small", "__udivmodsi4_fast_byte"] {
         for (a, b) in [(4_000_000_000u32, 7u32), (4_000_000_000, 3_000_000_000), (u32::MAX, 255)] {
             if routine.ends_with("_byte") && !(1..=255).contains(&b) {
                 continue;
             }
             let name = format!("{routine}-{a}-{b}");
-            let q = long_cell(&name, routine, a, b, "__sa");
-            let r = long_cell(&name, routine, a, b, "__sr");
+            let q = common::long_call(&format!("{name}-q"), routine, a, b, Result32::Value);
+            let r = common::long_call(&format!("{name}-r"), routine, a, b, Result32::Remainder);
             assert_eq!((q, r), (a / b, a % b), "{routine} {a} / {b}");
         }
     }
@@ -260,7 +244,11 @@ fn a_compiled_pair_gives_the_quotient_and_the_remainder_in_either_order() {
                     datalayout(),
                     probe(bits, signed, remainder_first, cases)
                 );
-                let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+                // the calls are counted in what the backend wrote: outlining
+                // moves some into a body
+                let mut request = Request::new(level);
+                request.passes.push("-fno-outline".to_owned());
+                let text = assembly(&ir, &request).unwrap_or_else(|e| panic!("{e}"));
                 let code: String = text
                     .lines()
                     .filter(|l| !l.starts_with("rc") || !l.contains(" = $"))
@@ -273,6 +261,7 @@ fn a_compiled_pair_gives_the_quotient_and_the_remainder_in_either_order() {
                             "jsr __udivsi3",
                             "jsr __divsi3",
                             "jsr __divmodsi4",
+                            "jsr __udivmodsi4",
                             "jsr __udivhi3",
                             "jsr __divhi3",
                             "jsr __divmodhi4",

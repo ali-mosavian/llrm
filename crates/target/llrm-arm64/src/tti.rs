@@ -98,10 +98,6 @@ const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 /// Bytes, in thousandths, one inliner cost unit (an instruction) stands for.
 const BYTES_PER_COST_UNIT_MILLI: i64 = 4000;
 
-/// Thousandths of a clock one unit of inline growth costs at -O2/-O3 (250
-/// clocks).
-const INLINE_MILLICLOCKS_PER_UNIT: i64 = 250_000;
-
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
@@ -683,25 +679,13 @@ impl Tti for AArch64 {
         Some(100)
     }
 
-    /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
-    /// clocks, the median of the -O2/-O3 cells where inlining grew the code
-    /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
-    /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
-    /// decisions are those of the fit.
-    ///
-    /// Refit scan (provisional: net = executed instructions + 0.3 x bytes, an
-    /// instruction proxy, not clocks; 2026-11-08, 34 programs at -O2/-O3,
-    /// release/next 8d22165d6d, rerun from the knob and scripts in draft PR
-    /// 8402): 30 and 10 clk/B change no cell against 62.5; 3 changes
-    /// jpeg_fixed and jpeg_single only (+84 B, -1.6k instructions); the
-    /// scoring rate 0.3 makes both worse in bytes and instructions (+540 B,
-    /// +688k instructions on jpeg_single -O2). Kept at the fitted rate.
+    /// The pin's threshold alone at -O2/-O3: AArch64 is a large platform, and
+    /// the 11-04 rule of bytes against clocks on a hot path is for the small
+    /// ones (6502, z80, m68k, m16). The earlier fit (62.5 milliclocks a byte)
+    /// refused `fillw` and `filll` at `cost=-5` against the pin's threshold
+    /// of 250 (pattern_fill -O3: 1,840 instructions against clang's 602).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        // Scan knob (w15/rate-scan only, never merged): milliclocks per byte.
-        if let Some(rate) = std::env::var("LLRM_INL_RATE").ok().and_then(|value| value.parse().ok()) {
-            return rate;
-        }
-        INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
+        0
     }
 
     /// DEVIATE UP1-RUNS (owner w15, exit 2026-11-20): an unknown-count loop
@@ -994,6 +978,29 @@ impl Tti for AArch64 {
         crate::tti_vector::cmp_sel_cost(op, ty, predicate, cost_kind)
     }
 
+    /// `AArch64TTIImpl::getAddressComputationCost`
+    /// ([L5318](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5318)),
+    /// asked with a vector of pointers: a step that is not a constant under
+    /// 65 bytes costs `NeonNonConstStrideOverhead` (10), any other 1.
+    fn scalarized_address_cost(
+        &self,
+        stride_bytes: Option<i64>,
+        _kind: CostKind,
+    ) -> Cost {
+        const NEON_NON_CONST_STRIDE_OVERHEAD: i64 = 10;
+        const MAX_MERGE_DISTANCE: i64 = 64;
+        Cost::of(if stride_bytes.is_some_and(|step| step < MAX_MERGE_DISTANCE + 1) {
+            1
+        } else {
+            NEON_NON_CONST_STRIDE_OVERHEAD
+        })
+    }
+
+    /// `AArch64TTIImpl::prefersVectorizedAddressing`: `ST->hasSVE()`.
+    fn prefers_vectorized_addressing(&self) -> bool {
+        false
+    }
+
     fn scalarization_overhead(
         &self,
         ty: VectorTy,
@@ -1017,6 +1024,20 @@ impl Tti for AArch64 {
         _value: Ty,
     ) -> u32 {
         crate::tti_vector::store_minimum_vf(vf, mem)
+    }
+
+    /// `AArch64TTIImpl::getShuffleCost`
+    /// ([L6978](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6978)),
+    /// `SK_Broadcast`: a `dup`, one for each register the vector takes. Every
+    /// other kind is not priced (DEVIATE SLP1 of `slptree`).
+    fn shuffle_cost(
+        &self,
+        kind: llrm_mir::tti::ShuffleKind,
+        ty: VectorTy,
+        _mask: &[i32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::shuffle_cost(kind, ty, cost_kind)
     }
 
     fn vector_instr_cost(

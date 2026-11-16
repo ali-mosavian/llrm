@@ -71,3 +71,23 @@ void pattern_bytes(unsigned char *dst, unsigned n)
     for (unsigned i = 0; i < n; i++)
         dst[i] = (unsigned char)((i & 3) + ((i >> 2) & 1));
 }
+
+/* A count-down sum with a run-time start: the vector loop's scalar remainder is marked
+   `llvm.loop.unroll.runtime.disable`, which the unroller read as absent (loop_countdown_sum). */
+unsigned down_sum(int n)
+{
+    unsigned s = 0;
+    for (int i = n; i >= 0; i--)
+        s += (((unsigned)i * 3u) ^ ((unsigned)i >> 2));
+    return s;
+}
+
+/* A 32-trip fold of a table: fourteen units a trip, 386 unrolled, over the pin's -O3 threshold of 300
+   (loop_interchange's `checksum`). */
+long table_fold(const short *table)
+{
+    long sum = 0;
+    for (int i = 0; i < 32; ++i)
+        sum = (sum * 31 + table[i]) % 100003;
+    return sum;
+}

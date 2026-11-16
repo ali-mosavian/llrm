@@ -780,8 +780,37 @@ fn allocated_choosing(
     }
 }
 
-/// Bytes and the clocks weighted by loop depth of an allocated function.
+/// Bytes and the clocks weighted by loop depth of an allocated function. The
+/// same allocation is priced again wherever a candidate comes out as another (a
+/// stack of the same slots, a variant that allocates alike): what was priced
+/// once is known by its content.
 fn priced_in_loops(
+    one: &Allocated,
+    level: Level,
+) -> Option<(u32, u64)> {
+    let key = price_key(one, level);
+    PRICINGS.with(|counts| counts.set((counts.get().0 + 1, counts.get().1)));
+    if let Some(known) = PRICES.with(|prices| prices.borrow().get(&key).copied()) {
+        // Z80_VERIFY_PRICES: every hit is priced again and must agree (a key
+        // that misses an input fails here)
+        if std::env::var_os("Z80_VERIFY_PRICES").is_some() {
+            assert_eq!(known, price_now(one, level), "a priced allocation's key misses an input");
+        }
+        return known;
+    }
+    PRICINGS.with(|counts| counts.set((counts.get().0, counts.get().1 + 1)));
+    let price = price_now(one, level);
+    PRICES.with(|prices| {
+        let mut prices = prices.borrow_mut();
+        if prices.len() >= PRICES_KEPT {
+            prices.clear();
+        }
+        prices.insert(key, price);
+    });
+    price
+}
+
+fn price_now(
     one: &Allocated,
     level: Level,
 ) -> Option<(u32, u64)> {
@@ -793,6 +822,47 @@ fn priced_in_loops(
         expand::replace_frequencies(kept);
     }
     price
+}
+
+/// Prices kept by [`price_key`] before the table is emptied.
+const PRICES_KEPT: usize = 4096;
+
+thread_local! {
+    static PRICES: std::cell::RefCell<std::collections::HashMap<(u64, u64), Option<(u32, u64)>>> =
+        std::cell::RefCell::new(Default::default());
+    /// Pricings asked for, and run, since the last [`take_pricings`].
+    static PRICINGS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The pricings asked for on this thread since the last call, and those that
+/// were run: the rest were known.
+pub fn take_pricings() -> (usize, usize) {
+    PRICINGS.with(|one| one.replace((0, 0)))
+}
+
+/// Everything `priced_in_loops` reads of an allocation, as two hashes.
+fn price_key(
+    one: &Allocated,
+    level: Level,
+) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let (function, assignment, slots, reads, frequencies) = one;
+    let mut both = Both(Default::default(), Default::default());
+    let _ = std::fmt::Write::write_fmt(&mut both, format_args!("{level:?}|"));
+    write_ambient_state(&mut both);
+    hash_function(function, &mut both);
+    assignment.0.hash(&mut both);
+    slots.hash(&mut both);
+    let mut reads: Vec<(&u32, &usize)> = reads.iter().collect();
+    reads.sort_unstable();
+    reads.hash(&mut both);
+    frequencies.is_some().hash(&mut both);
+    if let Some(own) = frequencies {
+        let mut own: Vec<(u32, u64)> = own.iter().map(|(id, one)| (*id, one.to_bits())).collect();
+        own.sort_unstable();
+        own.hash(&mut both);
+    }
+    (both.0.finish(), both.1.finish())
 }
 
 /// Whether the price `one` (bytes, clocks) beats `other`: bytes first, clocks
@@ -811,6 +881,39 @@ fn cheaper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A price is known by its content: the same allocation priced under
+    /// another ambient state (the bytes-first switch, the pricing mode, a
+    /// switch of the environment, the block frequencies) is another price, and
+    /// must not be handed the first one.
+    #[test]
+    fn an_allocation_priced_under_another_ambient_state_has_another_price_key() {
+        let request = Request::new(Level::O2);
+        let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
+        let function = machine_function_with(&selected, "lz4", true).expect("builds");
+        let assignment = Assignment(vec![RegId::default(); function.classes.len()]);
+        let one: Allocated = (function, assignment, Vec::new(), Default::default(), None);
+        let key = |level| price_key(&one, level);
+        let base = key(Level::O2);
+        assert_eq!(base, key(Level::O2), "the same state has the same key");
+        assert_ne!(base, key(Level::Os), "the level");
+        for (what, flip) in [
+            ("BYTES_FIRST", Box::new(|| expand::BYTES_FIRST.with(|one| one.set(!one.get()))) as Box<dyn Fn()>),
+            ("PRICING", Box::new(|| expand::PRICING.with(|one| one.set(!one.get())))),
+            ("SLOT_BY_CONFLICTS", Box::new(|| SLOT_BY_CONFLICTS.with(|one| one.set(!one.get())))),
+        ] {
+            flip();
+            let changed = key(Level::O2);
+            flip();
+            assert_ne!(changed, base, "the key does not see {what}");
+        }
+        let kept = expand::frequencies();
+        expand::set_frequencies(&[(7, 3.5)]);
+        let changed = key(Level::O2);
+        expand::set_frequencies(&kept.into_iter().collect::<Vec<_>>());
+        assert_ne!(changed, base, "the key does not see the block frequencies");
+        assert_eq!(key(Level::O2), base, "the state is restored");
+    }
 
     /// The allocation key is a hash of the function's fields, not of its
     /// `Debug` text (a fifth of int64_divmod_edges -O2): two functions that
@@ -1360,19 +1463,30 @@ fn allocation_key(
 ) -> (u64, u64) {
     use std::fmt::Write;
     use std::hash::Hasher;
+    // The scalars as text, the function as its fields: `Debug` of a function is
+    // the cost of the key (`int64_divmod_edges`: a fifth of the compile),
+    // and most of it is the selector's `form` of each instruction.
+    let mut both = Both(Default::default(), Default::default());
+    let _ = write!(both, "{name}|{strict}|{level:?}|{want_apart}|");
+    write_ambient_state(&mut both);
+    hash_function(function, &mut both);
+    (both.0.finish(), both.1.finish())
+}
+
+/// What the allocator and the pricing read besides their arguments: the
+/// switches of the environment, the block frequencies and the state of the
+/// thread.
+fn write_ambient_state(both: &mut Both) {
+    use std::fmt::Write;
     let mut environment: Vec<(String, String)> =
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     let mut frequencies: Vec<(u32, u64)> =
         expand::frequencies().into_iter().map(|(id, one)| (id, one.to_bits())).collect();
     frequencies.sort_unstable();
-    // The scalars as text, the function as its fields: `Debug` of a function is
-    // the cost of the key (`int64_divmod_edges`: a fifth of the compile),
-    // and most of it is the selector's `form` of each instruction.
-    let mut both = Both(Default::default(), Default::default());
     let _ = write!(
         both,
-        "{name}|{strict}|{level:?}|{want_apart}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{environment:?}|{frequencies:?}|",
+        "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{environment:?}|{frequencies:?}|",
         crate::regalloc::UNJOINED.with(|one| one.get()),
         crate::regalloc::NO_FOLD.with(|one| one.get()),
         LOOPS_FOLDED.with(|one| one.get()),
@@ -1383,8 +1497,6 @@ fn allocation_key(
         crate::dagisel::pipeline::ILP.with(|one| one.get()),
         crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.get()),
     );
-    hash_function(function, &mut both);
-    (both.0.finish(), both.1.finish())
 }
 
 /// Both hashes of a key at once.

@@ -35,6 +35,11 @@ pub enum MVT {
     /// The 64-bit integer vectors `FPR64` holds (arm64, `addDRTypeForNEON`).
     V8I8,
     V4I16,
+    /// The vectors under a D register: no register class holds them, so the
+    /// legalizer promotes their lanes (`v4i8` is `v4i16`).
+    V2I8,
+    V4I8,
+    V2I16,
     V2I32,
     /// The vectors no register holds: the type legalizer splits each in two
     /// (`TypeSplitVector`).
@@ -132,7 +137,7 @@ impl MVT {
 }
 
 /// Every vector type: its element and its lane count.
-const VECTORS: [(MVT, MVT, u32); 33] = [
+const VECTORS: [(MVT, MVT, u32); 36] = [
     (MVT::V2I1, MVT::I1, 2),
     (MVT::V4I1, MVT::I1, 4),
     (MVT::V8I1, MVT::I1, 8),
@@ -152,6 +157,9 @@ const VECTORS: [(MVT, MVT, u32); 33] = [
     (MVT::V4F64, MVT::F64, 4),
     (MVT::V8I8, MVT::I8, 8),
     (MVT::V4I16, MVT::I16, 4),
+    (MVT::V2I8, MVT::I8, 2),
+    (MVT::V4I8, MVT::I8, 4),
+    (MVT::V2I16, MVT::I16, 2),
     (MVT::V2I32, MVT::I32, 2),
     (MVT::V64I8, MVT::I8, 64),
     (MVT::V32I16, MVT::I16, 32),

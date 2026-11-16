@@ -230,7 +230,11 @@ fn function_text_uncached(
     if !alloc::wide_commuted() {
         return Ok(text);
     }
-    let apart = alloc::with_wide_commute(false, || function_text_once(module, name, selection))?;
+    // its layout, sink and shared compares were chosen with the wide choice;
+    // the narrow one is priced at the same
+    let kept = alloc::kept_variant();
+    let apart =
+        alloc::with_wide_commute(false, || alloc::with_variant(kept, || function_text_once(module, name, selection)))?;
     let cpu = selection.cpu;
     let size = |text: &str| crate::timing::estimate(cpu, text).map(|e| (e.bytes, e.cycles));
     Ok(match (size(&text), size(&apart)) {
@@ -322,7 +326,7 @@ pub fn module_text(
     // a module whose divisions are cold calls the speed routines with the
     // small wide path
     let wide = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
             .iter()
             .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
@@ -338,7 +342,7 @@ pub fn module_text(
     // module's choice by the share of its clocks it saves
     let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
     let compact_division = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4"]
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
             .iter()
             .any(|name| text.contains(&format!(" {name}\n")))
     };
@@ -1114,7 +1118,7 @@ fn lower(
     }
 }
 
-/// At size the speed multiply (`hotmultiply::FAST_BYTES` more, linked once) is
+/// At size the speed multiply (`hotmultiply::fast_bytes` more, linked once) is
 /// the module's choice by the share of its clocks it saves against the share of
 /// its bytes it adds (`mulimage::pays_by_share`): the static runs of its
 /// multiplies times what a call saves, against the module priced as it stands.
@@ -1129,7 +1133,7 @@ fn fast_multiply_pays_at_size(
 ) -> Result<bool, String> {
     let (clocks, bytes) = priced(module, parts, texts)?;
     let saved = (crate::hotmultiply::runs(module) * crate::hotmultiply::SAVED_CLOCKS) as u64;
-    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::FAST_BYTES as i64), clocks, bytes))
+    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::fast_bytes() as i64), clocks, bytes))
 }
 
 /// The module as it stands, in estimated clocks and bytes
@@ -1196,6 +1200,19 @@ fn fast_division_pays_at_size(
     let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, faster))
         - crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
     let (clocks, bytes) = priced(module, parts, compact)?;
-    let saved = (crate::hotdivision::runs(module) * crate::hotdivision::SAVED_AT_SIZE) as u64;
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let weights: std::collections::HashMap<usize, Vec<u64>> = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(|(index, global)| match &global.kind {
+            llrm_mir::module::GlobalKind::Function(function) if function.entry().is_some() => {
+                Some((index, crate::weights::block_weights(module, function, &layout)))
+            }
+            _ => None,
+        })
+        .collect();
+    let saved = (crate::hotdivision::runs_priced(module, &weights) * crate::hotdivision::SAVED_AT_SIZE) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }

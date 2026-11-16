@@ -784,7 +784,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
+    for (second, lanes) in OP_ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
         if name == unzip_name(second, lanes) {
             return Some(Inst::VectorUnzip {
                 second,
@@ -978,9 +978,17 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
         }
         _ => {}
     }
-    if let Some(arrangement) = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
-        .into_iter()
-        .find(|one| name == dup_name(*one))
+    if let Some(arrangement) = [
+        Arrangement::B16,
+        Arrangement::H8,
+        Arrangement::S4,
+        Arrangement::D2,
+        Arrangement::B8,
+        Arrangement::H4,
+        Arrangement::S2,
+    ]
+    .into_iter()
+    .find(|one| name == dup_name(*one))
     {
         return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Dup(arrangement, gpr_of(&s[0])) });
     }

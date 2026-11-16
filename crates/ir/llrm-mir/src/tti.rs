@@ -789,6 +789,13 @@ pub trait Tti {
         true
     }
 
+    /// The backend selects a vector under a register (`<8 x i8>`): the pin's
+    /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
+    /// whose backend takes none keeps the loop scalar.
+    fn selects_sub_register_vectors(&self) -> bool {
+        false
+    }
+
     /// `getArithmeticReductionCost` / `getMinMaxReductionCost` of the
     /// horizontal step of a vector reduction (`llvm.vector.reduce.*` of `ty`);
     /// `ordered`: a float add or multiply in lane order (no `reassoc`). `None`:
@@ -1087,6 +1094,25 @@ pub trait Tti {
     ) -> Cost {
         let _ = kind;
         Cost::BASIC
+    }
+
+    /// `getAddressComputationCost` of one lane of a scalarized access
+    /// (`getMemInstScalarizationCost`, which passes a vector of pointers and
+    /// the pointer's SCEV): `stride_bytes` is the constant step of the
+    /// address between iterations, `None` where it is not one.
+    fn scalarized_address_cost(
+        &self,
+        stride_bytes: Option<i64>,
+        kind: CostKind,
+    ) -> Cost {
+        let _ = stride_bytes;
+        self.address_computation_cost(kind)
+    }
+
+    /// `prefersVectorizedAddressing`: a scalarized load takes its pointers
+    /// apart from a vector (a target with gathers). A store does so always.
+    fn prefers_vectorized_addressing(&self) -> bool {
+        true
     }
 
     /// What a call of a function the target lowers to a call, with
@@ -2132,6 +2158,12 @@ pub trait Tti {
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
+    /// own (`Tuning::unroll_threshold_at_o3`).
+    fn unroll_threshold_at_o3(&self) -> Option<u32> {
+        None
     }
 
     /// How many values the x87 stack holds where this subtarget keeps floats

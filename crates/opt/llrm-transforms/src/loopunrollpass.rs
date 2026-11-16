@@ -214,7 +214,9 @@ impl LoopOptions {
         let id = lp.get_loop_latch(function).and_then(|latch| function.terminator(latch)).and_then(|term| {
             function.instruction(term).metadata.iter().find(|(kind, _)| kind == "llvm.loop").map(|(_, id)| *id)
         });
-        let node = |at: llrm_mir::module::MetadataId| run.metadata.get(at.0 as usize);
+        // The loop ID may be one the vectorizer made earlier in this run: not yet in the module's table.
+        let node =
+            |at: llrm_mir::module::MetadataId| crate::loopvectorizeskeleton::node_at(&*run.declared, run.metadata, at);
         let Some(id) = id else { return Self(Vec::new()) };
         let Some(loop_id) = node(id) else { return Self(Vec::new()) };
         if !matches!(
@@ -512,6 +514,9 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
+    if run.options.opt_level > 2 {
+        up.threshold = run.tti.unroll_threshold_at_o3().unwrap_or(up.threshold);
+    }
     // DEVIATE UNROLL-SPEED-TRIAL: the trial compile's own threshold.
     if let Some(trial::SpeedUnroll::Wide(wide)) = trial::speed_unroll() {
         up.threshold = wide;

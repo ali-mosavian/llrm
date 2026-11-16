@@ -329,6 +329,11 @@ pub struct Tuning {
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
     pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// `Threshold` of the full unroll at `-O3` alone (the pin's is 300): a
+    /// loop of 32 trips and a dozen operations is unrolled where the pin
+    /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
+    /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
+    pub unroll_threshold_at_o3: Option<u32>,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -787,6 +792,7 @@ impl Tuning {
         merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
+        unroll_threshold_at_o3: None,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
@@ -1818,6 +1824,7 @@ mod tests {
             (pin.unroll_threshold, pin.unroll_max_percent_threshold_boost, pin.unroll_partial_threshold),
             (None, None, None)
         );
+        assert_eq!(pin.unroll_threshold_at_o3, None);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);

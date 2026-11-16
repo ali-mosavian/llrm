@@ -81,6 +81,31 @@ fn a_vector_multiply_by_a_near_power_of_two_is_a_shift_and_an_add() {
     }
 }
 
+/// A vector narrower than a register (`<8 x i8>`, `<4 x i16>`, `<2 x i32>`)
+/// stopped the compile (`Legalize(Unsupported { op: Load, ty: V8I8, "vector
+/// with no register class" })`, no output at all). It is now widened to the
+/// register as the pin's `TypeWidenVector` does and its accesses are `movq`, 8
+/// bytes, as wide as the vector: the host run in `lv_run.c` puts each buffer
+/// against an unmapped page.
+#[test]
+fn a_vector_narrower_than_a_register_is_widened_and_moved_by_movq() {
+    let text = assembly_of("lv_narrow.c", "x86_64-linux", "-O2");
+    for (name, op) in [("add_u8x8", "paddb"), ("sub_u16x4", "psubw"), ("xor_u32x2", "pxor")] {
+        let body = body(&text, name);
+        assert!(body.contains(op) && body.contains("movq"), "{name} lacks {op} and movq: {body}");
+        assert!(!body.contains("xmmword") && !body.contains("movups") && !body.contains("movdqu"), "{name}: {body}");
+    }
+}
+
+/// The vectors an unrolled vector loop stores are constants (`<0, 1, ..> + <8, ..>` per trip folds, #10074): with the
+/// sub-register vectors widened, `copy_runs`' init loops are stored constants and not `paddb`/`pmullw` at run time.
+#[test]
+fn the_vectors_a_fully_unrolled_ramp_loop_stores_are_constants() {
+    let text = assembly_of("lv_narrow.c", "x86_64-linux", "-O2");
+    let fill = body(&text, "fill_ramp");
+    assert!(!fill.contains("paddb") && !fill.contains("pmullw") && !fill.contains("paddw"), "{fill}");
+}
+
 #[test]
 fn the_32_bit_target_and_o1_keep_every_loop_scalar() {
     assert!(!assembly("x86_32-linux", "-O2").contains("xmm"));
@@ -123,7 +148,7 @@ fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut objects = Vec::new();
-    for source in ["lv_run.c", "lv_loops.c", "lv_lanes.c", "lv_casts.c"] {
+    for source in ["lv_run.c", "lv_loops.c", "lv_lanes.c", "lv_casts.c", "lv_narrow.c"] {
         let object = dir.join(format!("{source}.o"));
         let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_64-linux")
@@ -285,4 +310,47 @@ fn a_byte_table_computed_in_32_bit_lanes_is_a_vector_loop_with_packuswb() {
     let text = assembly("x86_64-linux", "-O2");
     let pattern = body(&text, "pattern_bytes");
     assert!(pattern.contains("packuswb") && pattern.contains("paddd"), "{pattern}");
+}
+
+/// The scalar remainder of a vector loop is not unrolled at run time: the unroller could not see the loop ID the
+/// vectorizer had just made, so the remainder got a 0-3 trip prologue and a 4-wide body (loop_countdown_sum: three
+/// loops in `down_sum` where the pin has two).
+#[test]
+fn a_vector_loop_remainder_is_not_unrolled_at_run_time() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "down_sum");
+    assert!(sum.contains("paddd"), "vectorized: {sum}");
+    assert_eq!(sum.matches("align 16").count(), 2, "a vector loop and a rolled remainder: {sum}");
+}
+
+/// The pin keeps a 32-trip table fold at -O3 (386 units against its threshold of 300), gcc and clang 20 unroll it whole:
+/// loop_interchange +17.6% over the bar. m64 takes 450 at -O3.
+#[test]
+fn a_32_trip_table_fold_is_unrolled_whole_at_o3() {
+    let text = assembly("x86_64-linux", "-O3");
+    let fold = body(&text, "table_fold");
+    assert!(!fold.contains("align 16"), "a loop is left: {fold}");
+}
+
+/// A packed accumulator is the tied operand of the `paddd` that adds to it: the peephole's recurrence commute knew
+/// only the integer ops, so each trip of `down_sum`'s vector loop copied two accumulators (6 copies a trip, 4 now; the
+/// pin has 4).
+#[test]
+fn a_packed_accumulator_is_added_in_place() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "down_sum");
+    let (_, rest) = sum.split_once("align 16").expect("a vector loop");
+    let vector = rest.split_once("jne").expect("its back edge").0;
+    let copies = vector.lines().filter(|line| line.trim_start().starts_with("movaps")).count();
+    assert!(copies <= 4, "the loop copies {copies} registers: {vector}");
+}
+
+/// `descent` carries a loaded `short` round its loop and indexes with it: the load was `movzx` and every trip
+/// extended it again (`movzx ecx, cx`). The extension is on the load now (gcc's `ree`).
+#[test]
+fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
+    let text = assembly_of("ree_loops.c", "x86_64-linux", "-O3");
+    let descent = body(&text, "descent");
+    let widened = descent.lines().filter(|line| (line.contains("movsx") || line.contains("movzx")) && !line.contains("ptr")).count();
+    assert_eq!(widened, 0, "a register-to-register extension stays in the loop: {descent}");
 }
