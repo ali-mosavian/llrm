@@ -1403,6 +1403,23 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// The uses of `value` move to a new value one at a time, from the head:
+    /// the list comes out reversed, as LLVM's `replaceAllUsesWith` leaves the
+    /// uses of an argument that `DeadArgumentElimination` recreates.
+    pub fn reverse_uses(
+        &mut self,
+        value: ValueId,
+    ) {
+        let held = Held::Value(value.0);
+        let uses = self.uses.users(held).snapshot();
+        for &one in &uses {
+            self.uses.unlink(held, one);
+        }
+        for &one in &uses {
+            self.uses.link(held, one);
+        }
+    }
+
     /// The call `inst`'s argument `at` becomes `with`, as the callee's
     /// parameter did, under `function_type`.
     pub fn replace_argument(
