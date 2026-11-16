@@ -1917,6 +1917,20 @@ fn unrolls_table_fold(
     !printed(&module).contains("br i1")
 }
 
+/// loop_interchange -O3 (x86_64): `checksum`'s 32-trip `srem` fold is 386 units
+/// in the pin (the `srem` by a constant costs 8 for size) against 259 in LLVM
+/// 20 (4), so clang 20 unrolls it whole and the pin keeps it: 58,416 executed
+/// instructions against 46,441. The target's size cost of a divide by a
+/// constant now decides, at the pin's 300.
+#[test]
+fn a_cheaper_size_cost_of_a_divide_by_a_constant_unrolls_the_fold_the_pin_keeps() {
+    let pin = llrm_mir::target::Tuning::PIN;
+    let cheaper = llrm_mir::target::Tuning { div_by_constant_size_cost: Some(4), ..pin };
+    assert!(!unrolls_table_fold(pin, 3), "the pin's 8 keeps the loop");
+    assert!(unrolls_table_fold(cheaper, 3), "4 is under the pin's 300 for the fold");
+    assert!(!unrolls_table_fold(cheaper, 2), "-O2 keeps its 150");
+}
+
 /// loop_interchange -O3: the pin keeps `checksum`'s 32-trip loop (386 against 300) where gcc and clang 20 unroll it
 /// whole: 58,416 executed instructions against the bar's 49,680.
 #[test]
