@@ -73,6 +73,7 @@ const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
 const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
+const FLOAT_BITS: &str = include_str!("../tests/lv/float_bits.ll");
 const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
 const FP_CONVERT_NARROW: &str = include_str!("../tests/lv/fp_convert_narrow.ll");
 const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
@@ -129,6 +130,18 @@ fn an_int_to_float_conversion_is_widened_with_its_operand() {
     assert_eq!(count(&text, "fmul <4 x float>"), 2, "{text}");
     assert_eq!(count(&text, "load <4 x i32>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
+}
+
+/// `b[i] = bits(a[i] * 2.5f) * 5` (the soft-float `f2b` of the sfm16 loops): "A
+/// cast the target has no vector instruction for yet" kept a `bitcast float to
+/// i32` loop scalar (sfm16_float_mul O2 4009 instructions against clang's
+/// 1955); the pin widens it (`bitcast <4 x float> to <4 x i32>`).
+#[test]
+fn a_bitcast_between_float_and_integer_lanes_is_widened() {
+    let text = run(FLOAT_BITS);
+    assert!(count(&text, "bitcast <4 x float>") >= 1, "{text}");
+    assert!(count(&text, "mul <4 x i32>") >= 1, "{text}");
+    assert_eq!(count(&text, "bitcast float"), 0, "{text}");
 }
 
 /// `b[i] = (float)a[i] * 2.5f` over `i64`: "A cast that changes the lane width"
