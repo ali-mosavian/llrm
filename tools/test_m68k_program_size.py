@@ -106,3 +106,9 @@ def test_a_program_that_does_not_link_is_a_skip_row_not_the_end_of_the_sweep(mon
     rows = capsys.readouterr().out.splitlines()
     assert rows[0].startswith("| bad | 68000 | Os | ours | SKIP |") and "memcpy" in rows[0], rows
     assert rows[1:] == [f"| good | 68000 | Os | {c} | 10 | 2 | 12 |  |" for c in ("ours", "gcc")], rows
+
+
+def test_the_assembly_is_not_given_more_global_labels_than_the_compiler_wrote():
+    """Every label global made ours 192 B larger on fcmp_all (68020 Os, program 5530 B against 5338 B of the object) and left gcc's 5078 B alone: a call to a static function became a 32-bit relocation."""
+    text = "\t.globl\tmain\nmain:\n\tjsr\t(helper,%pc)\nhelper:\n\trts\n"
+    assert size.in_text(text).count(".globl") == 1

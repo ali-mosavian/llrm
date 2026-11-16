@@ -58,14 +58,9 @@ def short(member: str) -> str:
     return re.sub(r"^rt_[^_]+_[^_]+_[^_]+_", "", member).removesuffix(".o")
 
 
-def globalize(text: str) -> str:
-    """Every label global, so the linker can name the functions (the compilers' output makes none)."""
-    out = [".text"]
-    for line in text.splitlines():
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*:", line):
-            out.append(f".globl {line[:-1]}")
-        out.append(line)
-    return "\n".join(out) + "\n"
+def in_text(text: str) -> str:
+    """The compiler's assembly under `.text`, its own `.globl` lines unchanged. Every label global (as this once did) made each call to a `static` function a 32-bit relocation: ours, which calls pc-relative, read 192 B larger on fcmp_all (5530 against 5338) and gcc, which calls absolute, did not."""
+    return ".text\n" + text
 
 
 def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str]) -> list[str]:
@@ -103,7 +98,7 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
     obj = work / f"{source.stem}.{compiler}.o"
     if compiler != "clang":
         glob = work / f"{source.stem}.{compiler}.g.s"
-        glob.write_text(globalize(asm.read_text()))
+        glob.write_text(in_text(asm.read_text()))
         subprocess.run([f"{tools}as", f"-m{cpu}", "-o", str(obj), str(glob)], check=True, capture_output=True, env=env)
     crt, archive = support(cc, root, cpu, level, cache)
     exe, mapfile = work / f"{source.stem}.{compiler}.exe", work / f"{source.stem}.{compiler}.map"
