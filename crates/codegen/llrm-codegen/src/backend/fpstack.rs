@@ -1372,7 +1372,9 @@ fn depth_first(body: &LirBody) -> Vec<i64> {
 /// fewest instructions, weighted by loop depth. Chains are the instructions
 /// that share a value one of them writes; a block that writes memory, calls,
 /// or has a float instruction with an address or integer operand is left as
-/// it is.
+/// it is. The values a loop carries into its header are likewise tried in
+/// each order (two or three of them), kept by the same count; not where bytes
+/// are strict (-O1, -Os).
 pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
@@ -1390,7 +1392,8 @@ pub(super) fn converted_with(
 ) -> Result<LirBody, Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
-    let mut best = converted_valued(body, classes, cpu, constants)?;
+    let no_orders = HashMap::default();
+    let mut best = converted_valued(body, classes, cpu, constants, &no_orders)?;
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
         return Ok(best);
@@ -1411,7 +1414,7 @@ pub(super) fn converted_with(
             let mut blocks: Vec<Block> = current.blocks.iter().cloned().collect();
             blocks[index] = block.with_insns(insns);
             let candidate = current.with_blocks(blocks);
-            let Ok(done) = converted_valued(&candidate, classes, cpu, constants) else { continue };
+            let Ok(done) = converted_valued(&candidate, classes, cpu, constants, &no_orders) else { continue };
             let length = weighted_len(&done, &weight);
             if length < score {
                 score = length;
@@ -1420,7 +1423,55 @@ pub(super) fn converted_with(
             }
         }
     }
+    // The order each loop header's carried values take: a loop that finds them
+    // the wrong way round exchanges them on every trip.
+    // Not where bytes are strict (-O1, -Os): the shuffle can move a constant's
+    // load onto an edge and the block placement after it grows the loop's
+    // guard.
+    if cpu.is_some_and(|cpu| cpu.bytes_strict()) {
+        return Ok(best);
+    }
+    let mut orders: HashMap<i64, Vec<u32>> = HashMap::default();
+    let (live_in, _) = live_among(&current, |value| floating.contains(&value));
+    for one in crate::analysis::loops::loops(&current.blocks, Some(current.entry)) {
+        let values: Vec<u32> = live_in[&one.header].iter().filter(|value| floating.contains(value)).collect();
+        if !(2..=3).contains(&values.len()) {
+            continue;
+        }
+        for order in permutations(&values) {
+            tried += 1;
+            if tried > MAX_CHAIN_TRIALS {
+                return Ok(best);
+            }
+            let mut trial = orders.clone();
+            trial.insert(one.header, order);
+            let Ok(done) = converted_valued(&current, classes, cpu, constants, &trial) else { continue };
+            let length = weighted_len(&done, &weight);
+            if length < score {
+                score = length;
+                best = done;
+                orders = trial;
+            }
+        }
+    }
     Ok(best)
+}
+
+/// Every order of `values`.
+fn permutations(values: &[u32]) -> Vec<Vec<u32>> {
+    if values.len() <= 1 {
+        return vec![values.to_vec()];
+    }
+    let mut all = Vec::new();
+    for at in 0..values.len() {
+        let mut rest = values.to_vec();
+        let first = rest.remove(at);
+        for mut tail in permutations(&rest) {
+            tail.insert(0, first);
+            all.push(tail);
+        }
+    }
+    all
 }
 
 /// Most orders `converted` converts a function in.
@@ -1563,6 +1614,7 @@ fn converted_valued(
     classes: &RegisterClasses,
     cpu: Option<&Profile>,
     constants: &HashMap<i64, &'static str>,
+    orders: &HashMap<i64, Vec<u32>>,
 ) -> Result<LirBody, Raised> {
     let regs = body.regs();
     let floating = floatassign::_floating_values(body);
@@ -1605,6 +1657,18 @@ fn converted_valued(
         let (entry, exit) = bundles.of[&block.at];
         live_bundles.entry(entry).or_default().mask.extend(floats(&live_in[&block.at]));
         live_bundles.entry(exit).or_default().mask.extend(floats(&live_out[&block.at]));
+    }
+    // DEVIATE 11: the order a loop header's values take, where `converted_with`
+    // tried one other than the first exit to reach it would give.
+    for (header, order) in orders {
+        let Some(&(entry, _)) = bundles.of.get(header) else { continue };
+        let Some(bundle) = live_bundles.get_mut(&entry) else { continue };
+        if bundle.fixed.is_none()
+            && bundle.mask.len() == order.len()
+            && order.iter().all(|value| bundle.mask.contains(value))
+        {
+            bundle.fixed = Some(order.clone());
+        }
     }
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let status_word = classes.status_word().ok_or_else(|| unlowered("the target has no x87 status word register"))?;
