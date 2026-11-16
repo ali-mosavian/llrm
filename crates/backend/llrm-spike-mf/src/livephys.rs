@@ -140,6 +140,16 @@ impl LiveLanes {
     }
 }
 
+thread_local! {
+    static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The instructions [`PhysLiveness::of`] has stepped over on this thread since
+/// the last call.
+pub fn take_steps() -> usize {
+    STEPS.with(std::cell::Cell::take)
+}
+
 /// How many instructions apart a block's checkpoints are.
 const STRIDE: usize = 16;
 
@@ -166,24 +176,41 @@ impl PhysLiveness {
     ) -> PhysLiveness {
         let succs = successors(function);
         let blocks = function.blocks.len();
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); blocks];
+        for (b, out) in succs.iter().enumerate() {
+            for &s in out {
+                preds[s].push(b);
+            }
+        }
         let mut live_in = vec![LiveLanes::default(); blocks];
         let mut live_out = vec![LiveLanes::default(); blocks];
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for b in (0..blocks).rev() {
-                let mut out = LiveLanes::default();
-                for &s in &succs[b] {
-                    out.union(&live_in[s]);
-                }
-                let mut live = out.clone();
-                for inst in function.blocks[b].insts.iter().rev() {
-                    live.step_backward::<T>(info, assignment, inst);
-                }
-                if out != live_out[b] || live != live_in[b] {
-                    live_out[b] = out;
-                    live_in[b] = live;
-                    changed = true;
+        // Last block first, as a sweep would; a block is solved again only when
+        // a successor's live-in changed, so an acyclic function is stepped
+        // once.
+        let mut queue: std::collections::VecDeque<usize> = (0..blocks).rev().collect();
+        let mut queued = vec![true; blocks];
+        while let Some(b) = queue.pop_front() {
+            queued[b] = false;
+            let mut out = LiveLanes::default();
+            for &s in &succs[b] {
+                out.union(&live_in[s]);
+            }
+            let mut live = out.clone();
+            STEPS.with(|count| count.set(count.get() + function.blocks[b].insts.len()));
+            for inst in function.blocks[b].insts.iter().rev() {
+                live.step_backward::<T>(info, assignment, inst);
+            }
+            let moved = live != live_in[b];
+            if out != live_out[b] || moved {
+                live_out[b] = out;
+                live_in[b] = live;
+                if moved {
+                    for &p in &preds[b] {
+                        if !queued[p] {
+                            queued[p] = true;
+                            queue.push_back(p);
+                        }
+                    }
                 }
             }
         }

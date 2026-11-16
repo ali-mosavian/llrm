@@ -75,9 +75,11 @@ fn a_sign_test_of_a_pair_reads_its_high_byte() {
     assert!(live(&f, 0, 0, reg::H) && !live(&f, 0, 0, reg::L));
 }
 
-/// `live_before` at every position of a block of 40,000 instructions stepped back from the block's end each
-/// time, 800 M steps: the printer asks at every instruction, and `select_of_constants` -O2 spent 140 M steps and
-/// half its compile there for 800 call sites. The answers come from checkpoints, `STRIDE` steps at most each.
+/// `live_before` at every position of a block of 40,000 instructions stepped
+/// back from the block's end each time, 800 M steps: the printer asks at every
+/// instruction, and `select_of_constants` -O2 spent 140 M steps and
+/// half its compile there for 800 call sites. The answers come from
+/// checkpoints, `STRIDE` steps at most each.
 #[test]
 fn every_position_of_a_long_block_is_asked_without_walking_to_its_end() {
     let n = 40_000;
@@ -88,8 +90,32 @@ fn every_position_of_a_long_block_is_asked_without_walking_to_its_end() {
     let live = PhysLiveness::of::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
     for at in 0..n {
         let before = live.live_before::<Z80Registers>(&f, &assignment, &REGISTER_INFO, 0, at);
-        // `b` is read at the odd positions and written at the even ones just before
+        // `b` is read at the odd positions and written at the even ones just
+        // before
         assert_eq!(before.is_live(&REGISTER_INFO, reg::B), at % 2 == 1, "at {at}");
     }
     assert!(start.elapsed() < std::time::Duration::from_secs(3), "40,000 queries took {:?}", start.elapsed());
+}
+
+/// Solving the live-outs swept every block again to see that nothing moved: an
+/// acyclic function of 50 straight blocks was stepped twice over
+/// (switch_jump_table -O2: 5% of the compile in 270 solves). Each instruction
+/// is stepped once where no loop feeds a block's live-in back, and the answers
+/// are the same.
+#[test]
+fn an_acyclic_function_is_stepped_over_once_when_its_live_outs_are_solved() {
+    let blocks: Vec<Vec<Inst>> = (0..50)
+        .map(|at| {
+            vec![def(reg::B), read(reg::B), read(reg::D), def(reg::E), read(if at % 2 == 0 { reg::A } else { reg::C })]
+        })
+        .collect();
+    let f = function(blocks);
+    let assignment = Assignment(Vec::new());
+    llrm_spike_mf::livephys::take_steps();
+    let live = PhysLiveness::of::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+    assert_eq!(llrm_spike_mf::livephys::take_steps(), 50 * 5, "every instruction once");
+    // `d` is read in every block and written in none: live before the first
+    // instruction of block 0
+    let before = live.live_before::<Z80Registers>(&f, &assignment, &REGISTER_INFO, 0, 0);
+    assert!(before.is_live(&REGISTER_INFO, reg::D) && !before.is_live(&REGISTER_INFO, reg::B));
 }
