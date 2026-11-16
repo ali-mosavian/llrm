@@ -162,3 +162,22 @@ fn the_worklist_solves_the_same_live_outs_as_sweeps_on_functions_with_loops() {
     }
     assert!(loops > 100, "{loops} backward branches");
 }
+
+/// The live lanes of a register file are a sorted list: two sets holding the same lanes are equal however they were
+/// built, and a register whose lanes were all removed is gone (the worklist stops when a block's live-in is equal).
+#[test]
+fn the_live_lanes_are_the_same_set_whatever_order_they_were_added_in() {
+    use llrm_spike_mf::livephys::LiveLanes;
+    use llrm_z80::{REGISTER_INFO, reg};
+    let (mut one, mut other) = (LiveLanes::default(), LiveLanes::default());
+    for register in [reg::BC, reg::HL, reg::E, reg::D] {
+        one.add(&REGISTER_INFO, register);
+    }
+    for register in [reg::D, reg::E, reg::HL, reg::BC] {
+        other.add(&REGISTER_INFO, register);
+    }
+    assert_eq!(one, other);
+    one.add(&REGISTER_INFO, reg::A);
+    one.remove(&REGISTER_INFO, reg::A);
+    assert_eq!(one, other, "a register with no lane left is not kept");
+}
