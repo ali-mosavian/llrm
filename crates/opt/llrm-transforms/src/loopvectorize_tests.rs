@@ -15,13 +15,26 @@ fn run_compares(source: &str) -> String {
     run_with(source, true)
 }
 
+/// [`run`] with the interleave groups the arm64 backend does not select yet.
+fn run_interleaved(source: &str) -> String {
+    run_with_options(source, false, true)
+}
+
 fn run_with(
     source: &str,
     compares: bool,
 ) -> String {
+    run_with_options(source, compares, false)
+}
+
+fn run_with_options(
+    source: &str,
+    compares: bool,
+    interleaves: bool,
+) -> String {
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares, interleaves });
     manager
         .run_module(
             &mut module,
@@ -234,7 +247,7 @@ fn a_tiny_trip_count_is_not_interleaved() {
 fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     let mut module = crate::testing::parsed(COPY);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: true, compares: false });
+    manager.add(LoopVectorize { always: true, only_when_forced: true, compares: false, interleaves: false });
     manager
         .run_module(
             &mut module,
@@ -349,7 +362,7 @@ fn run_x86(
         .with_tuning(llrm_mir::target::Tuning { vectorize_at_size: at_size, ..llrm_mir::target::Tuning::PIN });
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false, interleaves: false });
     manager.run_module(&mut module, std::rc::Rc::new(X86At(std::rc::Rc::new(tti)))).unwrap();
     crate::testing::printed(&module)
 }
@@ -1144,6 +1157,42 @@ const SELECT_INVARIANT: &str = include_str!("../tests/lv/select_invariant.ll");
 fn a_select_by_a_loop_invariant_condition_stays_scalar() {
     let text = run_compares(SELECT_INVARIANT);
     assert_eq!(count(&text, "<4 x i32>"), 0, "{text}");
+}
+
+const INTERLEAVE_STORE: &str = include_str!("../tests/lv/interleave_store.ll");
+const INTERLEAVE_SWAP: &str = include_str!("../tests/lv/interleave_swap.ll");
+
+/// `p[2i] = x; p[2i+1] = y` over bytes stayed scalar ("An access that is not
+/// consecutive"). The pin takes VF 16, IC 2: per part one `<32 x i8>` store of
+/// the two splats concatenated and interleaved (`interleaved.vec`).
+#[test]
+fn two_stores_per_iteration_are_one_interleaved_store() {
+    let text = run_interleaved(INTERLEAVE_STORE);
+    assert_eq!(count(&text, "store <32 x i8>"), 2, "{text}");
+    assert!(text.contains("<i32 0, i32 16, i32 1, i32 17"), "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 32"), "{text}");
+}
+
+/// A pair swap `d[2i] = s[2i+1]; d[2i+1] = s[2i]` over halves: the pin takes
+/// VF 8, IC 2, one `<16 x i16>` load and one store per part, the members
+/// pulled out by `strided.vec` shuffles.
+#[test]
+fn a_pair_swap_is_an_interleaved_load_and_store() {
+    let text = run_interleaved(INTERLEAVE_SWAP);
+    assert_eq!(count(&text, "load <16 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <16 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "= shufflevector <16 x i16> %wide.vec"), 4, "{text}");
+    assert_eq!(count(&text, "poison, <16 x i32> <i32 0, i32 8, i32 1, i32 9"), 2, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
+}
+
+/// The groups are not widened unless the backend selects them.
+#[test]
+fn interleave_groups_stay_scalar_where_the_backend_has_none() {
+    let text = run(INTERLEAVE_SWAP);
+    assert_eq!(count(&text, "load <16 x i16>"), 0, "{text}");
+    assert_eq!(count(&text, "load i16"), 2, "{text}");
 }
 
 const COUNT_AND_SUM: &str = include_str!("../tests/lv/count_and_sum_of_zeros.ll");

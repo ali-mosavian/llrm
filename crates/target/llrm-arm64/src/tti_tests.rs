@@ -826,6 +826,27 @@ fn vector_costs_at_code_size_are_the_pins() {
     assert_eq!((cmp(ICmp, i(32, 4), Some(Int(I::Slt))), cmp(Select, i(32, 4), Some(Int(I::Slt)))), (Some(1), Some(1)));
 }
 
+/// `getInterleavedMemoryOpCost` (L5865): a full group of up to four costs one
+/// `ldN`/`stN` per member per register; a member vector that is not 64 bits or
+/// a multiple of 128 (`<2 x i8>`), or a factor of five, is the BasicTTI
+/// fallback this port does not translate (LV-I1). Before the hook existed the
+/// loop vectorizer could not weigh an interleave group at all.
+#[test]
+fn interleaved_memory_costs_are_one_ldn_per_member_per_register() {
+    use llrm_mir::tti::MemoryOp::*;
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let cost = |lane, count, factor| {
+        tti.interleaved_memory_op_cost(Store, VectorTy { lane: Ty::Int(lane), count }, factor, CostKind::RecipThroughput)
+            .map(|c| c.value)
+    };
+    assert_eq!(cost(8, 16, 2), Some(2));
+    assert_eq!(cost(16, 8, 4), Some(4));
+    assert_eq!(cost(8, 8, 2), Some(2));
+    assert_eq!(cost(64, 4, 2), Some(4));
+    assert_eq!(cost(8, 2, 2), None);
+    assert_eq!(cost(8, 16, 5), None);
+}
+
 #[test]
 fn slp_runs_on_arm64() {
     assert!(AArch64::of_cpu("generic").unwrap().slp_priced());
