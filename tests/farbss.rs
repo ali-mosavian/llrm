@@ -120,8 +120,20 @@ impl Lab {
     fn exe(
         &self,
         name: &str,
-        flag: &str,
+        flags: &[&str],
         nozero: bool,
+    ) -> PathBuf {
+        self.exe_of(name, flags, nozero, PROGRAM, &[])
+    }
+
+    /// `program` at `flags`, linked after `extra` (assembled objects).
+    fn exe_of(
+        &self,
+        name: &str,
+        flags: &[&str],
+        nozero: bool,
+        program: &str,
+        extra: &[&str],
     ) -> PathBuf {
         let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
@@ -140,29 +152,22 @@ impl Lab {
             &format!("{name}-init.obj"),
             &defines,
         );
-        std::fs::write(self.path("t.c"), PROGRAM).unwrap();
-        self.compile(&["-Os", flag, "-march=i486", "t.c", "-o", &format!("{name}.obj")]);
+        std::fs::write(self.path("t.c"), program).unwrap();
+        let object = format!("{name}.obj");
+        let mut args = vec!["-Os"];
+        args.extend(flags);
+        args.extend(["-march=i486", "t.c", "-o", object.as_str()]);
+        self.compile(&args);
         let exe = self.path(&format!("{name}.exe"));
-        let (start, init, program) = (format!("{name}-start.obj"), format!("{name}-init.obj"), format!("{name}.obj"));
-        self.run(
-            "jwlink",
-            &common::jwlink(&[
-                "option",
-                "quiet",
-                "name",
-                exe.to_str().unwrap(),
-                "file",
-                &start,
-                "file",
-                &init,
-                "file",
-                &program,
-                "file",
-                "ext.obj",
-                "file",
-                "os.obj",
-            ]),
-        );
+        let (start, init) = (format!("{name}-start.obj"), format!("{name}-init.obj"));
+        // `extra` before the program: its XIB, XI and XIE segments bracket the
+        // program's entries.
+        let mut link = vec!["option", "quiet", "name", exe.to_str().unwrap(), "file", &start, "file", &init];
+        for one in extra {
+            link.extend(["file", one]);
+        }
+        link.extend(["file", &object, "file", "ext.obj", "file", "os.obj"]);
+        self.run("jwlink", &common::jwlink(&link));
         exe
     }
 
@@ -212,9 +217,9 @@ impl Lab {
 fn test_zero_far_data_is_not_stored_and_is_zero_on_dirty_memory() {
     let lab = Lab::new();
     lab.runtime();
-    let bss = lab.exe("bss", "-mfar-bss", false);
-    let unzeroed = lab.exe("raw", "-mfar-bss", true);
-    let stored = lab.exe("stored", "-mno-far-bss", false);
+    let bss = lab.exe("bss", &["-mfar-bss"], false);
+    let unzeroed = lab.exe("raw", &["-mfar-bss"], true);
+    let stored = lab.exe("stored", &["-mno-far-bss", "-mno-far-bss-init"], false);
     let printed = lab.dirty(&[&bss, &unzeroed, &stored]);
     // far bytes set, near bytes set, the initialised far array's sum.
     assert_eq!(printed[0], "0 0 10", "zeroed: {printed:?}");
@@ -231,7 +236,7 @@ fn test_far_zero_data_moves_only_where_the_startup_zeroes_it() {
     let lab = Lab::new();
     std::fs::write(lab.path("t.c"), PROGRAM).unwrap();
     let listing = |flag: &str| {
-        lab.compile(&["-Os", flag, "t.c", "-S", "-o", "t.s"]);
+        lab.compile(&["-Os", flag, "-mno-far-bss-init", "t.c", "-S", "-o", "t.s"]);
         std::fs::read_to_string(lab.path("t.s")).unwrap()
     };
     let far = listing("-mfar-bss");
@@ -241,6 +246,77 @@ fn test_far_zero_data_moves_only_where_the_startup_zeroes_it() {
     );
     let plain = listing("-mno-far-bss");
     assert!(!plain.contains("FAR_BSS") && plain.contains("000h,000h,000h,000h"));
+}
+
+/// A start-up that walks Open Watcom's `XIB`..`XIE` table the way `__InitRtns`
+/// does: it keeps its loop count in cx across each far call, as Watcom's walker
+/// does, and ends the program (exit 99, nothing printed) if a routine clobbers
+/// it.
+const XI_WALK: &str = ".model medium
+.386
+XIB segment word public 'DATA'
+XIB ends
+XI segment word public 'DATA'
+XI ends
+XIE segment word public 'DATA'
+XIE ends
+DGROUP group XIB, XI, XIE
+.code
+public _xi_walk@3
+_xi_walk@3 proc far
+    push si
+    mov si, offset DGROUP:XIB
+    mov cx, 1234
+walk:
+    cmp si, offset DGROUP:XIE
+    jae done
+    cmp byte ptr [si], 1
+    jne next
+    call dword ptr [si+2]
+    cmp cx, 1234
+    jne broken
+next:
+    add si, 6
+    jmp walk
+broken:
+    mov ax, 4C63h
+    int 21h
+done:
+    pop si
+    ret
+_xi_walk@3 endp
+end
+";
+
+/// Open Watcom's start-up never zeroes FAR_BSS, and its linker stores the
+/// zeros: the C row's far zero data (huge/c, 80 KB) cost its size in the EXE.
+/// With `-mfar-bss-init` the object zeroes it itself, from its own `XI` entry.
+///
+/// The walker is a stand-in for `__InitRtns` (an Open Watcom build is no part
+/// of the gate), and the start-up here zeroes nothing, on memory DIRTY.COM
+/// filled with 0A5h: an emulator that starts with zeroed RAM, or a start-up
+/// that zeroes FAR_BSS, would prove nothing. The control without the entry
+/// reads the dirt, so the run can see it. The first routine clobbered cx, which
+/// `__InitRtns` keeps its priority limit in: init.exe exited before `main`.
+#[test]
+fn test_far_zero_data_is_zeroed_by_an_xi_entry_on_dirty_memory() {
+    let lab = Lab::new();
+    lab.runtime();
+    let program =
+        PROGRAM.replace("int main(void)\n{", "extern void __cdecl xi_walk(void);\nint main(void)\n{\n    xi_walk();");
+    std::fs::write(lab.path("walk.asm"), XI_WALK).unwrap();
+    lab.assemble(&lab.path("walk.asm"), "walk.obj", &[]);
+    let init = lab.exe_of("xi", &["-mfar-bss-init"], true, &program, &["walk.obj"]);
+    let control = lab.exe_of("noxi", &["-mno-far-bss-init", "-mfar-bss"], true, &program, &["walk.obj"]);
+    let stored = lab.exe_of("xstored", &["-mno-far-bss-init", "-mno-far-bss"], true, &program, &["walk.obj"]);
+    let printed = lab.dirty(&[&init, &control, &stored]);
+    // far bytes set, near bytes set, the initialised far array's sum; the near
+    // bss is the start-up's, which zeroes nothing here.
+    assert_eq!(printed[0], "0 300 10", "the entry zeroes the far data: {printed:?}");
+    assert_eq!(printed[1], "40000 300 10", "without the entry the far data is dirt: {printed:?}");
+    assert_eq!(printed[2], "0 0 10", "stored zeros, the near ones too: {printed:?}");
+    let size = |exe: &PathBuf| std::fs::metadata(exe).unwrap().len();
+    assert!(size(&init) + 39_000 < size(&stored), "{} against {}", size(&init), size(&stored));
 }
 
 /// Nib's start-up zeroes the far uninitialised data too: a huge array of zeros
