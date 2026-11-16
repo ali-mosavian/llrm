@@ -41,6 +41,7 @@
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::tti::{AddressingMode, Tti};
@@ -1200,7 +1201,10 @@ pub fn live_induction_variables(
     users: &IvUsers,
 ) -> Vec<Scev> {
     let Some(lp) = cx.loops.get_loop_for(l) else { return Vec::new() };
-    let managed: HashSet<InstId> = users.uses.iter().map(|u| u.user).collect();
+    let mut managed: IdSet<InstId> = IdSet::new();
+    for u in &users.uses {
+        managed.insert(u.user);
+    }
     let phis: Vec<ValueId> = cx
         .function
         .iter_block(l)
