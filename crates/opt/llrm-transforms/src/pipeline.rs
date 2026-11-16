@@ -144,7 +144,7 @@ use crate::{
     fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
     inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
-    simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
+    simplifycfg, splitpaths, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -276,6 +276,9 @@ pub struct Options {
     /// pipelines have it off (`enable-unroll-and-jam`); it is on at -O3 and
     /// -Omax, where the particle row gains from it.
     pub unroll_and_jam: bool,
+    /// `-ftree-loop-vectorize`: LLVM's `LoopVectorizePass`, which clang runs at
+    /// -O2 and up.
+    pub vectorize: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
@@ -359,6 +362,7 @@ impl Default for Options {
             unswitch: false,
             interchange: true,
             unroll_and_jam: false,
+            vectorize: true,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -526,6 +530,7 @@ impl Options {
             "tailrec" => self.sibcalls,
             "loop-interchange" => self.interchange,
             "loop-unroll-and-jam" => self.unroll_and_jam,
+            "loop-vectorize" => self.vectorize,
             _ => true,
         }
     }
@@ -1939,6 +1944,10 @@ pub fn recorded(
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
+    // gcc's `-fsplit-paths`: -O3 and a target that asks (`Tti::split_paths_at_o3`).
+    if applied.options.wanted("splitpaths") && unroll_level(&applied.options) >= 3 {
+        manager.add(splitpaths::SplitPaths);
+    }
     if applied.options.wanted("ree") {
         manager.add(ree::Ree);
     }

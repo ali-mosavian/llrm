@@ -380,14 +380,12 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
-    let select_form = |name: &str, ilp: bool| {
-        crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
+    let select_form = |name: &str| {
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         crate::dagisel::pipeline::STRICT_LEVEL
             .with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(false));
-        crate::dagisel::pipeline::ILP.with(|one| one.set(false));
         one
     };
     // A form whose long adds became carry ops is also selected with them left
@@ -398,18 +396,25 @@ pub fn selections_with_alternatives(
     // whenever `UADDO_CARRY` is legal and prices nothing; `adc hl, rr` ties
     // each sum to `hl`, which costs spills where several longs are live
     // (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
-    let select = |name: &str, ilp: bool| {
+    // The selection is scheduled by `Source` and by `ILP` from one DAG.
+    let select = |name: &str| -> (Result<Selection, String>, Result<Selection, String>) {
         crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
-        let mut one = select_form(name, ilp);
+        let mut one = select_form(name);
         if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
             crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
-            let generic = select_form(name, ilp);
+            let generic = select_form(name);
             crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
             if let (Ok(one), Ok(generic)) = (&mut one, generic) {
                 one.generic = Some(Box::new(generic));
             }
         }
-        one
+        match one {
+            Ok(one) => {
+                let ilp = one.scheduled_by_ilp();
+                (Ok(one), Ok(ilp))
+            }
+            Err(why) => (Err(why.clone()), Err(why)),
+        }
     };
     // A function with the routine for its long multiplies
     // (`prepare::mark_long_multiplies`) is also selected the other way: a
@@ -460,8 +465,13 @@ pub fn selections_with_alternatives(
             })
         })
     };
-    let main: Vec<Selected> =
-        names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
+    let main: Vec<Selected> = names
+        .iter()
+        .map(|name| {
+            let (source, ilp) = select(name);
+            (name.clone(), source, ilp)
+        })
+        .collect();
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
@@ -490,7 +500,8 @@ pub fn selections_with_alternatives(
             // also carry the divide's price
             crate::dagisel::pipeline::SPEED_ROUTINES
                 .with(|one| one.set(divides && muls.is_none() && !fills && !shifts));
-            let selected = (name.clone(), select(name, false), select(name, true));
+            let (source, ilp) = select(name);
+            let selected = (name.clone(), source, ilp);
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(false));
             crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(false));

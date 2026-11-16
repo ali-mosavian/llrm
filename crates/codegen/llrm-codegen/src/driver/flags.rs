@@ -123,6 +123,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("loop-interchange", |options, on| options.interchange = on),
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
+    ("tree-loop-vectorize", |options, on| options.vectorize = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = Some(on)),
     ("inline-recursive", |options, on| options.inline.recursive = Some(on)),

@@ -576,6 +576,8 @@ impl llrm_target::Target for M64 {
                             ipa_cp_clones_at_speed: true,
                             // DEVIATE UNROLL-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             unroll_threshold_at_o3: Some(450),
+                            // DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            split_paths_at_o3: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

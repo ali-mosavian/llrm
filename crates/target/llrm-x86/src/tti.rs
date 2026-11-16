@@ -1175,6 +1175,10 @@ impl Tti for X86 {
         self.tuning.unroll_threshold_at_o3
     }
 
+    fn split_paths_at_o3(&self) -> bool {
+        self.tuning.split_paths_at_o3
+    }
+
     /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
     /// `getUnrollingPreferences` then enables partial and runtime unrolling
     /// (`Tti::get_unrolling_preferences`):
@@ -2247,7 +2251,7 @@ impl Tti for X86 {
         matches!(op, CastKind::ZExt | CastKind::SExt)
             && matches!(
                 (src, dst),
-                (Ty::Int(8), Ty::Int(16 | 32)) | (Ty::Int(16), Ty::Int(32))
+                (Ty::Int(8), Ty::Int(16 | 32 | 64)) | (Ty::Int(16), Ty::Int(32 | 64)) | (Ty::Int(32), Ty::Int(64))
             )
             && matches!(
                 (legalized(src, self.native()), legalized(dst, self.native())),

@@ -7,14 +7,15 @@ O=${OUT:-${TMPDIR:-/tmp}/arm64-bench-out}; mkdir -p $O; mkdir -p $O/src; python3
 LLC="timeout 600 ${LLC:-$B/target/debug/llrm-arm64-llc}"
 T="-target aarch64-unknown-linux-gnu -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h"
 # ccn|clangn|gccn (+nnv): every column compiled with the one neutral flag set of tools/external_flags.py (relocation: flagset.RELOC, what ours emits unflagged);
+# -ffreestanding is part of the recorded set (a column without it is a different compile: libc builtins), so table.py refuses a mismatch;
 # the flags used are written to $X.flags, and cell.sh puts their canonical form in the row so table.py can refuse a mismatch.
 NEUTRAL=$(python3 $H/flagset.py --neutral); NEUTRAL_CL=${NEUTRAL/-fzero-init-padding-bits=standard/}; F=
 case $C in
- ccn) F="$NEUTRAL_CL"; LLRM_ARM64_SYSROOT=/usr/aarch64-linux-gnu timeout 600 ${CC:-$B/target/debug/llrm-cc} $T $F -O$L -ffreestanding -c $S -o $X.o ;;
- clangn) F="$NEUTRAL_CL"; $V/clang $T $F -O$L -ffreestanding -c $S -o $X.o ;;
- clangnnv) F="$NEUTRAL_CL -fno-vectorize -fno-slp-vectorize"; $V/clang $T $F -O$L -ffreestanding -c $S -o $X.o ;;
- gccn) F="$NEUTRAL"; aarch64-linux-gnu-gcc $F -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h -O$L -ffreestanding -c $S -o $X.o ;;
- gccnnv) F="$NEUTRAL -fno-tree-vectorize"; aarch64-linux-gnu-gcc $F -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h -O$L -ffreestanding -c $S -o $X.o ;;
+ ccn) F="$NEUTRAL_CL -ffreestanding"; LLRM_ARM64_SYSROOT=/usr/aarch64-linux-gnu timeout 600 ${CC:-$B/target/debug/llrm-cc} $T $F -O$L -c $S -o $X.o ;;
+ clangn) F="$NEUTRAL_CL -ffreestanding"; $V/clang $T $F -O$L -c $S -o $X.o ;;
+ clangnnv) F="$NEUTRAL_CL -fno-vectorize -fno-slp-vectorize -ffreestanding"; $V/clang $T $F -O$L -c $S -o $X.o ;;
+ gccn) F="$NEUTRAL -ffreestanding"; aarch64-linux-gnu-gcc $F -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h -O$L -c $S -o $X.o ;;
+ gccnnv) F="$NEUTRAL -fno-tree-vectorize -ffreestanding"; aarch64-linux-gnu-gcc $F -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h -O$L -c $S -o $X.o ;;
  cc2) LLRM_ARM64_SYSROOT=/usr/aarch64-linux-gnu LLRM_CC_TARGET=arm64-linux timeout 600 ${CC} -target arm64-linux -O$L -ffreestanding -c $S -o $X.o ;;
  cc4) LLRM_ARM64_SYSROOT=/usr/aarch64-linux-gnu LLRM_CC_TARGET=arm64-linux timeout 600 ${CC} -target arm64-linux -fomit-frame-pointer -O$L -ffreestanding -c $S -o $X.o ;;
  cc5) LLRM_ARM64_SYSROOT=/usr/aarch64-linux-gnu timeout 600 ${CC} $T -fomit-frame-pointer -O$L -ffreestanding -c $S -o $X.o ;;
