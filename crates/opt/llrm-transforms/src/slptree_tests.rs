@@ -82,3 +82,26 @@ fn a_gather_of_repeated_scalars_inserts_each_once_and_shuffles() {
     assert!(text.contains("<4 x i32> <i32 0, i32 0, i32 1, i32 1>"), "{text}");
     assert!(text.contains("store <4 x float>"), "{text}");
 }
+
+/// Four `fneg`s of consecutive loads: the pin makes `fneg <4 x float>` (cost
+/// -9). `fneg` was no bundle, so the stores stayed scalar.
+#[test]
+fn four_fnegs_of_consecutive_loads_become_one_vector_fneg() {
+    let text = run(include_str!("../tests/slp/fneg4.ll"));
+    assert!(text.contains("fneg <4 x float>"), "{text}");
+    assert!(text.contains("store <4 x float>"), "{text}");
+    assert_eq!(text.matches("fneg float").count(), 0, "{text}");
+}
+
+/// Four `extractelement`s of lanes 0..3 of one vector, multiplied by four
+/// loaded constants: the pin uses the source vector as the bundle (cost
+/// -18): one `fmul <4 x float>` of it, no extract. The extracts were four
+/// gathered scalars, so the tree paid four inserts of them to rebuild the
+/// vector it had already.
+#[test]
+fn extracts_of_each_lane_of_one_vector_use_the_vector() {
+    let text = run(include_str!("../tests/slp/extract4.ll"));
+    assert!(text.contains("fmul <4 x float> %v, %"), "{text}");
+    assert_eq!(text.matches("extractelement").count(), 0, "{text}");
+    assert_eq!(text.matches("insertelement").count(), 0, "{text}");
+}
