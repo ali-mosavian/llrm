@@ -2537,6 +2537,22 @@ const LIVE_OUT: &str = ";live ";
 /// shared flow.
 fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
     let at = |register: &str| ["b", "c", "d", "e", "h", "l"].iter().position(|one| *one == register);
+    // marks the registers the words of `operands` name, past `mnemonic`
+    let read = |live: &mut [bool; 6], operands: &str, mnemonic: &str| {
+        let operands = operands.strip_prefix(mnemonic).unwrap_or(operands);
+        for word in operands.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()) {
+            match word {
+                "bc" => live[..2].fill(true),
+                "de" => live[2..4].fill(true),
+                "hl" => live[4..].fill(true),
+                _ => {
+                    if let Some(byte) = at(word) {
+                        live[byte] = true;
+                    }
+                }
+            }
+        }
+    };
     let mut keep = vec![true; lines.len()];
     for end in 0..lines.len() {
         let Line::Inst(marker) = &lines[end] else { continue };
@@ -2574,24 +2590,15 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
                 if mnemonic == "djnz" {
                     live[0] = true;
                 }
+                // the target is the last operand (a condition code comes before it): `jp (hl)` reads the pair
+                read(&mut live, text.rsplit(", ").next().unwrap_or(""), mnemonic);
                 continue;
             }
             if HIDDEN.contains(&mnemonic) {
                 live = [true; 6];
                 continue;
             }
-            for word in text.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()).skip(1) {
-                match word {
-                    "bc" => live[..2].fill(true),
-                    "de" => live[2..4].fill(true),
-                    "hl" => live[4..].fill(true),
-                    _ => {
-                        if let Some(byte) = at(word) {
-                            live[byte] = true;
-                        }
-                    }
-                }
-            }
+            read(&mut live, text, mnemonic);
         }
     }
     lines.into_iter().zip(keep).filter_map(|(line, keep)| keep.then_some(line)).collect()
@@ -4118,6 +4125,23 @@ mod tests {
         };
         assert_eq!(block("000000"), 5, "both loads of bc are dead");
         assert_eq!(block("110000"), 7, "bc is live after the block");
+    }
+
+    /// `ld l, a` before `jp (hl)` was dropped as a dead load: the indirect jump reads `hl`, and the pass read a jump
+    /// as reading nothing of its own. switch_peeled_table -Os printed wrong results (the jump table's target was
+    /// the pair's old low byte).
+    #[test]
+    fn a_load_the_indirect_jump_reads_is_kept() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![
+            inst("ld a, (hl)"),
+            inst("inc hl"),
+            inst("ld h, (hl)"),
+            inst("ld l, a"),
+            inst("jp (hl)"),
+            inst(&format!("{LIVE_OUT}000000")),
+        ];
+        assert_eq!(drop_dead_byte_loads(lines).len(), 5, "`ld l, a` feeds the jump");
     }
 
     /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`.
