@@ -1317,6 +1317,7 @@ fn a_float_global_is_emitted_as_its_bits() {
     );
 }
 
+/// (A compare is `__lesf2`, the core `lt`, `le`, `eq` and `ne` share: `with_soft_compare_classes`.)
 /// A float add, a multiply, an int-to-float and a compare are calls of the
 /// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
 /// each stopped at "the target names no routine" or, for the compare, at a
@@ -1334,7 +1335,7 @@ fn a_float_operation_is_a_call_of_its_softfloat_routine() {
     call("define float @f(float %a, float %b) {\n  %r = fadd float %a, %b\n  ret float %r\n}", "__addsf3");
     call("define float @f(float %a, float %b) {\n  %r = fmul float %a, %b\n  ret float %r\n}", "__mulsf3");
     call("define float @f(i32 %n) {\n  %r = sitofp i32 %n to float\n  ret float %r\n}", "__floatsisf");
-    call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__ltsf2");
+    call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__lesf2");
     // An i32 result takes the `si` routines: `__fixsfdi` was called and never
     // linked.
     call("define i32 @f(float %a) {\n  %r = fptosi float %a to i32\n  ret i32 %r\n}", "__fixsfsi");
