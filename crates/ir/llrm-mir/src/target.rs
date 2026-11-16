@@ -549,6 +549,9 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
+    /// `Tti::shift_loop_counts`: the shift-loop count idioms form (`ctlz`/`cttz`
+    /// are one instruction). Wasm and x86-64 say true (LI-18).
+    pub shift_loop_counts: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -848,6 +851,7 @@ impl Tuning {
         lsr_size_order: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
+        shift_loop_counts: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
