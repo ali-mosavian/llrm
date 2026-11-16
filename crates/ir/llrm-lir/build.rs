@@ -8,7 +8,7 @@ fn main() {
         if name.starts_with("DontUse") {
             continue;
         }
-        code.push_str(&format!("    pub const {name}: RegId = RegId(Register::{name} as u8);\n"));
+        code.push_str(&format!("    pub const {name}: RegId = RegId(Register::{name} as u16);\n"));
     }
     code.push_str("}\n");
     // The dword of each general register's family (`root`), by iced's number: a
