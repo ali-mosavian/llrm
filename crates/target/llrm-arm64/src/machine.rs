@@ -106,8 +106,9 @@ mod flag_tests {
     }
 }
 
-/// A constant memset is stored inline up to `MaxStoresPerMemset` (32) stores of
-/// 16 bytes (`q`). Priced by the byte it was 14 times too dear.
+/// AArch64ISelLowering.cpp#L1254 `MaxStoresPerMemset` (32; 8 at optsize, which
+/// is not modelled), stores of 16 bytes (`q`). Priced by the byte a fill was
+/// 14 times too dear.
 const MEMSET_STORES: i64 = 32;
 const MEMSET_STORE: i64 = 16;
 
