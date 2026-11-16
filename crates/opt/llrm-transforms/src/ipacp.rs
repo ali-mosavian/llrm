@@ -480,13 +480,14 @@ fn chain_benefit(
     peel_limited: bool,
     max_clones: usize,
     level: usize,
-    memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), (i64, i64)>,
+    memo: &mut BTreeMap<Vec<Option<ConstantId>>, (i64, i64)>,
 ) -> (i64, i64) {
-    if let Some(&done) = memo.get(&(known.to_vec(), level)) {
+    if let Some(&done) = memo.get(known) {
         return done;
     }
-    // A context met again while it is priced adds nothing.
-    memo.insert((known.to_vec(), level), (0, 0));
+    // A context met again while it is priced adds nothing; one met by another
+    // path is the value GCC's lattice holds once (`add_value` finds it again).
+    memo.insert(known.to_vec(), (0, 0));
     let size_of = inline::operations(body);
     let mut chain_size = size_of;
     let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs, peel_limited);
@@ -503,7 +504,7 @@ fn chain_benefit(
             chain_size = chain_size.saturating_add(after_size);
         }
     }
-    memo.insert((known.to_vec(), level), (benefit, chain_size));
+    memo.insert(known.to_vec(), (benefit, chain_size));
     (benefit, chain_size)
 }
 
