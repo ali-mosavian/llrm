@@ -726,3 +726,21 @@ b0:
     assert!(!sccped(&mut module));
     assert_eq!(printed(&module), text);
 }
+
+/// `refineInstruction` read a vector's range as one bit wide (`unwrap_or(1)`):
+/// every vector `add`, `sub`, `mul` and `shl` came out `nuw nsw`, so `mul <2 x
+/// i64> %y, %y` was poison for any `%y` over 32 bits.
+#[test]
+fn test_a_vector_operation_gets_no_wrap_flags_from_a_one_bit_range() {
+    let text = "define <2 x i64> @f(<2 x i64> %x, <2 x i64> %y) {
+b0:
+  %m = mul <2 x i64> %x, %y
+  %a = add <2 x i64> %m, %x
+  %s = shl <2 x i64> %a, %y
+  ret <2 x i64> %s
+}
+";
+    let mut module = parsed(text);
+    assert!(!sccped(&mut module));
+    assert_eq!(printed(&module), text);
+}

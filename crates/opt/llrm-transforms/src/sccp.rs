@@ -297,7 +297,8 @@ impl<'a> Rewrite<'a> {
         op: Operand,
     ) -> ConstantRange {
         let ty = function.operand_type(self.context, op).expect("a value or constant");
-        let width = self.context.types.int_bits(ty).unwrap_or(1);
+        // A vector's range is its lane's (`getScalarSizeInBits`).
+        let width = self.context.types.scalar_int_bits(ty).unwrap_or(1);
         match op {
             Operand::Constant(id) => match LatticeConstant::of(self.context, id) {
                 LatticeConstant::Int { width, bits } => ConstantRange::single(width, bits),
