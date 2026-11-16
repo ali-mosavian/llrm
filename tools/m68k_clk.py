@@ -29,10 +29,15 @@ def parse_clocks(stdout):
     return None
 
 
+def cycles_env(cpu, gcc_root):
+    """`cycles --exe` traces on the qemu CPU its path names (`m68020` for a path containing 68020, else `m68000`): the temp exe's path names none, so a 68020 program ran on a 68000 and stopped at its first 68020-only instruction (gcc's, 23 instructions of u64_divide_wide_divisor against ours's 137258), pricing a handful of clocks."""
+    return {**os.environ, "CYCLES_CPUS": cpu, "CYCLES_QEMU_CPU": f"m{cpu}", "GCC_M68K": gcc_root}
+
+
 def price(cycles, exe, cpu, gcc_root):
     run = subprocess.run(
         [cycles, "--exe", str(exe)],
-        env={**os.environ, "CYCLES_CPUS": cpu, "GCC_M68K": gcc_root},
+        env=cycles_env(cpu, gcc_root),
         capture_output=True,
         text=True,
         timeout=900,

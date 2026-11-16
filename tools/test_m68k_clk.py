@@ -53,3 +53,11 @@ def test_a_pair_that_printed_differently_is_not_priced():
     assert m68k_clk.same_output([(0, "1\n0\n"), (0, "1\n0\n")])
     assert not m68k_clk.same_output([(0, "1\n0\n"), (0, "1\n")])
     assert not m68k_clk.same_output([(0, "x"), None])
+
+
+def test_cycles_traces_a_68020_program_on_a_68020():
+    """The temp exe's path names no CPU, so `cycles` ran every program on qemu's m68000: gcc's 68020 code stopped at its first 68020 instruction and 68 of 87 cells priced a few dozen clocks (loop_copy_directions 4111 against ours 456485906)."""
+    import m68k_clk
+
+    assert m68k_clk.cycles_env("68020", "/")["CYCLES_QEMU_CPU"] == "m68020"
+    assert m68k_clk.cycles_env("68000", "/")["CYCLES_QEMU_CPU"] == "m68000"
