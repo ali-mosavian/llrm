@@ -744,3 +744,20 @@ b0:
     assert!(!sccped(&mut module));
     assert_eq!(printed(&module), text);
 }
+
+/// The same one-bit range for a vector took the mask of `and <4 x i16> %x, 255`
+/// for redundant: the `and` was dropped, and `zext` of `%x` kept the high
+/// byte of every lane (arm64 -O2: `ldr d; ushll`, no `bic`).
+#[test]
+fn test_a_vector_and_mask_is_not_dropped_by_a_one_bit_range() {
+    let text = "define <4 x i64> @f(<4 x i16> %x) {
+b0:
+  %a = and <4 x i16> %x, <i16 255, i16 255, i16 255, i16 255>
+  %z = zext <4 x i16> %a to <4 x i64>
+  ret <4 x i64> %z
+}
+";
+    let mut module = parsed(text);
+    assert!(!sccped(&mut module));
+    assert_eq!(printed(&module), text);
+}
