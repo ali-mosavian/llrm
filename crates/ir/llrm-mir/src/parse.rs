@@ -339,6 +339,11 @@ impl Parser {
                 Token::Global(name) if self.alias_names.contains_key(&name) => self.alias(name)?,
                 Token::Global(name) => self.global_variable(name)?,
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
+                // The use list of a global or a constant: those lists are not
+                // kept here (DEVIATE), so the directive is read and dropped.
+                Token::Word(word) if word == "uselistorder" || word == "uselistorder_bb" => {
+                    while !matches!(self.next(), Token::Punct('}') | Token::Eof) {}
+                }
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
                 Token::Comdat(name) => self.comdat_definition(name)?,

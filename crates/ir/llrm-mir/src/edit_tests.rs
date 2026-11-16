@@ -1208,3 +1208,14 @@ fn a_uselistorder_directive_reorders_the_uses_of_a_value() {
     let mut module = module(&text);
     assert_eq!(users_of(function(&mut module), "next"), ["j", "c", "sum", "i"]);
 }
+
+/// Clang's `-emit-llvm-uselists` writes the use lists of globals and
+/// constants as module-level directives after the functions. The reader
+/// refused them ("unexpected uselistorder at the top level"), so wasm and every
+/// other compile of such a module failed once llrm-cc asked for the lists.
+#[test]
+fn a_module_level_uselistorder_directive_is_read_and_dropped() {
+    let text = format!("{LOOP}\n@g = global i32 0\nuselistorder ptr @g, {{ 1, 0 }}\n");
+    let mut module = module(&text);
+    assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
+}
