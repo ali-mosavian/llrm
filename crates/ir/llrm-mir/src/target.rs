@@ -334,6 +334,18 @@ pub struct Tuning {
     /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
     /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
     pub unroll_threshold_at_o3: Option<u32>,
+    /// The code-size cost of a scalar divide or remainder by a constant
+    /// (`X86TTIImpl::getArithmeticInstrCost`: 5 or 6, and 2 more for size, in
+    /// the pin). LLVM 20 priced it 4: a 32-trip loop with a `srem` by a
+    /// constant (loop_interchange's `checksum`) was 259 units against the
+    /// threshold 300 there and 386 in the pin, so clang 20 unrolls it and the
+    /// pin does not. DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30); none: the pin's.
+    pub div_by_constant_size_cost: Option<u32>,
+    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
+    /// (`llrm-gpl-gcc`, feature `gcc-gpl`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// target takes it once measured; false: the pin's, none.
+    pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -604,6 +616,12 @@ pub struct Tuning {
     pub frame_slot_is_free_base: bool,
     /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
     pub lsr_address_fewest_registers: bool,
+    /// DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): a constant in a formula's setup
+    /// costs one, as in LLVM 20.1.8 (`getSetupCost`); the pin charges it by `getIntImmCost` (a free 0 costs
+    /// nothing), which makes `{0,+,1}` beat `{-1,+,1}` where clang 20 keeps the post-incremented index
+    /// (strlen: `mov eax, -1; inc eax; cmp [rdi+rax]` against `xor eax, eax; mov ecx, eax; inc eax; cmp [rdi+rcx]`).
+    /// false: the pin's.
+    pub lsr_constant_setup_is_one: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
     pub keep_constant_arith_operands: bool,
@@ -793,6 +811,8 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_threshold_at_o3: None,
+        div_by_constant_size_cost: None,
+        split_paths_at_o3: false,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
@@ -846,6 +866,7 @@ impl Tuning {
         keep_constant_displacements: false,
         frame_slot_is_free_base: false,
         lsr_address_fewest_registers: false,
+        lsr_constant_setup_is_one: false,
         keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
@@ -1825,6 +1846,8 @@ mod tests {
             (None, None, None)
         );
         assert_eq!(pin.unroll_threshold_at_o3, None);
+        assert_eq!(pin.div_by_constant_size_cost, None);
+        assert!(!pin.split_paths_at_o3);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);

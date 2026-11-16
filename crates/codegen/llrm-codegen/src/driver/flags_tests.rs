@@ -145,6 +145,7 @@ fn a_pass_option_overrides_the_level_wherever_it_stands() {
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
     assert_eq!(options.inline, Threshold::new(0));
     assert_eq!(pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline, Threshold::default());
+    assert!(!pipeline(&["-O3", "-fno-tree-loop-vectorize"]).vectorize && pipeline(&["-O3"]).vectorize);
     let error = parsed(&["-fno-vectorize"]).unwrap_err();
     assert!(error.contains("-fno-vectorize") && error.contains("-funroll-loops"), "{error}");
 }

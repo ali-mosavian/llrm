@@ -441,6 +441,8 @@ pub fn assembled_module(
     );
     if options.machine.far_bss {
         data::zero_far_to_bss(&mut assembled, module);
+    } else if options.machine.far_bss_init {
+        data::zero_far_with_init(&mut assembled, module);
     }
     stage_files(options, "", &assembled)?;
     Ok(assembled)

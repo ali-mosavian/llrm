@@ -1175,6 +1175,10 @@ impl Tti for X86 {
         self.tuning.unroll_threshold_at_o3
     }
 
+    fn split_paths_at_o3(&self) -> bool {
+        self.tuning.split_paths_at_o3
+    }
+
     /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
     /// `getUnrollingPreferences` then enables partial and runtime unrolling
     /// (`Tti::get_unrolling_preferences`):
@@ -1374,6 +1378,15 @@ impl Tti for X86 {
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
         self.sse2 && self.quad
+    }
+
+    /// The SLP vectorizer runs where the target takes vector values: its
+    /// store chains (a run of scalar stores of constants or of one tree is one
+    /// vector store) are priced by `vector_memory_op_cost`; a tree whose
+    /// operation this target does not price is not formed (the hooks are
+    /// `None`), so only what the SSE2 rows price vectorizes.
+    fn slp_priced(&self) -> bool {
+        self.vector_values()
     }
 
     /// `getRegisterBitWidth(RGK_FixedWidthVector)` of an SSE2 target: one XMM
@@ -1592,6 +1605,10 @@ impl Tti for X86 {
 
     fn lsr_address_fewest_registers(&self) -> bool {
         self.tuning.lsr_address_fewest_registers
+    }
+
+    fn lsr_constant_setup_is_one(&self) -> bool {
+        self.tuning.lsr_constant_setup_is_one
     }
 
     fn constant_arith_phi_is_cheap(
@@ -2247,7 +2264,7 @@ impl Tti for X86 {
         matches!(op, CastKind::ZExt | CastKind::SExt)
             && matches!(
                 (src, dst),
-                (Ty::Int(8), Ty::Int(16 | 32)) | (Ty::Int(16), Ty::Int(32))
+                (Ty::Int(8), Ty::Int(16 | 32 | 64)) | (Ty::Int(16), Ty::Int(32 | 64)) | (Ty::Int(32), Ty::Int(64))
             )
             && matches!(
                 (legalized(src, self.native()), legalized(dst, self.native())),
@@ -2372,7 +2389,7 @@ impl Tti for X86 {
         if second.constant && !second.negated_power_of_two && matches!(op, UDiv | SDiv | URem | SRem) {
             let mut cost = if matches!(op, URem | SRem) { 6 } else { 5 };
             if matches!(kind, CostKind::CodeSize | CostKind::SizeAndLatency) {
-                cost += 2;
+                cost = self.tuning.div_by_constant_size_cost.map_or(cost + 2, i64::from);
             }
             return Cost::of(count * cost);
         }

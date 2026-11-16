@@ -892,9 +892,10 @@ pub trait Tti {
     }
 
     /// Whether the SLP vectorizer's tree and store chains run: only where the
-    /// target's vector costs are priced against the pin (arm64). DEVIATE SLP2
-    /// (owner arm64, exit 2026-11-24): a target with vector registers and no
-    /// priced hooks keeps its scalar code.
+    /// target's vector costs are priced against the pin (arm64, and x86-64
+    /// where it holds vector values). DEVIATE SLP2 (owner arm64, exit
+    /// 2026-11-24): a target with vector registers and no priced hooks keeps
+    /// its scalar code.
     fn slp_priced(&self) -> bool {
         false
     }
@@ -1605,6 +1606,12 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup costs one, whatever
+    /// `int_imm_cost` says (LLVM 20.1.8's `getSetupCost`; the pin's is free for a free constant).
+    fn lsr_constant_setup_is_one(&self) -> bool {
+        false
+    }
+
     /// Whether a constant operand of an arithmetic instruction may become a phi
     /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
     /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.
@@ -1742,6 +1749,15 @@ pub trait Tti {
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
+    }
+
+    /// DEVIATE UNROLL-TRIAL-NEST (owner 6502): whether, at -O2 and -O3, an
+    /// innermost loop is held to the trial's threshold by `shouldFullUnroll`'s
+    /// analysis (the cost once the trips' constants fold, boosted) instead of
+    /// by its unrolled size alone, so that a loop the pin unrolls under its own
+    /// threshold is tried where this target's units count it larger.
+    fn unroll_trial_analyzed_at_speed(&self) -> bool {
+        false
     }
 
     /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): whether
@@ -2149,6 +2165,11 @@ pub trait Tti {
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// Whether the target takes gcc's path splitting at `-O3` (`Tuning::split_paths_at_o3`).
+    fn split_paths_at_o3(&self) -> bool {
+        false
     }
 
     /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
