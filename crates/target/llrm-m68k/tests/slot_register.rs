@@ -2,7 +2,9 @@
 //! slot (`move.b %d2,(4,%sp)`, 4 B and 16 clocks a side at the 68000), where
 //! gcc keeps it in `a0` (`movea.l %d2,%a0`, 2 B and 4 clocks):
 //! known_loads_walks -Os, 92 frame references to gcc's 25 (DEVIATE SLOT-REG,
-//! `src/slotreg.rs`).
+//! `src/slotreg.rs`). A size build only: since #9994 (M68K-ONE-BUILD) a speed
+//! build is built once and tries no slot registers; this test built the
+//! fixture as a speed build and failed from then on.
 
 use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -13,7 +15,7 @@ const IR: &str = include_str!("fixtures/slot_register.ll");
 
 fn asm(slot_registers: bool) -> String {
     let module = llrm_mir::parse::module(IR).expect("parses");
-    let options = Options { short: true, slot_registers, ..Options::default() };
+    let options = Options { short: true, size: true, slot_registers, ..Options::default() };
     text_with(&module, "f", Cpu::M68000, options).expect("compiles")
 }
 

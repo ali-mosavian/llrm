@@ -2376,7 +2376,7 @@ impl Tti for X86 {
         if second.constant && !second.negated_power_of_two && matches!(op, UDiv | SDiv | URem | SRem) {
             let mut cost = if matches!(op, URem | SRem) { 6 } else { 5 };
             if matches!(kind, CostKind::CodeSize | CostKind::SizeAndLatency) {
-                cost += 2;
+                cost = self.tuning.div_by_constant_size_cost.map_or(cost + 2, i64::from);
             }
             return Cost::of(count * cost);
         }
