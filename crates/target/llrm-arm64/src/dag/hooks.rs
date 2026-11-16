@@ -262,6 +262,11 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
             28 => (n() as i64 ^ 1, mvt::i32),
             30 => ((n() | (u64::from(b'U') << 8)) as i64, mvt::i32),
             41 => (8 + n() as i64, mvt::i32),
+            // The scaled offsets of the paired and unscaled forms
+            // (`N * 2`, `N * 4`, as an `i64`).
+            4 => (n() as i64, mvt::i64),
+            14 | 16 | 18 => (n() as i64 * 2, mvt::i64),
+            15 | 17 => (n() as i64 * 4, mvt::i64),
             other => panic!("xform {other} is not translated"),
         };
         dag.target_constant(constant, vt)

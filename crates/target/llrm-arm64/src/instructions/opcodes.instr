@@ -482,6 +482,12 @@ UZP2v16i8                  binary   x/x,x         -                        fp_ar
 UZP2v8i16                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v8i16
 UZP2v4i32                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v4i32
 UZP2v2i64                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v2i64
+UZP1v8i8                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v8i8
+UZP1v4i16                 binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v4i16
+UZP1v2i32                 binary   x/x,x         -                        fp_arith   - - - -/-                UZP1v2i32
+UZP2v8i8                  binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v8i8
+UZP2v4i16                 binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v4i16
+UZP2v2i32                 binary   x/x,x         -                        fp_arith   - - - -/-                UZP2v2i32
 SMLALv8i8_v8i16          fmuladd  x/x,x,x       -                        fp_arith   - - - -/-                SMLALv8i8_v8i16
 SMLALv16i8_v8i16         fmuladd  x/x,x,x       -                        fp_arith   - - - -/-                SMLALv16i8_v8i16
 SMLALv4i16_v4i32         fmuladd  x/x,x,x       -                        fp_arith   - - - -/-                SMLALv4i16_v4i32
