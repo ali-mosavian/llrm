@@ -1744,6 +1744,13 @@ impl Parser {
                 return self.fail("expected a block");
             };
             Some(crate::uselist::Held::Block(self.block_id(local, name).0))
+        } else if self.eat_word("label") {
+            // A block's list, as the writer spells it inside a function.
+            let Token::Local(name) = self.next() else {
+                self.at -= 1;
+                return self.fail("expected a block");
+            };
+            Some(crate::uselist::Held::Block(self.block_id(local, name).0))
         } else {
             match self.typed_value(local)?.1 {
                 Operand::Value(value) => Some(crate::uselist::Held::Value(value.0)),

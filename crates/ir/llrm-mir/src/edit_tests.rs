@@ -1233,3 +1233,21 @@ fn a_use_list_prints_its_shuffle_only_where_it_differs_from_the_readers() {
     let (_, next) = named(f, "next");
     assert_eq!(f.use_list_orders(), [(next, vec![1, 2, 3, 0])]);
 }
+
+/// Clang writes a block's use list inside the function as `uselistorder label
+/// %b, { .. }`. The reader took `label` for a type and then `%b` for a value
+/// never defined, so wasm refused `switch_empty_cases.c` at -O1/-O2/-Os.
+#[test]
+fn a_uselistorder_directive_reorders_the_uses_of_a_block() {
+    let users = |text: &str| {
+        let mut module = module(text);
+        let f = function(&mut module);
+        let block = f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some("loop")).expect("%loop");
+        f.block_users(block).iter().map(|one| one.user.0).collect::<Vec<_>>()
+    };
+    let plain = users(LOOP);
+    let text = LOOP.replace("}\n", "  uselistorder label %loop, { 1, 0 }\n}\n");
+    let swapped = users(&text);
+    assert_eq!(plain.len(), 2);
+    assert_eq!(swapped, [plain[1], plain[0]]);
+}
