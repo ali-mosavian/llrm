@@ -1283,6 +1283,7 @@ fn a_count_of_a_compare_beside_a_select_sum_is_widened_without_interleaving() {
 
 const EARLY_EXIT_DIFFER: &str = include_str!("../tests/lv/early_exit_differ.ll");
 const EARLY_EXIT_INDEX: &str = include_str!("../tests/lv/early_exit_index.ll");
+const EARLY_EXIT_FIND: &str = include_str!("../tests/lv/early_exit_find.ll");
 
 /// `differ` of memory_expansion (a byte compare that leaves at the first
 /// difference) stayed a scalar loop, 1.69 M instructions against clang's 0.93
@@ -1330,4 +1331,29 @@ fn the_early_exit_value_is_the_index_of_the_first_set_lane() {
     assert!(text.contains("llvm.vector.reduce.umin.v16i8"), "{text}");
     assert!(text.contains("select <16 x i1>"), "{text}");
     assert!(text.contains("= add i64 %index, %"), "{text}");
+}
+
+/// The text tests cannot see a wrong first lane, a lost remainder or a bad hand
+/// over to the scalar loop. The widened loop must return what the scalar one
+/// does, for a difference in the vector part (0, 7, 15, 16, 17, 1199), in the
+/// remainder (1200 to 1202) and none (1203 plants nothing).
+#[test]
+fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
+    let scalar = crate::testing::parsed(EARLY_EXIT_FIND);
+    let mut module = crate::testing::parsed(EARLY_EXIT_FIND);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: true, interleaves: false });
+    let machine = llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux };
+    manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+    let text = crate::testing::printed(&module);
+    assert!(text.contains("vector.early.exit:"), "{text}");
+    let inputs: Vec<[i128; 1]> = [0, 7, 15, 16, 17, 1199, 1200, 1201, 1202, 1203].iter().map(|&k| [k]).collect();
+    let inputs: Vec<&[i128]> = inputs.iter().map(|one| &one[..]).collect();
+    let (wide, narrow) = (crate::testing::results(&module, &inputs), crate::testing::results(&scalar, &inputs));
+    assert_eq!(wide, narrow, "{text}");
+    assert_eq!(
+        wide[..9],
+        [0, 7, 15, 16, 17, 1199, 1200, 1201, 1202].map(|k| llrm_mir::interpret::Val::Int { bits: k as u128, width: 64 }),
+        "{text}"
+    );
 }

@@ -28,7 +28,7 @@
 //!   whose loads are dereferenceable in the loop only; no stores (the pin's
 //!   `-enable-early-exit-vectorization-with-side-effects` is off), no
 //!   fault-only-first loads (`-enable-early-exit-with-ffload` is off), no
-//!   SCEV predicates. The planner does not plan them yet (VP1).
+//!   SCEV predicates. The planner takes them through `loopvectorizeearlyexit`.
 //! - LV-D4 calls: an intrinsic `getVectorIntrinsicIDForCall` takes is legal (a
 //!   scalar operand loop invariant, L965); a call the `VFDatabase` or
 //!   `isTLIScalarize` would take is refused. The transform widens fewer.

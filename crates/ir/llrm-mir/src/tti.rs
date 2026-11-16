@@ -708,8 +708,9 @@ pub trait Tti {
     }
 
     /// `-enable-early-exit-vectorization` (default true in the pin) where the
-    /// backend selects what the vector loop makes: `reduce.or` of an `i1`
-    /// vector and `cttz` of its bits. DEVIATE: on where a port says so.
+    /// backend selects what the vector loop makes: a vector `icmp`,
+    /// `reduce.or` of an `i1` vector, and `select` and `reduce.umin` of the
+    /// lane numbers. DEVIATE: on where a port says so.
     fn vectorizes_early_exit(&self) -> bool {
         false
     }

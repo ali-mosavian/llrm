@@ -1049,6 +1049,23 @@ impl<'m> Machine<'m> {
                     Opcode::Select => Some(match value(self, 0)? {
                         Val::Poison => Val::Poison,
                         Val::Int { bits, .. } => value(self, if bits != 0 { 1 } else { 2 })?,
+                        // A vector condition picks each lane.
+                        Val::Aggregate(conditions) => match (value(self, 1)?, value(self, 2)?) {
+                            (Val::Aggregate(taken), Val::Aggregate(other)) if taken.len() == conditions.len() => {
+                                Val::Aggregate(
+                                    conditions
+                                        .into_iter()
+                                        .zip(taken.into_iter().zip(other))
+                                        .map(|(condition, (taken, other))| match condition {
+                                            Val::Int { bits, .. } if bits != 0 => taken,
+                                            Val::Int { .. } => other,
+                                            _ => Val::Poison,
+                                        })
+                                        .collect(),
+                                )
+                            }
+                            _ => Val::Poison,
+                        },
                         other => unreachable!("a condition {other:?}"),
                     }),
                     Opcode::Freeze => Some(match value(self, 0)? {

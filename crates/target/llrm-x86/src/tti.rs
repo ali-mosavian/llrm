@@ -822,7 +822,9 @@ impl Tti for X86 {
         "X86"
     }
 
-    /// x86-64 first: `pcmpeqb`/`pmovmskb` selects the any-of of a byte compare.
+    /// x86-64 first (DEVIATE VPEE6, owner x87-cordic-2, exit 2026-12-10): the
+    /// other ports' backends are not known to select the vector loop's
+    /// `reduce.or` and `reduce.umin`.
     fn vectorizes_early_exit(&self) -> bool {
         self.vector_values()
     }
@@ -1461,6 +1463,44 @@ impl Tti for X86 {
             CostKind::Latency if op == MemoryOp::Load => Cost::of(4),
             _ => Cost::BASIC,
         })
+    }
+
+    /// `X86TTIImpl::getCmpSelInstrCost` of an integer vector, the SSE2 rows
+    /// (L4062 and L4069): the compares `pcmpeqX` and `pcmpgtX` of 8, 16 and 32
+    /// bit lanes cost one per register, the selects (`pand`, `pandn`, `por`)
+    /// two; the predicates SSE2 has no compare for cost the instructions that
+    /// make them (L3877), taking the second operand as no constant. A float
+    /// lane or a 64-bit compare is not priced (DEVIATE X86V3, owner
+    /// llrm-target-x86-m64-b, exit 2026-12-10).
+    fn vector_cmp_sel_cost(
+        &self,
+        op: CmpSel,
+        ty: VectorTy,
+        predicate: Option<Predicate>,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        use llrm_mir::opcode::IntPredicate;
+        if !self.vector_values() {
+            return None;
+        }
+        let Ty::Int(bits @ (8 | 16 | 32)) = ty.lane else { return None };
+        let pieces = xmm_pieces(ty)?;
+        let (row, extra) = match op {
+            CmpSel::ICmp => {
+                let extra = match predicate {
+                    Some(Predicate::Int(IntPredicate::Ne | IntPredicate::Sge | IntPredicate::Sle)) => 1,
+                    Some(Predicate::Int(IntPredicate::Ult | IntPredicate::Ugt)) => 2,
+                    Some(Predicate::Int(IntPredicate::Ule | IntPredicate::Uge)) if bits < 32 => 1,
+                    Some(Predicate::Int(IntPredicate::Ule | IntPredicate::Uge)) => 3,
+                    Some(Predicate::Int(_)) => 0,
+                    _ => 3,
+                };
+                (all(1, 1, 1, 1), extra)
+            }
+            CmpSel::Select => (all(2, 2, 3, 3), 0),
+            _ => return None,
+        };
+        row[kind.index()].map(|each| Cost::of(pieces * (extra + each)))
     }
 
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops

@@ -741,3 +741,13 @@ fn vector_casts_and_compares_work_on_each_lane() {
         int(1, 32)
     );
 }
+
+/// A `select` by a vector of `i1` hit `unreachable!("a condition Aggregate")`:
+/// the loop vectorizer's early exit finds the first set lane with one.
+#[test]
+fn a_select_by_a_vector_condition_picks_each_lane() {
+    let text = "define i8 @f() {\n  %c = icmp ne <4 x i8> <i8 0, i8 1, i8 0, i8 1>, zeroinitializer\n  \
+        %s = select <4 x i1> %c, <4 x i8> <i8 10, i8 11, i8 12, i8 13>, <4 x i8> <i8 20, i8 21, i8 22, i8 23>\n  \
+        %r = extractelement <4 x i8> %s, i64 2\n  %q = extractelement <4 x i8> %s, i64 3\n  %t = add i8 %r, %q\n  ret i8 %t\n}\n";
+    assert_eq!(result(text), int(32 + 13, 8));
+}
