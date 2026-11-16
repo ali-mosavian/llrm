@@ -2719,6 +2719,7 @@ fn held_since_stored(
     }
     let want = |(slot, register): &(String, String)| format!("ld {slot}, {register}");
     let mut lines: Vec<&str> = Vec::new();
+    let last_store = format!("ld {last_slot}, {last_register}");
     for line in out.iter().rev() {
         match line {
             Line::Loc(_) => {}
@@ -2728,7 +2729,7 @@ fn held_since_stored(
         if lines.len() > 24 {
             return false;
         }
-        if lines.last().is_some_and(|text| *text == format!("ld {last_slot}, {last_register}")) {
+        if lines.last().is_some_and(|text| *text == last_store) {
             break;
         }
     }
@@ -2896,12 +2897,13 @@ fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
     for (at, line) in lines.iter().enumerate() {
         let Line::Inst(text) = line else { continue };
         let Some(register) = byte(text) else { continue };
+        let reload = format!("ld {register}, ");
         for later in &lines[at + 1..] {
             match later {
                 Line::Loc(_) => continue,
                 Line::Label(_) => break,
                 Line::Inst(next) => {
-                    if let Some(source) = next.strip_prefix(&format!("ld {register}, "))
+                    if let Some(source) = next.strip_prefix(&reload)
                         && !names(&format!("ld x, {source}"), &register)
                     {
                         keep[at] = false;
@@ -3154,6 +3156,15 @@ pub fn weighted(
     lines: &[Line],
     frequencies: &llrm_support::hash::HashMap<u32, f64>,
 ) -> Vec<(Line, f64)> {
+    lines.iter().cloned().zip(block_weights(lines, frequencies)).collect()
+}
+
+/// [`weighted`]'s weights alone: the price reads the lines it holds, not a copy
+/// of each (a `String` per line, 36k in switch_jump_table -O2).
+fn block_weights(
+    lines: &[Line],
+    frequencies: &llrm_support::hash::HashMap<u32, f64>,
+) -> Vec<f64> {
     // blocks: the entry (before the first label) and one per `L<fn>_<id>`
     let mut starts = vec![0usize];
     let mut ids: Vec<Option<u32>> = vec![None];
@@ -3249,7 +3260,7 @@ pub fn weighted(
         while block + 1 < count && starts[block + 1] <= at {
             block += 1;
         }
-        out.push((line.clone(), freq[block]));
+        out.push(freq[block]);
     }
     out
 }
@@ -3261,12 +3272,11 @@ pub fn weighted(
 /// Owner z80, exit 2026-11-20: `MachineBlockFrequencyInfo` over the machine
 /// function.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
-    let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
+    let weights = FREQUENCIES.with(|one| block_weights(lines, &one.borrow()));
     let (mut bytes, mut clocks) = (0, 0.0);
-    let weighted = weighted(lines, &frequencies);
     let trips = local_loop_trips(lines);
     let mut before: Vec<&str> = Vec::new();
-    for ((line, weight), trips) in weighted.iter().zip(&trips) {
+    for ((line, weight), trips) in lines.iter().zip(&weights).zip(&trips) {
         let Line::Inst(text) = line else {
             before.clear();
             continue;
@@ -3333,10 +3343,10 @@ pub fn price_emitted_calls(
 ) -> ((u32, u64), Vec<(String, f64)>) {
     let lines = relax(lines.to_vec(), speed);
     let price = price_in_loops(&lines);
-    let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
+    let weights = FREQUENCIES.with(|one| block_weights(&lines, &one.borrow()));
     let trips = local_loop_trips(&lines);
     let mut calls = Vec::new();
-    for ((line, weight), trips) in weighted(&lines, &frequencies).iter().zip(&trips) {
+    for ((line, weight), trips) in lines.iter().zip(&weights).zip(&trips) {
         let Line::Inst(text) = line else { continue };
         let Some(name) = text.strip_prefix("call ").or_else(|| text.strip_prefix("jp ")) else { continue };
         let name = name.trim();
@@ -3747,6 +3757,34 @@ mod tests {
                 None => Line::Inst((*one).to_owned()),
             })
             .collect()
+    }
+
+    /// The price read a copy of every line to weigh it (a `String` per line,
+    /// 36k in switch_jump_table -O2): the weights alone are what `weighted`
+    /// pairs with the lines, and a diamond's join takes what flows into it.
+    #[test]
+    fn the_block_weights_are_the_weights_of_the_weighted_lines() {
+        let lines = lines_of(&["ld a, 1", "jp z, L0_1", "inc a", "jp L0_2", "L0_1:", "dec a", "L0_2:", "ret"]);
+        let frequencies: llrm_support::hash::HashMap<u32, f64> = [(1, 0.25), (2, 1.0)].into_iter().collect();
+        let weights = block_weights(&lines, &frequencies);
+        let paired = weighted(&lines, &frequencies);
+        assert_eq!(weights, paired.iter().map(|(_, weight)| *weight).collect::<Vec<_>>());
+        assert_eq!(weights.len(), lines.len());
+        assert!(weights.iter().any(|weight| *weight == 0.25), "the arm {weights:?}");
+    }
+
+    /// A byte load that a later load of the same register overwrites with
+    /// nothing between that names it is dropped; one that is read first
+    /// stays. The reload's text is built once per candidate, not once per
+    /// line scanned (21k `format!` in switch_jump_table -O2).
+    #[test]
+    fn a_byte_load_overwritten_before_any_read_is_dropped() {
+        let dropped = drop_overwritten_byte_stores(lines_of(&["and a, #248", "ld c, a", "or a, #5", "ld c, a"]));
+        assert_eq!(dropped, lines_of(&["and a, #248", "or a, #5", "ld c, a"]));
+        let read = lines_of(&["ld c, a", "ld b, c", "ld c, a"]);
+        assert_eq!(drop_overwritten_byte_stores(read.clone()), read, "read before it is overwritten");
+        let other = lines_of(&["ld c, a", "ld b, a", "ld e, a"]);
+        assert_eq!(drop_overwritten_byte_stores(other.clone()), other, "other registers are not overwrites");
     }
 
     /// A `jp cc, L` to a block that is only a tail `jp SYMBOL` becomes `jp cc,
