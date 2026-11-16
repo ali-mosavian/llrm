@@ -2,8 +2,9 @@
 //! widens, with the pin's factors (`opt -passes=loop-vectorize` on aarch64: i16
 //! copy of 1920 is VF 8, IC 2), and the ones it leaves alone.
 
-use super::LoopVectorize;
 use llrm_mir::target::{Machine as _, Neutral};
+
+use super::LoopVectorize;
 use crate::testing::parsed;
 
 fn run(source: &str) -> String {
@@ -387,8 +388,8 @@ fn run_x86_tuned(
     crate::testing::printed(&module)
 }
 
-/// Retiring LV-OS made 15 m64 -Os corpus files 5-50% bigger (byval_struct 183 ->
-/// 269 B): a target whose tuning says no keeps its optsize loops scalar.
+/// Retiring LV-OS made 15 m64 -Os corpus files 5-50% bigger (byval_struct 183
+/// -> 269 B): a target whose tuning says no keeps its optsize loops scalar.
 #[test]
 fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
     let optsize = COPY.replace(
@@ -400,8 +401,8 @@ fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
     assert!(count(&run_x86(COPY, false), "x i16>") > 0, "a loop at speed is widened either way");
 }
 
-/// mem_length_boundaries_m32: `sum += dst[i]` (bytes into an `i64`) stayed at the
-/// pin's VF 2 (the widest type) while gcc sums 16 bytes a trip: 142,319
+/// mem_length_boundaries_m32: `sum += dst[i]` (bytes into an `i64`) stayed at
+/// the pin's VF 2 (the widest type) while gcc sums 16 bytes a trip: 142,319
 /// instructions to gcc's 137,355. With the pin's own
 /// `-vectorizer-maximize-bandwidth` (the smallest type sizes the VF) it is a
 /// VF 16 loop, 266,570 total to gcc's 341,638 in the pin itself.
@@ -463,7 +464,8 @@ fn a_symbolic_trip_count_is_checked_at_run_time() {
     assert!(text.contains("%n.vec = sub i64 %n, %n.mod.vf"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %n.vec"), "{text}");
     assert!(text.contains("%cmp.n = icmp eq i64 %n, %n.vec"), "{text}");
-    // Its remainder is widened in turn, at 4 lanes as the pin: that loop's `n < 4` comes first.
+    // Its remainder is widened in turn, at 4 lanes as the pin: that loop's `n <
+    // 4` comes first.
     assert!(text.contains("%iter.check = icmp ult i64 %n, 4"), "{text}");
     assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ]"), "{text}");
     assert!(text.contains("br i1 %min.iters.check2, label %vector.ph1, label %vector.ph"), "{text}");
@@ -1283,9 +1285,10 @@ const EARLY_EXIT_DIFFER: &str = include_str!("../tests/lv/early_exit_differ.ll")
 const EARLY_EXIT_INDEX: &str = include_str!("../tests/lv/early_exit_index.ll");
 
 /// `differ` of memory_expansion (a byte compare that leaves at the first
-/// difference) stayed a scalar loop, 1.69 M instructions against clang's 0.93 M:
-/// the planner skipped every loop of two blocks. The pin widens it to 16 lanes
-/// and leaves the vector loop where `reduce.or` of the compare says (`AnyOf`).
+/// difference) stayed a scalar loop, 1.69 M instructions against clang's 0.93
+/// M: the planner skipped every loop of two blocks. The pin widens it to 16
+/// lanes and leaves the vector loop where `reduce.or` of the compare says
+/// (`AnyOf`).
 #[test]
 fn an_early_exit_byte_compare_is_widened_with_an_any_of_exit() {
     let text = run_compares(EARLY_EXIT_DIFFER);
@@ -1319,12 +1322,12 @@ fn the_early_exit_loop_keeps_a_marked_scalar_remainder() {
 
 /// The index of the first difference was lost where the loop leaves early: the
 /// exit phi reads `%i`, which the vector loop does not have per lane. The
-/// pin's `vector.early.exit` finds the first set lane (`cttz`) and adds it to
-/// the vector iteration's index.
+/// pin's `vector.early.exit` finds the first set lane (here the `umin` of the
+/// lane numbers the mask selects) and adds it to the vector iteration's index.
 #[test]
 fn the_early_exit_value_is_the_index_of_the_first_set_lane() {
     let text = run_compares(EARLY_EXIT_INDEX);
-    assert!(text.contains("llvm.cttz.i16"), "{text}");
-    assert!(text.contains("bitcast <16 x i1>"), "{text}");
+    assert!(text.contains("llvm.vector.reduce.umin.v16i8"), "{text}");
+    assert!(text.contains("select <16 x i1>"), "{text}");
     assert!(text.contains("= add i64 %index, %"), "{text}");
 }

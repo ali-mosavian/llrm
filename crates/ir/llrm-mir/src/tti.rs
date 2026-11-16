@@ -707,6 +707,13 @@ pub trait Tti {
         false
     }
 
+    /// `-enable-early-exit-vectorization` (default true in the pin) where the
+    /// backend selects what the vector loop makes: `reduce.or` of an `i1`
+    /// vector and `cttz` of its bits. DEVIATE: on where a port says so.
+    fn vectorizes_early_exit(&self) -> bool {
+        false
+    }
+
     /// `getNumberOfRegisters(ClassID)`: 0 where the target has no vector
     /// registers.
     fn number_of_registers(
@@ -1243,9 +1250,11 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a one-slot frame is released by `add` when
-    /// callee-saved registers are restored, as the pin does: `emitEpilogue` stands at the first callee-saved `pop`, where
-    /// `findDeadCallerSavedReg` answers 0. False: a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
+    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a
+    /// one-slot frame is released by `add` when callee-saved registers are
+    /// restored, as the pin does: `emitEpilogue` stands at the first
+    /// callee-saved `pop`, where `findDeadCallerSavedReg` answers 0. False:
+    /// a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
     fn frame_slot_add_with_saved(&self) -> bool {
         false
     }
@@ -1662,8 +1671,9 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup costs one, whatever
-    /// `int_imm_cost` says (LLVM 20.1.8's `getSetupCost`; the pin's is free for a free constant).
+    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup
+    /// costs one, whatever `int_imm_cost` says (LLVM 20.1.8's
+    /// `getSetupCost`; the pin's is free for a free constant).
     fn lsr_constant_setup_is_one(&self) -> bool {
         false
     }
@@ -2223,7 +2233,8 @@ pub trait Tti {
         (None, None)
     }
 
-    /// Whether the target takes gcc's path splitting at `-O3` (`Tuning::split_paths_at_o3`).
+    /// Whether the target takes gcc's path splitting at `-O3`
+    /// (`Tuning::split_paths_at_o3`).
     fn split_paths_at_o3(&self) -> bool {
         false
     }
