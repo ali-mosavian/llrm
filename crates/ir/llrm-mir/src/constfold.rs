@@ -111,7 +111,7 @@ fn undef(
 }
 
 /// The lanes of a vector constant: `getAggregateElement` of each.
-fn lanes_of(
+pub(crate) fn lanes_of(
     context: &Context,
     id: ConstantId,
     element: TypeId,
@@ -127,6 +127,71 @@ fn lanes_of(
         }
         ConstantKind::Poison => Some(vec![poison(context, element); count]),
         ConstantKind::Undef => Some(vec![undef(context, element); count]),
+        _ => None,
+    }
+}
+
+fn low_mask(width: u32) -> u128 {
+    if width >= 128 { u128::MAX } else { (1u128 << width) - 1 }
+}
+
+/// The bits of an integer constant or of a vector of integer constants, lane 0
+/// lowest, and how many: none past 128 bits, nor with an undef or poison lane.
+fn integer_bits_of(
+    context: &Context,
+    c: ConstantId,
+) -> Option<(u128, u32)> {
+    let constant = context.get(c);
+    match context.types.get(constant.ty).clone() {
+        Type::Int(width) => match constant.kind {
+            ConstantKind::Int(bits) => Some((bits & low_mask(width), width)),
+            ConstantKind::Zero | ConstantKind::Null => Some((0, width)),
+            _ => None,
+        },
+        Type::Vector { element, count } => {
+            let width = context.types.int_bits(element)?;
+            if u64::from(width) * u64::from(count) > 128 {
+                return None;
+            }
+            let mut bits = 0u128;
+            for (lane, one) in lanes_of(context, c, element, count as usize)?.into_iter().enumerate() {
+                let value = match context.get(one).kind {
+                    ConstantKind::Int(value) => value & low_mask(width),
+                    ConstantKind::Zero | ConstantKind::Null => 0,
+                    _ => return None,
+                };
+                bits |= value << (lane as u32 * width);
+            }
+            Some((bits, width * count))
+        }
+        _ => None,
+    }
+}
+
+/// `FoldBitCast` of the integer shapes (ConstantFold.cpp,
+/// `foldConstantCastPair` aside): an integer or a vector of integers as another
+/// of the same total width, lane 0 the low bits (little endian).
+fn bitcast_integer_lanes(
+    context: &Context,
+    c: ConstantId,
+    to: TypeId,
+) -> Option<ConstantId> {
+    let (bits, total) = integer_bits_of(context, c)?;
+    match context.types.get(to).clone() {
+        Type::Int(width) if width == total => Some(context.int(to, bits as i128)),
+        Type::Vector { element, count } => {
+            let width = context.types.int_bits(element)?;
+            if width * count != total {
+                return None;
+            }
+            if bits == 0 {
+                return Some(context.constant(Constant { ty: to, kind: ConstantKind::Zero }));
+            }
+            let lanes = (0..count)
+                .map(|lane| context.int(element, ((bits >> (lane * width)) & low_mask(width)) as i128))
+                .collect();
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Aggregate(lanes) }))
+        }
         _ => None,
     }
 }
@@ -400,6 +465,11 @@ pub fn cast(
     }
     if is_null_value(context, c) && op != CastOp::AddrSpaceCast {
         return Some(null_value(context, to));
+    }
+    if op == CastOp::BitCast {
+        if let Some(folded) = bitcast_integer_lanes(context, c, to) {
+            return Some(folded);
+        }
     }
     let dest = context.types.get(to).clone();
     // A fixed vector casts lane by lane (`ConstantFoldCastInstruction`, L116);
