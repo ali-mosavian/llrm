@@ -169,6 +169,63 @@ out:
     assert_eq!(loops(&after), 3, "{after}");
 }
 
+/// queens -O3 (m32) died in the unswitch: the original loop's dead blocks end
+/// in switches that name an exit three times, the exit's phi has an input for
+/// each edge, and one removal for each block left two inputs, so the exit
+/// that other blocks still reach was named by blocks erased ("block 115
+/// still has 2 users"). One removal for each edge, as LLVM's `successors(BB)`
+/// iterates them.
+#[test]
+fn a_dead_blocks_switch_naming_a_live_exit_twice_leaves_no_input_in_its_phi() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %latch ]
+  br i1 %z, label %then, label %else
+
+then:
+  %k = and i16 %i, 3
+  %a = add i16 %acc, %i
+  switch i16 %k, label %gone [
+    i16 1, label %gone
+    i16 2, label %then2
+  ]
+
+then2:
+  %c = add i16 %a, 1
+  switch i16 %k, label %gone [
+    i16 1, label %gone
+    i16 3, label %latch
+  ]
+
+else:
+  %b = mul i16 %acc, 3
+  %w = icmp eq i16 %i, 7
+  br i1 %w, label %gone, label %latch
+
+latch:
+  %sum = phi i16 [ %c, %then2 ], [ %b, %else ]
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %m
+  br i1 %done, label %out, label %head
+
+gone:
+  %g = phi i16 [ %acc, %then ], [ %acc, %then ], [ %a, %then2 ], [ %a, %then2 ], [ %b, %else ]
+  ret i16 %g
+
+out:
+  %r = phi i16 [ %sum, %latch ]
+  ret i16 %r
+}
+";
+    let after = unswitched(text, &[&[0, 3], &[1, 3], &[0, 9], &[5, 9]], true);
+    assert_eq!(loops(&after), 2, "{after}");
+}
+
 /// A value the loop makes and the code after reads is one phi after both
 /// copies, whichever ran.
 #[test]
