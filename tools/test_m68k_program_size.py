@@ -72,6 +72,8 @@ def test_the_archive_cache_key_follows_the_runtime_sources(tmp_path, monkeypatch
     """The cache was keyed by the compiler binary alone: an edited compiler-rt source kept using the archive built from the old one, so a runtime change measured as no change."""
     runtime = tmp_path / "rt"
     (runtime / "lib/int").mkdir(parents=True)
+    (runtime / "config/m68k").mkdir(parents=True)  # cache_dir hashes config/m68k/mulsi3.s too
+    (runtime / "config/m68k/mulsi3.s").write_text("rts\n")
     (runtime / "lib/int/clzsi2.c").write_text("int a;\n")
     monkeypatch.setattr(sweep, "RUNTIME", runtime)
     monkeypatch.setenv("M68K_EXEC_CACHE", str(tmp_path / "cache"))
@@ -112,3 +114,11 @@ def test_the_assembly_is_not_given_more_global_labels_than_the_compiler_wrote():
     """Every label global made ours 192 B larger on fcmp_all (68020 Os, program 5530 B against 5338 B of the object) and left gcc's 5078 B alone: a call to a static function became a 32-bit relocation."""
     text = "\t.globl\tmain\nmain:\n\tjsr\t(helper,%pc)\nhelper:\n\trts\n"
     assert size.in_text(text).count(".globl") == 1
+
+
+def test_the_like_columns_put_gcc_on_ours_pc_relative_data_model():
+    """Ours addresses data pc-relative, gcc absolute: fcmp_all 68020 Os was +260 B against gcc and +148 B against `gcc -mpcrel` (5338 / 5078 / 5190 B), so the plain column mixed a data-model cost into the code-size gap."""
+    source = HERE.parent / "tests/run/c/frameless.c"
+    plain = size.gcc_command("m68k-linux-gnu-", "68020", "Os", Path("x.s"), source, [])
+    like = size.gcc_command("m68k-linux-gnu-", "68020", "Os", Path("x.s"), source, [], pcrel=True)
+    assert "-mpcrel" not in plain and "-mpcrel" in like, (plain, like)

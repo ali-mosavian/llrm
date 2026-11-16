@@ -63,9 +63,9 @@ def in_text(text: str) -> str:
     return ".text\n" + text
 
 
-def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str]) -> list[str]:
+def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str], pcrel: bool = False) -> list[str]:
     """gcc's line with the program's own flags in gcc's spelling: `-fno-inline-functions` left out, gcc inlined what ours and the pin keep calls."""
-    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *external_flags.GCC_DIALECT, *external_flags.gcc_program_flags(flags), "-S", "-o", str(asm), str(source)]
+    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, *external_flags.gcc_program_flags(flags), "-S", "-o", str(asm), str(source)]
 
 
 def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: str, cache: Path, work: Path) -> dict[str, object]:
@@ -73,8 +73,8 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
     tools = f"{root}/usr/bin/m68k-linux-gnu-"
     asm = work / f"{source.stem}.{compiler}.s"
     flags = o0_sweep.flags_of(source.read_text(), f"m68k-{cpu}")
-    if compiler == "gcc":
-        cmd = gcc_command(tools, cpu, level, asm, source, flags)
+    if compiler in ("gcc", "gcc-pcrel"):
+        cmd = gcc_command(tools, cpu, level, asm, source, flags, pcrel=compiler == "gcc-pcrel")
         run_env = env
     elif compiler == "clang":
         pin, llc = pinned_tool("clang"), pinned_tool("llc")
@@ -124,7 +124,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cpu", default="68020")
     parser.add_argument("--level", default="Os")
-    parser.add_argument("--compiler", default="both", choices=["ours", "gcc", "clang", "both", "all"])
+    parser.add_argument("--compiler", default="both", choices=["ours", "gcc", "gcc-pcrel", "clang", "both", "like", "all"])
     parser.add_argument("names", nargs="+")
     args = parser.parse_args()
     root = os.environ.get("GCC_M68K")
@@ -133,7 +133,7 @@ def main() -> int:
         return 2
     cc = o0_sweep.compiler()
     cache = sweep.cache_dir(cc)
-    columns = {"both": ["ours", "gcc"], "all": ["ours", "gcc", "clang"]}.get(args.compiler, [args.compiler])
+    columns = {"both": ["ours", "gcc"], "like": ["ours", "gcc-pcrel"], "all": ["ours", "gcc", "clang"]}.get(args.compiler, [args.compiler])
     print("| program | cpu | level | compiler | program B | library B | whole B | members |")
     print("|---|---|---|---|---|---|---|---|")
     keep = os.environ.get("M68K_KEEP")  # a directory that keeps the linked .exe files for `cycles --exe`
