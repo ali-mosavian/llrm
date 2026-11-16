@@ -81,3 +81,13 @@ unsigned down_sum(int n)
         s += (((unsigned)i * 3u) ^ ((unsigned)i >> 2));
     return s;
 }
+
+/* A 32-trip fold of a table: fourteen units a trip, 386 unrolled, over the pin's -O3 threshold of 300
+   (loop_interchange's `checksum`). */
+long table_fold(const short *table)
+{
+    long sum = 0;
+    for (int i = 0; i < 32; ++i)
+        sum = (sum * 31 + table[i]) % 100003;
+    return sum;
+}
