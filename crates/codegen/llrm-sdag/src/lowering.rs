@@ -310,18 +310,28 @@ impl TargetLoweringInfo {
                 }
                 None => match mvt {
                     _ if mvt.is_vector() => {
-                        // `getPreferredVectorAction`: promote the lanes to the
-                        // narrowest integer type that makes a legal vector of
-                        // as many lanes (`v4i1` is `v4i16` where `v4i8` is not
-                        // a type).
-                        let promoted = (mvt.element() == Some(MVT::I1))
-                            .then(|| {
+                        // `getPreferredVectorAction` (power-of-two lanes) and
+                        // `computeRegisterProperties`: promote the lanes to the
+                        // narrowest wider integer type that makes a legal
+                        // vector of as many lanes (`v4i1` is `v4i16` where
+                        // `v4i8` is not a type, `v4i8` is `v4i16`, `v2i8` is
+                        // `v2i32`).
+                        let promoted = mvt
+                            .element()
+                            .zip(mvt.lanes())
+                            .filter(|&(element, lanes)| {
+                                lanes.is_power_of_two()
+                                    && EVT::Simple(element).is_integer()
+                                    && !(self.widen_vectors && element != MVT::I1)
+                            })
+                            .and_then(|(element, lanes)| {
+                                let bits = EVT::Simple(element).size_in_bits();
                                 [MVT::I8, MVT::I16, MVT::I32, MVT::I64]
                                     .into_iter()
-                                    .filter_map(|lane| MVT::vector(lane, mvt.lanes()?))
+                                    .filter(|&lane| EVT::Simple(lane).size_in_bits() > bits)
+                                    .filter_map(|lane| MVT::vector(lane, lanes))
                                     .find(|wider| self.vectors.contains(wider))
-                            })
-                            .flatten();
+                            });
                         if self.vectors.contains(&mvt) {
                             (TypeAction::Legal, vt)
                         } else if let Some(wider) = self.widened_vector(mvt) {
@@ -434,6 +444,30 @@ mod tests {
         assert_eq!(TargetLoweringInfo::x86_32().type_action(EVT::Simple(MVT::V2I64)), TypeAction::ScalarizeVector);
         assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V4I32)), TypeAction::Legal);
         assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V16I8)), TypeAction::Legal);
+    }
+
+    /// A vector under a D register has no register class: its lanes are
+    /// promoted to the narrowest wider type that makes a legal vector of as many
+    /// lanes (`getPreferredVectorAction`); `v4i8` was `ScalarizeVector`, which no
+    /// backend could build.
+    #[test]
+    fn a_vector_under_a_d_register_has_its_lanes_promoted() {
+        let aarch64 = TargetLoweringInfo::aarch64();
+        let promoted = |vt| aarch64.type_conversion(EVT::Simple(vt));
+        assert_eq!(promoted(MVT::V4I8), (TypeAction::PromoteInteger, EVT::Simple(MVT::V4I16)));
+        assert_eq!(promoted(MVT::V2I8), (TypeAction::PromoteInteger, EVT::Simple(MVT::V2I32)));
+        assert_eq!(promoted(MVT::V2I16), (TypeAction::PromoteInteger, EVT::Simple(MVT::V2I32)));
+        assert_eq!(promoted(MVT::V4I1), (TypeAction::PromoteInteger, EVT::Simple(MVT::V4I16)));
+        assert_eq!(promoted(MVT::V8I8), (TypeAction::Legal, EVT::Simple(MVT::V8I8)));
+    }
+
+    /// x86 widens `v4i8` (`X86TargetLowering::getPreferredVectorAction`); promoting
+    /// it to `v4i32` would pre-empt the widening and diverge from the pin.
+    #[test]
+    fn x86_does_not_promote_the_lanes_of_a_narrow_vector() {
+        let x86 = TargetLoweringInfo::x86_64_sse2();
+        assert_eq!(x86.type_conversion(EVT::Simple(MVT::V4I8)), (TypeAction::WidenVector, MVT::V16I8.into()));
+        assert_eq!(x86.type_conversion(EVT::Simple(MVT::V2I16)), (TypeAction::WidenVector, MVT::V8I16.into()));
     }
 
     /// Every target compared into an `i8`; AArch64 compares into an `i32`.

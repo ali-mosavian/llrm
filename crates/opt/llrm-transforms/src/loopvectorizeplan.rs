@@ -867,8 +867,10 @@ const EPILOGUE_MIN_VF: u64 = 16;
 /// The main loop must cover at least `EPILOGUE_MIN_VF` lanes
 /// (`isEpilogueVectorizationProfitable`); the epilogue's factor is no wider
 /// than the main loop's, and where the trip count is known no wider than the
-/// iterations left over (`SkipVF`: such a loop would never run); the cheapest
-/// per lane of those wins.
+/// iterations left over (`SkipVF`: such a loop would never run); of those that
+/// beat the scalar loop the cheapest over `MaxTripCount` iterations wins
+/// (`isMoreProfitable`, `IsEpilogue`): the remainder is under `VF x IC`, so
+/// a narrower factor with fewer scalar iterations left can beat a wider one.
 pub fn epilogue_vf(
     tti: &dyn Tti,
     facts: &LoopFacts,
@@ -882,20 +884,40 @@ pub fn epilogue_vf(
         return None;
     }
     let mut cap = u64::from(main.vf);
+    // `MaxTripCount` of the epilogue: the lanes the main loop leaves at most,
+    // or, where the trip count is known, exactly the remainder.
+    let mut max_trip_count = lanes - 1;
     if facts.trip_count != 0 {
         let remaining = facts.trip_count % lanes;
         if remaining == 0 {
             return None;
         }
         cap = cap.min(bit_floor(remaining));
+        max_trip_count = remaining;
     } else {
         // `SkipVF` against `SE.getURemExpr(TC, VF x IC)`: whatever the trip
         // count, fewer than `VF x IC` iterations are left, so a factor of that
         // many lanes or more would never run.
         cap = cap.min(bit_floor(lanes - 1));
     }
-    let (vf, _) = best_vf(tti, facts, cap, true, false);
-    (vf > 1).then_some(vf)
+    // The factors that beat the scalar loop (`ProfitableVFs`) in ascending
+    // order; the first is taken, a later one replaces it when cheaper over
+    // `max_trip_count` iterations (`isMoreProfitable`, `IsEpilogue`).
+    let scalar = iteration_cost(tti, &facts.recipes, 1, true, false).expect("the scalar loop is priced");
+    let mut best: Option<(i64, u64, i64)> = None;
+    let mut vf = 2u64;
+    while vf <= cap {
+        if let Ok(cost) = iteration_cost(tti, &facts.recipes, vf as u32, true, false) {
+            let candidate = (cost, vf, scalar);
+            if is_more_profitable(candidate, (scalar, 1, scalar), facts.trip_count, true)
+                && best.is_none_or(|best| is_more_profitable(candidate, best, max_trip_count, true))
+            {
+                best = Some(candidate);
+            }
+        }
+        vf *= 2;
+    }
+    best.map(|(_, vf, _)| vf as u32)
 }
 
 /// The constant trip count under which the pin allows no epilogue
