@@ -3874,6 +3874,10 @@ pub fn _instruction(
             }
         }
         Operation::Multiply | Operation::Divide => vec![format!("{name} {}", last(&sources))],
+        // `pshufd xmm0, xmm1, 0EEh`: a source of its own and the order as the third operand.
+        Operation::Extend if sources.len() == 2 && matches!(what.sources[1], Loc::Imm(_)) => {
+            vec![format!("{name} {}, {}, {}", dests[0], sources[0], sources[1])]
+        }
         Operation::Extend => {
             // `cvtss2sd xmm0, xmm1`, `cvtsi2sd xmm0, eax`: the SSE converts
             // name their operands; `cwd` and `cdq` name theirs in the opcode.
@@ -4212,6 +4216,21 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         assert_eq!(_instruction(regs, &copy, &no_names(), 0).unwrap(), ["movaps xmm0, xmm2"]);
+    }
+
+    /// `pshufd` printed `pshufd xmm1, 238`, the source and the destination one register (tied): the result is a fresh
+    /// register, `pshufd xmm1, xmm0, 238`.
+    #[test]
+    fn test_a_shuffle_prints_its_source_and_order() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let xmm = |register| Loc::Reg(ir::Reg { register, width: 16 });
+        let shuffle = Semantics {
+            name: Some("pshufd".into()),
+            dests: vec![xmm(RegId::XMM1)],
+            sources: vec![xmm(RegId::XMM0), Loc::Imm(ir::Imm { value: 238, width: 1, address: None })],
+            ..Semantics::new(Operation::Extend)
+        };
+        assert_eq!(_instruction(regs, &shuffle, &no_names(), 0).unwrap(), ["pshufd xmm1, xmm0, 238"]);
     }
 
     /// `cvtss2sd` and `sqrtsd` printed no source: `cvtss2sd` alone, `sqrtsd
