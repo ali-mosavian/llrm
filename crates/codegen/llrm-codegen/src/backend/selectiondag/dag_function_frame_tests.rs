@@ -1173,14 +1173,16 @@ define void @f() {{
     (fills, stores)
 }
 
-/// lru -Os at m32: two constant-store loops became memsets of 6..28 bytes, and
-/// the pin's eight-store limit kept them as stores (gcc: `rep stos`, 26 B
-/// smaller). At -Os the fill is taken where it is fewer bytes; at speed the
-/// stores stay, and a lone dword stays a store.
+/// lru -Os at m32: constant-store loops became memsets of 6..28 bytes, and
+/// `rep stosd` (201 clk against 124 for seven stores) lost clocks without
+/// beating the pin's eight-store limit. At -Os a fill is taken only past that
+/// limit, where it is fewer bytes; at speed the stores stay, and a lone dword
+/// stays a store.
 #[test]
-fn at_m32_os_a_28_byte_fill_is_rep_stos_and_at_speed_stores() {
-    assert_eq!(memset_shape_m32(28, -1, true).0, 1, "-Os: a fill");
-    assert_eq!(memset_shape_m32(28, -1, false).0, 0, "-O2: stores");
+fn at_m32_os_a_fill_past_the_pin_store_limit_is_rep_stos_and_at_speed_stores() {
+    assert_eq!(memset_shape_m32(28, -1, true).0, 0, "-Os: seven stores are the pin's");
+    assert_eq!(memset_shape_m32(40, -1, true).0, 1, "-Os: ten stores are a fill");
+    assert_eq!(memset_shape_m32(40, -1, false).0, 0, "-O2: stores");
     assert_eq!(memset_shape_m32(4, -1, true).0, 0, "one dword store is smaller than the fill");
     // rep_tails -Os grew a byte when a 5-byte fill (no whole dwords) was a
     // fill.
@@ -1768,9 +1770,7 @@ fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_o3() {
     let target = cpu.target();
     let tti = target.tti();
     let depth = |o3: bool| {
-        llrm_transforms::walk::Recursion::of(None, false, true, o3, tti.as_deref())
-            .expect("m32 copies recursion")
-            .depth
+        llrm_transforms::walk::Recursion::of(None, false, true, o3, tti.as_deref()).expect("m32 copies recursion").depth
     };
     assert_eq!((depth(false), depth(true)), (2, 2));
 }

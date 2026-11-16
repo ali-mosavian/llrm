@@ -41,6 +41,7 @@ use llrm_mir::valuetracking::power2::is_known_to_be_a_power_of_two;
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_and_or_replaced::fold_and_or_with_op_replaced;
 use crate::combine_and_select::fold_and_select;
 use crate::combine_bitorder::fold_bitwise_logic_with_intrinsics;
 use crate::combine_distribute::fold_using_distributive_laws;
@@ -503,7 +504,10 @@ pub fn visit_and(
     if let Some(found) = fold_boolean_and_or(c, inst, op0, op1, true, false) {
         return Visit::Replace(found);
     }
-    reassociate_boolean_operands(c, inst, (op0, op1), true).map_or(Visit::None, Visit::Replace)
+    if let Some(found) = reassociate_boolean_operands(c, inst, (op0, op1), true) {
+        return Visit::Replace(found);
+    }
+    fold_and_or_with_op_replaced(c, inst, BinaryOp::And, op0, op1).unwrap_or(Visit::None)
 }
 
 #[cfg(test)]

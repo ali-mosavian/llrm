@@ -9,7 +9,11 @@ use llrm_6502::driver::{Level, Request, assembly};
 
 fn text(body: &str) -> String {
     let ir = format!("target datalayout = \"{}\"\n{body}", datalayout());
-    assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"))
+    // the text is what the backend wrote: outlining would move its calls into a
+    // body
+    let mut request = Request::new(Level::O2);
+    request.passes.push("-fno-outline".to_owned());
+    assembly(&ir, &request).unwrap_or_else(|e| panic!("{e}"))
 }
 
 fn function<'a>(

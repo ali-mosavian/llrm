@@ -802,6 +802,48 @@ b3:
     assert!(block_of(&after, "b2").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
 
+/// LPM1 runs per loop (`loopfilter::only`): LICM over one loop hoists from that
+/// loop alone. The apply path ignored the scope and hoisted from every loop at
+/// the first loop's turn, so the outer loops' own `no-allowspeculation` LICM
+/// found nothing to leave in place (klw -O1: 240 blocks where the pin has 248,
+/// +37k executed instructions).
+#[test]
+fn test_a_scoped_run_hoists_from_the_named_loop_only() {
+    let text = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %k = mul i16 %a, 3
+  %j = add i16 %i, %k
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %x = phi i16 [ 0, %b2 ], [ %y, %b3 ]
+  %m = mul i16 %a, 5
+  %y = add i16 %x, %m
+  %d = icmp slt i16 %y, %n
+  br i1 %d, label %b3, label %b4
+
+b4:
+  ret i16 %y
+}
+";
+    let mut module = parsed(text);
+    let _scope = crate::loopfilter::only(&[llrm_mir::module::BlockId(1)]);
+    let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: true });
+    assert!(!block_of(&after, "b1").iter().any(|line| line.contains("mul i16 %a, 3")), "{after}");
+    assert!(
+        block_of(&after, "b3").iter().any(|line| line.contains("mul i16 %a, 5")),
+        "the other loop was hoisted: {after}"
+    );
+}
+
 /// LPM1's first LICM is `licm<no-allowspeculation>`: a multiply the loop may
 /// skip stays where it is, and the second LICM (speculating) hoists it. Without
 /// the flag the first one hoisted it too and the guard the rotate puts before

@@ -95,6 +95,9 @@ pub struct Edge {
 /// A selected function: its blocks and the sizes of its local frame objects, by
 /// frame index.
 pub struct Selection {
+    /// Which selection this is: unique to the thread, what a cached text of it
+    /// is keyed by (a selection is moved, not copied).
+    pub id: u64,
     pub blocks: Vec<Selected>,
     pub locals: Vec<i64>,
     /// The subtarget it was selected for: emission expands to the same CPU.
@@ -216,6 +219,7 @@ pub fn select_function_with(
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
     Ok(Selection {
+        id: next_selection_id(),
         blocks: selected,
         locals,
         cpu,
@@ -223,6 +227,16 @@ pub fn select_function_with(
         zero_page: 16,
         tuning: crate::alloc::Tuning::SPEED,
         source: None,
+    })
+}
+
+fn next_selection_id() -> u64 {
+    thread_local! {
+        static NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    NEXT.with(|next| {
+        next.set(next.get() + 1);
+        next.get()
     })
 }
 

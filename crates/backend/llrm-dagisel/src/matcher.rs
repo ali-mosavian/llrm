@@ -33,6 +33,10 @@ impl Vt {
     pub const V8I8: Vt = Vt(47);
     pub const V4I16: Vt = Vt(58);
     pub const V2I32: Vt = Vt(73);
+    /// The vectors under a D register (`ValueTypes.td` order).
+    pub const V2I8: Vt = Vt(41);
+    pub const V4I8: Vt = Vt(43);
+    pub const V2I16: Vt = Vt(56);
 }
 
 /// Operand flags of `EmitNode`/`MorphNodeTo` (`OPFL_*`).

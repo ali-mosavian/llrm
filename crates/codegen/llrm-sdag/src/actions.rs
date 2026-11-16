@@ -208,29 +208,6 @@ pub struct TargetLowering {
     min_stack_argument_alignment: u32,
 }
 
-/// Every vector type (`MVT::fixedlen_vector_valuetypes`).
-const VECTORS: [MVT; 19] = [
-    MVT::V16I8,
-    MVT::V8I16,
-    MVT::V4I32,
-    MVT::V2I64,
-    MVT::V4F32,
-    MVT::V2F64,
-    MVT::V2F32,
-    MVT::V8I8,
-    MVT::V4I16,
-    MVT::V2I32,
-    MVT::V32I8,
-    MVT::V16I16,
-    MVT::V8I32,
-    MVT::V4I64,
-    MVT::V8F32,
-    MVT::V4F64,
-    MVT::V16I32,
-    MVT::V8I64,
-    MVT::V16I64,
-];
-
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
@@ -953,7 +930,30 @@ impl TargetLowering {
         // other builds (and the constant ones, a pool load) stay the
         // expansion. DEVIATE X86V3 now covers only the 8- and 16-bit
         // lanes and the non-splat builds.
-        t.set_ops(&[ISD::BuildVector], &[MVT::V4I32, MVT::V2I64], Action::Custom);
+        t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerEXTEND_VECTOR_INREG`, `LowerTRUNCATE`: a vector widened to more than one register (`punpck`, `psra`),
+        // or narrowed from more than one (`pand` + `packuswb`). No vector has an extending load or a truncating store
+        // of another vector's memory type without `pmovzx` (SSE4.1).
+        let wide = [MVT::V16I16, MVT::V8I32, MVT::V16I32, MVT::V4I64, MVT::V8I64, MVT::V16I64];
+        t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &wide, Action::Custom);
+        t.set_ops(&[ISD::Truncate], &wide, Action::Custom);
+        for vt in MVT::vectors() {
+            for mem in MVT::vectors() {
+                for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
+                    t.set_load_ext_action(ext, vt, mem, Action::Expand);
+                }
+                t.set_trunc_store_action(vt, mem, Action::Expand);
+            }
+        }
+        // `LowerSELECT`: a scalar condition over a vector is a `CMOV` of the
+        // register.
+        t.set_ops(&[ISD::Select], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
+        // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack). DEVIATE
+        // X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles
+        // (`movss`, `punpck`) or uses `pinsrw`/`pinsrb`.
+        t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
@@ -962,18 +962,20 @@ impl TargetLowering {
         // expansion.
         t.set_ops(&[ISD::Shl, ISD::Srl], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
-        // `ExpandReductions` makes a reduction shuffles and `extractelement`;
-        // no shuffle is selected here, so the DAG folds the spilled
-        // lanes (`expandVecReduce`). DEVIATE X86V4 (owner
-        // llrm-target-x86-m64-b, exit 2026-11-24, the C3 PR: shuffle
-        // selection).
+        // `ExpandReductions` (`getShuffleReduction`) makes a sum, `and`, `or` or
+        // `xor` a shuffle and an operation a step, then `extractelement`.
+        t.set_ops(
+            &[ISD::VecReduceAdd, ISD::VecReduceAnd, ISD::VecReduceOr, ISD::VecReduceXor],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            Action::Custom,
+        );
+        // The product and the minima and maxima stay `expandVecReduce`: the
+        // spilled lanes folded as scalars. DEVIATE X86V4 (owner
+        // llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles those too
+        // (a vector multiply, `pcmpgt` and blend steps).
         t.set_ops(
             &[
-                ISD::VecReduceAdd,
                 ISD::VecReduceMul,
-                ISD::VecReduceAnd,
-                ISD::VecReduceOr,
-                ISD::VecReduceXor,
                 ISD::VecReduceSMax,
                 ISD::VecReduceSMin,
                 ISD::VecReduceUMax,
@@ -1075,14 +1077,31 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
         // `AArch64TargetLowering` (L1637): no vector has an extending load or a
         // truncating store of another vector's memory type.
-        for vt in VECTORS {
-            for mem in VECTORS {
+        for vt in MVT::vectors() {
+            for mem in MVT::vectors() {
                 for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
                     t.set_load_ext_action(ext, vt, mem, Expand);
                 }
                 t.set_trunc_store_action(vt, mem, Expand);
             }
         }
+        // `AArch64TargetLowering` (L1515, L1526): the small vectors a D register
+        // does not hold are loaded as a scalar and widened in registers
+        // (`tryLowerSmallVectorExtLoad`), and `v4i8` is stored by narrowing
+        // `v4i16` (`LowerTruncateVectorStore`).
+        for (vt, mem) in [
+            (MVT::V2I32, MVT::V2I8),
+            (MVT::V2I64, MVT::V2I8),
+            (MVT::V4I16, MVT::V4I8),
+            (MVT::V4I32, MVT::V4I8),
+            (MVT::V2I32, MVT::V2I16),
+            (MVT::V2I64, MVT::V2I16),
+        ] {
+            for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
+                t.set_load_ext_action(ext, vt, mem, Custom);
+            }
+        }
+        t.set_trunc_store_action(MVT::V4I16, MVT::V4I8, Custom);
         // `initActions`: "Vector reduction default to expand". The float
         // kinds have no node here.
         let reductions = [

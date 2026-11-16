@@ -161,6 +161,10 @@ pub struct Tuning {
     /// copy that leaves the module no larger and saves clocks, though no
     /// callee goes with it.
     pub inline_trial_keeps_shrinking_copy: bool,
+    /// `Tti::frame_slot_add_with_saved`.
+    pub frame_slot_add_with_saved: bool,
+    /// `Tti::inline_trial_cold_margin`.
+    pub inline_trial_cold_margin: i64,
     /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24):
     /// `inline_size_bytes` at -O1 alone (the byte-measured size view, the
     /// second round, and the trial of a callee the bound refused, kept
@@ -325,6 +329,23 @@ pub struct Tuning {
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
     pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// `Threshold` of the full unroll at `-O3` alone (the pin's is 300): a
+    /// loop of 32 trips and a dozen operations is unrolled where the pin
+    /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
+    /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
+    pub unroll_threshold_at_o3: Option<u32>,
+    /// The code-size cost of a scalar divide or remainder by a constant
+    /// (`X86TTIImpl::getArithmeticInstrCost`: 5 or 6, and 2 more for size, in
+    /// the pin). LLVM 20 priced it 4: a 32-trip loop with a `srem` by a
+    /// constant (loop_interchange's `checksum`) was 259 units against the
+    /// threshold 300 there and 386 in the pin, so clang 20 unrolls it and the
+    /// pin does not. DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30); none: the pin's.
+    pub div_by_constant_size_cost: Option<u32>,
+    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
+    /// (`llrm-gpl-gcc`, feature `gcc-gpl`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// target takes it once measured; false: the pin's, none.
+    pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -456,6 +477,10 @@ pub struct Tuning {
     /// Clocks a value held across an inner loop costs each outer trip: a store
     /// and a load.
     pub loop_carried_clocks: i64,
+    /// DEVIATE LSR-OUTER: the compare a counter stepped by an element size
+    /// takes over as the loop's exit test (`lftr`), saved each trip besides
+    /// the scaled index. 0: the pin (no outer-loop reduction).
+    pub counter_exit_compare_clocks: i64,
     /// DEVIATE EXT-LOAD-COST (owner llrm-target-x86-m16, exit 2026-11-27):
     /// the clocks a load that widens (`movzx`) costs over the plain load. CGP's
     /// `optimizeExt` moves an extension next to its load, as the pin does where
@@ -519,6 +544,11 @@ pub struct Tuning {
     /// x86's rows until judged per target (DEVIATE, owner
     /// llrm-target-x86-m64 at m64, exit 2026-11-24).
     pub add_to_or_disjoint: bool,
+    /// `LoopVectorize` widens an `optsize` loop whose trip count VF divides
+    /// (`isScalarEpilogueAllowed`). false: DEVIATE LV-OS (owner
+    /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
+    /// bytes +5..+50% on 15 corpus files.
+    pub vectorize_at_size: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -586,6 +616,12 @@ pub struct Tuning {
     pub frame_slot_is_free_base: bool,
     /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
     pub lsr_address_fewest_registers: bool,
+    /// DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): a constant in a formula's setup
+    /// costs one, as in LLVM 20.1.8 (`getSetupCost`); the pin charges it by `getIntImmCost` (a free 0 costs
+    /// nothing), which makes `{0,+,1}` beat `{-1,+,1}` where clang 20 keeps the post-incremented index
+    /// (strlen: `mov eax, -1; inc eax; cmp [rdi+rax]` against `xor eax, eax; mov ecx, eax; inc eax; cmp [rdi+rcx]`).
+    /// false: the pin's.
+    pub lsr_constant_setup_is_one: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
     pub keep_constant_arith_operands: bool,
@@ -620,11 +656,11 @@ pub struct Tuning {
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function.
     pub ipa_cp_max_clones: usize,
     /// DEVIATE LSR-SPILL-PRICE (exit 2026-11-24): a loop whose other values
-    /// already fill the registers keeps its pressure in the cost, so an
-    /// induction variable held in memory is priced as the spill it is. The
-    /// pin's LSR searches again with the pressure cut (LU3b); gcc's ivopts
-    /// charges `estimate_reg_pressure_cost`.
-    pub lsr_prices_spills: bool,
+    /// need this many registers more than the target has keeps its pressure in
+    /// the cost, so an induction variable held in memory is priced as the
+    /// spill it is. The pin's LSR searches again with the pressure cut (LU3b);
+    /// gcc's ivopts charges `estimate_reg_pressure_cost`. none: the pin's.
+    pub lsr_spill_pressure_margin: Option<u32>,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -740,6 +776,8 @@ impl Tuning {
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
+        frame_slot_add_with_saved: false,
+        inline_trial_cold_margin: 0,
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
@@ -772,6 +810,9 @@ impl Tuning {
         merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
+        unroll_threshold_at_o3: None,
+        div_by_constant_size_cost: None,
+        split_paths_at_o3: false,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
@@ -794,6 +835,7 @@ impl Tuning {
         merged_condition_clocks: 0,
         multiply_clocks: 0,
         loop_carried_clocks: 0,
+        counter_exit_compare_clocks: 0,
         ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
@@ -805,6 +847,7 @@ impl Tuning {
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
         add_to_or_disjoint: false,
+        vectorize_at_size: true,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
@@ -823,6 +866,7 @@ impl Tuning {
         keep_constant_displacements: false,
         frame_slot_is_free_base: false,
         lsr_address_fewest_registers: false,
+        lsr_constant_setup_is_one: false,
         keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
@@ -831,7 +875,7 @@ impl Tuning {
         recursive_tre_first: (false, false),
         ipa_cp_clones_at_speed: false,
         ipa_cp_max_clones: 4,
-        lsr_prices_spills: false,
+        lsr_spill_pressure_margin: None,
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,
@@ -1801,6 +1845,9 @@ mod tests {
             (pin.unroll_threshold, pin.unroll_max_percent_threshold_boost, pin.unroll_partial_threshold),
             (None, None, None)
         );
+        assert_eq!(pin.unroll_threshold_at_o3, None);
+        assert_eq!(pin.div_by_constant_size_cost, None);
+        assert!(!pin.split_paths_at_o3);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);

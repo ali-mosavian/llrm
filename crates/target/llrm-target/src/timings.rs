@@ -42,6 +42,16 @@ pub struct CpuTable {
     /// `max-grow-copy-bb-insns` 8, takes any block it optimises for speed);
     /// `None`: the pin's bound alone.
     pub tail_dup_hot_threshold: Option<i64>,
+    /// DEVIATE LOOP-TOP-JMP (owner x87-b, exit 2026-11-24): placement's choice
+    /// of a loop's top weighs the fall-throughs it gains and loses in clocks:
+    /// a taken conditional branch made one that falls through saves
+    /// `jcc - jcc_not_taken`, and a fall-through lost costs a whole `jmp`.
+    /// The pin counts each as one (`FallThroughGains`) and put the latch of
+    /// x_ld_dot above its header, so the inner loop's exit took a `jmp` every
+    /// outer trip. A loop's exit also falls into what follows it unless
+    /// another block's edge to it is hotter (`hasBetterLayoutPredecessor`'s
+    /// ratio gave the guard's edge block the latch). Off: the pin's count.
+    pub loop_top_prices_jumps: bool,
     /// Two-address commuting ties the operand the result goes back into (a
     /// loop's back-edge copy) even where the operand was read earlier in the
     /// block (DEVIATE TA-LC, owner anyisa, exit 2026-11-27): the pin's
@@ -87,11 +97,12 @@ pub struct CpuTable {
     /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard and no three-block minimum
     /// (T14 and D1 of jumps-tailmerge-check.md lifted). Off: the guards stand.
     pub tail_merge_pin_faithful: bool,
-    /// Runs of equal literal stores outside loops share a register at -O2/-O3 too, where
-    /// the bytes outweigh the clock of loading it (DEVIATE ISS1, owner
-    /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
-    /// `MOV32mi`s.
+    /// Runs of equal literal stores outside loops share a register where bytes are strict (DEVIATE ISS1,
+    /// owner x86-m32, exit 2026-11-30); -Os always. Off: the pin's `MOV32mi`s.
     pub share_literal_stores: bool,
+    /// The same at -O1 to -O3, where the bytes outweigh the clock of loading the register. Off where
+    /// clocks decide the cell: the `xor` and the register stores cost more than the immediates.
+    pub share_literal_stores_at_speed: bool,
     /// A `movzx` of a register into itself is `and r, mask` where the flags are dead and bytes
     /// are priced at speed: gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND`, set for the 486 and Pentium
     /// (DEVIATE ZEXT-AND, owner x86-m32-b, exit 2026-11-24). Off: the pin's `movzx`.
@@ -256,6 +267,7 @@ impl Timings {
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
                     ("scalars", "tail_dup_hot_threshold") => table.tail_dup_hot_threshold = Some(number()?),
+                    ("scalars", "loop_top_prices_jumps") => table.loop_top_prices_jumps = number()? != 0,
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
@@ -266,6 +278,7 @@ impl Timings {
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "share_literal_stores_at_speed") => table.share_literal_stores_at_speed = number()? != 0,
                     ("scalars", "zero_extend_with_and") => table.zero_extend_with_and = number()? != 0,
                     ("scalars", "pool_data_strict") => table.pool_data_strict = number()? != 0,
                     ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,

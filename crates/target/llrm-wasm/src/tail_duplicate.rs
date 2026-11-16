@@ -5,7 +5,7 @@
 //! returns (`common.ret`) costs no branch and no local.
 //!
 //! DEVIATE 1: only the general case (`tailDuplicate`); a block of one `br` is
-//! `forward_branch_only_blocks`'s, and a function with a personality is left
+//! `Folder::forward_branch_only`'s, and a function with a personality is left
 //! alone (try scopes name their blocks). Exit: the shared tail duplicator over
 //! the neutral machine function (S4), no later than 2026-11-20.
 //!
@@ -57,7 +57,7 @@ fn should_tail_duplicate(
     true
 }
 
-/// Whether the block is only a `br`: `forward_branch_only_blocks` has it.
+/// Whether the block is only a `br`: `Folder::forward_branch_only` has it.
 fn is_simple(
     f: &Function,
     tail: usize,

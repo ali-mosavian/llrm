@@ -1012,7 +1012,7 @@ fn unmarked_allocas(
     }
     Lifetimes {
         allocas,
-        dynamic: dynamic_alloca_space(function, &made.copies),
+        dynamic: llrm_mir::splice::has_dynamic_alloca(body),
         entry: made.entry,
         returns: made.returns.clone(),
     }
@@ -1058,7 +1058,8 @@ fn outlives_the_copy(
 /// it, so a call the copy brings carries the constants the pin's cost model sees
 /// (`hold(1)` copies `churn(c1, c2, c3, c4)`, not `churn(add 1 K, ...)`), and an alloca of the
 /// entry whose count was the argument's (`int a[n]`) has a constant one and is
-/// static: it goes to the caller's entry, and the copy has no dynamic alloca to bracket.
+/// static: it goes to the caller's entry (the copy is still bracketed: the body had a dynamic alloca,
+/// `ContainsDynamicAllocas`).
 /// DEVIATE: the pin also prunes the blocks a folded branch condition leaves dead and folds phis
 /// while it clones; here the Simplify list that follows does.
 fn fold_entry_allocas(
@@ -1078,11 +1079,6 @@ fn fold_entry_allocas(
             (copy, alloca, Some(block) == entry)
         })
         .collect();
-    // Asked before the fold: it is what makes the count constant, and an alloca
-    // that was dynamic is the one to move to the caller's entry.
-    let was_dynamic = copies
-        .iter()
-        .any(|&(copy, alloca, in_entry)| in_entry && alloca && !is_static_alloca(context, function, copy));
     for &(copy, alloca, _) in &copies {
         if alloca || function.instruction(copy).opcode == Opcode::Phi {
             continue;
@@ -1094,9 +1090,6 @@ fn fold_entry_allocas(
     }
     let copies: Vec<(InstId, bool)> =
         copies.into_iter().filter(|&(_, _, in_entry)| in_entry).map(|(copy, alloca, _)| (copy, alloca)).collect();
-    if !was_dynamic {
-        return;
-    }
     let first = anchor
         .filter(|&one| function.parent(one).is_some())
         .or_else(|| function.entry().and_then(|entry| function.block(entry).first()));
@@ -1115,27 +1108,6 @@ fn is_static_alloca(
     inst: InstId,
 ) -> bool {
     function.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
-}
-
-/// The address space of the first alloca among `copies` that is not static: not
-/// on the caller's entry or of a variable count.
-fn dynamic_alloca_space(
-    function: &Function,
-    copies: &[InstId],
-) -> Option<u32> {
-    copies
-        .iter()
-        .find_map(
-            |&copy| match function.instruction(copy).opcode {
-                Opcode::Alloca { address_space, .. }
-                    if function.parent(copy) != function.entry()
-                        || !function.instruction(copy).operands.iter().all(|one| matches!(one, Operand::Constant(_))) =>
-                {
-                    Some(address_space)
-                }
-                _ => None,
-            },
-        )
 }
 
 /// `InlineFunction`'s stack save and restore: a copy with a dynamic alloca

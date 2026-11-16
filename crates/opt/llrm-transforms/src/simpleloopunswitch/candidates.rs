@@ -49,6 +49,23 @@ pub(super) struct Candidate {
     pub partial: Option<PartialIv>,
 }
 
+/// The edges of `block`'s terminator, one for each operand that names a block:
+/// a switch's three cases to one target are three edges, as LLVM's
+/// `successors(BB)` iterates them, and the target's phis hold one input for
+/// each.
+pub(super) fn edges(
+    run: &Run,
+    block: BlockId,
+) -> Vec<BlockId> {
+    let Some(terminator) = run.function.terminator(block) else { return Vec::new() };
+    run.function
+        .instruction(terminator)
+        .operands
+        .iter()
+        .filter_map(|operand| if let Operand::Block(target) = operand { Some(*target) } else { None })
+        .collect()
+}
+
 /// The unique successors of `block`'s terminator, in operand order.
 pub(super) fn successors(
     run: &Run,

@@ -4,11 +4,11 @@
 
 use super::*;
 use crate::mc::inst::Cond;
-use crate::vector_forms::VectorForm;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, NarrowLane, Rounding, VectorFma,
-    VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Rounding, SMOV_FORMS,
+    VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
+use crate::vector_forms::VectorForm;
 
 const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Mov, "FMOV"),
@@ -216,6 +216,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::VectorMulAcc { op, lanes, rd, rn, rm } => semantics(
+            Operation::MultiplyAdd,
+            format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(*lanes)),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
         Inst::VectorFma { op, lanes, rd, rn, rm } => semantics(
             Operation::FloatMultiplyAdd,
             vector_fp_name(op.mnemonic(), *lanes),
@@ -283,6 +290,17 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::VectorSmov { lanes, wide, rd, rn, index } => {
+            let name = SMOV_FORMS.iter().find(|form| form.1 == *lanes && form.2 == *wide).expect("an SMOV row").0;
+            let width = if *wide { Width::X } else { Width::W };
+            semantics(
+                Operation::Move,
+                name.to_string(),
+                vec![gpr_loc(*rd, width)],
+                vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+                None,
+            )
+        }
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
             semantics(
@@ -523,9 +541,11 @@ fn long_name(
     format!("{stem}v{narrow}_v{wide}")
 }
 
-const LONG_OPS: [VectorLongOp; 8] = [
+const LONG_OPS: [VectorLongOp; 10] = [
     VectorLongOp::Ushll,
     VectorLongOp::Sshll,
+    VectorLongOp::Uaddl,
+    VectorLongOp::Saddl,
     VectorLongOp::Uaddw,
     VectorLongOp::Saddw,
     VectorLongOp::Umull,
@@ -544,7 +564,11 @@ fn vector_fp_name(
     mnemonic: &str,
     lanes: Arrangement,
 ) -> String {
-    let lanes = if lanes == Arrangement::D2 { "2f64" } else { "4f32" };
+    let lanes = match lanes {
+        Arrangement::D2 => "2f64",
+        Arrangement::S2 => "2f32",
+        _ => "4f32",
+    };
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
@@ -642,9 +666,10 @@ fn vector_int_unary_name(
     format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes))
 }
 
-const VECTOR_INT_UNARY: [VectorIntUnary; 3] = [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt];
+const VECTOR_INT_UNARY: [VectorIntUnary; 5] =
+    [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit];
 
-const VECTOR_OPS: [VectorOp; 14] = [
+const VECTOR_OPS: [VectorOp; 18] = [
     VectorOp::Add,
     VectorOp::Sub,
     VectorOp::Mul,
@@ -659,6 +684,10 @@ const VECTOR_OPS: [VectorOp; 14] = [
     VectorOp::Smin,
     VectorOp::Umax,
     VectorOp::Umin,
+    VectorOp::Sqadd,
+    VectorOp::Uqadd,
+    VectorOp::Sqsub,
+    VectorOp::Uqsub,
 ];
 const ARRANGEMENTS: [Arrangement; 4] = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2];
 /// The arrangements of the integer operations (three-same, shifts), which
@@ -696,7 +725,20 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             }
         });
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in OP_ARRANGEMENTS.into_iter().filter(|lanes| *lanes != Arrangement::D2) {
+        for op in [MulAcc::Add, MulAcc::Sub] {
+            if name == format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes)) {
+                return Some(Inst::VectorMulAcc {
+                    op,
+                    lanes,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[1]),
+                    rm: vreg_of(&s[2]),
+                });
+            }
+        }
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFma::Add, VectorFma::Sub] {
             if name == vector_fp_name(op.mnemonic(), lanes) {
                 return Some(Inst::VectorFma { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) });
@@ -742,7 +784,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
+    for (second, lanes) in OP_ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
         if name == unzip_name(second, lanes) {
             return Some(Inst::VectorUnzip {
                 second,
@@ -759,6 +801,15 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             rn: vreg_of(&s[0]),
             rm: vreg_of(&s[1]),
             index: value_of(&s[2]) as u8,
+        });
+    }
+    if let Some(&(_, lanes, wide)) = SMOV_FORMS.iter().find(|form| form.0 == name) {
+        return Some(Inst::VectorSmov {
+            lanes,
+            wide,
+            rd: gpr_of(dest?),
+            rn: vreg_of(&s[0]),
+            index: value_of(&s[1]) as u8,
         });
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {
@@ -821,7 +872,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in VECTOR_FP_OPS {
             if name == vector_fp_name(op.mnemonic(), lanes) {
                 return Some(Inst::VectorFpBinary {
@@ -927,9 +978,17 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
         }
         _ => {}
     }
-    if let Some(arrangement) = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
-        .into_iter()
-        .find(|one| name == dup_name(*one))
+    if let Some(arrangement) = [
+        Arrangement::B16,
+        Arrangement::H8,
+        Arrangement::S4,
+        Arrangement::D2,
+        Arrangement::B8,
+        Arrangement::H4,
+        Arrangement::S2,
+    ]
+    .into_iter()
+    .find(|one| name == dup_name(*one))
     {
         return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Dup(arrangement, gpr_of(&s[0])) });
     }

@@ -141,10 +141,10 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
-    inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
-    simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
+    fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
+    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
+    simplifycfg, splitpaths, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -276,6 +276,9 @@ pub struct Options {
     /// pipelines have it off (`enable-unroll-and-jam`); it is on at -O3 and
     /// -Omax, where the particle row gains from it.
     pub unroll_and_jam: bool,
+    /// `-ftree-loop-vectorize`: LLVM's `LoopVectorizePass`, which clang runs at
+    /// -O2 and up.
+    pub vectorize: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
@@ -359,6 +362,7 @@ impl Default for Options {
             unswitch: false,
             interchange: true,
             unroll_and_jam: false,
+            vectorize: true,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -518,7 +522,7 @@ impl Options {
             }
             "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" | "cgpcondsplit" => self.strength && self.cgpaddr,
-            "extload" => self.extload,
+            "extload" | "ree" => self.extload,
             "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
@@ -526,6 +530,7 @@ impl Options {
             "tailrec" => self.sibcalls,
             "loop-interchange" => self.interchange,
             "loop-unroll-and-jam" => self.unroll_and_jam,
+            "loop-vectorize" => self.vectorize,
             _ => true,
         }
     }
@@ -798,36 +803,42 @@ impl FunctionPass for PerLoop {
     }
 }
 
-/// The unswitch slot of LPM1 at -O3, where the pin's `SimpleLoopUnswitchPass`
-/// is non-trivial. A non-trivial unswitch hands the loop pass manager the
-/// sibling loops it cloned (`LPMUpdater::addSiblingLoops`) and asks for the
-/// loop again (`revisitCurrentLoop`); the manager then runs the whole of LPM1
-/// on each of them: instsimplify, simplifycfg, licm, rotate, licm, unswitch.
-/// The first visit of each loop is the flat slots before this one (`preamble`
-/// ran on every loop already), so only the revisits and the clones run the
-/// preamble again, then the unswitch.
+/// LPM1 (loop-instsimplify, loop-simplifycfg, licm, loop-rotate, licm,
+/// simple-loop-unswitch) as the loop pass manager runs it: loop by loop,
+/// innermost first, each loop through every pass before the next loop is
+/// looked at, so an inner loop is rotated and has its invariants hoisted
+/// before the outer loop's LICM and rotate see it. Run pass by pass over all
+/// the loops instead, the outer loops copy more headers (klw -O1: 251 blocks
+/// and 1,153 instructions where the pin has 248 and 1,127). The slot is the
+/// first of them (`loop-instsimplify@715`) and runs all of `passes`; the slots
+/// after it are [`AfterGroup`].
+///
+/// A non-trivial unswitch (-O3) hands the manager the sibling loops it cloned
+/// (`LPMUpdater::addSiblingLoops`) and asks for the loop again
+/// (`revisitCurrentLoop`); each of them goes through the whole of LPM1 again.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L270>
-struct UnswitchRevisit {
-    preamble: Vec<Box<dyn FunctionPass>>,
-    unswitch: Box<dyn FunctionPass>,
+struct LoopPassManager {
+    /// The passes in order, the unswitch last.
+    passes: Vec<Box<dyn FunctionPass>>,
+    fused: Fused,
 }
 
-impl FunctionPass for UnswitchRevisit {
+impl FunctionPass for LoopPassManager {
     fn name(&self) -> &'static str {
-        self.unswitch.name()
+        self.passes[0].name()
     }
 
     fn translations(&self) -> Vec<&'static str> {
-        self.unswitch.translations()
+        self.passes[0].translations()
     }
 
     fn adds_memory_operations(&self) -> bool {
-        self.unswitch.adds_memory_operations() || self.preamble.iter().any(|part| part.adds_memory_operations())
+        self.passes.iter().any(|part| part.adds_memory_operations())
     }
 
     fn reads(&self) -> llrm_mir::footprint::Footprint {
-        self.preamble.iter().fold(self.unswitch.reads(), |all, part| all.with(part.reads()))
+        self.passes.iter().fold(llrm_mir::footprint::Footprint::default(), |all, part| all.with(part.reads()))
     }
 
     fn run(
@@ -842,22 +853,21 @@ impl FunctionPass for UnswitchRevisit {
             .rev()
             .map(|one| one.get_header())
             .collect();
-        // (loop, whether LPM1's preamble has run on it since it was made or
-        // revisited)
-        let mut work: std::collections::VecDeque<(llrm_mir::module::BlockId, bool)> =
-            headers.into_iter().map(|header| (header, true)).collect();
+        let mut work: std::collections::VecDeque<llrm_mir::module::BlockId> = headers.into();
         let mut changed = false;
         let _ = crate::loopfilter::take_unswitched();
-        while let Some((header, preamble_ran)) = work.pop_front() {
+        while let Some(header) = work.pop_front() {
             let found = analyses.get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function);
             if !unit.function.is_placed(header) || !found.is_loop_header(header) {
                 continue;
             }
             {
                 let _scope = crate::loopfilter::only(&[header]);
-                let preamble = if preamble_ran { &mut self.preamble[..0] } else { &mut self.preamble[..] };
-                for part in preamble.iter_mut().chain(std::iter::once(&mut self.unswitch)) {
-                    let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
+                for part in self.passes.iter_mut() {
+                    let name = part.name();
+                    let preserved = llrm_mir::passes::spanned(name, || {
+                        llrm_mir::passes::run_checked(part.as_mut(), unit, analyses)
+                    });
                     if !preserved.are_all_preserved() {
                         changed = true;
                         analyses.invalidate(unit.function, &preserved);
@@ -868,12 +878,13 @@ impl FunctionPass for UnswitchRevisit {
             let (revisit, mut siblings) = crate::loopfilter::take_unswitched();
             siblings.reverse();
             for one in siblings {
-                work.push_front((one, false));
+                work.push_front(one);
             }
             if revisit {
-                work.push_front((header, false));
+                work.push_front(header);
             }
         }
+        self.fused.set(Some(unit.function.mark()));
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -1119,8 +1130,9 @@ pub(crate) fn llvm_order(
             // are `simplifycfg::Options::{L1438, L1682}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             // SLPVectorizerPass (l.1455): the compares of adjacent bytes
-            // against constants, on a target with vector registers.
-            slot("slp@1455", Box::new(crate::slpcompares::SlpCompares)),
+            // against constants, on a target with vector registers, and the
+            // store chains of a target that prices them.
+            slot("slp@1455", Box::new(crate::slpvectorize::SlpVectorize)),
             combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
             // before LoopUnrollPass; the nest is in simplify form and LCSSA.
@@ -1206,68 +1218,64 @@ pub(crate) fn llvm_order(
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
             let rotating = applied.options.rotate_slot;
-            // Non-trivial unswitching (-O3) revisits the loops it made and the
-            // loop it unswitched (`UnswitchRevisit`); the trivial one, at every
-            // other level, never does.
-            let unswitch_slot = || -> Box<dyn FunctionPass> {
-                let unswitch =
-                    Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch });
-                if !applied.options.unswitch {
-                    return unswitch;
-                }
-                let mut preamble: Vec<Box<dyn FunctionPass>> = vec![
-                    Box::new(crate::loopinstsimplify::LoopInstSimplify),
-                    Box::new(crate::loopsimplifycfg::LoopSimplifyCfg),
-                    Box::new(floatloop::FloatLoop),
+            // LPM1 runs loop by loop (`LoopPassManager`): the slot of
+            // loop-instsimplify runs all of it, the slots after it find their
+            // work done. Each call builds the passes once more, for the group
+            // or for the slots after it.
+            let lpm1_fused: Fused = Default::default();
+            let lpm1 = || -> Vec<(&'static str, Box<dyn FunctionPass>)> {
+                let mut passes: Vec<(&'static str, Box<dyn FunctionPass>)> = vec![
+                    // LPM1's first pass, PassBuilderPipelines.cpp#L715.
+                    ("loop-instsimplify@715", Box::new(crate::loopinstsimplify::LoopInstSimplify)),
+                    // LPM1's second pass, PassBuilderPipelines.cpp#L716.
+                    ("loop-simplifycfg@716", Box::new(crate::loopsimplifycfg::LoopSimplifyCfg)),
+                    ("floatloop@724", Box::new(floatloop::FloatLoop)),
+                    // LPM1
+                    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L724:
+                    // licm<no-allowspeculation> L724, loop-rotate L728,
+                    // licm<allowspeculation> L730. The first hoists only what
+                    // the loop certainly runs; the rotate puts a guard before a
+                    // loop not proven to run, so that the second hoists into a
+                    // preheader behind it (#2194).
+                    ("licm@724", licm("licm@724", !rotating)),
                 ];
-                if applied.options.licm {
-                    preamble.push(Box::new(crate::licm::Licm { apply: true, speculate: !rotating }));
-                }
                 if rotating {
-                    preamble.push(Box::new(looprotate::LoopRotate {
-                        duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
-                        size: applied.options.prefers_size(),
-                        check_exit_count: false,
-                        free_guard: false,
-                    }));
+                    // The header is copied at every level but -Oz
+                    // (`hasMinSize`).
+                    passes.push((
+                        "rotate@728",
+                        Box::new(looprotate::LoopRotate {
+                            duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                            size: applied.options.prefers_size(),
+                            check_exit_count: false,
+                            free_guard: false,
+                        }),
+                    ));
                 }
-                if applied.options.licm {
-                    preamble.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
-                }
-                Box::new(UnswitchRevisit { preamble, unswitch })
-            };
-            list.extend([
-                // LPM1's first pass, PassBuilderPipelines.cpp#L715.
-                slot("loop-instsimplify@715", Box::new(crate::loopinstsimplify::LoopInstSimplify)),
-                // LPM1's second pass, PassBuilderPipelines.cpp#L716.
-                slot("loop-simplifycfg@716", Box::new(crate::loopsimplifycfg::LoopSimplifyCfg)),
-                slot("floatloop@724", Box::new(floatloop::FloatLoop)),
-                // LPM1
-                // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L724:
-                // licm<no-allowspeculation> L724, loop-rotate L728,
-                // licm<allowspeculation> L730. The first hoists only what the
-                // loop certainly runs; the rotate puts a guard before a loop
-                // not proven to run, so that the second hoists into a preheader
-                // behind it (#2194).
-                licm("licm@724", !rotating),
-            ]);
-            if rotating {
-                // The header is copied at every level but -Oz (`hasMinSize`).
-                list.push(slot(
-                    "rotate@728",
-                    Box::new(looprotate::LoopRotate {
-                        duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
-                        size: applied.options.prefers_size(),
-                        check_exit_count: false,
-                        free_guard: false,
-                    }),
+                passes.push(("licm@730", licm("licm@730", true)));
+                // The pin's `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`:
+                // the options say -O3 and -Omax. It revisits only when
+                // non-trivial.
+                passes.push((
+                    "trivialunswitch@732",
+                    Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch }),
                 ));
+                passes
+            };
+            let mut group: Vec<Box<dyn FunctionPass>> = Vec::new();
+            for (name, pass) in lpm1() {
+                if applied.options.wanted(name) {
+                    group.push(slot(name, pass));
+                }
+            }
+            list.push(slot(
+                "loop-instsimplify@715",
+                Box::new(LoopPassManager { passes: group, fused: std::rc::Rc::clone(&lpm1_fused) }),
+            ));
+            for (name, pass) in lpm1().into_iter().skip(1) {
+                list.push(slot(name, Box::new(AfterGroup { inner: pass, fused: std::rc::Rc::clone(&lpm1_fused) })));
             }
             list.extend([
-                licm("licm@730", true),
-                // The pin's `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`:
-                // the options say -O3 and -Omax.
-                slot("trivialunswitch@732", unswitch_slot()),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
@@ -1645,7 +1653,10 @@ pub fn recorded(
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
                 cp_peel_limited: applied.options.inline.cp_clone.is_none(),
-                cp_max_clones: program.target.tti().map_or(crate::ipacp::DEFAULT_MAX_CLONES, |tti| tti.ipa_cp_max_clones()),
+                cp_max_clones: program
+                    .target
+                    .tti()
+                    .map_or(crate::ipacp::DEFAULT_MAX_CLONES, |tti| tti.ipa_cp_max_clones()),
                 ..applied.options.inline
             },
             ..applied.options.clone()
@@ -1836,6 +1847,11 @@ pub fn recorded(
     // not run through the simplification pipeline again.
     if let Some(stage) = late_stage {
         manager.add(stage);
+        // DEVIATE WRITEONLY-LATE (`Tti::write_only_after_late_unroll`).
+        if program.target.tti().is_some_and(|tti| tti.write_only_after_late_unroll()) {
+            manager.add_module(globalopt::WriteOnly);
+            manager.add(dead::Dead);
+        }
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
     // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not
@@ -1891,7 +1907,8 @@ pub fn recorded(
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
     }
-    // After gepoffset, which leaves the constant part of an address in its own `gep`.
+    // After gepoffset, which leaves the constant part of an address in its own
+    // `gep`.
     if applied.options.wanted("gepbyteindex") {
         manager.add(gepbyteindex::GepByteIndex);
     }
@@ -1926,6 +1943,14 @@ pub fn recorded(
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
+    // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
+    // gcc's `-fsplit-paths`: -O3 and a target that asks (`Tti::split_paths_at_o3`).
+    if applied.options.wanted("splitpaths") && unroll_level(&applied.options) >= 3 {
+        manager.add(splitpaths::SplitPaths);
+    }
+    if applied.options.wanted("ree") {
+        manager.add(ree::Ree);
+    }
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
     }
@@ -2024,7 +2049,8 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce {
             size: applied.options.prefers_size(),
-            bytes_strict: applied.options.prefers_size() || applied.options.at_o1(),
+            bytes_strict: applied.options.prefers_size()
+                || (applied.options.at_o1() && !applied.options.prices_bytes()),
         }));
         // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
         // LSR; it does nothing for a target whose TTI does not enable it.

@@ -1764,6 +1764,7 @@ fn is_move_with_reads(
 /// One register written by a load of a frame slot of an incoming argument.
 fn is_frame_load<T: Target>(one: &Insn) -> bool {
     is_named_frame_load(one, T::is_invariant_argument_load)
+        && one.what.as_ref().and_then(frame_cell).is_some_and(|addr| addr.disp < 0)
 }
 
 /// One register written by a load of a frame object a call fills

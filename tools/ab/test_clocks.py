@@ -55,3 +55,33 @@ def test_a_move_of_more_than_one_percent_across_the_bar_is_gained_or_lost():
     base = {"win": cell(1000, 950, 980), "regress": cell(900, 950, 980)}
     new = {"win": cell(900, 950, 980), "regress": cell(1000, 950, 980)}
     assert clocks.verdicts(base, new) == {"gained": ["win"], "lost": ["regress"], "moved": ["regress", "win"]}
+
+
+def test_a_cell_that_falls_with_both_bar_columns_is_not_lost():
+    """merge_icmps_fields: ours 2680 to 2579 (-3.8%) while gcc fell 2708 to 2607 and clang 2697 to 2569 on the same compilers.
+    It read as a counted cell lost, on drift of the instrument and no code change."""
+    base = {"merge_icmps_fields": cell(2680, 2708, 2697)}
+    new = {"merge_icmps_fields": cell(2579, 2607, 2569)}
+    assert clocks.verdicts(base, new) == {"gained": [], "lost": [], "moved": []}
+
+
+def test_a_move_larger_than_the_drift_still_counts():
+    base = {"win": cell(1000, 950, 980)}
+    new = {"win": cell(850, 960, 990)}
+    assert clocks.verdicts(base, new) == {"gained": ["win"], "lost": [], "moved": ["win"]}
+
+
+def test_a_program_with_an_lp64_expectation_is_checked_against_it():
+    """`call_keeps.out` is the ILP32 output; x86_64 prints `call_keeps.lp64.out`. Read the wrong one, ours, gcc and clang all
+    came out "not ok" (42 of 211 cells at -O2) and the cell was never counted."""
+    work = Path(tempfile.mkdtemp(prefix="clk"))
+    try:
+        source = work / "p.c"
+        source.write_text(PROGRAM)
+        assert clocks.expected_output(source) is None
+        source.with_suffix(".out").write_text("ilp32\n")
+        assert clocks.expected_output(source) == "ilp32\n"
+        source.with_suffix(".lp64.out").write_text("lp64\n")
+        assert clocks.expected_output(source) == "lp64\n"
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

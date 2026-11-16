@@ -55,14 +55,18 @@ use crate::lsr_collect::Collection;
 use crate::lsr_use::{Cost, Kind};
 
 impl Collection<'_, '_> {
-    /// DEVIATE LSR-SPILL-PRICE: the loop's other values alone need more than
-    /// every register the target has (gcc's ivopts, `regs_used` past
+    /// DEVIATE LSR-SPILL-PRICE: the loop's other values alone need the target's
+    /// margin more registers than it has (gcc's ivopts, `regs_used` past
     /// `target_avail_regs` in `estimate_reg_pressure_cost`, which prices spills
-    /// only past it), so each register the rewrite holds is a spill. The
-    /// cost model has no price for one.
+    /// only past it), so each register the rewrite holds is a spill. The cost
+    /// model has no price for one.
     fn spills_are_priced(&self) -> bool {
         // Spills cost clocks, not bytes: a size build keeps the pin's choice.
-        self.tti.lsr_prices_spills() && !self.size && self.pressure_units() > self.tti.number_of_gpr_registers()
+        !self.size
+            && self
+                .tti
+                .lsr_spill_pressure_margin()
+                .is_some_and(|margin| self.pressure_units() >= self.tti.number_of_gpr_registers() + margin)
     }
 
     /// `SolveRecurse`: decide use `workspace.len()`, then the rest.

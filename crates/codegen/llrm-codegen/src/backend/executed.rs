@@ -101,6 +101,9 @@ pub struct Executed {
     pub branches: f64,
     pub taken: f64,
     pub jumps: f64,
+    /// x87 `fxch`es executed: one instruction here, `x87_exchange` clocks on
+    /// the CPU.
+    pub exchanges: f64,
 }
 
 impl Executed {
@@ -113,6 +116,21 @@ impl Executed {
         Ok(self.taken * cost("jcc")?
             + (self.branches - self.taken) * cost("jcc_not_taken")?
             + self.jumps * cost("jmp_short")?)
+    }
+
+    /// What the exchanges cost over the one unit an instruction counts: a 486
+    /// `fxch` is 4 clocks, so a rotation that adds two to a loop is not
+    /// cheaper.
+    pub fn exchange_cycles(
+        &self,
+        cpu: &Profile,
+    ) -> Result<f64, String> {
+        // A CPU with no x87 states no price, and a body with no exchange
+        // needs none.
+        if self.exchanges == 0.0 {
+            return Ok(0.0);
+        }
+        Ok(self.exchanges * (cpu.cost("x87_exchange")? as f64 - 1.0))
     }
 }
 
@@ -192,12 +210,28 @@ pub fn work(body: &LirBody) -> Option<f64> {
 
 /// `None` for control flow with no finite profile-free estimate.
 pub fn executed(body: &LirBody) -> Option<Executed> {
+    executed_over(body, true)
+}
+
+/// [`executed`] with every loop at the heuristic's trips, proven or not
+/// (`MachineBlockFrequencyInfo` knows no trip count): the estimate that prices
+/// two shapes of one loop alike, where a rotation or an unrotation leaves a
+/// count provable in one and not the other.
+pub fn executed_unproven(body: &LirBody) -> Option<Executed> {
+    executed_over(body, false)
+}
+
+fn executed_over(
+    body: &LirBody,
+    proven: bool,
+) -> Option<Executed> {
     let graph = &body.blocks;
     if !loops::irreducible(graph, Some(body.entry)).is_empty() {
         return None;
     }
-    let frequency = Frequency::counted(body);
+    let frequency = if proven { Frequency::counted(body) } else { Frequency::over(body, &body.blocks) };
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
+    let is_fxch = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fxch"));
     let slots: IndexSet<Addr> = body
         .blocks
         .iter()
@@ -255,6 +289,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                         (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
                 Some((Operation::Jump, _)) => out.jumps += reaching,
+                Some((Operation::Exchange, _)) if is_fxch(one) => out.exchanges += reaching,
                 _ => {}
             }
             // A remat may be built as a reload; it counts as a remat.
@@ -283,7 +318,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::executed;
+    use super::{executed, executed_unproven};
     use crate::backend::cpu;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
@@ -302,6 +337,14 @@ mod tests {
 
     /// NOTHING anchors print no bytes, yet each counted as an executed
     /// instruction: nbody.c read 144 more with its asm unchanged.
+    #[test]
+    fn test_an_fxch_costs_the_486_three_clocks_over_one_instruction() {
+        let cpu = cpu::profile("486").unwrap();
+        let done = super::Executed { exchanges: 2.0, ..Default::default() };
+        assert_eq!(done.exchange_cycles(cpu).unwrap(), 6.0);
+        assert_eq!(super::Executed::default().exchange_cycles(cpu).unwrap(), 0.0);
+    }
+
     #[test]
     fn test_anchors_that_print_nothing_do_not_execute() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
@@ -427,6 +470,37 @@ mod tests {
         // The entry's jump, the header's six tests, five trips of two, the
         // return.
         assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 6.0 + 10.0 + 1.0);
+    }
+
+    /// ROTATION-TRIAL priced a rotated nest 3.9x heavier than its unrotated
+    /// shape because only the unrotated one had a proven trip count
+    /// (x_prefix -Os: 12,810 against 3,297): the trial's estimate
+    /// reads no proven count, so two shapes of one loop weigh alike.
+    #[test]
+    fn test_the_unproven_estimate_ignores_a_loops_proven_trips() {
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
+            block(
+                3,
+                vec![
+                    insn(3, Operation::Move, "mov", vec![ax], vec![bx]),
+                    insn(4, Operation::Jump, "jmp", vec![], vec![]),
+                ],
+                vec![2],
+            ),
+            block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body =
+            LirBody::new("counted", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let without = executed_unproven(&body).expect("a loop").instructions.round();
+        body.loop_trip_counts = vec![(2, 5)];
+        assert_eq!(executed_unproven(&body).expect("a loop").instructions.round(), without);
+        assert_ne!(executed(&body).expect("a counted loop").instructions.round(), without);
     }
 
     /// A loop whose way back runs through a block of its own, as a split

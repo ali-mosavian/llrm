@@ -2,12 +2,19 @@ int a[1024], b[1024];
 void add_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] += b[i]; }
 void copy_plus_one(int *d, const int *s, int n) { for (int i = 0; i < n; ++i) d[i] = s[i] + 1; }
 void multiply_arrays(void) { for (int i = 0; i < 1024; ++i) a[i] *= b[i]; }
+void times_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 3; }
+void times_seven(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * 7; }
+void times_minus_three(void) { for (int i = 0; i < 1024; ++i) a[i] = b[i] * -3; }
 
 int sum_array(const int *a, int n) {
   int total = 0;
   for (int i = 0; i < n; i++) total += a[i];
   return total;
 }
+
+long sum_longs(const long *a, int n) { long t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+short sum_shorts(const short *a, int n) { short t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+signed char sum_bytes(const signed char *a, int n) { signed char t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
 
 void fill_rows(short t[64][64]) {
   for (int y = 0; y < 64; ++y)
@@ -46,3 +53,41 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 }
 
 void add_five(void) { for (int i = 0; i < 1024; ++i) a[i] += 5; }
+
+/* A byte accumulator seeded from an argument and folded with a loop-invariant byte: the seed is lane 0 of a zero
+   vector and the operand a broadcast (`insertelement`), which had no x86 lowering (known_loads_walks). */
+unsigned char xor_toggle_count(unsigned char n)
+{
+    unsigned char x = n;
+    for (unsigned char i = 0; i < n; i++)
+        x ^= 1;
+    return x;
+}
+
+/* A byte table computed in 32-bit arithmetic: the narrowing to bytes (`trunc <16 x i32> to <16 x i8>`) was unpriced,
+   so the loop stayed scalar (mem_length_boundaries_m32: +70% executed instructions). */
+void pattern_bytes(unsigned char *dst, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++)
+        dst[i] = (unsigned char)((i & 3) + ((i >> 2) & 1));
+}
+
+/* A count-down sum with a run-time start: the vector loop's scalar remainder is marked
+   `llvm.loop.unroll.runtime.disable`, which the unroller read as absent (loop_countdown_sum). */
+unsigned down_sum(int n)
+{
+    unsigned s = 0;
+    for (int i = n; i >= 0; i--)
+        s += (((unsigned)i * 3u) ^ ((unsigned)i >> 2));
+    return s;
+}
+
+/* A 32-trip fold of a table: fourteen units a trip, 386 unrolled, over the pin's -O3 threshold of 300
+   (loop_interchange's `checksum`). */
+long table_fold(const short *table)
+{
+    long sum = 0;
+    for (int i = 0; i < 32; ++i)
+        sum = (sum * 31 + table[i]) % 100003;
+    return sum;
+}

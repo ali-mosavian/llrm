@@ -143,8 +143,17 @@ impl Context {
     #[inline]
     pub fn constant(
         &self,
-        constant: Constant,
+        mut constant: Constant,
     ) -> ConstantId {
+        // `ConstantVector::get`: a vector of zeros is the zero value of its
+        // type.
+        if let ConstantKind::Aggregate(lanes) = &constant.kind
+            && matches!(self.types.get(constant.ty), Type::Vector { .. })
+            && !lanes.is_empty()
+            && lanes.iter().all(|lane| matches!(self.get(*lane).kind, ConstantKind::Int(0)))
+        {
+            constant.kind = ConstantKind::Zero;
+        }
         let found = self.interned.borrow().get(&constant).copied();
         if let Some(id) = found {
             return id;
@@ -221,8 +230,41 @@ impl Context {
         ty: TypeId,
         value: i128,
     ) -> ConstantId {
+        // `ConstantInt::get` of a vector type is the splat of the lane's value.
+        if let Type::Vector { element, count } = self.types.get(ty).clone() {
+            let lane = self.int(element, value);
+            let kind = if matches!(self.get(lane).kind, ConstantKind::Int(0)) {
+                ConstantKind::Zero
+            } else {
+                ConstantKind::Aggregate(vec![lane; count as usize])
+            };
+            return self.constant(Constant { ty, kind });
+        }
         let bits = self.types.int_bits(ty).expect("an integer constant has an integer type");
         self.constant(Constant { ty, kind: ConstantKind::Int(value as u128 & mask(bits)) })
+    }
+
+    /// `m_APInt` of a constant: a number, or the one every lane of a vector
+    /// constant holds (a splat), and the width of the lane.
+    pub fn splat_int(
+        &self,
+        id: ConstantId,
+    ) -> Option<(u128, u32)> {
+        let constant = self.get(id);
+        let width = self.types.scalar_int_bits(constant.ty)?;
+        match &constant.kind {
+            ConstantKind::Int(bits) => Some((*bits, width)),
+            ConstantKind::Null | ConstantKind::Zero => Some((0, width)),
+            ConstantKind::Aggregate(lanes) if matches!(self.types.get(constant.ty), Type::Vector { .. }) => {
+                let first = *lanes.first()?;
+                let (bits, _) = self.splat_int(first)?;
+                lanes
+                    .iter()
+                    .all(|lane| *lane == first || self.splat_int(*lane) == Some((bits, width)))
+                    .then_some((bits, width))
+            }
+            _ => None,
+        }
     }
 }
 

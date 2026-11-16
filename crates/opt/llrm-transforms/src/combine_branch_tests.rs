@@ -165,3 +165,25 @@ fn test_a_phi_input_on_an_edge_reads_a_number() {
     );
     assert!(out.contains("phi i1 [ true, %t ], [ false, %e ]"), "{out}");
 }
+
+/// `br (fcmp ole x, 0)` kept its non-canonical predicate, so the select it
+/// became priced `fcmp ole` where the pin's `fcmp ugt` is outside AArch64's
+/// fast vector select: jpeg_single's idct y-loop was widened at VF8 (783)
+/// where the pin keeps it scalar (1668).
+#[test]
+fn test_a_branch_on_a_non_canonical_fcmp_takes_the_inverse_and_swaps() {
+    let out = combined(
+        "define void @f(float %x) {\nb0:\n  %c = fcmp ole float %x, 0.0\n  br i1 %c, label %t, label %e\nt:\n  ret void\ne:\n  ret void\n}\n",
+    );
+    assert!(out.contains("fcmp ugt float %x, 0.0"), "{out}");
+    assert!(out.contains("br i1 %c, label %e, label %t"), "{out}");
+}
+
+/// A compare with a second user keeps its predicate (`m_OneUse`).
+#[test]
+fn test_a_shared_fcmp_keeps_its_predicate() {
+    let out = combined(
+        "define i1 @f(float %x) {\nb0:\n  %c = fcmp ole float %x, 0.0\n  br i1 %c, label %t, label %e\nt:\n  br label %m\ne:\n  br label %m\nm:\n  ret i1 %c\n}\n",
+    );
+    assert!(out.contains("fcmp ole"), "{out}");
+}
