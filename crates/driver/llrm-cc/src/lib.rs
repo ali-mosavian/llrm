@@ -154,6 +154,14 @@ pub struct Target {
     /// at -O2. The pin's -O1 GVN does not (`GVNOptions` default, PRE off).
     #[serde(default)]
     pub pre_at_o1: bool,
+    /// DEVIATE REC-O1 (owner x86-m32-b, exit 2026-11-24):
+    /// `-fno-inline-recursive` is the default at `-O1`. gcc's recursive
+    /// inlining is `-finline-small-functions` (-O2 and up), and neither bar
+    /// compiler makes copies of a recursion at -O1; SPEED-O1 turned them on
+    /// as a side effect (bintree -O1 995 B against 292 B, no counted clock
+    /// gained).
+    #[serde(default)]
+    pub no_recursion_at_o1: bool,
     /// `-fwhole-program` is the default where the driver links one C source
     /// into an executable: nothing else names its globals, so what `main`
     /// does not reach is not in the program (LLVM's `InternalizePass` with
@@ -725,6 +733,19 @@ fn prices_bytes_at_o1(
         && !build.llc.iter().any(|flag| flag == "-fllrm-speed-rate" || flag == "-fno-llrm-speed-rate")
 }
 
+/// Whether the target's `-O1` takes `-fno-inline-recursive` as its default:
+/// unless the command line states either `-f[no-]inline-recursive`, and only
+/// where the backend takes pass switches.
+fn no_recursion_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.no_recursion_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-finline-recursive" || flag == "-fno-inline-recursive")
+}
+
 /// Whether the target's `-O1` takes `-ftree-pre` as its default: unless the
 /// command line states either `-f[no-]tree-pre`, and only where the backend
 /// takes pass switches.
@@ -794,6 +815,9 @@ pub fn llc_args(
     }
     if pre_at_o1(target, build) {
         args.push("-ftree-pre".into());
+    }
+    if no_recursion_at_o1(target, build) {
+        args.push("-fno-inline-recursive".into());
     }
     if sweeps_whole_program(target, build) {
         args.push("-fwhole-program".into());
