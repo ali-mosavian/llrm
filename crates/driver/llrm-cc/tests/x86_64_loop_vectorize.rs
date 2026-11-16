@@ -1,17 +1,26 @@
-//! x86-64 -O2: LoopVectorize runs on the integer loops isel can select (`paddd`, `movups`), because the target now
-//! says it has a 128-bit vector register and prices the add, the subtract, the logic ops and the contiguous access
-//! (X86TTIImpl rows); every op it does not price keeps its loop scalar (a `<4 x i32>` multiply has no SSE2 form).
-//! Before, `getRegisterBitWidth` was 0 and no loop was widened (copy_runs, loop_fusion, fill_nest: 15-59% more
+//! x86-64 -O2: LoopVectorize runs on the integer loops isel can select
+//! (`paddd`, `movups`), because the target now says it has a 128-bit vector
+//! register and prices the add, the subtract, the logic ops and the contiguous
+//! access (X86TTIImpl rows); every op it does not price keeps its loop scalar
+//! (a `<4 x i32>` multiply has no SSE2 form). Before, `getRegisterBitWidth` was
+//! 0 and no loop was widened (copy_runs, loop_fusion, fill_nest: 15-59% more
 //! instructions than clang). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
 
-fn assembly(target: &str, level: &str) -> String {
+fn assembly(
+    target: &str,
+    level: &str,
+) -> String {
     assembly_of("lv_loops.c", target, level)
 }
 
-fn assembly_of(source: &str, target: &str, level: &str) -> String {
+fn assembly_of(
+    source: &str,
+    target: &str,
+    level: &str,
+) -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
     // Tests run in parallel: a directory of its own for each call.
     static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -32,7 +41,10 @@ fn assembly_of(source: &str, target: &str, level: &str) -> String {
     std::fs::read_to_string(&asm).unwrap()
 }
 
-fn body<'a>(text: &'a str, name: &str) -> &'a str {
+fn body<'a>(
+    text: &'a str,
+    name: &str,
+) -> &'a str {
     let start = format!("{name} proc near");
     let end = format!("{name} endp");
     text.split(start.as_str()).nth(1).and_then(|rest| rest.split(end.as_str()).next()).expect("a body")
@@ -45,8 +57,9 @@ fn an_integer_add_loop_is_four_lanes_wide_at_o2() {
     assert!(add.contains("paddd") && (add.contains("movups") || add.contains("movaps")), "{add}");
 }
 
-/// An unknown trip count and pointers that may overlap: the remainder loop and the runtime check are emitted, and the
-/// listing still assembles (no op without a form).
+/// An unknown trip count and pointers that may overlap: the remainder loop and
+/// the runtime check are emitted, and the listing still assembles (no op
+/// without a form).
 #[test]
 fn a_runtime_trip_count_loop_has_a_vector_body_and_a_scalar_remainder() {
     let text = assembly("x86_64-linux", "-O2");
@@ -55,8 +68,9 @@ fn a_runtime_trip_count_loop_has_a_vector_body_and_a_scalar_remainder() {
     assert!(copy.contains("add ") || copy.contains("inc "), "the scalar remainder: {copy}");
 }
 
-/// A `<4 x i32>` multiply has no SSE2 `pmulld`: `pmuludq` on the even and the odd lanes, then `punpckldq` (the pin's
-/// `LowerMUL`). It was unpriced, so the loop stayed scalar.
+/// A `<4 x i32>` multiply has no SSE2 `pmulld`: `pmuludq` on the even and the
+/// odd lanes, then `punpckldq` (the pin's `LowerMUL`). It was unpriced, so the
+/// loop stayed scalar.
 #[test]
 fn an_int_multiply_loop_uses_pmuludq() {
     let text = assembly("x86_64-linux", "-O2");
@@ -64,17 +78,17 @@ fn an_int_multiply_loop_uses_pmuludq() {
     assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
-/// A vector multiply by `2^n + 1`, `2^n - 1` or `-(2^n - 1)` is a shift and an add or subtract (`visitMUL` through
-/// `isConstOrConstSplat`, `decomposeMulByConstant`): it read only a scalar constant, so a splat stayed `pmuludq` twice
-/// with five shuffles (`loop_countdown_sum` +24% instructions against clang).
+/// A vector multiply by `2^n + 1`, `2^n - 1` or `-(2^n - 1)` is a shift and an
+/// add or subtract (`visitMUL` through `isConstOrConstSplat`,
+/// `decomposeMulByConstant`): it read only a scalar constant, so a splat stayed
+/// `pmuludq` twice with five shuffles (`loop_countdown_sum` +24% instructions
+/// against clang).
 #[test]
 fn a_vector_multiply_by_a_near_power_of_two_is_a_shift_and_an_add() {
     let text = assembly("x86_64-linux", "-O2");
-    for (name, shift, op) in [
-        ("times_three", "pslld", "paddd"),
-        ("times_seven", "pslld", "psubd"),
-        ("times_minus_three", "pslld", "psubd"),
-    ] {
+    for (name, shift, op) in
+        [("times_three", "pslld", "paddd"), ("times_seven", "pslld", "psubd"), ("times_minus_three", "pslld", "psubd")]
+    {
         let body = body(&text, name);
         assert!(!body.contains("pmuludq"), "{name} multiplies: {body}");
         assert!(body.contains(shift) && body.contains(op), "{name} lacks {shift} and {op}: {body}");
@@ -97,8 +111,10 @@ fn a_vector_narrower_than_a_register_is_widened_and_moved_by_movq() {
     }
 }
 
-/// The vectors an unrolled vector loop stores are constants (`<0, 1, ..> + <8, ..>` per trip folds, #10074): with the
-/// sub-register vectors widened, `copy_runs`' init loops are stored constants and not `paddb`/`pmullw` at run time.
+/// The vectors an unrolled vector loop stores are constants (`<0, 1, ..> + <8,
+/// ..>` per trip folds, #10074): with the sub-register vectors widened,
+/// `copy_runs`' init loops are stored constants and not `paddb`/`pmullw` at run
+/// time.
 #[test]
 fn the_vectors_a_fully_unrolled_ramp_loop_stores_are_constants() {
     let text = assembly_of("lv_narrow.c", "x86_64-linux", "-O2");
@@ -112,8 +128,9 @@ fn the_32_bit_target_and_o1_keep_every_loop_scalar() {
     assert!(!assembly("x86_64-linux", "-O1").contains("xmm"));
 }
 
-/// A sum reached `llvm.vector.reduce.add` and the backend refused it (`CannotSelect("VecReduceAdd")`, no output at
-/// all), so reductions were kept scalar. The total is now folded from the spilled lanes (`expandVecReduce`).
+/// A sum reached `llvm.vector.reduce.add` and the backend refused it
+/// (`CannotSelect("VecReduceAdd")`, no output at all), so reductions were kept
+/// scalar. The total is now folded from the spilled lanes (`expandVecReduce`).
 #[test]
 fn a_sum_loop_is_vector_with_a_folded_total() {
     let text = assembly("x86_64-linux", "-O2");
@@ -140,8 +157,10 @@ fn a_vector_total_is_folded_by_shuffles_and_not_spilled_to_the_stack() {
     }
 }
 
-/// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
-/// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
+/// The widened loops compute what the scalar ones do: sums and xors folded from
+/// vector lanes, and forward and backward copies that overlap by 1 to 5 bytes,
+/// every length under 100, run on the host. The count-down copy sat 31 bytes
+/// low at IC 2 (`bad 340`).
 #[test]
 fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lv-run-{}", std::process::id()));
@@ -168,9 +187,10 @@ fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "bad 0");
 }
 
-/// The vector loop of a 64-lane row (VF 8, IC 2: four trips) was kept as a loop: the unroller found no size for a
-/// `<8 x i16>` store ("no cost for store") and never fully unrolled it. The pin unrolls it to one trip of eight
-/// stores per row.
+/// The vector loop of a 64-lane row (VF 8, IC 2: four trips) was kept as a
+/// loop: the unroller found no size for a
+/// `<8 x i16>` store ("no cost for store") and never fully unrolled it. The pin
+/// unrolls it to one trip of eight stores per row.
 #[test]
 fn a_vector_loop_of_four_trips_is_fully_unrolled() {
     let text = assembly("x86_64-linux", "-O2");
@@ -179,8 +199,10 @@ fn a_vector_loop_of_four_trips_is_fully_unrolled() {
     assert!(stores >= 8, "{fill}");
 }
 
-/// A vector constant the folder left as `bitcast (<16 x i8> .. to i128)` or `bitcast (i128 N to <4 x i32>)` stopped
-/// the compile (`CannotSelect("Truncate")`, "a vector constant that is not a list of integers"): both build now.
+/// A vector constant the folder left as `bitcast (<16 x i8> .. to i128)` or
+/// `bitcast (i128 N to <4 x i32>)` stopped the compile
+/// (`CannotSelect("Truncate")`, "a vector constant that is not a list of
+/// integers"): both build now.
 #[test]
 fn loops_that_leave_vector_image_constants_compile_at_o2_and_o3() {
     for level in ["-O2", "-O3"] {
@@ -189,7 +211,8 @@ fn loops_that_leave_vector_image_constants_compile_at_o2_and_o3() {
     }
 }
 
-/// A `<8 x i16>` multiply is `pmullw`: the loop was kept scalar because the multiply had no price.
+/// A `<8 x i16>` multiply is `pmullw`: the loop was kept scalar because the
+/// multiply had no price.
 #[test]
 fn a_short_multiply_loop_uses_pmullw() {
     let text = assembly("x86_64-linux", "-O2");
@@ -197,8 +220,8 @@ fn a_short_multiply_loop_uses_pmullw() {
     assert!(multiply.contains("pmullw"), "{multiply}");
 }
 
-/// A shift by a constant is `pslld`/`psrad`/`psrld` (`VSHLI`, `VSRAI`, `VSRLI`): a loop with one stayed scalar, its
-/// shift unpriced.
+/// A shift by a constant is `pslld`/`psrad`/`psrld` (`VSHLI`, `VSRAI`,
+/// `VSRLI`): a loop with one stayed scalar, its shift unpriced.
 #[test]
 fn a_loop_of_constant_shifts_uses_the_immediate_forms() {
     let text = assembly("x86_64-linux", "-O2");
@@ -206,8 +229,9 @@ fn a_loop_of_constant_shifts_uses_the_immediate_forms() {
     assert!(shifts.contains("pslld") && shifts.contains("psrad") && shifts.contains("psrld"), "{shifts}");
 }
 
-/// A splat of a variable was four stores through the stack (`BUILD_VECTOR` expanded); it is `movd` + `pshufd` (and
-/// `movq` + `punpcklqdq` for 64-bit lanes), as the pin's `LowerBUILD_VECTOR` makes it.
+/// A splat of a variable was four stores through the stack (`BUILD_VECTOR`
+/// expanded); it is `movd` + `pshufd` (and `movq` + `punpcklqdq` for 64-bit
+/// lanes), as the pin's `LowerBUILD_VECTOR` makes it.
 #[test]
 fn a_splat_of_a_variable_is_movd_and_pshufd() {
     let text = assembly("x86_64-linux", "-O2");
@@ -218,8 +242,9 @@ fn a_splat_of_a_variable_is_movd_and_pshufd() {
     assert!(longs.contains("movq xmm") && longs.contains("punpcklqdq"), "{longs}");
 }
 
-/// A `<16 x i8>` multiply is two `pmullw` of the unpacked halves, masked and packed: the loop was kept scalar (one
-/// `imul` and two byte stores a byte) because the byte multiply had no price and no lowering.
+/// A `<16 x i8>` multiply is two `pmullw` of the unpacked halves, masked and
+/// packed: the loop was kept scalar (one `imul` and two byte stores a byte)
+/// because the byte multiply had no price and no lowering.
 #[test]
 fn a_byte_multiply_by_a_constant_is_pmullw_and_packuswb() {
     let text = assembly("x86_64-linux", "-O2");
@@ -228,8 +253,9 @@ fn a_byte_multiply_by_a_constant_is_pmullw_and_packuswb() {
     assert!(!pattern.contains("imul"), "{pattern}");
 }
 
-/// A byte multiplied by a byte in memory (`mul byte ptr [..]`) stopped the compile to an object with
-/// `Semantics(op=MULTIPLY ... width=1)`: the one-operand `mul` took no memory byte.
+/// A byte multiplied by a byte in memory (`mul byte ptr [..]`) stopped the
+/// compile to an object with `Semantics(op=MULTIPLY ... width=1)`: the
+/// one-operand `mul` took no memory byte.
 #[test]
 fn a_byte_multiply_from_memory_assembles() {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
@@ -246,8 +272,9 @@ fn a_byte_multiply_from_memory_assembles() {
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
 
-/// The splat constant of a vector loop is read from the pool before the loop: it was reloaded (`movaps xmm, $K`) on
-/// every trip, because machine LICM left every xmm value in the loop.
+/// The splat constant of a vector loop is read from the pool before the loop:
+/// it was reloaded (`movaps xmm, $K`) on every trip, because machine LICM left
+/// every xmm value in the loop.
 #[test]
 fn a_vector_constant_is_loaded_before_the_loop() {
     let text = assembly("x86_64-linux", "-O2");
@@ -257,8 +284,9 @@ fn a_vector_constant_is_loaded_before_the_loop() {
     assert!(!inside.contains("$K"), "{add}");
 }
 
-/// The zero a reduction starts from is `xorps xmm, xmm` (`V_SET0`, an `isBuildVectorAllZeros` build the pin leaves
-/// legal): it was a 16-byte constant-pool load (`movaps xmm0, $K`) and a 16-byte `.rodata.cst16` entry.
+/// The zero a reduction starts from is `xorps xmm, xmm` (`V_SET0`, an
+/// `isBuildVectorAllZeros` build the pin leaves legal): it was a 16-byte
+/// constant-pool load (`movaps xmm0, $K`) and a 16-byte `.rodata.cst16` entry.
 #[test]
 fn a_vector_of_zeros_is_an_xor_and_not_a_pool_load() {
     let text = assembly("x86_64-linux", "-O2");
@@ -282,9 +310,10 @@ fn a_byte_accumulator_seeded_from_an_argument_compiles_with_movd_and_a_vector_se
     }
 }
 
-/// A lane written at a constant position (`insertelement` at 5, 3 and 2) had no lowering at all
-/// (`Unsupported { op: InsertVectorElt, .. "convert node to libcall" }`): it is a store of the vector, a store of the
-/// lane and a load (`ExpandINSERT_VECTOR_ELT`). The host run in `lv_run.c` checks the bytes.
+/// A lane written at a constant position (`insertelement` at 5, 3 and 2) had no
+/// lowering at all (`Unsupported { op: InsertVectorElt, .. "convert node to
+/// libcall" }`): it is a store of the vector, a store of the lane and a load
+/// (`ExpandINSERT_VECTOR_ELT`). The host run in `lv_run.c` checks the bytes.
 #[test]
 fn a_lane_written_at_a_constant_position_assembles_as_a_stack_round_trip() {
     let text = assembly_of("lv_lanes.c", "x86_64-linux", "-O2");
@@ -292,9 +321,11 @@ fn a_lane_written_at_a_constant_position_assembles_as_a_stack_round_trip() {
     assert!(set.contains("mov byte ptr [rsp") && set.contains("mov word ptr [rsp"), "{set}");
 }
 
-/// A vector widened to or narrowed from more than one register had no lowering (`Unsupported { op: Truncate, ty:
-/// V4I16, "vector with no register class" }`, `"split extending load"`, no `punpcklwd`): `punpck` with zero or with
-/// the sign, `pand` and `packuswb`. The host run in `lv_run.c` checks every width pair on edge values.
+/// A vector widened to or narrowed from more than one register had no lowering
+/// (`Unsupported { op: Truncate, ty: V4I16, "vector with no register class" }`,
+/// `"split extending load"`, no `punpcklwd`): `punpck` with zero or with
+/// the sign, `pand` and `packuswb`. The host run in `lv_run.c` checks every
+/// width pair on edge values.
 #[test]
 fn vectors_widened_or_narrowed_across_registers_use_unpack_and_pack() {
     let text = assembly_of("lv_casts.c", "x86_64-linux", "-O2");
@@ -303,8 +334,9 @@ fn vectors_widened_or_narrowed_across_registers_use_unpack_and_pack() {
     assert!(body(&text, "s32_64").contains("psrad"), "{text}");
 }
 
-/// A byte table computed in 32-bit lanes stayed a scalar loop because `trunc <16 x i32> to <16 x i8>` had no price
-/// (mem_length_boundaries_m32: 233,551 instructions to clang's 137,355): VF 16, `pand` and `packuswb`.
+/// A byte table computed in 32-bit lanes stayed a scalar loop because `trunc
+/// <16 x i32> to <16 x i8>` had no price (mem_length_boundaries_m32: 233,551
+/// instructions to clang's 137,355): VF 16, `pand` and `packuswb`.
 #[test]
 fn a_byte_table_computed_in_32_bit_lanes_is_a_vector_loop_with_packuswb() {
     let text = assembly("x86_64-linux", "-O2");
@@ -312,9 +344,10 @@ fn a_byte_table_computed_in_32_bit_lanes_is_a_vector_loop_with_packuswb() {
     assert!(pattern.contains("packuswb") && pattern.contains("paddd"), "{pattern}");
 }
 
-/// The scalar remainder of a vector loop is not unrolled at run time: the unroller could not see the loop ID the
-/// vectorizer had just made, so the remainder got a 0-3 trip prologue and a 4-wide body (loop_countdown_sum: three
-/// loops in `down_sum` where the pin has two).
+/// The scalar remainder of a vector loop is not unrolled at run time: the
+/// unroller could not see the loop ID the vectorizer had just made, so the
+/// remainder got a 0-3 trip prologue and a 4-wide body (loop_countdown_sum:
+/// three loops in `down_sum` where the pin has two).
 #[test]
 fn a_vector_loop_remainder_is_not_unrolled_at_run_time() {
     let text = assembly("x86_64-linux", "-O2");
@@ -323,9 +356,10 @@ fn a_vector_loop_remainder_is_not_unrolled_at_run_time() {
     assert_eq!(sum.matches("align 16").count(), 2, "a vector loop and a rolled remainder: {sum}");
 }
 
-/// A packed accumulator is the tied operand of the `paddd` that adds to it: the peephole's recurrence commute knew
-/// only the integer ops, so each trip of `down_sum`'s vector loop copied two accumulators (6 copies a trip, 4 now; the
-/// pin has 4).
+/// A packed accumulator is the tied operand of the `paddd` that adds to it: the
+/// peephole's recurrence commute knew only the integer ops, so each trip of
+/// `down_sum`'s vector loop copied two accumulators (6 copies a trip, 4 now;
+/// the pin has 4).
 #[test]
 fn a_packed_accumulator_is_added_in_place() {
     let text = assembly("x86_64-linux", "-O2");
@@ -334,4 +368,18 @@ fn a_packed_accumulator_is_added_in_place() {
     let vector = rest.split_once("jne").expect("its back edge").0;
     let copies = vector.lines().filter(|line| line.trim_start().starts_with("movaps")).count();
     assert!(copies <= 4, "the loop copies {copies} registers: {vector}");
+}
+
+/// `descent` carries a loaded `short` round its loop and indexes with it: the
+/// load was `movzx` and every trip extended it again (`movzx ecx, cx`). The
+/// extension is on the load now (gcc's `ree`).
+#[test]
+fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
+    let text = assembly_of("ree_loops.c", "x86_64-linux", "-O3");
+    let descent = body(&text, "descent");
+    let widened = descent
+        .lines()
+        .filter(|line| (line.contains("movsx") || line.contains("movzx")) && !line.contains("ptr"))
+        .count();
+    assert_eq!(widened, 0, "a register-to-register extension stays in the loop: {descent}");
 }
