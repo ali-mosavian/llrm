@@ -327,15 +327,16 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // recursion programs it cost +5556 B and
         // +1.12 M instructions over -O2 (REC-8).
         recursive_inlining_depth: Some((2, 2)),
-        // The pin's `sinkUnusedInvariants` (x_radix -Os 44,059 -> 42,859 clk: the
-        // shift count of an outer pass stays in `cl`), with DEVIATE SINK-PRESSURE
-        // (owner x86-m32-b, exit 2026-11-24): not where it carries more values
-        // across the loop than it frees (x_mul_constants -Os +231 B otherwise).
+        // The pin's `sinkUnusedInvariants` (x_radix -Os 44,059 -> 42,859 clk:
+        // an outer pass's shift count stays in `cl`), with DEVIATE
+        // SINK-PRESSURE (owner x86-m32-b, exit 2026-11-24): not where it
+        // carries more values across the loop than it frees (x_mul_constants
+        // -Os +231 B otherwise).
         sinks_unused_invariants: true,
         sinks_invariants_keeping_pressure: true,
-        // DEVIATE JT-OS (owner x86-m32-b, exit 2026-11-24): a size build copies a
-        // block of at most one insn to thread a jump, where the pin copies six
-        // (x_prefix -Os 163 -> 149 B, gcc 157; x_bubble +7 B).
+        // DEVIATE JT-OS (owner x86-m32-b, exit 2026-11-24): a size build
+        // copies a block of at most one insn to thread a jump, where the pin
+        // copies six (x_prefix -Os 163 -> 149 B, gcc 157; x_bubble +7 B).
         jump_threading_optsize_dup_threshold: Some(1),
         // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
         // threshold alone refuses, at a site 16x the caller's entry or hotter,
