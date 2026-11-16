@@ -87,6 +87,8 @@ pub struct RegisterClasses {
     pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
     /// `Target::leaf_fold_at_size`.
     pub leaf_fold_at_size: bool,
+    /// `Target::splits_params_for_shrink_wrap`.
+    pub splits_params_for_shrink_wrap: bool,
     /// `Target::cse_keeps_compare_with_live_minuend`.
     pub cse_keeps_compare_with_live_minuend: bool,
     /// `Target::cheap_move_immediate`.
@@ -189,6 +191,7 @@ impl RegisterClasses {
             frame_after: file.iter().find(|one| one.is("frame_follows")).map(|one| named(&one.name)),
             pressure: arch.pressure(),
             leaf_fold_at_size: arch.leaf_fold_at_size(),
+            splits_params_for_shrink_wrap: arch.splits_params_for_shrink_wrap(),
             cse_keeps_compare_with_live_minuend: arch.cse_keeps_compare_with_live_minuend(),
             cheap_move_immediate: arch.cheap_move_immediate(),
             uncheap_move_immediate_at_size: arch.uncheap_move_immediate_at_size(),
