@@ -120,20 +120,36 @@ impl RegisterInfo {
         self.regs.name(reg).map_or_else(|| format!("{reg:?}"), str::to_uppercase)
     }
 
-    /// `TRI->regunits(Reg)`: the byte lanes of the register's root it covers.
+    /// `TRI->regunits(Reg)`: the byte lanes of the register's root it covers;
+    /// of a tuple, those of every member's root.
     pub fn regunits(
         &self,
         reg: RegId,
     ) -> Units {
-        let root = self.regs.root(reg).index() as u32;
+        if self.regs.is_composite(reg) {
+            let members: Vec<(u32, u32)> =
+                self.regs.units(reg).map(|(root, lanes)| self.of_view(root, lanes)).collect();
+            let roots: Vec<u32> = members.iter().map(|one| one.0).collect();
+            return Units::spanning(&roots, members[0].1);
+        }
+        let (root, lanes) = self.of_view(self.regs.root(reg), self.regs.lanes(reg));
+        Units::spanning(&[root], lanes)
+    }
+
+    /// The first unit and the lanes of a view of `root` at `lanes`.
+    fn of_view(
+        &self,
+        root: RegId,
+        lanes: i64,
+    ) -> (u32, u32) {
         // A segment register has no sub-registers: one unit (`DS` of the
         // table).
-        let lanes = if self.regs.is_segment(reg) { 1 } else { self.regs.lanes(reg) as u32 & 0xf };
+        let lanes = if self.regs.is_segment(root) { 1 } else { lanes as u32 & 0xf };
         // Bytes 2 and 3 are never named apart (no `eax` sub-register covers
         // one), so they are one unit, `HAX` of X86RegisterInfo.td.
-        assert!(lanes & 0xc == 0 || lanes & 0xc == 0xc, "{reg:?} covers one of the upper bytes only");
+        assert!(lanes & 0xc == 0 || lanes & 0xc == 0xc, "{root:?} covers one of the upper bytes only");
         let hi = if lanes & 0xc != 0 { 0b100 } else { 0 };
-        Units::spanning(&[root * 4], (lanes & 0b11) | hi)
+        (root.index() as u32 * 4, (lanes & 0b11) | hi)
     }
 
     /// Whether writing one register can be seen by reading the other.
