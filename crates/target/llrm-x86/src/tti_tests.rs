@@ -500,12 +500,14 @@ fn a_function_built_for_size_keeps_the_pins_cost_for_a_zero_extended_constant() 
     assert_eq!(cost(true), Cost::of(2));
 }
 
-/// The SLP vectorizer ran on x86 with default (unpriced) vector costs and
-/// changed four to six programs of the identity corpus at O2 and O3
-/// (`bitcount_u64.c`, `double_across_a_call_result.c`): only arm64 prices it.
+/// The SLP vectorizer ran on x86 with default (unpriced) vector costs and changed four to six programs of the identity
+/// corpus at O2 and O3 (`bitcount_u64.c`, `double_across_a_call_result.c`). It runs on x86-64 now, where the SSE2 vector
+/// memory costs are priced (fill_nest's 64 constant stores became eight vector stores) and a tree with an operation the
+/// target does not price is not formed; the targets without vector values keep their scalar code.
 #[test]
-fn slp_does_not_run_on_x86() {
-    for cpu in ["x86-64", "i486", "pentium4"] {
+fn slp_runs_on_x86_64_alone() {
+    assert!(X86::of_cpu("x86-64").expect("a cpu").slp_priced());
+    for cpu in ["i486", "pentium4"] {
         if let Some(tti) = X86::of_cpu(cpu) {
             assert!(!tti.slp_priced(), "{cpu}");
         }
