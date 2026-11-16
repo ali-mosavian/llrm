@@ -375,34 +375,48 @@ pub(crate) fn primary_and_step(
     Ok((primary, step))
 }
 
+/// The largest step of a primary induction the widening takes besides one and
+/// minus one (`for (o = 0; o < n; o += 2)`).
+const MAX_SCALE: i128 = 64;
+
 /// [`primary_and_step`], for a loop the widening takes: the integer induction
-/// steps by one or by minus one. Whether it counts down is the third value.
+/// steps by one, by minus one or, counting up, by a small constant (its
+/// scale). One that steps by one is the first choice. Whether it counts down
+/// is the third value, the scale the fourth (1 unless the step is another).
+///
+/// The pin's VPlan makes its own canonical IV and derives the original one
+/// from it (`VPDerivedIVRecipe`: `start + index * step`); here the original
+/// induction is the counter and steps by `scale * VF * IC` per vector trip.
 fn primary_step_and_direction(
     se: &mut ScalarEvolution,
     legality: &Legality,
-) -> Result<(InstId, InstId, bool), Skipped> {
-    let (primary, reverse) = legality
-        .inductions
-        .iter()
-        .filter(|(_, descriptor)| descriptor.kind == InductionKind::Int)
-        .find_map(|(phi, descriptor)| {
-            let step = const_int_step(se, descriptor)?;
-            if step.is_one() {
-                Some((*phi, false))
-            } else if step.is_all_ones() {
-                Some((*phi, true))
-            } else {
-                None
-            }
+) -> Result<(InstId, InstId, bool, u128), Skipped> {
+    let inductions = || legality.inductions.iter().filter(|(_, descriptor)| descriptor.kind == InductionKind::Int);
+    let unit = inductions().find_map(|(phi, descriptor)| {
+        let step = const_int_step(se, descriptor)?;
+        if step.is_one() {
+            Some((*phi, false, 1))
+        } else if step.is_all_ones() {
+            Some((*phi, true, 1))
+        } else {
+            None
+        }
+    });
+    let (primary, reverse, scale) = unit
+        .or_else(|| {
+            inductions().find_map(|(phi, descriptor)| {
+                let step = const_int_step(se, descriptor)?.sext_value();
+                (2..=MAX_SCALE).contains(&step).then_some((*phi, false, step as u128))
+            })
         })
-        .ok_or(Skipped("No integer induction that steps by one"))?;
+        .ok_or(Skipped("No integer induction that steps by a small constant"))?;
     let step = legality
         .inductions
         .iter()
         .find(|(phi, _)| *phi == primary)
         .and_then(|(_, descriptor)| descriptor.induction_bin_op)
         .ok_or(Skipped("The induction has no step instruction"))?;
-    Ok((primary, step, reverse))
+    Ok((primary, step, reverse, scale))
 }
 
 /// The recipes of `header`'s loop, and what the transform rewrites (LVP3), or
@@ -419,7 +433,7 @@ fn extract(
     let header = the_loop.get_header();
     // The pin's VPlan makes its own canonical IV, so the original induction may
     // start anywhere: an integer one stepping by one is all the widening needs.
-    let (primary, step, reverse) = primary_step_and_direction(se, legality)?;
+    let (primary, step, reverse, scale) = primary_step_and_direction(se, legality)?;
     let primary_phi = Operand::Value(function.instruction(primary).result.expect("a phi"));
     let index_ty = function.instruction(primary).ty;
     let primary_start = legality
@@ -1144,7 +1158,7 @@ fn extract(
     {
         return Err(Skipped("An induction read as a value beside the accesses of a loop that counts down"));
     }
-    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, tests_phi };
+    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, scale, tests_phi };
     // `VPDerivedIVRecipe`: the induction of the addresses is the canonical one
     // (from zero, by one) or `start + index * step`, an `add` of the scalar
     // type that is priced (`computeCost`).
@@ -1152,7 +1166,7 @@ fn extract(
         primary_start,
         Operand::Constant(c) if matches!(cx.context.get(c).kind, ConstantKind::Int(0) | ConstantKind::Zero)
     );
-    if reverse || !starts_at_zero {
+    if reverse || scale != 1 || !starts_at_zero {
         let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
         recipes.push(Recipe::DerivedIv { lane });
     }
@@ -1711,7 +1725,7 @@ fn widen_induction(
     wide: &mut Vec<(InstId, Vec<ValueId>)>,
 ) {
     let header = widening.shape.header;
-    let direction: i128 = if widening.shape.reverse { -1 } else { 1 };
+    let direction: i128 = if widening.shape.reverse { -1 } else { widening.shape.scale as i128 };
     let vector_ty = context.types.intern(Type::Vector { element: induction.element, count: plan.vf });
     let first =
         function.iter_block(header).find(|&inst| function.instruction(inst).opcode != Opcode::Phi).expect("a body");
@@ -2184,7 +2198,9 @@ fn execute(
     keep_scalar_step_for_addresses(function, widening);
     // The induction steps by VF x IC (down, if it counts down).
     let lanes = i128::from(plan.vf) * i128::from(plan.ic);
-    let step = Operand::Constant(context.int(widening.index_ty, if widening.reverse { -lanes } else { lanes }));
+    let step = Operand::Constant(
+        context.int(widening.index_ty, if widening.reverse { -lanes } else { lanes * widening.shape.scale as i128 }),
+    );
     function.set_operand(widening.step, widening.step_operand, step);
 }
 
