@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
-    SMOV_FORMS, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, Permute, SMOV_FORMS, VectorFma, VectorFpOp,
+    VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -886,32 +886,33 @@ fn vector_inst(
         }
     }
     // `UZP1v8i16`: two sources, no tied register.
-    for (second, lanes) in [
-        Arrangement::B16,
-        Arrangement::H8,
-        Arrangement::S4,
-        Arrangement::D2,
-        Arrangement::B8,
-        Arrangement::H4,
-        Arrangement::S2,
-    ]
-    .into_iter()
-    .flat_map(|lanes| [(false, lanes), (true, lanes)])
-    {
-        let lane = match lanes {
-            Arrangement::B16 => "v16i8",
-            Arrangement::H8 => "v8i16",
-            Arrangement::S4 => "v4i32",
-            Arrangement::D2 => "v2i64",
-            Arrangement::B8 => "v8i8",
-            Arrangement::H4 => "v4i16",
-            Arrangement::S2 => "v2i32",
-        };
-        if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
-            return Some(match operands {
-                [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorUnzip { second, lanes, rd, rn: *rn, rm: *rm }),
-                _ => wrong(),
-            });
+    for kind in Permute::ALL {
+        for lanes in [
+            Arrangement::B16,
+            Arrangement::H8,
+            Arrangement::S4,
+            Arrangement::D2,
+            Arrangement::B8,
+            Arrangement::H4,
+            Arrangement::S2,
+        ] {
+            let lane = match lanes {
+                Arrangement::B16 => "v16i8",
+                Arrangement::H8 => "v8i16",
+                Arrangement::S4 => "v4i32",
+                Arrangement::D2 => "v2i64",
+                Arrangement::B8 => "v8i8",
+                Arrangement::H4 => "v4i16",
+                Arrangement::S2 => "v2i32",
+            };
+            if name == format!("{}{lane}", kind.stem()) {
+                return Some(match operands {
+                    [Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                        Ok(Inst::VectorPermute { kind, lanes, rd, rn: *rn, rm: *rm })
+                    }
+                    _ => wrong(),
+                });
+            }
         }
     }
     // `MULv4i32_indexed`: the multiplier is a lane of `rm`.
@@ -2376,11 +2377,8 @@ impl Emitter<'_> {
                     })
                     .collect();
                 let undefined = |op: &SDValue| {
-                    self.dag.value_type(*op).is_vector()
-                        && matches!(
-                            self.dag.opcode(*op),
-                            ISD::Undef | ISD::Poison
-                        ) || matches!(
+                    self.dag.value_type(*op).is_vector() && matches!(self.dag.opcode(*op), ISD::Undef | ISD::Poison)
+                        || matches!(
                             self.dag.opcode(*op),
                             ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF") && self.dag.value_type(*op).is_vector()
                         )
@@ -2445,8 +2443,8 @@ impl Emitter<'_> {
                         || node.values[0].is_vector()
                         || vector_fill(name, &operands).is_some()
                         || reduction(name).is_some()
-                        // `DUPi16` reads a lane into an `h` register, which has no
-                        // type of ours: it reads as an `i16`.
+                        // `DUPi16` reads a lane into an `h` register, which has
+                        // no type of ours: it reads as an `i16`.
                         || matches!(probe, Ok(Inst::VectorDupScalar { .. }))
                         || matches!(probe, Ok(Inst::FpUnary { op: FpUnary::Mov, .. }));
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
@@ -2631,8 +2629,8 @@ impl Emitter<'_> {
                         self.values.insert((id, 0), rd);
                         return Ok(());
                     }
-                    // A vector or float value nothing defines (the undefined half
-                    // of a widened vector) is a float register.
+                    // A vector or float value nothing defines (the undefined
+                    // half of a widened vector) is a float register.
                     ("IMPLICIT_DEF", []) if in_float_file(node.values[0]) => {
                         let one = self.mf.fpr();
                         if is_quad(node.values[0]) {

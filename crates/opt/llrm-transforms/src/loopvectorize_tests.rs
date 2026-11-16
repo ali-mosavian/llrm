@@ -73,6 +73,7 @@ const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
 const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
+const SYMBOLIC_STRIDE: &str = include_str!("../tests/lv/symbolic_stride.ll");
 const FLOAT_BITS: &str = include_str!("../tests/lv/float_bits.ll");
 const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
 const FP_CONVERT_NARROW: &str = include_str!("../tests/lv/fp_convert_narrow.ll");
@@ -170,6 +171,20 @@ fn strided_loads_are_scalarized_and_put_together() {
     assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
     assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
     assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
+}
+
+/// `b[i] = a[i * stride] * 2.5f` with a run-time `stride` (the twiddle load of
+/// stft_single's butterfly): "An access that is not consecutive" kept the loop
+/// scalar; the pin scalarizes the load, one copy of the address computation per
+/// lane (`VPReplicateRecipe`), and widens the rest.
+#[test]
+fn a_load_at_a_run_time_stride_is_scalarized_with_its_address_replicated() {
+    let text = run(SYMBOLIC_STRIDE);
+    // Two twiddle loads a lane, replicated address and all.
+    assert_eq!(count(&text, "insertelement <4 x float>"), 8, "{text}");
+    // A copy of the address for each of the other three lanes, per load.
+    assert_eq!(count(&text, " = mul i64 %lane.index"), 6, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 4, "{text}");
 }
 
 /// `double` lanes: pin VF 2, IC 2 (step 4).
