@@ -52,11 +52,12 @@ pub fn of(op: &Op) -> Facts {
                     | Inst::Prefetch { .. }
                     | Inst::VectorLoadReplicate { .. }
                     | Inst::VectorLoadLane { .. }
+                    | Inst::VectorLoadStructure { .. }
             )
         ),
         may_store: matches!(
             op,
-            Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. } | Inst::VectorStoreLane { .. })
+            Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. } | Inst::VectorStoreLane { .. } | Inst::VectorStoreStructure { .. })
         ),
         side_effects: matches!(
             op,

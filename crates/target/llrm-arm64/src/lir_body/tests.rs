@@ -336,6 +336,8 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorLoadLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
+        out.push(Inst::VectorLoadStructure { count: 2, lanes, rt: v(1), base: Gpr(3) });
+        out.push(Inst::VectorStoreStructure { count: 4, lanes, rt: v(1), base: Gpr(3) });
     }
     for (op, lanes) in [
         (VectorReduce::Addv, Arrangement::B16),
@@ -445,6 +447,8 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
         Inst::VectorIntUnary { .. } => "VectorIntUnary",
         Inst::VectorLoadLane { .. } => "VectorLoadLane",
+        Inst::VectorLoadStructure { .. } => "VectorLoadStructure",
+        Inst::VectorStoreStructure { .. } => "VectorStoreStructure",
         Inst::VectorFmaLane { .. } => "VectorFmaLane",
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
         Inst::VectorMulLane { .. } => "VectorMulLane",
@@ -528,6 +532,8 @@ const ALL: [&str; 76] = [
     "VectorLoadReplicate",
     "VectorIntUnary",
     "VectorLoadLane",
+    "VectorLoadStructure",
+    "VectorStoreStructure",
     "VectorFmaLane",
     "VectorFmulLane",
     "VectorMulLane",
