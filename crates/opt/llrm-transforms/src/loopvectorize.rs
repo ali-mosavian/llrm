@@ -150,12 +150,14 @@ struct Interleaved {
 }
 
 /// What a widened operation computes: a binary operation, `fneg`, a cast, a
-/// compare, a select, or the call of `llvm.fmuladd`.
+/// compare, a select, or the call of `llvm.fmuladd` or `llvm.{s,u}{max,min}`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WideOp {
     Binary(BinaryOp),
     FNeg,
     FMulAdd,
+    /// `llvm.{s,u}{max,min}` (`VPWidenIntrinsicRecipe`).
+    IntMinMax { signed: bool, max: bool },
     Cast(CastOp),
     /// `VPWidenRecipe` of a compare: a vector of `i1`.
     ICmp(IntPredicate),
@@ -167,7 +169,7 @@ enum WideOp {
 impl WideOp {
     fn arity(self) -> usize {
         match self {
-            WideOp::Binary(_) | WideOp::ICmp(_) | WideOp::FCmp(_) => 2,
+            WideOp::Binary(_) | WideOp::ICmp(_) | WideOp::FCmp(_) | WideOp::IntMinMax { .. } => 2,
             WideOp::FNeg | WideOp::Cast(_) => 1,
             WideOp::FMulAdd | WideOp::Select => 3,
         }
@@ -926,6 +928,35 @@ fn extract(
                     element: data.ty,
                     operand_element: source,
                     operands: [operand; 3],
+                }));
+            }
+            // `VPWidenIntrinsicRecipe` of `llvm.{s,u}{max,min}`: both arguments
+            // (the callee is the last operand), widened or loop-invariant.
+            Opcode::Call(_)
+                if matches!(widened_intrinsic(cx, inst), Some(Intrinsic::MinMax { .. })) =>
+            {
+                let Some(Intrinsic::MinMax { signed, max }) = widened_intrinsic(cx, inst) else { unreachable!() };
+                let value = data.result.expect("a min or max");
+                let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                if used_outside(inst) {
+                    return Err(Skipped("A call used after the loop"));
+                }
+                if !widened_users(value) {
+                    return Err(Skipped("A call result used other than by a store or a binary operation"));
+                }
+                let operands = [source_of(data.operands[0], &widened)?, source_of(data.operands[1], &widened)?];
+                if operands.iter().all(|one| matches!(one, Source::Splat(_))) {
+                    return Err(Skipped("A call of loop-invariant values"));
+                }
+                recipes.push(Recipe::IntMinMax { lane, signed, max });
+                widened.push(inst);
+                steps.push(Step::Operation(Operation {
+                    inst,
+                    op: WideOp::IntMinMax { signed, max },
+                    flags: data.flags,
+                    element: data.ty,
+                    operand_element: data.ty,
+                    operands: [operands[0], operands[1], operands[1]],
                 }));
             }
             // `VPWidenIntrinsicRecipe` of `llvm.fmuladd`: the call's arguments
@@ -1954,6 +1985,37 @@ fn execute(
                         WideOp::ICmp(predicate) => Opcode::ICmp(predicate),
                         WideOp::FCmp(predicate) => Opcode::FCmp(predicate),
                         WideOp::Select => Opcode::Select,
+                        WideOp::IntMinMax { signed, max } => {
+                            // `llvm.smax.v4i32` of the widened arguments.
+                            let function_type = context
+                                .types
+                                .intern(
+                                    Type::Function {
+                                        returns: vector_ty,
+                                        parameters: vec![vector_ty; 2],
+                                        variadic: false,
+                                    },
+                                );
+                            let name = format!(
+                                "llvm.{}{}.{}",
+                                if signed { 's' } else { 'u' },
+                                if max { "max" } else { "min" },
+                                llrm_mir::intrinsics::mangle(&context.types, vector_ty),
+                            );
+                            let callee = declared.declare(&name, function_type);
+                            let pointer = context.types.ptr(0);
+                            operands.push(Operand::Constant(
+                                context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }),
+                            ));
+                            Opcode::Call(Box::new(CallInfo {
+                                function_type,
+                                calling_convention: 0,
+                                return_attrs: Vec::new(),
+                                argument_attrs: vec![Vec::new(); 2],
+                                attrs: Vec::new(),
+                                tail: Tail::default(),
+                            }))
+                        }
                         WideOp::FMulAdd => {
                             // `llvm.fmuladd.v4f32` of the widened arguments.
                             let function_type = context
