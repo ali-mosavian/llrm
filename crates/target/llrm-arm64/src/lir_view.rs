@@ -24,6 +24,31 @@ pub enum Class {
     /// A vector register read whole: a call keeps only the low 64 bits of
     /// `v8`-`v15`, so it never takes one.
     Quad,
+    /// `n` consecutive vector registers, the operand of an `ldN`/`stN`: the
+    /// pin's `QQ`, `QQQ` and `QQQQ`.
+    Tuple(u8),
+}
+
+/// The tuple register of `count` vectors starting at `v{first}`, wrapping past
+/// `v31` (`v31_v0`).
+fn tuple_id(
+    count: u8,
+    first: u32,
+) -> RegId {
+    static IDS: std::sync::LazyLock<[[RegId; 32]; 3]> = std::sync::LazyLock::new(|| {
+        let by_name = |count: u32, first: u32| {
+            let members: Vec<String> = (0..count).map(|at| format!("v{}", (first + at) % 32)).collect();
+            crate::REGISTER_INFO.by_name(&members.join("_")).expect("the file lists every tuple")
+        };
+        std::array::from_fn(|count| std::array::from_fn(|first| by_name(count as u32 + 2, first as u32)))
+    });
+    IDS[usize::from(count) - 2][first as usize]
+}
+
+/// The first vector of a tuple register, if `register` is one.
+fn tuple_first(register: RegId) -> Option<u32> {
+    let info = &crate::REGISTER_INFO;
+    (info.is_composite(register)).then(|| (info.subreg(register, 0).expect("a tuple has members").index() - crate::reg::V0.index()) as u32)
 }
 
 /// The register file's id of machine register `n` of a class: `x0..x30` and
@@ -36,6 +61,7 @@ pub(crate) fn id(
         (Class::Gpr, 31) => crate::reg::XZR,
         (Class::Gpr, n) => RegId::from_raw(crate::reg::X0.index() as u8 + n as u8),
         (Class::Fpr | Class::Quad, n) => RegId::from_raw(crate::reg::V0.index() as u8 + n as u8),
+        (Class::Tuple(count), first) => tuple_id(count, first),
     }
 }
 
@@ -67,10 +93,11 @@ pub(crate) fn from_lir(
     let number = |base: RegId, id: RegId| (id.index() - base.index()) as u32;
     match (register, class) {
         (LirReg::Phys(r), _) if r == crate::reg::XZR || r == crate::reg::SP => Reg::Gpr(Gpr(31)),
+        (LirReg::Phys(r), _) if tuple_first(r).is_some() => Reg::Fpr(Vreg(tuple_first(r).expect("checked"))),
         (LirReg::Phys(r), _) if r.index() >= crate::reg::V0.index() => Reg::Fpr(Vreg(number(crate::reg::V0, r))),
         (LirReg::Phys(r), _) => Reg::Gpr(Gpr(number(crate::reg::X0, r))),
         (LirReg::Virt(n), Class::Gpr) => Reg::Gpr(Gpr(n + Gpr::FIRST_VIRTUAL)),
-        (LirReg::Virt(n), Class::Fpr | Class::Quad) => Reg::Fpr(Vreg(n + Gpr::FIRST_VIRTUAL)),
+        (LirReg::Virt(n), Class::Fpr | Class::Quad | Class::Tuple(_)) => Reg::Fpr(Vreg(n + Gpr::FIRST_VIRTUAL)),
     }
 }
 
@@ -231,6 +258,7 @@ fn view_with(
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
     let wide = crate::regalloc::wide_registers(function);
     let wide_list: Vec<Reg> = wide.iter().copied().collect();
+    let tuples: HashMap<Vreg, u8> = function.tuples.iter().copied().collect();
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
@@ -315,6 +343,7 @@ fn view_with(
                 if let LirReg::Virt(n) = reg {
                     lir.classes[n as usize] = match key {
                         Reg::Gpr(_) => Class::Gpr,
+                        Reg::Fpr(vreg) if tuples.contains_key(&vreg) => Class::Tuple(tuples[&vreg]),
                         _ if wide.contains(&key) => Class::Quad,
                         _ => Class::Fpr,
                     };
@@ -804,6 +833,12 @@ fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<
         Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
         Class::Fpr => fpr_order(),
         Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
+        // A tuple is read whole, as a `Quad` is: none takes a callee-saved vector.
+        Class::Tuple(count) => (16..=31u32)
+            .chain(0..=7)
+            .filter(|first| (0..u32::from(count)).all(|at| !(8..=15).contains(&((first + at) % 32))))
+            .map(|first| tuple_id(count, first))
+            .collect(),
     }
 }
 

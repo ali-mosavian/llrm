@@ -381,8 +381,12 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorDupScalar { rn, .. }) => {
                 wide.insert(Reg::Fpr(*rn));
             }
-            Op::I(Inst::VectorLoadStructure { count, rt, .. } | Inst::VectorStoreStructure { count, rt, .. }) => {
-                wide.extend((0..u32::from(*count)).map(|at| Reg::Fpr(rt.in_run(at))));
+            Op::I(Inst::VectorTupleExtract { rd, tuple, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*tuple)]);
+            }
+            Op::I(Inst::VectorTupleBuild { tuple, count, members }) => {
+                wide.insert(Reg::Fpr(*tuple));
+                wide.extend(members.iter().take(usize::from(*count)).map(|one| Reg::Fpr(*one)));
             }
             Op::I(Inst::VectorLoadReplicate { rt, .. } | Inst::VectorLoadLane { rt, .. }) => {
                 wide.insert(Reg::Fpr(*rt));

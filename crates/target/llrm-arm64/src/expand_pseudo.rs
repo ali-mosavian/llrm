@@ -16,7 +16,7 @@
 //! ([L1334](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp#L1334)).
 
 use crate::frame::Lowered;
-use crate::mc::inst::{BitSelect, Inst, Vreg};
+use crate::mc::inst::{Arrangement, BitSelect, Inst, Vreg, VectorOp};
 
 /// The real instructions of one `BSP`.
 fn expand_bsp(
@@ -37,12 +37,57 @@ fn expand_bsp(
     }
 }
 
+/// The vector `member` of the tuple whose first register is `first`.
+fn member(
+    first: Vreg,
+    at: u8,
+) -> Vreg {
+    first.in_run(u32::from(at))
+}
+
+/// `REG_SEQUENCE`: the moves that put `members` in the tuple's registers, as
+/// one parallel copy. A move goes once its target is no pending source; what
+/// is left is cycles, each broken by swapping with three `eor`s.
+fn expand_tuple_build(
+    tuple: Vreg,
+    count: u8,
+    members: &[Vreg; 4],
+) -> Vec<Inst> {
+    let mut pending: Vec<(Vreg, Vreg)> =
+        (0..count).map(|at| (member(tuple, at), members[usize::from(at)])).filter(|(to, from)| to != from).collect();
+    let eor = |rd, rn, rm| Inst::VectorBinary { op: VectorOp::Eor, lanes: Arrangement::B16, rd, rn, rm };
+    let mut out = Vec::new();
+    while !pending.is_empty() {
+        if let Some(at) = (0..pending.len()).find(|&at| pending.iter().all(|(_, from)| *from != pending[at].0)) {
+            let (to, from) = pending.remove(at);
+            out.push(Inst::VectorMov { rd: to, rn: from });
+            continue;
+        }
+        // Every target is another move's source: swap one pair, which leaves
+        // the other moves reading the swapped register.
+        let (to, from) = pending.remove(0);
+        out.extend([eor(to, to, from), eor(from, from, to), eor(to, to, from)]);
+        for (_, source) in &mut pending {
+            if *source == to {
+                *source = from;
+            } else if *source == from {
+                *source = to;
+            }
+        }
+        pending.retain(|(target, source)| target != source);
+    }
+    out
+}
+
 /// `blocks` with every pseudo replaced by the real instructions.
 pub fn run(blocks: Vec<Lowered>) -> Vec<Lowered> {
     blocks
         .into_iter()
         .map(|block| {
-            if !block.insts.iter().any(|inst| matches!(inst, Inst::VectorBsp { .. })) {
+            let pseudo = |inst: &Inst| {
+                matches!(inst, Inst::VectorBsp { .. } | Inst::VectorTupleExtract { .. } | Inst::VectorTupleBuild { .. })
+            };
+            if !block.insts.iter().any(pseudo) {
                 return block;
             }
             let mut insts = Vec::with_capacity(block.insts.len());
@@ -51,6 +96,19 @@ pub fn run(blocks: Vec<Lowered>) -> Vec<Lowered> {
                 match inst {
                     Inst::VectorBsp { quad, rd, mask, rn, rm } => {
                         for real in expand_bsp(quad, rd, mask, rn, rm) {
+                            insts.push(real);
+                            locs.push(loc);
+                        }
+                    }
+                    Inst::VectorTupleExtract { rd, tuple, index } => {
+                        let from = member(tuple, index);
+                        if rd != from {
+                            insts.push(Inst::VectorMov { rd, rn: from });
+                            locs.push(loc);
+                        }
+                    }
+                    Inst::VectorTupleBuild { tuple, count, members } => {
+                        for real in expand_tuple_build(tuple, count, &members) {
                             insts.push(real);
                             locs.push(loc);
                         }

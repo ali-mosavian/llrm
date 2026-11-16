@@ -352,19 +352,25 @@ impl Inst {
                 f(Fpr(rt), Role::UseDef);
                 f(G(base), Role::Use);
             }
-            // The registers are physical and consecutive: a rewrite of one
-            // would break the run, so none is applied.
-            Inst::VectorLoadStructure { count, rt, base, .. } => {
-                for at in 0..u32::from(*count) {
-                    f(Fpr(&mut rt.in_run(at)), Role::Def);
-                }
+            // `rt` is the tuple: one register of the `QQ`..`QQQQ` class, whose
+            // first register is the first of the run `ldN` writes.
+            Inst::VectorLoadStructure { rt, base, .. } => {
+                f(Fpr(rt), Role::Def);
                 f(G(base), Role::Use);
             }
-            Inst::VectorStoreStructure { count, rt, base, .. } => {
-                for at in 0..u32::from(*count) {
-                    f(Fpr(&mut rt.in_run(at)), Role::Use);
-                }
+            Inst::VectorStoreStructure { rt, base, .. } => {
+                f(Fpr(rt), Role::Use);
                 f(G(base), Role::Use);
+            }
+            Inst::VectorTupleExtract { rd, tuple, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(tuple), Role::Use);
+            }
+            Inst::VectorTupleBuild { tuple, count, members } => {
+                f(Fpr(tuple), Role::Def);
+                for member in members.iter_mut().take(usize::from(*count)) {
+                    f(Fpr(member), Role::Use);
+                }
             }
             Inst::VectorLoadReplicate { rt, base, .. } => {
                 f(Fpr(rt), Role::Def);

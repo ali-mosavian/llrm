@@ -2077,9 +2077,9 @@ impl Emitter<'_> {
     /// = PHI [if_true, taken], [if_false, head]` and holds the rest of the
     /// block.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L3276>
-    /// `ldN`/`stN` of `count` vectors: a run of `count` consecutive virtual
-    /// registers (`Vreg::in_run`) the allocator keeps as one tuple. A load's
-    /// results are the run; a store reads copies of its members in one.
+    /// `ldN`/`stN` of `count` vectors: one tuple register (`QQ`..`QQQQ`), which a
+    /// load defines and members are taken from (`EXTRACT_SUBREG`), and a store
+    /// reads from members put together (`REG_SEQUENCE`).
     fn structure_access(
         &mut self,
         id: u32,
@@ -2088,25 +2088,29 @@ impl Emitter<'_> {
         lanes: Arrangement,
         operands: &[Operand],
     ) -> Result<(), String> {
-        let run: Vec<Vreg> = (0..count).map(|_| self.mf.fpr()).collect();
-        let rt = run[0];
+        let tuple = self.mf.fpr();
+        self.mf.tuples.push((tuple, count));
         if store {
-            let Some((Operand::Reg(base), members)) = operands.split_last().map(|(base, rest)| (base, rest)) else {
+            let Some((Operand::Reg(base), members)) = operands.split_last() else {
                 return Err("a structure store without an address".into());
             };
             if members.len() != usize::from(count) {
                 return Err("a structure store with the wrong number of vectors".into());
             }
-            for (member, dst) in members.iter().zip(&run) {
+            let mut list = [Vreg(0); 4];
+            for (at, member) in members.iter().enumerate() {
                 let Operand::Fpr(src) = member else { return Err("a structure store of a non-vector".into()) };
-                self.ops.push(Op::Copy { dst: Reg::Fpr(*dst), src: Reg::Fpr(*src) });
+                list[at] = *src;
             }
-            self.ops.push(Op::I(Inst::VectorStoreStructure { count, lanes, rt, base: *base }));
+            self.ops.push(Op::I(Inst::VectorTupleBuild { tuple, count, members: list }));
+            self.ops.push(Op::I(Inst::VectorStoreStructure { count, lanes, rt: tuple, base: *base }));
         } else {
             let [Operand::Reg(base)] = operands else { return Err("a structure load without an address".into()) };
-            self.ops.push(Op::I(Inst::VectorLoadStructure { count, lanes, rt, base: *base }));
-            for (at, reg) in run.iter().enumerate() {
-                self.fvalues.insert((id, at as u8), *reg);
+            self.ops.push(Op::I(Inst::VectorLoadStructure { count, lanes, rt: tuple, base: *base }));
+            for at in 0..count {
+                let rd = self.mf.fpr();
+                self.ops.push(Op::I(Inst::VectorTupleExtract { rd, tuple, index: at }));
+                self.fvalues.insert((id, at), rd);
             }
         }
         Ok(())

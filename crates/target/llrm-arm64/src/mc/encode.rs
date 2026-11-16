@@ -509,6 +509,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x2E20_1C00 | u32::from(*quad) << 30 | op.size() << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorBsp { .. } => return error("a bit-select pseudo is expanded after allocation"),
+        Inst::VectorTupleExtract { .. } | Inst::VectorTupleBuild { .. } => {
+            return error("a tuple pseudo is expanded after allocation");
+        }
         Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
             let (u, a, opcode) = op.fields();
             let sz = u32::from(*lanes == Arrangement::D2);

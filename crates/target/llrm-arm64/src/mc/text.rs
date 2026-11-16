@@ -441,6 +441,11 @@ impl fmt::Display for Inst {
                 let suffix = if *quad { "16b" } else { "8b" };
                 write!(out, "bsp v{}.{suffix}, v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", rd.0, mask.0, rn.0, rm.0)
             }
+            Inst::VectorTupleExtract { rd, tuple, index } => write!(out, "tuple.extract v{}, v{}[{index}]", rd.0, tuple.0),
+            Inst::VectorTupleBuild { tuple, count, members } => {
+                let list: Vec<String> = members.iter().take(usize::from(*count)).map(|one| format!("v{}", one.0)).collect();
+                write!(out, "tuple.build v{}, {{{}}}", tuple.0, list.join(", "))
+            }
             Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)

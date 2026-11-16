@@ -386,6 +386,9 @@ pub struct MFunc {
     /// Float registers the selector knows hold 128 bits (`f128` values), for
     /// the allocator to spill and copy whole.
     pub wide: Vec<Reg>,
+    /// Virtual registers that are tuples of this many consecutive vectors
+    /// (`ldN`/`stN` operands): the allocator gives each a `QQ`..`QQQQ` register.
+    pub tuples: Vec<(Vreg, u8)>,
     /// The most bytes of outgoing arguments any call passes on the stack.
     pub outgoing: u64,
     /// Whether the function calls another (it saves the link register).

@@ -1637,6 +1637,22 @@ pub enum Inst {
         rn: Vreg,
         rm: Vreg,
     },
+    /// `rd` is member `index` of `tuple`, the result of a `VectorLoadStructure`:
+    /// a pseudo that is a copy of the tuple's register once it is chosen
+    /// (`EXTRACT_SUBREG` of `QQ`..`QQQQ`).
+    VectorTupleExtract {
+        rd: Vreg,
+        tuple: Vreg,
+        index: u8,
+    },
+    /// `tuple` is `members[..count]` side by side, the operand of a
+    /// `VectorStoreStructure`: copies into the tuple's registers once it is
+    /// chosen (`REG_SEQUENCE` of `QQ`..`QQQQ`).
+    VectorTupleBuild {
+        tuple: Vreg,
+        count: u8,
+        members: [Vreg; 4],
+    },
     /// A 16-byte float vector operation on every lane: `fadd v.4s, v.4s,
     /// v.4s`; `lanes` is `S4` or `D2`.
     VectorFpBinary {
