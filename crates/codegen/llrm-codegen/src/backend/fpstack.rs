@@ -1432,8 +1432,13 @@ pub(super) fn converted_with(
         return Ok(best);
     }
     let mut orders: HashMap<i64, Vec<u32>> = HashMap::default();
+    let found = crate::analysis::loops::loops(&current.blocks, Some(current.entry));
+    // Liveness only where there is a loop: a body without one asked it twice for nothing.
+    if found.is_empty() {
+        return Ok(best);
+    }
     let (live_in, _) = live_among(&current, |value| floating.contains(&value));
-    for one in crate::analysis::loops::loops(&current.blocks, Some(current.entry)) {
+    for one in found {
         let values: Vec<u32> = live_in[&one.header].iter().filter(|value| floating.contains(value)).collect();
         if !(2..=3).contains(&values.len()) {
             continue;
