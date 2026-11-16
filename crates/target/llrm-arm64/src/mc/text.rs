@@ -462,8 +462,8 @@ impl fmt::Display for Inst {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
             }
-            Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
-                let name = if *second { "uzp2" } else { "uzp1" };
+            Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
+                let name = kind.mnemonic();
                 let s = lanes.suffix();
                 write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
             }
