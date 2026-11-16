@@ -88,3 +88,21 @@ def test_gcc_gets_the_programs_no_inline_in_its_own_spelling():
     command = size.gcc_command("m68k-linux-gnu-", "68000", "Os", Path("x.s"), source, flags)
     assert "-fno-inline" in command and "-fno-inline-functions" not in command, command
     assert "-std=gnu17" in command, "gcc 15 reads C23: old_style_extra_args had no gcc cell"
+
+
+def test_a_program_that_does_not_link_is_a_skip_row_not_the_end_of_the_sweep(monkeypatch, capsys):
+    """The Os matrix of 211 programs stopped at its first (accumulator_forms: undefined `memcpy`) and printed no row for the other 210."""
+    import argparse
+
+    def measure(source, *rest):
+        if source.stem == "bad":
+            raise SystemExit("m68k_program_size: ours bad.c does not link: undefined reference to `memcpy'")
+        return {"program": 10, "library": 2, "whole": 12, "members": {}}
+
+    monkeypatch.setattr(size, "measure", measure)
+    args = argparse.Namespace(cpu="68000", level="Os")
+    for name in ("bad", "good"):
+        size.report(name, ["ours", "gcc"], args, "cc", "/", Path("."), Path("."))
+    rows = capsys.readouterr().out.splitlines()
+    assert rows[0].startswith("| bad | 68000 | Os | ours | SKIP |") and "memcpy" in rows[0], rows
+    assert rows[1:] == [f"| good | 68000 | Os | {c} | 10 | 2 | 12 |  |" for c in ("ours", "gcc")], rows
