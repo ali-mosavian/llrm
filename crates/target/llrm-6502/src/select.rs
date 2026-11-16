@@ -230,7 +230,11 @@ fn function_text_uncached(
     if !alloc::wide_commuted() {
         return Ok(text);
     }
-    let apart = alloc::with_wide_commute(false, || function_text_once(module, name, selection))?;
+    // its layout, sink and shared compares were chosen with the wide choice;
+    // the narrow one is priced at the same
+    let kept = alloc::kept_variant();
+    let apart =
+        alloc::with_wide_commute(false, || alloc::with_variant(kept, || function_text_once(module, name, selection)))?;
     let cpu = selection.cpu;
     let size = |text: &str| crate::timing::estimate(cpu, text).map(|e| (e.bytes, e.cycles));
     Ok(match (size(&text), size(&apart)) {
