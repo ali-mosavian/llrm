@@ -1013,6 +1013,101 @@ fn test_a_header_copy_of_a_terminal_value_is_tried_after_the_copy_it_overlaps() 
     assert_eq!(copies, vec![(vec![4], vec![25]), (vec![25], vec![22])], "both copies at the top: {:?}", names(&lis));
 }
 
+/// A copy of a pinned value is not a terminal copy (`applyTerminalRule`:
+/// `DstReg.isPhysical() || SrcReg.isPhysical()` returns false before it walks
+/// the uses of `SrcReg`). Here the pinned value was walked for every copy of
+/// it, a pass quadratic in the copies of one register (a 400-load straight-line
+/// z80 function: the rule was 10% of the compile and growing 22x for 4x the
+/// size), and a header copy of it was tried last as if terminal.
+#[test]
+fn test_a_copy_of_a_pinned_value_is_not_held_back_as_terminal() {
+    struct PinnedSource {
+        asked: std::cell::RefCell<Vec<(u32, u32)>>,
+    }
+    impl CoalescerEnv for PinnedSource {
+        fn can_share(
+            &self,
+            _: u32,
+            _: u32,
+        ) -> bool {
+            true
+        }
+
+        fn keeps(
+            &self,
+            value: u32,
+        ) -> bool {
+            value == 25
+        }
+
+        fn should_coalesce(
+            &self,
+            _: &LiveIntervals,
+            _: crate::liveness::slotindex::InstrKey,
+            src: u32,
+            dst: u32,
+        ) -> bool {
+            self.asked.borrow_mut().push((src, dst));
+            true
+        }
+    }
+    let (pre25, pre22) = (def(25), def(22));
+    let (y2, y1) = (copy(4, 25), copy(1, 22));
+    let (read_y2, read_y1, new_y) = (read(4), read(1), def(6));
+    let (to22, to25) = (copy(22, 6), copy(25, 1));
+    let was = body(&[
+        (&[pre25, pre22], &[1]),
+        (&[y2, y1, read_y2, read_y1, new_y, to22, Arc::clone(&to25)], &[1, 2]),
+        (&[read(25), read(22)], &[]),
+    ]);
+    let mut lis = LiveIntervals::new(&was);
+    let env = PinnedSource { asked: Default::default() };
+    run(&mut lis, &env, &[0, 1, 0]);
+    let asked = env.asked.borrow();
+    assert_eq!(
+        asked.iter().find(|(src, _)| *src == 25),
+        asked.first(),
+        "the copy of v25 is tried in its place: {asked:?}"
+    );
+}
+
+/// The same, as a growth bound: 64 copies of one pinned value walk none of its
+/// uses (they were 64 x 64 before), and the same copies of an ordinary value do
+/// walk them, so the count measures something.
+#[test]
+fn test_the_copies_of_a_pinned_value_walk_none_of_its_uses() {
+    struct Pin(u32);
+    impl CoalescerEnv for Pin {
+        fn can_share(
+            &self,
+            _: u32,
+            _: u32,
+        ) -> bool {
+            true
+        }
+
+        fn keeps(
+            &self,
+            value: u32,
+        ) -> bool {
+            value == self.0
+        }
+    }
+    let n = 64u32;
+    let walked = |pinned: u32| {
+        let mut insns = vec![def(1000)];
+        insns.extend((0..n).map(|i| copy(i + 1, 1000)));
+        insns.extend((0..n).map(|i| read(i + 1)));
+        let was = body(&[(&insns, &[])]);
+        let mut lis = LiveIntervals::new(&was);
+        super::driver::TERMINAL_WALKED.with(|one| one.set(0));
+        run(&mut lis, &Pin(pinned), &[0]);
+        super::driver::TERMINAL_WALKED.with(|one| one.get())
+    };
+    assert_eq!(walked(1000), 0, "a pinned source is not walked");
+    assert!(walked(0) >= (n * n) as usize, "an ordinary source is: the counter counts");
+}
+
 /// `copy` with its source an undef read: `v2 := mov undef v1`.
 fn undef_copy(
     dst: u32,

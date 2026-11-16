@@ -176,14 +176,28 @@ fn is_terminal_reg(
     lis.operands(reg).iter().all(|one| one.instr == copy || pick(lis.instr(one.instr)).is_none())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The operands `apply_terminal_rule` walked on this thread: a pass that is
+    /// not quadratic in the copies of one value walks none for a pinned one.
+    pub(super) static TERMINAL_WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `applyTerminalRule`.
 fn apply_terminal_rule(
     lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
     copy: InstrKey,
     block: usize,
     pick: Pick,
 ) -> bool {
     let Some((dst, src)) = pick(lis.instr(copy)) else { return false };
+    // A physical register on either side is not a terminal node, and its uses
+    // are not walked (`DstReg.isPhysical() || SrcReg.isPhysical()`): a
+    // pinned value is the physical register here.
+    if env.keeps(dst.value) || env.keeps(src.value) {
+        return false;
+    }
     if !is_terminal_reg(lis, dst.value, copy, pick) {
         return false;
     }
@@ -191,6 +205,8 @@ fn apply_terminal_rule(
     // involving SrcReg in this block?
     let dst_interval = lis.interval_rc(dst.value);
     let others: Vec<InstrKey> = lis.operands(src.value).iter().map(|one| one.instr).collect();
+    #[cfg(test)]
+    TERMINAL_WALKED.with(|walked| walked.set(walked.get() + others.len()));
     for other in others {
         if other == copy {
             continue;
@@ -310,7 +326,7 @@ impl Coalescer<'_> {
         if self.env.joins_global_copies() {
             let (mut local_terminals, mut global_terminals) = (Vec::new(), Vec::new());
             for copy in copies {
-                let terminal = apply_terminal_rule(self.lis, copy, block, pick_of(self.env));
+                let terminal = apply_terminal_rule(self.lis, self.env, copy, block, pick_of(self.env));
                 match (is_local_copy(self.lis, copy, pick_of(self.env)), terminal) {
                     (true, true) => local_terminals.push(Some(copy)),
                     (true, false) => self.local.push(Some(copy)),
@@ -325,7 +341,7 @@ impl Coalescer<'_> {
         } else {
             let mut terminals = Vec::new();
             for copy in copies {
-                if apply_terminal_rule(self.lis, copy, block, pick_of(self.env)) {
+                if apply_terminal_rule(self.lis, self.env, copy, block, pick_of(self.env)) {
                     terminals.push(Some(copy));
                 } else {
                     self.work.push(Some(copy));
