@@ -41,11 +41,23 @@ use crate::support::hash::HashMap;
 /// half}` (`MCRegUnit`).
 pub type RegUnit = u32;
 
+/// The most roots one register spans: `QQQQ`, four vector registers.
+pub const MAX_ROOTS: usize = 4;
+
 /// The units of a register (`MCRegUnitIterator`), without a heap allocation.
+/// A register of one root has the units of its lanes; a tuple (`QQ`..`QQQQ`)
+/// has those of every member, each member covering the same lanes
+/// (`MCRegUnitIterator` over the tuple's units, `RegisterTuples` in
+/// AArch64RegisterInfo.td).
 #[derive(Clone, Copy)]
 pub struct Units {
-    root: u32,
+    roots: [u32; MAX_ROOTS],
+    /// The roots not yet walked, from `roots[MAX_ROOTS - left]`.
+    left: u8,
+    /// The lanes of each root, still to walk of the current one.
     lanes: u32,
+    /// The lanes of each root, whole.
+    all: u32,
 }
 
 impl Iterator for Units {
@@ -53,21 +65,38 @@ impl Iterator for Units {
 
     fn next(&mut self) -> Option<RegUnit> {
         if self.lanes == 0 {
-            return None;
+            if self.left <= 1 {
+                return None;
+            }
+            self.left -= 1;
+            self.lanes = self.all;
         }
         let lane = self.lanes.trailing_zeros();
         self.lanes &= self.lanes - 1;
-        Some(self.root + lane)
+        Some(self.roots[self.roots.len() - usize::from(self.left)] + lane)
     }
 }
 
 impl Units {
+    /// The units of `lanes` of each of `roots` (unit numbers: root * 4 + lane).
+    pub fn spanning(
+        roots: &[u32],
+        lanes: u32,
+    ) -> Units {
+        assert!(!roots.is_empty() && roots.len() <= MAX_ROOTS, "{} roots", roots.len());
+        let mut at = [0; MAX_ROOTS];
+        let first = MAX_ROOTS - roots.len();
+        at[first..].copy_from_slice(roots);
+        Units { roots: at, left: if lanes == 0 { 0 } else { roots.len() as u8 }, lanes, all: lanes }
+    }
+
     pub fn len(&self) -> usize {
-        self.lanes.count_ones() as usize
+        let whole = usize::from(self.left.saturating_sub(1)) * self.all.count_ones() as usize;
+        whole + self.lanes.count_ones() as usize
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lanes == 0
+        self.len() == 0
     }
 }
 
@@ -104,7 +133,7 @@ impl RegisterInfo {
         // one), so they are one unit, `HAX` of X86RegisterInfo.td.
         assert!(lanes & 0xc == 0 || lanes & 0xc == 0xc, "{reg:?} covers one of the upper bytes only");
         let hi = if lanes & 0xc != 0 { 0b100 } else { 0 };
-        Units { root: root * 4, lanes: (lanes & 0b11) | hi }
+        Units::spanning(&[root * 4], (lanes & 0b11) | hi)
     }
 
     /// Whether writing one register can be seen by reading the other.
@@ -200,5 +229,27 @@ impl VirtRegMap {
             (Some(phys), Some(hint)) => phys == hint,
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod units_tests {
+    use super::Units;
+
+    /// A tuple has the units of every member, each covering the same lanes, in
+    /// member order; one root is what a single register always had.
+    #[test]
+    fn a_register_spanning_roots_has_the_units_of_each() {
+        let tuple = Units::spanning(&[8, 12, 0], 0b101);
+        assert_eq!(tuple.len(), 6);
+        assert_eq!(tuple.collect::<Vec<_>>(), [8, 10, 12, 14, 0, 2]);
+        let one = Units::spanning(&[8], 0b11);
+        assert_eq!((one.len(), one.collect::<Vec<_>>()), (2, vec![8, 9]));
+        assert!(Units::spanning(&[8, 12], 0).is_empty());
+        let mut part = Units::spanning(&[4, 8], 0b11);
+        part.next();
+        part.next();
+        part.next();
+        assert_eq!((part.len(), part.collect::<Vec<_>>()), (1, vec![9]));
     }
 }
