@@ -23,8 +23,10 @@ pub struct Segments {
     pub code: String,
     /// The stack lives in the data group: `stack` reaches the data too.
     pub stack_is_data: bool,
-    /// The program's start-up makes `stack` hold the data group's selector for the whole run, while `data` stays the
-    /// data segment (unlike `stack_is_data`, which frees it): a near pointer into the stack is read through `data`.
+    /// The program's start-up makes `stack` hold the data group's selector for
+    /// the whole run, while `data` stays the data segment (unlike
+    /// `stack_is_data`, which frees it): a near pointer into the stack is read
+    /// through `data`.
     pub stack_shares_data: bool,
 }
 
@@ -71,6 +73,12 @@ pub struct Machine {
     /// FAR_BSS), as DOS leaves memory past the image as it found it. Where
     /// it does not, zero far data is stored.
     pub far_bss: bool,
+    /// Where the start-up does not zero FAR_BSS (`far_bss` false), the object
+    /// zeroes its own far zero data through the runtime's initializer table
+    /// (Open Watcom's `XI`): its far variables of zeros stay out of the image,
+    /// and one routine and one table entry zero them before `main`. Taken by
+    /// a segment only where the stored zeros outweigh that code.
+    pub far_bss_init: bool,
     /// Every object with near uninitialised data (`_BSS`) opens it with an
     /// empty segment `BSSB` of the same class, so that a start-up zeroing from
     /// `BSSB` finds the first byte of all of it whatever order the linker
@@ -170,6 +178,7 @@ impl Machine {
             segment_end_faults,
             protected_huge_shift: table.get("huge_shift").and_then(toml::Value::as_integer).map(|shift| shift as u32),
             far_bss: table.get("far_bss").and_then(toml::Value::as_bool).unwrap_or(false),
+            far_bss_init: table.get("far_bss_init").and_then(toml::Value::as_bool).unwrap_or(false),
             bss_begin: table.get("bss_begin").and_then(toml::Value::as_bool).unwrap_or(false),
             layout: None,
         })
