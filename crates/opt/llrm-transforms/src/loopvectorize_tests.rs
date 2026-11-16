@@ -349,7 +349,7 @@ fn run_x86(
         .with_tuning(llrm_mir::target::Tuning { vectorize_at_size: at_size, ..llrm_mir::target::Tuning::PIN });
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false, interleaves: false });
     manager.run_module(&mut module, std::rc::Rc::new(X86At(std::rc::Rc::new(tti)))).unwrap();
     crate::testing::printed(&module)
 }
