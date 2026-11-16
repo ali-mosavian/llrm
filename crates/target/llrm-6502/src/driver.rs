@@ -653,7 +653,12 @@ fn tail(
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
     // `-fno-outline` is the kill switch, for a test of what the backend wrote
     let outlined = request.level != Level::O0 && !request.passes.iter().any(|flag| flag == "-fno-outline");
-    let text = if outlined { crate::outline::run(&text) } else { text };
+    // A place in a loop is given up for its clocks at -O1 only: at -O2 and -O3
+    // that takes div_constants_long and div_constants_ulong out of the bytes
+    // that beat the other compilers', and bytes come first (row
+    // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
+    let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
+    let text = if outlined { crate::outline::run_at(&text, rate) } else { text };
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
