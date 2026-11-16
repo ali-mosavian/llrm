@@ -12,8 +12,8 @@ cnt = $98               ; rc24: n % 8
 fill = $99              ; rc25: the byte a right shift brings in
 
 
-; v = x, then X = n / 8 and cnt = n % 8
-.macro SHIFT64_ENTER
+; v = x, A = n
+.macro SHIFT64_LOAD
     sta v
     stx v+1
     ldx #5
@@ -23,6 +23,10 @@ fill = $99              ; rc25: the byte a right shift brings in
     bpl :-
     ldy #0
     lda (rc0),y
+.endmacro
+
+; A = n: X = n / 8 and cnt = n % 8 (v is already set: the _a entries are the fix_udi.s ones)
+.macro SHIFT64_COUNT
     tay
     and #7
     sta cnt
@@ -31,6 +35,12 @@ fill = $99              ; rc25: the byte a right shift brings in
     lsr a
     lsr a
     tax
+.endmacro
+
+; v = x, then X = n / 8 and cnt = n % 8
+.macro SHIFT64_ENTER
+    SHIFT64_LOAD
+    SHIFT64_COUNT
 .endmacro
 
 ; A:X:rc2..rc7 = v
