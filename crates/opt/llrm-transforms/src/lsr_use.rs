@@ -1171,7 +1171,7 @@ pub fn setup_cost(
         Type::Constant => {
             let value = se.as_constant(reg).expect("a constant");
             let bits = se.get_type_size_in_bits(cx, se.type_of(reg));
-            u32::from(tti.int_imm_cost(value.sext_value(), bits) != TtiCost::FREE)
+            u32::from(tti.lsr_constant_setup_is_one() || tti.int_imm_cost(value.sext_value(), bits) != TtiCost::FREE)
         }
         _ if depth == 0 => 0,
         Type::AddRec => setup_cost(se, cx, tti, se.operands(reg)[0].scev, depth - 1),
