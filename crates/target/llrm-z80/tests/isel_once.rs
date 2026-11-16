@@ -37,3 +37,14 @@ fn both_schedules_come_from_one_dag_and_rescheduling_it_changes_nothing() {
     }
     assert!(differ, "the ILP schedule is a different order somewhere (lz4's copy loops)");
 }
+
+/// The selector's table was scanned for every block (4% of switch_jump_table
+/// -O2).
+#[test]
+fn a_selector_is_built_once_per_cpu() {
+    use llrm_z80::dagisel::hooks::Cpu;
+    use llrm_z80::dagisel::pipeline::selector;
+    assert!(std::ptr::eq(selector(Cpu::Z80), selector(Cpu::Z80)), "one selector for the Z80");
+    assert!(std::ptr::eq(selector(Cpu::Z180), selector(Cpu::Z180)), "one selector for the Z180");
+    assert!(!std::ptr::eq(selector(Cpu::Z80), selector(Cpu::Z180)), "each CPU has its own table");
+}
