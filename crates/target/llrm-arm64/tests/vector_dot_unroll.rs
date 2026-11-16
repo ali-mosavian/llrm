@@ -14,7 +14,8 @@ use llrm_arm64::machine::Platform;
 #[test]
 fn a_vectorized_dot_product_is_sized_and_unrolled() {
     let asm = driver::assembly(include_str!("data/vector_dot_unroll.ll"), Platform::Linux, Level::O2).expect("lowers");
-    let kernel: Vec<&str> = asm.lines().skip_while(|line| *line != "bench_dot:").take_while(|line| *line != "main:").collect();
+    let kernel: Vec<&str> =
+        asm.lines().skip_while(|line| *line != "bench_dot:").take_while(|line| *line != "main:").collect();
     let branches = kernel.iter().filter(|line| line.starts_with("\tb.")).count();
     assert_eq!(branches, 1, "{}", kernel.join("\n"));
 }
