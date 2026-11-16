@@ -122,3 +122,15 @@ def test_the_like_columns_put_gcc_on_ours_pc_relative_data_model():
     plain = size.gcc_command("m68k-linux-gnu-", "68020", "Os", Path("x.s"), source, [])
     like = size.gcc_command("m68k-linux-gnu-", "68020", "Os", Path("x.s"), source, [], pcrel=True)
     assert "-mpcrel" not in plain and "-mpcrel" in like, (plain, like)
+
+
+def test_the_link_has_the_libc_stubs_for_a_program_that_calls_memcpy():
+    """30 of 211 programs (every one that copies a struct or calls memcpy/memset or an `llrm_os_*` routine) were SKIP rows: the link had no libc, so a third of the corpus went unmeasured."""
+    command = size.link_command("m68k-linux-gnu-", "68000", Path("p.o"), Path("p.exe"), Path("p.map"), "crt.o", "rt.a", "stubs.a")
+    assert command[command.index("-Wl,--start-group") + 1 : command.index("-Wl,--end-group")] == ["rt.a", "stubs.a"], command
+
+
+def test_gcc_gets_the_posix_headers_and_no_x86_code_model():
+    """os_exit and bench_io (`#include "llrm_os.h"`) and memcpy_runtime (`-mcmodel=medium`, an x86 flag) had no gcc cell: 'No such file' and 'unrecognized command-line option'."""
+    command = size.gcc_command("m68k-linux-gnu-", "68000", "Os", Path("x.s"), HERE.parent / "tests/run/c/frameless.c", ["-O2", "-mcmodel=medium"])
+    assert str(HERE.parent / "runtime/shared/posix") in command and not any(flag.startswith("-mcmodel") for flag in command), command

@@ -65,7 +65,7 @@ def in_text(text: str) -> str:
 
 def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str], pcrel: bool = False) -> list[str]:
     """gcc's line with the program's own flags in gcc's spelling: `-fno-inline-functions` left out, gcc inlined what ours and the pin keep calls."""
-    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, *external_flags.gcc_program_flags(flags), "-S", "-o", str(asm), str(source)]
+    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, "-I", str(ROOT / "runtime/shared/posix"), *[flag for flag in external_flags.gcc_program_flags(flags) if not flag.startswith("-mcmodel")], "-S", "-o", str(asm), str(source)]
 
 
 def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: str, cache: Path, work: Path) -> dict[str, object]:
@@ -99,13 +99,12 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
     if compiler != "clang":
         glob = work / f"{source.stem}.{compiler}.g.s"
         glob.write_text(in_text(asm.read_text()))
-        subprocess.run([f"{tools}as", f"-m{cpu}", "-o", str(obj), str(glob)], check=True, capture_output=True, env=env)
-    crt, archive = support(cc, root, cpu, level, cache)
+        assembled = subprocess.run([f"{tools}as", f"-m{cpu}", "-o", str(obj), str(glob)], capture_output=True, text=True, env=env)
+        if assembled.returncode != 0:  # gcc -mpcrel on a data section over 32 KB: a 16-bit displacement does not reach
+            raise SystemExit(f"m68k_program_size: {compiler} {source.name} does not assemble: {sweep.first_error(assembled.stderr)}")
+    crt, archive, stubs = support(cc, root, cpu, level, cache)
     exe, mapfile = work / f"{source.stem}.{compiler}.exe", work / f"{source.stem}.{compiler}.map"
-    link = subprocess.run(
-        [f"{tools}gcc", f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding", f"-Wl,-Map={mapfile}", "-o", str(exe), str(obj), crt, archive],
-        capture_output=True, text=True, env=env,
-    )
+    link = subprocess.run(link_command(tools, cpu, obj, exe, mapfile, crt, archive, stubs), capture_output=True, text=True, env=env)
     if link.returncode != 0:
         raise SystemExit(f"m68k_program_size: {compiler} {source.name} does not link: {sweep.first_error(link.stderr)}")
     sizes = text_bytes(mapfile.read_text())
@@ -114,10 +113,22 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
     return {"program": program, "library": sum(library.values()), "members": library, "whole": program + sum(library.values())}
 
 
-def support(cc: str, root: str, cpu: str, level: str, cache: Path) -> tuple[str, str]:
-    """The crt object and the compiler-rt archive at LEVEL: the only objects a program is linked with here (no memcpy or OS stubs)."""
+def support(cc: str, root: str, cpu: str, level: str, cache: Path) -> tuple[str, str, str]:
+    """The crt object, the compiler-rt archive at LEVEL and the libc stub archive (`memcpy`, `memset`, the `llrm_os_*` calls): one stub source for both columns, so a program either column calls them for pays the same member bytes."""
     args = sweep.build_support(cc, root, cpu, cache, int(os.environ.get("JOBS", "4")), level, runnable=False)
-    return args[0], args[2]
+    stubs = cache / f"stubs_{cpu}.a"
+    if not stubs.exists():
+        tmp = stubs.with_suffix(".tmp")
+        tmp.unlink(missing_ok=True)
+        subprocess.run([f"{root}/usr/bin/m68k-linux-gnu-ar", "rcs", str(tmp), args[3], args[4]], check=True, env=sweep.tool_env(root))
+        tmp.rename(stubs)
+    return args[0], args[2], str(stubs)
+
+
+def link_command(tools: str, cpu: str, obj: Path, exe: Path, mapfile: Path, crt: str, archive: str, stubs: str) -> list[str]:
+    """The program, the crt and the two archives; the group lets the stubs reach back into compiler-rt."""
+    return [f"{tools}gcc", f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding", f"-Wl,-Map={mapfile}", "-o", str(exe), str(obj), crt,
+            "-Wl,--start-group", archive, stubs, "-Wl,--end-group"]
 
 
 def main() -> int:
