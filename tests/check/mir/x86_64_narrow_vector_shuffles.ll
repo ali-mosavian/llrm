@@ -35,8 +35,19 @@ define void @interleave(ptr %p, ptr %q) {
   ret void
 }
 
+define void @from_scalar(i16 %x, ptr %q) {
+  %y = bitcast i16 %x to <2 x i8>
+  %w = shufflevector <2 x i8> %y, <2 x i8> poison, <16 x i32> <i32 poison, i32 poison, i32 poison, i32 0, i32 1, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison>
+  %v = load <16 x i8>, ptr %q, align 16
+  %b = shufflevector <16 x i8> %w, <16 x i8> %v, <16 x i32> <i32 16, i32 17, i32 18, i32 3, i32 4, i32 21, i32 22, i32 23, i32 24, i32 25, i32 26, i32 27, i32 28, i32 29, i32 30, i32 31>
+  store <16 x i8> %b, ptr %q, align 16
+  ret void
+}
+
 ; CHECK-LABEL: piece proc
 ; CHECK: movaps xmmword ptr dst, xmm1
 ; CHECK: movaps xmmword ptr dst+16, xmm0
 ; CHECK-LABEL: interleave proc
+; CHECK: movaps xmmword ptr [rsi], xmm
+; CHECK-LABEL: from_scalar proc
 ; CHECK: movaps xmmword ptr [rsi], xmm

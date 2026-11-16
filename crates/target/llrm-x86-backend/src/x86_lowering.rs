@@ -832,6 +832,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::InsertVectorElt => lower_insert_vector_elt(dag, node),
             ISD::ExtractElement => lower_extract_vector_elt(dag, node),
+            ISD::ScalarToVector => lower_scalar_to_vector(dag, node),
             ISD::ZeroExtend | ISD::SignExtend if dag.value_type(node).is_vector() => lower_vector_extend(dag, node),
             ISD::Truncate if dag.value_type(node).is_vector() => lower_vector_truncate(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
@@ -3683,6 +3684,17 @@ fn lower_insert_vector_elt(
         return None;
     }
     Some(scalar_in_lane0(dag, vt, lane_vt, element, zero_rest))
+}
+
+/// `LowerSCALAR_TO_VECTOR` for byte and word lanes: the scalar any-extended to an `i32`, moved to lane 0 of a
+/// `v4i32` (`movd`) and bitcast.
+fn lower_scalar_to_vector(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let lane_vt = integer_lane_of_v128(vt)?;
+    Some(scalar_in_lane0(dag, vt, lane_vt, dag.operand(node, 0), false))
 }
 
 /// A scalar as lane 0 of a 128-bit integer vector: `movd`/`movq`, with
