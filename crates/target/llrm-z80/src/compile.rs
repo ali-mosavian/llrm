@@ -847,7 +847,7 @@ fn price_key(
 ) -> (u64, u64) {
     use std::hash::{Hash, Hasher};
     let (function, assignment, slots, reads, frequencies) = one;
-    let mut both = Both(Default::default(), Default::default());
+    let mut both = Both::new();
     let _ = std::fmt::Write::write_fmt(&mut both, format_args!("{level:?}|"));
     write_ambient_state(&mut both);
     hash_function(function, &mut both);
@@ -862,7 +862,7 @@ fn price_key(
         own.sort_unstable();
         own.hash(&mut both);
     }
-    (both.0.finish(), both.1.finish())
+    both.finish_pair()
 }
 
 /// Whether the price `one` (bytes, clocks) beats `other`: bytes first, clocks
@@ -913,6 +913,40 @@ mod tests {
         expand::set_frequencies(&kept.into_iter().collect::<Vec<_>>());
         assert_ne!(changed, base, "the key does not see the block frequencies");
         assert_eq!(key(Level::O2), base, "the state is restored");
+    }
+
+    /// Comparing the two forms of a function as `Debug` text of both was 3% of
+    /// switch_jump_table -O2; two functions that differ in a field must still
+    /// differ, or the copied and kept forms are taken for one.
+    #[test]
+    fn two_functions_differing_in_one_operand_are_not_the_same_function() {
+        let request = Request::new(Level::O2);
+        let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
+        let base = machine_function_with(&selected, "lz4", true).expect("builds");
+        assert!(same_function(&base, &base.clone()), "a copy is the same function");
+        let mut other = base.clone();
+        let imm = other
+            .blocks
+            .iter_mut()
+            .flat_map(|block| block.insts.iter_mut())
+            .flat_map(|inst| inst.operands.iter_mut())
+            .find_map(|operand| if let Operand::Imm(value) = operand { Some(value) } else { None })
+            .expect("an immediate");
+        *imm += 1;
+        assert!(!same_function(&base, &other), "one immediate differs");
+    }
+
+    /// A SipHash call per small field cost more than the bytes it hashed (a
+    /// tenth of switch_jump_table -O2): the key is hashed in one run.
+    #[test]
+    fn a_key_is_siphashed_in_one_run_not_one_per_field() {
+        let request = Request::new(Level::O2);
+        let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
+        let function = machine_function_with(&selected, "lz4", true).expect("builds");
+        let before = SIPS.with(|count| count.get());
+        let one = allocation_key(&function, "lz4", false, Level::O2, false);
+        assert_eq!(SIPS.with(|count| count.get()) - before, 1, "one SipHash run for the whole key");
+        assert_eq!(one, allocation_key(&function, "lz4", false, Level::O2, false));
     }
 
     /// The allocation key is a hash of the function's fields, not of its
@@ -1466,11 +1500,11 @@ fn allocation_key(
     // The scalars as text, the function as its fields: `Debug` of a function is
     // the cost of the key (`int64_divmod_edges`: a fifth of the compile),
     // and most of it is the selector's `form` of each instruction.
-    let mut both = Both(Default::default(), Default::default());
+    let mut both = Both::new();
     let _ = write!(both, "{name}|{strict}|{level:?}|{want_apart}|");
     write_ambient_state(&mut both);
     hash_function(function, &mut both);
-    (both.0.finish(), both.1.finish())
+    both.finish_pair()
 }
 
 /// What the allocator and the pricing read besides their arguments: the
@@ -1499,8 +1533,34 @@ fn write_ambient_state(both: &mut Both) {
     );
 }
 
-/// Both hashes of a key at once.
-struct Both(std::collections::hash_map::DefaultHasher, <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher);
+#[cfg(test)]
+thread_local! {
+    /// SipHash runs made, for the test that keeps them to one per key.
+    static SIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Both hashes of a key at once: Fx on every write, SipHash over the whole
+/// buffered key in one call (a SipHash call per small field costs more than
+/// the bytes it hashes).
+struct Both {
+    fx: <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher,
+    bytes: Vec<u8>,
+}
+
+impl Both {
+    fn new() -> Self {
+        Both { fx: Default::default(), bytes: Vec::with_capacity(4096) }
+    }
+
+    fn finish_pair(&self) -> (u64, u64) {
+        use std::hash::Hasher;
+        #[cfg(test)]
+        SIPS.with(|count| count.set(count.get() + 1));
+        let mut sip = std::collections::hash_map::DefaultHasher::new();
+        sip.write(&self.bytes);
+        (sip.finish(), self.fx.finish())
+    }
+}
 
 impl std::fmt::Write for Both {
     fn write_str(
@@ -1518,12 +1578,44 @@ impl std::hash::Hasher for Both {
         &mut self,
         bytes: &[u8],
     ) {
-        self.0.write(bytes);
-        self.1.write(bytes);
+        self.fx.write(bytes);
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    fn write_u8(
+        &mut self,
+        value: u8,
+    ) {
+        self.fx.write_u8(value);
+        self.bytes.push(value);
+    }
+
+    fn write_u32(
+        &mut self,
+        value: u32,
+    ) {
+        self.fx.write_u32(value);
+        self.bytes.extend_from_slice(&value.to_ne_bytes());
+    }
+
+    fn write_u64(
+        &mut self,
+        value: u64,
+    ) {
+        self.fx.write_u64(value);
+        self.bytes.extend_from_slice(&value.to_ne_bytes());
+    }
+
+    fn write_usize(
+        &mut self,
+        value: usize,
+    ) {
+        self.fx.write_usize(value);
+        self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
     fn finish(&self) -> u64 {
-        self.0.finish()
+        self.finish_pair().0
     }
 }
 
@@ -1548,13 +1640,27 @@ fn hash_form(
         }
         held.entry(at)
             .or_insert_with(|| {
-                let mut text = Both(Default::default(), Default::default());
+                let mut text = Both::new();
                 let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{form:?}"));
-                (form.clone(), std::hash::Hasher::finish(&text.1))
+                (form.clone(), std::hash::Hasher::finish(&text.fx))
             })
             .1
     });
     hash.hash(into);
+}
+
+/// Whether two functions agree in every field: the same 128-bit hash of all
+/// of them as the allocation key (no `Debug` text of two whole functions).
+fn same_function(
+    one: &MFunction,
+    other: &MFunction,
+) -> bool {
+    let hashed = |function: &MFunction| {
+        let mut both = Both::new();
+        hash_function(function, &mut both);
+        both.finish_pair()
+    };
+    hashed(one) == hashed(other)
 }
 
 /// Every field of the function, in the order they are declared: a field added
@@ -3929,7 +4035,7 @@ fn lines_of_form(
                 (machine_function_with(selected, name, true), machine_function_with(selected, name, false));
             matches!(
                 (one, other),
-                (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
+                (Ok(one), Ok(other)) if same_function(&one, &other)
             )
         };
         let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
