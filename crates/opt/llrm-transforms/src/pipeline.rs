@@ -276,6 +276,9 @@ pub struct Options {
     /// pipelines have it off (`enable-unroll-and-jam`); it is on at -O3 and
     /// -Omax, where the particle row gains from it.
     pub unroll_and_jam: bool,
+    /// `-ftree-loop-vectorize`: LLVM's `LoopVectorizePass`, which clang runs at
+    /// -O2 and up.
+    pub vectorize: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
@@ -359,6 +362,7 @@ impl Default for Options {
             unswitch: false,
             interchange: true,
             unroll_and_jam: false,
+            vectorize: true,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -526,6 +530,7 @@ impl Options {
             "tailrec" => self.sibcalls,
             "loop-interchange" => self.interchange,
             "loop-unroll-and-jam" => self.unroll_and_jam,
+            "loop-vectorize" => self.vectorize,
             _ => true,
         }
     }

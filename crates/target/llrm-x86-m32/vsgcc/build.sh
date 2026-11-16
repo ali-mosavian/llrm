@@ -71,6 +71,7 @@ for o in O1 O2 O3 Os; do
   fi
   for c in $CS; do
     ld -m $EMU -static -e 0 -Ttext=0x10000 --just-symbols=$O/stub.elf -Map=$P.$c$o.map -o $P.$c$o.elf $P.$c$o.o $(eval echo \${RT_$c:-}) 2>$P.$c$o.lderr || fail "LINK FAIL $c$o $P: $(grep -o 'undefined reference to.*' $P.$c$o.lderr | sort -u | tr '\n' ' ')"
+    sha256sum $P.$c$o.o | cut -d" " -f1 | tr -d "\n" > $P.$c$o.elf.src  # harness.fresh_elf: the image is the object's
   done
 done
 exit $FAILED

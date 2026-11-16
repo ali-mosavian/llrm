@@ -316,7 +316,8 @@ fn compiled_module_at_o1(
     let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
     let added = other_price.0 - kept_price.0;
     let saved = (kept_price.1 - other_price.1).round() as i64;
-    let pays = trial::keeps_at_o1(saved, added);
+    let rate = options.cpu().ok().and_then(|cpu| cpu.target().tti()).map_or(0, |tti| tti.unroll_milliclocks_per_byte());
+    let pays = trial::keeps_at_o1(saved, added, rate);
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll: {added:+} bytes, {saved:+} work saved: {}", if pays { "kept" } else { "put back" });
     }
