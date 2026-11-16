@@ -21,14 +21,15 @@
 //!    outlined is dropped, and a function that is left without a benefit is not
 //!    made.
 //!
-//! The pin outlines for bytes alone. Here a call costs clocks too, so a
-//! candidate keeps only the places where each byte it saves costs at most
-//! `clocks_per_byte` more clocks (`alloc::Tuning`, the rate every size-reducing
-//! choice of the target is made at): a `jsr` and its `rts` are 12 clocks a
-//! run, a `jmp` 3, times how often the place runs. How often is the static
-//! estimate of `MachineBlockFrequencyInfo` in its simplest form: a place
-//! inside the range of a backward branch runs [`LOOP_TRIPS`] times for each
-//! enclosing loop. The coldest places go first.
+//! The pin outlines for bytes alone, and so does this pass at `-Os`. At the
+//! speed levels a place inside a loop may be given up: a call costs 12 clocks
+//! (`jsr` and `rts`, a `jmp` 3) a run, a loop runs its body [`LOOP_TRIPS`]
+//! times for each entry (the pin's `BranchProbabilityInfo` loop scale, which
+//! `MachineBlockFrequencyInfo` applies; a back edge here is a backward branch
+//! of the text), and the place goes when each byte it saves would cost more
+//! than `clocks_per_byte` clocks (`alloc::Tuning`, the rate every size-reducing
+//! choice of the target is made at). A place outside every loop is never given
+//! up.
 //!
 //! The pin's targets must keep a register the call clobbers (the link register
 //! of AArch64) live across it. A `jsr` and its `rts` change no register, flag
@@ -53,31 +54,31 @@ const FRAME: usize = 1;
 const CALL_CLOCKS: u64 = 12;
 /// Clocks a jump to a body that ends in its own `rts` adds.
 const JUMP_CLOCKS: u64 = 3;
-/// Runs of a loop's body for one entry. The pin's loop heuristic is a back edge
-/// taken 31 times in 32 (`BranchProbabilityInfo`), which priced two programs
-/// of the corpus out of the bytes they beat the other compilers' by; the loops
-/// of programs this size run about 8 times.
-const LOOP_TRIPS: u64 = 8;
+/// Runs of a loop's body for one entry: a back edge taken 31 times in 32
+/// (`BranchProbabilityInfo`'s loop heuristic, the scale of the pin's
+/// `MachineBlockFrequencyInfo`).
+const LOOP_TRIPS: u64 = 32;
 /// The loops a place counts as being in, at most.
 const MOST_LOOPS: u32 = 3;
 
 /// [`run_at`] at the rate of the speed levels.
 pub fn run(text: &str) -> String {
-    run_at(text, crate::alloc::Tuning::SPEED.clocks_per_byte)
+    run_at(text, Some(crate::alloc::Tuning::SPEED.clocks_per_byte))
 }
 
 /// `text` with its repeated sequences outlined, and the same text when none
-/// pays: each byte saved may cost `clocks_per_byte` clocks.
+/// pays. With a rate, a place in a loop is given up where each byte it saves
+/// would cost more than `clocks_per_byte` clocks; with none, only bytes count.
 pub fn run_at(
     text: &str,
-    clocks_per_byte: u32,
+    clocks_per_byte: Option<u32>,
 ) -> String {
     let lines: Vec<Line> = text.lines().map(Line::parse).collect();
     if lines.iter().filter(|line| matches!(line, Line::Inst(_))).count() < 2 * (CALL + FRAME) {
         return text.to_owned();
     }
     let mapped = Mapper::new(&lines);
-    let chosen = select(&lines, &mapped, &weights(&lines), u64::from(clocks_per_byte));
+    let chosen = select(&lines, &mapped, &weights(&lines), clocks_per_byte.map(u64::from));
     if chosen.is_empty() {
         return text.to_owned();
     }
@@ -371,7 +372,7 @@ fn select(
     lines: &[Line],
     mapped: &Mapper,
     weights: &[u64],
-    clocks_per_byte: u64,
+    clocks_per_byte: Option<u64>,
 ) -> Vec<Chosen> {
     let tree = SuffixTree::new(&mapped.ids);
     // lines that end a body: an `rts`, and only when nothing follows it in the
@@ -442,21 +443,14 @@ fn select(
                 end = start + candidate.length;
             }
         }
-        // the coldest places that pay for their clocks in bytes
-        places.sort_by_key(|&place| (weights[place], place));
-        let per_run = if candidate.tail { JUMP_CLOCKS } else { CALL_CLOCKS };
-        let mut clocks = 0;
-        let mut kept = 0;
-        for (count, &place) in places.iter().enumerate() {
-            clocks += weights[place] * per_run;
-            let saved = benefit(candidate.bytes, count + 1, candidate.tail);
-            if count >= 1 && saved > 0 && clocks <= clocks_per_byte * saved as u64 {
-                kept = count + 1;
-            }
+        // a place in a loop is given up where its bytes cost more clocks than
+        // the rate allows; outside a loop it stays
+        if let Some(rate) = clocks_per_byte {
+            let per_run = if candidate.tail { JUMP_CLOCKS } else { CALL_CLOCKS };
+            let saved = candidate.bytes.saturating_sub(CALL) as u64;
+            places.retain(|&place| weights[place] == 1 || weights[place] * per_run <= rate * saved);
         }
-        places.truncate(kept);
-        places.sort_unstable();
-        if places.is_empty() {
+        if places.len() < 2 || benefit(candidate.bytes, places.len(), candidate.tail) <= 0 {
             continue;
         }
         for &place in &places {
