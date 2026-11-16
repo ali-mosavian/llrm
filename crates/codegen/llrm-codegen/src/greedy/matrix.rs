@@ -42,6 +42,17 @@ use crate::liveness::liveintervalunion::{LiveIntervalUnion, Query, VReg};
 use crate::liveness::liverange::{LiveInterval, LiveRange};
 use crate::liveness::slotindex::SlotIndex;
 
+/// Whether the registers `clobbered` (roots) include any of `phys`: a tuple
+/// is destroyed with any member (`MachineOperand::clobbersPhysReg` over each
+/// of its units' roots).
+pub fn clobbers(
+    regs: &llrm_lir::registers::Regs,
+    clobbered: &llrm_lir::registers::RegSet,
+    phys: RegId,
+) -> bool {
+    regs.units(phys).any(|(root, _)| clobbered.contains(&root))
+}
+
 /// `LiveRegMatrix::InterferenceKind`.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum InterferenceKind {
@@ -293,7 +304,9 @@ impl LiveRegMatrix {
         phys: RegId,
         unit: RegUnit,
     ) -> Option<LiveRange> {
-        if !virt.has_sub_ranges() {
+        // DEVIATE (no number): a tuple's lanes are its members', not one
+        // root's bytes: its range is read whole, an over-approximation.
+        if !virt.has_sub_ranges() || self.tri.regs.is_composite(phys) {
             return None;
         }
         // Unit lanes are the root's bytes, the upper two sharing one; the
@@ -372,7 +385,7 @@ impl LiveRegMatrix {
         virt: &LiveInterval,
         phys: RegId,
     ) -> bool {
-        self.reg_mask_of(virt).is_some_and(|roots| roots.contains(&self.tri.regs.root(phys)))
+        self.reg_mask_of(virt).is_some_and(|roots| clobbers(&self.tri.regs, &roots, phys))
     }
 
     /// The registers `virt` loses to the instructions it is live across, kept

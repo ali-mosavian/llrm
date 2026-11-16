@@ -4,8 +4,9 @@
 //! one root and one lane mask (the scalar path) saw none of this.
 
 use llrm_arm64::REGISTER_INFO;
+use llrm_codegen::greedy::matrix::clobbers;
 use llrm_codegen::greedy::virtregmap::RegisterInfo;
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegSet, Regs};
 
 fn units(name: &str) -> Vec<u32> {
     let tri = RegisterInfo::new(Regs(&REGISTER_INFO));
@@ -45,4 +46,19 @@ fn the_wrapping_tuple_holds_the_first_register() {
     assert!(meet("v31_v0", "v0"));
     assert!(meet("v31_v0", "v31"));
     assert!(!meet("v31_v0", "v1"));
+}
+
+/// A call that destroys `v1` destroys every tuple holding it, and none that
+/// does not: the mask was matched against the tuple's own root, a register
+/// no call names, so a live-across-call range was handed `v0_v1`.
+#[test]
+fn a_call_that_destroys_a_member_destroys_the_tuple() {
+    let regs = Regs(&REGISTER_INFO);
+    let reg = |name: &str| REGISTER_INFO.by_name(name).unwrap_or_else(|| panic!("{name}"));
+    let mask: RegSet = [regs.root(reg("v1"))].into_iter().collect();
+    assert!(clobbers(&regs, &mask, reg("v0_v1")));
+    assert!(clobbers(&regs, &mask, reg("v1_v2_v3")));
+    assert!(clobbers(&regs, &mask, reg("v1")));
+    assert!(!clobbers(&regs, &mask, reg("v2_v3")));
+    assert!(!clobbers(&regs, &mask, reg("v0")));
 }
