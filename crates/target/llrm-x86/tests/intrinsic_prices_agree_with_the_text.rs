@@ -37,7 +37,11 @@ fn test_every_price_row_is_found_and_a_missing_name_is_not() {
     }
     assert!(checked > 1000, "{checked} rows");
     let x86 = X86::of_cpu("i486").unwrap();
-    assert_eq!(x86.intrinsic_cost("llvm.no.such.thing", None, &[], CostKind::CodeSize), Cost::INVALID);
+    // A name that is no intrinsic is invalid. An `llvm.` name no row and no pin case names is "going to be turned
+    // into a library call" (`getTypeBasedIntrinsicInstrCost`'s last line, #10048): 1 for code size, else 10.
+    assert_eq!(x86.intrinsic_cost("no.such.thing", None, &[], CostKind::CodeSize), Cost::INVALID);
+    assert_eq!(x86.intrinsic_cost("llvm.no.such.thing", None, &[], CostKind::CodeSize), Cost::of(1));
+    assert_eq!(x86.intrinsic_cost("llvm.no.such.thing", None, &[], CostKind::RecipThroughput), Cost::of(10));
 }
 
 /// The price text had rows for f32 and f64 only, so every call of an
