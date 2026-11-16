@@ -93,6 +93,8 @@ pub struct Coalescer {
     /// default operand size: at size a constant is remade where that is
     /// shorter than the copy it replaces, or leaves no second copy of it.
     pub moves: Option<llrm_target::MoveBytes>,
+    /// `CoalescerEnv::keeps_split_params`.
+    pub keeps_split_params: bool,
 }
 
 impl Coalescer {
@@ -109,6 +111,7 @@ impl Coalescer {
             classes: std::rc::Rc::clone(classes),
             size: false,
             moves: None,
+            keeps_split_params: false,
         }
     }
 }
@@ -220,6 +223,7 @@ impl Coalescer {
                 keep_pinned: false,
                 joins_global_copies: true,
                 joins_pinned_copies: true,
+                keeps_split_params: self.keeps_split_params,
                 joins_sub_registers: true,
                 joins_lanes: false,
                 joins_loop_carried_first: false,

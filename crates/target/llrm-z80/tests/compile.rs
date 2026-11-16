@@ -1499,6 +1499,19 @@ fn a_form_of_a_function_is_allocated_at_most_six_times() {
     assert!(runs <= 6 * forms, "lz4 -O2 was allocated {runs} times for {forms} forms");
 }
 
+/// A function whose allocations folded no spilled read was allocated once more
+/// with every fold refused (`NO_FOLD`), and came out the same: 12 of 28
+/// allocations of switch_jump_table -O2, a third of its compile. The retry is
+/// run only where an allocation of the function folded a read.
+#[test]
+fn a_function_with_no_folded_read_is_not_allocated_again_unfolded() {
+    let ir = include_str!("kernels/ir/reload_high_lane_far.ll");
+    llrm_z80::compile::take_no_fold_trials();
+    text(ir, "g", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let trials = llrm_z80::compile::take_no_fold_trials();
+    assert_eq!(trials, 0, "{trials} allocations with the folds refused");
+}
+
 /// The same allocation was priced again (finished into text and priced)
 /// wherever a candidate came out as one already seen: `settle` prices up to six
 /// stack choices of one function, most of them alike, and each pricing is a

@@ -936,16 +936,37 @@ mod tests {
         assert!(!same_function(&base, &other), "one immediate differs");
     }
 
-    /// A SipHash call per small field cost more than the bytes it hashed (a
+    /// The key bytes are hashed by `wyhash`, no longer SipHash and Fx per
+    /// write: a flipped bit anywhere, a longer key that only adds zero
+    /// bytes, and the two seeds must all change what the memo sees.
+    #[test]
+    fn the_key_hash_changes_with_every_bit_and_with_the_length() {
+        let base: Vec<u8> = (0..70u8).map(|at| at.wrapping_mul(37)).collect();
+        let (first, second) = (wyhash(&base, 1), wyhash(&base, 2));
+        assert_ne!(first, second, "the seeds");
+        let mut seen = std::collections::HashSet::from([first]);
+        for at in 0..base.len() {
+            for bit in 0..8 {
+                let mut flipped = base.clone();
+                flipped[at] ^= 1 << bit;
+                assert!(seen.insert(wyhash(&flipped, 1)), "bit {bit} of byte {at}");
+            }
+        }
+        for length in 0..40 {
+            assert!(seen.insert(wyhash(&vec![0u8; length], 1)), "{length} zero bytes");
+        }
+    }
+
+    /// A hasher call per small field cost more than the bytes it hashed (a
     /// tenth of switch_jump_table -O2): the key is hashed in one run.
     #[test]
-    fn a_key_is_siphashed_in_one_run_not_one_per_field() {
+    fn a_key_is_hashed_in_one_run_not_one_per_field() {
         let request = Request::new(Level::O2);
         let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
         let function = machine_function_with(&selected, "lz4", true).expect("builds");
-        let before = SIPS.with(|count| count.get());
+        let before = RUNS.with(|count| count.get());
         let one = allocation_key(&function, "lz4", false, Level::O2, false);
-        assert_eq!(SIPS.with(|count| count.get()) - before, 1, "one SipHash run for the whole key");
+        assert_eq!(RUNS.with(|count| count.get()) - before, 1, "one hash run for the whole key");
         assert_eq!(one, allocation_key(&function, "lz4", false, Level::O2, false));
     }
 
@@ -1209,18 +1230,21 @@ fn allocate_from(
         Some(first) => first,
         None => allocate_first(function.clone(), name, level)?,
     };
-    let best = improved(first, function.clone(), name, level);
+    let (best, folds) = improved(first, function.clone(), name, level);
     // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
     // slots are all frame cells, so it folds every spilled read. Here a slot
     // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
     // after allocation: a spilled read is taken from its cell where the
     // function is cheaper for it, every other choice explored on both. Exit:
     // the stack slots chosen before the fold.
-    if !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
+    // Without a fold in the allocations that made `best`, the same allocations
+    // under `NO_FOLD` are the same.
+    if folds == 0 || !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
         return Ok(best);
     }
     crate::regalloc::NO_FOLD.with(|one| one.set(true));
-    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level));
+    NO_FOLD_TRIALS.with(|one| one.set(one.get() + 1));
+    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level).0);
     crate::regalloc::NO_FOLD.with(|one| one.set(false));
     Ok(match other {
         Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
@@ -1253,16 +1277,16 @@ fn repeating_loop_fold_wins(
         (priced_in_loops(&joined.0, level), priced_in_loops(&apart, level)),
         (Some(now), Some(then)) if cheaper(level, then, now)
     ) {
-        (false, Some((apart, joined.1, joined.2)))
+        (false, Some((apart, joined.1, joined.2, joined.3)))
     } else {
         (true, Some(joined))
     }
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
-/// byte back from `a`, and whether the other choices are worth exploring (not
-/// after the fallback).
-type First = (Allocated, bool, bool);
+/// byte back from `a`, whether the other choices are worth exploring (not
+/// after the fallback), and how many spilled reads it folded.
+type First = (Allocated, bool, bool, usize);
 
 /// The first allocation of `function`; where it fails, once more with the
 /// copies from the argument registers left unjoined.
@@ -1282,10 +1306,11 @@ fn allocate_first_apart(
     level: Level,
     want_apart: bool,
 ) -> Result<(First, Option<Allocated>), String> {
+    let folds = folds_made();
     match allocate_with_apart(None, true, function.clone(), name, level, want_apart) {
-        Ok((best, held, apart)) => Ok(((best, held, true), apart)),
+        Ok((best, held, apart)) => Ok(((best, held, true, folds_made() - folds), apart)),
         Err(first) => allocate_with(Some(true), true, function, name, level)
-            .map(|(done, _)| ((done, false, false), None))
+            .map(|(done, _)| ((done, false, false, folds_made() - folds), None))
             .map_err(|_| first),
     }
 }
@@ -1318,13 +1343,14 @@ fn allocate_with_apart(
 /// best so far: the argument copies joined or not, and a byte wanted both in
 /// `a` and in a register of its own loaded through `a` or through `hl`.
 fn improved(
-    (mut best, held, explore): First,
+    (mut best, held, explore, first_folds): First,
     function: MFunction,
     name: &str,
     level: Level,
-) -> Allocated {
+) -> (Allocated, usize) {
+    let folds = folds_made();
     if !explore {
-        return best;
+        return (best, first_folds);
     }
     let has_loop = !Cfg::new(&function).loops().is_empty();
     let other_join = Some(!crate::abi::z80().pinned_copies_unjoined);
@@ -1343,7 +1369,7 @@ fn improved(
             }
         }
     }
-    best
+    (best, first_folds + folds_made() - folds)
 }
 
 /// An ALU op or compare whose second source is a frame cell
@@ -1366,6 +1392,25 @@ thread_local! {
 }
 
 thread_local! {
+    /// Spilled reads the allocator has folded into their instruction on this
+    /// thread (an op reading its frame cell, or a byte of a pair read from it).
+    static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The folded spilled reads the allocations on this thread have left so far.
+fn folds_made() -> usize {
+    FOLDS.with(std::cell::Cell::get)
+}
+
+/// `count` folds more: a memoized allocation made them where it was first run.
+fn add_folds(count: usize) {
+    FOLDS.with(|one| one.set(one.get() + count));
+}
+
+thread_local! {
+    /// Allocations repeated with every spilled read left unfolded (`NO_FOLD`)
+    /// since the last [`take_no_fold_trials`].
+    static NO_FOLD_TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Reports `stack_slot_report_by` made, and whole-function read-again
@@ -1386,6 +1431,12 @@ thread_local! {
 /// each.
 pub fn take_stack_refusals() -> Vec<(i32, StackRefusal)> {
     STACK_REFUSALS.with(|one| std::mem::take(&mut *one.borrow_mut()))
+}
+
+/// The trials with every spilled read left unfolded run on this thread since
+/// the last call.
+pub fn take_no_fold_trials() -> usize {
+    NO_FOLD_TRIALS.with(|one| one.replace(0))
 }
 
 /// The allocations run on this thread since the last call.
@@ -1437,9 +1488,11 @@ fn allocate_once_with(
         }
         HOT_LOOP_FOLD.with(|one| one.set(done.hot_loop_fold));
         STACK_REFUSALS.with(|one| one.borrow_mut().extend(done.refusals.iter().copied()));
+        add_folds(done.folds);
         return done.result;
     }
     let refusals = STACK_REFUSALS.with(|one| one.borrow().len());
+    let folds = folds_made();
     let (folded_before, hot_before) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
     let result = allocate_once_computed(function, name, strict, level, want_apart);
     let (folded, hot_loop_fold) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
@@ -1448,6 +1501,7 @@ fn allocate_once_with(
         loops_folded: (folded != folded_before).then_some(folded),
         hot_loop_fold: if hot_loop_fold != hot_before { hot_loop_fold } else { hot_before },
         refusals: STACK_REFUSALS.with(|one| one.borrow()[refusals..].to_vec()),
+        folds: folds_made() - folds,
     };
     ALLOCATED.with(|memo| {
         let mut memo = memo.borrow_mut();
@@ -1471,6 +1525,8 @@ struct AllocatedBefore {
     loops_folded: Option<bool>,
     hot_loop_fold: bool,
     refusals: Vec<(i32, StackRefusal)>,
+    /// Spilled reads the call folded ([`folds_made`]).
+    folds: usize,
 }
 
 thread_local! {
@@ -1535,31 +1591,57 @@ fn write_ambient_state(both: &mut Both) {
 
 #[cfg(test)]
 thread_local! {
-    /// SipHash runs made, for the test that keeps them to one per key.
-    static SIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Key hash runs made, for the test that keeps them to one per key.
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Both hashes of a key at once: Fx on every write, SipHash over the whole
-/// buffered key in one call (a SipHash call per small field costs more than
-/// the bytes it hashes).
+/// The bytes of a key, hashed twice (two seeds) in one run when the key is
+/// complete: a hasher call per small field cost more than the bytes it hashes
+/// (SipHash, then Fx per write, were 4% of int64_divmod_edges -O2).
 struct Both {
-    fx: <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher,
     bytes: Vec<u8>,
 }
 
 impl Both {
     fn new() -> Self {
-        Both { fx: Default::default(), bytes: Vec::with_capacity(4096) }
+        Both { bytes: Vec::with_capacity(4096) }
     }
 
     fn finish_pair(&self) -> (u64, u64) {
-        use std::hash::Hasher;
         #[cfg(test)]
-        SIPS.with(|count| count.set(count.get() + 1));
-        let mut sip = std::collections::hash_map::DefaultHasher::new();
-        sip.write(&self.bytes);
-        (sip.finish(), self.fx.finish())
+        RUNS.with(|count| count.set(count.get() + 1));
+        (wyhash(&self.bytes, 0x243f_6a88_85a3_08d3), wyhash(&self.bytes, 0x1319_8a2e_0370_7344))
     }
+}
+
+/// wyhash (final version 4, one lane): 64 bits of `bytes`, folding two words
+/// at a time through a 64 x 64 -> 128 multiply.
+fn wyhash(
+    bytes: &[u8],
+    seed: u64,
+) -> u64 {
+    const P0: u64 = 0x2d35_8dcc_aa6c_78a5;
+    const P1: u64 = 0x8bb8_4b93_962e_acc9;
+    fn mix(
+        a: u64,
+        b: u64,
+    ) -> u64 {
+        let product = u128::from(a) * u128::from(b);
+        (product as u64) ^ ((product >> 64) as u64)
+    }
+    let word = |at: &[u8]| u64::from_le_bytes(at[..8].try_into().expect("eight bytes"));
+    let mut seed = seed ^ mix(seed ^ P0, P1);
+    let mut rest = bytes;
+    while rest.len() > 16 {
+        seed = mix(word(rest) ^ P1, word(&rest[8..]) ^ seed);
+        rest = &rest[16..];
+    }
+    // the last one to 16 bytes, read up to the end of the key (zero padded
+    // by the length that is mixed in below)
+    let mut tail = [0u8; 16];
+    tail[..rest.len()].copy_from_slice(rest);
+    let (a, b) = (word(&tail), word(&tail[8..]));
+    mix(P1 ^ bytes.len() as u64, mix(a ^ P1, b ^ seed))
 }
 
 impl std::fmt::Write for Both {
@@ -1567,8 +1649,7 @@ impl std::fmt::Write for Both {
         &mut self,
         text: &str,
     ) -> std::fmt::Result {
-        use std::hash::Hasher;
-        self.write(text.as_bytes());
+        self.bytes.extend_from_slice(text.as_bytes());
         Ok(())
     }
 }
@@ -1578,7 +1659,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         bytes: &[u8],
     ) {
-        self.fx.write(bytes);
         self.bytes.extend_from_slice(bytes);
     }
 
@@ -1586,7 +1666,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u8,
     ) {
-        self.fx.write_u8(value);
         self.bytes.push(value);
     }
 
@@ -1594,7 +1673,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u32,
     ) {
-        self.fx.write_u32(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1602,7 +1680,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u64,
     ) {
-        self.fx.write_u64(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1610,7 +1687,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: usize,
     ) {
-        self.fx.write_usize(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1642,7 +1718,7 @@ fn hash_form(
             .or_insert_with(|| {
                 let mut text = Both::new();
                 let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{form:?}"));
-                (form.clone(), std::hash::Hasher::finish(&text.fx))
+                (form.clone(), wyhash(&text.bytes, 0))
             })
             .1
     });
@@ -1809,6 +1885,7 @@ fn allocate_once_computed(
     }
     ALLOCATIONS.with(|one| one.set(one.get() + 1));
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
+    add_folds(function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| reads_its_cell(inst)).count());
     let reads = expand::reads(&function);
     if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
         dump(&function);
