@@ -2251,7 +2251,7 @@ impl Tti for X86 {
         matches!(op, CastKind::ZExt | CastKind::SExt)
             && matches!(
                 (src, dst),
-                (Ty::Int(8), Ty::Int(16 | 32)) | (Ty::Int(16), Ty::Int(32))
+                (Ty::Int(8), Ty::Int(16 | 32 | 64)) | (Ty::Int(16), Ty::Int(32 | 64)) | (Ty::Int(32), Ty::Int(64))
             )
             && matches!(
                 (legalized(src, self.native()), legalized(dst, self.native())),
