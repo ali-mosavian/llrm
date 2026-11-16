@@ -549,9 +549,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
-        Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
+        Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
             let size = lanes.size();
-            let base = if *second { 0x0E00_5800 } else { 0x0E00_1800 };
+            let base = 0x0E00_0800 | kind.opcode() << 12;
             base | lanes.q() << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorNarrow { high, shift: None, wide, rd, rn } => {

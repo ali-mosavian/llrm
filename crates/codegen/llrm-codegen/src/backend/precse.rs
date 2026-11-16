@@ -166,6 +166,7 @@ fn candidate(
     if one.uses.is_empty()
         && !remade
         && !loads_invariant
+        && !crate::backend::machinesink::zero_idiom(what)
         && !matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_none()
@@ -198,11 +199,20 @@ fn candidate(
 }
 
 /// What the table is keyed by: the instruction with its result named by
-/// nothing.
+/// nothing (and a read of the register it defines, which an idiom makes, by
+/// nothing either).
 fn expression(what: &Semantics) -> Semantics {
     let mut key = what.clone();
+    let idiom = crate::backend::machinesink::zero_idiom(what);
     if let Some(Loc::Held(dest)) = key.dests.first_mut() {
         *dest = Held { value: 0, width: dest.width, offset: 0 };
+    }
+    if idiom {
+        for source in &mut key.sources {
+            if let Loc::Held(from) = source {
+                *from = Held { value: 0, width: from.width, offset: 0 };
+            }
+        }
     }
     key
 }
@@ -1137,6 +1147,32 @@ mod tests {
                 .count()
         };
         assert_eq!(count(&body), 2, "the premise: two leas");
+        assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// `V_SET0` of two vector types in one loop body (the unpack steps of a
+    /// widened byte sum: `v8i16`, `v4i32`, `v2i64` zeros) stayed three `xorps`
+    /// of three registers, since each read its own result and no two were the
+    /// same expression: three live zeros and, at the register file's edge,
+    /// the loop's spills (mem_length_boundaries_m32 +2.7% over gcc). The pin
+    /// makes one.
+    #[test]
+    fn test_two_zero_vectors_in_a_block_are_one() {
+        let zero = |at, into| {
+            let wide = |value| Loc::Held(Held { value, width: 16, offset: 0 });
+            insn(at, Operation::Binary, "xorps", vec![wide(into)], vec![wide(into), wide(into)], vec![into], vec![])
+        };
+        let block = LirBlock::new(0, vec![zero(0, 10), zero(1, 11)]);
+        let mut body = LirBody::new("zero", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let count = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("xorps"))
+                .count()
+        };
+        assert_eq!(count(&body), 2, "the premise: two zeros");
         assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
     }
 

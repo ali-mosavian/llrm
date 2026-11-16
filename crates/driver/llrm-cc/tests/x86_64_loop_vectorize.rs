@@ -164,6 +164,17 @@ fn a_loop_to_the_terminator_indexes_with_the_bumped_register() {
     assert!(len.contains("[rdi+rax") && !len.contains("[rdi+rcx"), "{len}");
 }
 
+/// A byte sum into an `i64` (VF 16) kept its total as eight registers and interleaved twice: 16 accumulators spilled to
+/// the stack, mem_length_boundaries_m32 186,155 instructions to 142,319 scalar and gcc's 137,355. One register of lanes
+/// takes the eight pieces of a trip.
+#[test]
+fn a_byte_sum_into_a_wide_total_does_not_spill() {
+    let text = assembly_of("lv_bytesum.c", "x86_64-linux", "-O2");
+    let sum = body(&text, "sum_bytes_wide");
+    assert!(sum.contains("punpcklbw") || sum.contains("pmovzx"), "{sum}");
+    assert!(!sum.contains("rsp"), "{sum}");
+}
+
 /// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]

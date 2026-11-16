@@ -740,6 +740,18 @@ pub trait Tti {
         false
     }
 
+    /// A reduction wider than a vector register keeps one register of lanes
+    /// (see `Tuning::narrow_reduction_accumulators`).
+    fn narrows_reduction_accumulators(&self) -> bool {
+        false
+    }
+
+    /// A VF above the widest type's, taken for the bandwidth, needs a trip
+    /// count it divides (see `Tuning::bandwidth_vf_without_epilogue`).
+    fn bandwidth_vf_without_epilogue(&self) -> bool {
+        false
+    }
+
     /// `enableAggressiveInterleaving(HasReductions)`: interleave a loop that is
     /// not small.
     fn enable_aggressive_interleaving(&self) -> bool {
@@ -827,6 +839,18 @@ pub trait Tti {
         _kind: crate::intrinsics::ReduceKind,
         _ty: VectorTy,
         _ordered: bool,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` of the fixed vector
+    /// `ty`. `None`: not priced.
+    fn vector_min_max_cost(
+        &self,
+        _signed: bool,
+        _max: bool,
+        _ty: VectorTy,
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
