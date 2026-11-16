@@ -471,7 +471,7 @@ impl llrm_target::Target for M64 {
                             unroll_trial_at_o1: Some(150),
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
-                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,

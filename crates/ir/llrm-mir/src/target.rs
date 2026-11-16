@@ -421,7 +421,7 @@ pub struct Tuning {
     /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
     /// 16601539e87f.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): a loop whose
     /// loop-carried latency exceeds its issue-bound time is not unrolled at
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.
