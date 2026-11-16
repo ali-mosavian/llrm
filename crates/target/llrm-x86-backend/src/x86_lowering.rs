@@ -831,6 +831,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::InsertVectorElt => lower_insert_vector_elt(dag, node),
+            ISD::ExtractElement => lower_extract_vector_elt(dag, node),
             ISD::ZeroExtend | ISD::SignExtend if dag.value_type(node).is_vector() => lower_vector_extend(dag, node),
             ISD::Truncate if dag.value_type(node).is_vector() => lower_vector_truncate(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
@@ -3612,6 +3613,48 @@ fn lower_shuffle_reduction(
     let zero = dag.get_constant(0, EVT::I64);
     let lane = dag.get_node(ISD::ExtractElement, lane_vt, &[current, zero]);
     Some(dag.get_any_ext_or_trunc(lane, dag.value_type(node)))
+}
+
+/// `LowerEXTRACT_VECTOR_ELT`, a constant lane of a 128-bit integer vector without SSE4.1: the dword
+/// that holds it is shuffled to lane 0 (`pshufd`) and moved out (`movd`/`movq`), then shifted and
+/// narrowed for a byte or a word. A variable lane is the pin's too: through memory.
+///
+/// DEVIATE X86V6: the pin reads a word with `pextrw` and a byte as a word's half. Reason: no
+/// `X86ISD::PEXTRW` node here yet. Exit: add the node and its pattern; owner x87-cordic-2, review 2026-12-10.
+fn lower_extract_vector_elt(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (vector, index) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(vector);
+    let lane_vt = integer_lane_of_v128(vt)?;
+    let lane = u32::try_from(dag.constant(index)?).ok().filter(|&lane| lane < vt.lanes())?;
+    let bits = lane_vt.size_in_bits();
+    let (four, zero) = (EVT::Simple(MVT::V4I32), dag.get_constant(0, EVT::I64));
+    // Lane 0 of a dword or quadword lane is what isel selects as `movd`/`movq`.
+    if lane == 0 && bits >= 32 {
+        return Some(node);
+    }
+    let result = dag.value_type(node);
+    if bits == 64 {
+        let by = dag.get_constant_with(0xEE, EVT::I8, true, false);
+        let whole = dag.get_node(ISD::BitCast, four, &[vector]);
+        let shuffled = dag.get_node(x86isd::PSHUFD, four, &[whole, by]);
+        let moved = dag.get_node(ISD::BitCast, vt, &[shuffled]);
+        return Some(dag.get_node(ISD::ExtractElement, result, &[moved, zero]));
+    }
+    let (dword, shift) = (lane * bits / 32, lane * bits % 32);
+    let mut whole = dag.get_node(ISD::BitCast, four, &[vector]);
+    if dword != 0 {
+        let by = dag.get_constant_with(u128::from(0x55 * dword), EVT::I8, true, false);
+        whole = dag.get_node(x86isd::PSHUFD, four, &[whole, by]);
+    }
+    let mut value = dag.get_node(ISD::ExtractElement, EVT::I32, &[whole, zero]);
+    if shift != 0 {
+        let by = dag.get_constant(u128::from(shift), EVT::I8);
+        value = dag.get_node(ISD::Srl, EVT::I32, &[value, by]);
+    }
+    Some(dag.get_any_ext_or_trunc(value, result))
 }
 
 /// `LowerINSERT_VECTOR_ELT`, lane 0 of an undefined or all-zero 128-bit integer

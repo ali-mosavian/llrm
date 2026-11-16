@@ -954,6 +954,8 @@ impl TargetLowering {
         // X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles
         // (`movss`, `punpck`) or uses `pinsrw`/`pinsrb`.
         t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`; a variable one is the stack.
+        t.set_ops(&[ISD::ExtractElement], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
