@@ -201,3 +201,16 @@ fn a_nest_of_constant_divisions_folds_to_its_results() {
         assert!(divisions == 0 && reports == 4, "{divisions} calls to a division, {reports} reports:\n{text}");
     }
 }
+
+/// loop_fusion at -Os kept every callee and its loops, 1,041 B against 120 B at
+/// -O2: the size rule refuses the callees the unrolled loops fold away, and the
+/// pair that inlines them was priced only at -O2. -Os prices the -O2 pair too.
+#[test]
+fn the_pair_of_inlines_and_unrolls_is_priced_at_os() {
+    let text = assembly(include_str!("data/loop_fusion_os.ll"), &Request::new(Level::Os)).unwrap();
+    let kept: Vec<&str> = ["clear", "total", "same", "behind", "ahead", "over", "longer"]
+        .into_iter()
+        .filter(|name| text.contains(&format!("{name}:")))
+        .collect();
+    assert!(kept.is_empty(), "{kept:?} stay as functions:\n{text}");
+}

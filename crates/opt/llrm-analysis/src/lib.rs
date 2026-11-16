@@ -90,6 +90,7 @@
 
 pub mod aa;
 pub mod accessanalysis;
+pub mod edges;
 pub mod aggregate;
 pub mod alias;
 pub mod aliasdiff;

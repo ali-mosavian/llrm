@@ -74,7 +74,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 
-use crate::lcssa::{arms, from_arms};
+use crate::occurrence::{arms, from_arms};
 
 /// `target` is the edge `block`'s conditional branch takes when its
 /// condition holds: the old branch's own target, not its fall-through.
@@ -558,7 +558,7 @@ pub fn conditions_decided(
 }
 
 /// `terminator`'s edges to `target` now go to `to`.
-pub(crate) fn retarget(
+pub fn retarget(
     function: &mut Function,
     terminator: InstId,
     target: BlockId,
@@ -575,7 +575,7 @@ pub(crate) fn retarget(
 /// a copy of it would be a second pad, and the one module handler
 /// (`ehprepare`) cannot choose between two. Jump threading does not copy such
 /// a block (J10 of `jumpthreading.rs`, DF3 of `dfajumpthreading.rs`).
-pub(crate) fn starts_with_landing_pad(
+pub fn starts_with_landing_pad(
     function: &Function,
     block: BlockId,
 ) -> bool {
@@ -586,7 +586,7 @@ pub(crate) fn starts_with_landing_pad(
 }
 
 /// Whether `block` begins with two phis.
-pub(crate) fn has_two_phis(
+pub fn has_two_phis(
     function: &Function,
     block: BlockId,
 ) -> bool {
@@ -594,7 +594,7 @@ pub(crate) fn has_two_phis(
 }
 
 /// `block`'s phis, in order.
-pub(crate) fn phis(
+pub fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {

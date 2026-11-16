@@ -311,7 +311,12 @@ impl SelectionDAG {
         if opcode.is_commutative_binop() && self.is_constant_int(n1) && !self.is_constant_int(n2) {
             std::mem::swap(&mut n1, &mut n2);
         }
+        // `N2CV = isConstOrConstSplat(N2, AllowUndefs=false, AllowTruncation=true)`:
+        // a splat of a lane counts as the constant, at the lane's width.
+        let lane = if vt.is_vector() { vt.element() } else { vt };
+        let lane_bits = if lane.is_integer() { lane.size_in_bits() } else { 0 };
         let n2_const = self.constant(n2);
+        let n2_splat = if lane_bits == 0 { None } else { self.const_or_splat(n2).map(|value| value & mask(lane_bits)) };
         let is_i1 = vt == EVT::I1;
         match opcode {
             // `getNode` of `EXTRACT_SUBVECTOR`: "Trivial extraction."
@@ -325,15 +330,15 @@ impl SelectionDAG {
                 }
             }
             ISD::And => {
-                if n2_const == Some(0) {
+                if n2_splat == Some(0) {
                     return Folded::Done(n2);
                 }
-                if n2_const == Some(mask(vt.size_in_bits())) {
+                if n2_splat == Some(mask(lane_bits)) {
                     return Folded::Done(n1);
                 }
             }
             ISD::Or | ISD::Xor | ISD::Add | ISD::PtrAdd | ISD::Sub => {
-                if n2_const == Some(0) {
+                if n2_splat == Some(0) {
                     return Folded::Done(n1);
                 }
                 if matches!(opcode, ISD::Add | ISD::Sub) && is_i1 {
@@ -344,7 +349,7 @@ impl SelectionDAG {
                 if is_i1 {
                     return Folded::Done(self.get_node(ISD::And, vt, &[n1, n2]));
                 }
-                if n2_const == Some(0) {
+                if n2_splat == Some(0) {
                     return Folded::Done(n2);
                 }
             }

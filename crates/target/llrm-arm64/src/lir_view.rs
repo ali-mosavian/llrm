@@ -119,6 +119,15 @@ fn cheap_alu(op: &Op) -> bool {
         _ => false,
     }
 }
+
+/// `isReallyTriviallyReMaterializable`: an instruction that reads a register
+/// that is not constant is not remade where it is used. `add x9, sp, #0` (a
+/// `stacksave`, the base of a `dynamic_stackalloc`) reads one: made again
+/// after an `alloca` lowered `sp`, it saved nothing.
+fn reads_sp(op: &Op) -> bool {
+    matches!(op, Op::I(Inst::AddSubImm { rn: Gpr::R31, .. }))
+}
+
 /// A constant one instruction makes (`movz`, `movn` or a logical immediate):
 /// the size of the copy it replaces.
 const ONE_INSN_IMM: &str = "Imm1";
@@ -369,7 +378,7 @@ fn view_with(
             inst.early_clobber = facts.early_clobber;
             inst.rematerializable = fused
                 || zero
-                || cheap_alu(&op)
+                || (cheap_alu(&op) && !reads_sp(&op))
                 || matches!(
                     op,
                     Op::Imm { .. }
