@@ -239,7 +239,7 @@ fn widening_loop(live_values: usize) -> LoopFacts {
     let mut facts = facts(8, 1920, false);
     facts.recipes = recipes;
     // `live_values` i64 values all open across the last one.
-    let live = (0..live_values).map(|at| super::Live { lane: wide, start: at, end: live_values + 1 }).collect();
+    let live = (0..live_values).map(|at| super::Live { lane: wide, start: at, end: live_values + 1, accumulator: false }).collect();
     facts.pressure = Some(super::Pressure { live, invariants: Vec::new() });
     facts
 }
