@@ -172,6 +172,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
     frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
+    frontend.zero_bss = frontend.runtime != "llrm" && matches!(frontend.near_bytes, 0 | 2) && frontend.far_bytes != 2;
     // `--arm64` and `--wasm32` lower through an x86 target's mid-end, but the
     // object is the host target's: its datalayout says whether it has `f80`.
     let object_layout = match (arm64, wasm32) {

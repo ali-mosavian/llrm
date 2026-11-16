@@ -72,8 +72,9 @@ impl CombineHooks for Aarch64Lowering {
         vt: EVT,
         _constant: bool,
     ) -> bool {
-        // `AArch64TargetLowering::hasAndNot`: `bic` takes any scalar integer.
-        vt.is_integer()
+        // `AArch64TargetLowering::hasAndNot`: `bic` takes any scalar integer
+        // and a vector of 64 bits or more.
+        vt.is_integer() || (vt.is_vector() && vt.size_in_bits() >= 64)
     }
 
     fn is_indexed_legal(
@@ -299,7 +300,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress | ISD::Truncate
         )
     }
 
@@ -320,10 +321,25 @@ impl CombineHooks for Aarch64Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => super::combine::combine_mul(dag, node, level, self.opt_for_size),
+            ISD::Mul => super::vector::perform_vector_ext_combine(dag, node)
+                .or_else(|| super::combine::combine_mul(dag, node, level, self.opt_for_size)),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
-            ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
-            ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::Truncate => super::vector::truncate_combine(dag, node),
+            ISD::Target(aarch64_isd::DUP) => {
+                super::vector::dup_combine(dag, node, level == CombineLevel::AfterLegalizeDag)
+            }
+            ISD::Target(aarch64_isd::SMULL | aarch64_isd::UMULL) => super::vector::mull_combine(
+                dag,
+                node,
+                matches!(
+                    level,
+                    CombineLevel::BeforeLegalizeTypes | CombineLevel::AfterLegalizeTypes
+                ),
+            ),
+            ISD::Add => super::vector::perform_vector_ext_combine(dag, node)
+                .or_else(|| super::combine::add_combine_for_shifted_operands(dag, node)),
+            ISD::Sub => super::vector::perform_vector_ext_combine(dag, node)
+                .or_else(|| super::combine::conditional_sub(dag, node)),
             ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::And | ISD::Or if level == CombineLevel::AfterLegalizeDag => {
                 super::ccmp::combine_and_or_csel(dag, node)
@@ -423,6 +439,7 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::JumpTable => super::lowering::lower_jump_table(dag, node),
             ISD::BrJT => super::lowering::lower_br_jt(dag, node),
             ISD::BrInd => super::lowering::lower_br_ind(dag, node),
+            ISD::SetCC if dag.value_type(dag.operand(node, 0)).is_vector() => super::vector::lower_vsetcc(dag, node),
             ISD::SetCC => super::lowering::lower_setcc(dag, node),
             ISD::Select => super::lowering::lower_select(dag, node),
             ISD::SelectCC => super::lowering::lower_select_cc_node(dag, node),
@@ -448,18 +465,50 @@ impl LegalizeHooks for Aarch64Lowering {
             // only when it is volatile or atomic
             // (`ldxp`/`stxp`, `LowerStore128`); every other is declined, and
             // the legalizer splits it.
-            ISD::Load | ISD::Store => match dag.node(node).data {
+            ISD::Load => return super::vector::lower_small_vector_ext_load(dag, node),
+            ISD::Store => match dag.node(node).data {
                 NodeData::Mem(info) if info.volatile || info.ordering.is_some() => None,
-                _ => return None,
+                _ => return super::vector::lower_truncate_vector_store(dag, node),
             },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
-            ISD::BuildVector => super::vector::lower_build_vector(dag, node),
+            // `LowerINSERT_VECTOR_ELT`: a constant lane in range is as it is
+            // (`INS`); any other index is declined.
+            ISD::InsertVectorElt => {
+                let lanes = u128::from(dag.value_type(node).lanes());
+                dag.constant(dag.operand(node, 2)).filter(|&lane| lane < lanes).map(|_| node)
+            }
+            ISD::BuildVector => match super::vector::lower_build_vector(dag, node) {
+                Some(done) => Some(done),
+                // The pin's `SDValue()` for a constant that is no splat: the
+                // legalizer loads it from the constant pool
+                // (`ExpandBUILD_VECTOR`).
+                None if super::vector::is_constant_build_vector(dag, node) => return None,
+                None => None,
+            },
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
+            ISD::VecReduceAdd
+            | ISD::VecReduceAnd
+            | ISD::VecReduceOr
+            | ISD::VecReduceXor
+            | ISD::VecReduceSMax
+            | ISD::VecReduceSMin
+            | ISD::VecReduceUMax
+            | ISD::VecReduceUMin => super::vector::lower_vec_reduce(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
+            ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => super::vector::lower_min_max(dag, node),
+            // Declined for a `v2i64` that is no widening multiply: the
+            // legalizer unrolls it.
+            ISD::Mul => return super::vector::lower_mul(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp if dag.value_type(node).is_vector() => {
+                super::vector::lower_vector_int_to_fp(dag, node)
+            }
+            ISD::FpToSInt | ISD::FpToUInt if dag.value_type(node).is_vector() => {
+                super::vector::lower_vector_fp_to_int(dag, node)
+            }
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
             ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
@@ -659,7 +708,7 @@ pub fn select_block(
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
     super::combine::shift_amounts_mod(dag);
     let selector = Selector::new(table::TABLE);
-    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
+    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size, linux);
     do_instruction_selection_with(dag, &*super::ids::IDS, |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))

@@ -194,6 +194,14 @@ def data_files(program: Program) -> tuple[Path, ...]:
     return tuple(corpus.path(one[1:]) if one.startswith("@") else program.source.parent / one for one in program.data)
 
 
+def missing_frontend(program: Program) -> str | None:
+    """Why `program` cannot be compiled at all: its front end is not in the bin dir, or None. A run without it reads as 16 FAILs."""
+    tool = {".bas": "llrm-qb", ".nib": "llrm-nib"}.get(program.source.suffix, "llrm-cc")
+    if not (BIN / tool).exists():
+        return f"{BIN / tool} is not built (cargo build --release --bin {tool})"
+    return None
+
+
 def unavailable(program: Program) -> str | None:
     """Why a program's corpus or Open Watcom's compiler cannot be had, or None."""
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
@@ -328,6 +336,11 @@ def main() -> int:
             done = subprocess.run([str(BIN / dosbatch.c_frontend()), dosbatch.m_flag(target), f"-mabi={args.abi}", "--os-layer", "directory"], capture_output=True, text=True)
             has[target] = done.returncode == 0
         programs = [dataclasses.replace(p, flags=[*p.flags, f"-mabi={args.abi}"]) for p in programs if p.source.suffix in (".c", ".nib") and not any(one.startswith("-mabi=") for one in p.flags) and has[dosbatch.target_of(p.flags, dosbatch.REAL_MODE)] and not any(one.endswith(".wc") for one in p.link)]
+    refused = [(one, missing_frontend(one)) for one in programs if missing_frontend(one)]
+    for program, why in refused:
+        print(f"REFUSED  {program.name}: {why}")
+    if refused:
+        return 2
     for program in [one for one in programs if unavailable(one)]:
         print(f"SKIP  {program.name}: {unavailable(program)}")
         programs.remove(program)

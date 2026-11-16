@@ -1,4 +1,5 @@
 // flags: -O0 | -O2
+// bar: none (SDCC wrong value)
 // bar: not comparable (SDCC double is 32 bits: it computes a different program)
 // An integer constant compared with or added to a float constant converts to the float's type first (C11 6.3.1.8), so
 // 16777217L is 16777216.0f. Open Watcom's constant folder made it a double and folded `16777217L != 16777216.0f` to 1

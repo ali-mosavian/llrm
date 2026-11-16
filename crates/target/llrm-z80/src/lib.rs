@@ -21,6 +21,7 @@ pub mod post_update;
 pub mod prepare;
 pub mod regalloc;
 pub mod runtime_size;
+pub mod sink_group;
 pub mod sp_frame;
 pub mod spilled_args;
 pub mod step;

@@ -133,6 +133,11 @@ impl Machine for Arm64Machine {
         Some(Rc::new(AArch64::of_cpu(self.platform.cpu()).expect("a cpu the platform names")))
     }
 
+    /// Darwin's runtime has `memset_pattern16`; Linux states nothing.
+    fn library(&self) -> Option<Rc<dyn llrm_mir::libfunc::Library>> {
+        (self.platform == Platform::Darwin).then(|| Rc::new(llrm_mir::libfunc::Darwin { int_bits: 32, size_t_bits: 64 }) as _)
+    }
+
     fn lowering(&self) -> Option<Rc<dyn Lowering>> {
         Some(Rc::new(AArch64Lowering))
     }
@@ -221,5 +226,26 @@ impl Machine for Arm64Machine {
         aggressive: bool,
     ) -> Option<GlobalMerge> {
         Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, optsize_counts: true, mach_o: self.platform == Platform::Darwin })
+    }
+}
+
+#[cfg(test)]
+mod library_tests {
+    use super::*;
+    use llrm_mir::libfunc::{LibFunc, TargetLibraryInfo};
+
+    fn has_pattern(platform: Platform) -> bool {
+        match (Arm64Machine { platform }).library() {
+            Some(library) => TargetLibraryInfo::new(&*library).has(LibFunc::MemsetPattern16),
+            None => false,
+        }
+    }
+
+    /// A Darwin target stated no library, so the pass that forms
+    /// `memset_pattern16` (gated on `TLI->has`) never did on arm64-macos.
+    #[test]
+    fn darwin_has_memset_pattern16_and_linux_does_not() {
+        assert!(has_pattern(Platform::Darwin));
+        assert!(!has_pattern(Platform::Linux));
     }
 }

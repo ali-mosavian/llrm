@@ -31,6 +31,7 @@ fn a_jump_table_branch_loads_the_entry_and_branches_to_it() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -80,6 +81,7 @@ fn an_i64_jump_table_branch_adds_the_sign_extended_offset_to_the_table() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )

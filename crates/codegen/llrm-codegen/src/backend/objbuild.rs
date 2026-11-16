@@ -977,6 +977,9 @@ pub fn _data(
                 let at = segment.image.len() - width(loc);
                 if loc == OFFSET64 {
                     segment.image[at..at + 8].copy_from_slice(&offset.to_le_bytes());
+                } else if width(loc) == 4 && !*far {
+                    // A dword offset: both words, `pack_into` stores only the low one.
+                    segment.image[at..at + 4].copy_from_slice(&(*offset as u32).to_le_bytes());
                 } else {
                     pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
                 }
@@ -1068,6 +1071,8 @@ pub fn _code_by(
             }
         }
         items.push(Encoded::End(end));
+        let table = module.code_data.get(&procedure.name).map_or(&[][..], Vec::as_slice);
+        items.extend(_table(table, module.object.code_model())?);
     }
     left_to_the_linker(&mut items, &module.preemptible, module.object.code_model())?;
     near_within_group(&mut items, module.object.code_model());
@@ -1182,6 +1187,31 @@ fn near_within_group(
         }
     }
     *items = made;
+}
+
+/// The read-only data that follows a procedure in its code segment
+/// (`masm::Module::code_data`), as bytes between labels.
+fn _table(
+    datums: &[masm::Datum],
+    model: CodeModel,
+) -> Result<Vec<Encoded>, Unencodable> {
+    let near = if model.flat() { OFFSET32 } else { OFFSET };
+    datums
+        .iter()
+        .map(|item| match item {
+            masm::Datum::Label(label) | masm::Datum::Object(label) => Ok(Encoded::Label(label.clone())),
+            masm::Datum::Bytes(bytes) => Ok(Encoded::Piece(Piece::new(bytes.clone()))),
+            masm::Datum::Align(masm::Align { to }) => {
+                Ok(Encoded::Align(masm::CodeAlign { log2: to.max(&1).ilog2() as u8, max_skip: 0 }))
+            }
+            masm::Datum::Pointer(masm::Pointer { name, offset, far: false, bytes }) => {
+                let mut code = vec![0; *bytes as usize];
+                pack_field(&mut code, 0, near, *offset).map_err(|error| Unencodable(error.0))?;
+                Ok(Encoded::Piece(Piece { code, fixups: vec![Fixup::new(0, near, name.clone())] }))
+            }
+            other => Err(Unencodable(format!("{other:?} in a code segment"))),
+        })
+        .collect()
 }
 
 pub fn _items(
@@ -2206,6 +2236,7 @@ mod tests {
             far_bss: BTreeSet::new(),
             weak: BTreeSet::new(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
@@ -2245,6 +2276,7 @@ mod tests {
             far_bss: BTreeSet::new(),
             weak: BTreeSet::new(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
@@ -2321,6 +2353,7 @@ mod tests {
                 far_bss: BTreeSet::new(),
                 weak: BTreeSet::new(),
                 code_segments: Default::default(),
+                code_data: Default::default(),
                 comdats: Default::default(),
                 padding: Default::default(),
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
@@ -2372,6 +2405,7 @@ mod tests {
             far_bss: BTreeSet::new(),
             weak: BTreeSet::new(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
@@ -2412,6 +2446,7 @@ mod tests {
                 far_bss: BTreeSet::new(),
                 weak: BTreeSet::new(),
                 code_segments: Default::default(),
+                code_data: Default::default(),
                 comdats: Default::default(),
                 padding: Default::default(),
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
@@ -2528,6 +2563,7 @@ mod tests {
             far_bss: BTreeSet::new(),
             weak: BTreeSet::new(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
@@ -2640,6 +2676,7 @@ mod tests {
                 far_bss: BTreeSet::new(),
                 weak: BTreeSet::new(),
                 code_segments: Default::default(),
+                code_data: Default::default(),
                 comdats: Default::default(),
                 padding: masm::Padding { function: 4, nop: 1 },
                 object: llrm_target::Target::object(&llrm_x86_m32::M32),

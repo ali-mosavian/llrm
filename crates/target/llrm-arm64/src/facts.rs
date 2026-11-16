@@ -45,11 +45,18 @@ pub fn of(op: &Op) -> Facts {
         ),
         may_load: matches!(
             op,
-            Op::I(Inst::Load { .. } | Inst::LoadPair { .. } | Inst::Atomic { .. } | Inst::Prefetch { .. })
+            Op::I(
+                Inst::Load { .. }
+                    | Inst::LoadPair { .. }
+                    | Inst::Atomic { .. }
+                    | Inst::Prefetch { .. }
+                    | Inst::VectorLoadReplicate { .. }
+                    | Inst::VectorLoadLane { .. }
+            )
         ),
         may_store: matches!(
             op,
-            Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. })
+            Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. } | Inst::VectorStoreLane { .. })
         ),
         side_effects: matches!(
             op,

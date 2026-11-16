@@ -36,7 +36,8 @@
 //! llrm has not translated); `isDroppable` is the `llvm.assume` call (MIR has
 //! no operand bundles, so no `dereferenceable` bundle keeps a sink away);
 //! `isEHPad` is `landingpad` (MIR has no funclet pads); debug records are not
-//! moved (MIR has none).
+//! moved (MIR has none); a float is not sunk to a block that only ends the
+//! function where the target has an x87 stack (`floats_across_blocks`, DEVIATE SINK-X87).
 //!
 //! # Example
 //! `%x` is read only in `b1`, whose only predecessor is `b0`:
@@ -130,6 +131,26 @@ pub fn sink_block(
         users += 1;
     }
     user_parent
+}
+
+/// DEVIATE SINK-X87 (owner x87-b, exit 2026-11-24; Tti::x87_stack_slots): a
+/// float computed in one block and read in a later one that only `sink_block`'s
+/// "ends the function" clause reaches (the pin: "the user runs at most once, so
+/// sinking is neutral") is left where it is. Neutral on a register file, not on
+/// the x87's eight slots: a chain of `t += f(i)` across loops was pulled to the
+/// return one `fadd` at a time, and the eight results lived across every later
+/// loop (x_ld_horner -O2: seven sums spilled, `fld` of the multiplier each trip
+/// of the last loop, +50 clk against gcc).
+pub fn floats_across_blocks(
+    q: &Query,
+    inst: InstId,
+    dest: BlockId,
+) -> bool {
+    let function = q.function;
+    let Some(block) = function.parent(inst) else { return false };
+    let Some(value) = function.instruction(inst).result else { return false };
+    function.sole_predecessor(dest) != Some(block)
+        && llrm_mir::tti::Ty::of(&q.context.types, function.value(value).ty).is_some_and(|ty| ty.is_float())
 }
 
 /// Whether `inst` may move to `dest`; the checks of `tryToSinkInstruction`.

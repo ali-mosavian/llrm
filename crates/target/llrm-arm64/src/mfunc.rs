@@ -399,6 +399,8 @@ pub struct MFunc {
     pub dynamic: bool,
     /// The function's `"frame-pointer"` attribute (`all`, `non-leaf`, ...).
     pub frame_pointer: Option<String>,
+    /// The function is `optnone`: nothing is scheduled.
+    pub optnone: bool,
     /// The unwind table the function gets.
     pub unwind: crate::cfi::Unwind,
     /// The frame object each source variable lives in (`llvm.dbg.declare` of

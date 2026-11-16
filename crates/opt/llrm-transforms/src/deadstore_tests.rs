@@ -536,3 +536,21 @@ fn asking_whether_a_call_writes_derives_no_list() {
     eliminated(&text, &[]);
     assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for calls");
 }
+
+/// `is_overwrite` made the object of both writes before it asked whether they
+/// share one (`getUnderlyingObject` is on the pin's path only after the roots
+/// are known equal): two objects for each pair a walk compared, 4.3% of the
+/// instructions of `copy_runs` on 6502. Two globals: 220 objects before, 74
+/// after.
+#[test]
+fn comparing_stores_to_different_roots_makes_no_object() {
+    const ROUNDS: usize = 12;
+    let stores: String = (0..ROUNDS).map(|i| format!("  store i16 {i}, ptr @a\n  store i16 {i}, ptr @b\n")).collect();
+    let text = format!(
+        "@a = global i16 0\n@b = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n{stores}  store i16 %x, ptr @a\n  store i16 %x, ptr @b\n  %r = load i16, ptr @a\n  ret i16 %r\n}}\n"
+    );
+    let before = super::objects_made();
+    eliminated(&text, &[&[7]]);
+    let made = super::objects_made() - before;
+    assert!(made < 120, "{made} objects made for {ROUNDS} rounds of two stores (220 before, 74 after)");
+}

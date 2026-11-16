@@ -1,4 +1,5 @@
 // flags: -O0 | -O2
+// bar: none (SDCC wrong value)
 // GCC's predefined macros, which programs test and build their types from (gcc.c-torture: 73 programs refused on `__SIZE_TYPE__` alone,
 // widechar-3 on `__BYTE_ORDER__`): each agrees with what the compiler does, on either target. Every line prints 1.
 extern void report(long value);

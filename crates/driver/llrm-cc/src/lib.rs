@@ -133,13 +133,27 @@ pub struct Target {
     /// gcc's 16k).
     #[serde(default)]
     pub unroll_at_o1: bool,
-    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04; the m32
-    /// rows extend it, owner x87, exit 2026-11-27):
-    /// `-fthread-jumps` is the default at `-O1`. The pin's -O1 pipeline has no
-    /// `JumpThreadingPass` (PassBuilderPipelines.cpp#L495), so clang's IR keeps
-    /// a latch branch on a compare tested one block up.
+    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04; the
+    /// m32 rows extend it, owner x87, exit 2026-11-27; the m64 rows, owner
+    /// x86-m64, exit 2026-11-24; the 6502 rows, owner 6502, exit
+    /// 2026-11-24): `-fthread-jumps` is the default at `-O1`. The pin's -O1
+    /// pipeline has no `JumpThreadingPass` (PassBuilderPipelines.cpp#L495),
+    /// so clang's IR keeps a latch branch on a compare tested one block up.
     #[serde(default)]
     pub thread_jumps_at_o1: bool,
+    /// DEVIATE SPEED-O1 (owner x86-m32-b, exit 2026-11-24; user ruling
+    /// 2026-11-14: -O1 to -O3 match the best compiler by clocks):
+    /// `-fllrm-speed-rate` is the default at `-O1`, so the target's byte
+    /// price at speed counts there as at -O2. The pin's -O1 gates every
+    /// metric alone.
+    #[serde(default)]
+    pub speed_rate_at_o1: bool,
+    /// DEVIATE PRE-O1 (owner x86-m16-b, exit 2026-11-24; user ruling
+    /// 2026-11-14: -O1 to -O3 match the best compiler by clocks): `-ftree-pre`
+    /// is the default at `-O1`, so GVN makes a partial redundancy full there as
+    /// at -O2. The pin's -O1 GVN does not (`GVNOptions` default, PRE off).
+    #[serde(default)]
+    pub pre_at_o1: bool,
     /// `-fwhole-program` is the default where the driver links one C source
     /// into an executable: nothing else names its globals, so what `main`
     /// does not reach is not in the program (LLVM's `InternalizePass` with
@@ -474,6 +488,7 @@ const BACKEND_PASSES: &[&str] = &[
     "gcse",
     "tree-pre",
     "thread-jumps",
+    "llrm-speed-rate",
     "tree-switch-conversion",
     "jump-tables",
     "tree-dse",
@@ -697,6 +712,32 @@ fn threads_jumps_at_o1(
         && !build.llc.iter().any(|flag| flag == "-fthread-jumps" || flag == "-fno-thread-jumps")
 }
 
+/// Whether the target's `-O1` takes `-fllrm-speed-rate` as its default: unless
+/// the command line states either spelling, and only where the backend takes
+/// pass switches.
+fn prices_bytes_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.speed_rate_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-fllrm-speed-rate" || flag == "-fno-llrm-speed-rate")
+}
+
+/// Whether the target's `-O1` takes `-ftree-pre` as its default: unless the
+/// command line states either `-f[no-]tree-pre`, and only where the backend
+/// takes pass switches.
+fn pre_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.pre_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-ftree-pre" || flag == "-fno-tree-pre")
+}
+
 /// Whether the build links a single C source into an executable on a target
 /// that sweeps what `main` does not reach, unless the command line states
 /// either `-f[no-]whole-program`.
@@ -747,6 +788,12 @@ pub fn llc_args(
     }
     if threads_jumps_at_o1(target, build) {
         args.push("-fthread-jumps".into());
+    }
+    if prices_bytes_at_o1(target, build) {
+        args.push("-fllrm-speed-rate".into());
+    }
+    if pre_at_o1(target, build) {
+        args.push("-ftree-pre".into());
     }
     if sweeps_whole_program(target, build) {
         args.push("-fwhole-program".into());

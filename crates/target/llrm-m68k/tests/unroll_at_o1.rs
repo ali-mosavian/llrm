@@ -71,13 +71,14 @@ exit:
 }
 ";
 
-/// Four copies of a call are larger than the loop around one: the pin's threshold alone unrolled it.
+/// Four copies of a call are larger than the loop around one and save its counter and branch:
+/// -O1 is judged by clocks, so the pin's threshold unrolls it.
 #[test]
-fn a_loop_whose_copies_cost_more_stays_rolled_at_o1() {
+fn a_loop_whose_copies_cost_more_bytes_is_unrolled_at_o1_for_its_clocks() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let mut policy = Policy::default();
         assert!(policy.take("-funroll-loops"));
         let text = assembly_flagged(CALLS, cpu, Level::O1, false, None, CodeModel::Small, &policy).expect("compiles");
-        assert_eq!(text.matches("report").count(), 1, "{cpu:?}: unrolled\n{text}");
+        assert_eq!(text.matches("report").count(), 4, "{cpu:?}: stayed rolled\n{text}");
     }
 }

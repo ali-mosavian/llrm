@@ -4,8 +4,17 @@
 //! 4-byte alignment is `REP_MOVS`/`REP_STOS` (the bytes past the last block
 //! stored as above), and the rest is a call of `memcpy` or `memset`.
 
-/// A `rep movsw` in 32-bit code is a byte longer than `rep movsb`: copies of at least this many bytes win 48 clocks for it.
+/// A `rep movsw` in 32-bit code is a byte longer than `rep movsb`: copies of at
+/// least this many bytes win 48 clocks for it.
 const REP_WORD_MIN_BYTES: u64 = 32;
+
+/// Encoded sizes of the fill value in the accumulator, for
+/// `cheapest_fill_unit`.
+const XOR_OR_MOV_AL: u64 = 2;
+const MOV_AX: u64 = 4;
+const MOV_EAX: u64 = 5;
+const MOV_RAX_MINUS_ONE: u64 = 7;
+const MOVABS_RAX: u64 = 10;
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
@@ -48,6 +57,7 @@ impl Builder<'_> {
             }
             Intrinsic::MemSetPattern => self.visit_memset_pattern(instruction),
             Intrinsic::FunnelShift { left } => self.visit_funnel_shift(instruction, *left),
+            Intrinsic::VectorReduce(kind) => self.visit_vector_reduce(instruction, *kind),
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
@@ -447,10 +457,26 @@ impl Builder<'_> {
             || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
     }
 
-    /// DEVIATE REP-MOVS-OS keeps `rep movs` for any size at `-Os`, but moves the widest block the copy is a whole
-    /// number of and the pointers are aligned to (`emitConstantSizeRepmov`'s `AVT`, without a tail): the same
-    /// bytes as `rep movsb`, a block of 4 bytes for the same 3 clocks. A block of 2 carries the operand-size
-    /// prefix in 32-bit code, one byte that 1.5 clocks a byte copied pay back from `REP_WORD_MIN_BYTES`.
+    /// `-Oz` is `rep movsb` whatever the size; REP-MOVS-OS keeps a block
+    /// narrower than a dword to the target's limit (the pin's 128 bytes on
+    /// m32), past which the call copies by dwords.
+    fn rep_movs_within_limit(
+        &self,
+        bytes: u64,
+        alignment: u64,
+    ) -> bool {
+        self.has_min_size()
+            || alignment >= 4
+            || self.target.tti.as_ref().is_none_or(|tti| bytes <= tti.0.rep_movs_at_size_max())
+    }
+
+    /// DEVIATE REP-MOVS-OS keeps `rep movs` up to the target's limit at `-Os`,
+    /// and moves the widest block the copy is a whole number of and the
+    /// pointers are aligned to (`emitConstantSizeRepmov`'s `AVT`, without a
+    /// tail): the same bytes as `rep movsb`, a block of 4 bytes for the
+    /// same 3 clocks. A block of 2 carries the operand-size
+    /// prefix in 32-bit code, one byte that 1.5 clocks a byte copied pay back
+    /// from `REP_WORD_MIN_BYTES`.
     fn exact_rep_block(
         &self,
         size: u64,
@@ -824,6 +850,16 @@ impl Builder<'_> {
             if length % 4 != 0 || alignment < 4 {
                 return false;
             }
+            // The pin keeps up to `MaxStoresPerMemsetOptSize` stores; the
+            // fill's clocks (`rep stos` start-up) lose to them.
+            // Only the x87 zero fill below is priced inside the
+            // limit.
+            let x87_zero =
+                fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill();
+            let pieces = length / 4 + u64::from(length % 4 >= 2) + length % 2;
+            if !x87_zero && pieces <= self.target.tuning.max_stores_per_memset_opt_size as u64 {
+                return false;
+            }
             let place = usize::from(!frame);
             let value = match fill {
                 Some(0) => costs.value[0],
@@ -837,7 +873,7 @@ impl Builder<'_> {
             // and one `fst qword` each: its stores are the pin's to
             // beat, so the fill is taken only where it beats those
             // too.
-            if fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill() {
+            if x87_zero {
                 stores = stores.min(2 + length / 8 * costs.fst[place]);
             }
             return stores > value + costs.setup[place];
@@ -1339,7 +1375,9 @@ impl Builder<'_> {
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
                     (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
-                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.rep_movsb_copy() => {
+                    (None, Intrinsic::MemCpy, Some(bytes))
+                        if strings_exist && self.rep_movsb_copy() && self.rep_movs_within_limit(bytes, alignment) =>
+                    {
                         self.rep_movs(root, dst, other, bytes, dst_align.min(src_align), dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
@@ -1408,6 +1446,7 @@ impl Builder<'_> {
                     }
                     _ => self.mem_libcall(
                         info,
+                        operands[0],
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
                         &[dst, other],
@@ -1435,12 +1474,14 @@ impl Builder<'_> {
                     }
                     _ => None,
                 };
-                // a target with no string instructions fills what is left past the inline limit
-                // with its own node (`EmitTargetCodeForMemset`), where the pin would call `memset`
+                // a target with no string instructions fills what is left past
+                // the inline limit with its own node
+                // (`EmitTargetCodeForMemset`), where the pin would call
+                // `memset`
                 let hooked = match &inline {
-                    None if !strings_exist => self
-                        .calling()
-                        .and_then(|calling| calling.emit_memset(&mut self.dag, root, dst, other, size)),
+                    None if !strings_exist => {
+                        self.calling().and_then(|calling| calling.emit_memset(&mut self.dag, root, dst, other, size))
+                    }
                     _ => None,
                 };
                 match (inline, constant) {
@@ -1450,7 +1491,10 @@ impl Builder<'_> {
                         if strings_exist
                             && (self.has_min_size()
                                 || (opt_size
-                                    && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_at_size()))
+                                    && self.target.tti.as_ref().is_some_and(|tti| {
+                                        tti.0.rep_stos_at_size()
+                                            && (alignment >= 4 || bytes <= tti.0.rep_stos_at_size_max())
+                                    }))
                                 || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?
@@ -1482,7 +1526,7 @@ impl Builder<'_> {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
-                    _ => self.mem_libcall(info, "memset", root, &[dst, other], size)?,
+                    _ => self.mem_libcall(info, operands[0], "memset", root, &[dst, other], size)?,
                 }
             }
         };
@@ -1561,6 +1605,8 @@ impl Builder<'_> {
         let callee = self.dag.get_external_symbol(self.target.dag.pointer, name);
         let pointer = self.module.context.types.ptr(0);
         self.dag.set_root(chain);
+        // `memset`'s second argument is the fill byte
+        self.call_pointers = vec![true, name != "memset", false];
         self.lower_call_with(calling, callee, &args, &[ISD::AnyExtend; 3], &[], pointer, false)?;
         Ok(self.dag.get_root())
     }
@@ -1618,7 +1664,8 @@ impl Builder<'_> {
             );
         // DEVIATE MEM-1: where the target inlines variable copies, a length
         // whose low two bits are known zero (`n << 2`) has no byte tail
-        let inlines = !self.target.bytes_strict && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
+        let inlines =
+            !self.target.bytes_strict && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
         if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
             || inlines && super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
         {
@@ -1988,10 +2035,13 @@ impl Builder<'_> {
     }
 
     /// `getMemcpy`'s libcall: `name(dst, src, size)` for a copy, `name(dst,
-    /// value, size)` for a set; the result is read and dropped.
+    /// value, size)` for a set; the result is read, and dropped unless the
+    /// target's routines return the destination (`mem_libcalls_return_dest`),
+    /// where later uses of `destination` read it.
     fn mem_libcall(
         &mut self,
         info: &CallInfo,
+        destination: Operand,
         name: &str,
         chain_in: SDValue,
         first_two: &[SDValue],
@@ -2039,6 +2089,8 @@ impl Builder<'_> {
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
+        // `memset`'s second argument is the fill byte
+        self.call_pointers = arg_types.iter().map(|ty| self.is_pointer_type(*ty)).collect();
         // `isTailCall`: the intrinsic is marked `tail` and ends the function,
         // and the target takes the sibling call.
         let tail = match self.tail_candidate.take() {
@@ -2051,7 +2103,14 @@ impl Builder<'_> {
             let _ = self.lower_call(target_symbol, values, &extends, &[], &tail_plan, first, void, false)?;
         } else {
             let plan = plan_of(self, pointer_type)?;
-            let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+            let result = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+            // DEVIATE MEMLIB-RETURNED (owner llrm-target-6502, exit
+            // 2026-12-05): the pin keeps `dst` across the call.
+            if let (true, Some(result), Operand::Value(destination)) =
+                (self.target.mem_libcalls_return_dest, result, destination)
+            {
+                self.node_map.insert(destination, result);
+            }
         }
         Ok(self.dag.get_root())
     }
@@ -2230,6 +2289,43 @@ impl Builder<'_> {
         u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
+    /// DEVIATE REP-STOS-UNIT (ERMS/FSRM assumed, see
+    /// `Tuning::rep_stos_priced_unit`): the unit of a constant `rep stos`
+    /// at `-Os` that takes the fewest bytes, the pin's (`block`) on a tie.
+    /// Encodings at x86-64: the value in `eax` (`xor` 2, `mov al` 2,
+    /// `mov ax` 4, `mov eax` 5, `mov rax, -1` 7, `movabs` 10), `mov ecx, count`
+    /// 5, the string op (2, 3 with a prefix or REX), and each tail store at
+    /// its shortest (`mov [m], imm`: dword 6, word 7, byte 3).
+    fn cheapest_fill_unit(
+        block: u64,
+        size: u64,
+        byte: u64,
+    ) -> u64 {
+        let bytes = |unit: u64| {
+            let value = match (byte, unit) {
+                (0, _) | (_, 1) => XOR_OR_MOV_AL,
+                (_, 2) => MOV_AX,
+                (_, 4) => MOV_EAX,
+                (0xff, _) => MOV_RAX_MINUS_ONE,
+                _ => MOVABS_RAX,
+            };
+            let op = if unit == 1 || unit == 4 { 2 } else { 3 };
+            let left = size % unit;
+            value + 5 + op + left / 4 * 6 + (left % 4 / 2) * 7 + left % 2 * 3
+        };
+        // Every unit up to the pin's, the widest on a tie: a `rep stosb` of the
+        // same bytes runs the count of a `stosd` four times over.
+        let mut best = block;
+        let mut unit = block;
+        while unit > 1 {
+            unit /= 2;
+            if bytes(unit) < bytes(best) {
+                best = unit;
+            }
+        }
+        best
+    }
+
     /// `emitConstantSizeRepstos`.
     fn rep_stos(
         &mut self,
@@ -2255,6 +2351,12 @@ impl Builder<'_> {
             // registers, whatever its pointers; for size the pointer's width
             // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
             let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
+            let block =
+                if self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_priced_unit()) {
+                    Self::cheapest_fill_unit(block, size, byte as u64 & 255)
+                } else {
+                    block
+                };
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;

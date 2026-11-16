@@ -357,7 +357,9 @@ impl GvnPass<'_> {
         // their predecessor.
         let mut critical_edge_pred_split: Vec<BlockId> = Vec::new();
         let mut critical_edge_pred_and_load: Vec<(BlockId, InstId)> = Vec::new();
-        for pred in self.function.predecessors(load_bb).iter().copied().collect::<Vec<_>>() {
+        // Once per edge, as LLVM's `predecessors`: a switch with two cases to
+        // the block is two unavailable predecessors, which refuses PRE.
+        for pred in self.function.edge_predecessors(load_bb) {
             // Landing pads and the like are not handled by MIR.
             if self.is_value_fully_available_in_block(pred, &mut fully_available_blocks) {
                 continue;

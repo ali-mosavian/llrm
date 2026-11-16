@@ -28,15 +28,21 @@ fn instructions(
 #[test]
 fn a_word_shifted_right_by_seven_shifts_its_bytes_in_place() {
     let lines = instructions("define i16 @k_shr7(i16 %x) {\n  %r = lshr i16 %x, 7\n  ret i16 %r\n}\n", "k_shr7");
+    // the low byte arrives in `a` and shifts there; by hand through A and X
+    // it is `asl a; txa; rol a; tay; lda #0; rol a; tax; tya` (9 B)
     assert_eq!(
         lines,
-        ["asl rc2", "rol rc3", "lda #0", "rol a", "tax", "lda rc3", "rts"],
-        "the shift is two rotates in place and the carry is the top bit"
+        ["stx rc3", "asl a", "rol rc3", "lda #0", "rol a", "tax", "lda rc3", "rts"],
+        "the shift is two rotates in place and the carry is the top bit, not made again from X"
     );
 }
 
 #[test]
 fn a_long_shifted_right_by_seven_is_no_longer_than_it_was() {
     let lines = instructions("define i32 @k_shr7l(i32 %x) {\n  %r = lshr i32 %x, 7\n  ret i32 %r\n}\n", "k_shr7l");
-    assert!(lines.len() <= 35, "{} instructions: {lines:?}", lines.len());
+    assert!(
+        lines.len() <= 40, // was 35: 6502-AX-WORD-OPS, the A:X entry
+        "{} instructions: {lines:?}",
+        lines.len()
+    );
 }

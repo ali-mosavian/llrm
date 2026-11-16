@@ -72,7 +72,8 @@ fn computed_by_priced_multiply(
             let size = layout.alloc_size(&context.types, source);
             let scaled = size > 1
                 && matches!(inst.operands.get(1), Some(Operand::Value(_)))
-                && tti.reduces_outer_multiply(Some(u128::from(size)));
+                && (tti.reduces_outer_multiply(Some(u128::from(size)))
+                    || tti.reduces_outer_address_scale(u128::from(size)));
             scaled
                 || depth > 0
                     && inst
@@ -98,7 +99,8 @@ const MAX_IV_USERS: usize = 200;
 
 /// LLVM's loop strength reduction. `size`: the compile is for size, which the
 /// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
-/// `bytes_strict`: code bytes outrank clocks (-O1, -Os), which DEVIATE LG3's
+/// `bytes_strict`: code bytes outrank clocks (-Os, and -O1 where the target's
+/// byte price at speed does not count), which DEVIATE LG3's
 /// keep rule reads: a base added outside the loop counts against the
 /// instructions it saves once, not once a trip.
 pub struct LoopStrengthReduce {
@@ -277,6 +279,7 @@ fn plan_loop(
         native_widths: tti.lsr_native_integer_widths(),
         use_list_order: tti.lsr_users_in_use_list_order(),
         phi_operand_uses: tti.lsr_phi_operand_uses(),
+        phi_users_first: tti.lsr_phi_users_first(),
     };
     let mut users = match carried {
         Some(users) => {
@@ -431,14 +434,12 @@ fn plan_loop(
         };
         // DEVIATE LG3, where bytes outrank clocks (-Os, -O1): the end-biased
         // solution is refused when the target's byte table prices it larger
-        // than the pin's. At -O1 clocks are the other axis: it stays when it
-        // saves loop instructions (x_radix -O1: a compare saved, 1578 clk
-        // for 37 B), and is refused when it adds any.
-        let bytes_larger = cost.size_bytes > pin_cost.size_bytes;
-        let saves_insns = cost.c.insns < pin_cost.c.insns;
+        // than the pin's. Both axes are strict at -O1, so a form that saves an
+        // instruction for more bytes is a trade no bar counts (quicksort -O1
+        // m32: 27 B larger for one instruction, over the bar on bytes).
         let bytes_outweigh_saving = bytes_strict
-            && tti.lsr_size_model().is_some()
-            && if size { bytes_larger } else { cost.c.insns > pin_cost.c.insns || (bytes_larger && !saves_insns) };
+            && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
+            && cost.size_bytes > pin_cost.size_bytes;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving
@@ -727,7 +728,10 @@ pub fn reduced_held(
             }
             if split {
                 stable = false;
+                let scev = session.into_scev();
                 session = new_session(context, function);
+                session.adopt(scev);
+                session.forget_since_through_edges(context, layout, &outer.globals, &outer.metadata, function, mark);
                 mark = function.mark();
                 mark_opaque(&mut session, context, function);
             }

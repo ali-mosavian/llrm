@@ -227,6 +227,13 @@ pub struct Function {
     pub blocks: Vec<Vec<Inst>>,
     /// The successors of each block, by position, in the terminator's order.
     pub succs: Vec<Vec<usize>>,
+    /// `MachineBasicBlock::predecessors()`: the blocks that branch to each
+    /// block, in the order the pin's list holds them: the order the edges were
+    /// made (`SelectAllBasicBlocks` visits the IR in reverse post-order), a
+    /// later edge after the earlier ones. `BranchFolder::OptimizeBlock` takes
+    /// the first suitable one. [`Function::sync_preds`] makes the list follow
+    /// `succs`; an edge present in both keeps its place.
+    pub preds: Vec<Vec<usize>>,
     /// The probability of each edge of `succs` as a numerator over 2^31,
     /// zero when unknown; only until `machine_sink` has read it.
     pub edge_probs: Vec<Vec<u32>>,
@@ -286,6 +293,47 @@ impl Function {
         Function { name: name.to_string(), blocks: vec![Vec::new()], ..Function::default() }
     }
 
+    /// The block numbers of `preds` after blocks were numbered anew:
+    /// `new_of(old)` is where block `old` went, `None` if it is gone. A block
+    /// made since has no list until [`Function::sync_preds`].
+    pub fn remap_preds(
+        &mut self,
+        new_len: usize,
+        new_of: impl Fn(usize) -> Option<usize>,
+    ) {
+        let mut remapped = vec![Vec::new(); new_len];
+        for (old, list) in std::mem::take(&mut self.preds).into_iter().enumerate() {
+            if let Some(new) = new_of(old) {
+                remapped[new] = list.into_iter().filter_map(&new_of).collect();
+            }
+        }
+        self.preds = remapped;
+    }
+
+    /// `preds` follows `succs`: an edge gone leaves the list, an edge made
+    /// since goes at its end (`addSuccessor` appends), in the order of its
+    /// source block; the rest keep their places.
+    pub fn sync_preds(&mut self) {
+        let blocks = self.blocks.len();
+        self.preds.resize_with(blocks, Vec::new);
+        let mut wanted: Vec<Vec<usize>> = vec![Vec::new(); blocks];
+        for (from, to) in self.succs.iter().enumerate() {
+            for &to in to {
+                wanted[to].push(from);
+            }
+        }
+        for (list, mut rest) in self.preds.iter_mut().zip(wanted) {
+            list.retain(|from| match rest.iter().position(|wanted| wanted == from) {
+                Some(at) => {
+                    rest.remove(at);
+                    true
+                }
+                None => false,
+            });
+            list.extend(rest);
+        }
+    }
+
     /// The blocks in the order `order` gives (`order[new] = old`):
     /// `MachineFunction::RenumberBlocks` after the layout changed. Block
     /// operands and successors follow.
@@ -304,6 +352,13 @@ impl Function {
             .iter()
             .map(|&old| succs[old].take().expect("a block once").into_iter().map(|to| new_of[to]).collect())
             .collect();
+        self.remap_preds(order.len(), |old| Some(new_of[old]).filter(|&new| new != usize::MAX));
+        // An edge's probability stays with its block (a block left out takes
+        // its row along; an `edge_probs` the passes cleared stays empty).
+        if self.edge_probs.len() == new_of.len() {
+            let mut probs = std::mem::take(&mut self.edge_probs).into_iter().map(Some).collect::<Vec<_>>();
+            self.edge_probs = order.iter().map(|&old| probs[old].take().expect("a block once")).collect();
+        }
         for operand in self.blocks.iter_mut().flatten().flat_map(|inst| inst.operands.iter_mut()) {
             if let Operand::Block(block) = operand {
                 if let Some(&new) = new_of.get(*block as usize) {
@@ -449,5 +504,75 @@ impl Binding {
             L::Weak | L::WeakOdr | L::LinkOnce | L::LinkOnceOdr | L::Common | L::ExternWeak => Binding::Weak,
             L::External | L::AvailableExternally | L::Appending => Binding::Global,
         }
+    }
+}
+
+#[cfg(test)]
+mod preds_tests {
+    use super::*;
+
+    fn with_succs(succs: Vec<Vec<usize>>) -> Function {
+        Function { blocks: vec![Vec::new(); succs.len()], succs, ..Function::default() }
+    }
+
+    /// An edge that stays keeps its place; one gone leaves; one made goes last.
+    #[test]
+    fn sync_preds_keeps_the_order_of_the_edges_that_stay() {
+        let mut f = with_succs(vec![vec![2], vec![2], vec![], vec![]]);
+        f.preds = vec![vec![], vec![], vec![1, 0], vec![]];
+        f.succs[0] = vec![3];
+        f.succs[3] = vec![2];
+        f.sync_preds();
+        assert_eq!(f.preds, [vec![], vec![], vec![1, 3], vec![0]]);
+    }
+
+    /// Without a list (a hand-built function) the order is the block numbers'.
+    #[test]
+    fn sync_preds_orders_edges_made_since_by_block_number() {
+        let mut f = with_succs(vec![vec![2], vec![2], vec![]]);
+        f.sync_preds();
+        assert_eq!(f.preds[2], [0, 1]);
+    }
+
+    /// Blocks numbered anew take their lists along; a gone block leaves its
+    /// edges.
+    #[test]
+    fn apply_order_carries_the_predecessor_lists() {
+        let mut f = with_succs(vec![vec![1, 3], vec![3], vec![3], vec![]]);
+        f.preds = vec![vec![], vec![0], vec![], vec![2, 1, 0]];
+        // Block 2 is gone; 3 and 1 swap places.
+        f.apply_order(&[0, 3, 1]);
+        assert_eq!(f.preds, [vec![], vec![2, 0], vec![0]]);
+    }
+
+    /// A block inserted shifts the numbers after it.
+    #[test]
+    fn remap_preds_shifts_the_blocks_after_an_insertion() {
+        let mut f = with_succs(vec![vec![1], vec![], vec![]]);
+        f.preds = vec![vec![], vec![0], vec![1, 0]];
+        f.remap_preds(4, |old| Some(if old >= 1 { old + 1 } else { old }));
+        assert_eq!(f.preds, [vec![], vec![], vec![0], vec![2, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod apply_order_tests {
+    use super::*;
+
+    /// `fix_br_table_defaults` dropped two blocks and left `edge_probs` as it
+    /// was: every later block read another block's probabilities, and
+    /// `MachineSink` took a 2^31 row (one edge) for a two-way branch, so its
+    /// "unlikely edge" test failed and `CONST 1` stayed out of the split edge
+    /// (tail_calls -Os, one block and two instructions over the pin).
+    #[test]
+    fn the_probabilities_of_an_edge_follow_its_block() {
+        let mut f = Function::default();
+        f.blocks = vec![Vec::new(); 4];
+        f.succs = vec![vec![2, 3], vec![3], vec![3], vec![]];
+        f.edge_probs = vec![vec![1 << 30, 1 << 30], vec![1 << 31], vec![1 << 31], vec![]];
+        // Block 1 is dropped: block 2 and 3 move up.
+        f.apply_order(&[0, 2, 3]);
+        assert_eq!(f.edge_probs, [vec![1 << 30, 1 << 30], vec![1 << 31], vec![]]);
+        assert_eq!(f.succs[0], [1, 2]);
     }
 }

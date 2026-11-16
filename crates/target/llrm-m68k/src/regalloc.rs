@@ -206,6 +206,15 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         })
     }
 
+    /// `foldMemoryOperand` ([`crate::spillfold`]).
+    fn fold_spill(
+        inst: &llrm_spike_mf::Inst,
+        register: Reg,
+        slot: i32,
+    ) -> Option<llrm_spike_mf::Inst> {
+        crate::spillfold::fold(inst, register, slot)
+    }
+
     /// `getLoadRegOpcode`.
     fn spill_load(
         _class: Class,
@@ -510,7 +519,7 @@ pub fn relax_copy_only_classes(function: &mut MFunction) -> bool {
             let v = *v as usize;
             // a move into an address register leaves the codes alone: a value a
             // flag setter defines stays in a data register
-            if inst.sets_flags && matches!(operand, Operand::Def(_)) {
+            if inst.sets_flags() && matches!(operand, Operand::Def(_)) {
                 fixed[v] = true;
             }
             match inst.kind {

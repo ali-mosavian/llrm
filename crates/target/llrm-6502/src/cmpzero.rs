@@ -92,11 +92,11 @@ fn zero_compare(
     insts: &[Inst],
     compare: usize,
 ) -> Option<(Reg, Operand)> {
-    let inst = insts.get(compare).filter(|i| i.kind == Kind::Op("CMP") && i.sets_flags)?;
+    let inst = insts.get(compare).filter(|i| i.kind == Kind::Op("CMP") && i.sets_flags())?;
     let [flags @ Operand::Def(_), Operand::Use(tested), Operand::Imm(0)] = &inst.operands[..] else { return None };
     let after = &insts[compare + 1..];
-    let readers_only_zero_and_sign = after.iter().all(|i| !i.reads_flags || reads_zero_or_sign(i));
-    let none_sets_flags = after.iter().all(|i| !i.sets_flags);
+    let readers_only_zero_and_sign = after.iter().all(|i| !i.reads_flags() || reads_zero_or_sign(i));
+    let none_sets_flags = after.iter().all(|i| !i.sets_flags());
     (!after.is_empty() && readers_only_zero_and_sign && none_sets_flags).then(|| (*tested, flags.clone()))
 }
 
@@ -121,9 +121,11 @@ fn source(
             return (need == Reg::Phys(reg::A) && converts(inst)).then_some((at, loads));
         }
         match inst.kind {
-            // Only a copy of the tested byte: any other copy becomes a load once allocated (`ldx`, `lda`), which sets
-            // N and Z from its own byte, so the branch would read that and not the byte the setter made. x86's `mov`
-            // leaves the flags alone, which is what the pin's backward scan relies on.
+            // Only a copy of the tested byte: any other copy becomes a load
+            // once allocated (`ldx`, `lda`), which sets N and Z from its own
+            // byte, so the branch would read that and not the byte the setter
+            // made. x86's `mov` leaves the flags alone, which is what the pin's
+            // backward scan relies on.
             Kind::Copy if reads(inst, need) => {}
             Kind::Op("LDI") => loads.push(at),
             _ => return None,

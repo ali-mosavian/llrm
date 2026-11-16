@@ -40,6 +40,9 @@ struct Candidate {
     inst: InstId,
     wide: u32,
     bits: u32,
+    /// A multiply whose operands fit `limit` bits as signed numbers, not as
+    /// unsigned ones (`muls.w`).
+    signed: bool,
 }
 
 fn insert_before(
@@ -146,21 +149,33 @@ fn narrowed(
     for inst in wanted {
         let operands = function.instruction(inst).operands.clone();
         let wide = context.types.int_bits(function.instruction(inst).ty).unwrap_or(0);
-        let bits = session.ask(context, layout, function, outer, |se, cx| {
-            operands
-                .iter()
-                .map(|&operand| {
+        let (bits, signed) = session
+            .ask(context, layout, function, outer, |se, cx| {
+                let mut unsigned = 0;
+                let mut signed = 0;
+                for &operand in &operands {
                     let scev = se.get_scev(cx, operand);
-                    se.get_unsigned_range(cx, scev).get_active_bits()
-                })
-                .max()
-        });
-        if let Some(bits) = bits.filter(|&bits| bits <= limit) {
-            found.push(Candidate { inst, wide, bits });
+                    unsigned = unsigned.max(se.get_unsigned_range(cx, scev).get_active_bits());
+                    signed = signed.max(se.get_signed_range(cx, scev).get_min_signed_bits());
+                }
+                Some((unsigned, signed))
+            })
+            .map_or((u32::MAX, false), |(unsigned, signed)| {
+                // a divide is unsigned; a multiply is a signed half-by-half one
+                // where the unsigned ranges are wide and the
+                // signed ones fit
+                if kind == Kind::Multiplies && unsigned > limit && signed <= limit {
+                    (signed, true)
+                } else {
+                    (unsigned, false)
+                }
+            });
+        if bits <= limit {
+            found.push(Candidate { inst, wide, bits, signed });
         }
     }
     let mut changed = false;
-    for Candidate { inst, wide, bits } in found {
+    for Candidate { inst, wide, bits, signed } in found {
         let opcode = function.instruction(inst).opcode.clone();
         let ty = function.instruction(inst).ty;
         let [a, b] = function.instruction(inst).operands[..] else { continue };
@@ -169,7 +184,13 @@ fn narrowed(
             let mut halves = Vec::new();
             for operand in [a, b] {
                 let low = insert_before(function, inst, Opcode::Cast(CastOp::Trunc), half, vec![operand]);
-                halves.push(insert_before(function, inst, Opcode::Cast(CastOp::ZExt), ty, vec![low]));
+                halves.push(insert_before(
+                    function,
+                    inst,
+                    Opcode::Cast(if signed { CastOp::SExt } else { CastOp::ZExt }),
+                    ty,
+                    vec![low],
+                ));
             }
             let flags = function.instruction(inst).flags;
             let made = function.create_instruction(opcode, ty, halves, flags, None);

@@ -187,7 +187,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD11 | sdag-a | no FP constant folding | `selectiondag.rs` |
 | SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
 | SD13 | sdag-a | no vector types or nodes, but the four 128-bit integer vectors of `LLRM_ARM64_VECTORS` (2026-11-10) | `selectiondag.rs` |
-| VEC1 | llrm-arm64-vec | arm64 `LowerBUILD_VECTOR`/`LowerVECTOR_SHUFFLE`: constant splats and scalar splats only | `llrm-arm64/src/dag/vector.rs` |
+| VEC1 | llrm-arm64-vec | arm64 `LowerBUILD_VECTOR`/`LowerVECTOR_SHUFFLE`: constant splats and scalar splats; a constant that is no splat is the legalizer pool load (`ExpandBUILD_VECTOR`); INSERT_VECTOR_ELT forms open | `llrm-arm64/src/dag/vector.rs` |
 | VEC2 | llrm-arm64-vec | `visitINSERT_VECTOR_ELT`: the insert chain into a `BUILD_VECTOR` only | `selectiondag/combine_vector.rs` |
 | VEC3 | llrm-arm64-vec | LoopVectorize remainder is the scalar loop only: no epilogue vectorization (`vec.epilog.*`, `EpilogueVectorizationMinVF`) | `llrm-transforms/src/loopvectorizeplan.rs`, exit LV-X3 2026-11-20 |
 | SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-sdag/src/lowering.rs` |

@@ -100,8 +100,10 @@ impl Mos6502 {
     }
 
     /// A call to a runtime routine: `jsr` and the operands in `rc2..` (4 bytes
-    /// a byte-wide part), or past a word the long form through `__sa` and
-    /// `__sb` (measured, `x * C` of 32 bits: 59 bytes).
+    /// a byte-wide part), or past a word the long form (`x * C` of 32 bits:
+    /// 59 bytes through `__sa`/`__sb`, 17 now). The larger price stays: it also
+    /// stands for the routine a call links where an expansion does not
+    /// (div_constants_short: +168 B at the smaller).
     fn routine_bytes(parts: i64) -> i64 {
         if parts <= 2 { 3 + 4 * parts } else { 14 * parts + 3 }
     }
@@ -199,25 +201,38 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// DEVIATE OS-INLINE-TRIAL (speed; owner 6502, exit 2026-11-24, row
+    /// 6502-INLINE-RATE): a copy the rate refused is built inlined as well
+    /// and kept where the backend writes the chain smaller (memcpy_libcall
+    /// -O2: `same` folded into `main`, 100 B).
+    fn speed_inline_finished_trial(&self) -> bool {
+        true
+    }
+
+    fn write_only_after_late_unroll(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
 
-    // Rule 2 (user 11-04, a byte of growth must buy 3 clocks at -O2/-O3) is
-    // off: `speed_inline_milliclocks_per_byte` stays 0. DEVIATE 6502-RATE:
-    // the frequency the rule weighs with caps a loop at about 32 trips,
-    // where div_constants_long runs 1500, so it priced 6.8 KB for 4.05M
-    // clocks (600 clk/B) and tail_calls +12.6k clocks for 944 B. Owner:
-    // llrm-target-6502. Exit: a frequency that knows the trip count,
-    // 2026-11-20.
+    /// An inline at -O2/-O3 that grows the code is refused: bytes first at
+    /// every level (user ruling 2026-11-14), at the rate no clocks can
+    /// repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit 2026-11-24,
+    /// row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M
+    /// clocks (div_constants_long) and tail_calls +12.6k clocks for 944 B;
+    /// a price by clocks a byte weighs a loop at about 32 trips.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        1 << 40
+    }
 
-    /// A full unroll at -O2/-O3 must save 3 clocks for each code byte it adds
-    /// (the 6502 rate, `DEVIATE 6502-RATE`), on the real clock and byte tables
-    /// (`crate::opcosts`, `DEVIATE 6502-OPCOSTS`): the unit prices it used
-    /// before read a 32-bit store fill as a few instructions (220 B for 46
-    /// clocks, byval_struct). Owner: llrm-target-6502. Exit: 2026-11-20.
+    /// A full unroll at -O2/-O3 may add no byte: bytes first at every level
+    /// (user ruling 2026-11-14), on the real clock and byte tables
+    /// (`crate::opcosts`, `DEVIATE 6502-OPCOSTS`). The rate no clocks can
+    /// repay, the one the no-growth trial uses. It was 3 clocks a byte.
     fn unroll_milliclocks_per_byte(&self) -> i64 {
-        3000
+        1 << 40
     }
 
     /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the
@@ -232,8 +247,9 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
-    /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the byte model is within 25% of the written
-    /// bytes for two functions in three; a module over 512 instructions takes seconds to compile once
+    /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the byte model
+    /// is within 25% of the written bytes for two functions in three; a
+    /// module over 512 instructions takes seconds to compile once
     /// (div_constants_long -Os: 3.0 s, 13.0 s with the trial).
     fn opt_size_inline_trial_limits(&self) -> Option<(i64, usize)> {
         Some((25, 512))
@@ -253,6 +269,13 @@ impl Tti for Mos6502 {
     /// tip: row 6502-LSR-WORSE (owner 6502-d, exit 2026-11-24).
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
         &[16, 32]
+    }
+
+    /// A divide is a call here: `v / 10 >= 10` stays a compare of the quotient
+    /// the loop carries, not `v >= 100` with `v` kept across the call
+    /// (DEVIATE ICMPDIV-1, `tti.rs` of llrm-mir).
+    fn keeps_icmp_of_shared_division(&self) -> bool {
+        true
     }
 
     /// `isLSRCostLess` with the target's own instruction counts, the shape of
@@ -276,6 +299,10 @@ impl Tti for Mos6502 {
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    fn address_index_max(&self) -> Option<u64> {
+        Some(u64::from(u8::MAX))
     }
 
     /// `narrowiv`: a counter of a width the datalayout does not hold (`n8`
@@ -479,14 +506,16 @@ impl Tti for Mos6502 {
         }
     }
 
-    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so
-    // a pair is one call.
+    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`),
+    // the signed word one too (`__divmodhi4`), and the long ones
+    // (`__divmodsi4`, `__udivmodsi4`: the remainder in rc4..rc7), so a pair is
+    // one call.
     fn has_div_rem_op(
         &self,
         bits: u32,
         signed: bool,
     ) -> bool {
-        !signed && bits <= 2 * self.byte_bits
+        bits == 2 * self.byte_bits || bits == 4 * self.byte_bits || (!signed && bits < 2 * self.byte_bits)
     }
 
     fn cast_cost(

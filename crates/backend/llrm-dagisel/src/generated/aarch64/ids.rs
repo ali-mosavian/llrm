@@ -804,6 +804,10 @@ pub mod opcode {
     pub const BICv4i32: u16 = 2186;
     pub const BICv8i16: u16 = 2187;
     pub const BICv8i8: u16 = 2188;
+    pub const BIFv16i8: u16 = 2189;
+    pub const BIFv8i8: u16 = 2190;
+    pub const BITv16i8: u16 = 2191;
+    pub const BITv8i8: u16 = 2192;
     pub const BL: u16 = 2193;
     pub const BLR: u16 = 2194;
     pub const BLRA: u16 = 524;
@@ -826,6 +830,8 @@ pub mod opcode {
     pub const BSL1N_ZZZZ: u16 = 2219;
     pub const BSL2N_ZZZZ: u16 = 2220;
     pub const BSL_ZZZZ: u16 = 2221;
+    pub const BSLv16i8: u16 = 2222;
+    pub const BSLv8i8: u16 = 2223;
     pub const BSPv16i8: u16 = 534;
     pub const BSPv8i8: u16 = 535;
     pub const Bcc: u16 = 2224;
@@ -3666,6 +3672,12 @@ pub mod opcode {
     pub const MLA_ZZZI_D: u16 = 5482;
     pub const MLA_ZZZI_H: u16 = 5483;
     pub const MLA_ZZZI_S: u16 = 5484;
+    pub const MLAv16i8: u16 = 5485;
+    pub const MLAv2i32: u16 = 5486;
+    pub const MLAv4i16: u16 = 5488;
+    pub const MLAv4i32: u16 = 5490;
+    pub const MLAv8i16: u16 = 5492;
+    pub const MLAv8i8: u16 = 5494;
     pub const MLS_ZPZZZ_B_UNDEF: u16 = 1105;
     pub const MLS_ZPZZZ_D_UNDEF: u16 = 1106;
     pub const MLS_ZPZZZ_H_UNDEF: u16 = 1107;
@@ -3677,6 +3689,12 @@ pub mod opcode {
     pub const MLS_ZZZI_D: u16 = 5499;
     pub const MLS_ZZZI_H: u16 = 5500;
     pub const MLS_ZZZI_S: u16 = 5501;
+    pub const MLSv16i8: u16 = 5502;
+    pub const MLSv2i32: u16 = 5503;
+    pub const MLSv4i16: u16 = 5505;
+    pub const MLSv4i32: u16 = 5507;
+    pub const MLSv8i16: u16 = 5509;
+    pub const MLSv8i8: u16 = 5511;
     pub const MOVAZ_ZMI_H_B_PSEUDO: u16 = 1131;
     pub const MOVAZ_ZMI_H_D_PSEUDO: u16 = 1132;
     pub const MOVAZ_ZMI_H_H_PSEUDO: u16 = 1133;

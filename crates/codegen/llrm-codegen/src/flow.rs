@@ -64,6 +64,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoopSlots",
     "Scheduler",
     "Coalescer",
+    "JoinStackPointer",
     "MachineScheduler",
     "MachineSink",
     "PeepholeOptimizer",
@@ -76,6 +77,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
+    "KnownZero",
     "BreakFalseDeps",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
@@ -143,6 +145,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FloatAlloc", "floatalloc@8"),
     ("TwoAddress", "twoaddr@9"),
     ("Coalescer", "coalesce@10"),
+    ("JoinStackPointer", "coalesce@10"),
     ("RegAlloc", "allocate@11"),
     ("ParallelCopy", "parcopy@12"),
     ("Prologue", "prologue@13"),
@@ -155,6 +158,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
+    ("KnownZero", "copyprop@18"),
     ("BreakFalseDeps", "breakfalsedeps@19"),
 ];
 
@@ -309,8 +313,12 @@ pub fn machine_with<'a>(
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
             loop_carried_flow: target.commutes_loop_carried_flow(),
+            to_known_register: target.converts_three_address_to_known_register(),
             unoptimized: !target.optimized,
+            classes: Some(Rc::clone(classes)),
         }),
+        // `joinReservedPhysReg`: a copy of the stack pointer nothing moves it from.
+        Box::new(crate::backend::joinsp::JoinStackPointer { stack: registers.stack }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
@@ -367,6 +375,7 @@ pub fn machine_with<'a>(
             widens_byte: target.widens_load(1).unwrap_or(false),
             widens_word: target.widens_load(2).unwrap_or(false),
             strict_bytes: target.size || target.min_size || !target.speed_rate,
+            widens_word_immediate: target.widens_word_immediate(),
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),
@@ -396,6 +405,8 @@ pub fn machine_with<'a>(
         }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
+        // Beyond the pin (GCC's postreload-cse): a move of a zero the register holds.
+        Box::new(crate::backend::knownzero::KnownZero),
         // The pin's pre-emit pass: the distances are those of the final order.
         Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];

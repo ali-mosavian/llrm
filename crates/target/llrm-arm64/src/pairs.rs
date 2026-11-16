@@ -117,10 +117,13 @@ pub(crate) fn is_memory(inst: &Inst) -> bool {
         || ordered(inst)
 }
 
-/// An atomic access or a barrier: no access moves across it, whatever it
-/// reaches.
+/// An atomic access, a barrier or a vector lane access: no access moves
+/// across it, whatever it reaches.
 fn ordered(inst: &Inst) -> bool {
-    matches!(inst, Inst::Atomic { .. } | Inst::Dmb { .. })
+    matches!(
+        inst,
+        Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::VectorStoreLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadLane { .. }
+    )
 }
 
 pub(crate) fn leaves_the_block(inst: &Inst) -> bool {

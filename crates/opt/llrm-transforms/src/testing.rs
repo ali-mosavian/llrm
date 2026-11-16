@@ -157,6 +157,12 @@ pub struct Tuned {
     pub folds_masks: bool,
     /// `Machine::two_address`.
     pub two_address: bool,
+    /// The target's library has `memset_pattern16`, as a Darwin one does.
+    pub memset_pattern: bool,
+    /// `Machine::fills_by_pattern`: the target's isel fills a pattern itself.
+    pub fills_pattern: bool,
+    /// `Tuning::fills_pattern_at_speed`.
+    pub fills_pattern_at_speed: bool,
     /// A global is never a base, and a register and an index are the only
     /// forms.
     pub no_global_base: bool,
@@ -205,12 +211,26 @@ pub struct Flagged {
     pub skip_partial_at_size: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
+    pub fills_pattern_at_speed: bool,
     pub second_ipsccp: bool,
+    /// No legal `FADD` on `float` or `double` (a soft-float target).
+    pub soft_float: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
+    fn fp_op_expensive(
+        &self,
+        ty: tti::Ty,
+    ) -> bool {
+        self.soft_float && matches!(ty, tti::Ty::Double | tti::Ty::Float)
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.second_ipsccp
+    }
+
+    fn fills_pattern_at_speed(&self) -> bool {
+        self.fills_pattern_at_speed
     }
 
     fn have_fast_sqrt(
@@ -356,6 +376,30 @@ impl llrm_mir::tti::Tti for Flagged {
     }
 }
 
+/// A library of the pin's defaults for an unknown OS, with `memset_pattern16`.
+struct WithMemsetPattern;
+
+impl llrm_mir::libfunc::Library for WithMemsetPattern {
+    fn int_bits(&self) -> u32 {
+        32
+    }
+
+    fn size_t_bits(&self) -> u32 {
+        32
+    }
+
+    fn availability(
+        &self,
+        func: llrm_mir::libfunc::LibFunc,
+    ) -> llrm_mir::libfunc::Availability {
+        if func == llrm_mir::libfunc::LibFunc::MemsetPattern16 {
+            llrm_mir::libfunc::Availability::Standard
+        } else {
+            llrm_mir::libfunc::Generic { int_bits: 32, size_t_bits: 32 }.availability(func)
+        }
+    }
+}
+
 struct FoldsMasks;
 
 impl llrm_mir::lowering::Lowering for FoldsMasks {
@@ -365,6 +409,14 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn fills_by_pattern(&self) -> bool {
+        self.fills_pattern
+    }
+
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        self.memset_pattern.then(|| std::rc::Rc::new(WithMemsetPattern) as _)
+    }
+
     fn tuning(&self) -> llrm_mir::target::Tuning {
         let inline = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset };
         let inline_size = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size };
@@ -381,6 +433,7 @@ impl llrm_mir::target::Machine for Tuned {
             || self.narrows_counters
             || self.sinks_invariants
             || self.no_global_base
+            || self.fills_pattern_at_speed
             || self.cheap_ctlz
             || self.fast_sqrt
             || self.second_ipsccp
@@ -396,11 +449,13 @@ impl llrm_mir::target::Machine for Tuned {
                 sinks_invariants: self.sinks_invariants,
                 no_cmov: false,
                 no_global_base: self.no_global_base,
+                fills_pattern_at_speed: self.fills_pattern_at_speed,
                 cheap_ctlz: self.cheap_ctlz,
                 fast_sqrt: self.fast_sqrt,
                 second_ipsccp: self.second_ipsccp,
                 ord_dear: self.ord_dear,
                 skip_partial_at_size: self.skip_partial_at_size,
+                soft_float: false,
             }) as _
         })
     }

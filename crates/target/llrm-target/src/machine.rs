@@ -23,6 +23,9 @@ pub struct Segments {
     pub code: String,
     /// The stack lives in the data group: `stack` reaches the data too.
     pub stack_is_data: bool,
+    /// The program's start-up makes `stack` hold the data group's selector for the whole run, while `data` stays the
+    /// data segment (unlike `stack_is_data`, which frees it): a near pointer into the stack is read through `data`.
+    pub stack_shares_data: bool,
 }
 
 /// What an `in` or `out` of a port may do to memory, narrowest first.
@@ -189,6 +192,7 @@ impl Machine {
                 .get("stack_is_data")
                 .and_then(toml::Value::as_bool)
                 .ok_or("segments needs a boolean stack_is_data")?,
+            stack_shares_data: segments.get("stack_shares_data").and_then(toml::Value::as_bool).unwrap_or(false),
         })
     }
 

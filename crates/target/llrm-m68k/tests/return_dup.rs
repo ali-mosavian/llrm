@@ -63,15 +63,16 @@ done:
 ";
 
 /// A copy of the return is the function's epilogue (the saved registers, the
-/// frame): it grows the code where the shared one does not. Where neither bytes
-/// nor clocks may grow (-O1, `strict`) the build without the copy is kept;
-/// where clocks buy bytes (-O2) the copy stays.
+/// frame): it grows the code where the shared one does not. -O1 to -O3 are
+/// judged by clocks, so the copy stays; -Os keeps the shared return.
 #[test]
-fn a_return_whose_epilogue_costs_bytes_is_copied_only_where_clocks_pay_for_them() {
+fn a_return_whose_epilogue_costs_bytes_is_copied_wherever_clocks_pay_for_them() {
     let module = llrm_mir::parse::module(SAVING).expect("parses");
     let build = |options| text_with(&module, "g", Cpu::M68000, options).expect("compiles");
-    let strict = build(Options { strict: true, ..Options::default() });
-    assert_eq!(strict.matches("rts").count(), 1, "{strict}");
-    let speed = build(Options::default());
-    assert_eq!(speed.matches("rts").count(), 2, "{speed}");
+    let size = build(Options { size: true, ..Options::default() });
+    assert_eq!(size.matches("rts").count(), 1, "{size}");
+    for options in [Options { strict: true, ..Options::default() }, Options::default()] {
+        let speed = build(options);
+        assert_eq!(speed.matches("rts").count(), 2, "{speed}");
+    }
 }

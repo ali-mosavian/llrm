@@ -75,7 +75,7 @@ impl LoopIdiomRecognize {
         let Some(tti) = run.tti else { return false };
         let kind = CostKind::SizeAndLatency;
         let basic = tti.tcc_basic(kind);
-        let cost = tti.intrinsic_cost(
+        let cost = tti.zero_poison_intrinsic_cost(
             &format!("llvm.ctlz.i{bitwidth}"),
             Some(Ty::Int(bitwidth)),
             &[Ty::Int(bitwidth), Ty::Int(1)],
