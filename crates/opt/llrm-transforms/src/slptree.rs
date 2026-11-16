@@ -805,40 +805,6 @@ impl<'a> StoreSeparation<'a> {
     }
 }
 
-/// Whether a lane of `entry` reads another lane of it through the
-/// instructions of `block` standing from `first` on.
-fn lanes_depend(
-    function: &Function,
-    entry: &Entry,
-    block: BlockId,
-    first: usize,
-    position: &IdMap<InstId, usize>,
-) -> bool {
-    if entry.insts.len() < 2 {
-        return false;
-    }
-    let mut seen = llrm_mir::dense::IdSet::<InstId>::new();
-    let mut stack: Vec<InstId> = entry.insts.clone();
-    while let Some(inst) = stack.pop() {
-        for operand in &function.instruction(inst).operands {
-            let Operand::Value(id) = operand else { continue };
-            let ValueDef::Instruction(def) = function.value(*id).def else { continue };
-            if function.parent(def) != Some(block)
-                || position[&def] < first
-                || function.instruction(def).opcode == Opcode::Phi
-                || !seen.insert(def)
-            {
-                continue;
-            }
-            if entry.insts.contains(&def) {
-                return true;
-            }
-            stack.push(def);
-        }
-    }
-    false
-}
-
 /// DEVIATE SLP3: the scalars of the tree can stand as vectors where the last of
 /// each bundle is.
 fn schedulable(
@@ -888,12 +854,6 @@ fn schedulable(
         let block = function.parent(entry.insts[0]).expect("a placed bundle");
         let (first, last) =
             (entry.insts.iter().map(at).min().expect("a bundle"), entry.insts.iter().map(at).max().expect("a bundle"));
-        // The lanes of a bundle cannot read one another: they stand as one
-        // instruction (`BlockScheduling` cancels a cyclic bundle).
-        if entry.kind != Kind::Phi && lanes_depend(function, entry, block, first, position) {
-            llrm_support::debug!("slp", "tree: a lane reads another lane of its bundle");
-            return false;
-        }
         if entry.kind == Kind::Load {
             // Loads of the seed block stand before its first store; the loads
             // move down to the last, past nothing that writes.
