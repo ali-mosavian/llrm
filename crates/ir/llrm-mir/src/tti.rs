@@ -892,9 +892,10 @@ pub trait Tti {
     }
 
     /// Whether the SLP vectorizer's tree and store chains run: only where the
-    /// target's vector costs are priced against the pin (arm64). DEVIATE SLP2
-    /// (owner arm64, exit 2026-11-24): a target with vector registers and no
-    /// priced hooks keeps its scalar code.
+    /// target's vector costs are priced against the pin (arm64, and x86-64
+    /// where it holds vector values). DEVIATE SLP2 (owner arm64, exit
+    /// 2026-11-24): a target with vector registers and no priced hooks keeps
+    /// its scalar code.
     fn slp_priced(&self) -> bool {
         false
     }
@@ -1602,6 +1603,12 @@ pub trait Tti {
     /// it for post-indexed targets only): where registers are scarcer than
     /// the winner-register heuristic assumes (x86-m16: six).
     fn lsr_address_fewest_registers(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup costs one, whatever
+    /// `int_imm_cost` says (LLVM 20.1.8's `getSetupCost`; the pin's is free for a free constant).
+    fn lsr_constant_setup_is_one(&self) -> bool {
         false
     }
 

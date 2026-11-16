@@ -154,6 +154,16 @@ fn a_vector_total_shuffles_into_a_fresh_register_with_no_copy() {
     }
 }
 
+/// LSR charged a constant in a setup by `getIntImmCost` (a free 0 costs nothing), so the strlen loop started at 0 and
+/// copied the index before bumping it (`mov ecx, eax; inc eax; cmp [rdi+rcx]`, 4 a trip) where clang 20 starts at -1
+/// and indexes with the bumped register (3 a trip): strlen_idiom 2,895 against 2,759 Ir.
+#[test]
+fn a_loop_to_the_terminator_indexes_with_the_bumped_register() {
+    let text = assembly_of("lsr_strlen.c", "x86_64-linux", "-O2");
+    let len = body(&text, "len");
+    assert!(len.contains("[rdi+rax") && !len.contains("[rdi+rcx"), "{len}");
+}
+
 /// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]

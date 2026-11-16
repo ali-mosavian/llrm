@@ -1392,6 +1392,15 @@ impl Tti for X86 {
         self.sse2 && self.quad
     }
 
+    /// The SLP vectorizer runs where the target takes vector values: its
+    /// store chains (a run of scalar stores of constants or of one tree is one
+    /// vector store) are priced by `vector_memory_op_cost`; a tree whose
+    /// operation this target does not price is not formed (the hooks are
+    /// `None`), so only what the SSE2 rows price vectorizes.
+    fn slp_priced(&self) -> bool {
+        self.vector_values()
+    }
+
     /// `getRegisterBitWidth(RGK_FixedWidthVector)` of an SSE2 target: one XMM
     /// register. Only where the 128-bit integer vectors are taken
     /// (`vector_values`): the others stay scalar and read 0.
@@ -1608,6 +1617,10 @@ impl Tti for X86 {
 
     fn lsr_address_fewest_registers(&self) -> bool {
         self.tuning.lsr_address_fewest_registers
+    }
+
+    fn lsr_constant_setup_is_one(&self) -> bool {
+        self.tuning.lsr_constant_setup_is_one
     }
 
     fn constant_arith_phi_is_cheap(

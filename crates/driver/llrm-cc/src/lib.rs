@@ -463,6 +463,8 @@ const LLC_FLAGS: &[&str] = &[
     "-mno-stack-is-data",
     "-mfar-bss",
     "-mno-far-bss",
+    "-mfar-bss-init",
+    "-mno-far-bss-init",
     "-mregcall-default",
     "-mc-library",
     "-mbss-begin",
