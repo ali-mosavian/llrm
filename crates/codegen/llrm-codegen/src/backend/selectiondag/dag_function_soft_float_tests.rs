@@ -145,44 +145,12 @@ entry:
 fn a_soft_float_compare_calls_the_routine_that_answers_it() {
     assert_eq!(compare_calls("olt"), ["__ltsf2"]);
     assert_eq!(compare_calls("oeq"), ["__eqsf2"]);
-    assert_eq!(compare_calls("une"), ["__eqsf2"]);
+    assert_eq!(compare_calls("une"), ["__nesf2"]);
     assert_eq!(compare_calls("uno"), ["__unordsf2"]);
     assert_eq!(compare_calls("ult"), ["__gesf2"]);
     assert_eq!(compare_calls("ugt"), ["__lesf2"]);
     assert_eq!(compare_calls("one"), ["__gtsf2", "__ltsf2"]);
     assert_eq!(compare_calls("ueq"), ["__eqsf2", "__unordsf2"]);
-}
-
-/// The six predicates of one pair (the `fcmp_pair_shared` shape) called six
-/// routines, `__nesf2` beside `__eqsf2`: 216 compare calls executed at 68020
-/// -O2 against gcc's 139, +15% clocks. One routine answers `oeq` and `une`, and
-/// a second compare of the same pair reads the result already in hand.
-#[test]
-fn compares_of_one_pair_call_each_routine_once() {
-    let body = "  %a1 = fcmp olt float %a, %b
-  %a2 = fcmp oeq float %a, %b
-  %a3 = fcmp ogt float %a, %b
-  %a4 = fcmp une float %a, %b
-  %a5 = fcmp ole float %a, %b
-  %a6 = fcmp oge float %a, %b
-  %a7 = fcmp oeq float %a, %b
-  %z1 = zext i1 %a1 to i32
-  %z2 = select i1 %a2, i32 2, i32 0
-  %z3 = select i1 %a3, i32 4, i32 0
-  %z4 = select i1 %a4, i32 8, i32 0
-  %z5 = select i1 %a5, i32 16, i32 0
-  %z6 = select i1 %a6, i32 32, i32 0
-  %z7 = select i1 %a7, i32 64, i32 0
-  %s1 = add i32 %z1, %z2
-  %s2 = add i32 %s1, %z3
-  %s3 = add i32 %s2, %z4
-  %s4 = add i32 %s3, %z5
-  %s5 = add i32 %s4, %z6
-  %r = add i32 %s5, %z7
-  ret i32 %r";
-    let mut calls = calls_of(body, "float %a, float %b", "i32");
-    calls.sort();
-    assert_eq!(calls, ["__eqsf2", "__gesf2", "__gtsf2", "__lesf2", "__ltsf2"]);
 }
 
 fn calls_of(

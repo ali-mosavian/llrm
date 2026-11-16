@@ -776,7 +776,16 @@ impl<'a> TypeLegalizer<'a> {
         let (a, b) = (self.softened_float(lhs), self.softened_float(rhs));
         let vt = self.dag.value_type(node);
         let EVT::Simple(float_mvt) = float_vt else { return Err(unsupported("soften a compare of this float")) };
-        let pick = |cmp: Cmp3| libcalls::name(Libcall::Fcmp3(cmp, float_mvt));
+        // DEVIATE SOFT-CMP-CSE: by class, where the target's runtime has them.
+        let classes = self.tli.types.soft_compare_classes();
+        let pick = |cmp: Cmp3| {
+            let cmp = match cmp {
+                Cmp3::Oeq | Cmp3::Une | Cmp3::Olt if classes => Cmp3::Ole,
+                Cmp3::Ogt if classes => Cmp3::Oge,
+                other => other,
+            };
+            libcalls::name(Libcall::Fcmp3(cmp, float_mvt))
+        };
         let compare = |this: &mut Self, cmp: Cmp3, cc: CondCode| -> Result<SDValue, LegalizeError> {
             // The routines return a C `int`: the pointer's width up to a long
             // (16 at m16, 32 above).
