@@ -1,10 +1,11 @@
-//! Stores to neighbouring slots made adjacent.
+//! Stores to neighbouring slots made adjacent. At -O1: from -O2 the SLP
+//! vectorizer makes the constant pair one vector store, as the pin does.
 
-use llrm_arm64::driver;
+use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
 fn body(name: &str) -> String {
-    let asm = driver::assembly(include_str!("data/store_cluster.ll"), Platform::Darwin, true).expect("lowers");
+    let asm = driver::assembly(include_str!("data/store_cluster.ll"), Platform::Darwin, Level::O1).expect("lowers");
     let start = asm.find(&format!("_{name}:")).expect("the function is there");
     let rest = &asm[start..];
     rest[..rest[1..].find("\n_").map_or(rest.len(), |end| end + 1)].to_owned()
