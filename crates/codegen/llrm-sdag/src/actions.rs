@@ -956,6 +956,8 @@ impl TargetLowering {
         t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`; a variable one is the stack.
         t.set_ops(&[ISD::ExtractElement], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of the lanes the mask picks.
+        t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
