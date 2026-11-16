@@ -1374,6 +1374,18 @@ impl Tti for X86 {
         self.tuning.vectorize_at_size
     }
 
+    fn should_maximize_vector_bandwidth(&self) -> bool {
+        self.tuning.maximize_vector_bandwidth
+    }
+
+    fn narrows_reduction_accumulators(&self) -> bool {
+        self.tuning.narrow_reduction_accumulators
+    }
+
+    fn bandwidth_vf_without_epilogue(&self) -> bool {
+        self.tuning.bandwidth_vf_without_epilogue
+    }
+
     /// `bsr` and `tzcnt`/`bsf` are one instruction at x86-64 (LI-18).
     fn shift_loop_counts(&self) -> bool {
         self.tuning.shift_loop_counts
