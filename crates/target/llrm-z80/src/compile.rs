@@ -915,6 +915,27 @@ mod tests {
         assert_eq!(key(Level::O2), base, "the state is restored");
     }
 
+    /// Comparing the two forms of a function as `Debug` text of both was 3% of
+    /// switch_jump_table -O2; two functions that differ in a field must still
+    /// differ, or the copied and kept forms are taken for one.
+    #[test]
+    fn two_functions_differing_in_one_operand_are_not_the_same_function() {
+        let request = Request::new(Level::O2);
+        let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
+        let base = machine_function_with(&selected, "lz4", true).expect("builds");
+        assert!(same_function(&base, &base.clone()), "a copy is the same function");
+        let mut other = base.clone();
+        let imm = other
+            .blocks
+            .iter_mut()
+            .flat_map(|block| block.insts.iter_mut())
+            .flat_map(|inst| inst.operands.iter_mut())
+            .find_map(|operand| if let Operand::Imm(value) = operand { Some(value) } else { None })
+            .expect("an immediate");
+        *imm += 1;
+        assert!(!same_function(&base, &other), "one immediate differs");
+    }
+
     /// A SipHash call per small field cost more than the bytes it hashed (a
     /// tenth of switch_jump_table -O2): the key is hashed in one run.
     #[test]
@@ -1626,6 +1647,20 @@ fn hash_form(
             .1
     });
     hash.hash(into);
+}
+
+/// Whether two functions agree in every field: the same 128-bit hash of all
+/// of them as the allocation key (no `Debug` text of two whole functions).
+fn same_function(
+    one: &MFunction,
+    other: &MFunction,
+) -> bool {
+    let hashed = |function: &MFunction| {
+        let mut both = Both::new();
+        hash_function(function, &mut both);
+        both.finish_pair()
+    };
+    hashed(one) == hashed(other)
 }
 
 /// Every field of the function, in the order they are declared: a field added
@@ -4000,7 +4035,7 @@ fn lines_of_form(
                 (machine_function_with(selected, name, true), machine_function_with(selected, name, false));
             matches!(
                 (one, other),
-                (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
+                (Ok(one), Ok(other)) if same_function(&one, &other)
             )
         };
         let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
