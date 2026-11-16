@@ -1,10 +1,10 @@
 //! Backward threading on the shape of `queens`' column loop: a guard of the
 //! inner loop that every trip through the loop already passed.
 
+use llrm_gpl_gcc::backwardthreading::{BackwardThreading, MAX_THREADS};
 use llrm_mir::passes::PassManager;
 use llrm_mir::target::Neutral;
 
-use super::BackwardThreading;
 use crate::testing::{parsed, printed, results};
 
 /// `head` tests `row > 0` every trip; `latch` joins the path through `loop`
@@ -47,7 +47,7 @@ fn threaded(text: &str) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: super::MAX_THREADS });
+    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let text = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{text}");

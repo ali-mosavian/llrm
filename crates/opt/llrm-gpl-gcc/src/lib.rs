@@ -1,10 +1,13 @@
 //! gcc's size estimate of a function and the edge growth of copying a
 //! recursive one, after `estimate_num_insns` with `eni_size_weights`
-//! (tree-inline.cc) and `want_inline_small_function_p` (ipa-inline.cc).
+//! (tree-inline.cc) and `want_inline_small_function_p` (ipa-inline.cc); and the
+//! backward jump threader, after `tree-ssa-threadbackward.cc`.
 //!
 //! Licence: GPL-3.0-or-later, as gcc's. This crate is optional (feature
 //! `gcc-gpl` of `llrm-transforms`, off by default): a default build carries no
 //! gcc-derived code.
+
+pub mod backwardthreading;
 
 use llrm_mir::module::{Function, InstId};
 use llrm_mir::opcode::Opcode;

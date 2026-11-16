@@ -224,6 +224,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Translated,
         "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
+    #[cfg(feature = "gcc-gpl")]
     entry(
         "backthread@809",
         Simplify,
@@ -826,6 +827,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "gvn@787",
     "jumpthreading@668",
     "jumpthreading@809",
+    #[cfg(feature = "gcc-gpl")]
     "backthread@809",
     "cvp@669",
     "cvp@810",

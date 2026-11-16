@@ -1,6 +1,6 @@
-//! Backward jump threading: a branch whose outcome one path into its block
-//! decides is threaded for that path, though the block's other paths leave it
-//! unknown.
+//! Backward jump threading (GPL-3.0-or-later, as gcc's; feature `gcc-gpl`): a
+//! branch whose outcome one path into its block decides is threaded for that
+//! path, though the block's other paths leave it unknown.
 //!
 //! GCC's `tree-ssa-threadbackward` walks back from a conditional branch along
 //! a path until the branch's inputs are pinned down, then copies the path's
@@ -27,6 +27,8 @@
 //! not copy more than `max-jump-thread-duplication-stmts` (15) instructions;
 //! a function with `optsize` or `minsize` is left alone.
 
+use llrm_analysis::edges::{self, phis, single_predecessor, starts_with_landing_pad};
+use llrm_analysis::occurrence::{arms, from_arms};
 use llrm_analysis::ssaupdaterbulk::SsaUpdaterBulk;
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
 use llrm_mir::context::{ConstantKind, Context};
@@ -38,14 +40,11 @@ use llrm_mir::opcode::{Attribute, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::types::Type;
 
-use crate::edges::{self, phis, single_predecessor, starts_with_landing_pad};
-use crate::lcssa::arms;
-
 /// GCC `max-jump-thread-duplication-stmts`: the statements a threaded path
 /// may copy (`max-fsm-thread-path-insns`, 100, is for a `switch`).
 const MAX_PATH_INSNS: usize = 15;
 /// Paths threaded in one function: a cap on the code a run can add.
-const MAX_THREADS: usize = 16;
+pub const MAX_THREADS: usize = 16;
 
 pub struct BackwardThreading {
     pub enabled: bool,
@@ -422,7 +421,7 @@ fn remap_input(
                 *value = mapped;
             }
         }
-        function.set_operands(phi, crate::lcssa::from_arms(&incoming));
+        function.set_operands(phi, from_arms(&incoming));
     }
 }
 
@@ -495,7 +494,3 @@ fn thread(
     let dt = DomTree::of(function);
     ssa.rewrite_all_uses(context, function, &dt, None);
 }
-
-#[cfg(test)]
-#[path = "backwardthreading_tests.rs"]
-mod tests;

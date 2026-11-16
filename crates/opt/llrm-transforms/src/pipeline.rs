@@ -1367,10 +1367,11 @@ pub(crate) fn llvm_order(
                     ),
                 ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
+                #[cfg(feature = "gcc-gpl")]
                 slot(
                     "backthread@809",
                     Box::new(
-                        crate::backwardthreading::BackwardThreading::from_env()
+                        llrm_gpl_gcc::backwardthreading::BackwardThreading::from_env()
                             .when(applied.options.backward_threading),
                     ),
                 ),
@@ -1951,7 +1952,8 @@ pub fn recorded(
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
-    // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
+    // gcc's `ree` first: the extension it moves onto a load is the pair
+    // `extload` makes one extending load of.
     if applied.options.wanted("ree") {
         manager.add(ree::Ree);
     }
