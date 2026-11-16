@@ -2333,6 +2333,7 @@ impl FunctionPass for LoopVectorize {
                                 .then(|| dep.store_load_forward_safe_distance_in_bits()),
                             widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                             opt_size,
+                            size_priced: opt_size && tti.vectorizes_size_priced(),
                             has_reductions: !legality.reductions.is_empty(),
                             reduction_bits: widening
                                 .reductions
@@ -2414,6 +2415,7 @@ impl FunctionPass for LoopVectorize {
                             .then(|| dep.store_load_forward_safe_distance_in_bits()),
                         widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                         opt_size,
+                        size_priced: opt_size && tti.vectorizes_size_priced(),
                         has_reductions: !extracted.interleaving.reductions.is_empty(),
                         reduction_bits: extracted
                             .interleaving
