@@ -339,6 +339,8 @@ pub(super) fn instructions() -> Vec<Inst> {
         out.push(Inst::VectorLoadLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
         out.push(Inst::VectorLoadStructure { count: 2, lanes, rt: v(1), base: Gpr(3) });
         out.push(Inst::VectorStoreStructure { count: 4, lanes, rt: v(1), base: Gpr(3) });
+        out.push(Inst::VectorTupleExtract { rd: v(0), tuple: v(1), index: 1 });
+        out.push(Inst::VectorTupleBuild { tuple: v(0), count: 2, members: [v(1), v(2), Vreg(0), Vreg(0)] });
     }
     for (op, lanes) in [
         (VectorReduce::Addv, Arrangement::B16),
@@ -436,6 +438,8 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorCompareZero { .. } => "VectorCompareZero",
         Inst::VectorBitSelect { .. } => "VectorBitSelect",
         Inst::VectorBsp { .. } => "VectorBsp",
+        Inst::VectorTupleExtract { .. } => "VectorTupleExtract",
+        Inst::VectorTupleBuild { .. } => "VectorTupleBuild",
         Inst::VectorLongShift { .. } => "VectorLongShift",
         Inst::VectorLong { .. } => "VectorLong",
         Inst::VectorMulAcc { .. } => "VectorMulAcc",
@@ -472,7 +476,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 78] = [
+const ALL: [&str; 80] = [
     "Mark",
     "Label",
     "Cfi",
@@ -521,6 +525,8 @@ const ALL: [&str; 78] = [
     "VectorCompareZero",
     "VectorBitSelect",
     "VectorBsp",
+    "VectorTupleExtract",
+    "VectorTupleBuild",
     "VectorLongShift",
     "VectorLong",
     "VectorMulAcc",

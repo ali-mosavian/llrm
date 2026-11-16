@@ -915,10 +915,10 @@ impl Tti for AArch64 {
         vector_memory_op_cost(self.cpu, op, ty, align, kind)
     }
 
-    /// The selector has no `ld2`/`st2` or interleave shuffles yet (S3, S4 of
-    /// the interleaved-access work).
+    /// `ldN`/`stN` (`SelectLoad`, `SelectStore`) and the `zip`/`uzp`/`trn`
+    /// shuffles are selected.
     fn selects_interleaved_accesses(&self) -> bool {
-        false
+        true
     }
 
     fn interleaved_access_legal(

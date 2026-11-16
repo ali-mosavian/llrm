@@ -288,7 +288,8 @@ pub(super) fn to(
             let bits = u32::from(*count) * if lanes.full() == *lanes { 128 } else { 64 };
             let mut at = Mem::new(None, bits);
             (at.through, at.base) = place(*base);
-            let regs: Vec<Loc> = (0..u32::from(*count)).map(|one| vreg_loc(rt.in_run(one), 128)).collect();
+            // The tuple is named by its first register.
+            let regs: Vec<Loc> = vec![vreg_loc(*rt, 128)];
             let name = format!(
                 "{}{}{}v{}",
                 if load { "LD" } else { "ST" },

@@ -207,6 +207,20 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::VectorTupleExtract { rd, tuple, index } => semantics(
+            Operation::Move,
+            "TupleExtract".to_owned(),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*tuple, 128), imm(i64::from(*index))],
+            None,
+        ),
+        Inst::VectorTupleBuild { tuple, count, members } => semantics(
+            Operation::Move,
+            format!("TupleBuild{count}"),
+            vec![vreg_loc(*tuple, 128)],
+            members.iter().take(usize::from(*count)).map(|one| vreg_loc(*one, 128)).collect(),
+            None,
+        ),
         Inst::VectorBsp { quad, rd, mask, rn, rm } => {
             let bits = if *quad { 128 } else { 64 };
             semantics(
@@ -706,6 +720,16 @@ const OP_ARRANGEMENTS: [Arrangement; 7] = [
 pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let name = what.name.as_deref()?;
     let (dest, s) = (what.dests.first(), &what.sources);
+    if name == "TupleExtract" {
+        return Some(Inst::VectorTupleExtract { rd: vreg_of(dest?), tuple: vreg_of(&s[0]), index: value_of(&s[1]) as u8 });
+    }
+    if let Some(count) = name.strip_prefix("TupleBuild").and_then(|count| count.parse::<u8>().ok()) {
+        let mut members = [Vreg(0); 4];
+        for (at, member) in s.iter().take(usize::from(count)).enumerate() {
+            members[at] = vreg_of(member);
+        }
+        return Some(Inst::VectorTupleBuild { tuple: vreg_of(dest?), count, members });
+    }
     if name == "NOTv16i8" || name == "NOTv8i8" {
         return Some(Inst::VectorNot { quad: name == "NOTv16i8", rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
     }

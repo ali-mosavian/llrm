@@ -149,4 +149,37 @@ mod tests {
         assert_eq!(four.len(), 2, "a copy of the mask, then bsl");
         assert!(matches!(four[0], Inst::VectorMov { rd, rn } if rd == d && rn == m));
     }
+
+    /// Run `insts` over 32 registers holding their own numbers.
+    fn run_moves(insts: &[Inst]) -> [u32; 32] {
+        let mut regs: [u32; 32] = std::array::from_fn(|at| at as u32);
+        for inst in insts {
+            match inst {
+                Inst::VectorMov { rd, rn } => regs[rd.0 as usize] = regs[rn.0 as usize],
+                Inst::VectorBinary { op: VectorOp::Eor, rd, rn, rm, .. } => {
+                    regs[rd.0 as usize] = regs[rn.0 as usize] ^ regs[rm.0 as usize]
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        regs
+    }
+
+    /// A store's members land in the tuple's registers whatever registers
+    /// they were in, a swap of two (`stN` of `(b, a)` with `a` and `b` where
+    /// the tuple is) included: it was a copy over the register the next copy
+    /// read.
+    #[test]
+    fn a_tuple_is_built_from_members_in_any_registers() {
+        let first = Vreg(16);
+        for sources in [[16, 17, 18], [17, 16, 18], [18, 16, 17], [17, 18, 16], [20, 17, 16], [16, 16, 16], [31, 0, 1]] {
+            let members = [Vreg(sources[0]), Vreg(sources[1]), Vreg(sources[2]), Vreg(0)];
+            let regs = run_moves(&expand_tuple_build(first, 3, &members));
+            for at in 0..3 {
+                assert_eq!(regs[16 + at], sources[at], "member {at} of {sources:?}");
+            }
+        }
+        let wrapped = run_moves(&expand_tuple_build(Vreg(31), 2, &[Vreg(0), Vreg(31), Vreg(0), Vreg(0)]));
+        assert_eq!((wrapped[31], wrapped[0]), (0, 31), "v31_v0 built from (v0, v31)");
+    }
 }
