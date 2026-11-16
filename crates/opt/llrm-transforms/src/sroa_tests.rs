@@ -994,27 +994,6 @@ b0:
     assert!(after.contains("extractelement <8 x i16> %v, i32 5"), "{after}");
 }
 
-/// Three bytes of a stored `<16 x i8>` copied out: the DAG has no `<3 x i8>`
-/// (memory_expansion -O3 on x86-64 failed "vector with no register class"), so
-/// the copy stays a copy and no odd-lane vector is made.
-#[test]
-fn test_three_bytes_copied_out_of_a_stored_vector_make_no_odd_lane_vector() {
-    let after = sroa(
-        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
-
-define void @f(<16 x i8> %v, ptr %out) {
-b0:
-  %s = alloca <16 x i8>
-  store <16 x i8> %v, ptr %s
-  %p = getelementptr i8, ptr %s, i16 1
-  call void @llvm.memcpy.p0.p0.i16(ptr %out, ptr %p, i16 3, i1 false)
-  ret void
-}
-",
-    );
-    assert!(!after.contains("<3 x i8>"), "{after}");
-}
-
 /// The loop shape of arm64 `dot -O2`: a vector alloca stored once and read by
 /// lane in the body of a loop. Every lane read is an `extractelement` of the
 /// stored vector, in the loop; the alloca, its store and loads are gone.

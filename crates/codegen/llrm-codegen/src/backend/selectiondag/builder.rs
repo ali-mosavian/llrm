@@ -4377,17 +4377,22 @@ impl Builder<'_> {
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                for operand in [&mut first, &mut second] {
-                    if self.dag.is_undef(*operand) {
-                        *operand = self.dag.get_undef(padded);
-                    } else {
-                        let undef = self.dag.get_undef(input);
-                        let mut pieces = vec![undef; count];
-                        pieces[0] = *operand;
-                        *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
+                // DEVIATE: no padding past a register (the pin widens `v18i8` to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an extended vector type; owner
+                // x87-cordic-2; review 2026-11-27.
+                if padded.size_in_bits() <= 128 {
+                    for operand in [&mut first, &mut second] {
+                        if self.dag.is_undef(*operand) {
+                            *operand = self.dag.get_undef(padded);
+                        } else {
+                            let undef = self.dag.get_undef(input);
+                            let mut pieces = vec![undef; count];
+                            pieces[0] = *operand;
+                            *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
+                        }
                     }
+                    sources = count * sources;
                 }
-                sources = count * sources;
             }
             if sources > lanes {
                 // Each input a subvector of the mask's width, at one start.
