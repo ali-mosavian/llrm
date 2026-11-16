@@ -63,3 +63,66 @@ store i16 1, ptr getelementptr inbounds (i8, ptr @bmp, i64 2), align 2\n  ret vo
     );
     assert_eq!(text.matches("x i8>").count() + text.matches("x i16>").count(), 0, "{text}");
 }
+
+/// x86 takes the SLP vectorizer's store chains too: the machine of the
+/// loop-vectorizer's x86 tests, with an SSE2 target's costs.
+struct X86At(std::rc::Rc<llrm_x86::tti::X86>);
+
+impl llrm_mir::target::Machine for X86At {
+    fn has_vector_mir(&self) -> bool {
+        true
+    }
+
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(self.0.clone())
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        llrm_mir::target::Neutral.spaces()
+    }
+
+    fn foreign_span(
+        &self,
+        a: (i64, i64),
+        b: (i64, i64),
+        c: i64,
+    ) -> Option<(i64, i64)> {
+        llrm_mir::target::Neutral.foreign_span(a, b, c)
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::Neutral.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        llrm_mir::target::Neutral.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        llrm_mir::target::Neutral.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        llrm_mir::target::Neutral.address_forms()
+    }
+}
+
+/// fill_nest -O3 (x86_64): the 64 stores of `t[y][x] = 4660` a row holds (the
+/// inner loop unrolled) stayed 64 scalar stores, 16 `mov qword` a trip after
+/// the DAG's merging, while the pin's SLP makes eight `store <8 x i16> splat
+/// (i16 4660)`: `words` ran a scalar loop of 4,096 stores and the nest cost the
+/// 450 threshold its bytes (4,193 executed against clang 20's 3,681).
+#[test]
+fn constant_stores_become_vector_stores_on_x86_64() {
+    use llrm_mir::tti::Tti as _;
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    assert!(tti.vector_values(), "x86-64 holds SSE2 vectors");
+    let mut module = parsed(CONST_STORES);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(SlpVectorize);
+    manager.run_module(&mut module, std::rc::Rc::new(X86At(std::rc::Rc::new(tti)))).unwrap();
+    let text = crate::testing::printed(&module);
+    let splat = format!("store <8 x i16> <{}>", vec!["i16 1824"; 8].join(", "));
+    assert_eq!(text.matches(&splat).count(), 10, "{text}");
+    assert_eq!(text.matches("store i16").count(), 0, "{text}");
+}
