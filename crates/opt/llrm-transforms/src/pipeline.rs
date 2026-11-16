@@ -187,6 +187,10 @@ pub struct Options {
     /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
     /// (bsearch -O1: a re-test and a loop-carried copy of the result).
     pub thread_jumps: bool,
+    /// GCC's backward threader (`backthread@809`): a path into a join that
+    /// decides a guard is copied. It grows code, so a target that ranks bytes
+    /// first turns it off (6502, z80: `idioms` +188 and +619 bytes).
+    pub backward_threading: bool,
     /// A switch that only picks constants is a load from an array: gcc's
     /// `-ftree-switch-conversion`, -O2 and up.
     pub switch_conversion: bool,
@@ -341,6 +345,7 @@ impl Default for Options {
             drop_loads: true,
             pre: true,
             thread_jumps: false,
+            backward_threading: true,
             drop_stores: true,
             sink: true,
             spare_loads: false,
@@ -405,6 +410,7 @@ impl Options {
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             pre: false,
             thread_jumps: false,
+            backward_threading: true,
             loop_unrolling: false,
             unswitch: false,
             switch_conversion: false,
@@ -1366,6 +1372,13 @@ pub(crate) fn llvm_order(
                     ),
                 ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
+                slot(
+                    "backthread@809",
+                    Box::new(
+                        crate::backwardthreading::BackwardThreading::from_env()
+                            .when(applied.options.backward_threading),
+                    ),
+                ),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
