@@ -993,3 +993,34 @@ b0:
     assert!(!after.contains("alloca") && !after.contains("call void @llvm.memcpy"), "{after}");
     assert!(after.contains("extractelement <8 x i16> %v, i32 5"), "{after}");
 }
+
+/// The loop shape of arm64 `dot -O2`: a vector alloca stored once and read by
+/// lane in the body of a loop. Every lane read is an `extractelement` of the
+/// stored vector, in the loop; the alloca, its store and loads are gone.
+#[test]
+fn test_a_vector_alloca_read_by_lane_in_a_loop_is_promoted() {
+    let after = sroa(
+        "define i16 @f(<8 x i16> %v, i16 %n) {
+b0:
+  %s = alloca <8 x i16>
+  store <8 x i16> %v, ptr %s
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %j, %loop ]
+  %acc = phi i16 [ 0, %b0 ], [ %next, %loop ]
+  %p = getelementptr i8, ptr %s, i16 6
+  %x = load i16, ptr %p
+  %next = add i16 %acc, %x
+  %j = add i16 %i, 1
+  %c = icmp ult i16 %j, %n
+  br i1 %c, label %loop, label %exit
+
+exit:
+  ret i16 %next
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("extractelement <8 x i16> %v, i32 3"), "{after}");
+}
