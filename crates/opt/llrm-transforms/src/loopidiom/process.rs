@@ -360,6 +360,7 @@ impl LoopIdiomRecognize {
                         max_stores: run.memset_stores,
                         bytes: bytes / (groups.len() as i64).max(1),
                         prefixed: run.env.layout.pointer(0).index_bits < 32,
+                        store_bytes: 0,
                     })
                 },
             ) {

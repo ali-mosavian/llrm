@@ -255,6 +255,7 @@ pub fn operation(
                 max_stores: costs.memset_stores,
                 bytes: cells,
                 prefixed: layout.pointer(0).index_bits < 32,
+                store_bytes: costs.memset_store,
             };
             if costs.memset_stores > 0 && inline.stores() <= inline.max_stores {
                 return Some(inline.price(costs));

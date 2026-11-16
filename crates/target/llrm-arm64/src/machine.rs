@@ -106,6 +106,11 @@ mod flag_tests {
     }
 }
 
+/// A constant memset is stored inline up to `MaxStoresPerMemset` (32) stores of
+/// 16 bytes (`q`). Priced by the byte it was 14 times too dear.
+const MEMSET_STORES: i64 = 32;
+const MEMSET_STORE: i64 = 16;
+
 impl Machine for Arm64Machine {
     fn has_vector_mir(&self) -> bool {
         vectors_enabled()
@@ -147,7 +152,7 @@ impl Machine for Arm64Machine {
     }
 
     fn costs(&self) -> OperationCosts {
-        OperationCosts::default()
+        OperationCosts { memset_stores: MEMSET_STORES, memset_store: MEMSET_STORE, ..OperationCosts::default() }
     }
 
     /// Real bytes for the rate-priced decisions (unroll, inline growth, call
@@ -194,6 +199,8 @@ impl Machine for Arm64Machine {
             copy: word(units.copy),
             copy_cell: word(units.copy_cell),
             direction: word(units.direction),
+            memset_stores: MEMSET_STORES,
+            memset_store: MEMSET_STORE,
             ..units
         }
     }

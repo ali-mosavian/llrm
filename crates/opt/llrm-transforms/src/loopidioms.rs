@@ -1200,11 +1200,21 @@ pub(crate) struct InlineFills {
     /// A dword store carries the operand-size prefix: the target's word is
     /// 16 bits (m16); flat code has none.
     pub prefixed: bool,
+    /// Bytes of the widest store the backend uses
+    /// (`OperationCosts::memset_store`); 4 or less: dwords, then a word and
+    /// a byte for the tail.
+    pub store_bytes: i64,
 }
 
 impl InlineFills {
-    /// Its stores: dwords, then a word and a byte for the tail.
+    /// Its stores. Past a dword the backend stores the widest type that fits
+    /// and ends with one overlapping store (a 54-byte fill is four 16-byte
+    /// stores).
     pub(crate) fn stores(self) -> i64 {
+        if self.store_bytes > 4 && self.bytes > 0 {
+            let fits = 1i64 << (63 - (self.bytes as u64).leading_zeros());
+            return (self.bytes + self.store_bytes.min(fits) - 1) / self.store_bytes.min(fits);
+        }
         self.bytes / 4 + i64::from(self.bytes % 4 >= 2) + self.bytes % 2
     }
 
@@ -1214,6 +1224,9 @@ impl InlineFills {
         self,
         prices: &OperationCosts,
     ) -> i64 {
+        if self.store_bytes > 4 {
+            return self.stores() * prices.store_immediate;
+        }
         let dwords = self.bytes / 4;
         let prefix = if self.prefixed { prices.prefix } else { 0 };
         dwords * (prices.store_immediate + prefix) + (self.stores() - dwords) * prices.store_immediate

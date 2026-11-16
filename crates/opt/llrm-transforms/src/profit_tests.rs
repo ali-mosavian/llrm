@@ -603,3 +603,20 @@ fn an_inline_memset_pays_the_dword_prefix_only_in_sixteen_bit_code() {
     assert_eq!(price("e-p:32:32-n8:16:32"), Some(16));
     assert_eq!(price("e-p:16:16-n8:16"), Some(32));
 }
+
+/// A 54-byte constant memset on arm64 is four 16-byte stores; it was priced as
+/// 54 byte cells, so a 16-trip loop of them kept rolled (rep_count -O3: 1138
+/// instructions against clang's 999).
+#[test]
+fn a_wide_store_target_prices_a_memset_by_its_wide_stores() {
+    let text = "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\n\
+                define void @f(ptr %p) {\nb0:\n  call void @llvm.memset.p0.i64(ptr %p, i8 1, i64 54, i1 false)\n  ret void\n}\n";
+    let module = module(text);
+    let callees = llrm_mir::memory::callees(&module);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let costs = OperationCosts { store_immediate: 1, memset_stores: 32, memset_store: 16, ..OperationCosts::default() };
+    let f = function(&module);
+    let price =
+        f.walk().find_map(|(_, one)| operation(&module.context, &layout, f, &callees, one, &costs).filter(|&p| p > 0));
+    assert_eq!(price, Some(4));
+}
