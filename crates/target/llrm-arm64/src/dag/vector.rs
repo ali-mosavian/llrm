@@ -653,7 +653,7 @@ pub fn lower_vector_shuffle(
     // `SVN->isSplat()`: every defined lane picks the one lane.
     let lane = mask.iter().copied().find(|&lane| lane >= 0).unwrap_or(0);
     if !mask.iter().all(|&one| one < 0 || one == lane) {
-        return None;
+        return super::permute::lower(dag, op);
     }
     // "If this is undef splat, generate it via "just" vdup, if possible."
     if lane == 0 && dag.opcode(v1) == ISD::ScalarToVector {
