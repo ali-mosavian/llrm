@@ -1600,7 +1600,8 @@ impl Builder<'_> {
             let copy = self.dag.get_copy_to_reg(self.dag.entry_node(), reg, hidden);
             self.dag.set_root(copy);
         }
-        let (mut slot_offsets, mut slot_objects) = (std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
+        let (mut slot_offsets, mut slot_objects) =
+            (std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
             self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
