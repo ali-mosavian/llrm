@@ -892,9 +892,10 @@ pub trait Tti {
     }
 
     /// Whether the SLP vectorizer's tree and store chains run: only where the
-    /// target's vector costs are priced against the pin (arm64). DEVIATE SLP2
-    /// (owner arm64, exit 2026-11-24): a target with vector registers and no
-    /// priced hooks keeps its scalar code.
+    /// target's vector costs are priced against the pin (arm64, and x86-64
+    /// where it holds vector values). DEVIATE SLP2 (owner arm64, exit
+    /// 2026-11-24): a target with vector registers and no priced hooks keeps
+    /// its scalar code.
     fn slp_priced(&self) -> bool {
         false
     }
