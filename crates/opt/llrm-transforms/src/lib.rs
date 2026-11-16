@@ -170,6 +170,7 @@ mod combine_muldivrem_tests;
 pub mod combine_narrow;
 pub mod combine_negator;
 pub mod combine_not;
+pub mod combine_and_or_replaced;
 pub mod combine_or;
 pub mod combine_pass;
 pub mod combine_phi;

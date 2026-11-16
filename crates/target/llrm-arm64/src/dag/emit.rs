@@ -2175,6 +2175,17 @@ impl Emitter<'_> {
             // The stack pointer is register 31 only in an add: `mov x, sp` and
             // `mov sp, x` are `add #0`, and a body that writes it has a
             // frame record (`dynamic`).
+            // `joinReservedPhysReg`: every write is a restore of a value read
+            // from the stack pointer, and nothing else moves it.
+            ISD::CopyToReg
+                if !self.moves_sp
+                    && matches!(
+                        self.dag.node(node.ops[1]).data,
+                        NodeData::PhysReg(id) if id == crate::reg::SP
+                    ) =>
+            {
+                Ok(())
+            }
             ISD::CopyToReg
                 if matches!(
                     self.dag.node(node.ops[1]).data,
@@ -2692,6 +2703,67 @@ impl Emitter<'_> {
     }
 }
 
+/// Whether some block writes the stack pointer with a value that is not one
+/// read from it: a dynamic `alloca`'s `sub`, or a restore of another pointer.
+///
+/// `RegisterCoalescer::joinReservedPhysReg` makes `%v = COPY $sp ... $sp = COPY
+/// %v` an identity copy when nothing writes `$sp` between them. A function
+/// whose only writes are such restores has none that does, and keeps its
+/// reserved call frame (`hasVarSizedObjects` is false).
+///
+/// DEVIATE: the pin tests each live range; here a single write that is not a
+/// restore keeps every restore of the function.
+fn writes_stack_pointer(blocks: &[Selected]) -> bool {
+    let is_sp = |dag: &SelectionDAG, value: SDValue| {
+        matches!(
+            dag.node(value).data,
+            NodeData::PhysReg(id) if id == crate::reg::SP
+        )
+    };
+    let nodes = || {
+        blocks
+            .iter()
+            .flat_map(
+                |block| block
+                    .units
+                    .iter()
+                    .flat_map(|unit| &unit.nodes)
+                    .map(move |&node| (&block.dag, block.dag.node(SDValue { node, res: 0 }))),
+            )
+    };
+    // A read of the stack pointer, or of a register every def of which is one.
+    let reads_sp = |dag: &SelectionDAG, value: SDValue, saves: &HashMap<u32, bool>| {
+        let read = dag.node(value);
+        read.opcode == ISD::CopyFromReg
+            && match dag.node(read.ops[1]).data {
+                NodeData::PhysReg(id) => id == crate::reg::SP,
+                NodeData::Register(number) => saves.get(&number).copied().unwrap_or(false),
+                _ => false,
+            }
+    };
+    let mut saves: HashMap<u32, bool> = HashMap::default();
+    loop {
+        let mut next: HashMap<u32, bool> = HashMap::default();
+        for (dag, node) in nodes() {
+            if node.opcode != ISD::CopyToReg {
+                continue;
+            }
+            if let NodeData::Register(number) = dag.node(node.ops[1]).data {
+                let from_sp = reads_sp(dag, node.ops[2], &saves);
+                let one = next.entry(number).or_insert(true);
+                *one &= from_sp;
+            }
+        }
+        if next == saves {
+            break;
+        }
+        saves = next;
+    }
+    nodes().any(|(dag, node)| {
+        node.opcode == ISD::CopyToReg && is_sp(dag, node.ops[1]) && !reads_sp(dag, node.ops[2], &saves)
+    })
+}
+
 /// `blocks` of function `name` as a machine function, one block of ops each.
 /// `blocks` of function `name` as a machine function, one block of ops each;
 /// with `lines`, each op carries the source place of the IR instruction its
@@ -2720,24 +2792,7 @@ pub fn emit(
         splits: 0,
         sp_copies: rustc_hash::FxHashSet::default(),
         incoming: HashMap::default(),
-        moves_sp: blocks
-            .iter()
-            .any(
-                |block| block
-                    .units
-                    .iter()
-                    .flat_map(|unit| &unit.nodes)
-                    .any(
-                        |&node| {
-                            let node = block.dag.node(SDValue { node, res: 0 });
-                            node.opcode == ISD::CopyToReg
-                                && matches!(
-                                    block.dag.node(node.ops[1]).data,
-                                    NodeData::PhysReg(id) if id == crate::reg::SP
-                                )
-                        },
-                    ),
-            ),
+        moves_sp: writes_stack_pointer(blocks),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);

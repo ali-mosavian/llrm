@@ -311,3 +311,14 @@ fn a_byte_table_computed_in_32_bit_lanes_is_a_vector_loop_with_packuswb() {
     let pattern = body(&text, "pattern_bytes");
     assert!(pattern.contains("packuswb") && pattern.contains("paddd"), "{pattern}");
 }
+
+/// The scalar remainder of a vector loop is not unrolled at run time: the unroller could not see the loop ID the
+/// vectorizer had just made, so the remainder got a 0-3 trip prologue and a 4-wide body (loop_countdown_sum: three
+/// loops in `down_sum` where the pin has two).
+#[test]
+fn a_vector_loop_remainder_is_not_unrolled_at_run_time() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "down_sum");
+    assert!(sum.contains("paddd"), "vectorized: {sum}");
+    assert_eq!(sum.matches("align 16").count(), 2, "a vector loop and a rolled remainder: {sum}");
+}

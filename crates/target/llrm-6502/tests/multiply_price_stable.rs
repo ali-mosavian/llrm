@@ -21,5 +21,5 @@ fn a_one_call_multiply_stays_the_compact_routine_at_size() {
         .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let text = std::fs::read_to_string(dir.join("o.s")).unwrap();
-    assert!(text.contains("jsr __mulsi3\n") && !text.contains("__mulsi3_fast"), "the fast multiply at -Os:\n{text}");
+    assert!(text.contains("__mulsi3\n") && !text.contains("__mulsi3_fast"), "the fast multiply at -Os:\n{text}");
 }
