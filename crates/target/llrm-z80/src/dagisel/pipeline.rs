@@ -495,6 +495,28 @@ impl CombineHooks for Z80Combines {
     }
 }
 
+static Z80_SELECTOR: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| Selector::new(z80_z80::TABLE));
+static Z180_SELECTOR: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| Selector::new(z80_z180::TABLE));
+
+/// The selector of `cpu`: its table is scanned once, not once per block (4% of
+/// switch_jump_table -O2).
+pub fn selector(cpu: Cpu) -> &'static Selector {
+    match cpu {
+        Cpu::Z80 => &Z80_SELECTOR,
+        Cpu::Z180 => &Z180_SELECTOR,
+    }
+}
+
+thread_local! {
+    static LOWERINGS: [std::cell::OnceCell<llrm_codegen::backend::selectiondag::TargetLowering>; 2] = const { [const { std::cell::OnceCell::new() }; 2] };
+}
+
+/// `target_lowering(speed_routines)`, built once and copied: the block's own
+/// switches are set on the copy.
+fn base_lowering(speed_routines: bool) -> llrm_codegen::backend::selectiondag::TargetLowering {
+    LOWERINGS.with(|held| held[usize::from(speed_routines)].get_or_init(|| target_lowering(speed_routines)).clone())
+}
+
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order, of
 /// the `Source` schedule and of the `ILP` one.
 pub fn select_block(
@@ -505,7 +527,7 @@ pub fn select_block(
     (sized, long_multiply, cold, chain_credit): (bool, bool, bool, bool),
 ) -> Result<(Vec<Unit>, Vec<Unit>), Refusal> {
     let speed_routines = SPEED_ROUTINES.with(std::cell::Cell::get);
-    let mut tli = target_lowering(speed_routines);
+    let mut tli = base_lowering(speed_routines);
     if GENERIC_CARRY.with(std::cell::Cell::get) {
         for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
             tli.set_operation_action(op, MVT::I16, llrm_codegen::backend::selectiondag::Action::Expand);
@@ -563,10 +585,7 @@ pub fn select_block(
         live_out::compute_live_out_vreg_info(dag, info);
     }
 
-    let selector = Selector::new(match cpu {
-        Cpu::Z80 => z80_z80::TABLE,
-        Cpu::Z180 => z80_z180::TABLE,
-    });
+    let selector = selector(cpu);
     // the users of each constant before any is selected: a selected store no
     // longer names it
     let mut uses: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
