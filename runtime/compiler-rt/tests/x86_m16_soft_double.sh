@@ -23,6 +23,7 @@ def prep(path, suffix=''):
     return s
 out = ['#define SF_INTABI 1']
 out.append(prep('config/x86_m16/config.h'))
+out.append('#undef SF_CMP_SPLIT')  # one file: the per-entry cmp files redefine sf_cmp_un
 for f in ('include/softfloat.h', 'include/sf_helpers.h'):
     out.append(prep(f))
 for f in subprocess.check_output(['tests/fp_sources.sh', 'f32'], text=True).split():
