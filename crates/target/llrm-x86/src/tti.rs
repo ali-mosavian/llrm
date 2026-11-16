@@ -1607,6 +1607,10 @@ impl Tti for X86 {
         self.tuning.lsr_address_fewest_registers
     }
 
+    fn lsr_constant_setup_is_one(&self) -> bool {
+        self.tuning.lsr_constant_setup_is_one
+    }
+
     fn constant_arith_phi_is_cheap(
         &self,
         optsize: bool,

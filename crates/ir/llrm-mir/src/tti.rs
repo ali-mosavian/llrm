@@ -1606,6 +1606,12 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup costs one, whatever
+    /// `int_imm_cost` says (LLVM 20.1.8's `getSetupCost`; the pin's is free for a free constant).
+    fn lsr_constant_setup_is_one(&self) -> bool {
+        false
+    }
+
     /// Whether a constant operand of an arithmetic instruction may become a phi
     /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
     /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.
