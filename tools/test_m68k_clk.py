@@ -36,3 +36,10 @@ def test_gcc_pcrel_puts_the_gcc_column_on_the_pc_relative_data_model():
     plain = m68k_clk.gcc_command("gcc", "/", "68020", "Os", "p.c", "p.o", False)
     like = m68k_clk.gcc_command("gcc", "/", "68020", "Os", "p.c", "p.o", True)
     assert "-mpcrel" not in plain and "-mpcrel" in like, (plain, like)
+
+
+def test_gcc_main_is_not_moved_out_of_text():
+    """gcc put `main` in `.text.startup`, which the cycles pricing does not cover: u64_divide_wide_divisor 68020 priced 23 instructions for gcc against ours's 137258, so 68 of 71 cells read 'ours slower' and the clock bar meant nothing."""
+    import m68k_clk
+
+    assert "-fno-reorder-functions" in m68k_clk.gcc_command("gcc", "/", "68020", "Os", "p.c", "p.o", True)
