@@ -704,7 +704,7 @@ impl TargetLowering {
         vt: EVT,
     ) -> Action {
         match vt {
-            EVT::Int(_) => Action::Expand,
+            EVT::Int(_) | EVT::Vector(..) => Action::Expand,
             EVT::Simple(vt) => self.maps.operations.get(&(op, vt)).copied().unwrap_or(Action::Legal),
         }
     }

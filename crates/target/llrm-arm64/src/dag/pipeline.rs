@@ -236,6 +236,10 @@ impl CombineHooks for Aarch64Lowering {
         narrow.is_integer() && wide.is_integer() && narrow.size_in_bits() == 32 && wide.size_in_bits() == 64
     }
 
+    fn narrow_zext_setcc(&self) -> bool {
+        true
+    }
+
     /// `AArch64TargetLowering::isNarrowingProfitable`: `isTypeLegal(DestVT) &&
     /// DestVT.isVector()`. Vectors are deferred, so no scalar narrows.
     fn narrowing_profitable(
