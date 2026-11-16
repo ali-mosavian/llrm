@@ -515,3 +515,41 @@ b5:
     );
     assert!(!changed && !text.contains(".pre") && !text.contains("poison"), "{text}");
 }
+
+/// div_constants_long wasm32 -Oz kept 13 more `load @sum` than the pin (+143
+/// B): `lifetime.start` of another local sat between a loop's last store and
+/// the next loop's reload of the same global, and MemDep read the marker's
+/// size operand (MIR's markers keep it first) as its pointer, so every marker
+/// ended the scan as a clobber.
+#[test]
+fn test_a_load_past_a_lifetime_start_of_other_memory_is_still_the_first() {
+    let (text, changed) = loaded(
+        "@sum = internal global i16 0
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+define i16 @f(i16 %n, i16 %y) {
+b0:
+  %a = alloca i16
+  %p = load i16, ptr @sum, align 1
+  br label %h
+h:
+  %s = phi i16 [ %p, %b0 ], [ %t, %l ]
+  %i = phi i16 [ 0, %b0 ], [ %j, %l ]
+  %c = icmp eq i16 %i, %n
+  br i1 %c, label %x, label %l
+l:
+  %t = add i16 %s, %i
+  store i16 %t, ptr @sum, align 2
+  %j = add i16 %i, 1
+  br label %h
+x:
+  call void @llvm.lifetime.start.p0(i64 2, ptr nonnull %a) nounwind
+  store volatile i16 5, ptr %a
+  %q = load i16, ptr @sum, align 1
+  ret i16 %q
+}
+",
+        &[&[0, 0], &[3, 5], &[5, 1]],
+    );
+    assert!(changed && text.matches("load i16, ptr @sum").count() == 1, "{text}");
+}
