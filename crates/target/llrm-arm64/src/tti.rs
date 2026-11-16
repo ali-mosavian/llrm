@@ -374,6 +374,27 @@ pub(crate) fn vector_pieces(ty: VectorTy) -> Option<(i64, u32)> {
     Some((pieces, lane))
 }
 
+/// `AArch64TTIImpl::getInterleavedMemoryOpCost` (L5833), the native `ldN`/`stN`
+/// branch: a full group of up to four members whose member vector is 64 bits
+/// or a multiple of 128 costs one instruction per member per register
+/// (`getNumInterleavedAccesses`). `None`: the BasicTTI fallback, not
+/// translated (LV-I1, owner llrm-arm64-vec, exit 2026-11-24).
+fn interleaved_memory_op_cost(
+    ty: VectorTy,
+    factor: u32,
+) -> Option<Cost> {
+    const MAX_NATIVE_FACTOR: u32 = 4;
+    let (_, lane) = vector_pieces(ty)?;
+    let bits = u64::from(lane) * u64::from(ty.count);
+    // `isLegalInterleavedAccessType`: two or more lanes of 8 to 64 bits, 64 or
+    // a multiple of 128 bits.
+    let legal = ty.count >= 2 && [8, 16, 32, 64].contains(&lane) && (bits == 64 || bits % 128 == 0);
+    if factor > MAX_NATIVE_FACTOR || !legal {
+        return None;
+    }
+    Some(Cost::of(i64::from(factor) * ((bits as i64 + 127) / 128).max(1)))
+}
+
 /// `AArch64TTIImpl::getMemoryOpCost` for a fixed vector, the throughput
 /// kinds: L5664 (DEVIATE VT2: `TCK_Latency` reads the scheduling model and is
 /// not priced).
@@ -892,6 +913,22 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Option<Cost> {
         vector_memory_op_cost(self.cpu, op, ty, align, kind)
+    }
+
+    /// The selector has no `ld2`/`st2` or interleave shuffles yet (S3, S4 of
+    /// the interleaved-access work).
+    fn selects_interleaved_accesses(&self) -> bool {
+        false
+    }
+
+    fn interleaved_memory_op_cost(
+        &self,
+        _op: MemoryOp,
+        ty: VectorTy,
+        factor: u32,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        interleaved_memory_op_cost(ty, factor)
     }
 
     fn vector_arithmetic_cost(

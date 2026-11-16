@@ -431,6 +431,13 @@ fn branches() {
         }
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
+    // `ld2`..`ld4` of consecutive registers, wrapping past v31.
+    for lanes in ALL_ARRANGEMENTS {
+        for count in 2..=4 {
+            all.push(Inst::VectorLoadStructure { count, lanes, rt: Vreg(30), base: Gpr(9) });
+            all.push(Inst::VectorStoreStructure { count, lanes, rt: Vreg(4), base: Gpr(31) });
+        }
+    }
     for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
         for op in
