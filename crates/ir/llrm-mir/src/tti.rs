@@ -1744,6 +1744,15 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE UNROLL-TRIAL-NEST (owner 6502): whether, at -O2 and -O3, an
+    /// innermost loop is held to the trial's threshold by `shouldFullUnroll`'s
+    /// analysis (the cost once the trips' constants fold, boosted) instead of
+    /// by its unrolled size alone, so that a loop the pin unrolls under its own
+    /// threshold is tried where this target's units count it larger.
+    fn unroll_trial_analyzed_at_speed(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): whether
     /// the -Os trial measures a loop by the cost `analyzeLoopUnrollCost`
     /// finds once the trips' constants fold (a switch on the counter keeps

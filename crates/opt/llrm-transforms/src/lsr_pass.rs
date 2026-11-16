@@ -413,8 +413,9 @@ fn plan_loop(
         // loop must not outweigh the instructions it saves in it (nbody -O1:
         // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
-        let spent = cost.c.insns + cost.c.setup_cost;
-        let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
+        // A loser's metrics sit at their greatest (`Lose`): the sums saturate.
+        let spent = cost.c.insns.saturating_add(cost.c.setup_cost);
+        let saved = pin_cost.c.insns.saturating_add(pin_cost.c.setup_cost);
         // DEVIATE LG3: the `spent` against `saved` test above, over the trips
         // the loop is known to run, with the symbol bases the end-biased
         // solution adds to the pin's priced as the target's setup says
