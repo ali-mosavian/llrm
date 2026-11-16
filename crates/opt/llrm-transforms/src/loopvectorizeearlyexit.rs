@@ -40,8 +40,8 @@
 //!   induction stepping by one against an `eq`/`ne` test of the stepped value.
 //! - VPEE5 the cost of the any-of reduction (`VPInstruction::AnyOf`, an `or`
 //!   reduction of the mask per vector iteration) and of `vector.early.exit`
-//!   (`calculateEarlyExitCost`) is not added to the plan, so a VF may be
-//!   chosen that the pin's prices would refuse.
+//!   (`calculateEarlyExitCost`) is not added to the plan, so a VF may be chosen
+//!   that the pin's prices would refuse.
 //! - VPEE6 a port takes the loops only where `Tti::vectorizes_early_exit` says
 //!   its backend selects the vector loop (x86-64).
 //!

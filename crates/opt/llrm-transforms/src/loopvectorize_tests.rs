@@ -1379,7 +1379,8 @@ fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
     assert_eq!(wide, narrow, "{text}");
     assert_eq!(
         wide[..9],
-        [0, 7, 15, 16, 17, 1199, 1200, 1201, 1202].map(|k| llrm_mir::interpret::Val::Int { bits: k as u128, width: 64 }),
+        [0, 7, 15, 16, 17, 1199, 1200, 1201, 1202]
+            .map(|k| llrm_mir::interpret::Val::Int { bits: k as u128, width: 64 }),
         "{text}"
     );
 }
