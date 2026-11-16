@@ -3421,7 +3421,9 @@ pub fn read_copies_at_their_source(
     let pair = |r: RegId| [reg::BC, reg::DE, reg::HL].contains(&r);
     let byte = |r: RegId| [reg::A, reg::B, reg::C, reg::D, reg::E, reg::H, reg::L].contains(&r);
     'again: loop {
-        let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+        // solved at the first candidate that gets as far as asking: most
+        // functions have none
+        let live = std::cell::OnceCell::new();
         for b in 0..function.blocks.len() {
             for at in 0..function.blocks[b].insts.len() {
                 let inst = &function.blocks[b].insts[at];
@@ -3474,7 +3476,9 @@ pub fn read_copies_at_their_source(
                 let Some(&last) = compares.last() else { continue };
                 // the source stays as it is to the last compare (a write in the
                 // compare's own instruction comes after its read)
-                let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, last + 1);
+                let after = live
+                    .get_or_init(|| PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO))
+                    .live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, last + 1);
                 if after.is_live(&REGISTER_INFO, dst) {
                     continue;
                 }

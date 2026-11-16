@@ -162,3 +162,38 @@ fn the_worklist_solves_the_same_live_outs_as_sweeps_on_functions_with_loops() {
     }
     assert!(loops > 100, "{loops} backward branches");
 }
+
+/// The live lanes of a register file are a sorted list: two sets holding the
+/// same lanes are equal however they were built, and a register whose lanes
+/// were all removed is gone (the worklist stops when a block's live-in is
+/// equal).
+#[test]
+fn the_live_lanes_are_the_same_set_whatever_order_they_were_added_in() {
+    use llrm_spike_mf::livephys::LiveLanes;
+    use llrm_z80::{REGISTER_INFO, reg};
+    let (mut one, mut other) = (LiveLanes::default(), LiveLanes::default());
+    for register in [reg::BC, reg::HL, reg::E, reg::D] {
+        one.add(&REGISTER_INFO, register);
+    }
+    for register in [reg::D, reg::E, reg::HL, reg::BC] {
+        other.add(&REGISTER_INFO, register);
+    }
+    assert_eq!(one, other);
+    one.add(&REGISTER_INFO, reg::A);
+    one.remove(&REGISTER_INFO, reg::A);
+    assert_eq!(one, other, "a register with no lane left is not kept");
+}
+
+/// `read_copies_at_their_source` and the post-update fold each solved the live
+/// registers of the whole function before looking for a candidate, 2% of the
+/// corpus compile: a function with no copy to move and no access to step has
+/// nothing to ask, and solves nothing.
+#[test]
+fn a_function_with_nothing_to_rewrite_is_not_solved_for_liveness() {
+    let mut f = function(vec![vec![def(reg::B), def(reg::C), read(reg::C), read(reg::B)], vec![read(reg::D)]]);
+    let assignment = Assignment(Vec::new());
+    llrm_spike_mf::livephys::take_solved();
+    llrm_z80::compile::read_copies_at_their_source(&mut f, &assignment);
+    llrm_z80::post_update::fold(&mut f, &assignment);
+    assert_eq!(llrm_spike_mf::livephys::take_solved(), 0);
+}
