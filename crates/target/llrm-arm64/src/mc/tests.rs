@@ -407,8 +407,9 @@ fn branches() {
         }
     }
     for lanes in ALL_ARRANGEMENTS {
-        all.push(Inst::VectorUnzip { second: false, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
-        all.push(Inst::VectorUnzip { second: true, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        for kind in Permute::ALL {
+            all.push(Inst::VectorPermute { kind, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        }
     }
     for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
         all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });

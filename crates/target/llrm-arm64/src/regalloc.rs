@@ -357,7 +357,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
                     }
                 }
             }
-            Op::I(Inst::VectorUnzip { rd, rn, rm, .. }) => {
+            Op::I(Inst::VectorPermute { rd, rn, rm, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
             Op::I(Inst::VectorNarrow { high, rd, rn, .. }) => {
