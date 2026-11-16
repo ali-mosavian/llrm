@@ -645,6 +645,13 @@ pub trait Target {
         false
     }
 
+    /// The arguments a function keeps across its calls are read from a copy
+    /// made where the calls begin, so a base case that returns first pays no
+    /// frame (gcc's `split_live_ranges_for_shrink_wrap`).
+    fn splits_params_for_shrink_wrap(&self) -> bool {
+        false
+    }
+
     /// MachineCSE keeps a compare whose difference nothing reads apart from the
     /// same difference made in a later block, when that difference overwrites
     /// an operand still live (CSE-CMP): sharing them moves the subtract in

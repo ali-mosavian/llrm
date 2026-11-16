@@ -1374,10 +1374,24 @@ impl Tti for X86 {
         self.tuning.vectorize_at_size
     }
 
+    /// `bsr` and `tzcnt`/`bsf` are one instruction at x86-64 (LI-18).
+    fn shift_loop_counts(&self) -> bool {
+        self.tuning.shift_loop_counts
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
         self.sse2 && self.quad
+    }
+
+    /// The SLP vectorizer runs where the target takes vector values: its
+    /// store chains (a run of scalar stores of constants or of one tree is one
+    /// vector store) are priced by `vector_memory_op_cost`; a tree whose
+    /// operation this target does not price is not formed (the hooks are
+    /// `None`), so only what the SSE2 rows price vectorizes.
+    fn slp_priced(&self) -> bool {
+        self.vector_values()
     }
 
     /// `getRegisterBitWidth(RGK_FixedWidthVector)` of an SSE2 target: one XMM
@@ -1596,6 +1610,10 @@ impl Tti for X86 {
 
     fn lsr_address_fewest_registers(&self) -> bool {
         self.tuning.lsr_address_fewest_registers
+    }
+
+    fn lsr_constant_setup_is_one(&self) -> bool {
+        self.tuning.lsr_constant_setup_is_one
     }
 
     fn constant_arith_phi_is_cheap(

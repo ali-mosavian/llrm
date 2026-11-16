@@ -549,6 +549,9 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
+    /// `Tti::shift_loop_counts`: the shift-loop count idioms form (`ctlz`/`cttz`
+    /// are one instruction). Wasm and x86-64 say true (LI-18).
+    pub shift_loop_counts: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -616,6 +619,12 @@ pub struct Tuning {
     pub frame_slot_is_free_base: bool,
     /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
     pub lsr_address_fewest_registers: bool,
+    /// DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): a constant in a formula's setup
+    /// costs one, as in LLVM 20.1.8 (`getSetupCost`); the pin charges it by `getIntImmCost` (a free 0 costs
+    /// nothing), which makes `{0,+,1}` beat `{-1,+,1}` where clang 20 keeps the post-incremented index
+    /// (strlen: `mov eax, -1; inc eax; cmp [rdi+rax]` against `xor eax, eax; mov ecx, eax; inc eax; cmp [rdi+rcx]`).
+    /// false: the pin's.
+    pub lsr_constant_setup_is_one: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
     pub keep_constant_arith_operands: bool,
@@ -842,6 +851,7 @@ impl Tuning {
         lsr_size_order: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
+        shift_loop_counts: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
@@ -860,6 +870,7 @@ impl Tuning {
         keep_constant_displacements: false,
         frame_slot_is_free_base: false,
         lsr_address_fewest_registers: false,
+        lsr_constant_setup_is_one: false,
         keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
