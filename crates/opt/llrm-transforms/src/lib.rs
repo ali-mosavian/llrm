@@ -432,6 +432,7 @@ pub mod slpcompares;
 pub mod slpreduction;
 pub mod slptree;
 pub mod slpvectorize;
+pub mod vectorlower;
 pub mod spares;
 pub mod speculate;
 pub mod spill;

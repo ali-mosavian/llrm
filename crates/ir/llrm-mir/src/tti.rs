@@ -688,6 +688,15 @@ pub trait Tti {
         false
     }
 
+    /// A general register holds a vector of lanes narrower than itself: the
+    /// vectorizer widens bitwise loops by it, and the vectors are lowered to
+    /// the integer of their width before selection
+    /// (`crate::vectorlower`, gcc's `tree-vect-generic.cc`). Where the target
+    /// has vector registers the vectors stay.
+    fn word_vectors(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
