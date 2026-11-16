@@ -1532,6 +1532,43 @@ fn a_block_of_many_calls_is_not_rebuilt_whole_for_each_frame() {
     assert!(few > 0 && many < few * 6, "{few} instructions gone over for 20 calls, {many} for 80");
 }
 
+/// Branch folding found a block's predecessors by looking at every instruction of every block, 3.1% of fixed_point -O2.
+/// Only the terminators at a block's end can name a block: the instructions looked at do not grow with the block length.
+#[test]
+fn finding_predecessors_does_not_read_the_whole_function() {
+    let diamonds = |adds: usize| {
+        let mut ir = format!(
+            "target datalayout = \"{DATALAYOUT}\"\ndeclare i16 @h(i16)\ndefine i16 @g(i16 %a, i16 %c) {{\n  br label %j0\n"
+        );
+        let mut input = "%a".to_string();
+        for d in 0..16 {
+            ir.push_str(&format!("j{d}:\n  %t{d} = icmp eq i16 {input}, %c\n  br i1 %t{d}, label %l{d}, label %r{d}\n"));
+            let mut out = Vec::new();
+            for side in ["l", "r"] {
+                ir.push_str(&format!("{side}{d}:\n"));
+                let mut v = input.clone();
+                for step in 0..adds {
+                    ir.push_str(&format!("  %{side}{d}_{step} = call i16 @h(i16 {v})\n"));
+                    v = format!("%{side}{d}_{step}");
+                }
+                let offset = usize::from(side == "r") * 100 + d;
+                ir.push_str(&format!("  %{side}{d}_add = add i16 {v}, {offset}\n"));
+                v = format!("%{side}{d}_add");
+                ir.push_str(&format!("  %{side}{d}_call = call i16 @h(i16 {v})\n  br label %e{d}\n"));
+                out.push(format!("%{side}{d}_call"));
+            }
+            ir.push_str(&format!("e{d}:\n  %o{d} = phi i16 [ {}, %l{d} ], [ {}, %r{d} ]\n  br label %j{}\n", out[0], out[1], d + 1));
+            input = format!("%o{d}");
+        }
+        ir.push_str(&format!("j16:\n  ret i16 {input}\n}}\n"));
+        llrm_spike_mf::fold::take_scanned();
+        text(&ir, "g", 0, &Request::new(Level::O2)).expect("compiles");
+        llrm_spike_mf::fold::take_scanned()
+    };
+    let (short, long) = (diamonds(2), diamonds(24));
+    assert!(short > 0 && long < short * 2, "{short} instructions looked at with 2 calls in each arm, {long} with 24");
+}
+
 /// The same allocation was priced again (finished into text and priced)
 /// wherever a candidate came out as one already seen: `settle` prices up to six
 /// stack choices of one function, most of them alike, and each pricing is a
