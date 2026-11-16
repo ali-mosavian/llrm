@@ -19,8 +19,8 @@
 //! # Deviations
 //! - W1: `deadargelim` runs after the walk (`ipa-deadargs.`), as LLVM's
 //!   (`PassBuilderPipelines.cpp` l.1335), except for a function that calls
-//!   itself, which loses its unread parameters before the walk: the recursion
-//!   copier works on the body gcc's IPA-SRA leaves. Exit: the copier prices a
+//!   itself and, with the recursion copier on, loses its unread parameters
+//!   before the walk: the copier works on the body gcc's IPA-SRA leaves. Exit: the copier prices a
 //!   body with its unread parameters dropped.
 //! - W2a: the walk is per function in callee-first order, not per SCC with the
 //!   inliner's own updates; the clocks inliner still runs afterwards;
@@ -81,6 +81,8 @@ pub struct ModuleIpo {
     pub inline: crate::inline::Threshold,
     /// The clones made here count against the interprocedural step's.
     pub cloning: crate::ipacp::Shared,
+    /// As `Walk::speed_rate`: whether the recursion copier can run.
+    pub speed_rate: bool,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -172,11 +174,19 @@ impl ProgramPass for ModuleIpo {
         // DEVIATE W1 (narrowed, owner w10, exit 2026-11-24): the pin's
         // `deadargelim` follows the CGSCC walk, so the inliner prices a call
         // with the arguments nothing reads (x_idioms -Os `sumlong`, cost -10).
-        // A function that calls itself loses them first: the recursion copier
+        // With the copier on, a function that calls itself loses them first: the recursion copier
         // (gcc's `-finline-recursive`) works on the body gcc's IPA-SRA leaves,
         // and with them in place the copies merge no calls (hanoi: a switch of
         // nine copies and a closed form, against 23..2358 B more without).
-        for at in 0..count {
+        let copier = Recursion::of(
+            self.inline.recursive,
+            self.inline.single,
+            self.inline.limit != 0 && self.speed_rate,
+            self.inline.cp_clone.unwrap_or(false),
+            program.target.tti().as_deref(),
+        )
+        .is_some();
+        for at in (0..count).filter(|_| copier) {
             let ((removed, unsound), before) =
                 reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_from_recursions);
             vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);

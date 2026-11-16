@@ -706,6 +706,17 @@ pub trait CombineHooks {
         false
     }
 
+    /// `SimplifySetCC`'s "if the LHS is a ZERO_EXTEND, perform the comparison
+    /// on the input"
+    /// ([TargetLowering.cpp#L5105](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5105)):
+    /// a compare of a zero extension against a constant is made on the narrow
+    /// value, whatever else reads the extension. The pin does it everywhere;
+    /// DEVIATE (owner llrm-arm64-vec, exit 2026-11-30): only where a target
+    /// says so, until each target's cells are judged with it.
+    fn narrow_zext_setcc(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
@@ -1452,6 +1463,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, n0, rhs, new_cond));
             }
         }
+        if let Some(folded) = self.narrow_zext_compare(vt, n0, c1, cond) {
+            return Some(folded);
+        }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
             || !(self.dag.has_one_use(n0.node) || self.hooks.narrow_setcc_with_other_uses())
@@ -1518,6 +1532,73 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (self.dag.get_constant(c1, min_vt), cond)
         };
         Some(self.dag.get_setcc(vt, trunc, rhs, cond))
+    }
+
+    /// `SimplifySetCC`, "if the LHS is a ZERO_EXTEND, perform the comparison on
+    /// the input" ([L5105][pin]): a constant with bits above the source never
+    /// matches, so the compare is a constant; otherwise an equality or
+    /// unsigned compare is made on the source, with the constant truncated.
+    /// Only where `narrow_zext_setcc` says, and before the operations are
+    /// legalized.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5105
+    fn narrow_zext_compare(
+        &mut self,
+        vt: EVT,
+        n0: SDValue,
+        c1: u128,
+        cond: CondCode,
+    ) -> Option<SDValue> {
+        if !self.hooks.narrow_zext_setcc()
+            || self.level >= CombineLevel::AfterLegalizeVectorOps
+            || self.dag.opcode(n0) != ISD::ZeroExtend
+        {
+            return None;
+        }
+        let width = self.dag.value_type(n0).size_in_bits();
+        let source = self.dag.operand(n0, 0);
+        let in_size = self.dag.width(source);
+        if in_size >= width {
+            return None;
+        }
+        // `zext (trunc nuw x)` is `x` (`isTruncateOf`): the pin has folded the
+        // extension by the time its compare is looked at.
+        if self.dag.opcode(source) == ISD::Truncate
+            && self.dag.node(source).flags.has(SDNodeFlags::NO_UNSIGNED_WRAP)
+            && self.dag.value_type(self.dag.operand(source, 0)) == self.dag.value_type(n0)
+        {
+            return None;
+        }
+        let wide_mask = super::fold::mask(width);
+        let c1 = c1 & wide_mask;
+        if c1 >> in_size != 0 {
+            let negative = c1 >> (width - 1) & 1 == 1;
+            let answer = match cond {
+                CondCode::SetUGt | CondCode::SetUGe | CondCode::SetEq => Some(false),
+                CondCode::SetULt | CondCode::SetULe | CondCode::SetNe => Some(true),
+                CondCode::SetGt | CondCode::SetGe => Some(negative),
+                CondCode::SetLt | CondCode::SetLe => Some(!negative),
+                _ => None,
+            };
+            if let Some(answer) = answer {
+                return Some(self.dag.get_bool_constant(answer, vt));
+            }
+        }
+        if !matches!(
+            cond,
+            CondCode::SetEq
+                | CondCode::SetNe
+                | CondCode::SetUGt
+                | CondCode::SetUGe
+                | CondCode::SetULt
+                | CondCode::SetULe
+        ) {
+            return None;
+        }
+        let narrow = self.dag.value_type(source);
+        let rhs = self.dag.get_constant(c1 & super::fold::mask(in_size), narrow);
+        Some(self.dag.get_setcc(vt, source, rhs, cond))
     }
 
     /// `foldSetCCWithAnd`'s power-of-two mask arm

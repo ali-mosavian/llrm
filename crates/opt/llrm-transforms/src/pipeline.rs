@@ -187,6 +187,10 @@ pub struct Options {
     /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
     /// (bsearch -O1: a re-test and a loop-carried copy of the result).
     pub thread_jumps: bool,
+    /// GCC's backward threader (`backthread@809`): a path into a join that
+    /// decides a guard is copied. It grows code, so a target that ranks bytes
+    /// first turns it off (6502, z80: `idioms` +188 and +619 bytes).
+    pub backward_threading: bool,
     /// A switch that only picks constants is a load from an array: gcc's
     /// `-ftree-switch-conversion`, -O2 and up.
     pub switch_conversion: bool,
@@ -341,6 +345,7 @@ impl Default for Options {
             drop_loads: true,
             pre: true,
             thread_jumps: false,
+            backward_threading: true,
             drop_stores: true,
             sink: true,
             spare_loads: false,
@@ -405,6 +410,7 @@ impl Options {
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             pre: false,
             thread_jumps: false,
+            backward_threading: true,
             loop_unrolling: false,
             unswitch: false,
             switch_conversion: false,
@@ -1366,6 +1372,13 @@ pub(crate) fn llvm_order(
                     ),
                 ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
+                slot(
+                    "backthread@809",
+                    Box::new(
+                        crate::backwardthreading::BackwardThreading::from_env()
+                            .when(applied.options.backward_threading),
+                    ),
+                ),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
@@ -1730,7 +1743,11 @@ pub fn recorded(
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 {
-            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline, cloning: cloning.clone() });
+            manager.add_program(crate::walk::ModuleIpo {
+                inline: applied.options.inline,
+                cloning: cloning.clone(),
+                speed_rate: applied.options.prices_bytes(),
+            });
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
@@ -1930,11 +1947,7 @@ pub fn recorded(
     // CodeGenPrepare's sinking: compares, masks, address phis and the address
     // arithmetic of a block's accesses, made in the block that uses them.
     if applied.options.wanted("cgpaddr") {
-        if applied.options.prefers_size() || applied.options.at_o1() {
-            manager.add(cgpaddr::CgpAddrBytesStrict);
-        } else {
-            manager.add(cgpaddr::CgpAddr);
-        }
+        manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CB1 (owner x87-b, exit 2026-11-24): clock-priced, so not -Os.
     if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
@@ -1947,8 +1960,9 @@ pub fn recorded(
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
-    // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
-    // gcc's `-fsplit-paths`: -O3 and a target that asks (`Tti::split_paths_at_o3`).
+    // gcc's `ree` first: the extension it moves onto a load is the pair
+    // `extload` makes one extending load of. gcc's `-fsplit-paths`: -O3 and
+    // a target that asks (`Tti::split_paths_at_o3`).
     if applied.options.wanted("splitpaths") && unroll_level(&applied.options) >= 3 {
         manager.add(splitpaths::SplitPaths);
     }
