@@ -2,9 +2,8 @@
 //! widens, with the pin's factors (`opt -passes=loop-vectorize` on aarch64: i16
 //! copy of 1920 is VF 8, IC 2), and the ones it leaves alone.
 
-use llrm_mir::target::{Machine as _, Neutral};
-
 use super::LoopVectorize;
+use llrm_mir::target::{Machine as _, Neutral};
 use crate::testing::parsed;
 
 fn run(source: &str) -> String {
@@ -388,8 +387,8 @@ fn run_x86_tuned(
     crate::testing::printed(&module)
 }
 
-/// Retiring LV-OS made 15 m64 -Os corpus files 5-50% bigger (byval_struct 183
-/// -> 269 B): a target whose tuning says no keeps its optsize loops scalar.
+/// Retiring LV-OS made 15 m64 -Os corpus files 5-50% bigger (byval_struct 183 ->
+/// 269 B): a target whose tuning says no keeps its optsize loops scalar.
 #[test]
 fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
     let optsize = COPY.replace(
@@ -401,8 +400,8 @@ fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
     assert!(count(&run_x86(COPY, false), "x i16>") > 0, "a loop at speed is widened either way");
 }
 
-/// mem_length_boundaries_m32: `sum += dst[i]` (bytes into an `i64`) stayed at
-/// the pin's VF 2 (the widest type) while gcc sums 16 bytes a trip: 142,319
+/// mem_length_boundaries_m32: `sum += dst[i]` (bytes into an `i64`) stayed at the
+/// pin's VF 2 (the widest type) while gcc sums 16 bytes a trip: 142,319
 /// instructions to gcc's 137,355. With the pin's own
 /// `-vectorizer-maximize-bandwidth` (the smallest type sizes the VF) it is a
 /// VF 16 loop, 266,570 total to gcc's 341,638 in the pin itself.
@@ -464,8 +463,7 @@ fn a_symbolic_trip_count_is_checked_at_run_time() {
     assert!(text.contains("%n.vec = sub i64 %n, %n.mod.vf"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %n.vec"), "{text}");
     assert!(text.contains("%cmp.n = icmp eq i64 %n, %n.vec"), "{text}");
-    // Its remainder is widened in turn, at 4 lanes as the pin: that loop's `n <
-    // 4` comes first.
+    // Its remainder is widened in turn, at 4 lanes as the pin: that loop's `n < 4` comes first.
     assert!(text.contains("%iter.check = icmp ult i64 %n, 4"), "{text}");
     assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ]"), "{text}");
     assert!(text.contains("br i1 %min.iters.check2, label %vector.ph1, label %vector.ph"), "{text}");

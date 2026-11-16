@@ -59,9 +59,9 @@
 
 use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::basicaa::BasicAA;
-use llrm_analysis::interleavedaccess::InterleavedAccessInfo;
 use llrm_analysis::ivdescriptors::{InductionKind, RecurKind};
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
+use llrm_analysis::interleavedaccess::InterleavedAccessInfo;
 use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
@@ -161,10 +161,7 @@ enum WideOp {
     FNeg,
     FMulAdd,
     /// `llvm.{s,u}{max,min}` (`VPWidenIntrinsicRecipe`).
-    IntMinMax {
-        signed: bool,
-        max: bool,
-    },
+    IntMinMax { signed: bool, max: bool },
     Cast(CastOp),
     /// `VPWidenRecipe` of a compare: a vector of `i1`.
     ICmp(IntPredicate),
@@ -273,19 +270,23 @@ fn fills_registers(
         bits % u64::from(register_bits) == 0
             || (d_registers && matches!(cx.context.types.get(ty), Type::Int(_)) && bits == u64::from(register_bits) / 2)
     };
-    widening.steps.iter().all(|step| match step {
-        Step::Access(access) => whole(access.element),
-        Step::Interleave(group) => whole(group.element),
-        Step::Operation(operation) => {
-            (matches!(operation.op, WideOp::ICmp(_) | WideOp::FCmp(_)) || whole(operation.element))
-                        // A mask (`<VF x i1>`) is held in the registers of its
-                        // compare.
+    widening
+        .steps
+        .iter()
+        .all(
+            |step| match step {
+                Step::Access(access) => whole(access.element),
+                Step::Interleave(group) => whole(group.element),
+                Step::Operation(operation) => {
+                    (matches!(operation.op, WideOp::ICmp(_) | WideOp::FCmp(_)) || whole(operation.element))
+                        // A mask (`<VF x i1>`) is held in the registers of its compare.
                         && (matches!(cx.context.types.get(operation.operand_element), Type::Int(1))
                             || whole(operation.operand_element))
-        }
-        Step::Induction(induction) => whole(induction.element),
-        Step::Reduction(reduction) => element_ty(cx, reduction.ty).is_some() && whole(reduction.ty),
-    })
+                }
+                Step::Induction(induction) => whole(induction.element),
+                Step::Reduction(reduction) => element_ty(cx, reduction.ty).is_some() && whole(reduction.ty),
+            },
+        )
 }
 
 /// The widened loop's values by where they live: each step that makes a value
@@ -491,11 +492,10 @@ fn extract(
             )
     };
     // The loop's exit test: the condition of its branch.
-    let exit_condition =
-        function.terminator(header).and_then(|branch| match function.instruction(branch).operands[..] {
-            [Operand::Value(condition), ..] => Some(condition),
-            _ => None,
-        });
+    let exit_condition = function.terminator(header).and_then(|branch| match function.instruction(branch).operands[..] {
+        [Operand::Value(condition), ..] => Some(condition),
+        _ => None,
+    });
     // What an operand is: a value the loop widened, or a loop-invariant one.
     let source_of = |operand: Operand, widened: &[InstId]| -> Result<Source, Skipped> {
         if let Operand::Value(value) = operand
@@ -551,27 +551,22 @@ fn extract(
                 // `trunc` of its own recipe) is a vector of
                 // consecutive numbers.
                 let Operand::Value(value) = primary_phi else { unreachable!("a phi's result") };
-                let read_as_value = function
-                    .users(value)
-                    .iter()
-                    .any(
-                        |one| {
-                            one.user != step
-                                && match function.instruction(one.user).opcode {
-                                    Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::Trunc) => false,
-                                    // The exit test (its own arm judges it).
-                                    Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)
-                                        if function.instruction(one.user).result == exit_condition =>
-                                    {
-                                        !invariant(function.instruction(one.user).operands[1 - one.index as usize])
-                                    }
-                                    _ => !function
-                                        .instruction(one.user)
-                                        .result
-                                        .is_some_and(|result| address_arithmetic(function, header, result)),
-                                }
-                        },
-                    );
+                let read_as_value = function.users(value).iter().any(|one| {
+                    one.user != step
+                        && match function.instruction(one.user).opcode {
+                            Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::Trunc) => false,
+                            // The exit test (its own arm judges it).
+                            Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)
+                                if function.instruction(one.user).result == exit_condition =>
+                            {
+                                !invariant(function.instruction(one.user).operands[1 - one.index as usize])
+                            }
+                            _ => !function
+                                .instruction(one.user)
+                                .result
+                                .is_some_and(|result| address_arithmetic(function, header, result)),
+                        }
+                });
                 if read_as_value {
                     let lane =
                         element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
@@ -797,12 +792,9 @@ fn extract(
                     return Err(Skipped("A binary operation of loop-invariant values"));
                 }
                 let second = interleave::divisor_info(cx.context, op, data.operands[1], lane);
-                // `isSafeToSpeculativelyExecute`: a signed divide must not be
-                // by -1 either (the minimum overflows).
-                let divides = matches!(
-                    op,
-                    BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem
-                );
+                // `isSafeToSpeculativelyExecute`: a signed divide must not be by
+                // -1 either (the minimum overflows).
+                let divides = matches!(op, BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem);
                 let by_minus_one = matches!(op, BinaryOp::SDiv | BinaryOp::SRem) && second.value == Some(-1);
                 if divides
                     && !(second.constant
@@ -970,7 +962,9 @@ fn extract(
             }
             // `VPWidenIntrinsicRecipe` of `llvm.{s,u}{max,min}`: both arguments
             // (the callee is the last operand), widened or loop-invariant.
-            Opcode::Call(_) if matches!(widened_intrinsic(cx, inst), Some(Intrinsic::MinMax { .. })) => {
+            Opcode::Call(_)
+                if matches!(widened_intrinsic(cx, inst), Some(Intrinsic::MinMax { .. })) =>
+            {
                 let Some(Intrinsic::MinMax { signed, max }) = widened_intrinsic(cx, inst) else { unreachable!() };
                 let value = data.result.expect("a min or max");
                 let lane = element_ty(cx, data.ty).ok_or(Skipped("An element type the target has no vector of"))?;
@@ -1073,23 +1067,19 @@ fn extract(
             }
             Opcode::ICmp(_) | Opcode::FCmp(_) => {
                 let value = data.result.expect("a compare");
-                let source =
-                    function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped comparison"))?;
+                let source = function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped comparison"))?;
                 let lane = element_ty(cx, source).ok_or(Skipped("An element type the target has no vector of"))?;
                 // Read by selects (as their condition) and extensions of the
                 // mask (`zext i1` counts, `sext i1` masks): `VPWidenCastRecipe`
                 // of a vector of `i1`.
-                let only_conditions = function
-                    .users(value)
-                    .iter()
-                    .all(
-                        |one| function.parent(one.user) == Some(header)
-                            && one.index == 0
-                            && matches!(
-                                function.instruction(one.user).opcode,
-                                Opcode::Select | Opcode::Cast(CastOp::ZExt | CastOp::SExt)
-                            ),
-                    );
+                let only_conditions = function.users(value).iter().all(|one| {
+                    function.parent(one.user) == Some(header)
+                        && one.index == 0
+                        && matches!(
+                            function.instruction(one.user).opcode,
+                            Opcode::Select | Opcode::Cast(CastOp::ZExt | CastOp::SExt)
+                        )
+                });
                 if !only_conditions {
                     return Err(Skipped("A comparison used other than by a select or an extension"));
                 }
@@ -1156,10 +1146,7 @@ fn extract(
     }
     let step_operand = step_operand.ok_or(Skipped("The induction step was not found"))?;
     let (compare, bound_operand) = exit_compare.ok_or(Skipped("No exit compare"))?;
-    if !steps.iter().any(|one| matches!(
-        one,
-        Step::Access(_) | Step::Interleave(_) | Step::Reduction(_)
-    )) {
+    if !steps.iter().any(|one| matches!(one, Step::Access(_) | Step::Interleave(_) | Step::Reduction(_))) {
         return Err(Skipped("No memory access or reduction to widen"));
     }
     // The lanes of an induction count down in iteration order, those of a
@@ -1675,10 +1662,7 @@ fn widen_interleave(
                 .stored
                 .iter()
                 .map(|&source| {
-                    (
-                        source_part(context, function, splat_block, vector_ty, vf, source, part as usize, wide, splats),
-                        vf,
-                    )
+                    (source_part(context, function, splat_block, vector_ty, vf, source, part as usize, wide, splats), vf)
                 })
                 .collect();
             // `concatenateVectors`: halve the list by pairs until one vector.
@@ -1696,10 +1680,7 @@ fn widen_interleave(
                         None,
                     );
                     function.insert(joined, before).expect("the access's block");
-                    next.push((
-                        Operand::Value(function.instruction(joined).result.expect("a shufflevector")),
-                        count * 2,
-                    ));
+                    next.push((Operand::Value(function.instruction(joined).result.expect("a shufflevector")), count * 2));
                 }
                 pieces = next;
             }
@@ -1869,9 +1850,7 @@ fn close_reductions(
                     lanes as usize
                 ];
                 start_lanes[0] = c;
-                Operand::Constant(
-                    context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(start_lanes) }),
-                )
+                Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(start_lanes) }))
             }
             value => {
                 let lane = context.int(context.types.intern(Type::Int(64)), 0);
@@ -1958,37 +1937,30 @@ fn close_reductions(
 
 /// The operation that updates `reduction` as `phi op x`, with `x` a widened
 /// value and `op` the reduction's own fold, and the operand `x` is: the shape
-/// whose accumulator can keep one register of lanes
-/// (`loopvectorizeaccumulator`).
+/// whose accumulator can keep one register of lanes (`loopvectorizeaccumulator`).
 fn narrowable_update(
     widening: &Widening,
     reduction: &interleave::Reduction,
 ) -> Option<(BinaryOp, Source)> {
     let (op, _) = interleave::reduction_op(reduction.kind)?;
-    widening
-        .steps
-        .iter()
-        .find_map(
-            |step| match step {
-                Step::Operation(operation) if operation.inst == reduction.latch => {
-                    let [first, second, _] = operation.operands;
-                    match (operation.op, first, second) {
-                        (WideOp::Binary(one), Source::Wide(phi), other @ Source::Wide(_))
-                        | (WideOp::Binary(one), other @ Source::Wide(_), Source::Wide(phi))
-                            if one == op && phi == reduction.phi =>
-                        {
-                            Some((op, other))
-                        }
-                        _ => None,
-                    }
+    widening.steps.iter().find_map(|step| match step {
+        Step::Operation(operation) if operation.inst == reduction.latch => {
+            let [first, second, _] = operation.operands;
+            match (operation.op, first, second) {
+                (WideOp::Binary(one), Source::Wide(phi), other @ Source::Wide(_))
+                | (WideOp::Binary(one), other @ Source::Wide(_), Source::Wide(phi))
+                    if one == op && phi == reduction.phi =>
+                {
+                    Some((op, other))
                 }
                 _ => None,
-            },
-        )
+            }
+        }
+        _ => None,
+    })
 }
 
-/// The lanes `reduction`'s accumulator keeps at this plan, where it is
-/// narrowed.
+/// The lanes `reduction`'s accumulator keeps at this plan, where it is narrowed.
 fn accumulator_lanes(
     cx: &llrm_mir::context::Context,
     widening: &Widening,
@@ -2011,18 +1983,11 @@ fn execute(
     register_bits: u32,
 ) {
     // Per reduction: the lanes its accumulator keeps (`register_bits` 0: all).
-    let narrowed: Vec<Option<u32>> =
-        widening
-            .reductions
-            .iter()
-            .map(|one| {
-                if register_bits == 0 {
-                    None
-                } else {
-                    accumulator_lanes(context, widening, one, plan.vf, register_bits)
-                }
-            })
-            .collect();
+    let narrowed: Vec<Option<u32>> = widening
+        .reductions
+        .iter()
+        .map(|one| if register_bits == 0 { None } else { accumulator_lanes(context, widening, one, plan.vf, register_bits) })
+        .collect();
     let splat_block = skeleton.vector_ph;
     let vector_of = |context: &llrm_mir::context::Context, element: TypeId| {
         context.types.intern(Type::Vector { element, count: plan.vf })
@@ -2048,17 +2013,7 @@ fn execute(
                 erased.push(access.inst);
             }
             Step::Interleave(group) => {
-                widen_interleave(
-                    context,
-                    function,
-                    widening,
-                    plan,
-                    splat_block,
-                    void_ty,
-                    group,
-                    &mut wide,
-                    &mut splats,
-                );
+                widen_interleave(context, function, widening, plan, splat_block, void_ty, group, &mut wide, &mut splats);
                 erased.extend(group.members.iter().copied());
             }
             &Step::Induction(induction) => {
@@ -2375,10 +2330,9 @@ impl FunctionPass for LoopVectorize {
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
                 let dep = lai.dep_checker();
                 let widen_compares = self.compares || tti.selects_vector_compares();
-                // The groups; a gapped load group needs a scalar epilogue,
-                // which the skeleton does not keep (DEVIATE
-                // LV-I3, owner llrm-arm64-vec, exit
-                // 2026-11-24): released.
+                // The groups; a gapped load group needs a scalar epilogue, which
+                // the skeleton does not keep (DEVIATE LV-I3, owner
+                // llrm-arm64-vec, exit 2026-11-24): released.
                 let groups = (self.interleaves || tti.selects_interleaved_accesses()).then(|| {
                     let mut groups = InterleavedAccessInfo::analyze(se, &cx, header, &lai, false);
                     groups.invalidate_groups_requiring_scalar_epilogue();
