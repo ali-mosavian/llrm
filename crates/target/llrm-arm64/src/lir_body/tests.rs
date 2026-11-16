@@ -10,7 +10,7 @@ use llrm_mir::MetadataId;
 use super::*;
 use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
-    FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
+    FpUnary, Logic, Memory, Mul3, Permute, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
     Addr, Arrangement, Gpr, ImmShape, MulAcc, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
@@ -310,8 +310,9 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     for lanes in Arrangement::ALL {
-        out.push(Inst::VectorUnzip { second: false, lanes, rd: v(0), rn: v(1), rm: v(2) });
-        out.push(Inst::VectorUnzip { second: true, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        for kind in Permute::ALL {
+            out.push(Inst::VectorPermute { kind, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        }
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
@@ -453,7 +454,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
         Inst::VectorMulLane { .. } => "VectorMulLane",
         Inst::VectorNarrow { .. } => "VectorNarrow",
-        Inst::VectorUnzip { .. } => "VectorUnzip",
+        Inst::VectorPermute { .. } => "VectorPermute",
         Inst::VectorDupScalar { .. } => "VectorDupScalar",
         Inst::VectorReduce { .. } => "VectorReduce",
         Inst::VectorDupLane { .. } => "VectorDupLane",
@@ -538,7 +539,7 @@ const ALL: [&str; 78] = [
     "VectorFmulLane",
     "VectorMulLane",
     "VectorNarrow",
-    "VectorUnzip",
+    "VectorPermute",
     "VectorDupScalar",
     "VectorReduce",
     "VectorDupLane",
