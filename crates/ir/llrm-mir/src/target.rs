@@ -568,6 +568,9 @@ pub struct Tuning {
     /// epilogue is left). DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit
     /// 2026-11-30).
     pub bandwidth_vf_without_epilogue: bool,
+    /// `Tti::shift_loop_counts`: the shift-loop count idioms form (`ctlz`/`cttz`
+    /// are one instruction). Wasm and x86-64 say true (LI-18).
+    pub shift_loop_counts: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -870,6 +873,7 @@ impl Tuning {
         maximize_vector_bandwidth: false,
         narrow_reduction_accumulators: false,
         bandwidth_vf_without_epilogue: false,
+        shift_loop_counts: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,

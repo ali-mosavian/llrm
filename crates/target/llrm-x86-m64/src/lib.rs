@@ -455,6 +455,8 @@ impl llrm_target::Target for M64 {
                             narrow_reduction_accumulators: true,
                             // DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             bandwidth_vf_without_epilogue: true,
+                            // LI-18 (owner llrm-target-x86-m64-b): `bsr`/`bsf` are one instruction.
+                            shift_loop_counts: true,
                             lsr_size_x86_64: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes

@@ -1386,6 +1386,11 @@ impl Tti for X86 {
         self.tuning.bandwidth_vf_without_epilogue
     }
 
+    /// `bsr` and `tzcnt`/`bsf` are one instruction at x86-64 (LI-18).
+    fn shift_loop_counts(&self) -> bool {
+        self.tuning.shift_loop_counts
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
