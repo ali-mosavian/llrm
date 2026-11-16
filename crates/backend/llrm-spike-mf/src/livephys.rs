@@ -50,6 +50,7 @@
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LivePhysRegs.cpp#L141
 
 use llrm_lir::registers::{Info, RegId};
+
 use crate::mfunc::{Inst, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, Target, successors};
 
@@ -189,7 +190,8 @@ pub struct PhysLiveness {
 }
 
 thread_local! {
-    /// Functions [`PhysLiveness::of`] solved on this thread since the last [`take_solved`].
+    /// Functions [`PhysLiveness::of`] solved on this thread since the last
+    /// [`take_solved`].
     static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

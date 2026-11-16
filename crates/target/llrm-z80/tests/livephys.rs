@@ -163,8 +163,10 @@ fn the_worklist_solves_the_same_live_outs_as_sweeps_on_functions_with_loops() {
     assert!(loops > 100, "{loops} backward branches");
 }
 
-/// The live lanes of a register file are a sorted list: two sets holding the same lanes are equal however they were
-/// built, and a register whose lanes were all removed is gone (the worklist stops when a block's live-in is equal).
+/// The live lanes of a register file are a sorted list: two sets holding the
+/// same lanes are equal however they were built, and a register whose lanes
+/// were all removed is gone (the worklist stops when a block's live-in is
+/// equal).
 #[test]
 fn the_live_lanes_are_the_same_set_whatever_order_they_were_added_in() {
     use llrm_spike_mf::livephys::LiveLanes;

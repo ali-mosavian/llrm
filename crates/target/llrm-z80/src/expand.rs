@@ -2494,8 +2494,10 @@ pub fn finish(
             }
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
-        let after = printer.liveness.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, at, block.insts.len());
-        let bits: String = BYTES.map(|byte| if after.is_live(&REGISTER_INFO, byte) { '1' } else { '0' }).iter().collect();
+        let after =
+            printer.liveness.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, at, block.insts.len());
+        let bits: String =
+            BYTES.map(|byte| if after.is_live(&REGISTER_INFO, byte) { '1' } else { '0' }).iter().collect();
         printer.out.push(Line::Inst(format!("{LIVE_OUT}{bits}")));
     }
     // the tables follow the code: a word a block, each entry the label of its
@@ -2599,9 +2601,9 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
 /// `drop_overwritten_byte_stores`: the latter drops the `ld R1, S1` the former
 /// needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_reloaded_accumulator(
-        drop_dead_byte_loads(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines))))),
-    ))))
+    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_reloaded_accumulator(drop_dead_byte_loads(
+        drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines)))),
+    )))))
 }
 
 /// `ld r, a` then `ld a, r` (or the reverse) leaves both holding one value: the
@@ -3627,11 +3629,13 @@ fn flag_and_b_free(text: &str) -> bool {
 ///
 /// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
 thread_local! {
-    /// Instructions `push_arguments` went over to rewrite a call frame, since the last [`take_push_span`].
+    /// Instructions `push_arguments` went over to rewrite a call frame, since
+    /// the last [`take_push_span`].
     static PUSH_SPAN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The instructions `push_arguments` rewrote on this thread since the last call.
+/// The instructions `push_arguments` rewrote on this thread since the last
+/// call.
 pub fn take_push_span() -> usize {
     PUSH_SPAN.with(|one| one.replace(0))
 }
@@ -3667,8 +3671,9 @@ fn push_arguments(
                 at += 1;
                 continue;
             }
-            // only the span from the frame's opening to the last push's place changes: a block of many
-            // calls was rebuilt whole for each (straight-line code of 400 calls: a quarter of the compile)
+            // only the span from the frame's opening to the last push's place
+            // changes: a block of many calls was rebuilt whole for
+            // each (straight-line code of 400 calls: a quarter of the compile)
             let last = places.iter().map(|&(_, after)| after).max().unwrap_or(at);
             let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); last - at + 1];
             let mut stores = vec![false; last - at + 1];
@@ -4091,8 +4096,10 @@ mod tests {
         );
     }
 
-    /// The copy of a word a signed compare keeps one byte of (`ld c, l; ld a, h; xor a, #128; ld b, a; sub a, #129`)
-    /// stayed where no later load overwrote `bc`: switch_peeled_table -Os, once the loop no longer rebuilt it.
+    /// The copy of a word a signed compare keeps one byte of (`ld c, l; ld a,
+    /// h; xor a, #128; ld b, a; sub a, #129`) stayed where no later load
+    /// overwrote `bc`: switch_peeled_table -Os, once the loop no longer rebuilt
+    /// it.
     #[test]
     fn a_byte_load_nothing_reads_before_the_block_ends_is_dropped() {
         let inst = |text: &str| Line::Inst(text.to_owned());

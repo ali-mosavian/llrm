@@ -71,17 +71,20 @@ fn names(
 }
 
 thread_local! {
-    /// Instructions the predecessor scans looked at since the last [`take_scanned`].
+    /// Instructions the predecessor scans looked at since the last
+    /// [`take_scanned`].
     static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The instructions the predecessor scans of branch folding looked at on this thread since the last call.
+/// The instructions the predecessor scans of branch folding looked at on this
+/// thread since the last call.
 pub fn take_scanned() -> usize {
     SCANNED.with(|one| one.replace(0))
 }
 
-/// `MachineBasicBlock::terminators`: the run of terminators at a block's end, found from the back (the pin's verifier
-/// allows nothing but terminators after the first one).
+/// `MachineBasicBlock::terminators`: the run of terminators at a block's end,
+/// found from the back (the pin's verifier allows nothing but terminators after
+/// the first one).
 fn terminators(insts: &[Inst]) -> &[Inst] {
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
     SCANNED.with(|one| one.set(one.get() + insts.len() - first + 1));

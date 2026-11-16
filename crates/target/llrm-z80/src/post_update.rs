@@ -78,7 +78,8 @@ struct Context<'a> {
     function: &'a MFunction,
     assignment: &'a Assignment,
     cfg: &'a Cfg,
-    /// Solved when the first query asks, and again after a merge: most functions have no update to fold.
+    /// Solved when the first query asks, and again after a merge: most
+    /// functions have no update to fold.
     live: &'a std::cell::OnceCell<PhysLiveness>,
 }
 

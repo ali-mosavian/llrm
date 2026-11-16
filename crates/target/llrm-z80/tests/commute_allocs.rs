@@ -1,5 +1,6 @@
-//! `commute_to_the_dying_source` solved the virtual registers live out of each block in hash sets rebuilt per block
-//! per round: 4.6% of idioms -O2, 3.5% of it in `HashSet<u32>` growth. The solution takes a few allocations a block.
+//! `commute_to_the_dying_source` solved the virtual registers live out of each
+//! block in hash sets rebuilt per block per round: 4.6% of idioms -O2, 3.5% of
+//! it in `HashSet<u32>` growth. The solution takes a few allocations a block.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,15 +34,17 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static COUNTING: Counting = Counting;
 
-/// A chain of `count` blocks: the first makes 24 words, each of the others reads them all, so each is live out of
-/// every block before the last.
+/// A chain of `count` blocks: the first makes 24 words, each of the others
+/// reads them all, so each is live out of every block before the last.
 fn chain(count: usize) -> MFunction {
     const WORDS: u32 = 24;
     let mut function = MFunction::new("f");
     function.classes = vec![Class::Gr16; WORDS as usize];
     for at in 0..count {
         let insts = if at == 0 {
-            (0..WORDS).map(|v| Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(v)), Operand::Imm(i64::from(v))])).collect()
+            (0..WORDS)
+                .map(|v| Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(v)), Operand::Imm(i64::from(v))]))
+                .collect()
         } else {
             vec![Inst::new(Kind::Op("USE"), (0..WORDS).map(|v| Operand::Use(Reg::Virt(v))).collect())]
         };
