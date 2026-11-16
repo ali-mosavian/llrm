@@ -72,8 +72,9 @@ impl CombineHooks for Aarch64Lowering {
         vt: EVT,
         _constant: bool,
     ) -> bool {
-        // `AArch64TargetLowering::hasAndNot`: `bic` takes any scalar integer.
-        vt.is_integer()
+        // `AArch64TargetLowering::hasAndNot`: `bic` takes any scalar integer
+        // and a vector of 64 bits or more.
+        vt.is_integer() || (vt.is_vector() && vt.size_in_bits() >= 64)
     }
 
     fn is_indexed_legal(

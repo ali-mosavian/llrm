@@ -1150,6 +1150,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Load => self.visit_load(node).or_else(|| self.indexed(node)),
             ISD::TokenFactor => self.visit_token_factor(node),
             ISD::Select => self.visit_select(node),
+            ISD::VSelect => self.visit_vselect(node),
             ISD::SelectCC => self.visit_select_cc(node),
             ISD::Store => self.visit_store(node).or_else(|| self.indexed(node)),
             ISD::LifetimeEnd => self.visit_lifetime_end(node),
@@ -3734,7 +3735,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             | ISD::ZeroExtend
             | ISD::SignExtend
             | ISD::Truncate
-            | ISD::SignExtendInReg => vt.is_integer(),
+            | ISD::SignExtendInReg => vt.is_integer() || (vt.is_vector() && vt.element().is_integer()),
+            // Lanes moved as they are make no poison of their own.
+            ISD::ConcatVectors => true,
             ISD::Sra => {
                 vt.is_integer()
                     && self

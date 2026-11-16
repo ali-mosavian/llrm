@@ -557,6 +557,17 @@ fn num_sign_bits_at(
                 return if valid > width { 1 } else { width - valid + 1 };
             }
         }
+        // `ComputeNumSignBits` of `CONCAT_VECTORS`: the least of the parts'.
+        ISD::ConcatVectors => {
+            let mut least = u32::MAX;
+            for at in 0..dag.node(value).ops.len() {
+                least = least.min(signs(at));
+                if least == 1 {
+                    break;
+                }
+            }
+            return least;
+        }
         ISD::Truncate => {
             let source = scalar_bits(dag.value_type(dag.operand(value, 0)));
             let source_signs = signs(0);

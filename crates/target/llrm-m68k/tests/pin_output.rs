@@ -87,6 +87,7 @@ const SOURCE_ORDER: Options = Options {
     global_copies: true,
     relax_classes: false,
     remat_constants: false,
+    data_constants: false,
     slot_registers: false,
     spill_fold: false,
     mul: llrm_m68k::dagisel::mulprice::Mode::Pin,

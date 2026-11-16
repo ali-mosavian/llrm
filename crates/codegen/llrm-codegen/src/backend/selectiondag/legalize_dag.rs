@@ -721,6 +721,40 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(if result_vt == mask_vt { joined } else { self.dag.get_node(ISD::BitCast, result_vt, &[joined]) })
     }
 
+    /// `VectorLegalizer::ExpandSELECT`: a `select` of vectors on a scalar
+    /// condition is the arms masked by the broadcast condition, `and`, `and`
+    /// of the complement and `or`.
+    fn expand_vector_select(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (cond, then, other) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let vt = self.dag.value_type(node);
+        if self.dag.value_type(cond).is_vector() || !vt.is_vector() {
+            return None;
+        }
+        let tli = self.tli;
+        let expands = |op: ISD| tli.operation_action(op, vt) == Action::Expand;
+        if expands(ISD::And) || expands(ISD::Xor) || expands(ISD::Or) || expands(ISD::BuildVector) {
+            return None;
+        }
+        let mask_vt = vt.change_vector_element_type_to_integer();
+        let bit_vt = mask_vt.element();
+        let ones = self.dag.get_all_ones_constant(bit_vt);
+        let zero = self.dag.get_constant(0, bit_vt);
+        let lane = self.dag.get_select(bit_vt, cond, ones, zero);
+        let mask = self.dag.get_splat_build_vector(mask_vt, lane);
+        let as_mask = |this: &mut Self, value: SDValue| {
+            if this.dag.value_type(value) == mask_vt { value } else { this.dag.get_node(ISD::BitCast, mask_vt, &[value]) }
+        };
+        let (then, other) = (as_mask(self, then), as_mask(self, other));
+        let not_mask = self.dag.get_not(mask, mask_vt);
+        let taken = self.dag.get_node(ISD::And, mask_vt, &[then, mask]);
+        let kept = self.dag.get_node(ISD::And, mask_vt, &[other, not_mask]);
+        let joined = self.dag.get_node(ISD::Or, mask_vt, &[taken, kept]);
+        Some(if vt == mask_vt { joined } else { self.dag.get_node(ISD::BitCast, vt, &[joined]) })
+    }
+
     /// `getLogicalNOT`: `xor v, 1` (`-1` where booleans are all ones).
     fn get_logical_not(
         &mut self,
@@ -1295,6 +1329,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.unroll_vector_op(node)])
             }
             ISD::VSelect => self.expand_vselect(node).map(|selected| vec![selected]),
+            ISD::Select if vt.is_vector() => self.expand_vector_select(node).map(|selected| vec![selected]),
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::InsertVectorElt => self.expand_insert_vector_elt(node).map(|loaded| vec![loaded]),
             reduction if reduction.vec_reduce_base_opcode().is_some() => {

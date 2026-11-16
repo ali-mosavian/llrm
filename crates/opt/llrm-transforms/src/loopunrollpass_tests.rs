@@ -1867,3 +1867,63 @@ fn the_trip_counts_a_run_time_unroll_works_out_grow_with_the_loops_not_their_squ
     let (small, large) = (runtime_unroll_counts(8), runtime_unroll_counts(32));
     assert!(large < 6 * small, "8 loops: {small} counts, 32 loops: {large}");
 }
+
+/// A 32-trip fold of a table (`checksum` in loop_interchange): fourteen units a trip, so 386 unrolled, over the pin's
+/// 300 at `-O3`.
+const TABLE_FOLD: &str = "@t = global [32 x i16] zeroinitializer
+
+define i64 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i64 [ 0, %b0 ], [ %next, %b1 ]
+  %s = phi i64 [ 0, %b0 ], [ %r, %b1 ]
+  %p = getelementptr inbounds [2 x i8], ptr @t, i64 %i
+  %v = load i16, ptr %p
+  %w = sext i16 %v to i64
+  %a = add nsw i64 %s, %w
+  %r = srem i64 %a, 100003
+  %next = add nuw nsw i64 %i, 1
+  %go = icmp ult i64 %next, 32
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i64 %r
+}
+";
+
+/// Whether the loop is gone after the unroll: a partial unroll keeps its back edge.
+fn unrolls_table_fold(
+    tuning: llrm_mir::target::Tuning,
+    opt_level: u32,
+) -> bool {
+    let mut module = parsed(TABLE_FOLD);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let options = Options {
+        opt_level,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+        inliner_follows: true,
+        speed_rate: false,
+    };
+    unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    !printed(&module).contains("br i1")
+}
+
+/// loop_interchange -O3: the pin keeps `checksum`'s 32-trip loop (386 against 300) where gcc and clang 20 unroll it
+/// whole: 58,416 executed instructions against the bar's 49,680.
+#[test]
+fn a_target_with_a_higher_o3_threshold_unrolls_a_32_trip_fold_the_pin_keeps() {
+    let pin = llrm_mir::target::Tuning::PIN;
+    let raised = llrm_mir::target::Tuning { unroll_threshold_at_o3: Some(400), ..pin };
+    assert!(!unrolls_table_fold(pin, 3), "the pin's 300 keeps the loop");
+    assert!(unrolls_table_fold(raised, 3));
+    assert!(!unrolls_table_fold(raised, 2), "-O2 keeps its 150");
+}
