@@ -1243,6 +1243,32 @@ fn two_stores_per_iteration_are_one_interleaved_store() {
     assert!(text.contains("add nuw nsw i64 %i, 32"), "{text}");
 }
 
+const INTERLEAVE_STEP2: &str = include_str!("../tests/lv/interleave_step2.ll");
+
+/// `for (o = 0; o < 4000; o += 2) { s[o] = 65 + (o & 14); s[o + 1] = 31; }`
+/// (textfill's fill, 32009 instructions to the pin's 4120): the loop was left
+/// scalar ("No integer induction that steps by one"). The pin takes VF 16,
+/// IC 2 with `o` derived from the canonical index (`start + index * 2`): two
+/// `<32 x i8>` stores of the interleaved members and `o` stepping by 64.
+#[test]
+fn a_loop_stepping_by_two_is_widened_with_the_step_scaled() {
+    let text = run_interleaved(INTERLEAVE_STEP2);
+    assert_eq!(count(&text, "store <32 x i8>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %o, 64"), "{text}");
+    assert!(text.contains("%ind.end") || text.contains("icmp eq i64 %next, 3968"), "{text}");
+}
+
+/// An `i8` counter from 250 to 4 by 2 meets the bound after wrapping: 5
+/// iterations. The distance was divided as a `u128` (2^128 - 246) before it
+/// was cut to the type, and read 133.
+#[test]
+fn a_wrapping_counter_with_a_step_counts_its_iterations_in_the_type() {
+    use crate::loopvectorizeskeleton::iterations;
+    assert_eq!(iterations(false, 2, 8, 250, 4), 5);
+    assert_eq!(iterations(false, 1, 8, 250, 4), 10);
+    assert_eq!(iterations(true, 1, 8, 4, 250), 10);
+}
+
 /// A pair swap `d[2i] = s[2i+1]; d[2i+1] = s[2i]` over halves: the pin takes
 /// VF 8, IC 2, one `<16 x i16>` load and one store per part, the members
 /// pulled out by `strided.vec` shuffles.
