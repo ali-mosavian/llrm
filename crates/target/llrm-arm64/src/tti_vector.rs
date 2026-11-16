@@ -633,6 +633,34 @@ pub(crate) fn vector_instr_cost(
     Some(Cost::of(base))
 }
 
+/// `AArch64TTIImpl::getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` of a fixed
+/// vector
+/// ([L710](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L710)):
+/// one instruction a register of the types NEON has them for (8, 16 and 32-bit
+/// lanes), two (`cmgt` and `bif`) for 64-bit lanes, and the promoted `v2i8`,
+/// `v2i16` and `v4i8` a heavy 5 (signed) or 3. DEVIATE VT2 as the other
+/// vector hooks: `TCK_Latency` is not priced; the base class's compare and
+/// select price of the types not listed (a lane count of one) is not either.
+pub(crate) fn min_max_cost(
+    signed: bool,
+    ty: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    if cost_kind == CostKind::Latency {
+        return None;
+    }
+    let (pieces, lane) = vector_pieces(ty)?;
+    let bits = u64::from(lane) * u64::from(ty.count);
+    if matches!((lane, ty.count), (8, 2) | (16, 2) | (8, 4)) {
+        return Some(Cost::of(if signed { 5 } else { 3 }));
+    }
+    match lane {
+        _ if ty.count < 2 || bits < 64 => None,
+        64 => Some(Cost::of(pieces * 2)),
+        _ => Some(Cost::of(pieces)),
+    }
+}
+
 /// The `SK_Broadcast` rows of `ShuffleTbl` (L7196): `dup` of a 64- or 128-bit
 /// vector of 8, 16 or 32-bit lanes, or of two 64-bit ones; `LT.first` of them
 /// for a vector that splits.
