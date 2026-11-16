@@ -1,4 +1,6 @@
 /* The magnitude of a binary32 truncated to 64 bits, shared by fix_di.c and fix_udi.c (one routine each: a program links the one it calls). */
+#ifndef SF_F32_FIX_DI_H /* the flatteners paste both files into one unit: one definition */
+#define SF_F32_FIX_DI_H
 #include "softfloat.h"
 #include "sf_helpers.h"
 
@@ -14,4 +16,4 @@ static inline uint64_t magnitude(sf32 a, int *big)
     uint64_t m = (a & 0x7FFFFFu) | 0x800000u;
     return e >= 23 ? m << (e - 23) : m >> (23 - e);
 }
-
+#endif
