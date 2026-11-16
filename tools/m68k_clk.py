@@ -40,11 +40,29 @@ def price(cycles, exe, cpu, gcc_root):
     return parse_clocks(run.stdout)
 
 
-def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel):
-    """gcc's compile line; `pcrel` puts its data on ours's pc-relative model (`-mpcrel`), so the clocks of the two columns share one data model."""
+def same_output(runs):
+    """Whether the two columns' runs printed and exited alike. A pair that differs ran different programs (a gcc exe that stops early prices a handful of instructions): its clocks are not compared."""
+    return len(runs) == 2 and runs[0] == runs[1]
+
+
+def run_once(exe, cpu):
+    """(returncode, stdout) of the program under qemu, or None when it does not finish."""
+    try:
+        done = subprocess.run(["qemu-m68k", "-cpu", f"m{cpu}", str(exe)], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return None
+    return (done.returncode, done.stdout)
+
+
+def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel, flags=()):
+    """gcc's compile line; `pcrel` puts its data on ours's pc-relative model (`-mpcrel`), so the clocks of the two columns share one data model.
+    `flags` are the program's own `// flags:` in gcc's spelling (ValueError for one gcc cannot take): ours was built with `-fno-inline-functions`
+    and gcc without, so licm_graph_callee_footprint priced 188244 against 77282 clocks, gcc having inlined the call the program is about."""
+    import external_flags
+
     return [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
             "-ffreestanding", "-nostdlib", "-w", "-msoft-float", *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
-            "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
+            *external_flags.GCC_DIALECT, *external_flags.gcc_program_flags(flags), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
 
 
 def main():
@@ -71,7 +89,7 @@ def main():
         for name in args.files:
             path = Path(name).resolve()
             for level in args.levels.split(","):
-                cells = {}
+                cells, runs = {}, {}
                 with tempfile.TemporaryDirectory() as tmp:
                     for side in ("ours", "gcc"):
                         obj, exe = Path(tmp) / f"{side}.o", Path(tmp) / f"{side}.exe"
@@ -81,7 +99,11 @@ def main():
                                    "-I", str(ROOT / "runtime/shared/posix"), "-o", str(obj), str(path)]
                         else:
                             env = sweep.tool_env(gcc_root)
-                            cmd = gcc_command(gcc, gcc_root, cpu, level, path, obj, args.gcc_pcrel)
+                            try:
+                                cmd = gcc_command(gcc, gcc_root, cpu, level, path, obj, args.gcc_pcrel, o0_sweep.flags_of(path.read_text(), f"m68k-{cpu}"))
+                            except ValueError:
+                                cells[side] = ("", "")
+                                continue
                         if subprocess.run(cmd, capture_output=True, text=True, env=env).returncode:
                             cells[side] = ("", "")
                             continue
@@ -91,8 +113,11 @@ def main():
                             cells[side] = ("", "")
                             continue
                         text = subprocess.run([size, str(obj)], capture_output=True, text=True, env=sweep.tool_env(gcc_root)).stdout
+                        runs[side] = run_once(exe, cpu)
                         cells[side] = (text.split("\n")[1].split()[0], price(cycles, exe, cpu, gcc_root) or "")
-                print("\t".join([cpu, path.stem, level, *cells["ours"], *cells["gcc"]]), flush=True)
+                    if not same_output([runs.get("ours"), runs.get("gcc")]):
+                        cells = {side: (cell[0], "") for side, cell in cells.items()}  # bytes stay, clocks of unequal runs do not
+                print("\t".join([cpu, path.stem, level, *cells.get("ours", ("", "")), *cells.get("gcc", ("", ""))]), flush=True)
 
 
 if __name__ == "__main__":
