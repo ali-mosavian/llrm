@@ -404,6 +404,23 @@ fn copy_into(
     }
 }
 
+/// Each phi of `block` gets, for the edges `new_pred` has to it, the inputs `existing_pred` has for its own: the
+/// copy of a switch keeps every edge of the original, and a phi has an input for each (`predecessor_added` adds one).
+fn edges_copied(
+    function: &mut Function,
+    block: BlockId,
+    new_pred: BlockId,
+    existing_pred: BlockId,
+) {
+    for phi in phis(function, block) {
+        let mut incoming = arms(function, phi);
+        let copied: Vec<_> =
+            incoming.iter().filter(|&&(_, from)| from == existing_pred).map(|&(value, _)| (value, new_pred)).collect();
+        incoming.extend(copied);
+        function.set_operands(phi, from_arms(&incoming));
+    }
+}
+
 /// Each phi of `block` that has an input from `new_pred` reads it through
 /// `map` (the input was copied from the original predecessor).
 fn remap_input(
@@ -447,7 +464,7 @@ fn thread(
     function.predecessor_removed(context, p, e, true);
     function.erase(e_jump).expect("a jump nothing uses");
     for succ in function.successors(e) {
-        edges::predecessor_added(function, succ, e, p);
+        edges_copied(function, succ, e, p);
         remap_input(function, succ, e, &map);
     }
 

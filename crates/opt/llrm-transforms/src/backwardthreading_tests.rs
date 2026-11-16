@@ -87,3 +87,46 @@ fn a_target_that_turns_it_off_keeps_the_path_unthreaded() {
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     assert_eq!(printed(&module), printed(&before));
 }
+
+/// The join `p` ends in a switch with two cases to the same block `s`. The copy of `p` has the two edges too, so each
+/// phi of `s` needs two inputs from it: one was added, and the verifier (then `switchvalue` in SimplifyCFG, queens
+/// -O3: "an input from the existing predecessor") refused the function.
+#[test]
+fn a_join_ending_in_a_switch_gives_each_of_its_edges_an_input() {
+    let text = "define i32 @f(i32 %x, i32 %s, i1 %c) {
+entry:
+  %pos = icmp sgt i32 %x, 0
+  br i1 %pos, label %q, label %r
+
+q:
+  br label %p
+
+r:
+  br label %p
+
+p:
+  switch i32 %s, label %s_in [
+    i32 0, label %s_in
+    i32 1, label %bb
+  ]
+
+bb:
+  %g = icmp sgt i32 %x, 0
+  br i1 %g, label %a, label %s_in
+
+a:
+  ret i32 7
+
+s_in:
+  %v = phi i32 [ 1, %p ], [ 1, %p ], [ 3, %bb ]
+  ret i32 %v
+}
+";
+    let before = parsed(text);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS });
+    manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
+    let out = printed(&module);
+    assert_ne!(out, printed(&before), "the guard was not threaded:\n{out}");
+}
