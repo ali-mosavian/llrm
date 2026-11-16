@@ -59,16 +59,12 @@ impl Function {
         for value in 0..self.values.len() {
             let ValueDef::Instruction(def) = self.values[value].def else { continue };
             let held = Held::Value(value as u32);
-            let uses = self.uses.users(held).snapshot();
             let forward = |one: &Use| one.user.0 <= def.0;
-            if !uses.iter().any(|one| forward(one)) {
+            if !self.uses.users(held).iter().any(forward) {
                 continue;
             }
-            let after = uses.iter().copied().filter(|one| !forward(one));
-            let mut before: Vec<Use> = uses.iter().copied().filter(forward).collect();
-            before.reverse();
-            let order: Vec<Use> = after.chain(before).collect();
-            self.uses.reorder(held, &order);
+            // Later uses stay as they are; the early ones follow, oldest first.
+            self.uses.sort_by_key(held, |_, one| if forward(one) { (1, one.user.0, one.index) } else { (0, 0, 0) });
         }
     }
 
@@ -79,17 +75,14 @@ impl Function {
         held: Held,
         indexes: &[u32],
     ) -> Result<(), String> {
-        let uses = self.uses.users(held).snapshot();
-        if uses.len() < 2 {
-            return Err(if uses.is_empty() { "value has no uses" } else { "value only has one use" }.into());
+        let uses = self.uses.users(held).iter().count();
+        if uses < 2 {
+            return Err(if uses == 0 { "value has no uses" } else { "value only has one use" }.into());
         }
-        if uses.len() != indexes.len() {
-            return Err(format!("wrong number of indexes, expected {}", uses.len()));
+        if uses != indexes.len() {
+            return Err(format!("wrong number of indexes, expected {uses}"));
         }
-        let mut order: Vec<(u32, Use)> = indexes.iter().copied().zip(uses).collect();
-        order.sort_by_key(|(place, _)| *place);
-        let order: Vec<Use> = order.into_iter().map(|(_, one)| one).collect();
-        self.uses.reorder(held, &order);
+        self.uses.sort_by_key(held, |at, _| indexes[at]);
         Ok(())
     }
 
@@ -1410,14 +1403,7 @@ impl Function {
         &mut self,
         value: ValueId,
     ) {
-        let held = Held::Value(value.0);
-        let uses = self.uses.users(held).snapshot();
-        for &one in &uses {
-            self.uses.unlink(held, one);
-        }
-        for &one in &uses {
-            self.uses.link(held, one);
-        }
+        self.uses.sort_by_key(Held::Value(value.0), |at, _| std::cmp::Reverse(at));
     }
 
     /// The call `inst`'s argument `at` becomes `with`, as the callee's
