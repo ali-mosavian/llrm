@@ -68,6 +68,11 @@ impl Builder<'_> {
                     self.collect_leaves(*element, base + at * size, out)?;
                 }
             }
+            // `ComputeValueVTs`: a vector is one leaf, as wide as the target's vector registers make it.
+            Type::Vector { .. } if self.target.dag.vectors => {
+                self.type_of(ty)?;
+                out.push((ty, base));
+            }
             Type::Vector { .. } => return Err(Refused("vector value")),
             _ => {
                 self.type_of(ty)?;

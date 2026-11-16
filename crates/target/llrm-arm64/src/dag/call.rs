@@ -233,7 +233,41 @@ impl Aarch64Calling {
     }
 }
 
+/// The id of `llvm.aarch64.neon.ldN`/`stN` (`N` 2 to 4, any vector type):
+/// `STRUCT_STORE` or `0`, plus `N`. `AArch64TargetLowering` sees them as
+/// `INTRINSIC_W_CHAIN` / `INTRINSIC_VOID` nodes by `Intrinsic::aarch64_neon_*`.
+pub const STRUCT_STORE: u32 = 0x100;
+
+/// The `(store, count)` of an `ldN`/`stN` intrinsic id from [`neon_struct_id`].
+pub fn neon_struct_of(id: u32) -> (bool, u32) {
+    (id & STRUCT_STORE != 0, id & 0xff)
+}
+
+fn neon_struct_id(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("llvm.aarch64.neon.")?;
+    let (store, rest) = match rest.split_at_checked(2)? {
+        ("ld", rest) => (0, rest),
+        ("st", rest) => (STRUCT_STORE, rest),
+        _ => return None,
+    };
+    let (count, _) = rest.split_once('.')?;
+    match count.parse::<u32>().ok()? {
+        count @ 2..=4 => Some(store | count),
+        _ => None,
+    }
+}
+
 impl TargetCalling for Aarch64Calling {
+    fn intrinsic(
+        &self,
+        name: &str,
+    ) -> Option<llrm_codegen::backend::selectiondag::target_calling::TargetIntrinsic> {
+        Some(llrm_codegen::backend::selectiondag::target_calling::TargetIntrinsic {
+            id: neon_struct_id(name)?,
+            chained: true,
+        })
+    }
+
     /// `CCAssignFnForCall`: `ccc` and `fastcc` are AAPCS64; the pin has no
     /// table for `coldcc` and the like.
     fn supports_convention(

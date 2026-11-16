@@ -1970,12 +1970,23 @@ impl Builder<'_> {
                 return Ok(());
             }
             (true, false) => {
-                let vt = self.type_of(result_type)?;
-                self.dag.get_node_multi(ISD::IntrinsicWChain, &[vt, EVT::OTHER], &ops)
+                // `ComputeValueVTs`: an aggregate result (`ld2`'s pair of
+                // vectors) is one result per leaf, the chain after them.
+                let mut vts = if self.is_aggregate(result_type) {
+                    self.leaves(result_type)?
+                        .into_iter()
+                        .map(|(leaf, _)| self.type_of(leaf))
+                        .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    vec![self.type_of(result_type)?]
+                };
+                vts.push(EVT::OTHER);
+                self.dag.get_node_multi(ISD::IntrinsicWChain, &vts, &ops)
             }
         };
         if found.chained {
-            self.dag.set_root(SDValue { node: node.node, res: 1 });
+            let chain = self.dag.node(node).values.len() as u8 - 1;
+            self.dag.set_root(SDValue { node: node.node, res: chain });
         }
         if let Some(result) = instruction.result {
             self.set_value(result, SDValue { node: node.node, res: 0 });

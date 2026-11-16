@@ -42,6 +42,24 @@ use crate::mc::inst::{
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
+/// `LD2Twov4s`, `ST4Fourv16b`: `(store, count, arrangement)` of a multi-register
+/// structure access.
+fn struct_form(name: &str) -> Option<(bool, u8, Arrangement)> {
+    let (store, rest) = match name.split_at_checked(2)? {
+        ("LD", rest) => (false, rest),
+        ("ST", rest) => (true, rest),
+        _ => return None,
+    };
+    let (count, shape) = match rest.split_at_checked(1)? {
+        ("2", rest) => (2, rest.strip_prefix("Twov")?),
+        ("3", rest) => (3, rest.strip_prefix("Threev")?),
+        ("4", rest) => (4, rest.strip_prefix("Fourv")?),
+        _ => return None,
+    };
+    let lanes = Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == shape)?;
+    Some((store, count, lanes))
+}
+
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
     // `TargetOpcode::COPY` is no output of a pattern, so the table does not
@@ -1450,11 +1468,12 @@ impl Emitter<'_> {
     ) -> Result<Operand, String> {
         let node = self.dag.node(value);
         // The second result of a machine node is the flags it set, except
-        // for a writeback load, whose results are the new base and the value.
+        // for a writeback load, whose results are the new base and the value, and
+        // an `ldN`, whose results are its vectors.
         if value.res == 1
             && matches!(
                 node.opcode,
-                ISD::Machine(code) if !opcode_name(code).is_some_and(|name| memory_form(name).is_some_and(|form| {
+                ISD::Machine(code) if !opcode_name(code).is_some_and(|name| struct_form(name).is_some() || memory_form(name).is_some_and(|form| {
                     matches!(form.form, AddressForm::Post | AddressForm::Pre)
                 }))
             )
@@ -2058,6 +2077,41 @@ impl Emitter<'_> {
     /// = PHI [if_true, taken], [if_false, head]` and holds the rest of the
     /// block.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L3276>
+    /// `ldN`/`stN` of `count` vectors: a run of `count` consecutive virtual
+    /// registers (`Vreg::in_run`) the allocator keeps as one tuple. A load's
+    /// results are the run; a store reads copies of its members in one.
+    fn structure_access(
+        &mut self,
+        id: u32,
+        store: bool,
+        count: u8,
+        lanes: Arrangement,
+        operands: &[Operand],
+    ) -> Result<(), String> {
+        let run: Vec<Vreg> = (0..count).map(|_| self.mf.fpr()).collect();
+        let rt = run[0];
+        if store {
+            let Some((Operand::Reg(base), members)) = operands.split_last().map(|(base, rest)| (base, rest)) else {
+                return Err("a structure store without an address".into());
+            };
+            if members.len() != usize::from(count) {
+                return Err("a structure store with the wrong number of vectors".into());
+            }
+            for (member, dst) in members.iter().zip(&run) {
+                let Operand::Fpr(src) = member else { return Err("a structure store of a non-vector".into()) };
+                self.ops.push(Op::Copy { dst: Reg::Fpr(*dst), src: Reg::Fpr(*src) });
+            }
+            self.ops.push(Op::I(Inst::VectorStoreStructure { count, lanes, rt, base: *base }));
+        } else {
+            let [Operand::Reg(base)] = operands else { return Err("a structure load without an address".into()) };
+            self.ops.push(Op::I(Inst::VectorLoadStructure { count, lanes, rt, base: *base }));
+            for (at, reg) in run.iter().enumerate() {
+                self.fvalues.insert((id, at as u8), *reg);
+            }
+        }
+        Ok(())
+    }
+
     fn f128_select(
         &mut self,
         id: u32,
@@ -2392,6 +2446,10 @@ impl Emitter<'_> {
                             *operand = Operand::Fpr(defined);
                         }
                     }
+                }
+                // Its operands are the members, not the pin's one tuple.
+                if let Some((store, count, lanes)) = struct_form(name) {
+                    return self.structure_access(id, store, count, lanes, &operands);
                 }
                 self.constrain_register_classes(code, node, &mut operands);
                 if let Some(size) = name

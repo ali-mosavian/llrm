@@ -716,6 +716,7 @@ pub fn select_block(
     do_instruction_selection_with(dag, &*super::ids::IDS, |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
+            .or_else(|| select_neon_struct(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_extract(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert_in_zero(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert(adapter, node))
@@ -847,6 +848,66 @@ fn select_indexed_load(
     dag.replace_uses(PinValue::new(node, 0), value);
     dag.replace_uses(PinValue::new(node, 1), PinValue::new(load, 0));
     dag.replace_uses(PinValue::new(node, 2), PinValue::new(load, 2));
+    dag.remove_dead_node(node);
+    Some(Outcome::Selected)
+}
+
+/// `AArch64DAGToDAGISel::SelectLoad` and `SelectStore`: `llvm.aarch64.neon.ldN`
+/// is `LDNTwov4s` (and so on) with one vector result per member, `stN` is
+/// `STNTwov4s` of the members and the address. DEVIATE: the pin's untyped
+/// `QQ`/`QQQ`/`QQQQ` result and its `REG_SEQUENCE`/`EXTRACT_SUBREG` are the
+/// members themselves here; the tuple is made where the registers are
+/// (`lir_view`). `None` for any other node.
+fn select_neon_struct(
+    dag: &mut impl AddrDag,
+    node: u32,
+) -> Option<Outcome> {
+    use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
+    let code = dag.opcode(node);
+    if code != isd::INTRINSIC_W_CHAIN && code != isd::INTRINSIC_VOID {
+        return None;
+    }
+    let (store, count) = super::call::neon_struct_of(u32::try_from(dag.constant(dag.operand(node, 1))?).ok()?);
+    if (code == isd::INTRINSIC_VOID) != store {
+        return None;
+    }
+    let chain = dag.operand(node, 0);
+    let member = if store { dag.operand(node, 2) } else { PinValue::new(node, 0) };
+    let vt = dag.value_type(member);
+    let arrangement = [
+        (mvt::v16i8, "16b"),
+        (mvt::v8i16, "8h"),
+        (mvt::v4i32, "4s"),
+        (mvt::v2i64, "2d"),
+        (mvt::v4f32, "4s"),
+        (mvt::v2f64, "2d"),
+        (mvt::v8f16, "8h"),
+        (mvt::v8i8, "8b"),
+        (mvt::v4i16, "4h"),
+        (mvt::v2i32, "2s"),
+        (mvt::v2f32, "2s"),
+    ]
+    .into_iter()
+    .find(|(known, _)| *known == vt)?
+    .1;
+    let shape = ["", "", "Twov", "Threev", "Fourv"][count as usize];
+    let name = format!("{}{count}{shape}{arrangement}", if store { "ST" } else { "LD" });
+    let opcode = MACHINE_OPCODES.iter().find(|(_, known)| *known == name)?.0;
+    if store {
+        let mut ops: Vec<PinValue> = (0..count).map(|at| dag.operand(node, 2 + at as usize)).collect();
+        ops.push(dag.operand(node, 2 + count as usize));
+        ops.push(chain);
+        let stored = dag.machine_node(opcode, &[mvt::Other], &ops);
+        dag.replace_uses(PinValue::new(node, 0), PinValue::new(stored, 0));
+    } else {
+        let address = dag.operand(node, 2);
+        let mut types = vec![vt; count as usize];
+        types.push(mvt::Other);
+        let loaded = dag.machine_node(opcode, &types, &[address, chain]);
+        for at in 0..=count {
+            dag.replace_uses(PinValue::new(node, at as u8), PinValue::new(loaded, at as u8));
+        }
+    }
     dag.remove_dead_node(node);
     Some(Outcome::Selected)
 }
