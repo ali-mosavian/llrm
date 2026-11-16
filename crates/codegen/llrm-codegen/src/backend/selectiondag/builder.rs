@@ -982,12 +982,14 @@ impl Builder<'_> {
                 match self.module.context.types.get(*element) {
                     // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
-                        .filter(|lane| {
-                            EVT::Simple(*lane).size_in_bits() % 8 == 0
-                                && (MVT::vector(*lane, *count).is_some()
-                                    || !count.is_power_of_two() && MVT::vector(*lane, count.next_power_of_two()).is_some())
+                        .and_then(|lane| {
+                            MVT::vector(lane, *count).map(EVT::Simple).or_else(|| {
+                                (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                    && !count.is_power_of_two()
+                                    && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                .then(|| EVT::vector(lane, *count))
+                            })
                         })
-                        .map(|lane| EVT::vector(lane, *count))
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
                     Type::Float(kind @ (llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)) => {
@@ -4373,7 +4375,12 @@ impl Builder<'_> {
                 // Both inputs padded with undefined lanes to the mask's length.
                 let count = lanes.div_ceil(sources);
                 let padded = match input.is_vector().then(|| input.element()) {
-                    Some(EVT::Simple(lane)) => Some(EVT::vector(lane, (count * sources) as u32)),
+                    Some(EVT::Simple(lane)) => {
+                        let lanes = (count * sources) as u32;
+                        (MVT::vector(lane, lanes).is_some()
+                            || !lanes.is_power_of_two() && MVT::vector(lane, lanes.next_power_of_two()).is_some())
+                        .then(|| EVT::vector(lane, lanes))
+                    }
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
