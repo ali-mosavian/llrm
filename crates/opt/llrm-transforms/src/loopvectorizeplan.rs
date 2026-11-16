@@ -276,30 +276,31 @@ fn clamp_vf_by_max_trip_count(
     vf
 }
 
-/// `getMaximizedVFForTarget` (L235), fixed width.
+/// `getMaximizedVFForTarget` (L235), fixed width: the VF, and
+/// `MaxPermissibleVFWithoutMaxBW` (the widest VF before the bandwidth one).
 fn maximized_vf_for_target(
     tti: &dyn Tti,
     max_trip_count: u64,
     smallest: u32,
     widest: u32,
     max_safe_vf: u64,
-) -> u64 {
+) -> (u64, u64) {
     let register_bits = u64::from(tti.vector_register_bits());
     let max_vector = bit_floor(register_bits / u64::from(widest)).min(max_safe_vf);
     if max_vector == 0 {
-        return 1;
+        return (1, 1);
     }
     let max_vf = clamp_vf_by_max_trip_count(max_vector, max_trip_count);
     // If the MaxVF was already clamped, there is no point in trying a larger
     // one.
     if max_vf != max_vector {
-        return max_vf;
+        return (max_vf, max_vf);
     }
     if tti.should_maximize_vector_bandwidth() {
         let max_bandwidth = bit_floor(register_bits / u64::from(smallest)).min(max_safe_vf);
-        return clamp_vf_by_max_trip_count(max_bandwidth, max_trip_count);
+        return (clamp_vf_by_max_trip_count(max_bandwidth, max_trip_count), max_vf);
     }
-    max_vf
+    (max_vf, max_vf)
 }
 
 /// Why a vector factor has no price: the target prices no vector for a recipe
@@ -526,11 +527,32 @@ fn is_more_profitable(
     for_trip_count(vf_a, cost_a, scalar_a) < for_trip_count(vf_b, cost_b, scalar_b)
 }
 
+/// `VPRegisterUsage::spillCost` added by `LoopVectorizationPlanner::cost`
+/// (L5612) where `shouldConsiderRegPressureForVF`: the target maximizes the
+/// vector bandwidth and `vf` is past `MaxPermissibleVFWithoutMaxBW`. Each
+/// register used past the target's (`MaxLocalUsers - getNumberOfRegisters`)
+/// costs a spill and a reload (`TCC_Basic` each).
+fn spill_cost(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    vf: u64,
+    without_max_bandwidth: u64,
+) -> i64 {
+    const SPILL_AND_RELOAD: i64 = 2;
+    let Some(pressure) = &facts.pressure else { return 0 };
+    if !tti.should_maximize_vector_bandwidth() || vf <= without_max_bandwidth {
+        return 0;
+    }
+    let (users, _) = register_usage(tti, pressure, vf as u32);
+    i64::from(users.saturating_sub(tti.number_of_registers(RegisterClass::Vector))) * SPILL_AND_RELOAD
+}
+
 /// `computeBestVF` (L5640): the cheapest VF in `1, 2, 4 .. max_vf`.
 fn best_vf(
     tti: &dyn Tti,
     facts: &LoopFacts,
     max_vf: u64,
+    without_max_bandwidth: u64,
     backend_limits: bool,
     optimistic: bool,
 ) -> (u32, i64) {
@@ -552,7 +574,8 @@ fn best_vf(
     let mut best = (scalar, 1u64, scalar);
     let mut vf = 2u64;
     while vf <= max_vf {
-        let priced = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic);
+        let priced = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic)
+            .map(|cost| cost + spill_cost(tti, facts, vf, without_max_bandwidth));
         if debug {
             match &priced {
                 Ok(cost) => eprintln!("Cost for VF {vf}: {cost}"),
@@ -844,6 +867,14 @@ fn max_vf_of(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> u64 {
+    max_vfs_of(tti, facts).0
+}
+
+/// [`max_vf_of`] and `MaxPermissibleVFWithoutMaxBW`.
+fn max_vfs_of(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+) -> (u64, u64) {
     let (smallest, widest) = smallest_and_widest(&facts.recipes, &facts.reduction_bits);
     // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits /
     // WidestType).
@@ -866,8 +897,8 @@ fn choose_with(
     if facts.trip_count == 1 {
         return Err(NotPlanned("Single iteration (non) loop"));
     }
-    let max_vf = max_vf_of(tti, facts);
-    let (vf, cost) = best_vf(tti, facts, max_vf, backend_limits, optimistic);
+    let (max_vf, without_max_bandwidth) = max_vfs_of(tti, facts);
+    let (vf, cost) = best_vf(tti, facts, max_vf, without_max_bandwidth, backend_limits, optimistic);
     if vf == 1 {
         return Err(NotPlanned("Vectorization is possible but not beneficial"));
     }
