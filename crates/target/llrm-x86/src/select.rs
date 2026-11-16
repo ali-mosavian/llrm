@@ -2494,6 +2494,11 @@ fn scalar_sse(
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
         }
+        // `movd m32, xmm`: the encoding names the destination `RM32`.
+        (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) && name.trim_end_matches("_x") == "movd" => {
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_mem_reg(Code::Movd_rm32_xmm, built, outof.register)), at, relocated)
+        }
         (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) => {
             let code = code_of!(upper, "_XMMM", bits(first), "_XMM")?;
             let (built, relocated) = operand_of(cell, at.bits)?;

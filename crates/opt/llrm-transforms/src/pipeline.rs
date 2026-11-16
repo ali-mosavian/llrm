@@ -1730,7 +1730,11 @@ pub fn recorded(
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 {
-            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline, cloning: cloning.clone() });
+            manager.add_program(crate::walk::ModuleIpo {
+                inline: applied.options.inline,
+                cloning: cloning.clone(),
+                speed_rate: applied.options.prices_bytes(),
+            });
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
