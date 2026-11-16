@@ -1230,18 +1230,21 @@ fn allocate_from(
         Some(first) => first,
         None => allocate_first(function.clone(), name, level)?,
     };
-    let best = improved(first, function.clone(), name, level);
+    let (best, folds) = improved(first, function.clone(), name, level);
     // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
     // slots are all frame cells, so it folds every spilled read. Here a slot
     // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
     // after allocation: a spilled read is taken from its cell where the
     // function is cheaper for it, every other choice explored on both. Exit:
     // the stack slots chosen before the fold.
-    if !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
+    // Without a fold in the allocations that made `best`, the same allocations
+    // under `NO_FOLD` are the same.
+    if folds == 0 || !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
         return Ok(best);
     }
     crate::regalloc::NO_FOLD.with(|one| one.set(true));
-    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level));
+    NO_FOLD_TRIALS.with(|one| one.set(one.get() + 1));
+    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level).0);
     crate::regalloc::NO_FOLD.with(|one| one.set(false));
     Ok(match other {
         Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
@@ -1274,16 +1277,16 @@ fn repeating_loop_fold_wins(
         (priced_in_loops(&joined.0, level), priced_in_loops(&apart, level)),
         (Some(now), Some(then)) if cheaper(level, then, now)
     ) {
-        (false, Some((apart, joined.1, joined.2)))
+        (false, Some((apart, joined.1, joined.2, joined.3)))
     } else {
         (true, Some(joined))
     }
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
-/// byte back from `a`, and whether the other choices are worth exploring (not
-/// after the fallback).
-type First = (Allocated, bool, bool);
+/// byte back from `a`, whether the other choices are worth exploring (not
+/// after the fallback), and how many spilled reads it folded.
+type First = (Allocated, bool, bool, usize);
 
 /// The first allocation of `function`; where it fails, once more with the
 /// copies from the argument registers left unjoined.
@@ -1303,10 +1306,11 @@ fn allocate_first_apart(
     level: Level,
     want_apart: bool,
 ) -> Result<(First, Option<Allocated>), String> {
+    let folds = folds_made();
     match allocate_with_apart(None, true, function.clone(), name, level, want_apart) {
-        Ok((best, held, apart)) => Ok(((best, held, true), apart)),
+        Ok((best, held, apart)) => Ok(((best, held, true, folds_made() - folds), apart)),
         Err(first) => allocate_with(Some(true), true, function, name, level)
-            .map(|(done, _)| ((done, false, false), None))
+            .map(|(done, _)| ((done, false, false, folds_made() - folds), None))
             .map_err(|_| first),
     }
 }
@@ -1339,13 +1343,14 @@ fn allocate_with_apart(
 /// best so far: the argument copies joined or not, and a byte wanted both in
 /// `a` and in a register of its own loaded through `a` or through `hl`.
 fn improved(
-    (mut best, held, explore): First,
+    (mut best, held, explore, first_folds): First,
     function: MFunction,
     name: &str,
     level: Level,
-) -> Allocated {
+) -> (Allocated, usize) {
+    let folds = folds_made();
     if !explore {
-        return best;
+        return (best, first_folds);
     }
     let has_loop = !Cfg::new(&function).loops().is_empty();
     let other_join = Some(!crate::abi::z80().pinned_copies_unjoined);
@@ -1364,7 +1369,7 @@ fn improved(
             }
         }
     }
-    best
+    (best, first_folds + folds_made() - folds)
 }
 
 /// An ALU op or compare whose second source is a frame cell
@@ -1387,6 +1392,25 @@ thread_local! {
 }
 
 thread_local! {
+    /// Spilled reads the allocator has folded into their instruction on this
+    /// thread (an op reading its frame cell, or a byte of a pair read from it).
+    static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The folded spilled reads the allocations on this thread have left so far.
+fn folds_made() -> usize {
+    FOLDS.with(std::cell::Cell::get)
+}
+
+/// `count` folds more: a memoized allocation made them where it was first run.
+fn add_folds(count: usize) {
+    FOLDS.with(|one| one.set(one.get() + count));
+}
+
+thread_local! {
+    /// Allocations repeated with every spilled read left unfolded (`NO_FOLD`)
+    /// since the last [`take_no_fold_trials`].
+    static NO_FOLD_TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Reports `stack_slot_report_by` made, and whole-function read-again
@@ -1407,6 +1431,12 @@ thread_local! {
 /// each.
 pub fn take_stack_refusals() -> Vec<(i32, StackRefusal)> {
     STACK_REFUSALS.with(|one| std::mem::take(&mut *one.borrow_mut()))
+}
+
+/// The trials with every spilled read left unfolded run on this thread since
+/// the last call.
+pub fn take_no_fold_trials() -> usize {
+    NO_FOLD_TRIALS.with(|one| one.replace(0))
 }
 
 /// The allocations run on this thread since the last call.
@@ -1458,9 +1488,11 @@ fn allocate_once_with(
         }
         HOT_LOOP_FOLD.with(|one| one.set(done.hot_loop_fold));
         STACK_REFUSALS.with(|one| one.borrow_mut().extend(done.refusals.iter().copied()));
+        add_folds(done.folds);
         return done.result;
     }
     let refusals = STACK_REFUSALS.with(|one| one.borrow().len());
+    let folds = folds_made();
     let (folded_before, hot_before) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
     let result = allocate_once_computed(function, name, strict, level, want_apart);
     let (folded, hot_loop_fold) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
@@ -1469,6 +1501,7 @@ fn allocate_once_with(
         loops_folded: (folded != folded_before).then_some(folded),
         hot_loop_fold: if hot_loop_fold != hot_before { hot_loop_fold } else { hot_before },
         refusals: STACK_REFUSALS.with(|one| one.borrow()[refusals..].to_vec()),
+        folds: folds_made() - folds,
     };
     ALLOCATED.with(|memo| {
         let mut memo = memo.borrow_mut();
@@ -1492,6 +1525,8 @@ struct AllocatedBefore {
     loops_folded: Option<bool>,
     hot_loop_fold: bool,
     refusals: Vec<(i32, StackRefusal)>,
+    /// Spilled reads the call folded ([`folds_made`]).
+    folds: usize,
 }
 
 thread_local! {
@@ -1850,6 +1885,7 @@ fn allocate_once_computed(
     }
     ALLOCATIONS.with(|one| one.set(one.get() + 1));
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
+    add_folds(function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| reads_its_cell(inst)).count());
     let reads = expand::reads(&function);
     if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
         dump(&function);
