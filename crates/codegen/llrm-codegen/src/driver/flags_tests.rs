@@ -112,7 +112,7 @@ fn each_level_selects_gcc_s_passes() {
     let os = pipeline(&["-Os"]);
     assert_eq!((os.inline, os.unroll), (Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
-    assert_eq!((oz.inline, oz.unroll), (Threshold::default().for_min_size(), false));
+    assert_eq!((oz.inline, oz.unroll), (Threshold::default().for_min_size(), true));
     assert!(parsed(&["-O4"]).is_err());
 }
 

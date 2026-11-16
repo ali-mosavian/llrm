@@ -490,9 +490,9 @@ impl Options {
         self.limits.target_percent >= 200
     }
 
-    /// -Oz: no loop is copied.
+    /// -Oz: -Os with the headers not copied; the unroller keeps the size bounds.
     pub fn min_size() -> Self {
-        Self { unroll: false, has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
+        Self { has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
