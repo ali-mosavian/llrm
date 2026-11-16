@@ -14,10 +14,10 @@
 //!   the early slots' `ModifyCFG`, which makes the blocks
 //!   (`SplitBlockAndInsertIfThen(Else)`, `SplitBlockPredecessors`). No
 //!   `DomTreeUpdater` either way: the analyses are dropped.
-//! - Vectors (`isVectorPromotionViable` L2374, `rewriteVectorized*`
-//!   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
-//!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
-//!   registers, and `AggregateToVector` is off at -O2.
+//! - Vector promotion (`isVectorPromotionViable` L2374, `rewriteVectorized*`
+//!   L3451-L3637) is translated; `rewriteTreeStructuredMerge` L3002 and
+//!   `tryCanonicalizeStructToVector` L5460 are not (`AggregateToVector` is off
+//!   at -O2), and a vector of pointers is no candidate (`is_vector_element`).
 //! - Calls and invokes escape a pointer whatever their attributes
 //!   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
 //!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none
@@ -1184,6 +1184,295 @@ fn is_integer_widening_viable(
     whole_alloca_op
 }
 
+/// A vector a partition could be promoted to: its element and lane count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VecShape {
+    element: TypeId,
+    count: u32,
+}
+
+impl VecShape {
+    fn ty(
+        self,
+        context: &Context,
+    ) -> TypeId {
+        context.types.intern(Type::Vector { element: self.element, count: self.count })
+    }
+}
+
+fn vector_shape(
+    context: &Context,
+    ty: TypeId,
+) -> Option<VecShape> {
+    match context.types.get(ty) {
+        Type::Vector { element, count } => Some(VecShape { element: *element, count: *count }),
+        _ => None,
+    }
+}
+
+/// `VectorType::isValidElementType`. DEVIATE: a pointer is no element: the
+/// pointer conversions of `canConvertValue` are written for scalars here, so
+/// a partition that touches a vector of pointers is not promoted to a vector.
+/// Exit: a vector-of-pointers `canConvertValue`; owner x87-cordic-2; review
+/// 2026-12-10.
+fn is_vector_element(
+    context: &Context,
+    ty: TypeId,
+) -> bool {
+    matches!(context.types.get(ty), Type::Int(_) | Type::Float(_))
+}
+
+/// `isVectorPromotionViableForSlice`. SROA.cpp#L2145
+fn is_vector_promotion_viable_for_slice(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    p: &Partition,
+    slice: &Slice,
+    shape: VecShape,
+    element_size: u64,
+) -> bool {
+    // First validate the slice offsets.
+    let begin_offset = slice.begin.max(p.begin) - p.begin;
+    let begin_index = begin_offset / element_size;
+    if begin_index * element_size != begin_offset || begin_index >= u64::from(shape.count) {
+        return false;
+    }
+    let end_offset = slice.end.min(p.end) - p.begin;
+    let end_index = end_offset / element_size;
+    if end_index * element_size != end_offset || end_index > u64::from(shape.count) || end_index <= begin_index {
+        return false;
+    }
+    let elements = end_index - begin_index;
+    let slice_ty = if elements == 1 {
+        shape.element
+    } else {
+        context.types.intern(Type::Vector { element: shape.element, count: elements as u32 })
+    };
+    let split_int_ty = context.types.int((elements * element_size * 8) as u32);
+    let used = slice.used.expect("a live slice");
+    let user = function.instruction(used.user);
+    match slice.kind {
+        Kind::MemSet | Kind::Transfer => {
+            if constant_unsigned(context, user.operands[3]) != Some(0) || !slice.splittable {
+                return false;
+            }
+            if slice.kind == Kind::MemSet {
+                let splat_ty = context.types.int((element_size * 8) as u32);
+                if !can_convert_value(layout, context, splat_ty, shape.element) {
+                    return false;
+                }
+            }
+        }
+        Kind::Lifetime => {}
+        Kind::Memory => {
+            let split = p.begin > slice.begin || p.end < slice.end;
+            match user.opcode {
+                Opcode::Load { volatile, .. } => {
+                    // Loads and stores of a first-class aggregate disable it.
+                    if volatile || is_aggregate(context, user.ty) {
+                        return false;
+                    }
+                    let load_ty = if split { split_int_ty } else { user.ty };
+                    if !can_convert_value(layout, context, slice_ty, load_ty) {
+                        return false;
+                    }
+                }
+                Opcode::Store { volatile, .. } => {
+                    let value_ty = function.operand_type(context, user.operands[0]).expect("a typed value");
+                    if volatile || is_aggregate(context, value_ty) {
+                        return false;
+                    }
+                    let store_ty = if split { split_int_ty } else { value_ty };
+                    if !can_convert_value(layout, context, store_ty, slice_ty) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        Kind::PhiOrSelect => return false,
+    }
+    true
+}
+
+/// The candidate vector types of a partition (`CandidateTys` and the flags
+/// `isVectorPromotionViable` keeps beside it).
+struct VectorCandidates {
+    list: Vec<VecShape>,
+    common_element: Option<TypeId>,
+    have_common_element: bool,
+    /// A vector of pointers was seen (`HaveVecPtrTy`): see `is_vector_element`.
+    pointers: bool,
+}
+
+impl VectorCandidates {
+    /// `CheckCandidateType`.
+    fn check(
+        &mut self,
+        layout: &DataLayout,
+        context: &Context,
+        ty: TypeId,
+    ) {
+        let Some(shape) = vector_shape(context, ty) else { return };
+        if !is_vector_element(context, shape.element) {
+            self.pointers = true;
+            return;
+        }
+        // Return if bitcast to vectors is different for total size in bits.
+        if let Some(first) = self.list.first() {
+            if layout.size_bits(&context.types, ty) != layout.size_bits(&context.types, first.ty(context)) {
+                self.list.clear();
+                return;
+            }
+        }
+        self.list.push(shape);
+        match self.common_element {
+            None => self.common_element = Some(shape.element),
+            Some(common) if common != shape.element => self.have_common_element = false,
+            _ => {}
+        }
+    }
+}
+
+/// `checkVectorTypesForPromotion`. SROA.cpp#L2225
+fn check_vector_types_for_promotion(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    slices: &[Slice],
+    p: &Partition,
+    candidates: &mut VectorCandidates,
+) -> Option<VecShape> {
+    // If we didn't find a vector type, nothing to do here.
+    if candidates.list.is_empty() || candidates.pointers {
+        return None;
+    }
+    if !candidates.have_common_element {
+        // Integer-ify vector types.
+        for shape in &mut candidates.list {
+            if int_bits(context, shape.element).is_none() {
+                let bits = layout.size_bits(&context.types, shape.element) as u32;
+                shape.element = context.types.int(bits);
+            }
+        }
+        // Rank the candidates by ascending number of elements, one per count.
+        candidates.list.sort_by_key(|shape| shape.count);
+        candidates.list.dedup_by_key(|shape| shape.count);
+    } else {
+        // The same element type in every vector type is the same vector type.
+        candidates.list.truncate(1);
+    }
+    // SDAG SDNode can't have more than 65535 operands.
+    candidates.list.retain(|shape| shape.count <= u32::from(u16::MAX));
+    candidates.list.iter().copied().find(|&shape| {
+        let element_bits = layout.size_bits(&context.types, shape.element);
+        // Vectors of elements that aren't byte sized are not supported.
+        if element_bits % 8 != 0 {
+            return false;
+        }
+        let element_size = element_bits / 8;
+        slices[p.first..p.last]
+            .iter()
+            .chain(p.split_tails.iter().map(|&tail| &slices[tail]))
+            .all(|slice| is_vector_promotion_viable_for_slice(layout, context, function, p, slice, shape, element_size))
+    })
+}
+
+/// `createAndCheckVectorTypesForPromotion`. SROA.cpp#L2330
+fn create_and_check_vector_types_for_promotion(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    slices: &[Slice],
+    p: &Partition,
+    other_tys: &[TypeId],
+    copy: &[VecShape],
+    candidates: &mut VectorCandidates,
+) -> Option<VecShape> {
+    // Consider additional vector types where the element type size is a
+    // multiple of load/store element size.
+    for &ty in other_tys {
+        if !is_vector_element(context, ty) {
+            continue;
+        }
+        let type_size = layout.size_bits(&context.types, ty);
+        for shape in copy {
+            let vector_size = layout.size_bits(&context.types, shape.ty(context));
+            let element_size = layout.size_bits(&context.types, shape.element);
+            if type_size != vector_size && type_size != element_size && vector_size % type_size == 0 {
+                let made = context.types.intern(Type::Vector { element: ty, count: (vector_size / type_size) as u32 });
+                candidates.check(layout, context, made);
+            }
+        }
+    }
+    check_vector_types_for_promotion(layout, context, function, slices, p, candidates)
+}
+
+/// `isVectorPromotionViable`. SROA.cpp#L2374
+fn is_vector_promotion_viable(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    slices: &[Slice],
+    p: &Partition,
+) -> Option<VecShape> {
+    let mut candidates =
+        VectorCandidates { list: Vec::new(), common_element: None, have_common_element: true, pointers: false };
+    let mut load_store_tys: Vec<TypeId> = Vec::new();
+    let mut deferred_tys: Vec<TypeId> = Vec::new();
+    // Put load and store types into a set for de-duplication.
+    for slice in &slices[p.first..p.last] {
+        let used = slice.used.expect("a live slice");
+        let user = function.instruction(used.user);
+        let ty = match user.opcode {
+            Opcode::Load { .. } if slice.kind == Kind::Memory => user.ty,
+            Opcode::Store { .. } if slice.kind == Kind::Memory => {
+                function.operand_type(context, user.operands[0]).expect("a typed value")
+            }
+            _ => continue,
+        };
+        let partial = slice.begin != p.begin || slice.end != p.end;
+        if is_pointer(context, ty) && partial {
+            if !deferred_tys.contains(&ty) {
+                deferred_tys.push(ty);
+            }
+            continue;
+        }
+        if !load_store_tys.contains(&ty) {
+            load_store_tys.push(ty);
+        }
+        // Consider any loads or stores that are the exact size of the slice.
+        if !partial {
+            candidates.check(layout, context, ty);
+        }
+    }
+    let copy = candidates.list.clone();
+    if let Some(found) = create_and_check_vector_types_for_promotion(
+        layout,
+        context,
+        function,
+        slices,
+        p,
+        &load_store_tys,
+        &copy,
+        &mut candidates,
+    ) {
+        return Some(found);
+    }
+    candidates.list.clear();
+    create_and_check_vector_types_for_promotion(
+        layout,
+        context,
+        function,
+        slices,
+        p,
+        &deferred_tys,
+        &copy,
+        &mut candidates,
+    )
+}
+
 /// `BasicLoadAndStorePromoter`
 /// ([L6189](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SROA.cpp#L6189)):
 /// a promotion that keeps the stores and the alloca, and reads an undefined
@@ -1248,6 +1537,10 @@ struct Rewriter {
     /// The integer the accesses are widened to, when the partition passed
     /// `isIntegerWideningViable`.
     int_ty: Option<TypeId>,
+    /// The vector the partition's accesses are rewritten onto when it passed
+    /// `isVectorPromotionViable` (`VecTy`, `ElementTy`, `ElementSize`).
+    vec_ty: Option<VecShape>,
+    element_size: u64,
     begin: u64,
     end: u64,
     new_begin: u64,
@@ -2082,14 +2375,25 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         alloca: InstId,
         slices: &[Slice],
         p: &Partition,
-    ) -> (TypeId, bool) {
+    ) -> (TypeId, bool, Option<VecShape>) {
         let layout = self.unit.layout;
         let Opcode::Alloca { allocated, .. } = self.function().instruction(alloca).opcode else { unreachable!() };
-        // DEVIATE: no vector promotion (`isVectorPromotionViable`, L5559).
+        // First check if the partition is viable for vector promotion: it is
+        // preferred where the element is floating point, or where a type
+        // common to all slices spans the partition.
+        let vec = is_vector_promotion_viable(layout, self.context(), self.function(), slices, p);
+        if let Some(shape) = vec {
+            if matches!(self.context().types.get(shape.element), Type::Float(_)) && shape.count > 1 {
+                return (shape.ty(self.context()), false, vec);
+            }
+        }
         let (common, largest_int) = find_common_type(self.context(), self.function(), slices, p.first, p.last, p.end);
         if let Some(common) = common {
             let common_size = layout.alloc_size(&self.context().types, common);
             if common_size >= p.size() {
+                if let Some(shape) = vec {
+                    return (shape.ty(self.context()), false, vec);
+                }
                 let widen = is_integer_widening_viable(
                     layout,
                     self.unit.context,
@@ -2099,7 +2403,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     common,
                     self.odd_sizes,
                 );
-                return (common, widen);
+                return (common, widen, None);
             }
         }
         // Can we find an appropriate subtype in the original allocated type?
@@ -2119,7 +2423,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 partition_ty,
                 self.odd_sizes,
             ) {
-                return (partition_ty, true);
+                return (partition_ty, true, None);
+            }
+            if let Some(shape) = vec {
+                return (shape.ty(self.context()), false, vec);
             }
             if let Some(largest) = largest_int {
                 if layout.alloc_size(&self.context().types, largest) >= p.size()
@@ -2133,21 +2440,21 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                         self.odd_sizes,
                     )
                 {
-                    return (largest, true);
+                    return (largest, true, None);
                 }
             }
-            return (partition_ty, false);
+            return (partition_ty, false, None);
         }
         if let Some(largest) = largest_int {
             if layout.alloc_size(&self.context().types, largest) >= p.size() {
-                return (largest, false);
+                return (largest, false, None);
             }
         }
         if layout.legal_integer((p.size() * 8) as u32) {
-            return (self.unit.context.types.int((p.size() * 8) as u32), false);
+            return (self.unit.context.types.int((p.size() * 8) as u32), false, None);
         }
         let byte = self.unit.context.types.int(8);
-        (self.unit.context.types.intern(Type::Array { element: byte, count: p.size() }), false)
+        (self.unit.context.types.intern(Type::Array { element: byte, count: p.size() }), false, None)
     }
 
     /// `SROA::rewritePartition`. SROA.cpp#L5666
@@ -2160,7 +2467,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         number: usize,
     ) -> Option<InstId> {
         let layout = self.unit.layout;
-        let (partition_ty, widen) = self.select_partition_type(alloca, slices, p);
+        let (partition_ty, widen, vec_ty) = self.select_partition_type(alloca, slices, p);
         let Opcode::Alloca { allocated, align, address_space } = self.function().instruction(alloca).opcode else {
             unreachable!("an alloca")
         };
@@ -2200,6 +2507,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             new_alloca_end: p.end,
             new_alloca_ty: partition_ty,
             int_ty,
+            vec_ty,
+            element_size: vec_ty.map_or(0, |shape| layout.size_bits(&self.context().types, shape.element) / 8),
             begin: 0,
             end: 0,
             new_begin: 0,
@@ -2394,6 +2703,164 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             CastOp::BitCast
         };
         self.build(at, Opcode::Cast(op), new_ty, vec![value], None)
+    }
+
+    /// `getIndex`: the lane an offset of the new alloca is.
+    fn vector_index(
+        &self,
+        rewriter: &Rewriter,
+        offset: u64,
+    ) -> u64 {
+        (offset - rewriter.new_alloca_begin) / rewriter.element_size
+    }
+
+    /// `extractVector`. SROA.cpp#L2650
+    fn extract_vector(
+        &mut self,
+        at: InstId,
+        value: Operand,
+        begin: u64,
+        end: u64,
+        name: &str,
+    ) -> Operand {
+        let ty = self.type_of(value);
+        let shape = vector_shape(self.context(), ty).expect("a vector");
+        let elements = end - begin;
+        if elements == u64::from(shape.count) {
+            return value;
+        }
+        let name = format!("{name}.extract");
+        if elements == 1 {
+            let i32_ty = self.unit.context.types.int(32);
+            let index = self.int_constant(i32_ty, begin as i128);
+            return self.build(at, Opcode::ExtractElement, shape.element, vec![value, index], Some(&name));
+        }
+        let result = self.unit.context.types.intern(Type::Vector { element: shape.element, count: elements as u32 });
+        let poison = self.poison_of(ty);
+        let mask = (begin..end).map(|lane| lane as i32).collect();
+        self.build(at, Opcode::ShuffleVector(mask), result, vec![value, poison], Some(&name))
+    }
+
+    /// `insertVector`. SROA.cpp#L2671
+    fn insert_vector(
+        &mut self,
+        at: InstId,
+        old: Operand,
+        value: Operand,
+        begin: u64,
+        name: &str,
+    ) -> Operand {
+        let old_ty = self.type_of(old);
+        let shape = vector_shape(self.context(), old_ty).expect("a vector");
+        let Some(sub) = vector_shape(self.context(), self.type_of(value)) else {
+            // A single element to insert.
+            let i32_ty = self.unit.context.types.int(32);
+            let index = self.int_constant(i32_ty, begin as i128);
+            return self.build(
+                at,
+                Opcode::InsertElement,
+                old_ty,
+                vec![old, value, index],
+                Some(&format!("{name}.insert")),
+            );
+        };
+        let (sub_elements, elements) = (u64::from(sub.count), u64::from(shape.count));
+        if sub_elements == elements {
+            return value;
+        }
+        let end = begin + sub_elements;
+        // Widen the smaller vector with undef elements, then select between
+        // the old vector and it.
+        let expand: Vec<i32> =
+            (0..elements).map(|lane| if (begin..end).contains(&lane) { (lane - begin) as i32 } else { -1 }).collect();
+        let value_ty = self.type_of(value);
+        let poison = self.poison_of(value_ty);
+        let expanded =
+            self.build(at, Opcode::ShuffleVector(expand), old_ty, vec![value, poison], Some(&format!("{name}.expand")));
+        let blend: Vec<i32> = (0..elements)
+            .map(|lane| if (begin..end).contains(&lane) { lane as i32 } else { (lane + elements) as i32 })
+            .collect();
+        self.build(at, Opcode::ShuffleVector(blend), old_ty, vec![expanded, old], Some(&format!("{name}blend")))
+    }
+
+    /// `getVectorSplat`: `value` in every one of `elements` lanes.
+    fn vector_splat(
+        &mut self,
+        at: InstId,
+        value: Operand,
+        elements: u64,
+    ) -> Operand {
+        let element = self.type_of(value);
+        let ty = self.unit.context.types.intern(Type::Vector { element, count: elements as u32 });
+        let poison = self.poison_of(ty);
+        let i32_ty = self.unit.context.types.int(32);
+        let zero = self.int_constant(i32_ty, 0);
+        let inserted = self.build(at, Opcode::InsertElement, ty, vec![poison, value, zero], Some("vsplat"));
+        let poison = self.poison_of(ty);
+        self.build(at, Opcode::ShuffleVector(vec![0; elements as usize]), ty, vec![inserted, poison], Some("vsplat"))
+    }
+
+    /// `rewriteVectorizedLoadInst`. SROA.cpp#L3451
+    fn rewrite_vectorized_load(
+        &mut self,
+        rewriter: &Rewriter,
+        load: InstId,
+    ) -> Operand {
+        let begin = self.vector_index(rewriter, rewriter.new_begin);
+        let end = self.vector_index(rewriter, rewriter.new_end);
+        let align = self.new_ai_align(rewriter);
+        let loaded = self.build(
+            load,
+            Opcode::Load { align: Some(align), volatile: false },
+            rewriter.new_alloca_ty,
+            vec![Operand::Value(rewriter.new_ai_value)],
+            Some("load"),
+        );
+        self.extract_vector(load, loaded, begin, end, "vec")
+    }
+
+    /// `rewriteVectorizedStoreInst`. SROA.cpp#L3601
+    fn rewrite_vectorized_store(
+        &mut self,
+        rewriter: &Rewriter,
+        store: InstId,
+        mut value: Operand,
+    ) -> bool {
+        let shape = rewriter.vec_ty.expect("a vector partition");
+        if self.type_of(value) != rewriter.new_alloca_ty {
+            let begin = self.vector_index(rewriter, rewriter.new_begin);
+            let end = self.vector_index(rewriter, rewriter.new_end);
+            let elements = end - begin;
+            let slice_ty = if elements == 1 {
+                shape.element
+            } else {
+                self.unit.context.types.intern(Type::Vector { element: shape.element, count: elements as u32 })
+            };
+            if self.type_of(value) != slice_ty {
+                value = self.bit_preserving_cast_chain(store, value, slice_ty);
+            }
+            // Mix in the existing elements.
+            let align = self.new_ai_align(rewriter);
+            let old = self.build(
+                store,
+                Opcode::Load { align: Some(align), volatile: false },
+                rewriter.new_alloca_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("load"),
+            );
+            value = self.insert_vector(store, old, value, begin, "vec");
+        }
+        let void = self.unit.context.types.void();
+        let align = self.new_ai_align(rewriter);
+        self.build(
+            store,
+            Opcode::Store { align: Some(align), volatile: false },
+            void,
+            vec![value, Operand::Value(rewriter.new_ai_value)],
+            None,
+        );
+        self.dead_insts.push(store);
+        true
     }
 
     /// `extractInteger`. SROA.cpp#L2592
@@ -2628,7 +3095,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let whole = rewriter.new_begin == rewriter.new_alloca_begin && rewriter.new_end == rewriter.new_alloca_end;
         let mut ptr_adjusted = false;
         let mut value;
-        if rewriter.int_ty.is_some() && int_bits(self.context(), load_ty).is_some() {
+        if rewriter.vec_ty.is_some() {
+            value = self.rewrite_vectorized_load(rewriter, load);
+        } else if rewriter.int_ty.is_some() && int_bits(self.context(), load_ty).is_some() {
             value = self.rewrite_integer_load(rewriter, load);
         } else if whole
             && (can_convert_value(layout, self.context(), rewriter.new_alloca_ty, target_ty)
@@ -2796,6 +3265,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             value = self.extract_integer(store, value, narrow, rewriter.new_begin - rewriter.begin, "extract");
             value_ty = self.type_of(value);
         }
+        if rewriter.vec_ty.is_some() {
+            return self.rewrite_vectorized_store(rewriter, store, value);
+        }
         if rewriter.int_ty.is_some() && int_bits(self.context(), value_ty).is_some() {
             return self.rewrite_integer_store(rewriter, store, value);
         }
@@ -2915,7 +3387,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         };
         self.dead_insts.push(memset);
         let new_ty = rewriter.new_alloca_ty;
-        let can_continue = rewriter.int_ty.is_some() || {
+        let can_continue = rewriter.vec_ty.is_some() || rewriter.int_ty.is_some() || {
             if rewriter.begin > rewriter.new_alloca_begin || rewriter.end < rewriter.new_alloca_end {
                 false
             } else if len > u64::from(u32::MAX) {
@@ -2937,7 +3409,26 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             self.call_like(memset, new_operands);
             return false;
         }
-        let value = if let Some(int_ty) = rewriter.int_ty {
+        let value = if let Some(shape) = rewriter.vec_ty {
+            // A memset of a vectorized alloca is inserted into it.
+            let (begin, end) =
+                (self.vector_index(rewriter, rewriter.new_begin), self.vector_index(rewriter, rewriter.new_end));
+            let elements = end - begin;
+            let mut splat = self.get_integer_splat(memset, byte, rewriter.element_size);
+            splat = self.bit_preserving_cast_chain(memset, splat, shape.element);
+            if elements > 1 {
+                splat = self.vector_splat(memset, splat, elements);
+            }
+            let align = self.new_ai_align(rewriter);
+            let old = self.build(
+                memset,
+                Opcode::Load { align: Some(align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("oldload"),
+            );
+            self.insert_vector(memset, old, splat, begin, "vec")
+        } else if let Some(int_ty) = rewriter.int_ty {
             let size = rewriter.new_end - rewriter.new_begin;
             let mut value = self.get_integer_splat(memset, byte, size);
             if rewriter.new_begin != rewriter.new_alloca_begin || rewriter.new_end != rewriter.new_alloca_end {
@@ -2994,6 +3485,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         // which does not escape, so a memmove is a memcpy.
         let new_ty = rewriter.new_alloca_ty;
         let emit_memcpy = rewriter.int_ty.is_none()
+            && rewriter.vec_ty.is_none()
             && (rewriter.begin > rewriter.new_alloca_begin
                 || rewriter.end < rewriter.new_alloca_end
                 || rewriter.slice_size != layout.store_size(&self.context().types, new_ty)
@@ -3033,8 +3525,18 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let whole = rewriter.new_begin == rewriter.new_alloca_begin && rewriter.new_end == rewriter.new_alloca_end;
         let size = rewriter.new_end - rewriter.new_begin;
         let sub_int_ty = rewriter.int_ty.map(|_| self.unit.context.types.int((size * 8) as u32));
-        let other_ty = match (rewriter.int_ty, whole) {
-            (Some(_), false) => sub_int_ty.expect("an integer"),
+        let (begin_index, end_index) = match rewriter.vec_ty {
+            Some(_) => (self.vector_index(rewriter, rewriter.new_begin), self.vector_index(rewriter, rewriter.new_end)),
+            None => (0, 0),
+        };
+        let other_ty = match (rewriter.vec_ty, rewriter.int_ty, whole) {
+            (Some(shape), _, false) if end_index - begin_index == 1 => shape.element,
+            (Some(shape), _, false) => self
+                .unit
+                .context
+                .types
+                .intern(Type::Vector { element: shape.element, count: (end_index - begin_index) as u32 }),
+            (None, Some(_), false) => sub_int_ty.expect("an integer"),
             _ => new_ty,
         };
         let adjusted = self.adjusted_ptr(transfer, other, other_offset);
@@ -3045,7 +3547,16 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         };
         let new_align = self.new_ai_align(rewriter);
         let mut value;
-        if let (Some(int_ty), false, false) = (rewriter.int_ty, whole, is_dest) {
+        if rewriter.vec_ty.is_some() && !whole && !is_dest {
+            value = self.build(
+                transfer,
+                Opcode::Load { align: Some(new_align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("load"),
+            );
+            value = self.extract_vector(transfer, value, begin_index, end_index, "vec");
+        } else if let (Some(int_ty), false, false) = (rewriter.int_ty, whole, is_dest) {
             value = self.build(
                 transfer,
                 Opcode::Load { align: Some(new_align), volatile: false },
@@ -3065,7 +3576,16 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 Some("copyload"),
             );
         }
-        if let (Some(int_ty), false, true) = (rewriter.int_ty, whole, is_dest) {
+        if rewriter.vec_ty.is_some() && !whole && is_dest {
+            let old = self.build(
+                transfer,
+                Opcode::Load { align: Some(new_align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("oldload"),
+            );
+            value = self.insert_vector(transfer, old, value, begin_index, "vec");
+        } else if let (Some(int_ty), false, true) = (rewriter.int_ty, whole, is_dest) {
             let old = self.build(
                 transfer,
                 Opcode::Load { align: Some(new_align), volatile: false },
