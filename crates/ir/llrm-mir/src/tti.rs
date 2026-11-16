@@ -1771,6 +1771,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-TRIAL-NEST-OS (owner 6502, exit 2026-11-24): the same
+    /// at -Os: an innermost loop the pin refuses by `LoopSize + 1` is tried
+    /// at the cost the analysis finds once the trips' constants fold, scaled by
+    /// the boost the pin gives at -O2 (its -Os boost is 100), and kept only if
+    /// the module is smaller (`trial_pays`). A nest the pin unrolls whole at
+    /// -O2 folds to 62 B (int64_division); at -Os it stayed 3,336 B.
+    fn unroll_trial_analyzed_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL-ANALYZED (owner x87-b, exit 2026-11-24): whether
     /// the -Os trial measures a loop by the cost `analyzeLoopUnrollCost`
     /// finds once the trips' constants fold (a switch on the counter keeps
