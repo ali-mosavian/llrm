@@ -322,3 +322,12 @@ fn a_vector_loop_remainder_is_not_unrolled_at_run_time() {
     assert!(sum.contains("paddd"), "vectorized: {sum}");
     assert_eq!(sum.matches("align 16").count(), 2, "a vector loop and a rolled remainder: {sum}");
 }
+
+/// The pin keeps a 32-trip table fold at -O3 (386 units against its threshold of 300), gcc and clang 20 unroll it whole:
+/// loop_interchange +17.6% over the bar. m64 takes 450 at -O3.
+#[test]
+fn a_32_trip_table_fold_is_unrolled_whole_at_o3() {
+    let text = assembly("x86_64-linux", "-O3");
+    let fold = body(&text, "table_fold");
+    assert!(!fold.contains("align 16"), "a loop is left: {fold}");
+}

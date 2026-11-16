@@ -2151,6 +2151,12 @@ pub trait Tti {
         (None, None)
     }
 
+    /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
+    /// own (`Tuning::unroll_threshold_at_o3`).
+    fn unroll_threshold_at_o3(&self) -> Option<u32> {
+        None
+    }
+
     /// How many values the x87 stack holds where this subtarget keeps floats
     /// there (no SSE2 floating point); none: floats are in registers a
     /// pressure rule need not count.
