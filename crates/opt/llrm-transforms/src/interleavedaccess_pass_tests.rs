@@ -91,3 +91,44 @@ fn test_a_non_interleaving_shuffle_stays_a_store() {
     let (changed, text) = lowered(&store_of("32", 16, &mask, ""));
     assert!(!changed, "{text}");
 }
+
+fn load_text(
+    users: &str,
+    returns: &str,
+) -> String {
+    format!("define {returns} @f(ptr %p) {{\n  %w = load <32 x i8>, ptr %p\n{users}}}\n")
+}
+
+fn deinterleave(index: usize) -> String {
+    (0..16).map(|at| format!("i32 {}", index + at * 2)).collect::<Vec<_>>().join(", ")
+}
+
+/// A deinterleaving load of bytes stayed `uzp1`/`uzp2` of two wide loads
+/// (textfill O2/O3); the pin loads it with one `ld2`.
+#[test]
+fn test_two_deinterleaving_shuffles_of_a_load_are_one_ld2() {
+    let users = format!(
+        "  %e = shufflevector <32 x i8> %w, <32 x i8> poison, <16 x i32> <{}>\n\
+         %o = shufflevector <32 x i8> %w, <32 x i8> poison, <16 x i32> <{}>\n\
+         %r = add <16 x i8> %e, %o\n  ret <16 x i8> %r\n",
+        deinterleave(0),
+        deinterleave(1)
+    );
+    let (changed, text) = lowered(&load_text(&users, "<16 x i8>"));
+    assert!(changed, "{text}");
+    assert!(text.contains("call { <16 x i8>, <16 x i8> } @llvm.aarch64.neon.ld2.v16i8.p0(ptr %p)"), "{text}");
+    assert!(text.contains("extractvalue { <16 x i8>, <16 x i8> }"), "{text}");
+    assert!(!text.contains("load "), "{text}");
+}
+
+/// The load has a user that is no shuffle: the pin leaves it a load.
+#[test]
+fn test_a_load_with_a_plain_user_stays_a_load() {
+    let users = format!(
+        "  %e = shufflevector <32 x i8> %w, <32 x i8> poison, <16 x i32> <{}>\n\
+         %x = extractelement <32 x i8> %w, i32 0\n  ret <16 x i8> %e\n",
+        deinterleave(0)
+    );
+    let (changed, text) = lowered(&load_text(&users, "<16 x i8>"));
+    assert!(!changed, "{text}");
+}
