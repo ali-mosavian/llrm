@@ -511,6 +511,12 @@ impl fmt::Display for Inst {
             Inst::VectorLoadLane { lanes, rt, index, base } => {
                 write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
             }
+            Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+                let name = if matches!(self, Inst::VectorLoadStructure { .. }) { "ld" } else { "st" };
+                let list: Vec<String> =
+                    (0..u32::from(*count)).map(|at| format!("v{}.{}", rt.in_run(at).0, lanes.suffix())).collect();
+                write!(out, "{name}{count} {{ {} }}, [{}]", list.join(", "), gpr(*base, Width::X, true))
+            }
             Inst::VectorFpUnary { op, lanes, rd, rn } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)

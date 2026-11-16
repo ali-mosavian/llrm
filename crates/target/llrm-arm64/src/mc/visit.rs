@@ -352,6 +352,20 @@ impl Inst {
                 f(Fpr(rt), Role::UseDef);
                 f(G(base), Role::Use);
             }
+            // The registers are physical and consecutive: a rewrite of one
+            // would break the run, so none is applied.
+            Inst::VectorLoadStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Def);
+                }
+                f(G(base), Role::Use);
+            }
+            Inst::VectorStoreStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Use);
+                }
+                f(G(base), Role::Use);
+            }
             Inst::VectorLoadReplicate { rt, base, .. } => {
                 f(Fpr(rt), Role::Def);
                 f(G(base), Role::Use);
