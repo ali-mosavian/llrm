@@ -27,3 +27,12 @@ class ParseClocks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_gcc_pcrel_puts_the_gcc_column_on_the_pc_relative_data_model():
+    """The clocks columns compared ours (pc-relative data) with gcc's absolute data: a `lea (sym,%pc)` and an `abs.l` price differently, so a gap mixed the data model with the code."""
+    import m68k_clk
+
+    plain = m68k_clk.gcc_command("gcc", "/", "68020", "Os", "p.c", "p.o", False)
+    like = m68k_clk.gcc_command("gcc", "/", "68020", "Os", "p.c", "p.o", True)
+    assert "-mpcrel" not in plain and "-mpcrel" in like, (plain, like)

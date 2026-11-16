@@ -40,6 +40,13 @@ def price(cycles, exe, cpu, gcc_root):
     return parse_clocks(run.stdout)
 
 
+def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel):
+    """gcc's compile line; `pcrel` puts its data on ours's pc-relative model (`-mpcrel`), so the clocks of the two columns share one data model."""
+    return [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
+            "-ffreestanding", "-nostdlib", "-w", "-msoft-float", *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
+            "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
+
+
 def main():
     import m68k_exec_sweep as sweep
     import llrmbin
@@ -50,6 +57,7 @@ def main():
     ap.add_argument("--cpus", default="68000,68020")
     ap.add_argument("--levels", default="O1,O2,Os")
     ap.add_argument("--jobs", type=int, default=6)
+    ap.add_argument("--gcc-pcrel", action="store_true", help="gcc -mpcrel: ours's data model")
     ap.add_argument("files", nargs="+")
     args = ap.parse_args()
     gcc_root = os.environ["GCC_M68K"]
@@ -73,9 +81,7 @@ def main():
                                    "-I", str(ROOT / "runtime/shared/posix"), "-o", str(obj), str(path)]
                         else:
                             env = sweep.tool_env(gcc_root)
-                            cmd = [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
-                                   "-ffreestanding", "-nostdlib", "-w", "-msoft-float", f"-mcpu={cpu}", f"-{level}",
-                                   "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
+                            cmd = gcc_command(gcc, gcc_root, cpu, level, path, obj, args.gcc_pcrel)
                         if subprocess.run(cmd, capture_output=True, text=True, env=env).returncode:
                             cells[side] = ("", "")
                             continue
