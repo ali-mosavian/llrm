@@ -156,7 +156,14 @@ impl OpcodeMap {
         // A move between a general and an SSE register: the pin's names for
         // the direction, the form is the one with that encoding.
         if let Some(iced) = gpr_xmm_move(name) {
-            return self.forms.iter().position(|f| f.iced.as_deref() == Some(iced)).ok_or(Unmapped::NoForm);
+            // `MOVPDI2DImr` and `MOVPDI2DIrr` share the iced form; the name says whether the destination is memory.
+            let to_memory = name.ends_with("mr");
+            let takes = |f: &Form| f.dests.first().is_some_and(|d| d.allows('m')) == to_memory;
+            return self
+                .forms
+                .iter()
+                .position(|f| f.iced.as_deref() == Some(iced) && (!iced.starts_with("Movd_rm32") || takes(f)))
+                .ok_or(Unmapped::NoForm);
         }
         if let Some((mnemonic, width, result, letters)) =
             sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m))
@@ -230,7 +237,7 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         // `movq xmm, m64` (the upper lane zeroed) and `movq m64, xmm`.
         "MOVQI2PQIrm" => "Movq_xmm_xmmm64",
         "MOVPQI2QImr" => "Movq_xmmm64_xmm",
-        "MOVPDI2DIrr" => "Movd_rm32_xmm",
+        "MOVPDI2DIrr" | "MOVPDI2DImr" => "Movd_rm32_xmm",
         _ => return None,
     })
 }
@@ -310,6 +317,9 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
     let name = name.strip_suffix("_NOREX").unwrap_or(name);
     if matches!(name, "MOVQI2PQIrm" | "MOVPQI2QImr") {
         return Some(8);
+    }
+    if name == "MOVPDI2DImr" {
+        return Some(4);
     }
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
