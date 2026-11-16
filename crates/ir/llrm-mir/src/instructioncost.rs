@@ -23,10 +23,11 @@
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
-use crate::module::{Function, GlobalValue, InstId, Linkage, Operand, ValueDef};
+use crate::module::{Function, GlobalValue, InstId, Linkage, Operand, ValueDef, ValueId};
 use crate::opcode::{BinaryOp, CastOp, Opcode};
 use crate::tti::{
-    AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty, VectorTy,
+    AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, OperandInfo,
+    Predicate, Tti, Ty, VectorTy,
 };
 use crate::types::{Type, TypeId};
 
@@ -364,6 +365,44 @@ fn vector_of(
     }
 }
 
+/// What reads the extension `value`, for `GetUserAbsorbedCastCost`: an `add`,
+/// `sub` or `mul` shows the extensions among its operands to the widening
+/// rules (`isBinExtWideningInstruction`).
+fn ext_users(
+    context: &Context,
+    function: &Function,
+    value: ValueId,
+) -> Vec<ExtUser> {
+    let extended = |operand: Operand| -> Option<ExtOperand> {
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(def) = function.value(value).def else { return None };
+        let extension = function.instruction(def);
+        let Opcode::Cast(op @ (CastOp::SExt | CastOp::ZExt)) = extension.opcode else { return None };
+        let source = operand_type(context, function, extension.operands[0])?;
+        let src = match context.types.get(source) {
+            Type::Vector { element, .. } => Ty::of(&context.types, *element)?,
+            _ => Ty::of(&context.types, source)?,
+        };
+        Some(ExtOperand { kind: cast_of(op)?, src })
+    };
+    function
+        .users(value)
+        .iter()
+        .map(|one| {
+            let user = function.instruction(one.user);
+            let op = match user.opcode {
+                Opcode::Binary(BinaryOp::Add) => Some(ArithOp::Add),
+                Opcode::Binary(BinaryOp::Sub) => Some(ArithOp::Sub),
+                Opcode::Binary(BinaryOp::Mul) => Some(ArithOp::Mul),
+                _ => None,
+            };
+            let operands =
+                if op.is_some() { [extended(user.operands[0]), extended(user.operands[1])] } else { [None, None] };
+            ExtUser { op, operands, index: one.index as usize }
+        })
+        .collect()
+}
+
 /// `getInstructionCost(inst, kind)`.
 #[allow(clippy::too_many_arguments)]
 pub fn instruction_cost(
@@ -530,6 +569,12 @@ pub fn instruction_cost_known(
                 vector_of(context, operation.ty),
                 operand_type(context, function, operands[0]).and_then(|ty| vector_of(context, ty)),
             ) {
+                // An extension is judged with what reads it
+                // (`GetUserAbsorbedCastCost`).
+                (Some(dst), Some(src)) if matches!(op, CastKind::SExt | CastKind::ZExt) => {
+                    let users = operation.result.map(|value| ext_users(context, function, value)).unwrap_or_default();
+                    tti.vector_ext_cost(op, dst, src, &users, kind).unwrap_or(Cost::INVALID)
+                }
                 (Some(dst), Some(src)) => tti.vector_cast_cost(op, dst, src, kind).unwrap_or(Cost::INVALID),
                 _ => Cost::INVALID,
             },
@@ -586,7 +631,19 @@ pub fn instruction_cost_known(
             let op = if matches!(operation.opcode, Opcode::ICmp(_)) { CmpSel::ICmp } else { CmpSel::FCmp };
             match modelled(operands[0]) {
                 Some(ty) => tti.cmp_sel_cost(op, ty, kind),
-                None => Cost::INVALID,
+                // A compare of vectors: `getCmpSelInstrCost` of the operand
+                // type, with the predicate.
+                None => {
+                    let predicate = match operation.opcode {
+                        Opcode::ICmp(predicate) => Predicate::Int(predicate),
+                        Opcode::FCmp(predicate) => Predicate::Float(predicate),
+                        _ => unreachable!("a compare"),
+                    };
+                    operand_type(context, function, operands[0])
+                        .and_then(|ty| vector_of(context, ty))
+                        .and_then(|vector| tti.vector_cmp_sel_cost(op, vector, Some(predicate), kind))
+                        .unwrap_or(Cost::INVALID)
+                }
             }
         }
         Opcode::Unreachable | Opcode::Resume | Opcode::LandingPad { .. } | Opcode::VaArg => Cost::BASIC,
