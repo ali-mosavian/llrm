@@ -489,6 +489,9 @@ impl LegalizeHooks for Aarch64Lowering {
                 None if super::vector::is_constant_build_vector(dag, node) => return None,
                 None => None,
             },
+            // Declined for a lane that is no constant in range: the legalizer
+            // spills the vector.
+            ISD::ExtractElement => return super::vector::lower_extract_vector_elt(dag, node),
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             ISD::VecReduceAdd
             | ISD::VecReduceAnd
