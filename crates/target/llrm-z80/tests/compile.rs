@@ -1512,6 +1512,26 @@ fn a_function_with_no_folded_read_is_not_allocated_again_unfolded() {
     assert_eq!(trials, 0, "{trials} allocations with the folds refused");
 }
 
+/// A block of many calls with stack arguments was rebuilt whole for each call frame (`push_arguments`): the pushes
+/// of straight-line code with 400 calls took a quarter of its compile, 99.2G instructions for 400 calls against
+/// 11.0G for 100 (9x for 4x). Each frame rewrites its own span: the instructions gone over grow with the calls.
+#[test]
+fn a_block_of_many_calls_is_not_rebuilt_whole_for_each_frame() {
+    let calls = |count: usize| {
+        let mut ir = format!("target datalayout = \"{DATALAYOUT}\"\ndeclare void @f(i16, i16, i16, i16, i16, i16)\n");
+        ir.push_str("define void @g(i16 %a) {\n");
+        for _ in 0..count {
+            ir.push_str("  call void @f(i16 %a, i16 1, i16 2, i16 3, i16 4, i16 5)\n");
+        }
+        ir.push_str("  ret void\n}\n");
+        llrm_z80::expand::take_push_span();
+        text(&ir, "g", 0, &Request::new(Level::Os)).expect("compiles");
+        llrm_z80::expand::take_push_span()
+    };
+    let (few, many) = (calls(20), calls(80));
+    assert!(few > 0 && many < few * 6, "{few} instructions gone over for 20 calls, {many} for 80");
+}
+
 /// The same allocation was priced again (finished into text and priced)
 /// wherever a candidate came out as one already seen: `settle` prices up to six
 /// stack choices of one function, most of them alike, and each pricing is a
