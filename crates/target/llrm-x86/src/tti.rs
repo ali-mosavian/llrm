@@ -1171,6 +1171,10 @@ impl Tti for X86 {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
+    fn unroll_threshold_at_o3(&self) -> Option<u32> {
+        self.tuning.unroll_threshold_at_o3
+    }
+
     /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
     /// `getUnrollingPreferences` then enables partial and runtime unrolling
     /// (`Tti::get_unrolling_preferences`):
