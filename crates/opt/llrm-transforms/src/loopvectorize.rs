@@ -77,6 +77,7 @@ use llrm_mir::tti::{ArithOp, CmpSel, ExtOperand, ExtUser, MemoryOp, Predicate, T
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::lcssa::from_arms;
+use crate::loopvectorizeaccumulator as accumulator;
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
 use crate::loopvectorizeplan::{
@@ -264,6 +265,7 @@ fn fills_registers(
 fn register_pressure(
     cx: &Cx,
     widening: &Widening,
+    narrows: bool,
 ) -> Pressure {
     let lane_of = |ty: TypeId| element_ty(cx, ty).unwrap_or(Ty::Int(1));
     let mut made: Vec<(InstId, Ty, usize)> = Vec::new();
@@ -313,7 +315,9 @@ fn register_pressure(
         .zip(&last_read)
         .map(|((inst, lane, start), &read_at)| {
             let carried = widening.steps.iter().any(|step| matches!(step, Step::Induction(one) if one.inst == *inst));
-            Live { lane: *lane, start: *start, end: if carried { end } else { read_at } }
+            let accumulator = narrows
+                && widening.reductions.iter().any(|one| one.phi == *inst && narrowable_update(widening, one).is_some());
+            Live { lane: *lane, start: *start, end: if carried { end } else { read_at }, accumulator }
         })
         .collect();
     Pressure { live, invariants: invariants.into_iter().map(|(_, lane)| lane).collect() }
@@ -1452,30 +1456,32 @@ fn close_reductions(
     skeleton: &Skeleton,
     wide: &[(InstId, Vec<ValueId>)],
     reduction_phis: &[Vec<InstId>],
+    narrowed: &[Option<u32>],
 ) {
     let header = widening.shape.header;
     let enter = skeleton.vector_ph;
     let mut totals = Vec::new();
     let mut updates_of = Vec::new();
-    for (reduction, phis) in widening.reductions.iter().zip(reduction_phis) {
-        let vector_ty = context.types.intern(Type::Vector { element: reduction.ty, count: plan.vf });
+    for ((reduction, phis), narrowed) in widening.reductions.iter().zip(reduction_phis).zip(narrowed) {
+        let lanes = narrowed.unwrap_or(plan.vf);
+        let vector_ty = context.types.intern(Type::Vector { element: reduction.ty, count: lanes });
         let (fold, neutral) = interleave::reduction_op(reduction.kind).expect("a kind with an identity");
         let identity = interleave::identity(context, reduction, neutral);
         let updates = &wide.iter().find(|(inst, _)| *inst == reduction.latch).expect("the widened update").1;
-        let splat = broadcast(context, function, enter, vector_ty, plan.vf, identity);
+        let splat = broadcast(context, function, enter, vector_ty, lanes, identity);
         // The start in lane 0: the pin's `ReductionStartVector`.
         let start = match reduction.start {
             start if start == identity => splat,
             Operand::Constant(c) => {
-                let mut lanes = vec![
+                let mut start_lanes = vec![
                     match identity {
                         Operand::Constant(id) => id,
                         _ => unreachable!("an integer identity"),
                     };
-                    plan.vf as usize
+                    lanes as usize
                 ];
-                lanes[0] = c;
-                Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(lanes) }))
+                start_lanes[0] = c;
+                Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Aggregate(start_lanes) }))
             }
             value => {
                 let lane = context.int(context.types.intern(Type::Int(64)), 0);
@@ -1560,6 +1566,44 @@ fn close_reductions(
     }
 }
 
+/// The operation that updates `reduction` as `phi op x`, with `x` a widened
+/// value and `op` the reduction's own fold, and the operand `x` is: the shape
+/// whose accumulator can keep one register of lanes (`loopvectorizeaccumulator`).
+fn narrowable_update(
+    widening: &Widening,
+    reduction: &interleave::Reduction,
+) -> Option<(BinaryOp, Source)> {
+    let (op, _) = interleave::reduction_op(reduction.kind)?;
+    widening.steps.iter().find_map(|step| match step {
+        Step::Operation(operation) if operation.inst == reduction.latch => {
+            let [first, second, _] = operation.operands;
+            match (operation.op, first, second) {
+                (WideOp::Binary(one), Source::Wide(phi), other @ Source::Wide(_))
+                | (WideOp::Binary(one), other @ Source::Wide(_), Source::Wide(phi))
+                    if one == op && phi == reduction.phi =>
+                {
+                    Some((op, other))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+/// The lanes `reduction`'s accumulator keeps at this plan, where it is narrowed.
+fn accumulator_lanes(
+    cx: &llrm_mir::context::Context,
+    widening: &Widening,
+    reduction: &interleave::Reduction,
+    vf: u32,
+    register_bits: u32,
+) -> Option<u32> {
+    narrowable_update(widening, reduction)?;
+    let Type::Int(bits) = cx.types.get(reduction.ty) else { return None };
+    accumulator::lanes(register_bits, *bits, vf)
+}
+
 fn execute(
     context: &mut llrm_mir::context::Context,
     function: &mut Function,
@@ -1567,7 +1611,14 @@ fn execute(
     widening: &Widening,
     plan: Plan,
     skeleton: &Skeleton,
+    register_bits: u32,
 ) {
+    // Per reduction: the lanes its accumulator keeps (`register_bits` 0: all).
+    let narrowed: Vec<Option<u32>> = widening
+        .reductions
+        .iter()
+        .map(|one| if register_bits == 0 { None } else { accumulator_lanes(context, widening, one, plan.vf, register_bits) })
+        .collect();
     let splat_block = skeleton.vector_ph;
     let vector_of = |context: &llrm_mir::context::Context, element: TypeId| {
         context.types.intern(Type::Vector { element, count: plan.vf })
@@ -1600,7 +1651,11 @@ fn execute(
             // `VPReductionPHIRecipe`: one vector phi per part, closed below
             // once the updates exist.
             Step::Reduction(reduction) => {
-                let vector_ty = vector_of(context, reduction.ty);
+                let at = widening.reductions.iter().position(|one| one.phi == reduction.phi);
+                let vector_ty = match at.and_then(|at| narrowed[at]) {
+                    Some(lanes) => context.types.intern(Type::Vector { element: reduction.ty, count: lanes }),
+                    None => vector_of(context, reduction.ty),
+                };
                 let first = function
                     .iter_block(widening.shape.header)
                     .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
@@ -1623,6 +1678,43 @@ fn execute(
                 ));
                 reduction_phis.push(phis);
                 erased.push(reduction.phi);
+            }
+            Step::Operation(operation)
+                if widening
+                    .reductions
+                    .iter()
+                    .zip(&narrowed)
+                    .any(|(one, lanes)| lanes.is_some() && one.latch == operation.inst) =>
+            {
+                let (at, lanes) = widening
+                    .reductions
+                    .iter()
+                    .zip(&narrowed)
+                    .find_map(|(one, lanes)| (one.latch == operation.inst).then_some((one, lanes.expect("narrowed"))))
+                    .expect("the narrowed reduction");
+                let (op, other) = narrowable_update(widening, at).expect("a narrowable update");
+                let mut parts = Vec::new();
+                for part in 0..plan.ic as usize {
+                    let acc = match wide.iter().find(|(old, _)| *old == at.phi) {
+                        Some((_, values)) => values[part],
+                        None => unreachable!("the phi comes first"),
+                    };
+                    let Source::Wide(def) = other else { unreachable!("a widened operand") };
+                    let value = wide.iter().find(|(old, _)| *old == def).expect("the definition comes first").1[part];
+                    parts.push(accumulator::fold_pieces(
+                        context,
+                        function,
+                        operation.inst,
+                        op,
+                        at.ty,
+                        lanes,
+                        plan.vf,
+                        acc,
+                        value,
+                    ));
+                }
+                wide.push((operation.inst, parts));
+                erased.push(operation.inst);
             }
             Step::Operation(operation) => {
                 let before = Position::Before(operation.inst);
@@ -1692,7 +1784,7 @@ fn execute(
         }
     }
     if !widening.reductions.is_empty() {
-        close_reductions(context, function, declared, widening, plan, skeleton, &wide, &reduction_phis);
+        close_reductions(context, function, declared, widening, plan, skeleton, &wide, &reduction_phis, &narrowed);
     }
     // The stores first (they use the loads and operations), then the rest.
     for inst in erased.iter().rev() {
@@ -1764,6 +1856,7 @@ impl FunctionPass for LoopVectorize {
             return PreservedAnalyses::all();
         }
         let Some(tti) = target.tti() else { return PreservedAnalyses::all() };
+        let accumulator_bits = if tti.narrows_reduction_accumulators() { tti.vector_register_bits() } else { 0 };
         if tti.vector_register_bits() == 0 {
             return PreservedAnalyses::all();
         }
@@ -1847,7 +1940,7 @@ impl FunctionPass for LoopVectorize {
                                 .iter()
                                 .map(|one| cx.layout.size_bits(&cx.context.types, one.ty) as u32)
                                 .collect(),
-                            pressure: Some(register_pressure(&cx, &widening)),
+                            pressure: Some(register_pressure(&cx, &widening, tti.narrows_reduction_accumulators())),
                         };
                         let chosen = match forced {
                             Some(vf) => Ok(Plan { vf, ic: 1 }),
@@ -2054,7 +2147,7 @@ impl FunctionPass for LoopVectorize {
                 Planned::Vector(chosen, widening, epilogue) => {
                     let kind = if forced.is_some() { "epilogue vectorized" } else { "vectorized" };
                     why(unit, &outer, header, &format!("{kind} VF {} IC {}", chosen.vf, chosen.ic));
-                    execute(unit.context, unit.function, unit.declared, &widening, chosen, &skeleton);
+                    execute(unit.context, unit.function, unit.declared, &widening, chosen, &skeleton, accumulator_bits);
                     if forced.is_some() {
                         skeleton::check_epilogue_first(unit.context, unit.function, shape.preheader, header, &skeleton);
                     }

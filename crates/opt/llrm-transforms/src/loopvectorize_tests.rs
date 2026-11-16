@@ -373,6 +373,40 @@ fn a_byte_sum_into_a_wide_total_is_sized_by_the_smallest_type_where_the_tuning_s
     assert!(count(&wide, "load <16 x i8>") > 0, "{wide}");
 }
 
+/// mem_length_boundaries_m32: a byte sum into an `i64` at VF 16 kept its total
+/// as `<16 x i64>` (eight registers, doubled by the interleave count: 16
+/// accumulators and 186,155 instructions to 142,319 scalar). gcc keeps one
+/// register of lanes and adds the eight pieces of a trip into it.
+#[test]
+fn a_reduction_wider_than_a_register_keeps_one_register_of_lanes_where_the_tuning_says_so() {
+    let source = include_str!("../tests/lv/sum_zext_bytes.ll");
+    let pin = llrm_mir::target::Tuning { maximize_vector_bandwidth: true, ..llrm_mir::target::Tuning::PIN };
+    let wide = run_x86_tuned(source, pin);
+    assert!(count(&wide, "phi <16 x i64>") > 0, "the pin keeps the whole vector: {wide}");
+    let narrow = run_x86_tuned(source, llrm_mir::target::Tuning { narrow_reduction_accumulators: true, ..pin });
+    assert_eq!(count(&narrow, "phi <16 x i64>"), 0, "{narrow}");
+    assert!(count(&narrow, "phi <2 x i64>") > 0, "{narrow}");
+    assert_eq!(count(&narrow, "shufflevector <16 x i64>"), 8 * count(&narrow, "phi <2 x i64>"), "{narrow}");
+}
+
+/// rep_count: with the bandwidth tuning a 54-byte loop was widened to VF 16 and
+/// left a scalar epilogue (3,560 instructions to 4,018; gcc's very-cheap model
+/// takes a vector loop only where none is left). A trip count the VF divides
+/// keeps its wide factor.
+#[test]
+fn a_wider_factor_than_the_widest_type_needs_a_trip_count_it_divides() {
+    let divisible = include_str!("../tests/lv/sum_zext_bytes.ll");
+    let tuned = llrm_mir::target::Tuning {
+        maximize_vector_bandwidth: true,
+        bandwidth_vf_without_epilogue: true,
+        ..llrm_mir::target::Tuning::PIN
+    };
+    assert!(count(&run_x86_tuned(divisible, tuned), "<16 x i8>") > 0);
+    let remainder = divisible.replace("20000", "54");
+    let narrow = run_x86_tuned(&remainder, tuned);
+    assert_eq!(count(&narrow, "<16 x i8>"), 0, "{narrow}");
+}
+
 /// A trip count `n` the loop is given: the pin checks `n < 16` (minimum
 /// iterations), widens `n - n % 16` iterations (`n.vec`), tests `n == n.vec` in
 /// the middle block and enters the remainder at `n.vec`, or at 0 for a short

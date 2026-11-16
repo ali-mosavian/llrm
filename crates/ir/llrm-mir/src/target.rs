@@ -555,6 +555,19 @@ pub struct Tuning {
     /// DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin's
     /// own `-vectorizer-maximize-bandwidth`, a tuning limit, not a new rule.
     pub maximize_vector_bandwidth: bool,
+    /// gcc's single accumulator (`vectorizable_reduction`, `single_defuse_cycle`):
+    /// a reduction wider than a register keeps one register's lanes and folds
+    /// the pieces of each trip into it, not one accumulator per register. The
+    /// pin keeps the whole vector (a byte sum into an `i64` at VF 16 holds eight
+    /// registers and spills). DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30).
+    pub narrow_reduction_accumulators: bool,
+    /// gcc's very-cheap cost model (`vect_analyze_loop_costing`): a vector
+    /// factor above the widest type's, taken for the bandwidth of the smallest
+    /// type, is a candidate only where it divides the trip count (no scalar
+    /// epilogue is left). DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30).
+    pub bandwidth_vf_without_epilogue: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -855,6 +868,8 @@ impl Tuning {
         add_to_or_disjoint: false,
         vectorize_at_size: true,
         maximize_vector_bandwidth: false,
+        narrow_reduction_accumulators: false,
+        bandwidth_vf_without_epilogue: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,

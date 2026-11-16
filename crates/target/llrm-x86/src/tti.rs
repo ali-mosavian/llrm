@@ -1378,6 +1378,14 @@ impl Tti for X86 {
         self.tuning.maximize_vector_bandwidth
     }
 
+    fn narrows_reduction_accumulators(&self) -> bool {
+        self.tuning.narrow_reduction_accumulators
+    }
+
+    fn bandwidth_vf_without_epilogue(&self) -> bool {
+        self.tuning.bandwidth_vf_without_epilogue
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
