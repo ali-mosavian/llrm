@@ -155,6 +155,7 @@ movq_x	extend	x/m	64	sse_move	-	-	-	-/-	Movq_xmm_xmmm64
 movq_x	extend	m/x	64	sse_move	-	-	-	-/-	Movq_xmmm64_xmm
 movd	extend	r/x	32	sse_move	-	-	-	-/-	Movd_rm32_xmm
 movd_x	extend	x/r	32	sse_move	-	-	-	-/-	Movd_xmm_rm32
+movd_x	extend	m/x	32	sse_move	-	-	-	-/-	Movd_rm32_xmm
 cvtss2sd	extend	x/xm	32	sse_move	-	-	-	-/-	Cvtss2sd_xmm_xmmm32
 cvtsd2ss	extend	x/xm	64	sse_move	-	-	-	-/-	Cvtsd2ss_xmm_xmmm64
 cvtsi2ss	extend	x/rm	32	sse_move	-	-	-	-/-	Cvtsi2ss_xmm_rm32

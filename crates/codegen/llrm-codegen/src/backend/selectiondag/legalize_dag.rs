@@ -174,6 +174,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 // `ReplaceAllUsesWith` deletes the node it replaced, and what
                 // only it read.
                 self.dag.delete_replaced(n);
+                self.dag.forget_replaced(n);
             }
             // A sweep that built no node leaves nothing new to legalize.
             if !any || self.dag.nodes().len() == nodes {
@@ -555,6 +556,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             && !self.dag.value_type(self.dag.operand(node, 0)).is_vector()
         {
             action = Action::Expand;
+        }
+        // `EXTRACT_VECTOR_ELT` is asked of its vector's type: a target that lowers it by hand says so there.
+        if self.dag.opcode(node) == ISD::ExtractElement
+            && let source @ EVT::Simple(_) = self.dag.value_type(self.dag.operand(node, 0))
+            && source.is_vector()
+            && self.tli.operation_action(ISD::ExtractElement, source) == Action::Custom
+        {
+            action = Action::Custom;
         }
         if self.dag.opcode(node) == ISD::SetCC
             && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
@@ -1241,6 +1250,28 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(lanes[0])
     }
 
+    /// `LegalizeDAG::ExpandNode`, `VECTOR_SHUFFLE`: a `build_vector` of the lanes the mask picks, each an
+    /// `extract_vector_elt` of the input it names; an undefined lane stays undefined.
+    fn expand_vector_shuffle(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let (inputs, lane_vt) = ([self.dag.operand(node, 0), self.dag.operand(node, 1)], vt.element());
+        let (mask, lanes) = (self.dag.shuffle_mask(node).to_vec(), vt.lanes() as i32);
+        let ops: Vec<SDValue> = mask
+            .iter()
+            .map(|&pick| {
+                if pick < 0 {
+                    return self.dag.get_undef(lane_vt);
+                }
+                let at = self.dag.get_constant((pick % lanes) as u128, EVT::I64);
+                self.dag.get_node(ISD::ExtractElement, lane_vt, &[inputs[(pick / lanes) as usize], at])
+            })
+            .collect();
+        self.dag.get_build_vector(vt, &ops)
+    }
+
     /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
     /// constants or undefined is loaded from the constant pool, its lanes laid
     /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
@@ -1331,6 +1362,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::VSelect => self.expand_vselect(node).map(|selected| vec![selected]),
             ISD::Select if vt.is_vector() => self.expand_vector_select(node).map(|selected| vec![selected]),
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
+            ISD::VectorShuffle => Some(vec![self.expand_vector_shuffle(node)]),
             ISD::InsertVectorElt => self.expand_insert_vector_elt(node).map(|loaded| vec![loaded]),
             reduction if reduction.vec_reduce_base_opcode().is_some() => {
                 self.expand_vec_reduce(node).map(|total| vec![total])

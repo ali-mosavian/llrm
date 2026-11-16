@@ -880,6 +880,23 @@ impl SelectionDAG {
         }
     }
 
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
+    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
+    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    pub fn forget_replaced(
+        &mut self,
+        node: u32,
+    ) {
+        if node == self.root.node || node == self.entry.node || self.is_deleted(node) {
+            return;
+        }
+        let results = self.nodes[node as usize].values.len() as u8;
+        if (0..results).any(|res| self.has_users(SDValue { node, res })) {
+            return;
+        }
+        self.cse_forget(node);
+    }
+
     /// `SDNode::DropOperands`: a deleted node leaves the use lists of what it
     /// read, so they hold no entry for it. Each operand slot pushed one entry;
     /// they are looked for from the end, where a node made lately sits, and
