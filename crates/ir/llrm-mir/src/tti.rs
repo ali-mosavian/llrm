@@ -2940,6 +2940,16 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LSR-LIVE-IV (beyond the pin; a target opts in): an induction
+    /// variable that an instruction of the loop reads, and LSR does not
+    /// rewrite, is live in every solution. The pin credits a formula that
+    /// replaces it with the register it frees, so a count-up counter beside
+    /// the live one wins on a tie of registers (m68k `countdown`: `addq;
+    /// cmpi.l #-1; bne` where the loop ends on its own `subq` flags).
+    fn lsr_unmanaged_iv_reads_stay_live(&self) -> bool {
+        false
+    }
+
     /// `shouldDropLSRSolutionIfLessProfitable`.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
         false

@@ -191,7 +191,8 @@ impl Collection<'_, '_> {
             }
         }
         let mut found = Vec::new();
-        walk(self, se, &mut Vec::new(), &Cost::new(), &HashSet::default(), &mut HashSet::default(), &mut found);
+        let (seed_cost, seed_regs) = self.seeded();
+        walk(self, se, &mut Vec::new(), &seed_cost, &seed_regs, &mut HashSet::default(), &mut found);
         found.sort_by_key(|(cost, _)| (cost.c.num_regs, cost.c.insns, cost.c.setup_cost));
         llrm_support::debug!("lsr-all", "{} candidates, baseline {:?}", found.len(), self.baseline_cost.c);
         let mut shown = 0;
@@ -228,6 +229,14 @@ impl Collection<'_, '_> {
         self.solve_with_cost(se).0
     }
 
+    /// The empty solution's cost and registers: the live induction variables
+    /// (DEVIATE LSR-LIVE-IV), else nothing.
+    fn seeded(&self) -> (Cost, HashSet<Scev>) {
+        let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+        self.seed_live_ivs(&mut cost, &mut regs);
+        (cost, regs)
+    }
+
     /// One `SolveRecurse` from the empty solution with the uses taken in
     /// `order`: the formula chosen for each use (by use, empty if none) and
     /// what it costs.
@@ -241,13 +250,14 @@ impl Collection<'_, '_> {
         solution_cost.lose();
         let mut workspace = Vec::with_capacity(self.uses.len());
         let mut visited = HashSet::default();
+        let (seed_cost, seed_regs) = self.seeded();
         self.solve_recurse(
             se,
             &mut by_position,
             &mut solution_cost,
             &mut workspace,
-            &Cost::new(),
-            &HashSet::default(),
+            &seed_cost,
+            &seed_regs,
             &mut visited,
             order,
         );
