@@ -134,3 +134,9 @@ def test_gcc_gets_the_posix_headers_and_no_x86_code_model():
     """os_exit and bench_io (`#include "llrm_os.h"`) and memcpy_runtime (`-mcmodel=medium`, an x86 flag) had no gcc cell: 'No such file' and 'unrecognized command-line option'."""
     command = size.gcc_command("m68k-linux-gnu-", "68000", "Os", Path("x.s"), HERE.parent / "tests/run/c/frameless.c", ["-O2", "-mcmodel=medium"])
     assert str(HERE.parent / "runtime/shared/posix") in command and not any(flag.startswith("-mcmodel") for flag in command), command
+
+
+def test_ours_is_llrm_ccs_own_object_not_gnu_as_on_its_text():
+    """Reading ours through GNU as made fcmp_all 68020 Os 544 B too large (5338 against 4794 as an object), loop_copy_directions 622 B: every `lea (sym,%pc)` was an 8 B full-format word where the object has the pin's 4 B `R_68K_PC16`, so most of the 68020 cells 'over gcc' were the assembler."""
+    command = size.ours_command("llrm-cc", "Os", [], Path("o.o"), Path("p.c"))
+    assert "-c" in command and "-S" not in command and command[command.index("-o") + 1] == "o.o", command

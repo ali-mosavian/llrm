@@ -63,6 +63,11 @@ def in_text(text: str) -> str:
     return ".text\n" + text
 
 
+def ours_command(cc: str, level: str, flags: list[str], obj: Path, source: Path) -> list[str]:
+    """llrm-cc's own object: its encoder, not GNU as on the printed text. `lea (sym,%pc)` is 4 B in our object (`R_68K_PC16`, as the pin's) and 8 B when GNU as reads the text at the 68020 (a 32-bit base displacement): fcmp_all 68020 Os read 5338 B by text and is 4794 B as an object."""
+    return [cc, f"-{level}", "-w", "-c", *flags, "-I", str(ROOT / "runtime/shared/posix"), "-o", str(obj), str(source)]
+
+
 def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str], pcrel: bool = False) -> list[str]:
     """gcc's line with the program's own flags in gcc's spelling: `-fno-inline-functions` left out, gcc inlined what ours and the pin keep calls."""
     return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, "-I", str(ROOT / "runtime/shared/posix"), *[flag for flag in external_flags.gcc_program_flags(flags) if not flag.startswith("-mcmodel")], "-S", "-o", str(asm), str(source)]
@@ -90,13 +95,13 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
         cmd = [llc, f"-mcpu=M{cpu}", "-O2", "-filetype=obj", str(ir), "-o", str(work / f"{source.stem}.clang.o")]  # its text is not GNU as syntax
         run_env = env
     else:
-        cmd = [cc, f"-{level}", "-w", "-S", *flags, "-I", str(ROOT / "runtime/shared/posix"), "-o", str(asm), str(source)]
+        cmd = ours_command(cc, level, flags, work / f"{source.stem}.ours.o", source)
         run_env = {**os.environ, **llrmbin.cc_environment(), "LLRM_CC_TARGET": f"m68k-{cpu}"}
     built = subprocess.run(cmd, capture_output=True, text=True, env=run_env, timeout=sweep.TIMEOUT)
     if built.returncode != 0:
         raise SystemExit(f"m68k_program_size: {compiler} does not compile {source.name}: {sweep.first_error(built.stderr)}")
     obj = work / f"{source.stem}.{compiler}.o"
-    if compiler != "clang":
+    if compiler not in ("clang", "ours"):
         glob = work / f"{source.stem}.{compiler}.g.s"
         glob.write_text(in_text(asm.read_text()))
         assembled = subprocess.run([f"{tools}as", f"-m{cpu}", "-o", str(obj), str(glob)], capture_output=True, text=True, env=env)
