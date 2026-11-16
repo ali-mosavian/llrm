@@ -3229,7 +3229,8 @@ fn an_i32_call_argument_is_passed_in_the_dword_register_at_m64() {
 /// (`double_to_uint64.c` at i486 -Os) was two branches before the DAG: the high
 /// word was `mov edx, -2147483648 / xor eax, eax` in the arms and the threshold
 /// was loaded twice. The pin keeps one diamond for the float select and `shl
-/// 31` of the `setbe`.
+/// 31` of the condition's setcc (`setbe` after `fucom; sahf`; the status word
+/// is tested for C0|C3 now, #9921, a `setne`).
 #[test]
 fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_setcc() {
     let text = "target datalayout = \"@m32-datalayout@\"\n\
@@ -3237,7 +3238,16 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
                 define i64 @f(double %d) {\n  %r = fptoui double %d to i64\n  ret i64 %r\n}\n";
     let (built, _) = compiled(&flags(&["-m32", "-march=i486", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("setbe") && listing.contains("shl edx, 31"), "{listing}");
+    let diamonds = listing
+        .lines()
+        .filter(|line| {
+            matches!(
+                line.trim().split(' ').next(),
+                Some(op) if op.starts_with('j') && op != "jmp"
+            )
+        })
+        .count();
+    assert!(diamonds == 1 && listing.contains("set") && listing.contains("shl edx, 31"), "{listing}");
     assert!(!listing.contains("-2147483648"), "{listing}");
 }
 
@@ -4395,7 +4405,9 @@ fn the_call_pad_lies_above_the_locals_at_m64() {
 /// -O3 unroll-and-jam never fired on x86-64: the outer loop's size (28) was
 /// held to `BasicTTIImpl`'s 28-micro-op loop buffer, so the count was 0
 /// (particle: 15850 cycles; gcc's jam of two outer trips, 10262). Jammed, the
-/// copies of `px += vx` share one load of `vx`.
+/// copies of `px += vx` share one load of `vx`. The loop vectorizer is off:
+/// the pin's `default<O2>` and `default<O3>` vectorize this i16 nest (SSE2)
+/// since #9877, which leaves no scalar loop to jam.
 #[test]
 fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -4419,7 +4431,8 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     // of the 100 outer trips), where an unjammed nest loads `vx` and `vy` once
     // per trip and doubles nothing.
     let shape = |level: &str| {
-        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "f").unwrap();
+        let (built, _) =
+            compiled(&flags(&["-m64", level, "--isel=dag", "-fno-tree-loop-vectorize"]), text, "f").unwrap();
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
         let lines = listing.lines().map(str::trim);
         let doubled = lines
@@ -5761,13 +5774,14 @@ fn a_swap_of_two_64_bit_arguments_for_a_call_is_one_xchg_at_m64_os() {
 }
 
 /// A 16-trip loop of calls in an internal function that nothing will inline
-/// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
-/// early unroll leaves an internal function's loops to be priced at each
-/// inlined site, and no site came. huffman_decode -O3 at m64: `decode` copied
-/// 17 calls of `getbit`, 443 B against gcc's 137, 2099 B in all against 1184
-/// and 27% over gcc in clocks plus bytes.
+/// (`-fno-inline-functions` with called-once off) is fully unrolled at m64 -O3,
+/// as the pin's `LoopFullUnroll` does (`opt
+/// -passes='function(loop-unroll<O3>)'` leaves 16 calls of `h`). It was priced
+/// against its bytes (huffman_decode: 17 calls of `getbit`, 443 B against gcc's
+/// 137) until bytes stopped being counted at -O1..-O3 (ruling 2026-11-14,
+/// #9993).
 #[test]
-fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o3() {
+fn a_loop_of_calls_in_a_function_nothing_inlines_is_unrolled_at_the_pins_threshold_at_m64_o3() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i32 @h()\n\
@@ -5782,7 +5796,7 @@ fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o
         llrm_codegen::backend::masm::text(&built).unwrap().matches("call h").count()
     };
     let off = ["-m64", "-O3", "--isel=dag", "-fno-inline-functions", "-fno-inline-functions-called-once"];
-    assert!(calls_of_h(&off) <= 2, "the loop stays rolled: one call of h, not 16");
+    assert_eq!(calls_of_h(&off), 16, "the pin's threshold unrolls the loop: sixteen calls of h");
     let on = ["-m64", "-O3", "--isel=dag"];
     assert!(calls_of_h(&on) >= 1);
 }
@@ -6237,11 +6251,13 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
 }
 
-/// x86-m64 shellsort -O2: `bench_main_` took a second 255 B copy of `bench_shellsort`, a public function that stays,
-/// for one constant argument: 499 B of code against gcc's 235. INL-O2 RATE prices the copy's bytes at the m64 rate
-/// as m32's does, and the caller keeps the call (271 B).
+/// x86-m64 shellsort -O2: the 64-trip fill loop is vectorized (v8i16 `pmullw`,
+/// #9906) and `bench_shellsort` is inlined into `bench_main_`, as the pin does:
+/// its `opt -passes='default<O2>'` and `llc -O2` give 2085 B of code, no call
+/// of `bench_shellsort` left. Bytes are not counted at -O1..-O3 (ruling
+/// 2026-11-14); the object stays at the pin's size.
 #[test]
-fn a_speed_inline_pays_its_bytes_at_o2_on_m64() {
+fn a_speed_inline_stays_within_the_pins_object_at_o2_on_m64() {
     let text = include_str!("tests_data/shellsort_o2.ll");
     let (built, format) = compiled(&flags(&["-m64", "-O2"]), text, "bench_shellsort").unwrap();
     let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
@@ -6252,7 +6268,7 @@ fn a_speed_inline_pays_its_bytes_at_o2_on_m64() {
         llrm_target::Target::objects(&llrm_x86_m64::M64),
     )
     .unwrap();
-    assert!(bytes <= 350, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
+    assert!(bytes <= 2085, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
 }
 
 /// x86-m64 crc -O2: the rate kept `bench_main_`'s call of `bench_crc(0)`, whose copy folds to one constant: 21 executed

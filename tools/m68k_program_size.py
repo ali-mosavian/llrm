@@ -147,11 +147,20 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = keep or tmp
         for name in args.names:
-            for compiler in columns:
-                got = measure(ROOT / "tests/run/c" / f"{name}.c", args.cpu, args.level, compiler, cc, root, cache, Path(tmp))
-                members = " ".join(f"{short(m)}:{b}" for m, b in sorted(got["members"].items()))
-                print(f"| {name} | {args.cpu} | {args.level} | {compiler} | {got['program']} | {got['library']} | {got['whole']} | {members} |")
+            report(name, columns, args, cc, root, cache, Path(tmp))
     return 0
+
+
+def report(name: str, columns: list[str], args: argparse.Namespace, cc: str, root: str, cache: Path, work: Path) -> None:
+    """One row per column. A program a column cannot build or link (an x86-only source, a libc call: the link has no libc) is one SKIP row and the next program runs: it measured nothing, and it must not end the sweep."""
+    for compiler in columns:
+        try:
+            got = measure(ROOT / "tests/run/c" / f"{name}.c", args.cpu, args.level, compiler, cc, root, cache, work)
+        except SystemExit as refused:
+            print(f"| {name} | {args.cpu} | {args.level} | {compiler} | SKIP | | | {str(refused.code or refused).removeprefix('m68k_program_size: ')[:200]} |")
+            return
+        members = " ".join(f"{short(m)}:{b}" for m, b in sorted(got["members"].items()))
+        print(f"| {name} | {args.cpu} | {args.level} | {compiler} | {got['program']} | {got['library']} | {got['whole']} | {members} |")
 
 
 if __name__ == "__main__":

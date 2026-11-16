@@ -120,15 +120,47 @@ pub fn restore(noted: (Vec<String>, u64)) {
     ELIGIBLE.with(|list| *list.borrow_mut() = noted);
 }
 
-/// Whether a trial unroll is kept at -O1, where each axis is strict: it adds no
-/// bytes (`added` <= 0) and costs no work (`saved` >= 0, work being what the
-/// code is expected to execute). The one rule of every target's -O1 trial
-/// (DEVIATE UNROLL-TRIAL, 6502-UNROLL-O1, UNROLL-O1-TRIAL).
+/// Whether a trial unroll is kept at -O1: the code is expected to execute no
+/// more (`saved` >= 0, work being what the code is expected to execute) and
+/// adds no bytes (`added` <= 0). Where the target prices bytes in clocks at -O1
+/// (`rate`, thousandths of a clock a byte, `Tti::unroll_milliclocks_per_byte`;
+/// 0 where it does not), an unroll that adds bytes is kept too if the work it
+/// saves repays them, as the -O2 unroll is (`unroll_pays`): -O1 is about clocks
+/// since the ruling of 2026-11-14, which replaced the strict rule of each axis.
+/// The one rule of every target's -O1 trial (DEVIATE UNROLL-TRIAL,
+/// 6502-UNROLL-O1, UNROLL-O1-TRIAL).
 pub fn keeps_at_o1(
     saved: i64,
     added: i64,
+    rate: i64,
 ) -> bool {
-    added <= 0 && saved >= 0
+    if added <= 0 {
+        return saved >= 0;
+    }
+    rate > 0 && saved > 0 && saved * 1000 >= added * rate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keeps_at_o1;
+
+    /// x_life -O1 (m32): the 3x3 nest unrolled ran half the work (212,914
+    /// against 425,704) for 32 B more once the outer loops' counters
+    /// spilled; the strict rule put it back and the nest ran twice as long. 312
+    /// is the 486's byte rate.
+    #[test]
+    fn an_unroll_that_halves_the_work_is_kept_for_a_few_bytes_where_bytes_are_priced() {
+        assert!(keeps_at_o1(212_790, 32, 312));
+        assert!(!keeps_at_o1(212_790, 32, 0), "the strict rule of a target that prices no bytes");
+    }
+
+    /// matmul -O1 (m32): +1601 B for a work saving the 486's byte rate does not
+    /// repay.
+    #[test]
+    fn an_unroll_that_does_not_repay_its_bytes_is_put_back() {
+        assert!(!keeps_at_o1(400, 1601, 312));
+        assert!(keeps_at_o1(0, -3, 312) && keeps_at_o1(0, 0, 0) && !keeps_at_o1(-1, -3, 312));
+    }
 }
 
 /// DEVIATE ROTATION-TRIAL (beyond the pin; gcc's `-Os` leaves a counted loop
