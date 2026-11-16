@@ -1164,7 +1164,8 @@ fn the_inliner_reads_the_inline_policy_of_the_target() {
     use llrm_mir::tti::{InlinePolicy, Tti};
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
     let pin = PolicyOnly(InlinePolicy::PIN, Some(true), false);
-    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, Some(true), false);
+    assert_eq!(arm.inline_policy().by_rate, 0, "AArch64 inlines as the pin does");
+    let priced = PolicyOnly(InlinePolicy { by_rate: 62_500, ..InlinePolicy::PIN }, Some(true), false);
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&pin));
     assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced));
