@@ -1926,11 +1926,7 @@ pub fn recorded(
     // CodeGenPrepare's sinking: compares, masks, address phis and the address
     // arithmetic of a block's accesses, made in the block that uses them.
     if applied.options.wanted("cgpaddr") {
-        if applied.options.prefers_size() || applied.options.at_o1() {
-            manager.add(cgpaddr::CgpAddrBytesStrict);
-        } else {
-            manager.add(cgpaddr::CgpAddr);
-        }
+        manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CB1 (owner x87-b, exit 2026-11-24): clock-priced, so not -Os.
     if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
@@ -1943,8 +1939,9 @@ pub fn recorded(
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
-    // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
-    // gcc's `-fsplit-paths`: -O3 and a target that asks (`Tti::split_paths_at_o3`).
+    // gcc's `ree` first: the extension it moves onto a load is the pair
+    // `extload` makes one extending load of. gcc's `-fsplit-paths`: -O3 and
+    // a target that asks (`Tti::split_paths_at_o3`).
     if applied.options.wanted("splitpaths") && unroll_level(&applied.options) >= 3 {
         manager.add(splitpaths::SplitPaths);
     }
