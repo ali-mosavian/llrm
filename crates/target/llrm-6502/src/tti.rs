@@ -209,7 +209,7 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// DEVIATE INL-O1-TRIAL-6502 (owner 6502, exit 2026-12-05, as
+    /// DEVIATE INL-O1-TRIAL-6502 (owner 6502, exit 2026-11-24, as
     /// INL-O1-TRIAL-M68K): at -O1 a callee the bound refused is tried in the
     /// caller and kept where the caller comes out smaller, and a shrink the
     /// -O1 rule refuses is priced as the finished chain (`trial_inlined`). The
