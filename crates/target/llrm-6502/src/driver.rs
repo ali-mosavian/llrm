@@ -651,6 +651,7 @@ fn tail(
         text = text.replace(name.as_str(), label);
     }
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
+    let text = if request.level == Level::O0 { text } else { crate::outline::run(&text) };
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
