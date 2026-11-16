@@ -322,3 +322,16 @@ fn a_vector_loop_remainder_is_not_unrolled_at_run_time() {
     assert!(sum.contains("paddd"), "vectorized: {sum}");
     assert_eq!(sum.matches("align 16").count(), 2, "a vector loop and a rolled remainder: {sum}");
 }
+
+/// A packed accumulator is the tied operand of the `paddd` that adds to it: the peephole's recurrence commute knew
+/// only the integer ops, so each trip of `down_sum`'s vector loop copied two accumulators (6 copies a trip, 4 now; the
+/// pin has 4).
+#[test]
+fn a_packed_accumulator_is_added_in_place() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "down_sum");
+    let (_, rest) = sum.split_once("align 16").expect("a vector loop");
+    let vector = rest.split_once("jne").expect("its back edge").0;
+    let copies = vector.lines().filter(|line| line.trim_start().starts_with("movaps")).count();
+    assert!(copies <= 4, "the loop copies {copies} registers: {vector}");
+}
