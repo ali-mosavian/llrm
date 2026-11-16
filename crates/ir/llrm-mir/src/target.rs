@@ -334,6 +334,10 @@ pub struct Tuning {
     /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
     /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
     pub unroll_threshold_at_o3: Option<u32>,
+    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
+    /// (`llrm-gpl-gcc`, feature `gcc-gpl`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// target takes it once measured; false: the pin's, none.
+    pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -793,6 +797,7 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_threshold_at_o3: None,
+        split_paths_at_o3: false,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
@@ -1825,6 +1830,7 @@ mod tests {
             (None, None, None)
         );
         assert_eq!(pin.unroll_threshold_at_o3, None);
+        assert!(!pin.split_paths_at_o3);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);

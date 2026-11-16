@@ -97,21 +97,31 @@ fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
     assert!(labels(include_str!("data/bench_stft_fixed.ll")) <= 27);
 }
 
-/// tile -O2: the 40-trip loop inside a 25-trip loop saves 3,000 clocks for 300
-/// B (10 a byte): unrolled, 364 B and 2,155 instructions run where the rolled
-/// loop is 68 B and 4,181 (gcc 80 B, 4,184). The module is 115 instructions;
-/// rolled, fewer than 80.
+/// tile -O2: the 40-trip loop inside a 25-trip loop was unrolled (10 clocks a
+/// byte, 2,155 instructions run). Since #9916 priced vector arithmetic and
+/// casts at code size, the loop vectorizer takes it first: widening vector
+/// adds, 955 instructions run (clang 980, gcc 1,434).
 #[test]
-fn a_loop_that_saves_ten_clocks_a_byte_is_unrolled() {
-    let insns = instructions(include_str!("data/bench_tile.ll"), Level::O2);
-    assert!(insns >= 100, "{insns} instructions");
+fn a_loop_that_saves_ten_clocks_a_byte_is_vectorized() {
+    assert!(vector_lines(include_str!("data/bench_tile.ll"), "\tsaddw") > 0);
+}
+
+fn vector_lines(
+    source: &str,
+    prefix: &str,
+) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with(prefix)).count()
 }
 
 /// jpeg_fixed -O2: a 16-trip dot product inside two loops of unknown count was
 /// unrolled (+104 B) for a saving counted over 32 x 32 assumed runs of the
-/// loops around it (49,152 clocks); the program's instructions did not move.
-/// An unknown loop around counts once. Rolled: the loop's label stays.
+/// loops around it; the program's instructions did not move. Since #9916 the
+/// loop vectorizer takes it: one vector `mul`, three `mla`, one `addv`, no scalar `mul`.
 #[test]
-fn a_loop_inside_unknown_loops_is_not_unrolled_for_runs_nobody_counted() {
-    assert!(labels(include_str!("data/unroll_cold_nest.ll")) >= 6);
+fn a_loop_inside_unknown_loops_is_vectorized_not_unrolled_for_runs_nobody_counted() {
+    let source = include_str!("data/unroll_cold_nest.ll");
+    assert_eq!(vector_lines(source, "\tmla"), 3);
+    assert_eq!(vector_lines(source, "\taddv"), 1);
+    assert_eq!(vector_lines(source, "\tmul w"), 0);
 }

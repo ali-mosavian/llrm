@@ -417,6 +417,7 @@ pub mod ree;
 pub mod remidiom;
 pub mod rpoattrs;
 pub mod runtimechecks;
+pub mod splitpaths;
 pub mod sccp;
 pub mod sccpsolver;
 pub mod selectoptimize;
