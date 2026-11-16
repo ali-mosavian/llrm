@@ -1150,6 +1150,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Load => self.visit_load(node).or_else(|| self.indexed(node)),
             ISD::TokenFactor => self.visit_token_factor(node),
             ISD::Select => self.visit_select(node),
+            ISD::VSelect => self.visit_vselect(node),
             ISD::SelectCC => self.visit_select_cc(node),
             ISD::Store => self.visit_store(node).or_else(|| self.indexed(node)),
             ISD::LifetimeEnd => self.visit_lifetime_end(node),
@@ -1214,6 +1215,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
                 .fold_sext_setcc(node)
+                .or_else(|| self.fold_zext_setcc(node))
                 .or_else(|| self.fold_extend_of_cast(node))
                 .or_else(|| self.visit_extend(node))
                 .or_else(|| self.sext_of_non_negative(node))
@@ -2337,6 +2339,45 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
+    /// `visitZERO_EXTEND`'s vector arm for a compare
+    /// ([L16639](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16639)):
+    /// before legalization, `zext (setcc x, y)` of a vector of `i1` is the
+    /// compare made at the extension's own type, or at the matching integer
+    /// vector then resized, with the bits above the `i1` cleared. A compare
+    /// the target makes as that mask is a `cmeq` and a widening, not
+    /// the lanes read one by one.
+    fn fold_zext_setcc(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, n0) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        if self.dag.opcode(node) != ISD::ZeroExtend
+            || self.dag.opcode(n0) != ISD::SetCC
+            || !vt.is_vector()
+            || self.legal_operations()
+            || self.dag.value_type(n0).element() != EVT::I1
+        {
+            return None;
+        }
+        let tli = self.tli?;
+        let (lhs, rhs, cc) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1), self.dag.operand(n0, 2));
+        let operand_vt = self.dag.value_type(lhs);
+        if tli.types.set_cc_result_type(operand_vt) == self.dag.value_type(n0) {
+            return None;
+        }
+        let flags = self.dag.node(n0).flags;
+        let compare = if vt.size_in_bits() == operand_vt.size_in_bits() {
+            self.dag.get_node_flags(ISD::SetCC, vt, &[lhs, rhs, cc], flags)
+        } else {
+            let matching = operand_vt.change_vector_element_type_to_integer();
+            let made = self.dag.get_node_flags(ISD::SetCC, matching, &[lhs, rhs, cc], flags);
+            self.any_ext_or_trunc(made, vt)
+        };
+        // `getZeroExtendInReg(.., i1)`: the low bit.
+        let one = self.dag.get_constant(1, vt);
+        Some(self.dag.get_node(ISD::And, vt, &[compare, one]))
+    }
+
     /// `visitANY_EXTEND`, `visitZERO_EXTEND` and `visitSIGN_EXTEND`, the folds
     /// of an extension of another cast: `aext (zext x)` is `zext x`, `zext
     /// (aext x)` is `zext x`, `aext (trunc x)` is `x` made the right width,
@@ -3021,6 +3062,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        // `visitADD`: "fold (add x, 0) -> x, vector edition".
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.value_type(node).is_vector() {
+            if self.dag.is_build_vector_all(n1, false) {
+                return Some(n0);
+            }
+            if self.dag.is_build_vector_all(n0, false) {
+                return Some(n1);
+            }
+        }
         let flags = self.dag.node(node).flags;
         self.visit_add_like(node, flags)
     }
@@ -3659,7 +3710,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             | ISD::ZeroExtend
             | ISD::SignExtend
             | ISD::Truncate
-            | ISD::SignExtendInReg => vt.is_integer(),
+            | ISD::SignExtendInReg => vt.is_integer() || (vt.is_vector() && vt.element().is_integer()),
+            // Lanes moved as they are make no poison of their own.
+            ISD::ConcatVectors => true,
             ISD::Sra => {
                 vt.is_integer()
                     && self
@@ -4513,6 +4566,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        // `visitSTORE`: "Turn 'store undef, Ptr' -> nothing."
+        if self.dag.is_undef(value) && !info.volatile {
+            return Some(chain);
+        }
         // DEVIATE SD256: the call argument the builder cast to its bits stays
         // a float store when the load can never become an integer load
         // (`visit_bitcast`: volatile or extending): the cast alone would cost
@@ -4742,13 +4799,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
             return Some(self.dag.get_constant(0, vt));
         }
-        let is_const = |dag: &SelectionDAG, v: SDValue| dag.constant(v).is_some() && !dag.is_opaque(v);
+        // `isConstOrConstSplat`: a vector of one constant is the constant, at the width of its lane.
+        let is_const = |dag: &SelectionDAG, v: SDValue| dag.const_or_splat(v).is_some() && !dag.is_opaque(v);
         if is_const(self.dag, n0) && !is_const(self.dag, n1) {
             return Some(self.dag.get_node(ISD::Mul, vt, &[n1, n0]));
         }
-        let c1 = self.dag.constant(n1);
+        let c1 = self.dag.const_or_splat(n1);
         let opaque = self.dag.is_opaque(n1);
-        let width = vt.size_in_bits();
+        let width = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
         let ones = super::fold::mask(width);
         match c1 {
             Some(0) => return Some(n1),
@@ -4932,7 +4990,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         vt: EVT,
         c: u128,
     ) -> Option<SDValue> {
-        let width = vt.size_in_bits();
+        let width = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
         let ones = super::fold::mask(width);
         let negative = c >> (width - 1) & 1 == 1;
         let mut magnitude = if negative { c.wrapping_neg() & ones } else { c };
@@ -5049,7 +5107,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SignExtend | ISD::AnyExtend if sext_legal => {
                 let small = lane(self.dag.value_type(n00)).size_in_bits();
                 if small <= ext_bits
-                    || lane(self.dag.value_type(n00)).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00) + 1
+                    || lane(self.dag.value_type(n00)).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00)
+                        + 1
                         <= ext_bits
                 {
                     return Some(self.dag.get_node(ISD::SignExtend, vt, &[n00]));
@@ -5126,6 +5185,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
         let extended = self.dag.get_ext_load(LoadExt::ZExtLoad, wide, chain, ptr, MemInfo { ext: None, ..info });
         self.add_to_worklist(node.node);
+        // The pin folds the AND away first (`CombineTo(N, N0)`) when its mask
+        // keeps every bit of the memory type, then replaces the load: the
+        // AND's users join the load's use list before the load's go to the
+        // new one, which fixes the order `CreateVirtualRegisters` reads.
+        let low = super::fold::mask(mem.size_in_bits());
+        if info.ext == Some(LoadExt::ExtLoad) && super::known_bits::known_bits(self.dag, mask).one & low == low {
+            self.replace_value(node, load);
+        }
         self.replace_value(load, extended);
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
         Some(node)

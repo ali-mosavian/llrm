@@ -133,16 +133,14 @@ impl Machine for M68kMachine {
 /// (`timing::order`). On the 68000 it is 14 clk against 8 for a long.
 pub fn index_is_dearer_than_plain(cpu: crate::dagisel::hooks::Cpu) -> bool {
     use crate::dagisel::hooks::Cpu;
-    static DEARER: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
-        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
-            let price = |text: &str, bytes: u32| {
-                let clocks = crate::timing::cost(cpu, text, bytes, false).expect("a priced move").clocks;
-                crate::timing::order(cpu, false, clocks, bytes)
-            };
-            price("move.l (0,%a1,%d1), %d0", 4) > price("move.l (%a1), %d0", 2)
-        })
-    });
-    DEARER[cpu as usize]
+    static DEARER: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
+    *DEARER.get(cpu, |cpu| {
+        let price = |text: &str, bytes: u32| {
+            let clocks = crate::timing::cost(cpu, text, bytes, false).expect("a priced move").clocks;
+            crate::timing::order(cpu, false, clocks, bytes)
+        };
+        price("move.l (0,%a1,%d1), %d0", 4) > price("move.l (%a1), %d0", 2)
+    })
 }
 
 /// The m68k `TargetTransformInfo`: the base class's answers.
@@ -468,6 +466,13 @@ impl Tti for M68k {
     /// A size build refuses an inline of a callee that stays when it grows
     /// the code (SZ1): the callee's bytes against the call sequence's.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE MERGEFUNC-OS (owner m68k, exit 2026-11-24; z80 and x86 m32 have it): `MergeFunctions` is off in the
+    /// pin's pipeline; at -Os two functions of one body are one, the other a `bra` to it. gcc's `-fipa-icf` folds
+    /// them (shift_int32_variable: `shl`/`shl2`, `shr`/`shr2`, `sar`/`sar2`).
+    fn merge_functions_at_size(&self) -> bool {
         true
     }
 

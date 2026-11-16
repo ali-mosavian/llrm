@@ -475,6 +475,45 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_store(chain, truncated, ptr, info))
     }
 
+    /// `LegalizeLoadOps` and `LegalizeStoreOps` where `getLoadExtAction` or
+    /// `getTruncStoreAction` is `Custom`: the target's lowering replaces the
+    /// access; where it declines the access is expanded as usual.
+    fn custom_extending_access(
+        &mut self,
+        node: SDValue,
+    ) -> bool {
+        let NodeData::Mem(info) = self.dag.node(node).data else { return false };
+        let custom = match self.dag.opcode(node) {
+            ISD::Load => match (info.ext, self.dag.value_type(node), info.mem_vt) {
+                (Some(ext), EVT::Simple(wide), EVT::Simple(mem)) => self.tli.load_ext_action(ext, wide, mem) == Action::Custom,
+                _ => false,
+            },
+            ISD::Store => match (self.dag.value_type(self.dag.operand(node, 1)), info.mem_vt) {
+                (EVT::Simple(wide), EVT::Simple(mem)) => {
+                    self.dag.value_type(self.dag.operand(node, 1)).bits_gt(info.mem_vt)
+                        && self.tli.trunc_store_action(wide, mem) == Action::Custom
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !custom {
+            return false;
+        }
+        let Some(result) = self.hooks.lower_operation(self.dag, node) else { return false };
+        if result != node {
+            let results = self.dag.node(node).values.len() as u8;
+            if results > 1 && self.dag.node(result).values.len() == results as usize {
+                for res in 0..results {
+                    self.replace_node(SDValue { node: node.node, res }, SDValue { node: result.node, res });
+                }
+            } else {
+                self.replace_node(node, result);
+            }
+        }
+        true
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
@@ -487,6 +526,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
+        }
+        if self.custom_extending_access(node) {
+            return Ok(());
         }
         if let Some(store) = self.promote_sub_byte_trunc_store(node).or_else(|| self.expand_trunc_store(node)) {
             self.replace_node(node, store);
@@ -677,6 +719,40 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let joined = self.dag.get_node(ISD::Or, mask_vt, &[taken, kept]);
         let result_vt = self.dag.value_type(node);
         Some(if result_vt == mask_vt { joined } else { self.dag.get_node(ISD::BitCast, result_vt, &[joined]) })
+    }
+
+    /// `VectorLegalizer::ExpandSELECT`: a `select` of vectors on a scalar
+    /// condition is the arms masked by the broadcast condition, `and`, `and`
+    /// of the complement and `or`.
+    fn expand_vector_select(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (cond, then, other) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let vt = self.dag.value_type(node);
+        if self.dag.value_type(cond).is_vector() || !vt.is_vector() {
+            return None;
+        }
+        let tli = self.tli;
+        let expands = |op: ISD| tli.operation_action(op, vt) == Action::Expand;
+        if expands(ISD::And) || expands(ISD::Xor) || expands(ISD::Or) || expands(ISD::BuildVector) {
+            return None;
+        }
+        let mask_vt = vt.change_vector_element_type_to_integer();
+        let bit_vt = mask_vt.element();
+        let ones = self.dag.get_all_ones_constant(bit_vt);
+        let zero = self.dag.get_constant(0, bit_vt);
+        let lane = self.dag.get_select(bit_vt, cond, ones, zero);
+        let mask = self.dag.get_splat_build_vector(mask_vt, lane);
+        let as_mask = |this: &mut Self, value: SDValue| {
+            if this.dag.value_type(value) == mask_vt { value } else { this.dag.get_node(ISD::BitCast, mask_vt, &[value]) }
+        };
+        let (then, other) = (as_mask(self, then), as_mask(self, other));
+        let not_mask = self.dag.get_not(mask, mask_vt);
+        let taken = self.dag.get_node(ISD::And, mask_vt, &[then, mask]);
+        let kept = self.dag.get_node(ISD::And, mask_vt, &[other, not_mask]);
+        let joined = self.dag.get_node(ISD::Or, mask_vt, &[taken, kept]);
+        Some(if vt == mask_vt { joined } else { self.dag.get_node(ISD::BitCast, vt, &[joined]) })
     }
 
     /// `getLogicalNOT`: `xor v, 1` (`-1` where booleans are all ones).
@@ -1079,6 +1155,45 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_load(vt, chain, slot, info))
     }
 
+    /// `ExpandINSERT_VECTOR_ELT`: the vector is stored to a stack slot, the
+    /// element over its lane, and the slot loaded back as the vector.
+    /// Little-endian, a power-of-two lane count, a constant index (the builder
+    /// refuses any other).
+    fn expand_insert_vector_elt(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let (vector, element, index) =
+            (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let lane = vt.element();
+        let lane_bytes = lane.size_in_bits() / 8;
+        let count = vt.lanes();
+        if lane_bytes == 0 || !count.is_power_of_two() || self.dag.config().big_endian {
+            return None;
+        }
+        let cell = self.dag.create_stack_temporary(vt.size_in_bits() / 8, 16);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let whole = MemInfo {
+            mem_vt: vt,
+            align: 16,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let entry = self.dag.entry_node();
+        let spill = self.dag.get_store(entry, vector, slot, whole);
+        let value =
+            if self.dag.value_type(element) == lane { element } else { self.dag.get_sext_or_trunc(element, lane) };
+        let at = u32::try_from(self.dag.constant(index)?).ok()? % count;
+        let to = self.dag.get_object_ptr_offset(slot, i64::from(at * lane_bytes));
+        let put = self.dag.get_store(spill, value, to, MemInfo { mem_vt: lane, align: lane_bytes.min(16), ..whole });
+        Some(self.dag.get_load(vt, put, slot, whole))
+    }
+
     /// `TargetLowering::expandVecReduce`: the vector is spilled and its lanes
     /// are folded with the reduction's scalar operation, halving the lane
     /// count each step (lane `i` with lane `i + n / 2`), so a sum of four is
@@ -1214,7 +1329,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.unroll_vector_op(node)])
             }
             ISD::VSelect => self.expand_vselect(node).map(|selected| vec![selected]),
+            ISD::Select if vt.is_vector() => self.expand_vector_select(node).map(|selected| vec![selected]),
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
+            ISD::InsertVectorElt => self.expand_insert_vector_elt(node).map(|loaded| vec![loaded]),
             reduction if reduction.vec_reduce_base_opcode().is_some() => {
                 self.expand_vec_reduce(node).map(|total| vec![total])
             }

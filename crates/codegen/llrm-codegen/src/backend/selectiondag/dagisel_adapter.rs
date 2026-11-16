@@ -255,6 +255,9 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::V8I8) => Vt::V8I8,
         EVT::Simple(MVT::V4I16) => Vt::V4I16,
         EVT::Simple(MVT::V2I32) => Vt::V2I32,
+        EVT::Simple(MVT::V2I8) => Vt::V2I8,
+        EVT::Simple(MVT::V4I8) => Vt::V4I8,
+        EVT::Simple(MVT::V2I16) => Vt::V2I16,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -280,6 +283,9 @@ fn our_vt(
             (Vt::V8I8, MVT::V8I8),
             (Vt::V4I16, MVT::V4I16),
             (Vt::V2I32, MVT::V2I32),
+            (Vt::V2I8, MVT::V2I8),
+            (Vt::V4I8, MVT::V4I8),
+            (Vt::V2I16, MVT::V2I16),
         ]
         .into_iter()
         .find(|(p, _)| *p == vt)
@@ -297,6 +303,9 @@ fn our_vt(
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
         (mvt::f128, EVT::Simple(MVT::F128)),
+        // `ADDVv8i16v` leaves its `h` result in a floating-point register,
+        // typed `f16` in the pin; here it is the 16-bit value it holds.
+        (mvt::f16, EVT::I16),
         (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),

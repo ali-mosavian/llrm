@@ -123,6 +123,105 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
+    let key = TextKey::of(module, name, selection);
+    if let Some(text) = TEXTS.with(|texts| texts.borrow().as_ref().and_then(|map| map.get(&key).cloned())) {
+        TEXT_HITS.with(|hits| hits.set(hits.get() + 1));
+        // the test profile: write the text again and compare, to catch a
+        // choice the key leaves out
+        if llrm_support::env_flag!("LLRM_6502_VERIFY_TEXT_CACHE") {
+            assert_eq!(text, function_text_uncached(module, name, selection)?, "{name}: a cached text differs");
+        }
+        return Ok(text);
+    }
+    let text = function_text_uncached(module, name, selection)?;
+    TEXTS.with(|texts| {
+        if let Some(map) = texts.borrow_mut().as_mut() {
+            map.insert(key, text.clone());
+        }
+    });
+    Ok(text)
+}
+
+/// What the text of a function is a function of: the module and the function,
+/// the selection (its id, and the three fields the driver sets after it is
+/// made) and the choices [`alloc::text_flags`] names.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TextKey {
+    module: usize,
+    name: String,
+    selection: u64,
+    zero_page: u8,
+    tuning: (u32, bool),
+    source: Option<(String, Option<u32>)>,
+    flags: (bool, bool, bool, bool, bool, bool, bool, bool),
+}
+
+impl TextKey {
+    fn of(
+        module: &Module,
+        name: &str,
+        selection: &Selection,
+    ) -> TextKey {
+        TextKey {
+            module: module as *const Module as usize,
+            name: name.to_owned(),
+            selection: selection.id,
+            zero_page: selection.zero_page,
+            tuning: (selection.tuning.clocks_per_byte, selection.tuning.fast_routines),
+            source: selection.source.clone(),
+            flags: alloc::text_flags(name),
+        }
+    }
+}
+
+thread_local! {
+    static TEXTS: std::cell::RefCell<Option<HashMap<TextKey, String>>> = const { std::cell::RefCell::new(None) };
+    static TEXT_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEXT_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// While it lives, [`function_text`] remembers the text of each selection it
+/// writes: the pricing of a layout, of a multiply or a callee-save choice asks
+/// for the same text again, and the allocator and the peephole passes are the
+/// bulk of a compile. The modules the texts are keyed by must outlive it.
+pub struct TextCache(alloc::AllocationCache);
+
+impl TextCache {
+    pub fn new() -> TextCache {
+        TEXTS.with(|texts| *texts.borrow_mut() = Some(HashMap::default()));
+        TextCache(alloc::AllocationCache::new())
+    }
+}
+
+impl Default for TextCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TextCache {
+    fn drop(&mut self) {
+        TEXTS.with(|texts| *texts.borrow_mut() = None);
+    }
+}
+
+/// How many times this thread's [`function_text`] wrote a function (not found
+/// in the cache): what a test counts instead of seconds.
+pub fn text_compiles() -> usize {
+    TEXT_COMPILES.with(std::cell::Cell::get)
+}
+
+/// How many times this thread's [`function_text`] found its text in the cache.
+pub fn text_hits() -> usize {
+    TEXT_HITS.with(std::cell::Cell::get)
+}
+
+fn function_text_uncached(
+    module: &Module,
+    name: &str,
+    selection: &Selection,
+) -> Result<String, String> {
+    TEXT_COMPILES.with(|count| count.set(count.get() + 1));
     alloc::forget_wide_commuted();
     let text = function_text_once(module, name, selection)?;
     // the allocator's wider commute guesses it spares a copy; where it took
@@ -131,7 +230,11 @@ pub fn function_text(
     if !alloc::wide_commuted() {
         return Ok(text);
     }
-    let apart = alloc::with_wide_commute(false, || function_text_once(module, name, selection))?;
+    // its layout, sink and shared compares were chosen with the wide choice;
+    // the narrow one is priced at the same
+    let kept = alloc::kept_variant();
+    let apart =
+        alloc::with_wide_commute(false, || alloc::with_variant(kept, || function_text_once(module, name, selection)))?;
     let cpu = selection.cpu;
     let size = |text: &str| crate::timing::estimate(cpu, text).map(|e| (e.bytes, e.cycles));
     Ok(match (size(&text), size(&apart)) {
@@ -223,7 +326,9 @@ pub fn module_text(
     // a module whose divisions are cold calls the speed routines with the
     // small wide path
     let wide = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}_fast\n")))
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
     if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
         for at in 0..texts.len() {
@@ -237,7 +342,9 @@ pub fn module_text(
     // module's choice by the share of its clocks it saves
     let size = parts.first().is_some_and(|(_, selection)| selection.tuning == alloc::Tuning::SIZE);
     let compact_division = |text: &str| {
-        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
     };
     if size && texts.iter().any(|text| compact_division(text)) {
         let mut faster = texts.clone();
@@ -256,7 +363,9 @@ pub fn module_text(
     // compact one, linked once): a module takes the compact one, bytes first,
     // unless the clocks the speed one saves are worth them
     let speed_division16 = |text: &str| {
-        ["__udivhi3", "__divhi3", "__umodhi3", "__modhi3"].iter().any(|name| text.contains(&format!(" {name}\n")))
+        ["__udivhi3", "__divhi3", "__umodhi3", "__modhi3", "__divmodhi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
     };
     if !size && texts.iter().any(|text| speed_division16(text)) {
         let mut compact = texts.clone();
@@ -1009,7 +1118,7 @@ fn lower(
     }
 }
 
-/// At size the speed multiply (`hotmultiply::FAST_BYTES` more, linked once) is
+/// At size the speed multiply (`hotmultiply::fast_bytes` more, linked once) is
 /// the module's choice by the share of its clocks it saves against the share of
 /// its bytes it adds (`mulimage::pays_by_share`): the static runs of its
 /// multiplies times what a call saves, against the module priced as it stands.
@@ -1024,7 +1133,7 @@ fn fast_multiply_pays_at_size(
 ) -> Result<bool, String> {
     let (clocks, bytes) = priced(module, parts, texts)?;
     let saved = (crate::hotmultiply::runs(module) * crate::hotmultiply::SAVED_CLOCKS) as u64;
-    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::FAST_BYTES as i64), clocks, bytes))
+    Ok(crate::mulimage::pays_by_share((saved, crate::hotmultiply::fast_bytes() as i64), clocks, bytes))
 }
 
 /// The module as it stands, in estimated clocks and bytes
@@ -1055,7 +1164,7 @@ fn priced(
 /// DEVIATE 6502-DIV-16 (owner llrm-target-6502, exit 2026-11-24): the pin's
 /// `__udivhi3` is one routine. Reason: bytes first on this target at every
 /// level (user ruling 2026-11-14); the compact routine is 39 bytes smaller and
-/// 215 clocks slower a call on average (`hotdivision::SAVED_AT_SPEED_16`).
+/// slower a call on average (`hotdivision::saved_at_speed_16`).
 fn speed_division16_pays(
     module: &Module,
     parts: &[(&str, &Selection)],
@@ -1068,8 +1177,9 @@ fn speed_division16_pays(
     let (clocks, bytes) = priced(module, parts, compact)?;
     // the priced clocks leave out the routine's own run
     let runs = crate::hotdivision::runs16(module);
-    let clocks = clocks + (runs * crate::hotdivision::CLOCKS_COMPACT_16) as u64;
-    let saved = (runs * crate::hotdivision::SAVED_AT_SPEED_16) as u64;
+    let cpu = parts.first().map_or(crate::dagisel::hooks::Cpu::Mos6502, |(_, selection)| selection.cpu);
+    let clocks = clocks + (runs * crate::hotdivision::clocks_compact_16(cpu)) as u64;
+    let saved = (runs * crate::hotdivision::saved_at_speed_16(cpu)) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }
 
@@ -1090,6 +1200,19 @@ fn fast_division_pays_at_size(
     let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, faster))
         - crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
     let (clocks, bytes) = priced(module, parts, compact)?;
-    let saved = (crate::hotdivision::runs(module) * crate::hotdivision::SAVED_AT_SIZE) as u64;
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let weights: std::collections::HashMap<usize, Vec<u64>> = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(|(index, global)| match &global.kind {
+            llrm_mir::module::GlobalKind::Function(function) if function.entry().is_some() => {
+                Some((index, crate::weights::block_weights(module, function, &layout)))
+            }
+            _ => None,
+        })
+        .collect();
+    let saved = (crate::hotdivision::runs_priced(module, &weights) * crate::hotdivision::SAVED_AT_SIZE) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }

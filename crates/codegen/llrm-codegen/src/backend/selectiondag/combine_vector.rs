@@ -86,7 +86,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             // "BUILD_VECTOR - insert unused operands and build new
             // BUILD_VECTOR."
-            if self.dag.opcode(current) == ISD::BuildVector && self.dag.has_one_use(current.node) {
+            if self.dag.opcode(current) == ISD::BuildVector
+                && (self.dag.has_one_use(current.node) || self.dag.config().prefers_build_vector_sources)
+            {
                 for (lane, slot) in ops.iter_mut().enumerate() {
                     slot.get_or_insert_with(|| self.dag.operand(current, lane));
                 }

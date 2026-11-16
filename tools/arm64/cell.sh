@@ -1,6 +1,7 @@
 #!/bin/bash
 # cell.sh PROG LEVEL COMP -> one row for table.py: prog level comp bytes instrs metric value (ok|exception) flags
 # flags = the canonical codegen flag set the column was built with (flagset.py, from $X.flags that build2.sh writes for ccn|clangn|gccn...); `unknown` for a column that records none, which table.py refuses.
+# A/B two outputs with tools/arm64/cellcmp.py: it refuses rows of different columns (cc vs ccn) or unknown flags.
 # Builds with build2.sh and counts the kernel range (count.py --kernel); the row says so.
 # Env: UNICORN_PYTHON (python with unicorn), OUT, B, LLVM_BIN, CC, LLC as for build2.sh.
 # A failed cell is a row, not a gap: `unmeasured:<reason>` (table.py lists it); never rerun silently.

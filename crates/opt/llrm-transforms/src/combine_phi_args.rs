@@ -1,7 +1,8 @@
 //! `visitPHINode`'s argument folds: a phi of the same operation applied to
 //! different values is the operation applied to a phi of those values.
 //!
-//! Translation of `foldPHIArgZextsIntoPHI` and `foldPHIArgOpIntoPHI`
+//! Translation of `foldPHIArgZextsIntoPHI`, `foldPHIArgLoadIntoPHI` and
+//! `foldPHIArgOpIntoPHI`
 //! ([InstCombinePHI.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L779))
 //! at d1106deb71cc.
 //!
@@ -14,6 +15,10 @@
 //!   user, become the operation applied to a phi of the left operands (or to
 //!   the one left operand all of them share). The new operation goes at the top
 //!   of the phi's block, after the phis.
+//! - Two or more incoming values that are simple loads with one user each and
+//!   no memory write after them in their block
+//!   (`isSafeAndProfitableToSinkLoad`) become one load of a phi of the
+//!   addresses.
 //! - `foldDeadPhiWeb`
 //!   ([:59](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L59)):
 //!   phis used only by other phis, fewer than 16 of them, are deleted.
@@ -33,7 +38,7 @@
 //! operand types, predicate), `shouldChangeType` for integer casts, the
 //! constant right operand, the intersection of the binary operators' flags.
 //!
-//! DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP, load,
+//! DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP,
 //! `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 //! `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
 //! `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`, and
@@ -48,6 +53,7 @@
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::valuetracking::guarantee::may_write_to_memory;
 use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
@@ -67,6 +73,7 @@ fn same_opcode(
         (Opcode::Cast(x), Opcode::Cast(y)) => x == y,
         (Opcode::Binary(x), Opcode::Binary(y)) => x == y,
         (Opcode::ICmp(_), Opcode::ICmp(_)) => true,
+        (Opcode::Load { .. }, Opcode::Load { .. }) => true,
         _ => false,
     }
 }
@@ -86,7 +93,10 @@ impl Combiner<'_> {
             && same_opcode(&self.function.instruction(first).opcode, &self.function.instruction(second).opcode)
             && let Operand::Value(value) = incoming[0].0
             && self.has_one_user(value)
-            && let Some(folded) = self.fold_phi_arg_op_into_phi(phi, &incoming, first)
+            && let Some(folded) = match self.function.instruction(first).opcode {
+                Opcode::Load { .. } => self.fold_phi_arg_load_into_phi(phi, &incoming),
+                _ => self.fold_phi_arg_op_into_phi(phi, &incoming, first),
+            }
         {
             return Visit::Replace(folded);
         }
@@ -312,6 +322,126 @@ impl Combiner<'_> {
         let at = self.after_phis(phi);
         let cast = self.insert_before(at, Opcode::Cast(CastOp::ZExt), ty, vec![narrow_value], Flags::default());
         Some(Operand::Value(self.function.instruction(cast).result.expect("a value")))
+    }
+
+    /// `foldPHIArgLoadIntoPHI`: a phi of simple loads is one load of a phi of
+    /// the addresses (the address itself where they agree), at the least
+    /// alignment, with the metadata all of them keep.
+    fn fold_phi_arg_load_into_phi(
+        &mut self,
+        phi: InstId,
+        incoming: &[(Operand, BlockId)],
+    ) -> Option<Operand> {
+        let first = self.definition_of(incoming[0].0)?;
+        let first_inst = self.function.instruction(first).clone();
+        let Opcode::Load { align, volatile: false } = first_inst.opcode else { return None };
+        let layout = self.env.layout;
+        let mut least = align.unwrap_or_else(|| layout.align(&self.context.types, first_inst.ty));
+        let pointer_ty = self.type_of(first_inst.operands[0]);
+        let mut loads = vec![first];
+        // We can't sink the load if the loaded value could be modified
+        // between the load and the phi.
+        if self.function.parent(first) != Some(incoming[0].1) || !self.is_safe_and_profitable_to_sink_load(first) {
+            return None;
+        }
+        for &(value, from) in &incoming[1..] {
+            let def = self.definition_of(value)?;
+            let Operand::Value(user_of) = value else { return None };
+            let inst = self.function.instruction(def);
+            let Opcode::Load { align, volatile: false } = inst.opcode else { return None };
+            if !self.has_one_user(user_of) || self.type_of(inst.operands[0]) != pointer_ty {
+                return None;
+            }
+            least = least.min(align.unwrap_or_else(|| layout.align(&self.context.types, inst.ty)));
+            if self.function.parent(def) != Some(from) || !self.is_safe_and_profitable_to_sink_load(def) {
+                return None;
+            }
+            loads.push(def);
+        }
+        let pointers: Vec<Operand> = loads.iter().map(|&one| self.function.instruction(one).operands[0]).collect();
+        let pointer = if pointers.iter().all(|&one| one == pointers[0]) {
+            pointers[0]
+        } else {
+            let operands: Vec<Operand> =
+                pointers.iter().zip(incoming).flat_map(|(&value, &(_, from))| [value, Operand::Block(from)]).collect();
+            let new_phi = self.insert_before(phi, Opcode::Phi, pointer_ty, operands, Flags::default());
+            Operand::Value(self.function.instruction(new_phi).result.expect("a value"))
+        };
+        let at = self.after_phis(phi);
+        let align = (least != layout.align(&self.context.types, first_inst.ty)).then_some(least);
+        let new = self.insert_before(
+            at,
+            Opcode::Load { align, volatile: false },
+            first_inst.ty,
+            vec![pointer],
+            Flags::default(),
+        );
+        for (kind, node) in first_inst.metadata.iter().filter(|(kind, _)| kind != "dbg") {
+            self.function.annotate(new, kind, *node);
+        }
+        for &other in &loads[1..] {
+            crate::local::combine_metadata_for_cse(self.env.metadata, self.function, new, other, true);
+        }
+        Some(Operand::Value(self.function.instruction(new).result.expect("a value")))
+    }
+
+    /// `isSafeAndProfitableToSinkLoad`: nothing after the load in its block
+    /// writes memory (a call that only touches inaccessible memory does not),
+    /// and its address is not a frame slot the code would only load the
+    /// address of in each predecessor.
+    fn is_safe_and_profitable_to_sink_load(
+        &self,
+        load: InstId,
+    ) -> bool {
+        let q = query(self, None);
+        let mut scan = self.function.next_in_block(load);
+        while let Some(one) = scan {
+            if may_write_to_memory(&q, one) && !self.only_accesses_inaccessible_memory(&q, one) {
+                return false;
+            }
+            scan = self.function.next_in_block(one);
+        }
+        let is_static_alloca = |def: InstId| {
+            matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
+                && llrm_mir::instructioncost::is_static_alloca(self.function, def)
+        };
+        let Some(address) = self.definition_of(self.function.instruction(load).operands[0]) else { return true };
+        match self.function.instruction(address).opcode {
+            // A frame slot nothing takes the address of is not worth the
+            // address in a register.
+            Opcode::Alloca { .. } if is_static_alloca(address) => {
+                let result = self.function.instruction(address).result.expect("a value");
+                let taken =
+                    self.function.users(result).iter().any(|one| match self.function.instruction(one.user).opcode {
+                        Opcode::Load { .. } => false,
+                        Opcode::Store { .. } => one.index != 1,
+                        _ => true,
+                    });
+                taken
+            }
+            Opcode::GetElementPtr { .. } => {
+                let operands = &self.function.instruction(address).operands;
+                let on_slot = self.definition_of(operands[0]).is_some_and(is_static_alloca);
+                !(on_slot && operands[1..].iter().all(|one| matches!(one, Operand::Constant(_))))
+            }
+            _ => true,
+        }
+    }
+
+    /// `CallBase::onlyAccessesInaccessibleMemory`: what the site or the
+    /// callee states allows no access through a pointer or to other memory.
+    fn only_accesses_inaccessible_memory(
+        &self,
+        q: &llrm_mir::valuetracking::Query,
+        inst: InstId,
+    ) -> bool {
+        let instruction = self.function.instruction(inst);
+        let Some(info) = pattern::call_info(instruction) else { return false };
+        let none = |attrs: &[llrm_mir::opcode::Attribute]| {
+            let (through_pointers, elsewhere) = llrm_mir::memory::located(attrs);
+            through_pointers == llrm_mir::memory::Effects::NONE && elsewhere == llrm_mir::memory::Effects::NONE
+        };
+        none(&info.attrs) || pattern::called_function(q, instruction).is_some_and(|callee| none(&callee.attrs))
     }
 
     /// `foldPHIArgOpIntoPHI`, for casts and for binary operators and compares

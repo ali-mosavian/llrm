@@ -147,6 +147,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE ROTATION-HOT (owner x86-m32, exit 2026-11-24):
         // see `Tti::rotation_hot_at_size`.
         rotation_hot_at_size: true,
+        // DEVIATE ROTATION-HOT-BYTES (owner x87-b, exit 2026-11-24): a
+        // rotated loop's guard is a `test` and a `jcc` (4 B) and its closing
+        // branch changes form (floats -Os +5 B, x_list +8 B for a loop each):
+        // 8 B a loop, not the default 4.
+        rotation_hot_bytes_per_loop: 8,
         // DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01):
         // see `Tti::load_pre_off_at_size`.
         load_pre_off_at_size: true,
@@ -181,10 +186,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
-        // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
-        // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
-        // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
-        imul_at_size: true,
+        // DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24):
+        // see `Tti::frame_slot_add_with_saved`.
+        frame_slot_add_with_saved: true,
+        // DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24):
+        // see `Tti::inline_trial_cold_margin`.
+        inline_trial_cold_margin: 3,
         // DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24):
         // see `Tuning::mul_chains_hot_at_size`.
         mul_chains_hot_at_size: true,
@@ -202,6 +209,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // see `Tuning::multiply_clocks`.
         multiply_clocks: costs.multiply,
         loop_carried_clocks: costs.store + costs.load,
+        counter_exit_compare_clocks: costs.add,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
@@ -259,10 +267,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
-        // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin
-        // keeps up to MaxStoresPerMemsetOptSize stores). `mov dword/word/byte
-        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax`
-        // 2,
+        // fill is `rep stos` where its stores take more bytes and are more
+        // than MaxStoresPerMemsetOptSize (the pin keeps up to that many
+        // stores; lru -Os: 7 stores were `rep stosd`, 201 clk against
+        // 124). `mov dword/word/byte [esp+d8], imm` 8/7/5 B, at an absolute
+        // address 10/9/7; `xor eax, eax` 2,
         // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
         // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
         // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin
@@ -347,8 +356,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         ipa_cp_clones_at_speed: true,
         // DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24): gcc's depth.
         ipa_cp_max_clones: 8,
-        // DEVIATE LSR-SPILL-PRICE (owner x86-m32-b, exit 2026-11-24).
-        lsr_prices_spills: true,
+        // DEVIATE LSR-SPILL-PRICE (owner x86-m32-b, exit 2026-11-24): two
+        // registers past the file. x_sf_sub/add/mul/i2d hold 9 other values
+        // (-6..-9%); sfm16_float_cmp holds 7 and its pointer step is not
+        // spilled (22,268 clk, +3.6% without it).
+        lsr_spill_pressure_margin: Some(2),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a
@@ -1221,7 +1233,7 @@ mod tests {
         let one = CALLING.native();
         assert_eq!(
             (one.name.as_str(), CONVENTIONS.as_slice()),
-            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "sysv32"][..])
+            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "localregparm32", "sysv32"][..])
         );
         assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
         assert_eq!(

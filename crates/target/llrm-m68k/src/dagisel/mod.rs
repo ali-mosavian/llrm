@@ -6,6 +6,7 @@ pub mod addr;
 #[rustfmt::skip]
 #[path = "generated/asm.rs"]
 pub mod asm;
+pub mod anyext;
 pub mod bfffo;
 pub mod wordjump;
 pub mod btst;
@@ -24,6 +25,7 @@ pub mod indexed;
 pub mod local;
 pub mod lowering;
 pub mod mulprice;
+pub mod opcodes;
 pub mod synth;
 pub mod pea;
 pub mod pipeline;

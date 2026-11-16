@@ -40,13 +40,31 @@ pub fn only(headers: &[BlockId]) -> Scope {
     Scope(ONLY.with(|only| only.borrow_mut().replace(headers.to_vec())))
 }
 
+/// The loop headed by `from` is headed by `to` now (`LoopRotate` makes the
+/// header's successor the header): the scope follows it. LLVM's loop pass
+/// manager holds the `Loop`, which keeps its identity when its header moves;
+/// ours holds the header block.
+pub fn moved(
+    from: BlockId,
+    to: BlockId,
+) {
+    ONLY.with(|only| {
+        if let Some(only) = only.borrow_mut().as_mut() {
+            for header in only.iter_mut().filter(|header| **header == from) {
+                *header = to;
+            }
+        }
+    });
+}
+
 /// Whether a scope narrows the loops now: a run for one loop of a loop pass
 /// manager, not for the function.
 pub fn scoped() -> bool {
     ONLY.with(|only| only.borrow().is_some())
 }
 
-/// Whether the loop headed by `header` is in the scope; every loop is, without one.
+/// Whether the loop headed by `header` is in the scope; every loop is, without
+/// one.
 pub fn allows(header: BlockId) -> bool {
     ONLY.with(|only| only.borrow().as_ref().is_none_or(|only| only.contains(&header)))
 }

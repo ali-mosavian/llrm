@@ -316,7 +316,7 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorFma { rd, rn, rm, .. } => {
+            Inst::VectorFma { rd, rn, rm, .. } | Inst::VectorMulAcc { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
@@ -374,7 +374,7 @@ impl Inst {
                 f(Fpr(rt), Role::Use);
                 f(G(base), Role::Use);
             }
-            Inst::VectorUmov { rd, rn, .. } => {
+            Inst::VectorUmov { rd, rn, .. } | Inst::VectorSmov { rd, rn, .. } => {
                 f(G(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }

@@ -24,6 +24,7 @@
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
 mod counts;
+mod csv;
 mod family;
 mod m68020;
 mod m68030;
@@ -439,6 +440,38 @@ pub fn cost_on_counted(
     taken: bool,
     count: Option<u32>,
 ) -> Result<Cost, String> {
+    type Key = (u8, String, u32, bool, Option<u32>);
+    thread_local! {
+        static PRICES: std::cell::RefCell<llrm_support::hash::HashMap<Key, Result<Cost, String>>> =
+            std::cell::RefCell::new(Default::default());
+    }
+    PRICES.with(|prices| {
+        let key = (cpu as u8, text.to_owned(), bytes, taken, count);
+        if let Some(known) = prices.borrow().get(&key) {
+            return known.clone();
+        }
+        let made = priced(cpu, text, bytes, taken, count);
+        prices.borrow_mut().insert(key, made.clone());
+        made
+    })
+}
+
+static PRICED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many instruction texts the tables have parsed and priced: once per
+/// distinct `(cpu, text, bytes, taken, count)`, not once per ask.
+pub fn priced_texts() -> usize {
+    PRICED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn priced(
+    cpu: Cpu,
+    text: &str,
+    bytes: u32,
+    taken: bool,
+    count: Option<u32>,
+) -> Result<Cost, String> {
+    PRICED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let text = text.trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let (base, suffix) = match name.split_once('.') {

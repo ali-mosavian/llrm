@@ -426,9 +426,9 @@ fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
 
 /// clang marks every loop `llvm.loop.unroll.disable` at -O1 (its `UnrollLoops`
 /// is off), so the pin's -O1 never unrolls and x_life O1 ran 64k taken `jne`
-/// against gcc's 16k (+151k clk). The m32 and m64 rows take `-funroll-loops` at -O1,
-/// unless the command line states either spelling; other rows and levels are
-/// as before.
+/// against gcc's 16k (+151k clk). The m32 and m64 rows take `-funroll-loops` at
+/// -O1, unless the command line states either spelling; other rows and levels
+/// are as before.
 #[test]
 fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
@@ -447,7 +447,8 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
         let (clang, llc) = flags("x86_64-linux", line);
         let unrolls = line.starts_with("-O1 -c");
         assert!(
-            clang.iter().any(|f| f == "-funroll-loops") == unrolls && llc.iter().any(|f| f == "-funroll-loops") == unrolls,
+            clang.iter().any(|f| f == "-funroll-loops") == unrolls
+                && llc.iter().any(|f| f == "-funroll-loops") == unrolls,
             "m64 {line}"
         );
     }
@@ -455,8 +456,9 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
 }
 
-/// The m68k rows take `-funroll-loops` at -O1 (M68K-UNROLL-O1): float_in_place_update kept a two-trip float
-/// loop, 170 B at -O1 against gcc's 16. Other levels are as before, and a command line that names either
+/// The m68k rows take `-funroll-loops` at -O1 (M68K-UNROLL-O1):
+/// float_in_place_update kept a two-trip float loop, 170 B at -O1 against gcc's
+/// 16. Other levels are as before, and a command line that names either
 /// spelling is obeyed.
 #[test]
 fn the_m68k_rows_unroll_at_o1_unless_told_otherwise() {
@@ -470,9 +472,10 @@ fn the_m68k_rows_unroll_at_o1_unless_told_otherwise() {
     }
 }
 
-/// The 6502 rows take `-funroll-loops` at -O1 as the m32 rows do (6502-UNROLL-O1): float_in_place_update
-/// kept a two-trip float loop at -O1, 9441 B against 19 B at -Os. Other levels are as before, and
-/// a command line that names either spelling is obeyed.
+/// The 6502 rows take `-funroll-loops` at -O1 as the m32 rows do
+/// (6502-UNROLL-O1): float_in_place_update kept a two-trip float loop at -O1,
+/// 9441 B against 19 B at -Os. Other levels are as before, and a command line
+/// that names either spelling is obeyed.
 #[test]
 fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
@@ -516,17 +519,36 @@ fn m68k_x86_arm64_and_6502_rows_thread_jumps_at_o1_unless_told_otherwise() {
 
 /// DEVIATE SPEED-O1: the x86-32 rows give their backend `-fllrm-speed-rate` at
 /// -O1 (x_iir kept three `imul` of 24 clk a trip against gcc's lea chains,
-/// 130,528 clk to gcc's 60,034), unless the command line states either
-/// spelling; no other row, and no other level, does.
+/// 130,528 clk to gcc's 60,034), and the x86-16 rows do (m16 grep -O1 kept the
+/// pin's counters and spilled its scan loop: 46.4M clk against bcc's 33.9M),
+/// unless the command line states either spelling; no other row, and no other
+/// level, does.
 #[test]
-fn x86_32_rows_price_bytes_at_speed_at_o1_unless_told_otherwise() {
+fn x86_rows_price_bytes_at_speed_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fllrm-speed-rate");
     for row in table.keys() {
-        let at_o1 = row.starts_with("x86_32-");
+        let at_o1 = row.starts_with("x86_32-") || row.starts_with("x86_16-");
         assert_eq!(has(&llc(row, "-O1 -c x.c")), at_o1, "{row}");
         for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-llrm-speed-rate -c x.c"] {
+            assert!(!has(&llc(row, line)), "{row} {line}");
+        }
+    }
+}
+
+/// DEVIATE PRE-O1: the x86-16 rows give their backend `-ftree-pre` at -O1 (m16
+/// grep -O1 reloaded and respilled the scan loop's state, 40.16M clk against
+/// -O2's 34.89M, which GVN-PRE makes the same), unless the command line states
+/// either spelling; no other row, and no other level, does.
+#[test]
+fn x86_16_rows_run_pre_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-ftree-pre");
+    for row in table.keys() {
+        assert_eq!(has(&llc(row, "-O1 -c x.c")), row.starts_with("x86_16-"), "{row}");
+        for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-tree-pre -c x.c"] {
             assert!(!has(&llc(row, line)), "{row} {line}");
         }
     }

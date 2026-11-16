@@ -672,13 +672,11 @@ b0:
 /// instructions to the pin's 18).
 #[test]
 fn test_a_double_stored_whole_and_read_by_halves_is_widened_and_promoted() {
-    let after = managed(
-        &mut parsed(&format!("{X64}{F}")),
-        Sroa,
-    );
+    let after = managed(&mut parsed(&format!("{X64}{F}")), Sroa);
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
-    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and isel
-    // moves the double through the stack (float_bits -Os m32 132 -> 68 B).
+    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and
+    // isel moves the double through the stack (float_bits -Os m32 132 -> 68
+    // B).
     let after = sroa(F);
     assert!(!after.contains("alloca"), "{after}");
 }
@@ -856,4 +854,53 @@ b2:
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     assert!(!llrm_mir::print::module(&module).contains("alloca"), "the split did not happen");
     assert_eq!(llrm_analysis::cfg::shapes_derived() - before, 1, "a split that left the CFG dropped the shape");
+}
+
+/// A load at `gep ptr, phi [0, 1]` read a variable index, so the alloca stayed
+/// with both stores and the load (fpbench O3: 12 loads and 2 phis the pin's
+/// `unfoldGEPPhi` folds; +22 B). The gep becomes a phi of geps at constant
+/// offsets, each partition promoted: no alloca, store or load is left.
+#[test]
+fn test_a_gep_over_a_phi_of_constant_indices_is_unfolded_and_promoted() {
+    let after = sroa(
+        "define i32 @f(i1 %c) {
+b0:
+  %s = alloca [2 x i32]
+  %p1 = getelementptr i8, ptr %s, i16 4
+  store i32 5, ptr %s
+  store i32 7, ptr %p1
+  br i1 %c, label %b1, label %b2
+b1:
+  br label %b3
+b2:
+  br label %b3
+b3:
+  %i = phi i16 [ 0, %b1 ], [ 1, %b2 ]
+  %p = getelementptr i32, ptr %s, i16 %i
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+}
+
+/// The select form: `gep ptr, select c, 0, 1` unfolds to a select of geps.
+#[test]
+fn test_a_gep_over_a_select_of_constant_indices_is_unfolded_and_promoted() {
+    let after = sroa(
+        "define i32 @f(i1 %c) {
+b0:
+  %s = alloca [2 x i32]
+  %p1 = getelementptr i8, ptr %s, i16 4
+  store i32 5, ptr %s
+  store i32 7, ptr %p1
+  %i = select i1 %c, i16 0, i16 1
+  %p = getelementptr i32, ptr %s, i16 %i
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
 }

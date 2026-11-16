@@ -226,6 +226,11 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         "MOVDI2SSrr" => "Movd_xmm_rm32",
         "MOVDI2PDIrr" => "Movd_xmm_rm32",
         "MOV64toPQIrr" => "Movq_xmm_rm64",
+        "MOVPQIto64rr" => "Movq_rm64_xmm",
+        // `movq xmm, m64` (the upper lane zeroed) and `movq m64, xmm`.
+        "MOVQI2PQIrm" => "Movq_xmm_xmmm64",
+        "MOVPQI2QImr" => "Movq_xmmm64_xmm",
+        "MOVPDI2DIrr" => "Movd_rm32_xmm",
         _ => return None,
     })
 }
@@ -236,12 +241,12 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 53] = [
+    const ARITHMETIC: [&str; 58] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
         "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
         "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
-        "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB",
+        "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
     ];
     const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [
@@ -303,6 +308,9 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
 pub fn memory_bytes(name: &str) -> Option<u32> {
     // `MOV8mr_NOREX` stores `AH`: the byte store it stands for.
     let name = name.strip_suffix("_NOREX").unwrap_or(name);
+    if matches!(name, "MOVQI2PQIrm" | "MOVPQI2QImr") {
+        return Some(8);
+    }
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the

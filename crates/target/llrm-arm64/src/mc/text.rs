@@ -445,6 +445,10 @@ impl fmt::Display for Inst {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
             }
+            Inst::VectorMulAcc { op, lanes, rd, rn, rm } => {
+                let suffix = lanes.suffix();
+                write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
             Inst::VectorFma { op, lanes, rd, rn, rm } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0, rm.0)
@@ -488,6 +492,10 @@ impl fmt::Display for Inst {
                 let lane = lane_letter(*lanes);
                 let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
                 write!(out, "umov {}, v{}.{lane}[{index}]", gpr(*rd, width, false), rn.0)
+            }
+            Inst::VectorSmov { lanes, wide, rd, rn, index } => {
+                let width = if *wide { Width::X } else { Width::W };
+                write!(out, "smov {}, v{}.{}[{index}]", gpr(*rd, width, false), rn.0, lane_letter(*lanes))
             }
             Inst::VectorInsLane { lanes, rd, rn, index, src } => {
                 let lane = lane_letter(*lanes);

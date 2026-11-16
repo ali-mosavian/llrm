@@ -17,8 +17,8 @@
 //! splat of a scalar (`DUP`); `DUPLANE` and the other masks are declined.
 //! Exit: the rest of both lowerings, with reverse (`REV64`) first.
 
-use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::SDNodeFlags;
+use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
@@ -109,7 +109,9 @@ fn constant_build_vector(
         };
         if !inverted && modimm::type10(bits) {
             let code = imm(dag, modimm::encode10(bits));
-            let mov = dag.get_node(ISD::Target(aarch64_isd::MOVIedit), EVT::Simple(MVT::V2I64), &[code]);
+            // `tryAdvSIMDModImm64`: `MovTy` is `f64` for a 64-bit vector.
+            let mov_vt = EVT::Simple(if wide { MVT::V2I64 } else { MVT::F64 });
+            let mov = dag.get_node(ISD::Target(aarch64_isd::MOVIedit), mov_vt, &[code]);
             return Some(nvcast(dag, mov));
         }
         // `tryAdvSIMDModImm32`: types 1-4 shift the byte by 0, 8, 16, 24.
@@ -200,6 +202,12 @@ pub fn lower_build_vector(
         // "isOnlyLowElement && !isIntOrFPConstant(Value)"
         return Some(dag.get_node(ISD::ScalarToVector, vt, &[first]));
     }
+    // `MaybeLowHalfZeroHigh`: a 128-bit vector whose low half repeats one
+    // non-constant value and whose high half is zero is the low half
+    // concatenated with zeros, `FMOV Dd, Dn` (the move clears the upper half).
+    if let Some(done) = low_half_zero_high(dag, vt, &ops) {
+        return Some(done);
+    }
     let one_value = defined.iter().all(|&lane| lane == first);
     if one_value {
         // "Use DUP for non-constant splats."
@@ -224,6 +232,42 @@ pub fn lower_build_vector(
         }
     }
     Some(vec)
+}
+
+/// `LowerBUILD_VECTOR`'s `MaybeLowHalfZeroHigh` block.
+///
+/// DEVIATE VEC8 (owner arm64, exit 2026-11-24): a vector of two `f64` lanes is
+/// not made (the half is a `v1f64`, which is no type here); one of `i64` lanes
+/// is the `FMOVDXr` the pin's pattern selects.
+fn low_half_zero_high(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    ops: &[SDValue],
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::mvt::MVT;
+    let lane = vt.element();
+    let (bits, half) = (lane.size_in_bits(), ops.len() / 2);
+    if vt.size_in_bits() != 128 || ops.iter().any(|&one| dag.is_undef(one)) {
+        return None;
+    }
+    let first = ops[0];
+    let low_repeats = ops[..half].iter().all(|&one| one == first);
+    let high_zero = ops[half..].iter().all(|&one| lane_constant(dag, one, bits) == Some(0));
+    if !low_repeats || !high_zero || lane_constant(dag, first, bits).is_some() {
+        return None;
+    }
+    if bits == 64 {
+        // The pin's half is a `v1i64`, which is no type here: its
+        // `concat_vectors (scalar_to_vector x), zeros` is selected as `fmov
+        // d, x`, which clears the upper half; so is this `SCALAR_TO_VECTOR`.
+        return lane.is_integer().then(|| dag.get_node(ISD::ScalarToVector, vt, &[first]));
+    }
+    let EVT::Simple(lane_mvt) = lane else { return None };
+    let half_vt = EVT::Simple(MVT::vector(lane_mvt, half as u32)?);
+    let zero_lane = if lane.is_floating_point() { dag.get_constant_fp(0, lane) } else { dag.get_constant(0, lane) };
+    let zero = dag.get_splat_build_vector(half_vt, zero_lane);
+    let low = dag.get_node(ISD::Target(aarch64_isd::DUP), half_vt, &[first]);
+    Some(dag.get_node(ISD::ConcatVectors, vt, &[low, zero]))
 }
 
 /// `UnrollVectorOp`: one scalar operation per lane, put together by a
@@ -933,4 +977,84 @@ pub fn lower_vsetcc(
     }
     let mask = dag.get_sext_or_trunc(mask, vt);
     Some(if invert { dag.get_not(mask, vt) } else { mask })
+}
+
+/// `tryLowerSmallVectorExtLoad`
+/// ([L8126](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L8126)):
+/// an extending load of a vector that is 32 bits wide in memory (`v4i8`,
+/// `v2i16`) is one scalar load into a vector register, then widened by
+/// extensions in registers. DEVIATE VEC12 (owner llrm-arm64-vec, exit
+/// 2026-11-24): `v2i8`, which the pin loads as an `f16`, has no type here and
+/// is declined, and so is a volatile access.
+pub fn lower_small_vector_ext_load(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::{LoadExt, NodeData};
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let (result, mem) = (dag.value_type(node), info.mem_vt);
+    if info.volatile || info.ordering.is_some() || !mem.is_vector() || mem.size_in_bits() != 32 {
+        return None;
+    }
+    let (extend, ext) = match info.ext? {
+        LoadExt::ExtLoad | LoadExt::ZExtLoad => (ISD::ZeroExtend, LoadExt::ExtLoad),
+        LoadExt::SExtLoad => (ISD::SignExtend, LoadExt::SExtLoad),
+    };
+    let _ = ext;
+    let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
+    let f32_vt = EVT::Simple(MVT::F32);
+    let scalar = dag.get_load(f32_vt, chain, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo {
+        mem_vt: f32_vt,
+        ext: None,
+        ..info
+    });
+    let to_vector = dag.get_node(ISD::ScalarToVector, EVT::Simple(MVT::V4F32), &[scalar]);
+    let source_bits = mem.element().size_in_bits();
+    let mut current_bits = source_bits;
+    let mut lanes = 128 / source_bits;
+    let integer = |bits: u32, lanes: u32| MVT::integer(bits).and_then(|lane| MVT::vector(lane, lanes)).map(EVT::Simple);
+    let mut res = dag.get_node(ISD::BitCast, integer(source_bits, lanes)?, &[to_vector]);
+    let zero = dag.get_constant(0, EVT::I64);
+    let destination_bits = result.element().size_in_bits();
+    while current_bits < destination_bits {
+        if dag.value_type(res).size_in_bits() >= 128 {
+            lanes /= 2;
+            res = dag.get_node(ISD::ExtractSubvector, integer(current_bits, lanes)?, &[res, zero]);
+        }
+        current_bits *= 2;
+        res = dag.get_node(extend, integer(current_bits, lanes)?, &[res]);
+    }
+    if lanes != result.lanes() {
+        res = dag.get_node(ISD::ExtractSubvector, integer(current_bits, result.lanes())?, &[res, zero]);
+    }
+    let chain_out = SDValue { node: scalar.node, res: 1 };
+    Some(dag.get_node_multi(ISD::MergeValues, &[result, EVT::OTHER], &[res, chain_out]))
+}
+
+/// `LowerTruncateVectorStore`
+/// ([L7774](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L7774)):
+/// `v4i16` stored as `v4i8` is widened to `v8i16`, narrowed to `v8i8` (`xtn`),
+/// and its low word stored.
+pub fn lower_truncate_vector_store(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::NodeData;
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let (chain, value, ptr) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if info.volatile
+        || info.ordering.is_some()
+        || dag.value_type(value) != EVT::Simple(MVT::V4I16)
+        || info.mem_vt != EVT::Simple(MVT::V4I8)
+    {
+        return None;
+    }
+    let poison = dag.get_poison(EVT::I16);
+    let poison_vec = dag.get_node(ISD::BuildVector, EVT::Simple(MVT::V4I16), &[poison; 4]);
+    let wide = dag.get_node(ISD::ConcatVectors, EVT::Simple(MVT::V8I16), &[value, poison_vec]);
+    let narrow = dag.get_node(ISD::Truncate, EVT::Simple(MVT::V8I8), &[wide]);
+    let words = dag.get_node(ISD::BitCast, EVT::Simple(MVT::V2I32), &[narrow]);
+    let zero = dag.get_constant(0, EVT::I64);
+    let word = dag.get_node(ISD::ExtractElement, EVT::I32, &[words, zero]);
+    Some(dag.get_store(chain, word, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info }))
 }
