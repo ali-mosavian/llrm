@@ -421,11 +421,6 @@ pub struct Tuning {
     /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
     /// 16601539e87f.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): a loop whose
-    /// loop-carried latency exceeds its issue-bound time is not unrolled at
-    /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
-    /// nothing of the loop. false: the pin's.
-    pub unroll_recurrence_veto: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -818,7 +813,6 @@ impl Tuning {
         slots_loop_width_rule: false,
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
-        unroll_recurrence_veto: false,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,

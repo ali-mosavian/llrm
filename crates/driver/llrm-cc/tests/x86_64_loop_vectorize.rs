@@ -154,6 +154,16 @@ fn a_vector_total_shuffles_into_a_fresh_register_with_no_copy() {
     }
 }
 
+/// The runtime unroll was vetoed for a loop whose chain runs through memory (RU-REC, a deviation from the pin): clang
+/// unrolls this loop by 2 and runs 7% fewer instructions than the one-copy loop (loop_countdown_sum 461,766 against
+/// 440,614 Ir; bar 442,611).
+#[test]
+fn a_loop_with_a_chain_through_memory_is_unrolled_at_run_time() {
+    let text = assembly_of("unroll_volatile.c", "x86_64-linux", "-O2");
+    let down = body(&text, "down");
+    assert!(down.matches("shr").count() >= 3, "the loop was not unrolled: {down}");
+}
+
 /// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]
