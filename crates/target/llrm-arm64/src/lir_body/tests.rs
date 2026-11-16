@@ -309,7 +309,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
         }
     }
-    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+    for lanes in Arrangement::ALL {
         out.push(Inst::VectorUnzip { second: false, lanes, rd: v(0), rn: v(1), rm: v(2) });
         out.push(Inst::VectorUnzip { second: true, lanes, rd: v(0), rn: v(1), rm: v(2) });
     }

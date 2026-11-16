@@ -1085,6 +1085,23 @@ impl TargetLowering {
                 t.set_trunc_store_action(vt, mem, Expand);
             }
         }
+        // `AArch64TargetLowering` (L1515, L1526): the small vectors a D register
+        // does not hold are loaded as a scalar and widened in registers
+        // (`tryLowerSmallVectorExtLoad`), and `v4i8` is stored by narrowing
+        // `v4i16` (`LowerTruncateVectorStore`).
+        for (vt, mem) in [
+            (MVT::V2I32, MVT::V2I8),
+            (MVT::V2I64, MVT::V2I8),
+            (MVT::V4I16, MVT::V4I8),
+            (MVT::V4I32, MVT::V4I8),
+            (MVT::V2I32, MVT::V2I16),
+            (MVT::V2I64, MVT::V2I16),
+        ] {
+            for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
+                t.set_load_ext_action(ext, vt, mem, Custom);
+            }
+        }
+        t.set_trunc_store_action(MVT::V4I16, MVT::V4I8, Custom);
         // `initActions`: "Vector reduction default to expand". The float
         // kinds have no node here.
         let reductions = [

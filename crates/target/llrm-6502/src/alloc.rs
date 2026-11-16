@@ -113,6 +113,10 @@ thread_local! {
     static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Whether the last allocation made a choice only the wider rule makes.
     static WIDE_COMMUTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The (sink, share, place) the last `emit_on` kept, and the one a compile
+    /// is told to use (see [`with_variant`]).
+    static KEPT_VARIANT: std::cell::Cell<(bool, bool, bool)> = const { std::cell::Cell::new((true, true, true)) };
+    static FIXED_VARIANT: std::cell::Cell<Option<(bool, bool, bool)>> = const { std::cell::Cell::new(None) };
     static ALLOCATED: std::cell::RefCell<Option<HashMap<String, Vec<Allocated>>>> = const { std::cell::RefCell::new(None) };
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -200,6 +204,24 @@ pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool
         WIDE_COMMUTE.with(|a| a.get()),
         INLINE_SAVES.with(|set| set.borrow().contains(name)),
     )
+}
+
+/// The (sink, share, place) the last `emit` kept.
+pub fn kept_variant() -> (bool, bool, bool) {
+    KEPT_VARIANT.with(std::cell::Cell::get)
+}
+
+/// `f` with every function emitted once, with `variant` (sink, share, place),
+/// not tried against the others: a choice priced against another one, whose
+/// layout, sink and shared compares were already chosen for the function.
+pub fn with_variant<R>(
+    variant: (bool, bool, bool),
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = FIXED_VARIANT.with(|a| a.replace(Some(variant)));
+    let result = f();
+    FIXED_VARIANT.with(|a| a.set(before));
+    result
 }
 
 /// Whether the allocation just made took a choice only the wider rule makes.
@@ -3968,6 +3990,10 @@ fn emit_on(
         let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
         better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
     };
+    if let Some((sink, share, place)) = FIXED_VARIANT.with(std::cell::Cell::get) {
+        let (_, _, slots, _, _, _, finished) = run(function, sink, share, place)?;
+        return Ok((finished, slots));
+    }
     let (mut code, mut priced, mut slots, sunk, shared, moved, mut finished) = run(function.clone(), true, true, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
@@ -3979,6 +4005,7 @@ fn emit_on(
     {
         (code, priced, slots, place, finished) = (other, other_priced, other_slots, false, other_finished);
     }
+    KEPT_VARIANT.with(|a| a.set((true, true, place)));
     if !sunk && !shared {
         return Ok((finished, slots));
     }
@@ -3996,6 +4023,7 @@ fn emit_on(
         };
         if wins((&best.0, &best.1, &best.2), (&other, &other_priced, &other_slots)) {
             best = (other, other_priced, other_slots, other_finished);
+            KEPT_VARIANT.with(|a| a.set((sink, share, place)));
         }
     }
     Ok((best.3, best.2))
@@ -4829,19 +4857,29 @@ fn emit_with<const STACK: bool>(
                     if after[b][i].contains(&reg::Y) || after[b][i].contains(&reg::X) || a_live {
                         // `__csave` changes a, x and y: the same bytes pushed
                         // one at a time, the argument
-                        // in `a` waiting in an index register nothing holds
+                        // in `a` waiting in an index register nothing holds,
+                        // with all three live in a cell nothing holds
                         let keep = [(reg::Y, "y"), (reg::X, "x")].into_iter().find(|(r, _)| !after[b][i].contains(r));
-                        if a_live && keep.is_none() {
+                        let cell = free_cell.map(register_name);
+                        if a_live && keep.is_none() && cell.is_none() {
                             return Err("a register is live where the callee-saved cells are saved".into());
                         }
-                        if let (true, Some((_, r))) = (a_live, keep) {
-                            writeln!(out, "  ta{r}").unwrap();
+                        if a_live {
+                            match (keep, &cell) {
+                                (Some((_, r)), _) => writeln!(out, "  ta{r}").unwrap(),
+                                (None, Some(cell)) => writeln!(out, "  sta {cell}").unwrap(),
+                                (None, None) => {}
+                            }
                         }
                         for r in &regs {
                             writeln!(out, "  lda {}\n  pha", register_name(*r)).unwrap();
                         }
-                        if let (true, Some((_, r))) = (a_live, keep) {
-                            writeln!(out, "  t{r}a").unwrap();
+                        if a_live {
+                            match (keep, &cell) {
+                                (Some((_, r)), _) => writeln!(out, "  t{r}a").unwrap(),
+                                (None, Some(cell)) => writeln!(out, "  lda {cell}").unwrap(),
+                                (None, None) => {}
+                            }
                         }
                     } else {
                         writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();
