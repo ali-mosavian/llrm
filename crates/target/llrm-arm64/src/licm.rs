@@ -10,7 +10,7 @@
 //! moves with the constant it reads (`IsProfitableToHoist` L1273 reaching
 //! `CanCauseHighRegPressure` L1235), unless the values live at once in the loop
 //! and the copies already moved fill the class (DEVIATE ML3, exit 2026-11-20:
-//! the peak over the loop's blocks, not the pin's per-set back trace; a loop
+//! the pressure at each block's entry, not the pin's running back trace; a loop
 //! with a call counts the values it names against `d8`-`d15`, the registers a
 //! call keeps; a block that does not run on every trip keeps its copies,
 //! `AvoidSpeculation` L1349 without the peak). Any other pure invariant op
@@ -173,15 +173,16 @@ impl Policy<Wrapped> for Arm64<'_> {
         self.peak = [0, 0];
         self.hoisted = [0, 0];
         for block in facts.inside_blocks() {
+            // `EnterScope`: the pin compares a hoist with the pressure at each
+            // block's entry (`BackTrace`), not with the peak inside it.
             let mut now: BTreeSet<u32> = self.live.get(&block.at).cloned().unwrap_or_default();
-            self.note(&now);
             for one in block.insns.iter().rev() {
                 for value in &one.defs {
                     now.remove(value);
                 }
                 now.extend(one.uses.iter().copied());
-                self.note(&now);
             }
+            self.note(&now);
         }
         for &value in facts.named {
             let slot = self.slot(value);
@@ -563,6 +564,31 @@ mod tests {
         function.blocks = vec![block(0, vec![]), block(1, body), block(2, vec![])];
         hoist(&mut function);
         assert_eq!((dups(&function, 0), dups(&function, 1)), (0, 1), "{function:?}");
+    }
+
+    /// sfm16_float (arm64 -O2): five splats of constants stayed in the vector
+    /// loop, which holds every vector register at once inside but enters with
+    /// few: the pin compares a hoist with the pressure at block entry
+    /// (`BackTrace`), not the peak inside (6578 -> 6199 executed).
+    #[test]
+    fn the_splat_is_hoisted_from_a_loop_that_fills_the_registers_only_inside() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let mut function = MFunction::<Class>::new("f");
+        let held = FPR_LIMIT as u32;
+        function.classes = vec![Class::Quad; held as usize + 2];
+        function.classes[0] = Class::Gpr;
+        let mut body = vec![constant(0), dup(held + 1, 0)];
+        for value in 1..=held {
+            body.push(Inst::new(Kind::Op("Make"), vec![Operand::Def(Reg::Virt(value))]));
+        }
+        for value in 1..=held {
+            body.push(Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(value))]));
+        }
+        body.push(back);
+        function.blocks = vec![block(0, vec![]), block(1, body), block(2, vec![])];
+        hoist(&mut function);
+        assert_eq!((dups(&function, 0), dups(&function, 1)), (1, 0), "{function:?}");
     }
 
     /// An op that is as cheap as a move stays (`HoistCheapInsts` is off).

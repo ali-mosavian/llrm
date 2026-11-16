@@ -378,6 +378,9 @@ impl TargetLoweringInfo {
                     _ => (TypeAction::Legal, vt),
                 },
             },
+            // `getTypeConversion`, `TypeWidenVector` of a lane count that is no power of two (`v3i8`): the
+            // next power of two lanes (`v4i8`), which is a vector the pass looks at again.
+            EVT::Vector(element, lanes) => (TypeAction::WidenVector, EVT::vector(element, lanes.next_power_of_two())),
             EVT::Int(bits) => {
                 if bits < 8 || !bits.is_power_of_two() {
                     let rounded = EVT::integer(if bits < 8 { 8 } else { bits.next_power_of_two() });
