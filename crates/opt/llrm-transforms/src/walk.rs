@@ -936,6 +936,9 @@ impl ProgramPass for Walk {
                                     if let Some(site) = site.filter(|_| {
                                         !crate::trial::inlining()
                                             && (finished
+                                                // -O1 refuses a modeled shrink under an eighth of the caller; the
+                                                // backend prices the finished chain (`trial_inlined`).
+                                                || (growth < 0 && !self.speed_rate && size == crate::inlinecost::CallerSize::Speed)
                                                 || (growth > 0
                                                     && tti.opt_size_inline_trial_limits().is_some_and(|(band, _)| growth * 100 <= kept_bytes * band)))
                                     }) {
