@@ -28,7 +28,9 @@
 //! DEVIATE SLP3 (owner arm64, exit 2026-11-24): `BlockScheduling`'s dependency
 //! graph is not built: the loads must all stand before the first store, and
 //! nothing else between the first load and the last store may write memory, nor
-//! read it after the first store.
+//! read it after the first store. A load or store between the window's stores
+//! that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes may stay
+//! (`StoreSeparation`); a call may not.
 //!
 //! # Runs
 //! Under `slpvectorize`, on a window of stores whose values are not all
@@ -465,6 +467,49 @@ pub(crate) fn try_window(
     (cost < -COST_THRESHOLD).then_some(tree)
 }
 
+/// The memory dependence `BlockScheduling` finds between a window's stores and
+/// an instruction standing among them (`calculateDependencies`, `BatchAA`):
+/// the vector store stands at the last of the stores, so a load or store that
+/// cannot alias any of them may stay where it is.
+pub(crate) struct StoreSeparation<'a> {
+    unit: &'a MemUnit<'a>,
+    stores: Vec<llrm_analysis::aa::MemoryLocation>,
+    aa: llrm_analysis::aggregate::AggregateAA<'a>,
+}
+
+impl<'a> StoreSeparation<'a> {
+    pub(crate) fn new(
+        unit: &'a MemUnit<'a>,
+        stores: impl Iterator<Item = InstId>,
+    ) -> Self {
+        let mut aa = llrm_analysis::aggregate::AggregateAA::new();
+        aa.add_aa_result(llrm_analysis::basicaa::BasicAA::new(unit));
+        aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(unit));
+        aa.add_aa_result(llrm_analysis::typebasedaa::TypeBasedAA::new(unit));
+        let stores = stores.filter_map(|store| llrm_analysis::aa::MemoryLocation::get(unit, store)).collect();
+        Self { unit, stores, aa }
+    }
+
+    /// Whether `inst` is a plain load or store that touches none of the stores'
+    /// bytes. A call, a volatile or atomic access, and a store whose place is
+    /// unknown are dependences.
+    pub(crate) fn clear(
+        &mut self,
+        function: &Function,
+        inst: InstId,
+    ) -> bool {
+        let plain = match function.instruction(inst).opcode {
+            Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => !volatile,
+            _ => false,
+        };
+        let Some(here) = llrm_analysis::aa::MemoryLocation::get(self.unit, inst).filter(|_| plain) else {
+            return false;
+        };
+        let mut batch = llrm_analysis::aa::BatchAAResults::new(&mut self.aa);
+        self.stores.iter().all(|store| batch.is_no_alias(&here, store))
+    }
+}
+
 /// DEVIATE SLP3: the scalars of the tree can stand as vectors where the last of
 /// each bundle is.
 fn schedulable(
@@ -491,9 +536,15 @@ fn schedulable(
         Opcode::Store { .. } | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg | Opcode::Load { .. } => true,
         _ => false,
     };
-    // The stores move to the last: nothing else between them touches memory.
+    // The stores move to the last: nothing else between them touches their bytes.
+    let mut separation = StoreSeparation::new(unit, root.insts.iter().copied());
     for (order, inst) in function.iter_block(seed).enumerate() {
-        if order > first_store && order < last_store && !made.contains_key(&inst) && touches(inst) {
+        if order > first_store
+            && order < last_store
+            && !made.contains_key(&inst)
+            && touches(inst)
+            && !separation.clear(function, inst)
+        {
             llrm_support::debug!("slp", "tree: {:?} stands between the stores", function.instruction(inst).opcode);
             return false;
         }

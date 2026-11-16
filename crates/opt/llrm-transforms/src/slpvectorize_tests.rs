@@ -64,6 +64,20 @@ store i16 1, ptr getelementptr inbounds (i8, ptr @bmp, i64 2), align 2\n  ret vo
     assert_eq!(text.matches("x i8>").count() + text.matches("x i16>").count(), 0, "{text}");
 }
 
+const INTERLEAVED: &str = include_str!("../tests/slp/interleaved_object_stores.ll");
+
+/// matmul -O2 (arm64): the stores of `a` and of `b` alternate, and ours took any
+/// store between a window's own as a dependence, so `a` got four-lane windows
+/// and `b` stayed scalar (943 executed instructions against clang's 840); the
+/// pin's scheduler orders stores to different objects freely and makes one
+/// `<8 x i16>` store of each.
+#[test]
+fn stores_to_another_object_between_a_window_do_not_split_it() {
+    let text = run(INTERLEAVED);
+    assert_eq!(text.matches("store <8 x i16>").count(), 2, "{text}");
+    assert_eq!(text.matches("store i16").count(), 0, "{text}");
+}
+
 /// x86 takes the SLP vectorizer's store chains too: the machine of the
 /// loop-vectorizer's x86 tests, with an SSE2 target's costs.
 struct X86At(std::rc::Rc<llrm_x86::tti::X86>);
