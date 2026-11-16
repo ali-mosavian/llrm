@@ -188,6 +188,16 @@ pub struct PhysLiveness {
     checkpoints: std::cell::RefCell<Vec<Option<Checkpoints>>>,
 }
 
+thread_local! {
+    /// Functions [`PhysLiveness::of`] solved on this thread since the last [`take_solved`].
+    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The functions solved on this thread since the last call.
+pub fn take_solved() -> usize {
+    SOLVED.with(|one| one.replace(0))
+}
+
 impl PhysLiveness {
     /// Solves the live-outs of every block: a block's live-in is its live-out
     /// stepped back over its instructions.
@@ -196,6 +206,7 @@ impl PhysLiveness {
         assignment: &Assignment,
         info: &Info,
     ) -> PhysLiveness {
+        SOLVED.with(|one| one.set(one.get() + 1));
         let succs = successors(function);
         let blocks = function.blocks.len();
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); blocks];

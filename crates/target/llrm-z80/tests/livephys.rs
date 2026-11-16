@@ -181,3 +181,17 @@ fn the_live_lanes_are_the_same_set_whatever_order_they_were_added_in() {
     one.remove(&REGISTER_INFO, reg::A);
     assert_eq!(one, other, "a register with no lane left is not kept");
 }
+
+/// `read_copies_at_their_source` and the post-update fold each solved the live
+/// registers of the whole function before looking for a candidate, 2% of the
+/// corpus compile: a function with no copy to move and no access to step has
+/// nothing to ask, and solves nothing.
+#[test]
+fn a_function_with_nothing_to_rewrite_is_not_solved_for_liveness() {
+    let mut f = function(vec![vec![def(reg::B), def(reg::C), read(reg::C), read(reg::B)], vec![read(reg::D)]]);
+    let assignment = Assignment(Vec::new());
+    llrm_spike_mf::livephys::take_solved();
+    llrm_z80::compile::read_copies_at_their_source(&mut f, &assignment);
+    llrm_z80::post_update::fold(&mut f, &assignment);
+    assert_eq!(llrm_spike_mf::livephys::take_solved(), 0);
+}
