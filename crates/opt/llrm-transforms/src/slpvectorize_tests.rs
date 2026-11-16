@@ -140,3 +140,19 @@ fn constant_stores_become_vector_stores_on_x86_64() {
     assert_eq!(text.matches(&splat).count(), 10, "{text}");
     assert_eq!(text.matches("store i16").count(), 0, "{text}");
 }
+
+const PHI_PAIR: &str = include_str!("../tests/slp/phi_pair_loop.ll");
+
+/// nbody -O2/-O3 (arm64): the loop's 16 `double` phis stayed scalar, because
+/// the only seeds were stores; the pin seeds from the phis of a block
+/// (`vectorizeChainsInBlock`) and makes `<2 x double>` phis. Two sums of
+/// consecutive loads stayed two `phi double`, two loads, two `fadd`.
+#[test]
+fn two_phis_of_consecutive_loads_become_a_vector_phi() {
+    let text = run(PHI_PAIR);
+    assert!(text.contains("phi <2 x double> [ <double 0.000000e+00, double 1.000000e+00>"), "{text}");
+    assert_eq!(text.matches("phi double").count(), 0, "{text}");
+    assert!(text.contains("load <2 x double>"), "{text}");
+    assert!(text.contains("fadd <2 x double>"), "{text}");
+    assert_eq!(text.matches("fadd double").count(), 1, "{text}");
+}

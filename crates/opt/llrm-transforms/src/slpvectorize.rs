@@ -23,11 +23,25 @@
 //! DEVIATE SLP1 (owner arm64, exit 2026-11-24): the narrower tree
 //! `slptree` states.
 //!
+//! The phis of a block seed trees too (`vectorizeChainsInBlock` l.35538): they
+//! are sorted by type, by the values that reach them (`PHICompare`), cut into
+//! runs that are alike (`AreCompatiblePHIs`) and each run is tried in windows
+//! (`tryToVectorizeSequence` l.34803, `tryToVectorizeList` l.30044). Before
+//! the store chains, as the pin's block loop does. DEVIATE SLP5 (owner arm64,
+//! exit 2026-11-27): two incoming binary operations are alike only when they
+//! are one opcode (no alternate-opcode state); a block stands before another
+//! in `PHICompare` by its place in the layout, not by the dominator tree's
+//! DFS number; the element size is the phi's own type (`getVectorElementSize`
+//! reads the loads that feed it).
+//!
 //! # Runs
 //! At the pin's `slp-vectorizer` slot (`PassBuilderPipelines.cpp` l.1455).
 //!
 //! # Used by
 //! `pipeline` (Late).
+
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -226,6 +240,528 @@ fn vectorize(
     }
 }
 
+/// `-slp-min-reg-size`.
+const MIN_VEC_REG_BITS: u64 = 128;
+/// `MaxPHINumOperands`: a block's phis are read until one has more.
+const MAX_PHI_OPERANDS: usize = 128;
+
+/// LLVM's opcode numbers (`Instruction.def`), as `PHICompare` orders by them.
+fn opcode_number(opcode: &Opcode) -> u32 {
+    use llrm_mir::opcode::{BinaryOp as B, CastOp as C};
+    match opcode {
+        Opcode::Binary(op) => match op {
+            B::Add => 13,
+            B::FAdd => 14,
+            B::Sub => 15,
+            B::FSub => 16,
+            B::Mul => 17,
+            B::FMul => 18,
+            B::UDiv => 19,
+            B::SDiv => 20,
+            B::FDiv => 21,
+            B::URem => 22,
+            B::SRem => 23,
+            B::FRem => 24,
+            B::Shl => 25,
+            B::LShr => 26,
+            B::AShr => 27,
+            B::And => 28,
+            B::Or => 29,
+            B::Xor => 30,
+        },
+        Opcode::Alloca { .. } => 31,
+        Opcode::Load { .. } => 32,
+        Opcode::Store { .. } => 33,
+        Opcode::GetElementPtr { .. } => 34,
+        Opcode::Cast(op) => match op {
+            C::Trunc => 38,
+            C::ZExt => 39,
+            C::SExt => 40,
+            C::FPToUI => 41,
+            C::FPToSI => 42,
+            C::UIToFP => 43,
+            C::SIToFP => 44,
+            C::FPTrunc | C::FPRound => 45,
+            C::FPExt => 46,
+            C::PtrToInt => 47,
+            C::IntToPtr => 48,
+            C::BitCast => 49,
+            C::AddrSpaceCast => 50,
+        },
+        Opcode::ICmp(_) => 53,
+        Opcode::FCmp(_) => 54,
+        Opcode::Phi => 55,
+        Opcode::Call(_) => 56,
+        Opcode::Select => 57,
+        Opcode::VaArg => 60,
+        Opcode::ExtractElement => 61,
+        Opcode::InsertElement => 62,
+        Opcode::ShuffleVector(_) => 63,
+        Opcode::ExtractValue(_) => 64,
+        Opcode::InsertValue(_) => 65,
+        Opcode::LandingPad { .. } => 66,
+        Opcode::Freeze => 67,
+        _ => 1,
+    }
+}
+
+/// `getNumberOfParts` of `count` lanes of `bits`: the registers the vector
+/// splits into.
+fn parts_of(
+    register_bits: u64,
+    bits: u64,
+    count: u64,
+) -> u64 {
+    (count * bits).div_ceil(register_bits).max(1)
+}
+
+/// `getFloorFullVectorNumberOfElements`.
+fn floor_full(
+    register_bits: u64,
+    bits: u64,
+    size: u64,
+) -> u64 {
+    let parts = parts_of(register_bits, bits, size);
+    let floor = if size == 0 { 0 } else { 1 << size.ilog2() };
+    if parts >= size {
+        return floor;
+    }
+    let per_register = size.div_ceil(parts).next_power_of_two();
+    if per_register > size { floor } else { size / per_register * per_register }
+}
+
+/// `hasFullVectorsOrPowerOf2`.
+fn full_or_power_of_two(
+    register_bits: u64,
+    bits: u64,
+    size: u64,
+) -> bool {
+    if size <= 1 {
+        return false;
+    }
+    if size.is_power_of_two() {
+        return true;
+    }
+    let parts = parts_of(register_bits, bits, size);
+    parts < size && (size / parts).is_power_of_two() && size % parts == 0
+}
+
+/// The phis of the blocks as `vectorizeChainsInBlock` seeds them.
+struct PhiSeeds<'a> {
+    context: &'a mut Context,
+    layout: &'a DataLayout,
+    declared: &'a mut Declared,
+    function: &'a mut Function,
+    outer: &'a Outer,
+    tti: &'a dyn Tti,
+    /// `PHIToOpcodes`: the values that reach each phi, other than phis.
+    opcodes: HashMap<InstId, Vec<Operand>>,
+    /// `isAnalyzedBundle`.
+    analyzed: HashSet<Vec<InstId>>,
+}
+
+impl PhiSeeds<'_> {
+    fn bits_of(
+        &self,
+        phi: InstId,
+    ) -> Option<u64> {
+        let ty = self.function.instruction(phi).ty;
+        lane_of(self.context, ty).map(|(_, bytes)| bytes * 8)
+    }
+
+    fn instruction_of(
+        &self,
+        operand: Operand,
+    ) -> Option<InstId> {
+        let Operand::Value(id) = operand else { return None };
+        match self.function.value(id).def {
+            llrm_mir::module::ValueDef::Instruction(inst) if self.function.parent(inst).is_some() => Some(inst),
+            _ => None,
+        }
+    }
+
+    fn undefined(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        matches!(
+            operand,
+            Operand::Constant(id) if matches!(self.context.get(id).kind, ConstantKind::Undef | ConstantKind::Poison)
+        )
+    }
+
+    fn block_rank(
+        &self,
+        block: BlockId,
+    ) -> usize {
+        self.function.layout().iter().position(|one| *one == block).unwrap_or(usize::MAX)
+    }
+
+    /// The non-phi values that reach `phi` through phis.
+    fn reaching(
+        &self,
+        phi: InstId,
+    ) -> Vec<Operand> {
+        let mut reached = Vec::new();
+        let mut nodes = vec![phi];
+        let mut visited = HashSet::new();
+        while let Some(node) = nodes.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            for pair in self.function.instruction(node).operands.chunks(2) {
+                match self.instruction_of(pair[0]).filter(|one| self.function.instruction(*one).opcode == Opcode::Phi) {
+                    Some(inner) => nodes.push(inner),
+                    None => reached.push(pair[0]),
+                }
+            }
+        }
+        reached
+    }
+
+    /// `PHICompare`: whether `a` stands before `b`.
+    fn compare(
+        &self,
+        a: InstId,
+        b: InstId,
+    ) -> Ordering {
+        if a == b {
+            return Ordering::Equal;
+        }
+        let (one, two) = (self.function.instruction(a), self.function.instruction(b));
+        let rank = |ty| match self.context.types.get(ty) {
+            Type::Float(FloatKind::Float) => (3, 32),
+            Type::Float(_) => (4, 64),
+            Type::Int(bits) => (12, u32::from(*bits)),
+            _ => (99, 0),
+        };
+        // Types by id, then by size.
+        let by_type = rank(one.ty).cmp(&rank(two.ty));
+        if by_type != Ordering::Equal {
+            return by_type;
+        }
+        let (first, second) = (&self.opcodes[&a], &self.opcodes[&b]);
+        let by_count = first.len().cmp(&second.len());
+        if by_count != Ordering::Equal {
+            return by_count;
+        }
+        for (x, y) in first.iter().zip(second) {
+            // Instructions come first, by block and then by opcode.
+            match (self.instruction_of(*x), self.instruction_of(*y)) {
+                (Some(i1), Some(i2)) => {
+                    let (b1, b2) = (self.function.parent(i1).unwrap(), self.function.parent(i2).unwrap());
+                    if b1 != b2 {
+                        return self.block_rank(b1).cmp(&self.block_rank(b2));
+                    }
+                    let (n1, n2) =
+                        (opcode_number(&self.function.instruction(i1).opcode), opcode_number(&self.function.instruction(i2).opcode));
+                    if n1 != n2 {
+                        return n1.cmp(&n2);
+                    }
+                    continue;
+                }
+                (Some(_), None) => return Ordering::Less,
+                (None, Some(_)) => return Ordering::Greater,
+                (None, None) => {}
+            }
+            // Non-undef constants next.
+            let constant = |operand| matches!(operand, Operand::Constant(_)) && !self.undefined(operand);
+            match (constant(*x), constant(*y)) {
+                (true, true) => continue,
+                (true, false) => return Ordering::Less,
+                (false, true) => return Ordering::Greater,
+                _ => {}
+            }
+            // Non-constant non-instructions (arguments) before undefs.
+            match (self.undefined(*x), self.undefined(*y)) {
+                (false, false) => continue,
+                (false, true) => return Ordering::Less,
+                (true, false) => return Ordering::Greater,
+                (true, true) => {}
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// `AreCompatiblePHIs`: `last` (the run's back) and `next` take one tree.
+    fn compatible(
+        &self,
+        last: InstId,
+        next: InstId,
+    ) -> bool {
+        if next == last {
+            return true;
+        }
+        if self.function.instruction(next).ty != self.function.instruction(last).ty {
+            return false;
+        }
+        let (first, second) = (&self.opcodes[&next], &self.opcodes[&last]);
+        if first.len() != second.len() {
+            return false;
+        }
+        for (x, y) in first.iter().zip(second) {
+            if self.undefined(*x) || self.undefined(*y) {
+                continue;
+            }
+            if let (Some(i1), Some(i2)) = (self.instruction_of(*x), self.instruction_of(*y)) {
+                if self.function.is_erased(i1) || self.function.is_erased(i2) {
+                    return false;
+                }
+                if self.function.parent(i1) != self.function.parent(i2) {
+                    return false;
+                }
+                if self.function.instruction(i1).opcode == self.function.instruction(i2).opcode
+                    && self.function.instruction(i1).ty == self.function.instruction(i2).ty
+                {
+                    continue;
+                }
+                return false;
+            }
+            if matches!(x, Operand::Constant(_)) && matches!(y, Operand::Constant(_)) {
+                continue;
+            }
+            if std::mem::discriminant(x) != std::mem::discriminant(y)
+                || self.instruction_of(*x).is_some() != self.instruction_of(*y).is_some()
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The tree of `ops`, if it pays.
+    fn tree_of(
+        &self,
+        block: BlockId,
+        ops: &[InstId],
+    ) -> Option<crate::slptree::Tree> {
+        let unit = MemUnit::within(self.context, self.layout, self.function, self.outer);
+        let mut session = llrm_analysis::scev::analysis::ScevSession::of(self.context, self.function, self.outer);
+        session.ask_within(
+            self.context,
+            self.layout,
+            &self.outer.globals,
+            &self.outer.metadata,
+            self.function,
+            |se, cx| {
+                let scaler = crate::slptree::Scaler::new(se, cx);
+                crate::slptree::try_phis(&unit, self.function, block, ops, self.tti, &scaler)
+            },
+        )
+    }
+
+    /// `tryToVectorizeList` of phis.
+    fn try_list(
+        &mut self,
+        block: BlockId,
+        list: &[InstId],
+        max_vf_only: bool,
+    ) -> bool {
+        if list.len() < 2 {
+            return false;
+        }
+        let Some(bits) = self.bits_of(list[0]) else { return false };
+        let register = u64::from(self.tti.vector_register_bits());
+        let min_vf = (MIN_VEC_REG_BITS / bits).max(2);
+        let max_vf = floor_full(register, bits, list.len() as u64).max(min_vf);
+        if max_vf < 2 {
+            return false;
+        }
+        let mut changed = false;
+        let (mut next, max) = (0usize, list.len());
+        let mut vf = max_vf;
+        while next + 1 < max && vf >= min_vf {
+            if parts_of(register, bits, vf) != vf {
+                let mut at = next;
+                while at < max {
+                    let actual = (max - at).min(vf as usize) as u64;
+                    if !full_or_power_of_two(register, bits, actual) {
+                        at += 1;
+                        continue;
+                    }
+                    if max_vf_only && actual < max_vf {
+                        break;
+                    }
+                    if (vf > min_vf && actual < vf) || (vf == min_vf && actual < 2) {
+                        break;
+                    }
+                    let ops: Vec<InstId> = list[at..]
+                        .iter()
+                        .copied()
+                        .filter(|phi| !self.function.is_erased(*phi))
+                        .take(actual as usize)
+                        .collect();
+                    if ops.len() as u64 != actual {
+                        break;
+                    }
+                    if self.analyzed.contains(&ops) {
+                        at += 1;
+                        continue;
+                    }
+                    match self.tree_of(block, &ops) {
+                        Some(tree) => {
+                            crate::slptree::emit(self.context, self.declared, self.function, &tree, None);
+                            at += vf as usize - 1;
+                            next = at + 1;
+                            changed = true;
+                        }
+                        None => {
+                            self.analyzed.insert(ops);
+                        }
+                    }
+                    at += 1;
+                }
+            }
+            vf = floor_full(register, bits, vf - 1);
+            if vf < 2 {
+                break;
+            }
+        }
+        changed
+    }
+
+    /// `tryToVectorizeSequence` over `incoming`, sorted by `PHICompare`.
+    fn sequence(
+        &mut self,
+        block: BlockId,
+        mut incoming: Vec<InstId>,
+    ) -> bool {
+        incoming.sort_by(|a, b| self.compare(*a, *b));
+        let mut changed = false;
+        let mut candidates: Vec<InstId> = Vec::new();
+        let live = |this: &Self, list: &[InstId]| -> Vec<InstId> {
+            list.iter().copied().filter(|phi| !this.function.is_erased(*phi)).collect()
+        };
+        let mut at = 0;
+        while at < incoming.len() {
+            if self.function.is_erased(incoming[at]) || self.bits_of(incoming[at]).is_none() {
+                at += 1;
+                continue;
+            }
+            let start = at;
+            let mut run: Vec<InstId> = Vec::new();
+            while at < incoming.len()
+                && (self.function.is_erased(incoming[at])
+                    || run.last().is_none_or(|last| self.compatible(*last, incoming[at])))
+            {
+                if !self.function.is_erased(incoming[at]) {
+                    run.push(incoming[at]);
+                }
+                at += 1;
+            }
+            let bits = self.bits_of(incoming[start]).expect("a lane type");
+            if run.len() > 1 && self.try_list(block, &run, true) {
+                changed = true;
+                candidates = live(self, &run);
+            } else if (run.len() as u64) < (u64::from(self.tti.vector_register_bits()) / bits).max(2)
+                && (candidates.is_empty()
+                    || self.function.instruction(candidates[0]).ty == self.function.instruction(incoming[start]).ty)
+            {
+                candidates.extend(live(self, &run));
+            }
+            // The last of its type: what is left is tried at any factor.
+            let boundary = at >= incoming.len()
+                || self.function.instruction(incoming[at]).ty != self.function.instruction(incoming[start]).ty;
+            if candidates.len() > 1 && boundary {
+                if self.try_list(block, &candidates, false) {
+                    changed = true;
+                } else {
+                    let mut rest = 0;
+                    while rest < candidates.len() {
+                        if self.function.is_erased(candidates[rest]) {
+                            rest += 1;
+                            continue;
+                        }
+                        let from = rest;
+                        let mut small: Vec<InstId> = Vec::new();
+                        while rest < candidates.len()
+                            && (self.function.is_erased(candidates[rest])
+                                || self.compatible(candidates[rest], candidates[from]))
+                        {
+                            if !self.function.is_erased(candidates[rest]) {
+                                small.push(candidates[rest]);
+                            }
+                            rest += 1;
+                        }
+                        if small.len() > 1 && self.try_list(block, &small, false) {
+                            changed = true;
+                        }
+                    }
+                }
+                candidates.clear();
+            }
+        }
+        changed
+    }
+
+    /// `vectorizeChainsInBlock`'s phi loop.
+    fn block(
+        &mut self,
+        block: BlockId,
+    ) -> bool {
+        let mut changed = false;
+        let mut visited: HashSet<InstId> = HashSet::new();
+        loop {
+            let mut incoming: Vec<InstId> = Vec::new();
+            for inst in self.function.iter_block(block).collect::<Vec<_>>() {
+                let phi = self.function.instruction(inst);
+                if phi.opcode != Opcode::Phi || phi.operands.len() / 2 > MAX_PHI_OPERANDS {
+                    break;
+                }
+                if !visited.contains(&inst) && self.bits_of(inst).is_some() {
+                    incoming.push(inst);
+                }
+            }
+            if incoming.len() <= 1 {
+                break;
+            }
+            for phi in &incoming {
+                if !self.opcodes.get(phi).is_some_and(|reached| !reached.is_empty()) {
+                    let reached = self.reaching(*phi);
+                    self.opcodes.insert(*phi, reached);
+                }
+            }
+            let vectorized = self.sequence(block, incoming.clone());
+            changed |= vectorized;
+            if vectorized {
+                self.opcodes.clear();
+            }
+            visited.extend(incoming);
+            if !vectorized {
+                break;
+            }
+        }
+        changed
+    }
+}
+
+/// The phis of each block as seeds; whether any tree was made.
+fn run_phis(
+    context: &mut Context,
+    layout: &DataLayout,
+    declared: &mut Declared,
+    function: &mut Function,
+    outer: &Outer,
+    tti: &dyn Tti,
+) -> bool {
+    let mut changed = false;
+    let blocks = function.layout().to_vec();
+    let mut seeds = PhiSeeds {
+        context,
+        layout,
+        declared,
+        function,
+        outer,
+        tti,
+        opcodes: HashMap::new(),
+        analyzed: HashSet::new(),
+    };
+    for block in blocks {
+        changed |= seeds.block(block);
+    }
+    changed
+}
+
 /// Store chains to vector stores in `function`; whether any was made.
 fn run_function(
     context: &mut Context,
@@ -235,6 +771,7 @@ fn run_function(
     outer: &Outer,
     tti: &dyn Tti,
 ) -> bool {
+    let phis = run_phis(context, layout, declared, function, outer, tti);
     let mut plan: Vec<(TypeId, Vec<Seed>)> = Vec::new();
     {
         let unit = MemUnit::within(context, layout, function, outer);
@@ -273,7 +810,7 @@ fn run_function(
     for (ty, window) in &plan {
         vectorize(context, function, *ty, window);
     }
-    let mut changed = !plan.is_empty();
+    let mut changed = phis || !plan.is_empty();
     // One tree at a time, the function read again after each.
     while let Some((tree, align)) = next_tree(context, layout, function, outer, tti) {
         crate::slptree::emit(context, declared, function, &tree, align);

@@ -59,6 +59,8 @@ use llrm_mir::types::{FloatKind, Type, TypeId};
 const MAX_DEPTH: usize = 12;
 /// `-slp-threshold`.
 const COST_THRESHOLD: i64 = 0;
+/// `-slp-phi-vectorization-budget`.
+const PHI_BUDGET: usize = 1024;
 
 /// `getShallowScore`'s scores (`LookAheadHeuristics`, l.1081).
 const SCORE_CONSECUTIVE_LOADS: i32 = 40;
@@ -78,6 +80,8 @@ enum Kind {
     ICmp(IntPredicate),
     FCmp(FloatPredicate),
     Select,
+    /// The phis of one block, an operand column for each incoming block.
+    Phi,
     /// A vector built from its scalars.
     Gather,
 }
@@ -93,6 +97,8 @@ struct Entry {
     operands: Vec<usize>,
     /// The type of one lane (a compare's is `i1`).
     lane_ty: TypeId,
+    /// A phi bundle's incoming blocks, one for each operand column.
+    incoming: Vec<BlockId>,
 }
 
 /// A tree that is worth making, ready for [`emit`].
@@ -209,7 +215,14 @@ impl Builder<'_, '_> {
         if lanes.iter().any(|lane| self.inst_of(*lane).is_some_and(|inst| self.made.contains_key(&inst))) {
             self.failed = true;
         }
-        self.entries.push(Entry { kind: Kind::Gather, lanes, insts: Vec::new(), operands: Vec::new(), lane_ty });
+        self.entries.push(Entry {
+            kind: Kind::Gather,
+            lanes,
+            insts: Vec::new(),
+            operands: Vec::new(),
+            lane_ty,
+            incoming: Vec::new(),
+        });
         self.entries.len() - 1
     }
 
@@ -319,6 +332,9 @@ impl Builder<'_, '_> {
         if lane_ty_of(self.context(), lane_ty).is_none() {
             return self.gather(lanes, lane_ty);
         }
+        if first.opcode == Opcode::Phi {
+            return self.build_phis(lanes, insts, lane_ty, depth);
+        }
         let (kind, arity, swappable, skip) = match &first.opcode {
             Opcode::Load { volatile: false, .. } => (Kind::Load, 0, false, 0),
             Opcode::Binary(op) => (Kind::Binary(*op), 2, commutative(*op), 0),
@@ -369,7 +385,14 @@ impl Builder<'_, '_> {
             return self.gather(lanes, lane_ty);
         }
         let entry = self.entries.len();
-        self.entries.push(Entry { kind, lanes: lanes.clone(), insts: insts.clone(), operands: Vec::new(), lane_ty });
+        self.entries.push(Entry {
+            kind,
+            lanes: lanes.clone(),
+            insts: insts.clone(),
+            operands: Vec::new(),
+            lane_ty,
+            incoming: Vec::new(),
+        });
         for inst in &insts {
             self.made.insert(*inst, entry);
         }
@@ -378,6 +401,79 @@ impl Builder<'_, '_> {
             let children: Vec<usize> = columns.into_iter().map(|column| self.build(column, depth + 1)).collect();
             self.entries[entry].operands = children;
         }
+        entry
+    }
+
+    /// The phis of a bundle read for each incoming block of the first
+    /// (`PHIHandler::buildOperands`); `None` when the phis do not share one
+    /// set of distinct incoming blocks.
+    fn phi_columns(
+        &self,
+        insts: &[InstId],
+    ) -> Option<(Vec<BlockId>, Vec<Vec<Operand>>)> {
+        let arms = |inst: InstId| -> Vec<(Operand, BlockId)> {
+            self.function
+                .instruction(inst)
+                .operands
+                .chunks(2)
+                .filter_map(
+                    |pair| match pair[1] {
+                        Operand::Block(block) => Some((pair[0], block)),
+                        _ => None,
+                    },
+                )
+                .collect()
+        };
+        let blocks: Vec<BlockId> = arms(insts[0]).iter().map(|arm| arm.1).collect();
+        if blocks.iter().enumerate().any(|(at, block)| blocks[..at].contains(block)) {
+            return None;
+        }
+        let mut columns: Vec<Vec<Operand>> = vec![Vec::with_capacity(insts.len()); blocks.len()];
+        for inst in insts {
+            let theirs = arms(*inst);
+            if theirs.len() != blocks.len() {
+                return None;
+            }
+            for (column, block) in columns.iter_mut().zip(&blocks) {
+                column.push(theirs.iter().find(|arm| arm.1 == *block)?.0);
+            }
+        }
+        Some((blocks, columns))
+    }
+
+    /// `buildTreeRec`'s `Instruction::PHI`: the entry is made before its
+    /// operands, so a latch value that reads the phis again finds it.
+    fn build_phis(
+        &mut self,
+        lanes: Vec<Operand>,
+        insts: Vec<InstId>,
+        lane_ty: TypeId,
+        depth: usize,
+    ) -> usize {
+        let ty = self.function.instruction(insts[0]).ty;
+        let columns = if insts.iter().all(|inst| self.function.instruction(*inst).ty == ty) {
+            self.phi_columns(&insts)
+        } else {
+            None
+        };
+        // `-slp-phi-vectorization-budget`.
+        let Some((incoming, columns)) = columns.filter(|(blocks, _)| insts.len() * blocks.len() <= PHI_BUDGET) else {
+            return self.gather(lanes, lane_ty);
+        };
+        let entry = self.entries.len();
+        self.entries.push(Entry {
+            kind: Kind::Phi,
+            lanes,
+            insts: insts.clone(),
+            operands: Vec::new(),
+            lane_ty,
+            incoming,
+        });
+        for inst in &insts {
+            self.made.insert(*inst, entry);
+        }
+        let children: Vec<usize> = columns.into_iter().map(|column| self.build(column, depth + 1)).collect();
+        self.entries[entry].operands = children;
         entry
     }
 
@@ -437,6 +533,7 @@ pub(crate) fn try_window(
                 insts: stores.to_vec(),
                 operands: Vec::new(),
                 lane_ty: store_ty,
+                incoming: Vec::new(),
             },
         );
     for store in stores {
@@ -465,6 +562,66 @@ pub(crate) fn try_window(
     let cost = cost_of(unit, function, &tree, &made, align, tti, scaler)?;
     llrm_support::debug!("slp", "tree of {} entries x{}: cost {cost}", tree.entries.len(), stores.len());
     (cost < -COST_THRESHOLD).then_some(tree)
+}
+
+/// `tryToVectorizeList` on the phis `phis` of one block: their tree, if it
+/// pays. The root is the phi bundle; nothing is stored.
+pub(crate) fn try_phis(
+    unit: &MemUnit,
+    function: &Function,
+    block: BlockId,
+    phis: &[InstId],
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<Tree> {
+    let position = positions(function);
+    let lanes: Vec<Operand> = phis.iter().map(|phi| result_of(function, *phi)).collect();
+    let mut builder =
+        Builder { unit, function, block, entries: Vec::new(), made: IdMap::new(), position, failed: false };
+    builder.build(lanes, 0);
+    if builder.failed || builder.entries.first().is_none_or(|root| root.kind != Kind::Phi) {
+        llrm_support::debug!("slp", "phi tree x{}: no phi bundle{}", phis.len(), if builder.failed { ", a lane used as a gather" } else { "" });
+        return None;
+    }
+    let tree = Tree { entries: builder.entries, block };
+    let made = builder.made;
+    let position = builder.position;
+    if tiny_without_stores(&tree) {
+        llrm_support::debug!("slp", "phi tree x{}: tiny", phis.len());
+        return None;
+    }
+    if !schedulable(unit, function, &tree, &made, &position) {
+        llrm_support::debug!("slp", "phi tree: not schedulable");
+        return None;
+    }
+    let cost = cost_of(unit, function, &tree, &made, 1, tti, scaler)?;
+    llrm_support::debug!("slp", "phi tree of {} entries x{}: cost {cost}", tree.entries.len(), phis.len());
+    (cost < -COST_THRESHOLD).then_some(tree)
+}
+
+/// `isTreeTinyAndNotFullyVectorizable`, the parts a tree without a store root
+/// meets: three entries whose two others are small gathers, one vector entry
+/// among gathers that only repack, phis and gathers alone.
+fn tiny_without_stores(tree: &Tree) -> bool {
+    let gather = |entry: &Entry| entry.kind == Kind::Gather;
+    let constant_lanes = |entry: &Entry| entry.lanes.iter().all(|lane| constant_of(*lane));
+    let splat = |entry: &Entry| entry.lanes.iter().all(|lane| *lane == entry.lanes[0]);
+    let rest = &tree.entries[1..];
+    // `-slp-min-tree-size` 3: the tree of a root and two gathers.
+    if tree.entries.len() == 3
+        && rest.iter().all(|entry| gather(entry) && entry.lanes.len() <= 4 && !constant_lanes(entry))
+    {
+        return true;
+    }
+    let vector = tree.entries.iter().filter(|entry| !gather(entry)).count();
+    if tree.entries.len() > 1
+        && vector == 1
+        && rest.iter().all(|entry| gather(entry) && !splat(entry) && !constant_lanes(entry))
+    {
+        return true;
+    }
+    // "Only PHI nodes and gathers": the phis cost nothing.
+    tree.entries.iter().all(|entry| gather(entry) || entry.kind == Kind::Phi)
 }
 
 /// The memory dependence `BlockScheduling` finds between a window's stores and
@@ -510,6 +667,40 @@ impl<'a> StoreSeparation<'a> {
     }
 }
 
+/// Whether a lane of `entry` reads another lane of it through the
+/// instructions of `block` standing from `first` on.
+fn lanes_depend(
+    function: &Function,
+    entry: &Entry,
+    block: BlockId,
+    first: usize,
+    position: &IdMap<InstId, usize>,
+) -> bool {
+    if entry.insts.len() < 2 {
+        return false;
+    }
+    let mut seen = llrm_mir::dense::IdSet::<InstId>::new();
+    let mut stack: Vec<InstId> = entry.insts.clone();
+    while let Some(inst) = stack.pop() {
+        for operand in &function.instruction(inst).operands {
+            let Operand::Value(id) = operand else { continue };
+            let ValueDef::Instruction(def) = function.value(*id).def else { continue };
+            if function.parent(def) != Some(block)
+                || position[&def] < first
+                || function.instruction(def).opcode == Opcode::Phi
+                || !seen.insert(def)
+            {
+                continue;
+            }
+            if entry.insts.contains(&def) {
+                return true;
+            }
+            stack.push(def);
+        }
+    }
+    false
+}
+
 /// DEVIATE SLP3: the scalars of the tree can stand as vectors where the last of
 /// each bundle is.
 fn schedulable(
@@ -521,9 +712,10 @@ fn schedulable(
 ) -> bool {
     let at = |inst: &InstId| position[inst];
     let root = &tree.entries[0];
-    let seed = function.parent(root.insts[0]).expect("a placed store");
-    let (first_store, last_store) =
-        (root.insts.iter().map(at).min().expect("stores"), root.insts.iter().map(at).max().expect("stores"));
+    let seed = function.parent(root.insts[0]).expect("a placed root");
+    // The stores of a store root: the vector store stands at the last.
+    let stores = (root.kind == Kind::Store)
+        .then(|| (root.insts.iter().map(at).min().expect("stores"), root.insts.iter().map(at).max().expect("stores")));
     // A call of an intrinsic that computes each lane from its arguments
     // (`isTriviallyVectorizable`) touches no memory.
     let pure_call = |inst: InstId| {
@@ -536,17 +728,19 @@ fn schedulable(
         Opcode::Store { .. } | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg | Opcode::Load { .. } => true,
         _ => false,
     };
-    // The stores move to the last: nothing else between them touches their bytes.
-    let mut separation = StoreSeparation::new(unit, root.insts.iter().copied());
-    for (order, inst) in function.iter_block(seed).enumerate() {
-        if order > first_store
-            && order < last_store
-            && !made.contains_key(&inst)
-            && touches(inst)
-            && !separation.clear(function, inst)
-        {
-            llrm_support::debug!("slp", "tree: {:?} stands between the stores", function.instruction(inst).opcode);
-            return false;
+    if let Some((first_store, last_store)) = stores {
+        // The stores move to the last: nothing else between them touches their bytes.
+        let mut separation = StoreSeparation::new(unit, root.insts.iter().copied());
+        for (order, inst) in function.iter_block(seed).enumerate() {
+            if order > first_store
+                && order < last_store
+                && !made.contains_key(&inst)
+                && touches(inst)
+                && !separation.clear(function, inst)
+            {
+                llrm_support::debug!("slp", "tree: {:?} stands between the stores", function.instruction(inst).opcode);
+                return false;
+            }
         }
     }
     for entry in &tree.entries {
@@ -556,10 +750,19 @@ fn schedulable(
         let block = function.parent(entry.insts[0]).expect("a placed bundle");
         let (first, last) =
             (entry.insts.iter().map(at).min().expect("a bundle"), entry.insts.iter().map(at).max().expect("a bundle"));
+        // The lanes of a bundle cannot read one another: they stand as one
+        // instruction (`BlockScheduling` cancels a cyclic bundle).
+        if entry.kind != Kind::Phi && lanes_depend(function, entry, block, first, position) {
+            llrm_support::debug!("slp", "tree: a lane reads another lane of its bundle");
+            return false;
+        }
         if entry.kind == Kind::Load {
             // Loads of the seed block stand before its first store; the loads
             // move down to the last, past nothing that writes.
-            if block == seed && last > first_store {
+            if let Some((first_store, _)) = stores
+                && block == seed
+                && last > first_store
+            {
                 llrm_support::debug!("slp", "tree: a load stands after the first store");
                 return false;
             }
@@ -820,6 +1023,8 @@ fn entry_cost(
                 let wide = valid(tti.vector_cmp_sel_cost(CmpSel::Select, vector, predicate, kind)?)?;
                 wide - n * valid(tti.cmp_sel_cost(CmpSel::Select, lane, kind))?
             }
+            // The phis cost nothing, scalar or vector (`getEntryCost`, l.16449).
+            Kind::Phi => 0,
             Kind::Gather => gather_cost(context, tti, entry, vector, kind)?,
         };
         llrm_support::debug!("slp", "entry {:?} x{}: {}", entry.kind, count, entry_cost);
@@ -875,6 +1080,14 @@ fn gather_cost(
     Some(total)
 }
 
+/// Where a made instruction goes: right after an instruction, or right before
+/// a block's terminator.
+#[derive(Clone, Copy)]
+enum Anchor {
+    After(InstId),
+    Before(InstId),
+}
+
 /// Where the next vector made for an anchor goes: after the last one made for
 /// it, so a gather stands before the bundle that reads it.
 #[derive(Default)]
@@ -892,6 +1105,20 @@ impl Placer {
         let at = self.cursor.get(&anchor).copied().unwrap_or(anchor);
         function.insert(made, Position::After(at)).expect("the anchor's block");
         self.cursor.insert(anchor, made);
+    }
+
+    fn place(
+        &mut self,
+        function: &mut Function,
+        anchor: Anchor,
+        made: InstId,
+    ) {
+        match anchor {
+            Anchor::After(anchor) => self.after(function, anchor, made),
+            Anchor::Before(terminator) => {
+                function.insert(made, Position::Before(terminator)).expect("the terminator's block");
+            }
+        }
     }
 }
 
@@ -932,40 +1159,72 @@ pub(crate) fn emit(
     let position = positions(function);
     let last_of = |entry: &Entry| *entry.insts.iter().max_by_key(|inst| position[*inst]).expect("a bundle");
     let mut placer = Placer::default();
-    // The vector of each entry, children first.
+    // The vector of each entry, children first; a phi's before them, since a
+    // latch value reads it, and its incoming values once they exist.
     let mut vectors: Vec<Option<Operand>> = vec![None; tree.entries.len()];
-    let mut order: Vec<usize> = Vec::new();
+    let mut order: Vec<(usize, bool)> = Vec::new();
     fn visit(
         tree: &Tree,
         at: usize,
-        order: &mut Vec<usize>,
+        seen: &mut [bool],
+        order: &mut Vec<(usize, bool)>,
     ) {
+        if std::mem::replace(&mut seen[at], true) {
+            return;
+        }
+        let phi = tree.entries[at].kind == Kind::Phi;
+        if phi {
+            order.push((at, false));
+        }
         for child in &tree.entries[at].operands {
-            if !order.contains(child) {
-                visit(tree, *child, order);
-            }
+            visit(tree, *child, seen, order);
         }
-        if !order.contains(&at) {
-            order.push(at);
-        }
+        order.push((at, phi));
     }
-    visit(tree, 0, &mut order);
-    for at in order {
+    visit(tree, 0, &mut vec![false; tree.entries.len()], &mut order);
+    for (at, fill) in order {
         let entry = &tree.entries[at];
         let count = entry.lanes.len();
         let vector_ty = vector_of(context, entry.lane_ty, count);
+        if fill {
+            // The phi's incoming values, now that its operands are made.
+            let phi = defined_by(function, vectors[at].expect("the vector phi"));
+            let mut arms = Vec::with_capacity(entry.incoming.len() * 2);
+            for (block, child) in entry.incoming.iter().zip(&entry.operands) {
+                arms.push(vectors[*child].expect("an operand made first"));
+                arms.push(Operand::Block(*block));
+            }
+            function.set_operands(phi, arms);
+            continue;
+        }
+        if entry.kind == Kind::Phi {
+            // After the block's phis, as the pin's builder stands at its first
+            // non-phi.
+            let phi = function.create_instruction(Opcode::Phi, vector_ty, Vec::new(), Flags::default(), None);
+            placer.after(function, last_phi_of(function, entry.insts[0]), phi);
+            vectors[at] = Some(result_of(function, phi));
+            continue;
+        }
         let operands: Vec<Operand> =
             entry.operands.iter().map(|child| vectors[*child].expect("an operand made first")).collect();
         let made = match &entry.kind {
             Kind::Gather => {
                 // Built right before the bundle that reads it.
                 let user = tree.entries.iter().position(|one| one.operands.contains(&at)).expect("a user");
-                // A user's vector stands after its last scalar: the gather
-                // stands there too, before the user, after every lane it reads.
-                let anchor = last_of(&tree.entries[user]);
+                let user = &tree.entries[user];
+                let anchor = if user.kind == Kind::Phi {
+                    // A phi reads it at the end of the incoming block.
+                    let column = user.operands.iter().position(|one| *one == at).expect("a column");
+                    let block = user.incoming[column];
+                    Anchor::Before(function.terminator(block).expect("a terminated block"))
+                } else {
+                    // A user's vector stands after its last scalar: the gather
+                    // stands there too, before the user, after every lane it reads.
+                    Anchor::After(last_of(user))
+                };
                 Some(build_vector(context, function, &mut placer, anchor, entry, vector_ty))
             }
-            Kind::Store => None,
+            Kind::Store | Kind::Phi => None,
             kind => {
                 let lead = function.instruction(entry.insts[0]).clone();
                 let mut flags = lead.flags;
@@ -1020,7 +1279,7 @@ pub(crate) fn emit(
                         vectors[at] = Some(result_of(function, made));
                         continue;
                     }
-                    Kind::Store | Kind::Gather => unreachable!(),
+                    Kind::Store | Kind::Gather | Kind::Phi => unreachable!(),
                 };
                 let ops = if matches!(kind, Kind::Load) {
                     vec![function.instruction(entry.insts[0]).operands[0]]
@@ -1036,18 +1295,20 @@ pub(crate) fn emit(
     }
     // The vector store, at the last store.
     let root = &tree.entries[0];
-    let last = last_of(root);
-    let vector = vectors[root.operands[0]].expect("the stored vector");
-    let pointer = function.instruction(root.insts[0]).operands[1];
-    let void = context.types.void();
-    let store = function.create_instruction(
-        Opcode::Store { align: store_align, volatile: false },
-        void,
-        vec![vector, pointer],
-        Flags::default(),
-        None,
-    );
-    placer.after(function, last, store);
+    if root.kind == Kind::Store {
+        let last = last_of(root);
+        let vector = vectors[root.operands[0]].expect("the stored vector");
+        let pointer = function.instruction(root.insts[0]).operands[1];
+        let void = context.types.void();
+        let store = function.create_instruction(
+            Opcode::Store { align: store_align, volatile: false },
+            void,
+            vec![vector, pointer],
+            Flags::default(),
+            None,
+        );
+        placer.after(function, last, store);
+    }
     // The lanes some user outside the tree reads.
     let tree_insts: Vec<InstId> = tree.entries.iter().flat_map(|entry| entry.insts.iter().copied()).collect();
     let i32_ty = context.types.int(64);
@@ -1078,7 +1339,12 @@ pub(crate) fn emit(
                 Flags::default(),
                 None,
             );
-            function.insert(extract, Position::After(defined)).expect("the vector's block");
+            if entry.kind == Kind::Phi {
+                // Phis stay grouped: the extract follows the last of them.
+                placer.after(function, last_phi_of(function, entry.insts[0]), extract);
+            } else {
+                function.insert(extract, Position::After(defined)).expect("the vector's block");
+            }
             let value = result_of(function, extract);
             for (user, operand) in outside {
                 let mut operands = function.instruction(user).operands.clone();
@@ -1088,7 +1354,8 @@ pub(crate) fn emit(
         }
     }
     // The scalars: each goes where nothing reads it; a user may stand in a
-    // block after its operand's, so the rest are taken again.
+    // block after its operand's, so the rest are taken again. What is left
+    // reads only itself (a phi and its latch value): all go at once.
     let mut doomed: Vec<InstId> = tree_insts;
     loop {
         let before = doomed.len();
@@ -1104,7 +1371,33 @@ pub(crate) fn emit(
             break;
         }
     }
+    if !doomed.is_empty() {
+        function.erase_all(&doomed).expect("scalars only the tree reads");
+    }
     let _ = ValueId(0);
+}
+
+/// The instruction that defines `vector`.
+fn defined_by(
+    function: &Function,
+    vector: Operand,
+) -> InstId {
+    let Operand::Value(id) = vector else { unreachable!("a made vector") };
+    let ValueDef::Instruction(inst) = function.value(id).def else { unreachable!("a made vector") };
+    inst
+}
+
+/// The last phi of the block of `inst`, a phi.
+fn last_phi_of(
+    function: &Function,
+    inst: InstId,
+) -> InstId {
+    let block = function.parent(inst).expect("a placed phi");
+    function
+        .iter_block(block)
+        .take_while(|one| function.instruction(*one).opcode == Opcode::Phi)
+        .last()
+        .expect("a phi")
 }
 
 /// The vector of a gather: constants as a constant, one value as a splat, any
@@ -1113,7 +1406,7 @@ fn build_vector(
     context: &mut Context,
     function: &mut Function,
     placer: &mut Placer,
-    anchor: InstId,
+    anchor: Anchor,
     entry: &Entry,
     vector_ty: TypeId,
 ) -> Operand {
@@ -1137,7 +1430,7 @@ fn build_vector(
     let count = entry.lanes.len();
     let mut insert = |function: &mut Function, opcode: Opcode, operands: Vec<Operand>| {
         let made = function.create_instruction(opcode, vector_ty, operands, Flags::default(), None);
-        placer.after(function, anchor, made);
+        placer.place(function, anchor, made);
         result_of(function, made)
     };
     let poison = Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Poison }));
