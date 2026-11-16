@@ -144,7 +144,7 @@ use crate::{
     fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
     inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
-    simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
+    simplifycfg, splitpaths, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -1944,6 +1944,10 @@ pub fn recorded(
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
+    // gcc's `-fsplit-paths`: -O3 and a target that asks (`Tti::split_paths_at_o3`).
+    if applied.options.wanted("splitpaths") && unroll_level(&applied.options) >= 3 {
+        manager.add(splitpaths::SplitPaths);
+    }
     if applied.options.wanted("ree") {
         manager.add(ree::Ree);
     }
