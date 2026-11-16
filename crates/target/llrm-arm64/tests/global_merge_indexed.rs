@@ -7,7 +7,8 @@ use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
 fn body(name: &str) -> String {
-    let asm = driver::assembly(include_str!("data/global_merge_indexed.ll"), Platform::Linux, Level::O3).expect("lowers");
+    let asm =
+        driver::assembly(include_str!("data/global_merge_indexed.ll"), Platform::Linux, Level::O3).expect("lowers");
     let mut lines = asm.lines().skip_while(|line| *line != format!("{name}:"));
     let first = lines.next().expect("the function is there");
     let rest = lines.take_while(|line| line.starts_with('\t') || line.starts_with(".L"));

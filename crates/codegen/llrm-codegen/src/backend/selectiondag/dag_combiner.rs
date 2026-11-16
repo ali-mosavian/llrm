@@ -707,11 +707,12 @@ pub trait CombineHooks {
     }
 
     /// `SimplifySetCC`'s "if the LHS is a ZERO_EXTEND, perform the comparison
-    /// on the input" ([TargetLowering.cpp#L5105](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5105)):
-    /// a compare of a zero extension against a constant is made on the
-    /// narrow value, whatever else reads the extension. The pin does it
-    /// everywhere; DEVIATE (owner llrm-arm64-vec, exit 2026-11-30): only
-    /// where a target says so, until each target's cells are judged with it.
+    /// on the input"
+    /// ([TargetLowering.cpp#L5105](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5105)):
+    /// a compare of a zero extension against a constant is made on the narrow
+    /// value, whatever else reads the extension. The pin does it everywhere;
+    /// DEVIATE (owner llrm-arm64-vec, exit 2026-11-30): only where a target
+    /// says so, until each target's cells are judged with it.
     fn narrow_zext_setcc(&self) -> bool {
         false
     }
@@ -1586,7 +1587,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if !matches!(
             cond,
-            CondCode::SetEq | CondCode::SetNe | CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe
+            CondCode::SetEq
+                | CondCode::SetNe
+                | CondCode::SetUGt
+                | CondCode::SetUGe
+                | CondCode::SetULt
+                | CondCode::SetULe
         ) {
             return None;
         }

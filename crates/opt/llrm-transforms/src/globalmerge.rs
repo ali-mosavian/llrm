@@ -104,7 +104,8 @@ pub fn merged(
     }
     let wanted: HashSet<u32> = groups.iter().flat_map(|(_, globals)| globals.iter().map(|g| g.0)).collect();
     let sites = uses(module, &wanted);
-    let kept = if options.keep_data_indexed { data_indexed_in_loops(module, layout, &wanted, &sites) } else { HashSet::new() };
+    let kept =
+        if options.keep_data_indexed { data_indexed_in_loops(module, layout, &wanted, &sites) } else { HashSet::new() };
     let mut plans = Vec::new();
     for (_, mut globals) in groups {
         globals.retain(|id| !kept.contains(&id.0));
@@ -136,8 +137,12 @@ fn data_indexed_in_loops(
         wanted.iter().flat_map(|global| sites.get(global).into_iter().flatten().map(|site| site.function)).collect();
     for at in functions {
         let GlobalKind::Function(function) = &module.globals[at].kind else { continue };
-        let mut session =
-            llrm_analysis::scev::analysis::ScevSession::within(&module.context, &module.globals, &module.metadata, function);
+        let mut session = llrm_analysis::scev::analysis::ScevSession::within(
+            &module.context,
+            &module.globals,
+            &module.metadata,
+            function,
+        );
         session.ask_within(&module.context, layout, &module.globals, &module.metadata, function, |scev, cx| {
             for (block, inst) in function.walk() {
                 let Some(found) = cx.loops.get_loop_for(block) else { continue };
@@ -151,13 +156,16 @@ fn data_indexed_in_loops(
                 if !wanted.contains(&global.0) || hit.contains(&global.0) {
                     continue;
                 }
-                let data_dependent = data.operands[1..].iter().any(|&index| {
-                    matches!(index, Operand::Value(_)) && {
-                        let expr = scev.get_scev(cx, index);
-                        !scev.is_loop_invariant(cx, expr, Some(header))
-                            && !scev.has_computable_loop_evolution(cx, expr, Some(header))
-                    }
-                });
+                let data_dependent = data
+                    .operands[1..]
+                    .iter()
+                    .any(
+                        |&index| matches!(index, Operand::Value(_)) && {
+                            let expr = scev.get_scev(cx, index);
+                            !scev.is_loop_invariant(cx, expr, Some(header))
+                                && !scev.has_computable_loop_evolution(cx, expr, Some(header))
+                        },
+                    );
                 if data_dependent {
                     hit.insert(global.0);
                 }
