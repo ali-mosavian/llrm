@@ -208,6 +208,10 @@ pub struct Options {
     pub relax_classes: bool,
     /// Make a `moveq` constant again where it is read ([`crate::moveqremat`]).
     pub remat_constants: bool,
+    /// A `moveq` constant read only by data operands is held in a data
+    /// register ([`crate::moveqremat::hold_in_data_registers`]): a function
+    /// built for size is also built without, and the smaller kept.
+    pub data_constants: bool,
     /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
     /// [`crate::dagisel::mulprice`]).
     pub mul: crate::dagisel::mulprice::Mode,
@@ -258,6 +262,7 @@ impl Options {
         global_copies: true,
         relax_classes: false,
         remat_constants: false,
+        data_constants: false,
         mul: crate::dagisel::mulprice::Mode::Pin,
         loop_carried_first: false,
         debug: false,
@@ -302,6 +307,7 @@ impl Default for Options {
             global_copies: true,
             relax_classes: true,
             remat_constants: true,
+            data_constants: true,
             mul: crate::dagisel::mulprice::Mode::Trial,
             loop_carried_first: true,
             debug: false,
@@ -375,7 +381,10 @@ pub fn items_with(
     };
     // The trials run without the slot registers, so their choices are the
     // pass's being off; it is tried once on the build they end on.
-    let options = Options { slot_registers: false, ..options };
+    // the held constants are tried last, on the build every other choice ended
+    // on
+    let held = options.data_constants && wants_size;
+    let options = Options { slot_registers: false, data_constants: false, ..options };
     let (mut kept, shared, mut kept_options) = finished(options)?;
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
@@ -394,6 +403,7 @@ pub fn items_with(
         let mut best = kept;
         if touched.slot_registers && crate::trial::keeps(&items, &best, cpu, price) {
             best = items;
+            kept_options = Options { slot_registers: true, ..kept_options };
         }
         // a slot read in place stays in the frame: the same build without the
         // fold may move it
@@ -403,9 +413,18 @@ pub fn items_with(
             if touched.slot_registers && crate::trial::keeps(&items, &best, cpu, price) {
                 trial_won(name, "spill_fold", true);
                 best = items;
+                kept_options = options;
             }
         }
-        return Ok(best);
+        kept = best;
+    }
+    if held {
+        let (items, touched) =
+            items_once(module, name, cpu, Options { data_constants: true, ..kept_options }, &prefixes)?;
+        if touched.data_constants && crate::trial::keeps(&items, &kept, cpu, price) {
+            trial_won(name, "data_constants", crate::trial::keeps(&items, &kept, cpu, price));
+            kept = items;
+        }
     }
     Ok(kept)
 }
@@ -436,7 +455,7 @@ fn items_trials(
     let saved = touched.global_copies;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {} shared_cse {}",
+            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {} data_constants {} shared_cse {}",
             touched.tail_dup,
             touched.return_dup,
             touched.class_split,
@@ -445,6 +464,7 @@ fn items_trials(
             touched.global_copies,
             touched.mul_trial,
             touched.remat_constants,
+            touched.data_constants,
             touched.shared_cse
         );
     }
@@ -466,14 +486,15 @@ fn items_trials(
         use crate::dagisel::mulprice::Mode;
         let without = Options { mul: Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
-        let linked = crate::routine::another_function_multiplies_variables(module, name, cpu);
+        let linked = crate::routine::mulsi3_share(module, name, cpu, price);
         if touched.mul_synthesized {
             // DEVIATE G2: the pin's shapes are judged as before (clocks
             // count wherever they run); a chain beyond them only against
             // that winner, and its clocks only inside loops
             let shapes = Options { mul: Mode::TrialPinShapes, ..options };
             let (pin, _) = items_once(module, name, cpu, shapes, prefixes)?;
-            let (base, base_options) = if crate::trial::prefers_without_linking(&pin, &plain, cpu, price, true, linked) {
+            let (base, base_options) = if crate::trial::prefers_without_linking(&pin, &plain, cpu, price, true, linked)
+            {
                 (plain, without)
             } else {
                 (pin, shapes)
@@ -624,6 +645,8 @@ struct Touched {
     /// The build marked a `moveq` constant rematerializable
     /// ([`crate::moveqremat`]).
     remat_constants: bool,
+    /// The build held a `moveq` constant in a data register.
+    data_constants: bool,
     /// The shared `MachineCSE` changed the function.
     shared_cse: bool,
     /// A spill slot moved into an address register ([`crate::slotreg`]).
@@ -711,6 +734,7 @@ pub fn libcalls_for(
                 global_copies: false,
                 relax_classes: false,
                 remat_constants: false,
+                data_constants: false,
                 slot_registers: false,
                 ..options
             };
@@ -815,7 +839,7 @@ struct Prefixes {
 /// The options that only the stages after `MachineCSE` read, left out of the
 /// key of the stage before it.
 fn before_late_stage(options: Options) -> Options {
-    Options { relax_classes: false, remat_constants: false, ..before_allocation(options) }
+    Options { relax_classes: false, remat_constants: false, data_constants: false, ..before_allocation(options) }
 }
 
 /// The options that only allocation and the stages after it read.
@@ -992,6 +1016,9 @@ fn items_once(
             }
             if options.remat_constants {
                 touched.remat_constants = crate::moveqremat::rematerializable_constants(&mut function) > 0;
+            }
+            if options.data_constants && wants_size {
+                touched.data_constants = crate::moveqremat::hold_in_data_registers(&mut function) > 0;
             }
             Ok((function, touched))
         })?;

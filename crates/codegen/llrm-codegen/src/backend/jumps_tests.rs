@@ -2599,7 +2599,8 @@ fn test_a_flag_setting_instruction_is_not_hoisted_over_a_branch_with_no_compare(
 }
 
 /// The pin copies propagation twice, again after tail duplication and block
-/// placement (row 84): `ControlFlow`, `CopyPropagation`, then `BreakFalseDeps`.
+/// placement (row 84): `ControlFlow`, `CopyPropagation`, then `BreakFalseDeps`;
+/// `KnownZero` (beyond the pin) runs between the last two.
 #[test]
 fn test_copy_propagation_runs_again_after_the_control_flow() {
     let names = |cpu: &str| -> Vec<&'static str> {
@@ -2618,7 +2619,7 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
         .collect()
     };
     let optimized = names("386");
-    assert_eq!(&optimized[optimized.len() - 3..], ["ControlFlow", "CopyPropagation", "BreakFalseDeps"]);
+    assert_eq!(&optimized[optimized.len() - 4..], ["ControlFlow", "CopyPropagation", "KnownZero", "BreakFalseDeps"]);
 }
 
 fn dword() -> Loc {

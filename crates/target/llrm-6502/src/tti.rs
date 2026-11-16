@@ -100,8 +100,10 @@ impl Mos6502 {
     }
 
     /// A call to a runtime routine: `jsr` and the operands in `rc2..` (4 bytes
-    /// a byte-wide part), or past a word the long form through `__sa` and
-    /// `__sb` (measured, `x * C` of 32 bits: 59 bytes).
+    /// a byte-wide part), or past a word the long form (`x * C` of 32 bits:
+    /// 59 bytes through `__sa`/`__sb`, 17 now). The larger price stays: it also
+    /// stands for the routine a call links where an expansion does not
+    /// (div_constants_short: +168 B at the smaller).
     fn routine_bytes(parts: i64) -> i64 {
         if parts <= 2 { 3 + 4 * parts } else { 14 * parts + 3 }
     }
@@ -207,14 +209,20 @@ impl Tti for Mos6502 {
         true
     }
 
+    fn write_only_after_late_unroll(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
 
-    /// An inline at -O2/-O3 that grows the code is refused: bytes first at every level (user ruling
-    /// 2026-11-14), at the rate no clocks can repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit
-    /// 2026-11-24, row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M clocks (div_constants_long) and
-    /// tail_calls +12.6k clocks for 944 B; a price by clocks a byte weighs a loop at about 32 trips.
+    /// An inline at -O2/-O3 that grows the code is refused: bytes first at
+    /// every level (user ruling 2026-11-14), at the rate no clocks can
+    /// repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit 2026-11-24,
+    /// row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M
+    /// clocks (div_constants_long) and tail_calls +12.6k clocks for 944 B;
+    /// a price by clocks a byte weighs a loop at about 32 trips.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         1 << 40
     }
@@ -498,14 +506,16 @@ impl Tti for Mos6502 {
         }
     }
 
-    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so
-    // a pair is one call.
+    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`),
+    // the signed word one too (`__divmodhi4`), and the long ones
+    // (`__divmodsi4`, `__udivmodsi4`: the remainder in rc4..rc7), so a pair is
+    // one call.
     fn has_div_rem_op(
         &self,
         bits: u32,
         signed: bool,
     ) -> bool {
-        !signed && bits <= 2 * self.byte_bits
+        bits == 2 * self.byte_bits || bits == 4 * self.byte_bits || (!signed && bits < 2 * self.byte_bits)
     }
 
     fn cast_cost(

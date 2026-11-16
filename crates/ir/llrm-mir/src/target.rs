@@ -161,6 +161,10 @@ pub struct Tuning {
     /// copy that leaves the module no larger and saves clocks, though no
     /// callee goes with it.
     pub inline_trial_keeps_shrinking_copy: bool,
+    /// `Tti::frame_slot_add_with_saved`.
+    pub frame_slot_add_with_saved: bool,
+    /// `Tti::inline_trial_cold_margin`.
+    pub inline_trial_cold_margin: i64,
     /// DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24):
     /// `inline_size_bytes` at -O1 alone (the byte-measured size view, the
     /// second round, and the trial of a callee the bound refused, kept
@@ -325,6 +329,11 @@ pub struct Tuning {
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
     pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// `Threshold` of the full unroll at `-O3` alone (the pin's is 300): a
+    /// loop of 32 trips and a dozen operations is unrolled where the pin
+    /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
+    /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
+    pub unroll_threshold_at_o3: Option<u32>,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -523,6 +532,11 @@ pub struct Tuning {
     /// x86's rows until judged per target (DEVIATE, owner
     /// llrm-target-x86-m64 at m64, exit 2026-11-24).
     pub add_to_or_disjoint: bool,
+    /// `LoopVectorize` widens an `optsize` loop whose trip count VF divides
+    /// (`isScalarEpilogueAllowed`). false: DEVIATE LV-OS (owner
+    /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
+    /// bytes +5..+50% on 15 corpus files.
+    pub vectorize_at_size: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
     /// 4`) pays no setup bytes. Only a target whose byte model was checked
@@ -744,6 +758,8 @@ impl Tuning {
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
+        frame_slot_add_with_saved: false,
+        inline_trial_cold_margin: 0,
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
@@ -776,6 +792,7 @@ impl Tuning {
         merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
+        unroll_threshold_at_o3: None,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
@@ -810,6 +827,7 @@ impl Tuning {
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
         add_to_or_disjoint: false,
+        vectorize_at_size: true,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         lsr_users_in_use_list_order: false,
@@ -1806,6 +1824,7 @@ mod tests {
             (pin.unroll_threshold, pin.unroll_max_percent_threshold_boost, pin.unroll_partial_threshold),
             (None, None, None)
         );
+        assert_eq!(pin.unroll_threshold_at_o3, None);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);

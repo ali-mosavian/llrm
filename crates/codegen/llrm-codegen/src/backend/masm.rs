@@ -1602,7 +1602,9 @@ fn lowered(
         }
     }
     enter.extend(procedure.body.vector_saves.iter().map(|(register, cell)| vector(true, *register, cell, false)));
-    let dead = scratch.map(|_| DEAD);
+    // `emitEpilogue` releases the slot where the first callee-saved `pop` stands, not at the `ret`:
+    // `findDeadCallerSavedReg` answers 0 for a `pop`, so with registers to restore the slot is an `add`.
+    let dead = scratch.filter(|_| saved.is_empty() || !procedure.registers.slot_add_with_saved).map(|_| DEAD);
     let mut leave: Vec<Semantics> = Vec::new();
     for op in emit_epilogue(&info, dead) {
         if leave.is_empty() && matches!(op, Op::AddSp(_) | Op::LeaSpFp(_) | Op::MovSpFp) {
@@ -5039,6 +5041,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: Some((RegId::EAX, RegId::ECX)),
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5095,6 +5098,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5155,6 +5159,7 @@ mod tests {
                 red_zone: 0,
                 slot_scratch: None,
                 slot_dead_checked: false,
+                slot_add_with_saved: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,
@@ -5234,6 +5239,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5415,6 +5421,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5451,17 +5458,20 @@ mod tests {
 
     /// `place` saved SI on every call, entered or not, though only its loop
     /// names it: the early `return 1` pushed and popped it for nothing. The
-    /// save is where the loop starts.
+    /// save is where the loop starts. The entry block reads no frame cell:
+    /// since #9917 (`useOrDefCSROrFI`) a read of an incoming argument there
+    /// keeps the save in the entry.
     #[test]
     fn test_a_register_only_a_later_block_names_is_saved_there() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
+        let bx = || Loc::Reg(ir::Reg { register: RegId::BX, width: 2 });
         let blocks = vec![
             lir::LirBlock {
                 succ: vec![3, 2].into(),
                 ..lir::LirBlock::new(
                     1,
-                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()])), insn(2, branch)],
+                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![bx()])), insn(2, branch)],
                 )
             },
             lir::LirBlock::new(
@@ -5606,6 +5616,7 @@ mod tests {
                 object_aligned: false,
                 slot_scratch: None,
                 slot_dead_checked: false,
+                slot_add_with_saved: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,

@@ -322,7 +322,14 @@ fn ext_cast_cost(
     if let Some(&(.., cost)) = CONVERSIONS.iter().find(|&&(one, to, from, _)| one == kind && to == dst && from == src) {
         return Some(Cost::of(cost));
     }
-    let ((dst_registers, _), (src_registers, _)) = (vector_pieces(dst)?, vector_pieces(src)?);
+    // A vector of `i1` (a mask) is promoted to bytes: one register to sixteen
+    // lanes, a register more per sixteen after.
+    let src_pieces = if src.lane == Ty::Int(1) {
+        (i64::from((src.count / 16).max(1)), 1)
+    } else {
+        vector_pieces(src)?
+    };
+    let ((dst_registers, _), (src_registers, _)) = (vector_pieces(dst)?, src_pieces);
     if dst_registers == src_registers {
         return Some(Cost::of(src_registers));
     }
@@ -500,6 +507,10 @@ pub(crate) fn scalarization_overhead(
     if cost_kind != CostKind::RecipThroughput {
         return None;
     }
+    // A vector of pointers (the address of a scalarized store): every lane is
+    // priced, lane 0 too (`getMemInstScalarizationCost` of the pin's opt:
+    // 44 for 8 floats, 48 for 8 bytes at stride 8).
+    let ty = if ty.lane == Ty::Pointer { VectorTy { lane: Ty::Int(64), ..ty } } else { ty };
     let (_, lane) = vector_pieces(ty)?;
     let moves = i64::from(insert) + i64::from(extract);
     let register_lanes = (128 / lane).min(ty.count);
@@ -620,6 +631,23 @@ pub(crate) fn vector_instr_cost(
         }
     }
     Some(Cost::of(base))
+}
+
+/// The `SK_Broadcast` rows of `ShuffleTbl` (L7196): `dup` of a 64- or 128-bit
+/// vector of 8, 16 or 32-bit lanes, or of two 64-bit ones; `LT.first` of them
+/// for a vector that splits.
+pub(crate) fn shuffle_cost(
+    kind: llrm_mir::tti::ShuffleKind,
+    ty: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    if kind != llrm_mir::tti::ShuffleKind::Broadcast || cost_kind != CostKind::RecipThroughput {
+        return None;
+    }
+    let (pieces, lane) = vector_pieces(ty)?;
+    let bits = u64::from(lane) * u64::from(ty.count);
+    let legal = (bits == 64 && lane != 64) || bits % 128 == 0;
+    legal.then(|| Cost::of(pieces))
 }
 
 /// `AArch64TTIImpl::getStoreMinimumVF`

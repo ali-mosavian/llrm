@@ -447,6 +447,8 @@ impl llrm_target::Target for M64 {
                             lsr_size_order: true,
                             // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
+                            // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            vectorize_at_size: false,
                             lsr_size_x86_64: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
@@ -572,6 +574,8 @@ impl llrm_target::Target for M64 {
                             immediate_forms_at_size: true,
                             // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
                             ipa_cp_clones_at_speed: true,
+                            // DEVIATE UNROLL-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            unroll_threshold_at_o3: Some(450),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

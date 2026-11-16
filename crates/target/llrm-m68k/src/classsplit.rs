@@ -40,7 +40,7 @@ fn needs_address(
 
 /// Whether operand `position` of an instruction of `kind` may be a data
 /// register.
-fn takes_data(
+pub(crate) fn takes_data(
     kind: Kind,
     position: usize,
 ) -> bool {
@@ -50,48 +50,22 @@ fn takes_data(
     }
 }
 
-/// The number of values held to a data register.
-pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
+/// The values that need an address register (`wants`), and those that end in
+/// one: they need one, or are read only by copies and phis into such values.
+pub(crate) fn address_bound(function: &MFunction) -> (Vec<bool>, Vec<bool>) {
     let count = function.classes.len();
-    let blocks = function.blocks.len();
-    let next = successors(function);
-    // reach[a][b]: b follows a by one step or more
-    let reach: Vec<Vec<bool>> = (0..blocks)
-        .map(|start| {
-            let mut seen = vec![false; blocks];
-            let mut work = next[start].clone();
-            while let Some(to) = work.pop() {
-                if !std::mem::replace(&mut seen[to], true) {
-                    work.extend(&next[to]);
-                }
-            }
-            seen
-        })
-        .collect();
-    let mut defs = vec![0u32; count];
-    let mut phi_result = vec![false; count];
     let mut wants_address = vec![false; count];
     for block in &function.blocks {
-        for phi in &block.phis {
-            if let Reg::Virt(v) = phi.result {
-                defs[v as usize] += 2;
-                phi_result[v as usize] = true;
-            }
-        }
         for inst in &block.insts {
             for (position, operand) in inst.operands.iter().enumerate() {
-                match operand {
-                    Operand::Def(Reg::Virt(v)) => defs[*v as usize] += 1,
-                    Operand::Use(Reg::Virt(v)) if needs_address(inst.kind, position) => {
-                        wants_address[*v as usize] = true
-                    }
-                    _ => {}
+                if let Operand::Use(Reg::Virt(v)) = operand
+                    && needs_address(inst.kind, position)
+                {
+                    wants_address[*v as usize] = true;
                 }
             }
         }
     }
-    // values that end in an address register: they need one, or are read only
-    // by copies and phis into such values
     let mut addressy: Vec<bool> = (0..count).map(|v| wants_address[v] || function.classes[v] == Class::Ar32).collect();
     loop {
         let mut reads = vec![0u32; count];
@@ -129,6 +103,45 @@ pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
             break;
         }
     }
+    (wants_address, addressy)
+}
+
+/// The number of values held to a data register.
+pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
+    let count = function.classes.len();
+    let blocks = function.blocks.len();
+    let next = successors(function);
+    // reach[a][b]: b follows a by one step or more
+    let reach: Vec<Vec<bool>> = (0..blocks)
+        .map(|start| {
+            let mut seen = vec![false; blocks];
+            let mut work = next[start].clone();
+            while let Some(to) = work.pop() {
+                if !std::mem::replace(&mut seen[to], true) {
+                    work.extend(&next[to]);
+                }
+            }
+            seen
+        })
+        .collect();
+    let mut defs = vec![0u32; count];
+    let mut phi_result = vec![false; count];
+    for block in &function.blocks {
+        for phi in &block.phis {
+            if let Reg::Virt(v) = phi.result {
+                defs[v as usize] += 2;
+                phi_result[v as usize] = true;
+            }
+        }
+        for inst in &block.insts {
+            for (position, operand) in inst.operands.iter().enumerate() {
+                if let Operand::Def(Reg::Virt(v)) = operand {
+                    defs[*v as usize] += 1;
+                }
+            }
+        }
+    }
+    let (wants_address, addressy) = address_bound(function);
     let mut held = 0;
     for v in 0..count as u32 {
         let at = v as usize;

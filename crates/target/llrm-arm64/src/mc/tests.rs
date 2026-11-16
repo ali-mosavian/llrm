@@ -406,7 +406,7 @@ fn branches() {
             all.push(Inst::VectorLong { op, lane, high, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
         }
     }
-    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+    for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorUnzip { second: false, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
         all.push(Inst::VectorUnzip { second: true, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
     }
@@ -424,6 +424,11 @@ fn branches() {
         all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
         all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
         all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
+        for wide in [false, true] {
+            if lanes != Arrangement::D2 && (wide || lanes != Arrangement::S4) {
+                all.push(Inst::VectorSmov { lanes, wide, rd: Gpr(9), rn: Vreg(21), index });
+            }
+        }
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
     }
     for lanes in ALL_ARRANGEMENTS {

@@ -780,8 +780,37 @@ fn allocated_choosing(
     }
 }
 
-/// Bytes and the clocks weighted by loop depth of an allocated function.
+/// Bytes and the clocks weighted by loop depth of an allocated function. The
+/// same allocation is priced again wherever a candidate comes out as another (a
+/// stack of the same slots, a variant that allocates alike): what was priced
+/// once is known by its content.
 fn priced_in_loops(
+    one: &Allocated,
+    level: Level,
+) -> Option<(u32, u64)> {
+    let key = price_key(one, level);
+    PRICINGS.with(|counts| counts.set((counts.get().0 + 1, counts.get().1)));
+    if let Some(known) = PRICES.with(|prices| prices.borrow().get(&key).copied()) {
+        // Z80_VERIFY_PRICES: every hit is priced again and must agree (a key
+        // that misses an input fails here)
+        if std::env::var_os("Z80_VERIFY_PRICES").is_some() {
+            assert_eq!(known, price_now(one, level), "a priced allocation's key misses an input");
+        }
+        return known;
+    }
+    PRICINGS.with(|counts| counts.set((counts.get().0, counts.get().1 + 1)));
+    let price = price_now(one, level);
+    PRICES.with(|prices| {
+        let mut prices = prices.borrow_mut();
+        if prices.len() >= PRICES_KEPT {
+            prices.clear();
+        }
+        prices.insert(key, price);
+    });
+    price
+}
+
+fn price_now(
     one: &Allocated,
     level: Level,
 ) -> Option<(u32, u64)> {
@@ -793,6 +822,47 @@ fn priced_in_loops(
         expand::replace_frequencies(kept);
     }
     price
+}
+
+/// Prices kept by [`price_key`] before the table is emptied.
+const PRICES_KEPT: usize = 4096;
+
+thread_local! {
+    static PRICES: std::cell::RefCell<std::collections::HashMap<(u64, u64), Option<(u32, u64)>>> =
+        std::cell::RefCell::new(Default::default());
+    /// Pricings asked for, and run, since the last [`take_pricings`].
+    static PRICINGS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The pricings asked for on this thread since the last call, and those that
+/// were run: the rest were known.
+pub fn take_pricings() -> (usize, usize) {
+    PRICINGS.with(|one| one.replace((0, 0)))
+}
+
+/// Everything `priced_in_loops` reads of an allocation, as two hashes.
+fn price_key(
+    one: &Allocated,
+    level: Level,
+) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let (function, assignment, slots, reads, frequencies) = one;
+    let mut both = Both(Default::default(), Default::default());
+    let _ = std::fmt::Write::write_fmt(&mut both, format_args!("{level:?}|"));
+    write_ambient_state(&mut both);
+    hash_function(function, &mut both);
+    assignment.0.hash(&mut both);
+    slots.hash(&mut both);
+    let mut reads: Vec<(&u32, &usize)> = reads.iter().collect();
+    reads.sort_unstable();
+    reads.hash(&mut both);
+    frequencies.is_some().hash(&mut both);
+    if let Some(own) = frequencies {
+        let mut own: Vec<(u32, u64)> = own.iter().map(|(id, one)| (*id, one.to_bits())).collect();
+        own.sort_unstable();
+        own.hash(&mut both);
+    }
+    (both.0.finish(), both.1.finish())
 }
 
 /// Whether the price `one` (bytes, clocks) beats `other`: bytes first, clocks
@@ -811,6 +881,105 @@ fn cheaper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A price is known by its content: the same allocation priced under
+    /// another ambient state (the bytes-first switch, the pricing mode, a
+    /// switch of the environment, the block frequencies) is another price, and
+    /// must not be handed the first one.
+    #[test]
+    fn an_allocation_priced_under_another_ambient_state_has_another_price_key() {
+        let request = Request::new(Level::O2);
+        let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
+        let function = machine_function_with(&selected, "lz4", true).expect("builds");
+        let assignment = Assignment(vec![RegId::default(); function.classes.len()]);
+        let one: Allocated = (function, assignment, Vec::new(), Default::default(), None);
+        let key = |level| price_key(&one, level);
+        let base = key(Level::O2);
+        assert_eq!(base, key(Level::O2), "the same state has the same key");
+        assert_ne!(base, key(Level::Os), "the level");
+        for (what, flip) in [
+            ("BYTES_FIRST", Box::new(|| expand::BYTES_FIRST.with(|one| one.set(!one.get()))) as Box<dyn Fn()>),
+            ("PRICING", Box::new(|| expand::PRICING.with(|one| one.set(!one.get())))),
+            ("SLOT_BY_CONFLICTS", Box::new(|| SLOT_BY_CONFLICTS.with(|one| one.set(!one.get())))),
+        ] {
+            flip();
+            let changed = key(Level::O2);
+            flip();
+            assert_ne!(changed, base, "the key does not see {what}");
+        }
+        let kept = expand::frequencies();
+        expand::set_frequencies(&[(7, 3.5)]);
+        let changed = key(Level::O2);
+        expand::set_frequencies(&kept.into_iter().collect::<Vec<_>>());
+        assert_ne!(changed, base, "the key does not see the block frequencies");
+        assert_eq!(key(Level::O2), base, "the state is restored");
+    }
+
+    /// The allocation key is a hash of the function's fields, not of its
+    /// `Debug` text (a fifth of int64_divmod_edges -O2): two functions that
+    /// differ in any field must not share a key, or the memo hands one
+    /// the other's allocation. Each flag, operand and list of an instruction
+    /// changes the key.
+    #[test]
+    fn a_change_to_any_field_of_an_instruction_changes_the_allocation_key() {
+        let request = Request::new(Level::O2);
+        let ir = include_str!("../tests/kernels/ir/lz4.ll");
+        let selected = cached_selections(ir, &request).expect("selects");
+        let base = machine_function_with(&selected, "lz4", true).expect("builds");
+        let key = |function: &MFunction| allocation_key(function, "lz4", false, Level::O2, false);
+        let same = key(&base);
+        assert_eq!(same, key(&base.clone()), "a copy has its key");
+        let at = base
+            .blocks
+            .iter()
+            .position(|block| {
+                block.insts.iter().any(|inst| inst.operands.iter().any(|op| matches!(op, Operand::Imm(_))))
+            })
+            .expect("an immediate somewhere");
+        let inst = base.blocks[at]
+            .insts
+            .iter()
+            .position(|inst| inst.operands.iter().any(|op| matches!(op, Operand::Imm(_))))
+            .expect("an immediate");
+        let edits: Vec<(&str, Box<dyn Fn(&mut MFunction)>)> = vec![
+            ("name", Box::new(|f| f.name.push('x'))),
+            ("optimize_for_size", Box::new(|f| f.optimize_for_size ^= true)),
+            ("locals", Box::new(|f| f.locals.push((99, 2, 1)))),
+            ("block id", Box::new(move |f| f.blocks[at].id += 1)),
+            (
+                "operand",
+                Box::new(move |f| {
+                    for op in &mut f.blocks[at].insts[inst].operands {
+                        if let Operand::Imm(value) = op {
+                            *value += 1;
+                        }
+                    }
+                }),
+            ),
+            ("call", Box::new(move |f| f.blocks[at].insts[inst].call ^= true)),
+            ("terminator", Box::new(move |f| f.blocks[at].insts[inst].terminator ^= true)),
+            ("barrier", Box::new(move |f| f.blocks[at].insts[inst].barrier ^= true)),
+            ("sets_flags", Box::new(move |f| f.blocks[at].insts[inst].sets_flags ^= true)),
+            ("remade_sets_flags", Box::new(move |f| f.blocks[at].insts[inst].remade_sets_flags ^= true)),
+            ("reads_flags", Box::new(move |f| f.blocks[at].insts[inst].reads_flags ^= true)),
+            ("may_load", Box::new(move |f| f.blocks[at].insts[inst].may_load ^= true)),
+            ("may_store", Box::new(move |f| f.blocks[at].insts[inst].may_store ^= true)),
+            ("side_effects", Box::new(move |f| f.blocks[at].insts[inst].side_effects ^= true)),
+            ("cheap_as_move", Box::new(move |f| f.blocks[at].insts[inst].cheap_as_move ^= true)),
+            ("invariant_load", Box::new(move |f| f.blocks[at].insts[inst].invariant_load ^= true)),
+            ("rematerializable", Box::new(move |f| f.blocks[at].insts[inst].rematerializable ^= true)),
+            ("early_clobber", Box::new(move |f| f.blocks[at].insts[inst].early_clobber ^= true)),
+            ("commutable", Box::new(move |f| f.blocks[at].insts[inst].commutable ^= true)),
+            ("origin", Box::new(move |f| f.blocks[at].insts[inst].origin += 1)),
+            ("ties", Box::new(move |f| f.blocks[at].insts[inst].ties.push((0, 1)))),
+            ("form_operands", Box::new(move |f| f.blocks[at].insts[inst].form_operands.push(Operand::Imm(7)))),
+        ];
+        for (field, edit) in edits {
+            let mut changed = base.clone();
+            edit(&mut changed);
+            assert_ne!(key(&changed), same, "the key does not see `{field}`");
+        }
+    }
 
     /// call_keeps -O1: `churn` with the routines 920 B / 8709 T, inline 1136 B
     /// / 6922 T. The smaller relative regret picked the inline form on a 2%
@@ -1165,8 +1334,11 @@ thread_local! {
 thread_local! {
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Forms of a function (scheduler, return block copied or kept, carry form) built since the last
-    /// [`take_forms_built`].
+    /// Reports `stack_slot_report_by` made, and whole-function read-again
+    /// analyses it ran, since the last [`take_slot_analyses`].
+    static SLOT_ANALYSES: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// Forms of a function (scheduler, return block copied or kept, carry form)
+    /// built since the last [`take_forms_built`].
     static FORMS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The request's `slot_by_conflicts`, for the allocation on this thread.
     static SLOT_BY_CONFLICTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1187,7 +1359,15 @@ pub fn take_allocations() -> usize {
     ALLOCATIONS.with(|one| one.replace(0))
 }
 
-/// The forms of a function built on this thread since the last call: each is allocated a bounded number of times.
+/// The stack-slot reports made on this thread since the last call, and the
+/// whole-function read-again analyses they ran: one a report, however many
+/// slots it refuses.
+pub fn take_slot_analyses() -> (usize, usize) {
+    SLOT_ANALYSES.with(|one| one.replace((0, 0)))
+}
+
+/// The forms of a function built on this thread since the last call: each is
+/// allocated a bounded number of times.
 pub fn take_forms_built() -> usize {
     FORMS_BUILT.with(|one| one.replace(0))
 }
@@ -1283,30 +1463,30 @@ fn allocation_key(
 ) -> (u64, u64) {
     use std::fmt::Write;
     use std::hash::Hasher;
-    struct Both(
-        std::collections::hash_map::DefaultHasher,
-        <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher,
-    );
-    impl Write for Both {
-        fn write_str(
-            &mut self,
-            text: &str,
-        ) -> std::fmt::Result {
-            self.0.write(text.as_bytes());
-            self.1.write(text.as_bytes());
-            Ok(())
-        }
-    }
+    // The scalars as text, the function as its fields: `Debug` of a function is
+    // the cost of the key (`int64_divmod_edges`: a fifth of the compile),
+    // and most of it is the selector's `form` of each instruction.
+    let mut both = Both(Default::default(), Default::default());
+    let _ = write!(both, "{name}|{strict}|{level:?}|{want_apart}|");
+    write_ambient_state(&mut both);
+    hash_function(function, &mut both);
+    (both.0.finish(), both.1.finish())
+}
+
+/// What the allocator and the pricing read besides their arguments: the
+/// switches of the environment, the block frequencies and the state of the
+/// thread.
+fn write_ambient_state(both: &mut Both) {
+    use std::fmt::Write;
     let mut environment: Vec<(String, String)> =
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     let mut frequencies: Vec<(u32, u64)> =
         expand::frequencies().into_iter().map(|(id, one)| (id, one.to_bits())).collect();
     frequencies.sort_unstable();
-    let mut both = Both(Default::default(), Default::default());
     let _ = write!(
         both,
-        "{name}|{strict}|{level:?}|{want_apart}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{environment:?}|{frequencies:?}|{function:?}",
+        "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{environment:?}|{frequencies:?}|",
         crate::regalloc::UNJOINED.with(|one| one.get()),
         crate::regalloc::NO_FOLD.with(|one| one.get()),
         LOOPS_FOLDED.with(|one| one.get()),
@@ -1317,7 +1497,170 @@ fn allocation_key(
         crate::dagisel::pipeline::ILP.with(|one| one.get()),
         crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.get()),
     );
-    (both.0.finish(), both.1.finish())
+}
+
+/// Both hashes of a key at once.
+struct Both(std::collections::hash_map::DefaultHasher, <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher);
+
+impl std::fmt::Write for Both {
+    fn write_str(
+        &mut self,
+        text: &str,
+    ) -> std::fmt::Result {
+        use std::hash::Hasher;
+        self.write(text.as_bytes());
+        Ok(())
+    }
+}
+
+impl std::hash::Hasher for Both {
+    fn write(
+        &mut self,
+        bytes: &[u8],
+    ) {
+        self.0.write(bytes);
+        self.1.write(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+}
+
+thread_local! {
+    /// The hash of the `Debug` text of each selector form seen, by the address
+    /// of its `Arc`; the `Arc` is held, so the address names the form for as
+    /// long as the entry stays.
+    static FORM_HASHES: std::cell::RefCell<std::collections::HashMap<usize, (std::sync::Arc<llrm_lir::Semantics>, u64)>> =
+        std::cell::RefCell::new(Default::default());
+}
+
+fn hash_form(
+    form: &std::sync::Arc<llrm_lir::Semantics>,
+    into: &mut Both,
+) {
+    use std::hash::Hash;
+    let at = std::sync::Arc::as_ptr(form) as usize;
+    let hash = FORM_HASHES.with(|held| {
+        let mut held = held.borrow_mut();
+        if held.len() > 50_000 {
+            held.clear();
+        }
+        held.entry(at)
+            .or_insert_with(|| {
+                let mut text = Both(Default::default(), Default::default());
+                let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{form:?}"));
+                (form.clone(), std::hash::Hasher::finish(&text.1))
+            })
+            .1
+    });
+    hash.hash(into);
+}
+
+/// Every field of the function, in the order they are declared: a field added
+/// to a type fails to compile here until it is hashed. What has no `Hash` is
+/// hashed as its `Debug` text.
+fn hash_function(
+    function: &MFunction,
+    into: &mut Both,
+) {
+    use std::hash::Hash;
+    let MFunction {
+        name,
+        blocks,
+        classes,
+        fixed,
+        locals,
+        optimize_for_size,
+        optnone,
+        returns_twice,
+        places,
+        variables,
+        odds,
+    } = function;
+    (name, classes.len(), fixed, locals, optimize_for_size, optnone, returns_twice, places).hash(into);
+    for class in classes {
+        std::mem::discriminant(class).hash(into);
+    }
+    let _ = std::fmt::Write::write_fmt(into, format_args!("{variables:?}|{odds:?}|"));
+    blocks.len().hash(into);
+    for Block { id, insts, phis } in blocks {
+        (id, insts.len(), phis.len()).hash(into);
+        for Phi { result, incoming } in phis {
+            (result, incoming).hash(into);
+        }
+        for inst in insts {
+            hash_inst(inst, into);
+        }
+    }
+}
+
+fn hash_operand(
+    operand: &Operand,
+    into: &mut Both,
+) {
+    use std::hash::Hash;
+    match operand {
+        Operand::Def(reg) => (0u8, reg).hash(into),
+        Operand::Use(reg) => (1u8, reg).hash(into),
+        Operand::Imm(value) => (2u8, value).hash(into),
+        Operand::Symbol(name, offset) => (3u8, name, offset).hash(into),
+        Operand::Frame(slot) => (4u8, slot).hash(into),
+        Operand::Block(id) => (5u8, id).hash(into),
+    }
+}
+
+fn hash_inst(
+    inst: &Inst,
+    into: &mut Both,
+) {
+    use std::hash::Hash;
+    let Inst {
+        kind,
+        operands,
+        call,
+        call_clobbers,
+        ties,
+        terminator,
+        barrier,
+        sets_flags,
+        remade_sets_flags,
+        reads_flags,
+        may_load,
+        may_store,
+        side_effects,
+        cheap_as_move,
+        invariant_load,
+        memory,
+        rematerializable,
+        early_clobber,
+        commutable,
+        origin,
+        form,
+        form_operands,
+    } = inst;
+    match kind {
+        Kind::Op(name) => (0u8, name).hash(into),
+        Kind::Copy => 1u8.hash(into),
+    }
+    operands.len().hash(into);
+    operands.iter().for_each(|operand| hash_operand(operand, into));
+    (call, ties, terminator, barrier, sets_flags, remade_sets_flags, reads_flags).hash(into);
+    (may_load, may_store, side_effects, cheap_as_move, invariant_load, rematerializable).hash(into);
+    (early_clobber, commutable, origin).hash(into);
+    match call_clobbers {
+        Some(set) => (1u8, set.len(), set.iter().collect::<Vec<_>>()).hash(into),
+        None => 0u8.hash(into),
+    }
+    if let Some(memory) = memory {
+        let _ = std::fmt::Write::write_fmt(into, format_args!("{memory:?}|"));
+    }
+    match form {
+        Some(form) => hash_form(form, into),
+        None => 0u8.hash(into),
+    }
+    form_operands.len().hash(into);
+    form_operands.iter().for_each(|operand| hash_operand(operand, into));
 }
 
 fn allocate_once_computed(
@@ -2075,10 +2418,12 @@ pub fn stack_slot_report_by(
     }
     let succs = llrm_spike_mf::regalloc::successors(function);
     let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+    SLOT_ANALYSES.with(|one| one.set((one.get().0 + 1, one.get().1)));
     // the first slot that keeps `chosen` from being a stack, or none
     // per block and instruction: whether a load's slot is read again after it
     let read_again = |function: &MFunction, chosen: &std::collections::BTreeSet<i32>| -> Vec<Vec<bool>> {
         use std::collections::BTreeSet;
+        SLOT_ANALYSES.with(|one| one.set((one.get().0, one.get().1 + 1)));
         let n = function.blocks.len();
         let (mut live_in, mut live_out) = (vec![BTreeSet::<i32>::new(); n], vec![BTreeSet::<i32>::new(); n]);
         let step = |inst: &Inst, now: &mut BTreeSet<i32>| match spill(inst) {
@@ -2121,6 +2466,41 @@ pub fn stack_slot_report_by(
             })
             .collect()
     };
+    // What a slot's loads need does not depend on which other slots are chosen
+    // (the slots are independent in `read_again`, and the mate of a pair is
+    // live or not whatever is chosen), so both are computed once for every
+    // slot in play, not again for each slot that is refused.
+    let all_slots: std::collections::BTreeSet<i32> = chosen.iter().chain(&chosen_crossing).copied().collect();
+    let again = read_again(function, &all_slots);
+    // per block, in program order, the slots whose load restores a byte of a
+    // pair whose other half is live
+    let mate_live: Vec<Vec<i32>> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(b, block)| {
+            let mut after =
+                live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, block.insts.len());
+            let mut slots = Vec::new();
+            for (_, inst) in block.insts.iter().enumerate().rev() {
+                if let Some((false, slot, register)) = spill(inst)
+                    && all_slots.contains(&slot)
+                {
+                    let pair = stack_pair(register).expect("checked above");
+                    if register != pair {
+                        let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
+                        let mate = if register == lo { hi } else { lo };
+                        if after.is_live(&REGISTER_INFO, mate) {
+                            slots.push(slot);
+                        }
+                    }
+                }
+                after.step_backward::<Z80Registers>(&REGISTER_INFO, assignment, inst);
+            }
+            slots.reverse();
+            slots
+        })
+        .collect();
     // DEVIATE Z80-SLOT-CONFLICT: on a load with other slots on top the pin has
     // no counterpart (StackSlotColoring.cpp only shares frame slots, by weight,
     // first fit); here the slot in the most such conflicts goes back to the
@@ -2131,7 +2511,6 @@ pub fn stack_slot_report_by(
      -> Option<(i32, StackRefusal)> {
         peeks.clear();
         let mut conflicts: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
-        let again = read_again(function, chosen);
         let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
         entry[0] = Some(Vec::new());
         let mut work = vec![0usize];
@@ -2194,33 +2573,12 @@ pub fn stack_slot_report_by(
             return Some((slot, StackRefusal::LoadNotOnTop));
         }
         // the other half of a pair a byte slot saves is dead once the pair is
-        // restored. One backward sweep a block, so the liveness after each load
-        // is stepped to once, not recomputed from the block's end; the
-        // first load in program order is the one reported.
-        for (b, block) in function.blocks.iter().enumerate() {
-            let mut after =
-                live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, block.insts.len());
-            let mut first = None;
-            for (at, inst) in block.insts.iter().enumerate().rev() {
-                if let Some((false, slot, register)) = spill(inst)
-                    && chosen.contains(&slot)
-                {
-                    let pair = stack_pair(register).expect("checked above");
-                    if register != pair {
-                        let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
-                        let mate = if register == lo { hi } else { lo };
-                        if after.is_live(&REGISTER_INFO, mate) {
-                            first = Some(slot);
-                        }
-                    }
-                }
-                after.step_backward::<Z80Registers>(&REGISTER_INFO, assignment, inst);
-            }
-            if let Some(slot) = first {
-                return Some((slot, StackRefusal::ByteMateLive));
-            }
-        }
-        None
+        // restored; the first load in program order is the one reported
+        mate_live
+            .iter()
+            .find_map(
+                |slots| slots.iter().find(|slot| chosen.contains(slot)).map(|&slot| (slot, StackRefusal::ByteMateLive)),
+            )
     };
     let mut peeks = std::collections::BTreeSet::new();
     while let Some((slot, why)) = violation(function, &chosen, &mut peeks) {

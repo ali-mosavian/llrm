@@ -87,3 +87,16 @@ fn a_run_of_loop_passes_is_canonicalised_into_lcssa_form_first() {
     assert_eq!(phis(&run("loop(loop-instsimplify)", EXIT_USE).unwrap()), 2);
     assert_eq!(phis(&run("function(dce)", EXIT_USE).unwrap()), 1);
 }
+
+const SLOT: &str =
+    "define i32 @f() {\nentry:\n  %a = alloca i32\n  store i32 7, ptr %a\n  %v = load i32, ptr %a\n  ret i32 %v\n}\n";
+
+/// `-passes=sroa` was `unsupported`, so the pin's SROA could not be run alone
+/// on a function to compare against ours.
+#[test]
+fn sroa_runs_alone_in_both_cfg_modes() {
+    for text in ["sroa", "sroa<modify-cfg>", "sroa<preserve-cfg>"] {
+        let out = run(text, SLOT).unwrap();
+        assert!(!out.contains("alloca") && !out.contains("load"), "{text}:\n{out}");
+    }
+}

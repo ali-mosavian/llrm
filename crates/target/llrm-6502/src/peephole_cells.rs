@@ -63,6 +63,24 @@ fn call_keeps_scratch(
         )
 }
 
+/// Whether `inst`, a `jsr`, leaves the named cell as it was: a spill slot, a
+/// callee-saved cell, or a cell the runtime routine's text does not name.
+///
+/// The pin's analogue is the call's register mask applied to the copy's source
+/// as to its destination (`MachineCopyPropagation`,
+/// `Tracker::clobberRegister`).
+fn call_keeps_source(
+    inst: &Inst,
+    source: &str,
+) -> bool {
+    let Some(n) = cell_number(source) else { return true };
+    (8..=15).contains(&n)
+        || matches!(
+            &inst.operand,
+            Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
+}
+
 fn straight(op: Op) -> bool {
     use Op::*;
     matches!(
@@ -190,6 +208,21 @@ fn dead_from_pushed(
             }
             return true;
         }
+        // a call does not read the cells its routine reads no argument from:
+        // one it always writes is dead before it (the `rc5`..`rc7` of a byte
+        // divisor, the remainder's cells of a quotient-and-remainder call), any
+        // other is as the call found it
+        if inst.op == Op::Jsr
+            && let Operand::Direct(routine) = &inst.operand
+            && let Some(effects) = crate::routine_effects::cell_effects(routine)
+            && n < 64
+            && effects.reads & (1 << n) == 0
+        {
+            if effects.writes & (1 << n) != 0 {
+                return true;
+            }
+            continue;
+        }
         // a call of a routine that names no cell reads none of them
         if inst.op == Op::Jsr
             && matches!(
@@ -299,16 +332,25 @@ pub fn drop_unused_saves(asm: &mut Asm) {
 }
 
 pub fn drop_dead_stores(asm: &mut Asm) {
-    let mut at = 0;
-    while at < asm.lines.len() {
-        if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), .. }) =
-            &asm.lines[at]
-            && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut Default::default())
-        {
-            asm.lines.remove(at);
-            continue;
+    // a removed store can make an earlier one dead (a zero kept in a scratch
+    // cell for the argument stores of a call that ignores them)
+    loop {
+        let before = asm.lines.len();
+        let mut at = 0;
+        while at < asm.lines.len() {
+            if let Line::Inst(Inst {
+                op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), ..
+            }) = &asm.lines[at]
+                && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut Default::default())
+            {
+                asm.lines.remove(at);
+                continue;
+            }
+            at += 1;
         }
-        at += 1;
+        if asm.lines.len() == before {
+            break;
+        }
     }
 }
 
@@ -500,6 +542,11 @@ fn spill_copy_once(
             // argument cells
             if inst.op == Op::Jsr {
                 if call_keeps_scratch(inst, n) {
+                    // the reads after the call would read `s` as the call left
+                    // it
+                    if !call_keeps_source(inst, s) {
+                        return false;
+                    }
                     continue;
                 }
                 if n <= 7 {

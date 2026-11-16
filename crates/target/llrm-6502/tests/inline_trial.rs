@@ -67,3 +67,18 @@ fn a_trial_that_keeps_nothing_selects_the_kept_side_once() {
     let selected = driver::selected() - before;
     assert!(selected <= 2 * functions + 1, "{selected} selections for {functions} functions");
 }
+
+/// loop_fusion -O2/-O3: the rate refused `clear` and `total`, and the unroll
+/// trial priced their loops as calls (+1,388 B, put back): 1,190 B and 92,367
+/// clocks. Inlined and unrolled the whole program folds (133 B, 2,825 clocks)
+/// once the stores of the arrays no body loads any more are removed after the
+/// late unroll: the listing then has no call and no array.
+#[test]
+fn a_refused_copy_and_the_unroll_it_enables_are_priced_together() {
+    for level in [Level::O2, Level::O3] {
+        let text = at(level, "loop_fusion");
+        for gone in ["jsr clear", "jsr total", "clear:", "total:", "data__r_a_"] {
+            assert!(!text.contains(gone), "{level:?}: `{gone}` is still in the listing\n{text}");
+        }
+    }
+}

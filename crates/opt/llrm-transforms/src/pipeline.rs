@@ -143,7 +143,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
     inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
@@ -524,7 +524,7 @@ impl Options {
             }
             "indvars" | "window" | "gepoffset" | "gepbyteindex" | "narrowrange" => self.strength,
             "cgpaddr" | "cgpselectarms" | "cgpcondsplit" => self.strength && self.cgpaddr,
-            "extload" => self.extload,
+            "extload" | "ree" => self.extload,
             "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
@@ -1855,6 +1855,11 @@ pub fn recorded(
     // not run through the simplification pipeline again.
     if let Some(stage) = late_stage {
         manager.add(stage);
+        // DEVIATE WRITEONLY-LATE (`Tti::write_only_after_late_unroll`).
+        if program.target.tti().is_some_and(|tti| tti.write_only_after_late_unroll()) {
+            manager.add_module(globalopt::WriteOnly);
+            manager.add(dead::Dead);
+        }
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
     // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not
@@ -1946,6 +1951,10 @@ pub fn recorded(
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
+    // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
+    if applied.options.wanted("ree") {
+        manager.add(ree::Ree);
+    }
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
     }

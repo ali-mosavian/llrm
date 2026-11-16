@@ -309,7 +309,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
         }
     }
-    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+    for lanes in Arrangement::ALL {
         out.push(Inst::VectorUnzip { second: false, lanes, rd: v(0), rn: v(1), rm: v(2) });
         out.push(Inst::VectorUnzip { second: true, lanes, rd: v(0), rn: v(1), rm: v(2) });
     }
@@ -317,6 +317,11 @@ pub(super) fn instructions() -> Vec<Inst> {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
         out.push(Inst::VectorInsLane { lanes, rd: v(0), rn: v(1), index: 1, src: 0 });
         out.push(Inst::VectorUmov { lanes, rd: Gpr(3), rn: v(1), index: 1 });
+        for wide in [false, true] {
+            if lanes != Arrangement::D2 && (wide || lanes != Arrangement::S4) {
+                out.push(Inst::VectorSmov { lanes, wide, rd: Gpr(3), rn: v(1), index: 1 });
+            }
+        }
         out.push(Inst::VectorStoreLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
     }
     for lanes in Arrangement::ALL {
@@ -435,6 +440,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorInsGpr { .. } => "VectorInsGpr",
         Inst::VectorInsLane { .. } => "VectorInsLane",
         Inst::VectorUmov { .. } => "VectorUmov",
+        Inst::VectorSmov { .. } => "VectorSmov",
         Inst::VectorStoreLane { .. } => "VectorStoreLane",
         Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
         Inst::VectorIntUnary { .. } => "VectorIntUnary",
@@ -461,7 +467,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 75] = [
+const ALL: [&str; 76] = [
     "Mark",
     "Label",
     "Cfi",
@@ -517,6 +523,7 @@ const ALL: [&str; 75] = [
     "VectorInsGpr",
     "VectorInsLane",
     "VectorUmov",
+    "VectorSmov",
     "VectorStoreLane",
     "VectorLoadReplicate",
     "VectorIntUnary",
