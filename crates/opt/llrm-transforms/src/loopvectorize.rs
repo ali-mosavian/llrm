@@ -828,16 +828,19 @@ fn extract(
                 }));
             }
             // `VPWidenCastRecipe`: an integer extension or truncation, and a
-            // conversion between integer and float lanes. DEVIATE LV-X4
-            // (owner llrm-arm64-vec, exit LV-W3b): the other casts are not
+            // conversion between integer and float lanes, and a `bitcast` of a
+            // lane to a number of its own width. DEVIATE LV-X4 (owner arm64,
+            // exit LV-W3b): `fpext`, `fptrunc` and the pointer casts are not
             // widened.
             Opcode::Cast(op) => {
                 let kind = interleave::cast_kind(op).ok_or(Skipped("A cast the cost model does not know"))?;
                 let integer_cast = matches!(op, CastOp::SExt | CastOp::ZExt | CastOp::Trunc);
-                if !integer_cast && !matches!(
-                    op,
-                    CastOp::SIToFP | CastOp::UIToFP | CastOp::FPToSI | CastOp::FPToUI
-                ) {
+                if !integer_cast
+                    && !matches!(
+                        op,
+                        CastOp::SIToFP | CastOp::UIToFP | CastOp::FPToSI | CastOp::FPToUI | CastOp::BitCast
+                    )
+                {
                     return Err(Skipped("A cast the target has no vector instruction for yet"));
                 }
                 let value = data.result.expect("a cast");
