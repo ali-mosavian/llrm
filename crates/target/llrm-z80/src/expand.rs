@@ -2494,6 +2494,9 @@ pub fn finish(
             }
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
+        let after = printer.liveness.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, at, block.insts.len());
+        let bits: String = BYTES.map(|byte| if after.is_live(&REGISTER_INFO, byte) { '1' } else { '0' }).iter().collect();
+        printer.out.push(Line::Inst(format!("{LIVE_OUT}{bits}")));
     }
     // the tables follow the code: a word a block, each entry the label of its
     // block
@@ -2507,12 +2510,97 @@ pub fn finish(
     Ok(tidy(printer.out))
 }
 
+/// The byte registers the text passes follow, in the order of their flags.
+const BYTES: [RegId; 6] = [reg::B, reg::C, reg::D, reg::E, reg::H, reg::L];
+
+/// The line that ends a block in the printer's output, carrying which of
+/// [`BYTES`] the allocator's liveness keeps live after the block's last
+/// instruction: `;live 001100`. [`drop_dead_byte_loads`] reads and removes it.
+const LIVE_OUT: &str = ";live ";
+
+/// Drops `ld r, s` of a byte register that nothing reads before the block ends
+/// (the [`LIVE_OUT`] line). The printer leaves one where it copies a whole word
+/// and the compare after it reads one byte (`xor a, #128; ld b, a` of a signed
+/// compare against a constant whose low byte is 0): the copy is dead unless a
+/// later load overwrites it, which `drop_overwritten_byte_stores` sees. It runs
+/// after the passes that need such a load to fuse (`ld l, c; ld h, b; ld l,
+/// h`). The scan stops at a label; a call, a return or an instruction that
+/// reads a register unnamed keeps every register live, and a jump keeps those
+/// live after the block.
+///
+/// Translation: `DeadMachineInstrElim` (DeadMachineInstructionElim.cpp, a
+/// physical register def not live after the instruction is dead), on the
+/// printed text. DEVIATE: only a load of a byte register from another byte
+/// register, the accumulator or a constant is judged. Exit: the pass on the
+/// shared flow.
+fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
+    let at = |register: &str| ["b", "c", "d", "e", "h", "l"].iter().position(|one| *one == register);
+    let mut keep = vec![true; lines.len()];
+    for end in 0..lines.len() {
+        let Line::Inst(marker) = &lines[end] else { continue };
+        let Some(bits) = marker.strip_prefix(LIVE_OUT) else { continue };
+        keep[end] = false;
+        let live_out: Vec<bool> = bits.chars().map(|bit| bit == '1').collect();
+        let mut live = [false; 6];
+        live.iter_mut().zip(&live_out).for_each(|(now, out)| *now = *out);
+        for index in (0..end).rev() {
+            let text = match &lines[index] {
+                Line::Label(_) => break,
+                Line::Inst(text) if text.starts_with(LIVE_OUT) => break,
+                Line::Inst(text) => text,
+                _ => continue,
+            };
+            let mnemonic = text.split(' ').next().unwrap_or("");
+            if let Some((to, source)) = text.strip_prefix("ld ").and_then(|rest| rest.split_once(", "))
+                && let Some(to) = at(to)
+                && (at(source).is_some() || source == "a" || source.starts_with('#'))
+            {
+                if !live[to] {
+                    keep[index] = false;
+                    continue;
+                }
+                live[to] = false;
+                if let Some(source) = at(source) {
+                    live[source] = true;
+                }
+                continue;
+            }
+            if matches!(mnemonic, "jr" | "jp" | "djnz") {
+                for (now, out) in live.iter_mut().zip(&live_out) {
+                    *now |= *out;
+                }
+                if mnemonic == "djnz" {
+                    live[0] = true;
+                }
+                continue;
+            }
+            if HIDDEN.contains(&mnemonic) {
+                live = [true; 6];
+                continue;
+            }
+            for word in text.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()).skip(1) {
+                match word {
+                    "bc" => live[..2].fill(true),
+                    "de" => live[2..4].fill(true),
+                    "hl" => live[4..].fill(true),
+                    _ => {
+                        if let Some(byte) = at(word) {
+                            live[byte] = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    lines.into_iter().zip(keep).filter_map(|(line, keep)| keep.then_some(line)).collect()
+}
+
 /// The post-printer passes. `forward_high_bytes` runs before
 /// `drop_overwritten_byte_stores`: the latter drops the `ld R1, S1` the former
 /// needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
     branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_reloaded_accumulator(
-        drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines)))),
+        drop_dead_byte_loads(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines))))),
     ))))
 }
 
@@ -3948,6 +4036,28 @@ mod tests {
             vec![inst("ld c, (hl)")],
             "each load is overwritten by the next"
         );
+    }
+
+    /// The copy of a word a signed compare keeps one byte of (`ld c, l; ld a, h; xor a, #128; ld b, a; sub a, #129`)
+    /// stayed where no later load overwrote `bc`: switch_peeled_table -Os, once the loop no longer rebuilt it.
+    #[test]
+    fn a_byte_load_nothing_reads_before_the_block_ends_is_dropped() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let block = |live: &str| {
+            let lines = vec![
+                Line::Label("L".to_owned()),
+                inst("ld c, l"),
+                inst("ld a, h"),
+                inst("xor a, #128"),
+                inst("ld b, a"),
+                inst("sub a, #129"),
+                inst("jr nc, M"),
+                inst(&format!("{LIVE_OUT}{live}")),
+            ];
+            drop_dead_byte_loads(lines).len()
+        };
+        assert_eq!(block("000000"), 5, "both loads of bc are dead");
+        assert_eq!(block("110000"), 7, "bc is live after the block");
     }
 
     /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`.
