@@ -1278,3 +1278,53 @@ fn a_count_of_a_compare_beside_a_select_sum_is_widened_without_interleaving() {
     assert_eq!(count(&text, "select <16 x i1>"), 1, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
 }
+
+const EARLY_EXIT_DIFFER: &str = include_str!("../tests/lv/early_exit_differ.ll");
+const EARLY_EXIT_INDEX: &str = include_str!("../tests/lv/early_exit_index.ll");
+
+/// `differ` of memory_expansion (a byte compare that leaves at the first
+/// difference) stayed a scalar loop, 1.69 M instructions against clang's 0.93 M:
+/// the planner skipped every loop of two blocks. The pin widens it to 16 lanes
+/// and leaves the vector loop where `reduce.or` of the compare says (`AnyOf`).
+#[test]
+fn an_early_exit_byte_compare_is_widened_with_an_any_of_exit() {
+    let text = run_compares(EARLY_EXIT_DIFFER);
+    assert_eq!(count(&text, "load <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "icmp ne <16 x i8>"), 1, "{text}");
+    assert_eq!(count(&text, "llvm.vector.reduce.or.v16i1"), 2, "call and declaration: {text}");
+    assert!(text.contains("vector.early.exit:"), "{text}");
+    assert!(text.contains("vector.body:"), "{text}");
+}
+
+/// The vector loop's exit has the pin's shape: the any-of branch to
+/// `vector.early.exit`, then the count branch to `middle.block`, else back.
+#[test]
+fn the_early_exit_vector_loop_leaves_by_the_any_of_then_the_count() {
+    let text = run_compares(EARLY_EXIT_DIFFER);
+    assert!(text.contains("add i64 %index, 16"), "{text}");
+    assert!(text.contains("label %vector.early.exit"), "{text}");
+    assert!(text.contains("label %middle.block"), "{text}");
+}
+
+/// The original loop stays as the scalar remainder, marked as vectorized (it
+/// must not be widened again), entered from `scalar.ph`.
+#[test]
+fn the_early_exit_loop_keeps_a_marked_scalar_remainder() {
+    let text = run_compares(EARLY_EXIT_INDEX);
+    assert_eq!(count(&text, "load i8"), 2, "{text}");
+    assert!(text.contains("scalar.ph:"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64"), "{text}");
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 2, "{text}");
+}
+
+/// The index of the first difference was lost where the loop leaves early: the
+/// exit phi reads `%i`, which the vector loop does not have per lane. The
+/// pin's `vector.early.exit` finds the first set lane (`cttz`) and adds it to
+/// the vector iteration's index.
+#[test]
+fn the_early_exit_value_is_the_index_of_the_first_set_lane() {
+    let text = run_compares(EARLY_EXIT_INDEX);
+    assert!(text.contains("llvm.cttz.i16"), "{text}");
+    assert!(text.contains("bitcast <16 x i1>"), "{text}");
+    assert!(text.contains("= add i64 %index, %"), "{text}");
+}
