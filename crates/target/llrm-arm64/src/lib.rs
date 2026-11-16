@@ -87,4 +87,24 @@ mod tests {
         assert!(info.in_class(reg::D0, class::FPR));
         assert!(info.in_class(reg::XZR, class::ZERO));
     }
+
+    /// A tuple is its members' registers: `v0_v1` collides with `v1` and `d1`
+    /// (the old root-and-lane test read it as its own root and let `ld2` clobber
+    /// a live `v1`), not with `v2`; the wrap past `v31` is a tuple too.
+    #[test]
+    fn a_tuple_overlaps_what_its_members_do() {
+        let info = info();
+        let pair = info.by_name("v0_v1").expect("tuple row");
+        assert!(info.is_composite(pair) && !info.is_composite(reg::V1));
+        assert!(info.overlaps(pair, reg::V1) && info.overlaps(reg::D0, pair));
+        assert!(!info.overlaps(pair, reg::V2));
+        assert!(info.overlaps(pair, info.by_name("v1_v2").unwrap()));
+        assert!(!info.overlaps(pair, info.by_name("v2_v3").unwrap()));
+        assert_eq!(info.subreg(pair, 1), Some(reg::V1));
+        assert_eq!(info.subreg(pair, 2), None);
+        let wrap = info.by_name("v31_v0_v1").expect("wraps");
+        assert_eq!(info.subreg(wrap, 1), Some(reg::V0));
+        assert!(info.overlaps(wrap, reg::V31) && info.overlaps(wrap, pair));
+        assert!(info.in_class(pair, class::TUPLE) && !info.in_class(pair, class::FPR));
+    }
 }

@@ -72,6 +72,36 @@ pub fn bytes(text: &str) -> Vec<String> {
     order(text, "@bytes")
 }
 
+/// A `@tuple q0_q1 vecs q0 q1` line: a register that is several registers
+/// allocated as one, its class, and its members in order.
+pub struct Tuple {
+    pub name: String,
+    pub class: String,
+    pub members: Vec<String>,
+}
+
+/// The tuples a file states, each member a register of the file.
+pub fn tuples(text: &str) -> Result<Vec<Tuple>, String> {
+    let registers = parse(text)?;
+    let mut found = Vec::new();
+    for raw in text.lines() {
+        let Some(rest) = raw.split('#').next().unwrap_or("").trim().strip_prefix("@tuple") else { continue };
+        let mut words = rest.split_whitespace().map(str::to_owned);
+        let (Some(name), Some(class)) = (words.next(), words.next()) else {
+            return Err(format!("registers.regs: `@tuple{rest}` needs a name and a class"));
+        };
+        let members: Vec<String> = words.collect();
+        if members.len() < 2 {
+            return Err(format!("registers.regs: tuple {name} has {} members, a tuple has at least two", members.len()));
+        }
+        if let Some(missing) = members.iter().find(|member| !registers.iter().any(|one| &one.name == *member)) {
+            return Err(format!("registers.regs: tuple {name} names `{missing}`, which is no register"));
+        }
+        found.push(Tuple { name, class, members });
+    }
+    Ok(found)
+}
+
 fn order(
     text: &str,
     key: &str,
@@ -237,7 +267,7 @@ pub fn source_with(
         ));
     }
     let mut code = String::from(
-        "pub static REGISTER_INFO: llrm_lir::registers::Info = {\n    let mut table: [Option<llrm_lir::registers::Entry>; 256] = [None; 256];\n",
+        "pub static REGISTER_INFO: llrm_lir::registers::Info = {\n    let mut table: [Option<llrm_lir::registers::Entry>; llrm_lir::registers::REGISTER_IDS] = [None; llrm_lir::registers::REGISTER_IDS];\n",
     );
     for one in &registers {
         let mut mask = Vec::new();
@@ -252,13 +282,34 @@ pub fn source_with(
         }
         let mask = if mask.is_empty() { "0".to_owned() } else { mask.join(" | ") };
         code.push_str(&format!(
-            "    table[{names}::{}.index()] = Some(llrm_lir::registers::Entry {{ id: {names}::{}, name: {:?}, bits: {}, root: {names}::{}, lane: {}, classes: {mask} }});\n",
+            "    table[{names}::{}.index()] = Some(llrm_lir::registers::Entry {{ id: {names}::{}, name: {:?}, bits: {}, root: {names}::{}, lane: {}, classes: {mask}, members: &[] }});\n",
             one.name.to_uppercase(),
             one.name.to_uppercase(),
             one.name,
             one.bits,
             one.root.to_uppercase(),
             one.lane
+        ));
+    }
+    for tuple in tuples(text)? {
+        if !classes.contains(&tuple.class.as_str()) {
+            return Err(format!(
+                "registers.regs: tuple {} has the class `{}`, which llrm_lir::registers has no bit for",
+                tuple.name, tuple.class
+            ));
+        }
+        let bits: u32 = tuple
+            .members
+            .iter()
+            .map(|member| registers.iter().find(|one| &one.name == member).map_or(0, |one| one.bits))
+            .sum();
+        let members: Vec<String> = tuple.members.iter().map(|member| format!("{names}::{}", member.to_uppercase())).collect();
+        let upper = tuple.name.to_uppercase();
+        code.push_str(&format!(
+            "    table[{names}::{upper}.index()] = Some(llrm_lir::registers::Entry {{ id: {names}::{upper}, name: {:?}, bits: {bits}, root: {names}::{upper}, lane: 0, classes: llrm_lir::registers::class::{}, members: &[{}] }});\n",
+            tuple.name,
+            tuple.class.to_uppercase(),
+            members.join(", ")
         ));
     }
     // The roles: the root the description gives the class `frame`, and `stack`.
@@ -288,7 +339,7 @@ pub fn source_with(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {}, lanes_x86: {}, lanes_none: {}, ties_by_row: {} }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; llrm_lir::registers::REGISTER_IDS] = [[None; {WIDTH_COLUMNS}]; llrm_lir::registers::REGISTER_IDS];\n    let mut at = 0;\n    while at < llrm_lir::registers::REGISTER_IDS {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {}, lanes_x86: {}, lanes_none: {}, ties_by_row: {} }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
         bytes.join(", "),
@@ -321,6 +372,14 @@ pub fn constants(
     let mut code = String::new();
     for (at, one) in registers.iter().enumerate() {
         code.push_str(&format!("pub const {}: {id} = {id}::from_raw({});\n", one.name.to_uppercase(), at + 1));
+    }
+    // Tuples are numbered past the registers, which is why ids are wider than a byte.
+    for (at, tuple) in tuples(text)?.iter().enumerate() {
+        code.push_str(&format!(
+            "pub const {}: {id} = {id}::from_wide({});\n",
+            tuple.name.to_uppercase(),
+            registers.len() + at + 1
+        ));
     }
     Ok(code)
 }
@@ -372,6 +431,25 @@ mod source_tests {
         assert_eq!(made, "pub const FP: Reg = Reg::from_raw(1);\npub const SP: Reg = Reg::from_raw(2);\n");
         let many: String = (0..256).map(|at| format!("r{at} 64 r{at} 0 gpr - -\n")).collect();
         assert!(super::constants(&many, "Reg").is_err());
+    }
+
+    /// A `@tuple` line is a register of several, numbered past the file's own.
+    #[test]
+    fn a_tuple_line_makes_a_composite_register() {
+        let text = "v0 128 v0 0 vec - -\nv1 128 v1 0 vec - -\n@tuple v0_v1 tuple v0 v1\n";
+        let consts = super::constants(text, "Reg").expect("made");
+        assert!(consts.contains("pub const V0_V1: Reg = Reg::from_wide(3);"), "{consts}");
+        let made = super::source_with(
+            &format!("fp 64 fp 0 frame - 29\nsp 64 sp 0 stack - 31\n{text}"),
+            "Reg",
+            "regs",
+            &["frame", "stack", "vec", "tuple"],
+            "rows",
+        )
+        .expect("made");
+        assert!(made.contains("members: &[regs::V0, regs::V1]"), "{made}");
+        assert!(super::tuples("v0 128 v0 0 vec - -\n@tuple t tuple v0 v9\n").is_err());
+        assert!(super::tuples("v0 128 v0 0 vec - -\n@tuple t tuple v0\n").is_err());
     }
 
     /// Two frame registers (or none) are no role: the table is not made.

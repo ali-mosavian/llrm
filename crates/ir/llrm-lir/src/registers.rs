@@ -7,13 +7,17 @@
 
 use iced_x86::Register;
 
+/// How many register ids a file may number: the scalar registers, then the
+/// tuples of consecutive vector registers (`QQ`, `QQQ`, `QQQQ`).
+pub const REGISTER_IDS: usize = 512;
+
 /// A register's id: a number in the table of the target being compiled
 /// (`Info`). The x86 targets number theirs as iced does, so the encoder and
 /// decoder convert; any other target numbers its own file. Only the target's
 /// `Info` says what an id means: `Debug` and the x86 helpers below read an id
 /// as iced's.
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RegId(u8);
+pub struct RegId(u16);
 
 thread_local! {
     static NAMED_BY: std::cell::Cell<Option<&'static Info>> = const { std::cell::Cell::new(None) };
@@ -53,12 +57,18 @@ impl RegId {
     /// The register iced names, for the encoder and the decoder.
     #[inline]
     pub const fn new(register: Register) -> Self {
-        RegId(register as u8)
+        RegId(register as u16)
     }
 
     /// The id numbered `number` in a target's own register file.
     #[inline]
     pub const fn from_raw(number: u8) -> Self {
+        RegId(number as u16)
+    }
+
+    /// The id numbered `number`, of the scalar file or past it, a tuple's.
+    #[inline]
+    pub const fn from_wide(number: u16) -> Self {
         RegId(number)
     }
 
@@ -90,7 +100,7 @@ impl RegId {
     /// The register of iced's number `index`.
     #[inline]
     pub fn from_index(index: usize) -> RegId {
-        RegId(u8::try_from(index).expect("a register id below 256"))
+        RegId(u16::try_from(index).expect("a register id below 65536"))
     }
 
     /// The dword register of this one's family (see [`crate::root::root`]):
@@ -98,7 +108,7 @@ impl RegId {
     /// `Info` says its own roots.
     #[inline]
     pub fn root(self) -> RegId {
-        RegId(ROOT_OF[self.0 as usize])
+        RegId(u16::from(ROOT_OF[self.0 as usize]))
     }
 
     /// iced's number of the register: the index into the tables.
@@ -184,7 +194,7 @@ impl From<RegId> for Register {
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
-pub const CLASSES: [&str; 23] = [
+pub const CLASSES: [&str; 24] = [
     "base",
     "byte",
     "code_segment",
@@ -208,6 +218,7 @@ pub const CLASSES: [&str; 23] = [
     "xmm",
     "tail_call",
     "frame_follows",
+    "tuple",
 ];
 
 /// The class bits.
@@ -249,6 +260,9 @@ pub mod class {
     /// The register the frame register follows in the allocation order when
     /// the function has no frame pointer and the register is given out.
     pub const FRAME_FOLLOWS: u32 = 1 << 22;
+    /// Several registers allocated as one (`Entry::members`): the operand of a
+    /// multi-register load or store, never a scalar's home.
+    pub const TUPLE: u32 = 1 << 23;
 }
 
 /// What LIR calls the frame register and the stack pointer, whatever the
@@ -269,6 +283,9 @@ pub struct Entry {
     pub lane: u32,
     /// `class` bits.
     pub classes: u32,
+    /// A tuple's registers in order (`q0_q1`: `q0`, `q1`); empty for a
+    /// register that is not one.
+    pub members: &'static [RegId],
 }
 
 /// A target's register file: an entry by iced's number, and each register at
@@ -330,7 +347,7 @@ impl Default for Cache {
 }
 
 pub struct Info {
-    pub table: [Option<Entry>; 256],
+    pub table: [Option<Entry>; REGISTER_IDS],
     /// The root the description gives the class `frame`, and `stack`.
     pub frame: RegId,
     pub stack: RegId,
@@ -357,7 +374,7 @@ pub struct Info {
     pub effects: Rows,
     /// Worked out on first ask.
     pub cache: Cache,
-    pub views: [[Option<RegId>; 8]; 256],
+    pub views: [[Option<RegId>; 8]; REGISTER_IDS],
     /// The file states `@lanes bytes`: its lanes are the bytes of each root,
     /// from each entry's `lane` and `bits`, not x86's table (the 6502's pairs
     /// and cells).
@@ -391,7 +408,7 @@ impl Info {
         bytes: u32,
     ) -> Option<RegId> {
         let want = ((1_i64 << bytes) - 1) << (self.lanes(wide).trailing_zeros() + offset);
-        (0..256).map(RegId::from_index).find(|&register| {
+        (0..REGISTER_IDS).map(RegId::from_index).find(|&register| {
             self.known(register)
                 && self.root(register) == self.root(wide)
                 && self.lanes(register) == want
@@ -521,7 +538,40 @@ impl Info {
         one: RegId,
         other: RegId,
     ) -> bool {
+        if self.is_composite(one) || self.is_composite(other) {
+            return self.units(one).any(|(root, lanes)| {
+                self.units(other).any(|(other_root, other_lanes)| root == other_root && lanes & other_lanes != 0)
+            });
+        }
         self.root(one) == self.root(other) && self.lanes(one) & self.lanes(other) != 0
+    }
+
+    /// Whether `register` is a tuple: several registers allocated as one.
+    pub fn is_composite(
+        &self,
+        register: RegId,
+    ) -> bool {
+        self.get(register).is_some_and(|one| !one.members.is_empty())
+    }
+
+    /// The `(root, lanes)` pieces `register` occupies: its own for a scalar,
+    /// each member's for a tuple.
+    pub fn units(
+        &self,
+        register: RegId,
+    ) -> impl Iterator<Item = (RegId, i64)> + '_ {
+        let members = self.get(register).map_or(&[][..], |one| one.members);
+        let own = members.is_empty().then_some(register);
+        own.into_iter().chain(members.iter().copied()).map(|one| (self.root(one), self.lanes(one)))
+    }
+
+    /// The `index`th register of tuple `tuple`.
+    pub fn subreg(
+        &self,
+        tuple: RegId,
+        index: usize,
+    ) -> Option<RegId> {
+        self.get(tuple)?.members.get(index).copied()
     }
 
     /// Whether `register` is a segment register.
@@ -764,17 +814,17 @@ impl PartialEq for Regs {
 
 impl Eq for Regs {}
 
-/// A set of registers, a bit each: the register file is 256 ids, so the set is
-/// four words held in place, where a `BTreeSet<RegId>` allocated a node and
+/// A set of registers, a bit each: the register file is `REGISTER_IDS` ids, so the set is
+/// eight words held in place, where a `BTreeSet<RegId>` allocated a node and
 /// walked a tree for each of the 85,000 registers `masm::_roots` inserted in a
 /// d_faces -O2 compile. Iteration is ascending, `BTreeSet`'s order.
 #[derive(Clone, Copy, Default, Eq, PartialEq, Hash)]
-pub struct RegSet([u64; 4]);
+pub struct RegSet([u64; REGISTER_IDS / 64]);
 
 impl RegSet {
     #[must_use]
     pub const fn new() -> Self {
-        Self([0; 4])
+        Self([0; REGISTER_IDS / 64])
     }
 
     /// Whether `register` was not in the set.
@@ -826,7 +876,7 @@ impl RegSet {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0 == [0; 4]
+        self.0 == [0; REGISTER_IDS / 64]
     }
 
     /// The members, ascending.

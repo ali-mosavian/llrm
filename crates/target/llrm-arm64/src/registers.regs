@@ -235,3 +235,197 @@ b28  8 v28 0 fpr 92 -
 b29  8 v29 0 fpr 93 -
 b30  8 v30 0 fpr 94 -
 b31  8 v31 0 fpr 95 -
+
+# Tuples: n consecutive vector registers wrapping past v31, the operand of ldN/stN.
+@tuple v0_v1 tuple v0 v1
+@tuple v1_v2 tuple v1 v2
+@tuple v2_v3 tuple v2 v3
+@tuple v3_v4 tuple v3 v4
+@tuple v4_v5 tuple v4 v5
+@tuple v5_v6 tuple v5 v6
+@tuple v6_v7 tuple v6 v7
+@tuple v7_v8 tuple v7 v8
+@tuple v8_v9 tuple v8 v9
+@tuple v9_v10 tuple v9 v10
+@tuple v10_v11 tuple v10 v11
+@tuple v11_v12 tuple v11 v12
+@tuple v12_v13 tuple v12 v13
+@tuple v13_v14 tuple v13 v14
+@tuple v14_v15 tuple v14 v15
+@tuple v15_v16 tuple v15 v16
+@tuple v16_v17 tuple v16 v17
+@tuple v17_v18 tuple v17 v18
+@tuple v18_v19 tuple v18 v19
+@tuple v19_v20 tuple v19 v20
+@tuple v20_v21 tuple v20 v21
+@tuple v21_v22 tuple v21 v22
+@tuple v22_v23 tuple v22 v23
+@tuple v23_v24 tuple v23 v24
+@tuple v24_v25 tuple v24 v25
+@tuple v25_v26 tuple v25 v26
+@tuple v26_v27 tuple v26 v27
+@tuple v27_v28 tuple v27 v28
+@tuple v28_v29 tuple v28 v29
+@tuple v29_v30 tuple v29 v30
+@tuple v30_v31 tuple v30 v31
+@tuple v31_v0 tuple v31 v0
+@tuple d0_d1 tuple d0 d1
+@tuple d1_d2 tuple d1 d2
+@tuple d2_d3 tuple d2 d3
+@tuple d3_d4 tuple d3 d4
+@tuple d4_d5 tuple d4 d5
+@tuple d5_d6 tuple d5 d6
+@tuple d6_d7 tuple d6 d7
+@tuple d7_d8 tuple d7 d8
+@tuple d8_d9 tuple d8 d9
+@tuple d9_d10 tuple d9 d10
+@tuple d10_d11 tuple d10 d11
+@tuple d11_d12 tuple d11 d12
+@tuple d12_d13 tuple d12 d13
+@tuple d13_d14 tuple d13 d14
+@tuple d14_d15 tuple d14 d15
+@tuple d15_d16 tuple d15 d16
+@tuple d16_d17 tuple d16 d17
+@tuple d17_d18 tuple d17 d18
+@tuple d18_d19 tuple d18 d19
+@tuple d19_d20 tuple d19 d20
+@tuple d20_d21 tuple d20 d21
+@tuple d21_d22 tuple d21 d22
+@tuple d22_d23 tuple d22 d23
+@tuple d23_d24 tuple d23 d24
+@tuple d24_d25 tuple d24 d25
+@tuple d25_d26 tuple d25 d26
+@tuple d26_d27 tuple d26 d27
+@tuple d27_d28 tuple d27 d28
+@tuple d28_d29 tuple d28 d29
+@tuple d29_d30 tuple d29 d30
+@tuple d30_d31 tuple d30 d31
+@tuple d31_d0 tuple d31 d0
+@tuple v0_v1_v2 tuple v0 v1 v2
+@tuple v1_v2_v3 tuple v1 v2 v3
+@tuple v2_v3_v4 tuple v2 v3 v4
+@tuple v3_v4_v5 tuple v3 v4 v5
+@tuple v4_v5_v6 tuple v4 v5 v6
+@tuple v5_v6_v7 tuple v5 v6 v7
+@tuple v6_v7_v8 tuple v6 v7 v8
+@tuple v7_v8_v9 tuple v7 v8 v9
+@tuple v8_v9_v10 tuple v8 v9 v10
+@tuple v9_v10_v11 tuple v9 v10 v11
+@tuple v10_v11_v12 tuple v10 v11 v12
+@tuple v11_v12_v13 tuple v11 v12 v13
+@tuple v12_v13_v14 tuple v12 v13 v14
+@tuple v13_v14_v15 tuple v13 v14 v15
+@tuple v14_v15_v16 tuple v14 v15 v16
+@tuple v15_v16_v17 tuple v15 v16 v17
+@tuple v16_v17_v18 tuple v16 v17 v18
+@tuple v17_v18_v19 tuple v17 v18 v19
+@tuple v18_v19_v20 tuple v18 v19 v20
+@tuple v19_v20_v21 tuple v19 v20 v21
+@tuple v20_v21_v22 tuple v20 v21 v22
+@tuple v21_v22_v23 tuple v21 v22 v23
+@tuple v22_v23_v24 tuple v22 v23 v24
+@tuple v23_v24_v25 tuple v23 v24 v25
+@tuple v24_v25_v26 tuple v24 v25 v26
+@tuple v25_v26_v27 tuple v25 v26 v27
+@tuple v26_v27_v28 tuple v26 v27 v28
+@tuple v27_v28_v29 tuple v27 v28 v29
+@tuple v28_v29_v30 tuple v28 v29 v30
+@tuple v29_v30_v31 tuple v29 v30 v31
+@tuple v30_v31_v0 tuple v30 v31 v0
+@tuple v31_v0_v1 tuple v31 v0 v1
+@tuple d0_d1_d2 tuple d0 d1 d2
+@tuple d1_d2_d3 tuple d1 d2 d3
+@tuple d2_d3_d4 tuple d2 d3 d4
+@tuple d3_d4_d5 tuple d3 d4 d5
+@tuple d4_d5_d6 tuple d4 d5 d6
+@tuple d5_d6_d7 tuple d5 d6 d7
+@tuple d6_d7_d8 tuple d6 d7 d8
+@tuple d7_d8_d9 tuple d7 d8 d9
+@tuple d8_d9_d10 tuple d8 d9 d10
+@tuple d9_d10_d11 tuple d9 d10 d11
+@tuple d10_d11_d12 tuple d10 d11 d12
+@tuple d11_d12_d13 tuple d11 d12 d13
+@tuple d12_d13_d14 tuple d12 d13 d14
+@tuple d13_d14_d15 tuple d13 d14 d15
+@tuple d14_d15_d16 tuple d14 d15 d16
+@tuple d15_d16_d17 tuple d15 d16 d17
+@tuple d16_d17_d18 tuple d16 d17 d18
+@tuple d17_d18_d19 tuple d17 d18 d19
+@tuple d18_d19_d20 tuple d18 d19 d20
+@tuple d19_d20_d21 tuple d19 d20 d21
+@tuple d20_d21_d22 tuple d20 d21 d22
+@tuple d21_d22_d23 tuple d21 d22 d23
+@tuple d22_d23_d24 tuple d22 d23 d24
+@tuple d23_d24_d25 tuple d23 d24 d25
+@tuple d24_d25_d26 tuple d24 d25 d26
+@tuple d25_d26_d27 tuple d25 d26 d27
+@tuple d26_d27_d28 tuple d26 d27 d28
+@tuple d27_d28_d29 tuple d27 d28 d29
+@tuple d28_d29_d30 tuple d28 d29 d30
+@tuple d29_d30_d31 tuple d29 d30 d31
+@tuple d30_d31_d0 tuple d30 d31 d0
+@tuple d31_d0_d1 tuple d31 d0 d1
+@tuple v0_v1_v2_v3 tuple v0 v1 v2 v3
+@tuple v1_v2_v3_v4 tuple v1 v2 v3 v4
+@tuple v2_v3_v4_v5 tuple v2 v3 v4 v5
+@tuple v3_v4_v5_v6 tuple v3 v4 v5 v6
+@tuple v4_v5_v6_v7 tuple v4 v5 v6 v7
+@tuple v5_v6_v7_v8 tuple v5 v6 v7 v8
+@tuple v6_v7_v8_v9 tuple v6 v7 v8 v9
+@tuple v7_v8_v9_v10 tuple v7 v8 v9 v10
+@tuple v8_v9_v10_v11 tuple v8 v9 v10 v11
+@tuple v9_v10_v11_v12 tuple v9 v10 v11 v12
+@tuple v10_v11_v12_v13 tuple v10 v11 v12 v13
+@tuple v11_v12_v13_v14 tuple v11 v12 v13 v14
+@tuple v12_v13_v14_v15 tuple v12 v13 v14 v15
+@tuple v13_v14_v15_v16 tuple v13 v14 v15 v16
+@tuple v14_v15_v16_v17 tuple v14 v15 v16 v17
+@tuple v15_v16_v17_v18 tuple v15 v16 v17 v18
+@tuple v16_v17_v18_v19 tuple v16 v17 v18 v19
+@tuple v17_v18_v19_v20 tuple v17 v18 v19 v20
+@tuple v18_v19_v20_v21 tuple v18 v19 v20 v21
+@tuple v19_v20_v21_v22 tuple v19 v20 v21 v22
+@tuple v20_v21_v22_v23 tuple v20 v21 v22 v23
+@tuple v21_v22_v23_v24 tuple v21 v22 v23 v24
+@tuple v22_v23_v24_v25 tuple v22 v23 v24 v25
+@tuple v23_v24_v25_v26 tuple v23 v24 v25 v26
+@tuple v24_v25_v26_v27 tuple v24 v25 v26 v27
+@tuple v25_v26_v27_v28 tuple v25 v26 v27 v28
+@tuple v26_v27_v28_v29 tuple v26 v27 v28 v29
+@tuple v27_v28_v29_v30 tuple v27 v28 v29 v30
+@tuple v28_v29_v30_v31 tuple v28 v29 v30 v31
+@tuple v29_v30_v31_v0 tuple v29 v30 v31 v0
+@tuple v30_v31_v0_v1 tuple v30 v31 v0 v1
+@tuple v31_v0_v1_v2 tuple v31 v0 v1 v2
+@tuple d0_d1_d2_d3 tuple d0 d1 d2 d3
+@tuple d1_d2_d3_d4 tuple d1 d2 d3 d4
+@tuple d2_d3_d4_d5 tuple d2 d3 d4 d5
+@tuple d3_d4_d5_d6 tuple d3 d4 d5 d6
+@tuple d4_d5_d6_d7 tuple d4 d5 d6 d7
+@tuple d5_d6_d7_d8 tuple d5 d6 d7 d8
+@tuple d6_d7_d8_d9 tuple d6 d7 d8 d9
+@tuple d7_d8_d9_d10 tuple d7 d8 d9 d10
+@tuple d8_d9_d10_d11 tuple d8 d9 d10 d11
+@tuple d9_d10_d11_d12 tuple d9 d10 d11 d12
+@tuple d10_d11_d12_d13 tuple d10 d11 d12 d13
+@tuple d11_d12_d13_d14 tuple d11 d12 d13 d14
+@tuple d12_d13_d14_d15 tuple d12 d13 d14 d15
+@tuple d13_d14_d15_d16 tuple d13 d14 d15 d16
+@tuple d14_d15_d16_d17 tuple d14 d15 d16 d17
+@tuple d15_d16_d17_d18 tuple d15 d16 d17 d18
+@tuple d16_d17_d18_d19 tuple d16 d17 d18 d19
+@tuple d17_d18_d19_d20 tuple d17 d18 d19 d20
+@tuple d18_d19_d20_d21 tuple d18 d19 d20 d21
+@tuple d19_d20_d21_d22 tuple d19 d20 d21 d22
+@tuple d20_d21_d22_d23 tuple d20 d21 d22 d23
+@tuple d21_d22_d23_d24 tuple d21 d22 d23 d24
+@tuple d22_d23_d24_d25 tuple d22 d23 d24 d25
+@tuple d23_d24_d25_d26 tuple d23 d24 d25 d26
+@tuple d24_d25_d26_d27 tuple d24 d25 d26 d27
+@tuple d25_d26_d27_d28 tuple d25 d26 d27 d28
+@tuple d26_d27_d28_d29 tuple d26 d27 d28 d29
+@tuple d27_d28_d29_d30 tuple d27 d28 d29 d30
+@tuple d28_d29_d30_d31 tuple d28 d29 d30 d31
+@tuple d29_d30_d31_d0 tuple d29 d30 d31 d0
+@tuple d30_d31_d0_d1 tuple d30 d31 d0 d1
+@tuple d31_d0_d1_d2 tuple d31 d0 d1 d2
