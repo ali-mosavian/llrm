@@ -24,6 +24,7 @@ pub mod prepare;
 pub mod reassociate;
 pub mod relax;
 pub mod routine_clocks;
+pub mod routine_effects;
 pub mod routines;
 pub mod select;
 pub mod sharecmp;

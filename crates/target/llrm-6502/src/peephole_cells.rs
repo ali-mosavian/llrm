@@ -208,6 +208,21 @@ fn dead_from_pushed(
             }
             return true;
         }
+        // a call does not read the cells its routine reads no argument from:
+        // one it always writes is dead before it (the `rc5`..`rc7` of a byte
+        // divisor, the remainder's cells of a quotient-and-remainder call), any
+        // other is as the call found it
+        if inst.op == Op::Jsr
+            && let Operand::Direct(routine) = &inst.operand
+            && let Some(effects) = crate::routine_effects::cell_effects(routine)
+            && n < 64
+            && effects.reads & (1 << n) == 0
+        {
+            if effects.writes & (1 << n) != 0 {
+                return true;
+            }
+            continue;
+        }
         // a call of a routine that names no cell reads none of them
         if inst.op == Op::Jsr
             && matches!(
@@ -317,16 +332,25 @@ pub fn drop_unused_saves(asm: &mut Asm) {
 }
 
 pub fn drop_dead_stores(asm: &mut Asm) {
-    let mut at = 0;
-    while at < asm.lines.len() {
-        if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), .. }) =
-            &asm.lines[at]
-            && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut Default::default())
-        {
-            asm.lines.remove(at);
-            continue;
+    // a removed store can make an earlier one dead (a zero kept in a scratch
+    // cell for the argument stores of a call that ignores them)
+    loop {
+        let before = asm.lines.len();
+        let mut at = 0;
+        while at < asm.lines.len() {
+            if let Line::Inst(Inst {
+                op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), ..
+            }) = &asm.lines[at]
+                && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut Default::default())
+            {
+                asm.lines.remove(at);
+                continue;
+            }
+            at += 1;
         }
-        at += 1;
+        if asm.lines.len() == before {
+            break;
+        }
     }
 }
 
