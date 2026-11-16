@@ -78,6 +78,8 @@ pub enum Recipe {
     /// `llvm.fmuladd` of `lane`s (`VPWidenIntrinsicRecipe`): AArch64 prices it
     /// as one `fmul` (`getIntrinsicInstrCost`, L797).
     FMulAdd { lane: Ty },
+    /// `llvm.{s,u}{max,min}` of `lane`s (`VPWidenIntrinsicRecipe`).
+    IntMinMax { lane: Ty, signed: bool, max: bool },
     /// An access whose addresses are not consecutive and not a pattern the
     /// pin widens (an interleave group, a reversal, a uniform address): one
     /// scalar access per lane (`CM_Scalarize`), a load's lanes put together
@@ -204,6 +206,20 @@ fn lane_bits(ty: Ty) -> u32 {
     }
 }
 
+/// The name of the scalar `llvm.{s,u}{max,min}` of `lane`, as the cost hooks
+/// take it.
+fn min_max_name(
+    signed: bool,
+    max: bool,
+    lane: Ty,
+) -> String {
+    let bits = match lane {
+        Ty::Int(bits) => bits,
+        _ => 0,
+    };
+    format!("llvm.{}{}.i{bits}", if signed { 's' } else { 'u' }, if max { "max" } else { "min" })
+}
+
 /// The lane types of a recipe's vectors: its result's, and a conversion's
 /// source.
 fn recipe_lanes(recipe: &Recipe) -> impl Iterator<Item = Ty> {
@@ -220,6 +236,7 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
         | Recipe::Store { lane, .. }
         | Recipe::Binary { lane, .. }
         | Recipe::FMulAdd { lane }
+        | Recipe::IntMinMax { lane, .. }
         | Recipe::Scalarized { lane, .. }
         | Recipe::Compare { lane, .. }
         | Recipe::Select { lane, .. }
@@ -350,6 +367,13 @@ fn iteration_cost(
                     Cost { value: access.value + address, valid: access.valid }
                 } else {
                     tti.vector_memory_op_cost(op, vector(lane), align, kind).ok_or(NotTaken)?
+                }
+            }
+            Recipe::IntMinMax { lane, signed, max } => {
+                if vf == 1 {
+                    tti.intrinsic_cost(&min_max_name(signed, max, lane), Some(lane), &[lane, lane], kind)
+                } else {
+                    unknown(tti.vector_min_max_cost(signed, max, vector(lane), kind))?
                 }
             }
             Recipe::FMulAdd { lane } => {

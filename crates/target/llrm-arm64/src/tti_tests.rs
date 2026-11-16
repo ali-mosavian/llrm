@@ -887,3 +887,20 @@ fn wide_vector_casts_and_extended_reductions_are_the_pins() {
         assert_eq!(native.map(|c| c.value), Some(2), "{cpu}");
     }
 }
+
+/// `getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` (L710): a register of 8, 16
+/// or 32-bit lanes is 1, of 64-bit lanes 2 (`cmgt` and `bif`), the promoted
+/// `v2i8`, `v2i16` and `v4i8` 5 signed and 3 unsigned.
+#[test]
+fn a_vector_min_or_max_costs_one_a_register_and_two_for_64_bit_lanes() {
+    let i = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let k = CostKind::RecipThroughput;
+    let cost = |signed, ty| tti.vector_min_max_cost(signed, true, ty, k).map(|c| c.value);
+    assert_eq!((cost(true, i(32, 4)), cost(false, i(32, 4))), (Some(1), Some(1)));
+    assert_eq!((cost(true, i(32, 2)), cost(true, i(8, 8)), cost(true, i(16, 4))), (Some(1), Some(1), Some(1)));
+    assert_eq!((cost(true, i(32, 16)), cost(true, i(8, 32))), (Some(4), Some(2)));
+    assert_eq!((cost(true, i(64, 2)), cost(true, i(64, 4))), (Some(2), Some(4)));
+    assert_eq!((cost(true, i(8, 2)), cost(false, i(16, 2)), cost(true, i(8, 4))), (Some(5), Some(3), Some(5)));
+    assert_eq!(tti.vector_min_max_cost(true, true, i(32, 4), CostKind::Latency), None);
+}

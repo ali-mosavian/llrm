@@ -968,6 +968,16 @@ impl Tti for AArch64 {
         crate::tti_vector::ext_cost(kind, dst, src, users)
     }
 
+    fn vector_min_max_cost(
+        &self,
+        signed: bool,
+        _max: bool,
+        ty: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::min_max_cost(signed, ty, cost_kind)
+    }
+
     fn vector_cmp_sel_cost(
         &self,
         op: CmpSel,

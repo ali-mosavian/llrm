@@ -810,6 +810,18 @@ pub trait Tti {
         None
     }
 
+    /// `getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` of the fixed vector
+    /// `ty`. `None`: not priced.
+    fn vector_min_max_cost(
+        &self,
+        _signed: bool,
+        _max: bool,
+        _ty: VectorTy,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
     /// `getExtendedReductionCost` of `llvm.vector.reduce.add` of `vec` extended
     /// to the lane `result`, where the target has a native form (AArch64's
     /// `uaddlv`, `uaddlp`). `None`: `BaseT`'s: the reduction of the extended
