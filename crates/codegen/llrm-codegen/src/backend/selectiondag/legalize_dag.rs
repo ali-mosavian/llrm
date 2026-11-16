@@ -546,7 +546,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.action_type(node);
         let mut action = match vt {
             EVT::Simple(_) => self.tli.operation_action(self.dag.opcode(node), vt),
-            EVT::Int(_) => Action::Expand,
+            EVT::Int(_) | EVT::Vector(..) => Action::Expand,
         };
         // `EXTRACT_ELEMENT` lies about being legal: when it claims to be, it is
         // expanded. The same node taking a vector is `EXTRACT_VECTOR_ELT`.

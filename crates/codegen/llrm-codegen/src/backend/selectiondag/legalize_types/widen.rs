@@ -149,8 +149,8 @@ impl TypeLegalizer<'_> {
         let width = vec_vt.size_in_bits();
         let mut ty = self.dag.value_type(scalars[0]);
         let vector_of = |ty: EVT| match ty {
-            EVT::Simple(lane) => MVT::vector(lane, width / ty.size_in_bits()).map(EVT::Simple),
-            EVT::Int(_) => None,
+            EVT::Simple(lane) => Some(EVT::vector(lane, width / ty.size_in_bits())),
+            EVT::Int(_) | EVT::Vector(..) => None,
         };
         let mut vec = self.dag.get_node(ISD::ScalarToVector, vector_of(ty)?, &[scalars[0]]);
         let mut at = 1_u32;

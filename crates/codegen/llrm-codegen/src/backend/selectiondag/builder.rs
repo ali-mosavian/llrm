@@ -980,9 +980,14 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
-                        .and_then(|lane| MVT::vector(lane, *count))
-                        .map(EVT::Simple)
+                        .filter(|lane| {
+                            EVT::Simple(*lane).size_in_bits() % 8 == 0
+                                && (MVT::vector(*lane, *count).is_some()
+                                    || !count.is_power_of_two() && MVT::vector(*lane, count.next_power_of_two()).is_some())
+                        })
+                        .map(|lane| EVT::vector(lane, *count))
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
                     Type::Float(kind @ (llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)) => {
@@ -4367,11 +4372,10 @@ impl Builder<'_> {
                 }
                 // Both inputs padded with undefined lanes to the mask's length.
                 let count = lanes.div_ceil(sources);
-                let padded = match input {
-                    EVT::Simple(mvt) => mvt.element().and_then(|lane| MVT::vector(lane, (count * sources) as u32)),
-                    EVT::Int(_) => None,
+                let padded = match input.is_vector().then(|| input.element()) {
+                    Some(EVT::Simple(lane)) => Some(EVT::vector(lane, (count * sources) as u32)),
+                    _ => None,
                 }
-                .map(EVT::Simple)
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
                 for operand in [&mut first, &mut second] {
                     if self.dag.is_undef(*operand) {
