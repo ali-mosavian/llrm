@@ -16,6 +16,7 @@ pub mod hotmultiply;
 pub mod ir_lowering;
 pub mod mulimage;
 pub mod opcosts;
+pub mod outline;
 pub mod peephole;
 pub mod peephole_cells;
 pub mod platform;

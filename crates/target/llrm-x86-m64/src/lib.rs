@@ -574,6 +574,8 @@ impl llrm_target::Target for M64 {
                             immediate_forms_at_size: true,
                             // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
                             ipa_cp_clones_at_speed: true,
+                            // DEVIATE UNROLL-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            unroll_threshold_at_o3: Some(450),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })
