@@ -1938,8 +1938,7 @@ pub fn recorded(
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
-    // gcc's `ree` first: the extension it moves onto a load is the pair
-    // `extload` makes one extending load of.
+    // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
     if applied.options.wanted("ree") {
         manager.add(ree::Ree);
     }
