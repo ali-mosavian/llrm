@@ -985,9 +985,16 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
-                        .and_then(|lane| MVT::vector(lane, *count))
-                        .map(EVT::Simple)
+                        .and_then(|lane| {
+                            MVT::vector(lane, *count).map(EVT::Simple).or_else(|| {
+                                (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                    && !count.is_power_of_two()
+                                    && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                .then(|| EVT::vector(lane, *count))
+                            })
+                        })
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
                     Type::Float(kind @ (llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)) => {
@@ -4376,23 +4383,32 @@ impl Builder<'_> {
                 }
                 // Both inputs padded with undefined lanes to the mask's length.
                 let count = lanes.div_ceil(sources);
-                let padded = match input {
-                    EVT::Simple(mvt) => mvt.element().and_then(|lane| MVT::vector(lane, (count * sources) as u32)),
-                    EVT::Int(_) => None,
-                }
-                .map(EVT::Simple)
-                .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                for operand in [&mut first, &mut second] {
-                    if self.dag.is_undef(*operand) {
-                        *operand = self.dag.get_undef(padded);
-                    } else {
-                        let undef = self.dag.get_undef(input);
-                        let mut pieces = vec![undef; count];
-                        pieces[0] = *operand;
-                        *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
+                let padded = match input.is_vector().then(|| input.element()) {
+                    Some(EVT::Simple(lane)) => {
+                        let lanes = (count * sources) as u32;
+                        (MVT::vector(lane, lanes).is_some()
+                            || !lanes.is_power_of_two() && MVT::vector(lane, lanes.next_power_of_two()).is_some())
+                        .then(|| EVT::vector(lane, lanes))
                     }
+                    _ => None,
                 }
-                sources = count * sources;
+                .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
+                // DEVIATE: no padding past a register (the pin widens `v18i8` to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an extended vector type; owner
+                // x87-cordic-2; review 2026-11-27.
+                if padded.size_in_bits() <= 128 {
+                    for operand in [&mut first, &mut second] {
+                        if self.dag.is_undef(*operand) {
+                            *operand = self.dag.get_undef(padded);
+                        } else {
+                            let undef = self.dag.get_undef(input);
+                            let mut pieces = vec![undef; count];
+                            pieces[0] = *operand;
+                            *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
+                        }
+                    }
+                    sources = count * sources;
+                }
             }
             if sources > lanes {
                 // Each input a subvector of the mask's width, at one start.
