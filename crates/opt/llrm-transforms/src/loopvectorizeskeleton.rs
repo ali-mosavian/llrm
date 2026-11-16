@@ -194,13 +194,16 @@ fn constant_int(
 /// down, over the step), not yet masked to the type. The exit test is an
 /// `eq`/`ne`, so a step that does not divide the distance never meets it and
 /// the loop is not finite: the quotient is the count.
-fn iterations(
+pub(crate) fn iterations(
     reverse: bool,
     scale: u128,
+    bits: u32,
     start: u128,
     bound: u128,
 ) -> u128 {
-    if reverse { start.wrapping_sub(bound) } else { bound.wrapping_sub(start) / scale }
+    // Masked to the type before the division: a bound met after the counter
+    // wraps (i8 from 250 to 4) is a distance of the type, not of u128.
+    if reverse { start.wrapping_sub(bound) & mask(bits) } else { (bound.wrapping_sub(start) & mask(bits)) / scale }
 }
 
 fn mask(bits: u32) -> u128 {
@@ -277,7 +280,7 @@ pub(crate) fn add_remainder(
         return None;
     }
     if let (Some(start_value), Some(bound_value)) = (start_value, bound_value)
-        && (iterations(reverse, scale, start_value, bound_value) & mask(bits)) < u128::from(vf_ic)
+        && (iterations(reverse, scale, bits, start_value, bound_value)) < u128::from(vf_ic)
     {
         return None;
     }
@@ -327,7 +330,7 @@ pub(crate) fn add_remainder(
         && memory.is_none()
     {
         // Both ends known: the checks fold (the pin's constant folder).
-        let trip = iterations(reverse, scale, start_value, bound_value) & mask(bits);
+        let trip = iterations(reverse, scale, bits, start_value, bound_value);
         let moved = trip - trip % u128::from(vf_ic);
         let end = constant(
             context,
@@ -362,6 +365,9 @@ pub(crate) fn add_remainder(
         } else {
             emit(function, before, Opcode::Binary(BinaryOp::Sub), index_ty, vec![bound, start], "n.trip")
         };
+        // A step that does not divide the distance never meets the `eq` test:
+        // the scalar loop would not end, which a loop the pin vectorizes may
+        // not do, so the floor here is the exact count of one that ends.
         let shift = constant(context, u128::from(scale.trailing_zeros()));
         let trip = if scale > 1 {
             emit(function, before, Opcode::Binary(BinaryOp::LShr), index_ty, vec![distance, shift], "n.steps")

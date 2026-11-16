@@ -1256,6 +1256,17 @@ fn a_loop_stepping_by_two_is_widened_with_the_step_scaled() {
     assert!(text.contains("%ind.end") || text.contains("icmp eq i64 %next, 3968"), "{text}");
 }
 
+/// An `i8` counter from 250 to 4 by 2 meets the bound after wrapping: 5
+/// iterations. The distance was divided as a `u128` (2^128 - 246) before it
+/// was cut to the type, and read 133.
+#[test]
+fn a_wrapping_counter_with_a_step_counts_its_iterations_in_the_type() {
+    use crate::loopvectorizeskeleton::iterations;
+    assert_eq!(iterations(false, 2, 8, 250, 4), 5);
+    assert_eq!(iterations(false, 1, 8, 250, 4), 10);
+    assert_eq!(iterations(true, 1, 8, 4, 250), 10);
+}
+
 /// A pair swap `d[2i] = s[2i+1]; d[2i+1] = s[2i]` over halves: the pin takes
 /// VF 8, IC 2, one `<16 x i16>` load and one store per part, the members
 /// pulled out by `strided.vec` shuffles.
