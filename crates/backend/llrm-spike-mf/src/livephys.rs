@@ -214,7 +214,54 @@ impl PhysLiveness {
                 }
             }
         }
+        let solved = PhysLiveness { live_out, checkpoints: std::cell::RefCell::new((0..blocks).map(|_| None).collect()) };
+        // `LLRM_VERIFY=1`: the answer of the sweeps, which the worklist must equal
+        if llrm_support::env_flag!("LLRM_VERIFY") {
+            let swept = Self::of_by_sweeps::<T>(function, assignment, info);
+            assert!(solved.live_out == swept.live_out, "livephys: the worklist's live-outs differ from the sweeps' in @{}", function.name);
+        }
+        solved
+    }
+
+    /// [`Self::of`] by sweeps over every block until none moves: the reference
+    /// the worklist is checked against (`LLRM_VERIFY`, the tests).
+    pub fn of_by_sweeps<T: Target>(
+        function: &MFunction<T::Class>,
+        assignment: &Assignment,
+        info: &Info,
+    ) -> PhysLiveness {
+        let succs = successors(function);
+        let blocks = function.blocks.len();
+        let mut live_in = vec![LiveLanes::default(); blocks];
+        let mut live_out = vec![LiveLanes::default(); blocks];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for b in (0..blocks).rev() {
+                let mut out = LiveLanes::default();
+                for &s in &succs[b] {
+                    out.union(&live_in[s]);
+                }
+                let mut live = out.clone();
+                for inst in function.blocks[b].insts.iter().rev() {
+                    live.step_backward::<T>(info, assignment, inst);
+                }
+                if out != live_out[b] || live != live_in[b] {
+                    live_out[b] = out;
+                    live_in[b] = live;
+                    changed = true;
+                }
+            }
+        }
         PhysLiveness { live_out, checkpoints: std::cell::RefCell::new((0..blocks).map(|_| None).collect()) }
+    }
+
+    /// What is live out of block `b`.
+    pub fn live_out_of(
+        &self,
+        b: usize,
+    ) -> &LiveLanes {
+        &self.live_out[b]
     }
 
     /// What is live just before instruction `at` of block `b`. The block's

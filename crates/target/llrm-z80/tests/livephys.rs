@@ -119,3 +119,45 @@ fn an_acyclic_function_is_stepped_over_once_when_its_live_outs_are_solved() {
     let before = live.live_before::<Z80Registers>(&f, &assignment, &REGISTER_INFO, 0, 0);
     assert!(before.is_live(&REGISTER_INFO, reg::D) && !before.is_live(&REGISTER_INFO, reg::B));
 }
+
+/// The worklist must reach the sweeps' answer where blocks loop, branch out of order and fall through: 400
+/// functions of 2 to 12 blocks, a third of the branches backward.
+#[test]
+fn the_worklist_solves_the_same_live_outs_as_sweeps_on_functions_with_loops() {
+    let registers = [reg::A, reg::B, reg::C, reg::D, reg::E, reg::H, reg::L, reg::BC, reg::DE, reg::HL];
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move |bound: usize| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 33) as usize) % bound
+    };
+    let mut loops = 0;
+    for _ in 0..400 {
+        let count = 2 + next(11);
+        let blocks: Vec<Vec<Inst>> = (0..count)
+            .map(|at| {
+                let mut insts: Vec<Inst> = (0..1 + next(6))
+                    .map(|_| {
+                        let one = registers[next(registers.len())];
+                        if next(2) == 0 { def(one) } else { read(one) }
+                    })
+                    .collect();
+                if next(3) > 0 {
+                    let to = next(count);
+                    loops += usize::from(to <= at);
+                    let mut jump = Inst::new(Kind::Op("JP"), vec![Operand::Block(to as u32)]);
+                    jump.barrier = next(2) == 0;
+                    insts.push(jump);
+                }
+                insts
+            })
+            .collect();
+        let f = function(blocks);
+        let assignment = Assignment(Vec::new());
+        let worked = PhysLiveness::of::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+        let swept = PhysLiveness::of_by_sweeps::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+        for b in 0..count {
+            assert!(worked.live_out_of(b) == swept.live_out_of(b), "block {b} of {f:?}");
+        }
+    }
+    assert!(loops > 100, "{loops} backward branches");
+}
