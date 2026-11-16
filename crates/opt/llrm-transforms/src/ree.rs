@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Redundant extension elimination across a phi: gcc's
 //! [`ree.cc`](https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ree.cc)
 //! (`pass_ree`), as the rewrite of MIR before isel.

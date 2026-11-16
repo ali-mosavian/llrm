@@ -193,6 +193,8 @@ pub struct Tuned {
     pub second_ipsccp: bool,
     /// `Tti::ext_load_free`: the target extends a narrow load as it loads.
     pub ext_loads_free: bool,
+    /// `Tti::split_paths_at_o3`.
+    pub split_paths: bool,
 }
 
 use llrm_mir::tti;
@@ -218,6 +220,7 @@ pub struct Flagged {
     /// No legal `FADD` on `float` or `double` (a soft-float target).
     pub soft_float: bool,
     pub ext_loads_free: bool,
+    pub split_paths: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
@@ -239,6 +242,10 @@ impl llrm_mir::tti::Tti for Flagged {
         _src: tti::Ty,
     ) -> bool {
         self.ext_loads_free
+    }
+
+    fn split_paths_at_o3(&self) -> bool {
+        self.split_paths
     }
 
     fn fills_pattern_at_speed(&self) -> bool {
@@ -452,6 +459,7 @@ impl llrm_mir::target::Machine for Tuned {
             || self.ord_dear
             || self.unswitch_threshold.is_some()
             || self.ext_loads_free
+            || self.split_paths
             || self.skip_partial_at_size)
             .then(|| {
             std::rc::Rc::new(Flagged {
@@ -470,6 +478,7 @@ impl llrm_mir::target::Machine for Tuned {
                 skip_partial_at_size: self.skip_partial_at_size,
                 soft_float: false,
                 ext_loads_free: self.ext_loads_free,
+                split_paths: self.split_paths,
             }) as _
         })
     }
