@@ -6097,11 +6097,11 @@ fn a_counted_loop_that_is_smaller_unrotated_stays_unrotated_at_os_on_m64() {
     assert!(bytes <= 195, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
 }
 
-/// MUL-HOT (m32 -Os): `x * 45` keeps its `imul` in a block that runs once and is the pin's `lea` chain in a loop (the pin
-/// decomposes at -Os, `hasMinSize` is -Oz's). The tip kept the `imul` everywhere at -Os: x_mul_constants -Os ran
-/// 388,733 clk against clang's 286,797.
+/// m32 -Os: `x * 45` is the pin's `lea` chain in a loop and outside it (the pin decomposes at -Os, `hasMinSize` is
+/// -Oz's). MUL-HOT kept the `imul` where a block ran once; #10077 removed it, with MUL-OS. The tip kept the `imul`
+/// everywhere at -Os: x_mul_constants -Os ran 388,733 clk against clang's 286,797.
 #[test]
-fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
+fn a_multiply_is_a_chain_at_m32_os_in_a_loop_and_outside_it() {
     let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
     let once = format!("{head}define i32 @f(i32 %x) {{\n  %m = mul i32 %x, 45\n  ret i32 %m\n}}\n");
     let looped = format!(
@@ -6115,15 +6115,15 @@ fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
         let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    assert!(listing(&once).contains("imul"), "a multiply that runs once keeps its imul:\n{}", listing(&once));
+    assert!(!listing(&once).contains("imul"), "a multiply that runs once is the chain:\n{}", listing(&once));
     assert!(!listing(&looped).contains("imul"), "a multiply in a loop is the chain:\n{}", listing(&looped));
 }
 
-/// MUL-HOT (m32 -Os): a block runs often when its function does, not only when its loop does. x_dct -Os called `dct8`
+/// m32 -Os: a multiply in a function is the chain whether it is called from a loop or once. x_dct -Os called `dct8`
 /// (`x * 7`, `x * 5`, `x * 3` in straight-line code) from two nested loops and kept every `imul`: 314,722 clk against
-/// clang's 211,103. A function called from a loop is hot in all its blocks; one called once keeps its `imul`.
+/// clang's 211,103.
 #[test]
-fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
+fn a_multiply_in_a_function_is_a_chain_at_m32_os_called_from_a_loop_or_once() {
     let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
     let callee = "define internal i32 @g(i32 %x) noinline {\n  %m = mul i32 %x, 45\n  ret i32 %m\n}\n";
     let once = format!("{head}{callee}define i32 @f(i32 %x) {{\n  %r = call i32 @g(i32 %x)\n  ret i32 %r\n}}\n");
@@ -6140,7 +6140,7 @@ fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
         let start = listing.find("g proc").unwrap_or_else(|| panic!("no g:\n{listing}"));
         listing[start..].split("g endp").next().unwrap().to_owned()
     };
-    assert!(callee_listing(&once).contains("imul"), "a function called once keeps its imul:\n{}", callee_listing(&once));
+    assert!(!callee_listing(&once).contains("imul"), "a function called once is the chain:\n{}", callee_listing(&once));
     assert!(!callee_listing(&looped).contains("imul"), "a function called from a loop is the chain:\n{}", callee_listing(&looped));
 }
 
