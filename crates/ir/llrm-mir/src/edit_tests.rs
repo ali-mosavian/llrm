@@ -1219,3 +1219,17 @@ fn a_module_level_uselistorder_directive_is_read_and_dropped() {
     let mut module = module(&text);
     assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
 }
+
+/// What a reader would build prints no directive; a reordered list prints the
+/// shuffle that `opt -preserve-ll-uselistorder` prints for it (checked against
+/// the pin on this loop: `{ 1, 2, 3, 0 }`, and none without the directive).
+#[test]
+fn a_use_list_prints_its_shuffle_only_where_it_differs_from_the_readers() {
+    let mut plain = module(LOOP);
+    assert!(function(&mut plain).use_list_orders().is_empty());
+    let text = LOOP.replace("}\n", "  uselistorder i32 %next, { 1, 2, 3, 0 }\n}\n");
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let (_, next) = named(f, "next");
+    assert_eq!(f.use_list_orders(), [(next, vec![1, 2, 3, 0])]);
+}

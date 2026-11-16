@@ -642,6 +642,19 @@ impl Printer<'_> {
         }
         out.push_str(" {\n");
         out.push_str(&self.blocks(function, &slots));
+        // `LLRM_USELISTS=1`: the use-list orders, as `-preserve-ll-uselistorder`.
+        if std::env::var_os("LLRM_USELISTS").is_some() {
+            for (value, shuffle) in function.use_list_orders() {
+                let order: Vec<String> = shuffle.iter().map(u32::to_string).collect();
+                let _ = writeln!(
+                    out,
+                    "  uselistorder {} %{}, {{ {} }}",
+                    self.ty(function.value(value).ty),
+                    slots.values[&value],
+                    order.join(", ")
+                );
+            }
+        }
         out.push_str("}\n");
         out
     }
