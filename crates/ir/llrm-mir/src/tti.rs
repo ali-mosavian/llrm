@@ -2139,6 +2139,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE JT-OS: the size gate of a block JumpThreading copies in an
+    /// `optsize` function; none: the pin's (`minsize` only).
+    fn jump_threading_optsize_dup_threshold(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are
     /// eliminated before its copies of itself are made.
     fn recursive_tre_first(&self) -> (bool, bool) {
@@ -2813,6 +2819,14 @@ pub trait Tti {
     /// Flip the default when those are fixed.
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp)
     fn sinks_unused_invariants(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE SINK-PRESSURE (owner x86-m32-b, exit 2026-11-24): the sink
+    /// skips a value whose move would keep more values live across the loop
+    /// than it frees (gcc `loop-invariant.cc` weighs registers; the pin does
+    /// not). false: the pin's.
+    fn sinks_invariants_keeping_pressure(&self) -> bool {
         false
     }
 

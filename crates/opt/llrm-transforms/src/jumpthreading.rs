@@ -629,12 +629,14 @@ impl State<'_, '_> {
     /// `runImpl`
     /// ([L284](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L284)).
     fn run_impl(&mut self) -> bool {
-        self.bb_dup_threshold =
-            if self.function().attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize")) {
-                self.options.min_size_bb_dup_threshold
-            } else {
-                self.options.bb_dup_threshold
-            };
+        let has = |name: &str| self.function().attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name));
+        self.bb_dup_threshold = if has("minsize") {
+            self.options.min_size_bb_dup_threshold
+        } else if let Some(limit) = self.tti.jump_threading_optsize_dup_threshold().filter(|_| has("optsize")) {
+            limit
+        } else {
+            self.options.bb_dup_threshold
+        };
         let Some(entry) = self.function().entry() else { return false };
 
         self.unreachable.clear();

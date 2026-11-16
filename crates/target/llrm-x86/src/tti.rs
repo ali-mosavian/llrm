@@ -1274,6 +1274,18 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_depth
     }
 
+    fn sinks_unused_invariants(&self) -> bool {
+        self.tuning.sinks_unused_invariants
+    }
+
+    fn sinks_invariants_keeping_pressure(&self) -> bool {
+        self.tuning.sinks_invariants_keeping_pressure
+    }
+
+    fn jump_threading_optsize_dup_threshold(&self) -> Option<u32> {
+        self.tuning.jump_threading_optsize_dup_threshold
+    }
+
     fn ipa_cp_clones_at_speed(&self) -> bool {
         self.tuning.ipa_cp_clones_at_speed
     }

@@ -41,20 +41,30 @@ exit:
     )
 }
 
-/// `function` sunk, its loops found for it.
-fn sunk(module: &mut llrm_mir::module::Module) -> bool {
+/// `function` sunk, its loops found for it; `keep_pressure` as the target's.
+fn sunk(
+    module: &mut llrm_mir::module::Module,
+    keep_pressure: bool,
+) -> bool {
     let context = module.context.clone();
     let globals = module.globals.clone();
     let function: &mut Function = f(module);
     let loops = llrm_analysis::cfg::loops_of(function);
-    sunk_with(&context, &Callees::default(), &globals, function, &loops)
+    sunk_with(&context, &Callees::default(), &globals, function, &loops, keep_pressure)
 }
 
 /// `text` sunk, printed, where it computes what it did.
 fn run(text: &str) -> (String, bool) {
+    run_keeping(text, false)
+}
+
+fn run_keeping(
+    text: &str,
+    keep_pressure: bool,
+) -> (String, bool) {
     let before = parsed(text);
     let mut after = before.clone();
-    let changed = sunk(&mut after);
+    let changed = sunk(&mut after, keep_pressure);
     let text = printed(&after);
     let inputs: &[&[i128]] = &[&[1, 1], &[3, 2], &[4, 0], &[2, 5]];
     assert_eq!(results(&after, inputs), results(&before, inputs), "{text}");
@@ -91,4 +101,28 @@ fn test_a_chain_moves_together() {
     assert!(changed);
     let (outer, _) = after.split_once("inner:").expect("inner");
     assert!(!outer.contains("%u = ") && !outer.contains("%v = "), "{after}");
+}
+
+/// x_mul_constants -Os (+231 B): twelve loops in a row, each preheader holding
+/// the sum of two values only it read. The pin sinks them past every loop, so
+/// both operands of each sum were live across it instead of the sum.
+const PAIR: &str = "  %p = add i32 %i, 3\n  %q = add i32 %i, 5\n  %s = add i32 %p, %q\n";
+
+fn pair() -> String {
+    nested(PAIR).replace("%go = icmp ult i32 %i.next, %n", "%w = add i32 %s, %i.next\n  %go = icmp ult i32 %w, %n")
+}
+
+#[test]
+fn test_the_pin_moves_a_sum_of_two_values_only_it_reads() {
+    let (after, changed) = run(&pair());
+    assert!(changed);
+    let (outer, _) = after.split_once("inner:").expect("inner");
+    assert!(!outer.contains("%s = "), "{after}");
+}
+
+#[test]
+fn test_a_sum_of_two_values_only_it_reads_stays_where_pressure_is_kept() {
+    let (after, _) = run_keeping(&pair(), true);
+    let (outer, _) = after.split_once("inner:").expect("inner");
+    assert!(outer.contains("%s = add i32 %p, %q"), "{after}");
 }

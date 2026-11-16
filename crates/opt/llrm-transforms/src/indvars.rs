@@ -332,7 +332,14 @@ impl FunctionPass for IndVars {
         // `sinkUnusedInvariants`, the last step of the pin's run; opt-in per
         // target (`Tti::sinks_unused_invariants`).
         let sunk = outer.target().tti().is_some_and(|tti| tti.sinks_unused_invariants())
-            && crate::invariantsink::sunk(unit.context, outer.callees(), &outer.globals, unit.function, loops)
+            && crate::invariantsink::sunk(
+                unit.context,
+                outer.callees(),
+                &outer.globals,
+                unit.function,
+                loops,
+                outer.target().tti().is_some_and(|tti| tti.sinks_invariants_keeping_pressure()),
+            )
             || sunk;
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
