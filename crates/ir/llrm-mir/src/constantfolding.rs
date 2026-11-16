@@ -17,8 +17,9 @@
 //! DEVIATE, permanent (MIR lacks the construct; the fact is stated):
 //! 1. Vectors: `FoldBitCast`'s vector arms (L189-L406),
 //!    `ConstantFoldFixedVectorCall`, the vector intrinsics, `masked_load`
-//!    (L1776-L1801); `is_constant` of a vector. MIR types vectors but has no
-//!    lane operation and nothing produces one (#2201).
+//!    (L1776-L1801); `is_constant` of a vector. MIR has no lane operation
+//!    (#2201): an integer operation and a cast that keeps the lanes fold lane
+//!    by lane, nothing else of a vector does.
 //! 2. `ptrtoaddr`: MIR has no `ptrtoaddr` opcode (#2202, #2204). Byte types and
 //!    `inrange`: MIR has no byte type and its constant GEP has no `inrange`.
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
@@ -1614,7 +1615,21 @@ fn constant_fold_inst_operands_impl(
 ) -> Option<ConstantId> {
     let vector = |ty: TypeId| matches!(context.types.get(ty), Type::Vector { .. });
     if vector(dest) || ops.iter().any(|&one| vector(ty_of(context, one))) {
-        return None;
+        // Lane by lane: an integer operation and a cast that keeps the lanes
+        // (`ConstantFoldBinaryInstruction`, `ConstantFoldCastInstruction`); the
+        // rest of the vector folds waits for lane operations (DEVIATE 1).
+        return match opcode {
+            Opcode::Binary(op)
+                if !matches!(
+                    op,
+                    BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
+                ) =>
+            {
+                constfold::binary(context, *op, ops[0], ops[1])
+            }
+            Opcode::Cast(op) if *op != CastOp::BitCast => constfold::cast(context, *op, ops[0], dest),
+            _ => None,
+        };
     }
     match opcode {
         Opcode::FNeg => constant_fold_unary_op_operand(context, ops[0]),
