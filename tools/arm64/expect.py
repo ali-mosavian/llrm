@@ -1,18 +1,20 @@
 """A cell is only a measurement if the program produced its expected value."""
 import os
+from pathlib import Path
 import sys
 
-# A program whose float model differs on aarch64 (fused a*b+c) has its own NAME.arm64.out.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import corpus_targets  # noqa: E402
+
+TARGET = "arm64-linux"
 
 
 def expected_path(bench_dir, prog):
-    """The reference output a cell is judged on: NAME.arm64.out, else NAME.ci.out (the part of the corpus the harness
-    feeds), else NAME.out."""
-    for suffix in (".arm64.out", ".ci.out", ".out"):
-        path = f"{bench_dir}/{prog}/{prog}{suffix}"
-        if os.path.exists(path):
-            return path
-    return f"{bench_dir}/{prog}/{prog}.out"
+    """The reference output a cell is judged on: NAME.ci.out (the part of the corpus the harness feeds), else the one
+    `corpus_targets.expected_output` names for aarch64 (NAME.arm64.out, NAME.lp64.out, NAME.out)."""
+    source = f"{bench_dir}/{prog}/{prog}.c"
+    ci = f"{bench_dir}/{prog}/{prog}.ci.out"
+    return ci if os.path.exists(ci) else str(corpus_targets.expected_output(Path(source), TARGET))
 
 
 def same_value(reported, expected):
@@ -31,6 +33,12 @@ def status(prog, level, reported, expected):
 if __name__ == "__main__":
     if sys.argv[1] == "--path":
         print(expected_path(sys.argv[2], sys.argv[3]))
+        sys.exit()
+    if sys.argv[1] == "--applies":
+        source = Path(sys.argv[2])
+        if not corpus_targets.applies(TARGET, source.read_text(), source):
+            print(corpus_targets.reason(source.read_text(), source))
+            sys.exit(3)
         sys.exit()
     prog, level, reported, out = sys.argv[1], sys.argv[2], sys.argv[3], open(sys.argv[4]).read()
     result = status(prog, level, reported, out)

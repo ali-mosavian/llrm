@@ -104,6 +104,18 @@ class KernelRange(unittest.TestCase):
         self.assertTrue(expect.expected_path(root, "grep").endswith("grep.ci.out"))
         self.assertTrue(expect.expected_path(root, "queens").endswith("queens.out"))
 
+    def test_a_dos_only_program_is_not_measured_on_arm64(self):
+        # textfill (`// targets: dos`) stores through a DOS physical screen address: it built, ran and printed a row of
+        # +15,921 instructions that no other target counts.
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(COUNT), "expect.py"), "--applies",
+                            os.path.join(os.path.dirname(COUNT), "..", "..", "bench", "textfill", "textfill.c")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("DOS", r.stdout)
+        ok = subprocess.run([sys.executable, os.path.join(os.path.dirname(COUNT), "expect.py"), "--applies",
+                             os.path.join(os.path.dirname(COUNT), "..", "..", "bench", "queens", "queens.c")])
+        self.assertEqual(ok.returncode, 0)
+
     def test_a_program_with_two_reports_is_judged_on_its_last(self):
         # grep prints lines then a checksum; `reported` holds the checksum, the .out's first number (4745 lines) never equalled it:
         # all 188 grep cells of the LV-X2 table read `unmeasured:value ... is not the expected one`.

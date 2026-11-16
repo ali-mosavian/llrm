@@ -10,6 +10,7 @@ O=${OUT:-${TMPDIR:-/tmp}/arm64-bench-out}; mkdir -p "$O"; export OUT=$O
 # the program's reference output: expect.py expected_path (NAME.arm64.out, NAME.ci.out, NAME.out)
 expected_file() { python3 "$H/expect.py" --path "${B:-$H/../..}/bench" "$P"; }
 unmeasured() { printf '%s\t%s\t%s\t\t\tkernel\tunmeasured:%s\t\n' "$P" "$L" "$C" "$1"; exit 0; }
+applies=$(python3 "$H/expect.py" --applies "${B:-$H/../..}/bench/$P/$P.c") || unmeasured "$applies"  # `// targets:` that leaves out arm64 (textfill: dos)
 bash "$H/build2.sh" "$P" "$L" "$C" >/dev/null 2>"$O/err.$P.$L.$C" || unmeasured "build failed, see $O/err.$P.$L.$C"
 X=$O/$P.$L.$C
 bytes=$(python3 -c "import sys;sys.path.insert(0,'$H');import matrix_kb;print(matrix_kb.kernel_bytes('$X.o'))" 2>>"$O/err.$P.$L.$C") || unmeasured "kernel bytes failed"
