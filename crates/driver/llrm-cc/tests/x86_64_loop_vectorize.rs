@@ -140,6 +140,20 @@ fn a_vector_total_is_folded_by_shuffles_and_not_spilled_to_the_stack() {
     }
 }
 
+/// `pshufd` was a tied two-address form (`movaps xmm1, xmm0; pshufd xmm1, xmm1, 0xee`), a copy before each fold step
+/// where the pin writes a fresh register (`pshufd xmm1, xmm0, 0xee`): countdown_sum 462,091 against 442,611 Ir.
+#[test]
+fn a_vector_total_shuffles_into_a_fresh_register_with_no_copy() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "sum_array");
+    let lines: Vec<&str> = sum.lines().map(str::trim).collect();
+    let shuffles: Vec<usize> = (0..lines.len()).filter(|at| lines[*at].starts_with("pshufd")).collect();
+    assert!(!shuffles.is_empty(), "{sum}");
+    for at in shuffles {
+        assert!(!lines[at - 1].starts_with("movaps"), "a copy before {}: {sum}", lines[at]);
+    }
+}
+
 /// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]
@@ -343,4 +357,14 @@ fn a_packed_accumulator_is_added_in_place() {
     let vector = rest.split_once("jne").expect("its back edge").0;
     let copies = vector.lines().filter(|line| line.trim_start().starts_with("movaps")).count();
     assert!(copies <= 4, "the loop copies {copies} registers: {vector}");
+}
+
+/// `descent` carries a loaded `short` round its loop and indexes with it: the load was `movzx` and every trip
+/// extended it again (`movzx ecx, cx`). The extension is on the load now (gcc's `ree`).
+#[test]
+fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
+    let text = assembly_of("ree_loops.c", "x86_64-linux", "-O3");
+    let descent = body(&text, "descent");
+    let widened = descent.lines().filter(|line| (line.contains("movsx") || line.contains("movzx")) && !line.contains("ptr")).count();
+    assert_eq!(widened, 0, "a register-to-register extension stays in the loop: {descent}");
 }

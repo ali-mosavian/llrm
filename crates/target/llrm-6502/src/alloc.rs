@@ -4857,19 +4857,29 @@ fn emit_with<const STACK: bool>(
                     if after[b][i].contains(&reg::Y) || after[b][i].contains(&reg::X) || a_live {
                         // `__csave` changes a, x and y: the same bytes pushed
                         // one at a time, the argument
-                        // in `a` waiting in an index register nothing holds
+                        // in `a` waiting in an index register nothing holds,
+                        // with all three live in a cell nothing holds
                         let keep = [(reg::Y, "y"), (reg::X, "x")].into_iter().find(|(r, _)| !after[b][i].contains(r));
-                        if a_live && keep.is_none() {
+                        let cell = free_cell.map(register_name);
+                        if a_live && keep.is_none() && cell.is_none() {
                             return Err("a register is live where the callee-saved cells are saved".into());
                         }
-                        if let (true, Some((_, r))) = (a_live, keep) {
-                            writeln!(out, "  ta{r}").unwrap();
+                        if a_live {
+                            match (keep, &cell) {
+                                (Some((_, r)), _) => writeln!(out, "  ta{r}").unwrap(),
+                                (None, Some(cell)) => writeln!(out, "  sta {cell}").unwrap(),
+                                (None, None) => {}
+                            }
                         }
                         for r in &regs {
                             writeln!(out, "  lda {}\n  pha", register_name(*r)).unwrap();
                         }
-                        if let (true, Some((_, r))) = (a_live, keep) {
-                            writeln!(out, "  t{r}a").unwrap();
+                        if a_live {
+                            match (keep, &cell) {
+                                (Some((_, r)), _) => writeln!(out, "  t{r}a").unwrap(),
+                                (None, Some(cell)) => writeln!(out, "  lda {cell}").unwrap(),
+                                (None, None) => {}
+                            }
                         }
                     } else {
                         writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();

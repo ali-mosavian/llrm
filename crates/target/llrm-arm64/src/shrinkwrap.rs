@@ -74,6 +74,18 @@ impl FlowGraph for Graph {}
 
 /// Whether `op` needs the frame: it calls, addresses a frame object or the
 /// caller's arguments, or touches a callee-saved register.
+/// `IsKnownNonStackPtr` (`ShrinkWrap.cpp` `useOrDefCSROrFI`): an access to a
+/// global or the constant pool is not an access to this function's stack, even
+/// where a stack address escaped.
+fn known_non_stack(op: &Op) -> bool {
+    use crate::mc::inst::MemObject;
+    matches!(
+        op,
+        Op::I(Inst::Load { mmo, .. } | Inst::Store { mmo, .. })
+            if matches!(mmo.object, MemObject::Global(_) | MemObject::ConstantPool)
+    )
+}
+
 fn needs_frame(op: &Op) -> bool {
     match op {
         Op::Call { .. } | Op::FrameAddress { .. } => true,
@@ -113,9 +125,16 @@ impl Frame for Uses<'_> {
         block: BlockId,
         stack_address_used: bool,
     ) -> bool {
-        self.function.blocks[block.0 as usize].ops.iter().any(|op| {
-            needs_frame(op) || (stack_address_used && matches!(op, Op::I(Inst::Load { .. } | Inst::Store { .. })))
-        })
+        self.function
+            .blocks[block.0 as usize]
+            .ops
+            .iter()
+            .any(
+                |op| needs_frame(op)
+                    || (stack_address_used
+                        && matches!(op, Op::I(Inst::Load { .. } | Inst::Store { .. }))
+                        && !known_non_stack(op)),
+            )
     }
 
     fn terminators_touch(

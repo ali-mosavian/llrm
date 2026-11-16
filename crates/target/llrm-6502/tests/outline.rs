@@ -6,7 +6,7 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{Level, Request, assembly};
-use llrm_6502::outline::run;
+use llrm_6502::outline::{run, run_at};
 
 fn bytes(text: &str) -> u32 {
     llrm_6502::timing::estimate(Cpu::Mos6502, text).expect("prices").bytes
@@ -201,4 +201,31 @@ fn a_recursive_function_with_an_outlined_body_runs_to_its_deepest_level() {
         let name = format!("outline-recursion-{level:?}");
         assert_eq!(common::run_with(&name, "  jsr probe\n", &code), 0, "{level:?}:\n{text}");
     }
+}
+
+/// Four copies of a 4-instruction sum in a loop were outlined for the 11 bytes
+/// they save: each run of the loop added 4 calls, 48 clocks for 11 bytes, and
+/// `loop_fusion` ran 31% slower (122,028 clocks against 92,923 at -O1). A place
+/// in a loop runs with the loop and is given up; outside one the same four
+/// copies are outlined, and at `-Os` (no rate) so are the ones in the loop.
+#[test]
+fn a_sequence_in_a_loop_pays_for_each_run_of_the_loop() {
+    let sum = "  lda rc16\n  clc\n  adc rc17\n  sta rc18\n";
+    let straight = probe(&sum.repeat(4));
+    assert!(run(&straight).contains("jsr __outl_0"), "the copies are not outlined where they run once");
+    let looped = probe(&format!("again:\n{}  dec rc30\n  bne again\n", sum.repeat(4)));
+    assert_eq!(run(&looped), looped, "the copies are outlined inside a loop");
+    assert!(run_at(&looped, None).contains("jsr __outl_0"), "bytes alone do not outline them");
+}
+
+/// Six copies of a 2-instruction move save 1 byte for 72 clocks: priced at
+/// 12 clocks a byte, the first rule gave them up in straight-line code, where
+/// they run once and the program is no slower for more than a byte of them.
+/// A place outside every loop is never priced.
+#[test]
+fn a_place_outside_every_loop_is_never_priced() {
+    let text = probe(&"  lda rc16\n  sta rc17\n".repeat(6));
+    let outlined = run(&text);
+    assert!(outlined.contains("jsr __outl_0"), "{outlined}");
+    assert!(bytes(&outlined) < bytes(&text), "{} -> {} B", bytes(&text), bytes(&outlined));
 }

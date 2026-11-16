@@ -465,6 +465,17 @@ def fresh_stub():
     return built
 
 
+def fresh_elf(prog, variant):
+    """The linked image of `variant`, if build.sh linked it from the object now beside it: it does not relink an object
+    overwritten later, and the stale image ran as if it were the new code (x_fir, x_spill_store_order, 2026-11-16)."""
+    import hashlib
+    elf = OUT / "b" / f"{prog}.{variant}.elf"
+    obj, record = elf.with_suffix(".o"), elf.with_suffix(".elf.src")
+    assert record.exists() and obj.exists() and record.read_text() == hashlib.sha256(obj.read_bytes()).hexdigest(), \
+        f"{elf} was not built from {obj}: relink it (build.sh)"
+    return elf
+
+
 def run(prog, variant, hot=False, limit=300_000_000):
     stub = nm(fresh_stub())
     if variant in OMF_VARIANTS:
@@ -473,7 +484,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
         # The default convention's name is `bench_x_`, cdecl's `_bench_x`.
         kern = syms.get(f"bench_{prog}_") or syms[f"_bench_{prog}"]
     else:
-        elf = OUT / "b" / f"{prog}.{variant}.elf"
+        elf = fresh_elf(prog, variant)
         segs, syms = elf_segments(elf), nm(elf)
         # llrm's ELF symbols are decorated with a leading underscore until the ABI says otherwise
         main, kern = syms.get("main", syms.get("_main")), syms.get(f"bench_{prog}", syms.get(f"_bench_{prog}"))
