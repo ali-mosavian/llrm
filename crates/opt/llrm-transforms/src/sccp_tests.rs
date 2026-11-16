@@ -761,3 +761,21 @@ b0:
     assert!(!sccped(&mut module));
     assert_eq!(printed(&module), text);
 }
+
+/// The mask of a vector `and` is kept at every lane width, and when the
+/// operand is an `add` result: the one-bit range took all of them for redundant.
+#[test]
+fn test_a_splat_mask_of_a_vector_is_kept_at_every_lane_width() {
+    let text = "define <4 x i32> @f(<4 x i32> %x, <8 x i8> %y, <4 x i16> %z) {
+b0:
+  %m = and <4 x i32> %x, <i32 255, i32 255, i32 255, i32 255>
+  %n = and <8 x i8> %y, <i8 15, i8 15, i8 15, i8 15, i8 15, i8 15, i8 15, i8 15>
+  %s = add <4 x i16> %z, %z
+  %o = and <4 x i16> %s, <i16 255, i16 255, i16 255, i16 255>
+  ret <4 x i32> %m
+}
+";
+    let mut module = parsed(text);
+    assert!(!sccped(&mut module));
+    assert_eq!(printed(&module), text);
+}
