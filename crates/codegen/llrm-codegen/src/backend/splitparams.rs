@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Splits the live range of an argument register where the calls begin, so
 //! the frame and the kept registers can wait for them. Translated from gcc's
 //! `split_live_ranges_for_shrink_wrap` (gcc/ira.cc).
