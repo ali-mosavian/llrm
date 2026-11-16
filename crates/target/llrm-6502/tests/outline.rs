@@ -202,3 +202,17 @@ fn a_recursive_function_with_an_outlined_body_runs_to_its_deepest_level() {
         assert_eq!(common::run_with(&name, "  jsr probe\n", &code), 0, "{level:?}:\n{text}");
     }
 }
+
+/// Four copies of a 4-instruction sum in a loop were outlined for the 11 bytes
+/// they save: each run of the loop added 4 calls, 48 clocks for 11 bytes, and
+/// `loop_fusion` ran 31% slower (122,028 clocks against 92,923 at -O1). A
+/// place in a loop pays for the runs of the loop; outside one the same four
+/// copies are outlined.
+#[test]
+fn a_sequence_in_a_loop_pays_for_each_run_of_the_loop() {
+    let sum = "  lda rc16\n  clc\n  adc rc17\n  sta rc18\n";
+    let straight = probe(&sum.repeat(4));
+    assert!(run(&straight).contains("jsr __outl_0"), "the copies are not outlined where they run once");
+    let looped = probe(&format!("again:\n{}  dec rc30\n  bne again\n", sum.repeat(4)));
+    assert_eq!(run(&looped), looped, "the copies are outlined inside a loop");
+}

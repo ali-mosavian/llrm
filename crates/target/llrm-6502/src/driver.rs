@@ -653,7 +653,7 @@ fn tail(
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
     // `-fno-outline` is the kill switch, for a test of what the backend wrote
     let outlined = request.level != Level::O0 && !request.passes.iter().any(|flag| flag == "-fno-outline");
-    let text = if outlined { crate::outline::run(&text) } else { text };
+    let text = if outlined { crate::outline::run_at(&text, request.level.tuning().clocks_per_byte) } else { text };
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 

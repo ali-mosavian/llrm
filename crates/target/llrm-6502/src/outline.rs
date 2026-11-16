@@ -21,6 +21,15 @@
 //!    outlined is dropped, and a function that is left without a benefit is not
 //!    made.
 //!
+//! The pin outlines for bytes alone. Here a call costs clocks too, so a
+//! candidate keeps only the places where each byte it saves costs at most
+//! `clocks_per_byte` more clocks (`alloc::Tuning`, the rate every size-reducing
+//! choice of the target is made at): a `jsr` and its `rts` are 12 clocks a
+//! run, a `jmp` 3, times how often the place runs. How often is the static
+//! estimate of `MachineBlockFrequencyInfo` in its simplest form: a place
+//! inside the range of a backward branch runs [`LOOP_TRIPS`] times for each
+//! enclosing loop. The coldest places go first.
+//!
 //! The pin's targets must keep a register the call clobbers (the link register
 //! of AArch64) live across it. A `jsr` and its `rts` change no register, flag
 //! or cell, so no boundary has anything to save: the target hook
@@ -40,15 +49,35 @@ const CALL: usize = 3;
 /// The `rts` of a body that does not end in one.
 const FRAME: usize = 1;
 
-/// `text` with its repeated sequences outlined, and the same text when none
-/// pays.
+/// Clocks a call and its return add to a run of the sequence it replaces.
+const CALL_CLOCKS: u64 = 12;
+/// Clocks a jump to a body that ends in its own `rts` adds.
+const JUMP_CLOCKS: u64 = 3;
+/// Runs of a loop's body for one entry. The pin's loop heuristic is a back edge
+/// taken 31 times in 32 (`BranchProbabilityInfo`), which priced two programs
+/// of the corpus out of the bytes they beat the other compilers' by; the loops
+/// of programs this size run about 8 times.
+const LOOP_TRIPS: u64 = 8;
+/// The loops a place counts as being in, at most.
+const MOST_LOOPS: u32 = 3;
+
+/// [`run_at`] at the rate of the speed levels.
 pub fn run(text: &str) -> String {
+    run_at(text, crate::alloc::Tuning::SPEED.clocks_per_byte)
+}
+
+/// `text` with its repeated sequences outlined, and the same text when none
+/// pays: each byte saved may cost `clocks_per_byte` clocks.
+pub fn run_at(
+    text: &str,
+    clocks_per_byte: u32,
+) -> String {
     let lines: Vec<Line> = text.lines().map(Line::parse).collect();
     if lines.iter().filter(|line| matches!(line, Line::Inst(_))).count() < 2 * (CALL + FRAME) {
         return text.to_owned();
     }
     let mapped = Mapper::new(&lines);
-    let chosen = select(&lines, &mapped);
+    let chosen = select(&lines, &mapped, &weights(&lines), u64::from(clocks_per_byte));
     if chosen.is_empty() {
         return text.to_owned();
     }
@@ -94,6 +123,39 @@ fn legal(
             None => true,
         },
     }
+}
+
+/// How many times each line runs for one run of its function, by the loops
+/// around it: a backward branch makes a loop of the lines from its target to
+/// itself.
+fn weights(lines: &[Line]) -> Vec<u64> {
+    let mut labels: HashMap<&str, usize> = HashMap::new();
+    for (at, line) in lines.iter().enumerate() {
+        if let Line::Label(name) = line {
+            labels.insert(name, at);
+        }
+    }
+    // a line's depth is the loops that begin at or before it, less those that
+    // ended before it
+    let mut change = vec![0i32; lines.len() + 1];
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(Inst { op, operand, .. }) = line else { continue };
+        if !(op.is_branch() || *op == Op::Jmp) {
+            continue;
+        }
+        if let Some(&target) = operand.name().and_then(|name| labels.get(name)).filter(|&&target| target < at) {
+            change[target] += 1;
+            change[at + 1] -= 1;
+        }
+    }
+    let mut depth = 0i32;
+    change[..lines.len()]
+        .iter()
+        .map(|delta| {
+            depth += delta;
+            LOOP_TRIPS.pow((depth as u32).min(MOST_LOOPS))
+        })
+        .collect()
 }
 
 /// The numbers of the instructions (`InstructionMapper`).
@@ -308,6 +370,8 @@ fn bytes_of(lines: &[Line]) -> usize {
 fn select(
     lines: &[Line],
     mapped: &Mapper,
+    weights: &[u64],
+    clocks_per_byte: u64,
 ) -> Vec<Chosen> {
     let tree = SuffixTree::new(&mapped.ids);
     // lines that end a body: an `rts`, and only when nothing follows it in the
@@ -378,7 +442,21 @@ fn select(
                 end = start + candidate.length;
             }
         }
-        if benefit(candidate.bytes, places.len(), candidate.tail) <= 0 {
+        // the coldest places that pay for their clocks in bytes
+        places.sort_by_key(|&place| (weights[place], place));
+        let per_run = if candidate.tail { JUMP_CLOCKS } else { CALL_CLOCKS };
+        let mut clocks = 0;
+        let mut kept = 0;
+        for (count, &place) in places.iter().enumerate() {
+            clocks += weights[place] * per_run;
+            let saved = benefit(candidate.bytes, count + 1, candidate.tail);
+            if count >= 1 && saved > 0 && clocks <= clocks_per_byte * saved as u64 {
+                kept = count + 1;
+            }
+        }
+        places.truncate(kept);
+        places.sort_unstable();
+        if places.is_empty() {
             continue;
         }
         for &place in &places {
