@@ -343,7 +343,7 @@ pub struct Tuning {
     /// 2026-11-30); none: the pin's.
     pub div_by_constant_size_cost: Option<u32>,
     /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
-    /// (`llrm-gpl-gcc`, feature `gcc-gpl`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// (`splitpaths.rs`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
     /// target takes it once measured; false: the pin's, none.
     pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
@@ -421,7 +421,7 @@ pub struct Tuning {
     /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
     /// 16601539e87f.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): a loop whose
     /// loop-carried latency exceeds its issue-bound time is not unrolled at
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.

@@ -271,6 +271,26 @@ pub(super) fn duplicate_simple(
         .enumerate()
         .any(|(one, block)| one != at && block.succ.contains(&tail.at) && !preds.contains(&one))
         || tail.at == body.entry;
+    let redirected = |old: &Block| {
+        old.phis
+            .iter()
+            .map(|phi| {
+                let mut phi = phi.clone();
+                let from_tail: Vec<u32> =
+                    phi.incoming.iter().filter(|(pred, _)| *pred == tail.at).map(|(_, value)| *value).collect();
+                for &pred in &preds {
+                    for value in &from_tail {
+                        phi.incoming.push((body.blocks[pred].at, *value));
+                    }
+                }
+                if !remains {
+                    phi.incoming.retain(|(pred, _)| *pred != tail.at);
+                }
+                phi
+            })
+            .collect::<Vec<_>>()
+            .into()
+    };
     let mut blocks: Vec<Block> = Vec::new();
     for (place, old) in body.blocks.iter().enumerate() {
         if place == at && !remains {
@@ -300,28 +320,13 @@ pub(super) fn duplicate_simple(
                 }
             }
             new.succ = succ.into();
+            if old.at == to {
+                new.phis = redirected(old);
+            }
             blocks.push(new.into());
         } else if old.at == to {
             let mut new = LirBlock::clone(old);
-            new.phis = old
-                .phis
-                .iter()
-                .map(|phi| {
-                    let mut phi = phi.clone();
-                    let from_tail: Vec<u32> =
-                        phi.incoming.iter().filter(|(pred, _)| *pred == tail.at).map(|(_, value)| *value).collect();
-                    for &pred in &preds {
-                        for value in &from_tail {
-                            phi.incoming.push((body.blocks[pred].at, *value));
-                        }
-                    }
-                    if !remains {
-                        phi.incoming.retain(|(pred, _)| *pred != tail.at);
-                    }
-                    phi
-                })
-                .collect::<Vec<_>>()
-                .into();
+            new.phis = redirected(old);
             blocks.push(new.into());
         } else {
             blocks.push(old.clone());
@@ -844,6 +849,26 @@ mod tests {
         let branch = at(&done, 0).insns.iter().find_map(|one| one.what.as_ref().filter(|w| w.op == Operation::Branch));
         assert_eq!(branch.and_then(|w| w.target), Some(9));
         assert_eq!(done.odds.taken.get(&(0, 9)), Some(&777));
+    }
+
+    /// A loop whose latch is one jump back to the header: the header is a
+    /// predecessor of the jump block, and its phi kept an arm from the removed
+    /// block (`earlytaildup: a phi reads from ..., which is not a
+    /// predecessor`).
+    #[test]
+    fn test_a_header_whose_latch_is_a_jump_block_reads_its_phi_from_itself() {
+        let mut header = block(2, vec![work(5), of("je", Operation::Branch, Some(9), false), jump(3)], &[9, 3]);
+        header.phis = vec![crate::model::lir::Phi { result: 5, incoming: vec![(0, 1), (3, 6)] }].into();
+        let shape = body(vec![
+            block(0, vec![jump(2)], &[2]),
+            header,
+            block(3, vec![jump(2)], &[2]),
+            block(9, vec![of("ret", Operation::Return, None, false)], &[]),
+        ]);
+        let done = tail_duplicate(&shape, 3, false).expect("bypassed");
+        assert!(done.blocks.iter().all(|block| block.at != 3), "the jump block is gone");
+        let arms = &at(&done, 2).phis[0].incoming;
+        assert_eq!(arms.as_slice(), [(0, 1), (2, 6)], "the phi reads the latch value from the header itself");
     }
 
     /// A predecessor that cannot take a copy (two successors) stops a block

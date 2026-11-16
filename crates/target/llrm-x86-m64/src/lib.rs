@@ -481,7 +481,7 @@ impl llrm_target::Target for M64 {
                             carry_slot_indexes: false,
                             // DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             lsr_constant_setup_is_one: true,
-                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
