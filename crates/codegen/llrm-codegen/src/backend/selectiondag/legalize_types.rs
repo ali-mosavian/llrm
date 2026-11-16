@@ -91,6 +91,11 @@ pub struct TypeLegalizer<'a> {
     /// A float value and the integer of its width that stands for it
     /// (`SoftenedFloats`).
     softened: HashMap<SDValue, SDValue>,
+    /// The result of a compare routine already called on these operands: the
+    /// routines are pure (`const` in libgcc), so a second compare of the same
+    /// pair reads it instead of calling again. DEVIATE SOFT-CMP-CSE (the pin
+    /// calls one routine per predicate): owner w8, exit 2026-11-27.
+    compare_results: HashMap<(&'static str, SDValue, SDValue), SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -148,6 +153,7 @@ impl<'a> TypeLegalizer<'a> {
             split: HashMap::default(),
             widened: HashMap::default(),
             softened: HashMap::default(),
+            compare_results: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -577,8 +583,10 @@ impl<'a> TypeLegalizer<'a> {
                     )
                 } else {
                     let bits = from.size_in_bits();
-                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a value known non-negative (`nneg`, or
-                    // a clear sign bit), where the target asks (`TargetLowering::signed_conversion_of_nonneg`)
+                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a
+                    // value known non-negative (`nneg`, or
+                    // a clear sign bit), where the target asks
+                    // (`TargetLowering::signed_conversion_of_nonneg`)
                     let nonneg = op == ISD::UIntToFp
                         && self.tli.signed_conversion_of_nonneg()
                         && (self.dag.node(value).flags.0 & SDNodeFlags::NON_NEG.0 != 0
@@ -773,16 +781,27 @@ impl<'a> TypeLegalizer<'a> {
             // The routines return a C `int`: the pointer's width up to a long
             // (16 at m16, 32 above).
             let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
-            let result = pick(cmp)
-                .and_then(|name| this.soft_call(name, &[a, b], int))
-                .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let name = pick(cmp).ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let result = match this.compare_results.get(&(name, a, b)) {
+                Some(&done) => done,
+                None => {
+                    let call = this
+                        .soft_call(name, &[a, b], int)
+                        .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+                    this.compare_results.insert((name, a, b), call);
+                    call
+                }
+            };
             let zero = this.dag.get_constant(0, int);
             Ok(this.dag.get_setcc(vt, result, zero, cc))
         };
         use CondCode::*;
         Ok(match code {
             SetOEq | SetEq => compare(self, Cmp3::Oeq, SetEq)?,
-            SetUNe | SetNe => compare(self, Cmp3::Une, SetNe)?,
+            // DEVIATE SOFT-CMP-CSE: `__eqsf2` is zero iff the pair is ordered
+            // and equal, so its non-zero result is `une`; the pin
+            // calls `__nesf2`, a second call beside an `oeq` of the same pair.
+            SetUNe | SetNe => compare(self, Cmp3::Oeq, SetNe)?,
             SetOGe | SetGe => compare(self, Cmp3::Oge, SetGe)?,
             SetOLt | SetLt => compare(self, Cmp3::Olt, SetLt)?,
             SetOLe | SetLe => compare(self, Cmp3::Ole, SetLe)?,
@@ -1550,11 +1569,16 @@ impl<'a> TypeLegalizer<'a> {
                     source
                 };
                 let (in_lane, out_lane) = (self.dag.value_type(source).element(), to.element());
-                let at = self.dag.constant(base).ok_or(LegalizeError::Unsupported {
-                    op: ISD::ExtractSubvector,
-                    ty: vt,
-                    what: "promote an extract at a variable index",
-                })?;
+                let at = self
+                    .dag
+                    .constant(base)
+                    .ok_or(
+                        LegalizeError::Unsupported {
+                            op: ISD::ExtractSubvector,
+                            ty: vt,
+                            what: "promote an extract at a variable index",
+                        },
+                    )?;
                 let ops: Vec<SDValue> = (0..vt.lanes())
                     .map(|lane| {
                         let index = self.dag.get_constant(at + u128::from(lane), self.dag.value_type(base));
@@ -2046,8 +2070,8 @@ impl<'a> TypeLegalizer<'a> {
                 if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point()
                     || self.dag.value_type(self.dag.operand(value, 0)).is_vector() =>
             {
-                // `ExpandRes_BITCAST` of a float or a legal vector: stored to a stack slot, the
-                // halves loaded from it.
+                // `ExpandRes_BITCAST` of a float or a legal vector: stored to a
+                // stack slot, the halves loaded from it.
                 let src = self.dag.operand(value, 0);
                 let (slot, store, cell) = self.store_to_slot(src);
                 let info = super::dag::MemInfo {
@@ -3090,7 +3114,10 @@ impl<'a> TypeLegalizer<'a> {
         if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
             && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
             && !self.product_fits(lhs, rhs, bits)
-            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
+            && ![lhs, rhs]
+                .into_iter()
+                .filter_map(|one| self.dag.constant(one))
+                .any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
         {
             let vt = self.dag.value_type(value);
@@ -3379,8 +3406,9 @@ impl<'a> TypeLegalizer<'a> {
         };
         // A dword divisor's size form always does two `div`s: -Os only, -O1
         // keeps the clocks.
-        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that runs more than once a
-        // call the speed routine, whose bytes the module pays once.
+        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that
+        // runs more than once a call the speed routine, whose bytes the
+        // module pays once.
         let hot = self.tli.fast_divide_in_loops() && self.dag.config().block_frequency > 1.0;
         let small = (self.tli.small_divide() && (wide || self.tli.size_only()) && !hot)
             .then(|| arch.divide_routine_small(signed, wide, used).ok())
