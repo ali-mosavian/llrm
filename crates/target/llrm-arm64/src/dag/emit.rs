@@ -1588,6 +1588,8 @@ impl Emitter<'_> {
         // keep the type, so no scalar compile can change.
         let to_float = match operands.get(1) {
             Some(Operand::Imm(class)) if to.is_vector() => matches!(class, 6 | 7 | 29 | 43 | 77),
+            // A plain `COPY` (a `FREEZE`) keeps its source's class.
+            None if to.is_vector() => matches!(operands.first(), Some(Operand::Fpr(_))),
             _ => to.is_floating_point(),
         };
         match (operands.first(), to_float) {

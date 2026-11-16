@@ -35,6 +35,7 @@ use llrm_mir::opcode::{BinaryOp, Flags};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_and_or_replaced::fold_and_or_with_op_replaced;
 use crate::combine_bitorder::{fold_bitwise_logic_with_intrinsics, match_bswap_or_bitreverse};
 use crate::combine_casted_logic::fold_casted_bitwise_logic;
 use crate::combine_distribute::fold_using_distributive_laws;
@@ -333,7 +334,10 @@ pub fn visit_or(
     if let Some(found) = reassociate_boolean_operands(c, inst, (op0, op1), false) {
         return Visit::Replace(found);
     }
-    fold_casted_bitwise_logic(c, inst, op0, op1).unwrap_or(Visit::None)
+    if let Some(found) = fold_casted_bitwise_logic(c, inst, op0, op1) {
+        return found;
+    }
+    fold_and_or_with_op_replaced(c, inst, BinaryOp::Or, op0, op1).unwrap_or(Visit::None)
 }
 
 #[cfg(test)]
