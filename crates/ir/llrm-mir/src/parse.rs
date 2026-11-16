@@ -1722,10 +1722,10 @@ impl Parser {
         Ok(())
     }
 
-    /// `uselistorder TYPE VALUE, { N, ... }` or `uselistorder_bb @f, %bb, { N, ... }`
-    /// (`LLParser::parseUseListOrder`, `parseUseListOrderBB`). A constant's
-    /// list is read and not applied: the lists of constants are per function
-    /// here (DEVIATE).
+    /// `uselistorder TYPE VALUE, { N, ... }` or `uselistorder_bb @f, %bb, { N,
+    /// ... }` (`LLParser::parseUseListOrder`, `parseUseListOrderBB`). A
+    /// constant's list is read and not applied: the lists of constants are
+    /// per function here (DEVIATE).
     fn use_list_order(
         &mut self,
         local: &mut Local,
