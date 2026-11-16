@@ -14,7 +14,7 @@ use llrm_support::hash::HashMap;
 use crate::mc::inst::{FpConvert, Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
-use crate::regalloc::{Allocation, spill_access};
+use crate::regalloc::{Allocation, spill_access, spill_access_at};
 
 /// A virtual register's class: the width of a use is the instruction's.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -535,7 +535,11 @@ fn rebuild_with(
     let wide = crate::regalloc::wide_registers(function);
     let mut slots: HashMap<i32, u32> = HashMap::default();
     for (slot, class) in spill_slots {
-        let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
+        let (size, align) = match class {
+            Class::Quad => (16, 16),
+            Class::Tuple(count) => (16 * u64::from(*count), 16),
+            _ => (8, 8),
+        };
         slots.insert(*slot, function.slot(size, align));
     }
     let physical = |register: LirReg| match register {
@@ -592,6 +596,15 @@ fn rebuild_with(
                     if dst != src {
                         // A copy of 128 bits moves all of them.
                         match (dst, src) {
+                            // A tuple copy is a parallel move of its members.
+                            (Reg::Fpr(tuple), Reg::Fpr(first)) if matches!(registers[0].1, Class::Tuple(_)) => {
+                                let Class::Tuple(count) = registers[0].1 else { unreachable!() };
+                                let mut members = [Vreg(0); 4];
+                                for at in 0..count {
+                                    members[usize::from(at)] = first.in_run(u32::from(at));
+                                }
+                                ops.push(Op::I(Inst::VectorTupleBuild { tuple, count, members }));
+                            }
                             (Reg::Fpr(rd), Reg::Fpr(rn))
                                 if registers[0].1 == Class::Quad
                                     || registers[1].1 == Class::Quad
@@ -607,8 +620,16 @@ fn rebuild_with(
                 Kind::Op(name @ ("SpillStore" | "SpillLoad")) => {
                     let Some(Operand::Frame(slot)) = inst.operands.last() else { panic!("a spill names no slot") };
                     let slot = slots[slot];
-                    let quad = registers[0].1 == Class::Quad;
-                    ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
+                    if let (Class::Tuple(count), Reg::Fpr(first)) = (registers[0].1, reg_at(0)) {
+                        // A tuple goes to its slot a member at a time.
+                        for at in 0..count {
+                            let member = Reg::Fpr(first.in_run(u32::from(at)));
+                            ops.push(spill_access_at(member, slot, 16 * i64::from(at), name == "SpillLoad", true));
+                        }
+                    } else {
+                        let quad = registers[0].1 == Class::Quad;
+                        ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
+                    }
                 }
                 Kind::Op(_)
                     if matches!(
