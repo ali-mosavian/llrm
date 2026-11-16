@@ -235,6 +235,13 @@ impl Tti for Mos6502 {
         1 << 40
     }
 
+    /// DEVIATE UNROLL-PRICED-OS: see `Tti::unroll_priced_at_size`. Bytes are
+    /// first at -Os (`sum4`, a four-trip loop over a global: the loop is 18 B,
+    /// the unroll the pin's estimate admits 20 B).
+    fn unroll_priced_at_size(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the
     /// pin's threshold of 300 counts IR instructions, about 4 a trip of a
     /// small loop; this target counts 15 units a trip (`LLRM_DEBUG=unroll`:

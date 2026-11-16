@@ -1746,6 +1746,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-PRICED-OS (owner 6502, exit 2026-11-24): whether a full
+    /// unroll that `-Os` admits by the pin's size estimate (`LoopSize + 1`,
+    /// counted in IR instructions) is priced on the backend's bytes as at
+    /// -O2, so one that adds a byte stays a loop. The estimate counts the
+    /// loop's counter and exit test as code the copies lose; a target whose
+    /// loop control is cheaper than the copies it replaces writes the
+    /// unrolled code larger.
+    fn unroll_priced_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
