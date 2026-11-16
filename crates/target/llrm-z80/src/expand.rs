@@ -3616,6 +3616,16 @@ fn flag_and_b_free(text: &str) -> bool {
 /// motion.
 ///
 /// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
+thread_local! {
+    /// Instructions `push_arguments` went over to rewrite a call frame, since the last [`take_push_span`].
+    static PUSH_SPAN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The instructions `push_arguments` rewrote on this thread since the last call.
+pub fn take_push_span() -> usize {
+    PUSH_SPAN.with(|one| one.replace(0))
+}
+
 fn push_arguments(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -3647,22 +3657,27 @@ fn push_arguments(
                 at += 1;
                 continue;
             }
-            let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); block.insts.len()];
-            let mut stores = vec![false; block.insts.len()];
+            // only the span from the frame's opening to the last push's place changes: a block of many
+            // calls was rebuilt whole for each (straight-line code of 400 calls: a quarter of the compile)
+            let last = places.iter().map(|&(_, after)| after).max().unwrap_or(at);
+            let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); last - at + 1];
+            let mut stores = vec![false; last - at + 1];
             for (store, after) in places {
                 let mut push = block.insts[store].clone();
                 push.kind = Kind::Op("PUSHARG");
                 push.operands.truncate(1);
-                stores[store] = true;
-                pushes[after].push(push);
+                stores[store - at] = true;
+                pushes[after - at].push(push);
             }
-            let old = std::mem::take(&mut block.insts);
-            for (index, inst) in old.into_iter().enumerate() {
-                if index != at && !stores[index] {
-                    block.insts.push(inst);
+            PUSH_SPAN.with(|one| one.set(one.get() + last - at + 1));
+            let mut span = Vec::new();
+            for (offset, inst) in block.insts[at..=last].iter().enumerate() {
+                if offset != 0 && !stores[offset] {
+                    span.push(inst.clone());
                 }
-                block.insts.append(&mut pushes[index]);
+                span.append(&mut pushes[offset]);
             }
+            block.insts.splice(at..=last, span);
         }
     }
 }
