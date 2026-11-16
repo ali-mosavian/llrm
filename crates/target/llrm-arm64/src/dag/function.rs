@@ -411,13 +411,64 @@ fn is_zext_free(
         || (dag.opcode(value) == ISD::Load && from.size_in_bits() <= 32)
 }
 
-/// `AArch64TargetLowering::computeKnownBitsForTargetNode`, `AArch64ISD::CSEL`:
-/// what both arms share.
+/// The bits of a lane of what a modified-immediate node (`MOVI`, `MOVIshift`,
+/// `MOVImsl`, `MOVIedit`, `MVNIshift`, `MVNImsl`) makes, as
+/// `computeKnownBitsForTargetNode` reads them, with the lane's width.
+fn modified_immediate(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> Option<(u32, u64)> {
+    use llrm_dagisel::generated::aarch64::ids::isd as ids;
+    let ISD::Target(id) = dag.opcode(value) else { return None };
+    let ty = dag.value_type(value);
+    let width = if ty.is_vector() { ty.element().size_in_bits() } else { ty.size_in_bits() };
+    let (mask, operand) =
+        (u64::MAX >> (64 - width), |at: usize| dag.constant(dag.operand(value, at)).map(|c| c as u64));
+    // `AArch64_AM::getShiftValue` of an `MSL` shift.
+    let msl = |at: usize| operand(at).map(|shift| shift & 0x3f);
+    let lane = match id {
+        ids::MOVI => operand(0)?,
+        ids::MOVIshift => operand(0)? << operand(1)?,
+        ids::MOVImsl => !(!operand(0)? << msl(1)?),
+        // `decodeAdvSIMDModImmType10`: a byte of ones per set bit.
+        ids::MOVIedit => (0..8)
+            .filter(|bit| operand(0).is_some_and(|code| code >> bit & 1 == 1))
+            .fold(0, |bits, bit| bits | 0xffu64 << (8 * bit)),
+        ids::MVNIshift => !(operand(0)? << operand(1)?),
+        ids::MVNImsl => !operand(0)? << msl(1)?,
+        _ => return None,
+    };
+    Some((width, lane & mask))
+}
+
+/// `AArch64TargetLowering::computeKnownBitsForTargetNode`: `CSEL` (what both
+/// arms share), the modified immediates (a constant), and an `NVCAST` of
+/// one (the same bits, seen in lanes of another width).
 fn known_bits_for_target_node(
     dag: &SelectionDAG,
     value: SDValue,
     operand: &dyn Fn(usize) -> KnownBits,
 ) -> Option<KnownBits> {
-    (dag.opcode(value) == ISD::Target(llrm_dagisel::generated::aarch64::ids::isd::CSEL) && value.res == 0)
-        .then(|| operand(0).intersect(operand(1)))
+    use llrm_dagisel::generated::aarch64::ids::isd as ids;
+    let ISD::Target(id) = dag.opcode(value) else { return None };
+    let ty = dag.value_type(value);
+    let width = if ty.is_vector() { ty.element().size_in_bits() } else { ty.size_in_bits() };
+    let constant =
+        |lane: u64| KnownBits { zero: u128::from(!lane & (u64::MAX >> (64 - width))), one: u128::from(lane), width };
+    match id {
+        ids::CSEL if value.res == 0 => Some(operand(0).intersect(operand(1))),
+        ids::MOVI | ids::MOVIshift | ids::MOVImsl | ids::MOVIedit | ids::MVNIshift | ids::MVNImsl => {
+            modified_immediate(dag, value).map(|(_, lane)| constant(lane))
+        }
+        ids::NVCAST => {
+            // The 64 bits the constant repeats, cut into lanes of this width.
+            let (from, lane) = modified_immediate(dag, dag.operand(value, 0))?;
+            let unit = (0..64 / from).fold(0u64, |unit, at| unit | lane << (from * at));
+            let lanes = (0..64 / width).map(|at| unit >> (width * at) & (u64::MAX >> (64 - width)));
+            let all = u64::MAX >> (64 - width);
+            let (one, zero) = lanes.fold((all, all), |(one, zero), lane| (one & lane, zero & !lane & all));
+            Some(KnownBits { zero: u128::from(zero), one: u128::from(one), width })
+        }
+        _ => None,
+    }
 }

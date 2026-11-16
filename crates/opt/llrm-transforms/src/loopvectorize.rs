@@ -239,6 +239,9 @@ fn fills_registers(
         let bits = u64::from(vf) * u64::from(cx.layout.size_bits(&cx.context.types, ty));
         bits % u64::from(register_bits) == 0
             || (d_registers && matches!(cx.context.types.get(ty), Type::Int(_)) && bits == u64::from(register_bits) / 2)
+            // `v4i8`, a scalar load widened in registers (the
+            // pin's `tryLowerSmallVectorExtLoad`).
+            || (d_registers && matches!(cx.context.types.get(ty), Type::Int(8)) && vf == 4)
     };
     widening
         .steps

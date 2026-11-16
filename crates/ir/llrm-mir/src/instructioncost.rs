@@ -23,10 +23,12 @@
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
+use crate::intrinsics::Intrinsic;
 use crate::module::{Function, GlobalValue, InstId, Linkage, Operand, ValueDef};
-use crate::opcode::{BinaryOp, CastOp, Opcode};
+use crate::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use crate::tti::{
-    AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty, VectorTy,
+    AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, LaneOp, MemoryOp, OperandInfo, Tti, Ty,
+    VectorInstrContext, VectorTy,
 };
 use crate::types::{Type, TypeId};
 
@@ -364,6 +366,50 @@ fn vector_of(
     }
 }
 
+/// `getVectorInstrCost` of an `insertelement` or `extractelement`, with the
+/// context the pin hints from the scalar: an insert of a one-use load, an
+/// extract that only a store uses.
+fn lane_instruction_cost(
+    tti: &dyn Tti,
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+    operands: &[Operand],
+    kind: CostKind,
+) -> Cost {
+    let operation = function.instruction(inst);
+    let insert = operation.opcode == Opcode::InsertElement;
+    let Some(vector) = operand_type(context, function, operands[0]).and_then(|ty| vector_of(context, ty)) else {
+        return Cost::INVALID;
+    };
+    let index = constant_int(context, operands[if insert { 2 } else { 1 }]).and_then(|bits| u32::try_from(bits).ok());
+    let into_poison = matches!(
+        operands[0],
+        Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison
+    );
+    let hint = if insert {
+        let loaded = match operands[1] {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Instruction(def) => {
+                    matches!(function.instruction(def).opcode, Opcode::Load { .. })
+                        && function.users(value).only().is_some()
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if loaded { VectorInstrContext::Load } else { VectorInstrContext::None }
+    } else {
+        let stored = operation.result.and_then(|value| function.users(value).only()).is_some_and(|use_| {
+            let user = function.instruction(use_.user);
+            matches!(user.opcode, Opcode::Store { .. }) && user.operands[0] == Operand::Value(operation.result.unwrap())
+        });
+        if stored { VectorInstrContext::Store } else { VectorInstrContext::None }
+    };
+    let op = if insert { LaneOp::Insert } else { LaneOp::Extract };
+    tti.vector_instr_cost(op, vector, index, into_poison, hint, kind).unwrap_or(Cost::INVALID)
+}
+
 /// `getInstructionCost(inst, kind)`.
 #[allow(clippy::too_many_arguments)]
 pub fn instruction_cost(
@@ -444,6 +490,18 @@ pub fn instruction_cost_known(
             {
                 return cost;
             }
+            if let Some(Intrinsic::VectorReduce(reduce)) = name.and_then(Intrinsic::named)
+                && let Some(vector) = operands
+                    .get(operands.len().wrapping_sub(2))
+                    .and_then(|&vec| operand_type(context, function, vec))
+                    .and_then(|ty| vector_of(context, ty))
+            {
+                // `getArithmeticReductionCost` / `getMinMaxReductionCost`; a
+                // float add or multiply without `reassoc`
+                // reduces in lane order.
+                let ordered = reduce.is_float() && !operation.flags.contains(Flags::REASSOC);
+                return tti.vector_reduction_cost(reduce, vector, ordered, kind).unwrap_or(Cost::INVALID);
+            }
             if name.is_some_and(|name| name.starts_with("llvm.")) {
                 let arguments: Option<Vec<Ty>> =
                     operands[..operands.len() - 1].iter().map(|&one| modelled(one)).collect();
@@ -487,10 +545,12 @@ pub fn instruction_cost_known(
                 Cost::FREE
             }
         }
-        // BasicTTIImpl::getInstructionCost prices these through getVectorInstrCost and
-        // getShuffleCost; the model has no vector type yet (VECTORS-1 PR-D), so
-        // they are invalid, never cheap.
-        Opcode::ExtractElement | Opcode::InsertElement | Opcode::ShuffleVector(_) => Cost::INVALID,
+        // `getVectorInstrCost` of the lane (`Idx` -1 for a variable one); a shuffle is not priced
+        // here (`getShuffleCost` needs the mask kind), so it is invalid, never cheap.
+        Opcode::ExtractElement | Opcode::InsertElement => {
+            lane_instruction_cost(tti, context, function, inst, operands, kind)
+        }
+        Opcode::ShuffleVector(_) => Cost::INVALID,
         Opcode::Alloca { .. } => {
             if is_static_alloca(function, inst) {
                 Cost::FREE

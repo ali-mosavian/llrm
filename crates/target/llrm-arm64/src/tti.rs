@@ -390,16 +390,21 @@ fn vector_memory_op_cost(
 ) -> Option<Cost> {
     let (first, lane) = vector_pieces(ty)?;
     // DEVIATE VT3 (owner arm64, exit 2026-11-24): a memory access under 64
-    // bits (`<2 x i8>`, `<4 x i8>`, `<2 x i16>`) is not priced: the selector
-    // has no register class for it, and SLP's `store <2 x i8>` was refused by
-    // llc (jpeg -Os).
-    if u64::from(lane) * u64::from(ty.count) < 64 {
+    // bits (`<2 x i8>`, `<2 x i16>`) is not priced: the selector has no
+    // lowering for it (`v4i8` is `ldr s` and a widening, `str s` and a
+    // narrowing), and SLP's `store <2 x i8>` was refused by llc (jpeg -Os).
+    if u64::from(lane) * u64::from(ty.count) < 64 && !(lane == 8 && ty.count == 4) {
         return None;
     }
     match kind {
         CostKind::Latency => return None,
         CostKind::CodeSize | CostKind::SizeAndLatency => return Some(Cost::of(first)),
         CostKind::RecipThroughput => {}
+    }
+    // `getMemoryOpCost`'s "extending loads and truncating stores": `v4i8` is
+    // lowered to a scalar load or store and a widening or narrowing.
+    if u64::from(lane) * u64::from(ty.count) < 64 {
+        return Some(Cost::of(2));
     }
     // Unaligned 128-bit stores, on the cpus that set the feature.
     if cpu.misaligned_128_store_slow()

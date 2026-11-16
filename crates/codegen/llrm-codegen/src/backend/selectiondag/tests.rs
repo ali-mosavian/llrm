@@ -107,6 +107,7 @@ mod undef_float;
 mod use_div_rem;
 mod usub_sat;
 mod vastart;
+mod vector_logic_identity;
 mod wasm_hooks;
 mod wide_compare;
 mod wide_counts;

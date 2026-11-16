@@ -219,6 +219,13 @@ pub(crate) fn cast_cost(
             return Some(cost);
         }
     }
+    // An extension between types whose halves are no table row (`<4 x i8>` to
+    // `<4 x i64>`: split, and `<2 x i8>` to `<2 x i64>` is one `ushll`).
+    if matches!(kind, CastKind::SExt | CastKind::ZExt) {
+        if let Some(cost) = ext_cast_cost(kind, dst, src) {
+            return Some(cost);
+        }
+    }
     if kind == CastKind::BitCast {
         let (to, from) = (vector_pieces(dst)?, vector_pieces(src)?);
         let bits = |ty: VectorTy, (_, lane): (i64, u32)| u64::from(lane) * u64::from(ty.count);
@@ -413,7 +420,9 @@ pub(crate) fn cmp_sel_cost(
         return None;
     }
     let (registers, lane) = vector_pieces(ty)?;
-    if !whole_registers(ty, lane) {
+    // `v4i8` legalizes to the `v4i16` D register: a compare of it is one.
+    let promoted_bytes = op == CmpSel::ICmp && lane == 8 && ty.count == 4;
+    if !whole_registers(ty, lane) && !promoted_bytes {
         return None;
     }
     match op {
@@ -557,7 +566,8 @@ pub(crate) fn reduction_cost(
     ordered: bool,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if cost_kind != CostKind::RecipThroughput || ordered {
+    // The tables carry no cost kind: every kind gets the same cost.
+    if ordered {
         return None;
     }
     let (first, lane_bits) = vector_pieces(ty)?;

@@ -143,3 +143,19 @@ fn the_known_bits_of_a_vector_are_those_of_its_lanes() {
     let splat = dag.get_build_vector(v2i64, &[low, low]);
     assert_eq!(known_bits(&dag, splat).zero, !0xFFFFu128 & u128::from(u64::MAX));
 }
+
+/// A promoted `<4 x i8>` compare masks its operand to the byte again; the mask
+/// stayed because the bytes of an `extract_subvector` of a zero-extension were
+/// unknown (`and` + `movi` per compare on arm64).
+#[test]
+fn the_known_bits_of_a_subvector_are_those_of_its_source() {
+    let v8i16 = EVT::Simple(crate::backend::selectiondag::MVT::V8I16);
+    let v4i16 = EVT::Simple(crate::backend::selectiondag::MVT::V4I16);
+    let v8i8 = EVT::Simple(crate::backend::selectiondag::MVT::V8I8);
+    let mut dag = dag();
+    let x = dag.get_register(v8i8, 9);
+    let extended = dag.get_node(ISD::ZeroExtend, v8i16, &[x]);
+    let zero = dag.get_constant(0, EVT::I64);
+    let low = dag.get_node(ISD::ExtractSubvector, v4i16, &[extended, zero]);
+    assert_eq!(known_bits(&dag, low).zero, 0xFF00);
+}

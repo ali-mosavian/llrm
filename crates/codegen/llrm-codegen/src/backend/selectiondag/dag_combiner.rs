@@ -2871,6 +2871,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if n0 == n1 {
             return Some(n0);
         }
+        // `visitAND`, vector edition: `(and x, -1)` is `x`, `(and x, 0)` is
+        // `0`.
+        if vt.is_vector() {
+            if self.dag.is_build_vector_all(n1, true) {
+                return Some(n0);
+            }
+            if self.dag.is_build_vector_all(n1, false) {
+                return Some(n1);
+            }
+        }
         if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
             return Some(self.dag.get_node(ISD::And, vt, &[n1, n0]));
         }
@@ -2906,6 +2916,21 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                         return Some(n1);
                     }
                 }
+            }
+        }
+        // `SimplifyDemandedBits`, `AND`: one side is the result when it is
+        // zero wherever the other is not known to be one (an `and` with a mask
+        // of what a target node makes, known only through
+        // `computeKnownBitsForTargetNode`).
+        if vt.is_vector() {
+            let lane_all = super::fold::mask(vt.element().size_in_bits());
+            let (known0, known1) =
+                (super::known_bits::known_bits(self.dag, n0), super::known_bits::known_bits(self.dag, n1));
+            if lane_all & !(known0.zero | known1.one) == 0 {
+                return Some(n0);
+            }
+            if lane_all & !(known1.zero | known0.one) == 0 {
+                return Some(n1);
             }
         }
         let all = super::fold::mask(vt.size_in_bits());

@@ -1555,6 +1555,24 @@ impl<'a> TypeLegalizer<'a> {
                     ty: vt,
                     what: "promote an extract at a variable index",
                 })?;
+                // DEVIATE VEC14 (owner llrm-arm64-vec, exit 2026-11-24): the
+                // pin builds the vector and its `convertBuildVecExtToExt` makes
+                // the extension of the source and a subvector of it; this makes
+                // that directly when both types are legal.
+                let source_vt = self.dag.value_type(source);
+                let widened = match out_lane {
+                    EVT::Simple(lane) if in_lane.bits_lt(out_lane) && source_vt.is_vector() => {
+                        MVT::vector(lane, source_vt.lanes()).map(EVT::Simple)
+                    }
+                    _ => None,
+                }
+                .filter(|&wide| self.action(wide) == TypeAction::Legal && self.action(to) == TypeAction::Legal);
+                if let Some(wide) = widened {
+                    let extended = self.dag.get_node(ISD::AnyExtend, wide, &[source]);
+                    let sub = self.dag.get_node(ISD::ExtractSubvector, to, &[extended, base]);
+                    self.set_promoted_integer(value, sub);
+                    return Ok(());
+                }
                 let ops: Vec<SDValue> = (0..vt.lanes())
                     .map(|lane| {
                         let index = self.dag.get_constant(at + u128::from(lane), self.dag.value_type(base));

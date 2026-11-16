@@ -383,3 +383,80 @@ fn a_five_trip_vector_loop_is_fully_unrolled() {
     let branches = text.lines().filter(|l| l.trim().starts_with("b.") || l.trim().starts_with("cbnz")).count();
     assert!(text.contains("q") && branches == 0, "{text}");
 }
+
+/// The unroller priced `insertelement` and `llvm.vector.reduce.add` as invalid
+/// ("no cost for call"), so it refused the 2-trip loop of a VF4 epilogue and
+/// left its branch, `cmp` and vector setup in `rep_count` (O2: 1,191 executed
+/// vs 1,158).
+#[test]
+fn a_two_trip_loop_of_lane_inserts_and_a_reduction_is_fully_unrolled() {
+    let text = assembly(
+        "declare i64 @llvm.vector.reduce.add.v4i64(<4 x i64>)\n\
+         define i64 @f(ptr noalias %a, ptr %b) {\n\
+         entry:\n  %w = load <4 x i64>, ptr %b, align 16\n  br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %next, %loop ]\n\
+         \x20 %acc = phi i64 [ 0, %entry ], [ %sum, %loop ]\n\
+         \x20 %p = getelementptr inbounds i64, ptr %a, i64 %i\n\
+         \x20 %x = load i64, ptr %p, align 8\n\
+         \x20 %v = insertelement <4 x i64> %w, i64 %x, i64 3\n\
+         \x20 %r = call i64 @llvm.vector.reduce.add.v4i64(<4 x i64> %v)\n\
+         \x20 %sum = add i64 %acc, %r\n\
+         \x20 %next = add nuw nsw i64 %i, 1\n\
+         \x20 %done = icmp eq i64 %next, 2\n\
+         \x20 br i1 %done, label %exit, label %loop\n\
+         exit:\n  ret i64 %sum\n}\n",
+    );
+    let branches = text.lines().filter(|l| l.trim().starts_with("b.") || l.trim().starts_with("cbnz")).count();
+    assert!(branches == 0, "{text}");
+}
+
+/// `x == 0` on a `<4 x i8>` load materialised the zero (`movi`) and masked both
+/// sides to the promoted lanes (`and` with `0x00ff00ff00ff00ff`): 9
+/// instructions where the pin has `ldr s`, `ushll`, `cmeq #0`, `sshll`, `str`.
+#[test]
+fn a_compare_of_narrow_lanes_with_zero_needs_no_mask() {
+    let text = assembly(
+        "define void @f(ptr %p, ptr %r) {\n\
+         \x20 %a = load <4 x i8>, ptr %p, align 1\n\
+         \x20 %c = icmp eq <4 x i8> %a, zeroinitializer\n\
+         \x20 %s = sext <4 x i1> %c to <4 x i32>\n\
+         \x20 store <4 x i32> %s, ptr %r\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(text.contains("cmeq") && text.contains("#0"), "{text}");
+    assert!(!text.contains("movi") && !text.contains("\tand"), "{text}");
+}
+
+/// A select of `b` or zero by a compare mask was `movi` + `bsl`; the pin has
+/// the mask `and` `b` (the lanes of a compare are all ones or zero).
+#[test]
+fn a_select_against_zero_by_a_compare_mask_is_an_and() {
+    let text = assembly(
+        "define void @f(ptr %p, ptr %q, ptr %r) {\n\
+         \x20 %a = load <2 x i64>, ptr %p\n\
+         \x20 %b = load <2 x i64>, ptr %q\n\
+         \x20 %c = icmp eq <2 x i64> %a, zeroinitializer\n\
+         \x20 %s = select <2 x i1> %c, <2 x i64> %b, <2 x i64> zeroinitializer\n\
+         \x20 store <2 x i64> %s, ptr %r\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(text.contains("\tand") || text.contains(" and "), "{text}");
+    assert!(!text.contains("bsl") && !text.contains("movi"), "{text}");
+}
+
+/// `zext <4 x i8>` to `<4 x i64>` took its lanes through `mov h, v.h[n]` pairs
+/// (the build-vector of extracts); the pin widens the whole vector and takes
+/// halves: `ushll` twice, then one `ushll`/`ushll2` pair.
+#[test]
+fn a_zext_of_narrow_lanes_widens_the_vector_and_takes_halves() {
+    let text = assembly(
+        "define void @f(ptr %p, ptr %q) {\n\
+         \x20 %x = load <4 x i8>, ptr %p, align 1\n\
+         \x20 %z = zext <4 x i8> %x to <4 x i64>\n\
+         \x20 store <4 x i64> %z, ptr %q, align 8\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(!text.contains(".h["), "{text}");
+    assert!(text.contains("ushll2"), "{text}");
+}

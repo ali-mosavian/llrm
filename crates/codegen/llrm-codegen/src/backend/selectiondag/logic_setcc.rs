@@ -288,6 +288,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if n0 == n1 {
             return Some(n0);
         }
+        // `visitOR`, vector edition: `(or x, 0)` is `x`, `(or x, -1)` is `-1`.
+        if vt.is_vector() {
+            if self.dag.is_build_vector_all(n1, false) {
+                return Some(n0);
+            }
+            if self.dag.is_build_vector_all(n1, true) {
+                return Some(n1);
+            }
+        }
         if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
             return Some(self.dag.get_node(ISD::Or, vt, &[n1, n0]));
         }

@@ -154,7 +154,8 @@ fn binary(
 /// The bits of a lane of an integer vector, the same in every lane the
 /// demanded elements name (all of them here): `BUILD_VECTOR` (the operands'
 /// common bits, an operand wider than the lane implicitly truncated),
-/// `ZERO_EXTEND`, and the logical operations; the rest is unknown.
+/// `ZERO_EXTEND`, `EXTRACT_SUBVECTOR`, and the logical operations; the rest is
+/// unknown.
 fn walk_vector(
     dag: &SelectionDAG,
     value: SDValue,
@@ -179,6 +180,9 @@ fn walk_vector(
             let inner = lane(0);
             KnownBits { zero: inner.zero | (all & !mask(inner.width)), one: inner.one, width }
         }
+        // `computeKnownBits`, `EXTRACT_SUBVECTOR`: the lanes of the source
+        // include the ones taken (all of them are asked for here).
+        ISD::ExtractSubvector => lane(0),
         ISD::And => {
             let (lhs, rhs) = (lane(0), lane(1));
             KnownBits { zero: lhs.zero | rhs.zero, one: lhs.one & rhs.one, width }
@@ -187,7 +191,14 @@ fn walk_vector(
             let (lhs, rhs) = (lane(0), lane(1));
             KnownBits { zero: lhs.zero & rhs.zero, one: lhs.one | rhs.one, width }
         }
-        _ => KnownBits::unknown(width),
+        // `computeKnownBitsForTargetNode`: the target says what its nodes make.
+        _ => dag.config().known_bits_for_target_node.and_then(|known| known(dag, value, &lane)).map_or_else(
+            || KnownBits::unknown(width),
+            |mut found| {
+                found.width = width;
+                found
+            },
+        ),
     }
 }
 

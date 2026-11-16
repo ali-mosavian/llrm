@@ -701,6 +701,21 @@ fn a_vector_reduction_is_priced_by_the_pins_table() {
     assert_eq!(cost(ReduceKind::FAdd, Ty::Double, 2, false), Some(1));
     assert_eq!(cost(ReduceKind::SMax, Ty::Int(16), 8, false), Some(2));
     assert_eq!(cost(ReduceKind::SMax, Ty::Int(32), 8, false), Some(3));
+    // The tables carry no cost kind: `-cost-kind=code-size` prints the same
+    // costs.
+    for kind in [CostKind::CodeSize, CostKind::Latency, CostKind::SizeAndLatency] {
+        let at = |reduce, lane, count| {
+            tti.vector_reduction_cost(reduce, VectorTy { lane, count }, false, kind).map(|c| c.value)
+        };
+        assert_eq!(at(ReduceKind::Add, Ty::Int(64), 4), Some(3), "{kind:?}");
+        assert_eq!(at(ReduceKind::Add, Ty::Int(64), 16), Some(9), "{kind:?}");
+        assert_eq!(at(ReduceKind::Add, Ty::Int(32), 4), Some(2), "{kind:?}");
+        assert_eq!(at(ReduceKind::SMax, Ty::Int(32), 8), Some(3), "{kind:?}");
+    }
+    let and = tti
+        .vector_reduction_cost(ReduceKind::And, VectorTy { lane: Ty::Int(32), count: 8 }, false, CostKind::CodeSize)
+        .map(|c| c.value);
+    assert_eq!(and, Some(6));
     // Not the pin's table: in lane order, a multiply, a 64-bit min.
     assert_eq!(cost(ReduceKind::FAdd, Ty::Float, 4, true), None);
     assert_eq!(cost(ReduceKind::Mul, Ty::Int(32), 4, false), None);
@@ -885,5 +900,22 @@ fn wide_vector_casts_and_extended_reductions_are_the_pins() {
         );
         let native = tti.vector_extended_reduction_cost(ReduceKind::Add, true, Ty::Int(32), i(8, 16), k);
         assert_eq!(native.map(|c| c.value), Some(2), "{cpu}");
+    }
+}
+
+/// `zext`/`sext` of `<4 x i8>` to `<4 x i64>` costs 3 in the pin's table,
+/// throughput and code size; `BaseT`'s split rule said 5, so the vectorizer
+/// priced the VF4 i8 epilogue's widening too high.
+#[test]
+fn a_four_lane_byte_extension_to_i64_costs_three() {
+    let i = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+    let tti = AArch64::of_cpu("generic").unwrap();
+    for kind in [CostKind::RecipThroughput, CostKind::CodeSize] {
+        for cast in [CastKind::ZExt, CastKind::SExt] {
+            let cost = tti.vector_cast_cost(cast, i(64, 4), i(8, 4), kind).map(|c| c.value);
+            assert_eq!(cost, Some(3), "{cast:?} {kind:?}");
+        }
+        let narrow = tti.vector_cast_cost(CastKind::ZExt, i(32, 4), i(8, 4), kind).map(|c| c.value);
+        assert_eq!(narrow, Some(1), "{kind:?}");
     }
 }
