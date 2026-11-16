@@ -11,6 +11,7 @@ Host oracle (run from `runtime/compiler-rt`, each prints `fails=0` or its totals
 - `python3 tests/cells_worse.py A.json B.json` (bench.py --json files): lists cells worse on bytes, clocks or instructions; `sh tests/cells_worse_test.sh` is its test
 - `sh tests/int16_lint.sh` (16-bit int compile of every source)
 - `LLRM_CC=llrm-cc sh tests/udivmod_w_size_test.sh`: the 64-bit divide worker links no 32-bit shift libcall at -Os
+- `sh tests/shift64_6502_test.sh`: the 6502 64-bit shifts are asm members under 110 B each, fixunsdi.s (float and double to u64) is one under 160 B, and fix_di.c / fix_udi.c define one routine each
 
 Targets:
 - m68k (qemu): `LLRM_CC_DIR=dir tests/run_m68k.sh CPU OPT [n]`, `tests/m68k_cmp_unordered.c`, `tests/m68k_wrapper_size.sh`, `tests/m68k_no_self_call.sh`, `tests/size_m68k.sh [CPU] [OPT]`
