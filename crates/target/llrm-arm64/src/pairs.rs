@@ -123,6 +123,8 @@ fn ordered(inst: &Inst) -> bool {
     matches!(
         inst,
         Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::VectorStoreLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadLane { .. }
+            | Inst::VectorLoadStructure { .. }
+            | Inst::VectorStoreStructure { .. }
     )
 }
 

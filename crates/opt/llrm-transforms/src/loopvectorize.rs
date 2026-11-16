@@ -61,6 +61,7 @@ use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::basicaa::BasicAA;
 use llrm_analysis::ivdescriptors::{InductionKind, RecurKind};
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
+use llrm_analysis::interleavedaccess::InterleavedAccessInfo;
 use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
@@ -100,6 +101,9 @@ pub struct LoopVectorize {
     /// Widen compares and selects whatever the target says of its backend
     /// (the unit tests').
     pub compares: bool,
+    /// Widen the loads and stores of interleave groups whatever the target
+    /// says of its backend (the unit tests').
+    pub interleaves: bool,
 }
 
 /// What an operand of a widened instruction is.
@@ -127,6 +131,22 @@ struct Access {
     /// The loop counts down and the access moves with it: the lanes are the
     /// elements below the address, in memory order.
     reverse: bool,
+}
+
+/// A full interleave group (`InterleaveGroup`): the accesses `factor` elements
+/// apart that one wide access and `factor` shuffles replace.
+#[derive(Clone, Debug)]
+struct Interleaved {
+    /// The members in index order; every index has one (a full group).
+    members: Vec<InstId>,
+    /// The member the wide access is made at (`getInsertPos`): the first load
+    /// or the last store of the group in program order.
+    insert: InstId,
+    is_load: bool,
+    element: TypeId,
+    align: u64,
+    /// For a store, the value each member stores.
+    stored: Vec<Source>,
 }
 
 /// What a widened operation computes: a binary operation, `fneg`, a cast, a
@@ -168,9 +188,10 @@ struct Operation {
 }
 
 /// An instruction of the loop that is widened, in program order.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Step {
     Access(Access),
+    Interleave(Interleaved),
     Operation(Operation),
     Induction(Induction),
     /// A reduction's phi: one vector phi per part, from the identity.
@@ -247,6 +268,7 @@ fn fills_registers(
         .all(
             |step| match step {
                 Step::Access(access) => whole(access.element),
+                Step::Interleave(group) => whole(group.element),
                 Step::Operation(operation) => {
                     (matches!(operation.op, WideOp::ICmp(_) | WideOp::FCmp(_)) || whole(operation.element))
                         // A mask (`<VF x i1>`) is held in the registers of its compare.
@@ -383,6 +405,7 @@ fn extract(
     the_loop: Loop,
     legality: &Legality,
     widen_compares: bool,
+    groups: Option<&InterleavedAccessInfo>,
 ) -> Result<(Vec<Recipe>, Widening), Skipped> {
     let function = cx.function;
     let header = the_loop.get_header();
@@ -480,6 +503,8 @@ fn extract(
     let mut exit_compare = None;
     let mut tests_phi = false;
     let mut reductions: Vec<interleave::Reduction> = Vec::new();
+    // The value each member of a store group stores, until its last member.
+    let mut group_stores: Vec<(InstId, Source)> = Vec::new();
     for inst in function.iter_block(header).collect::<Vec<_>>() {
         let data = function.instruction(inst);
         match data.opcode {
@@ -570,6 +595,55 @@ fn extract(
                     (function.operand_type(cx.context, value).ok_or(Skipped("An untyped store"))?, data.operands[1])
                 };
                 let lane = element_ty(cx, value_ty).ok_or(Skipped("An element type the target has no vector of"))?;
+                // `CM_Interleave`: a member of a full group of two or four
+                // (a factor of three needs the pin's padded concatenation,
+                // DEVIATE LV-I2, owner llrm-arm64-vec, exit 2026-11-24) is
+                // widened with the group, at its insert position; the other
+                // members have no recipe of their own.
+                if !reverse
+                    && let Some(group) = groups
+                        .and_then(|info| info.interleave_group(inst))
+                        .filter(|group| !group.is_reverse() && group.is_full() && matches!(group.factor(), 2 | 4))
+                {
+                    let members: Vec<InstId> = group.members().collect();
+                    if is_load {
+                        let value = data.result.expect("a load");
+                        if !widened_users(value) {
+                            return Err(Skipped("A loaded value used other than by a store or a binary operation"));
+                        }
+                        if inst != group.insert_pos() {
+                            widened.push(inst);
+                            continue;
+                        }
+                    } else {
+                        group_stores.push((inst, source_of(data.operands[0], &widened)?));
+                        if inst != group.insert_pos() {
+                            continue;
+                        }
+                    }
+                    let stored = if is_load {
+                        Vec::new()
+                    } else {
+                        members
+                            .iter()
+                            .map(|member| group_stores.iter().find(|(one, _)| one == member).expect("stored first").1)
+                            .collect()
+                    };
+                    if is_load {
+                        widened.push(inst);
+                    }
+                    let op = if is_load { MemoryOp::Load } else { MemoryOp::Store };
+                    recipes.push(Recipe::Interleave { op, lane, factor: group.factor() });
+                    steps.push(Step::Interleave(Interleaved {
+                        members,
+                        insert: inst,
+                        is_load,
+                        element: value_ty,
+                        align: group.align(),
+                        stored,
+                    }));
+                    continue;
+                }
                 // `getWideningDecision`: consecutive addresses widen; a stride
                 // of up to 4 is an interleave group and a reversal, a uniform
                 // address another decision, none translated here (the planner
@@ -1008,7 +1082,7 @@ fn extract(
     }
     let step_operand = step_operand.ok_or(Skipped("The induction step was not found"))?;
     let (compare, bound_operand) = exit_compare.ok_or(Skipped("No exit compare"))?;
-    if !steps.iter().any(|one| matches!(one, Step::Access(_) | Step::Reduction(_))) {
+    if !steps.iter().any(|one| matches!(one, Step::Access(_) | Step::Interleave(_) | Step::Reduction(_))) {
         return Err(Skipped("No memory access or reduction to widen"));
     }
     // The lanes of an induction count down in iteration order, those of a
@@ -1342,6 +1416,132 @@ fn widen_access(
     }
 }
 
+/// `VPInterleaveRecipe::execute`: one wide access of `factor * VF` lanes per
+/// part at the group's first element, from the insert position's address. A
+/// load group is one `wide.vec` and a `strided.vec` shuffle per member; a store
+/// group concatenates the members' vectors, interleaves them with one shuffle
+/// (`interleaved.vec`) and stores that. The members keep memory order, so the
+/// access is `part * VF * factor` elements on from the first iteration's.
+fn widen_interleave(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    widening: &Widening,
+    plan: Plan,
+    splat_block: BlockId,
+    void_ty: TypeId,
+    group: &Interleaved,
+    wide: &mut Vec<(InstId, Vec<ValueId>)>,
+    splats: &mut Vec<(Operand, Operand)>,
+) {
+    let before = Position::Before(group.insert);
+    let factor = group.members.len() as u32;
+    let vf = plan.vf;
+    let vector_ty = context.types.intern(Type::Vector { element: group.element, count: vf });
+    let wide_ty = context.types.intern(Type::Vector { element: group.element, count: vf * factor });
+    let insert = function.instruction(group.insert);
+    let pointer = if group.is_load { insert.operands[0] } else { insert.operands[1] };
+    let Operand::Value(pointer_value) = pointer else { unreachable!("an address is a gep") };
+    let gep_flags = match function.value(pointer_value).def {
+        llrm_mir::module::ValueDef::Instruction(def) => function.instruction(def).flags,
+        _ => unreachable!("an address is a gep"),
+    };
+    let ptr_ty = function.value(pointer_value).ty;
+    // The insert position's member index: its address is that many elements
+    // past the group's first.
+    let index = group.members.iter().position(|member| *member == group.insert).expect("a member") as i128;
+    let mut lanes: Vec<Vec<ValueId>> = vec![Vec::new(); factor as usize];
+    for part in 0..plan.ic {
+        let offset = i128::from(part) * i128::from(vf) * i128::from(factor) - index;
+        let address = if offset == 0 {
+            pointer
+        } else {
+            let gep = function.create_instruction(
+                Opcode::GetElementPtr { source: group.element },
+                ptr_ty,
+                vec![pointer, Operand::Constant(context.int(widening.index_ty, offset))],
+                gep_flags,
+                Some("gep.part"),
+            );
+            function.insert(gep, before).expect("the access's block");
+            Operand::Value(function.instruction(gep).result.expect("a gep"))
+        };
+        let poison = Operand::Constant(context.constant(Constant { ty: wide_ty, kind: ConstantKind::Poison }));
+        if group.is_load {
+            let load = function.create_instruction(
+                Opcode::Load { align: Some(group.align), volatile: false },
+                wide_ty,
+                vec![address],
+                Flags::default(),
+                Some("wide.vec"),
+            );
+            function.insert(load, before).expect("the access's block");
+            let loaded = Operand::Value(function.instruction(load).result.expect("a load"));
+            for (member, parts) in lanes.iter_mut().enumerate() {
+                let mask = (0..vf).map(|lane| (lane * factor + member as u32) as i32).collect();
+                let strided = function.create_instruction(
+                    Opcode::ShuffleVector(mask),
+                    vector_ty,
+                    vec![loaded, poison],
+                    Flags::default(),
+                    Some("strided.vec"),
+                );
+                function.insert(strided, before).expect("the access's block");
+                parts.push(function.instruction(strided).result.expect("a shufflevector"));
+            }
+        } else {
+            let mut pieces: Vec<(Operand, u32)> = group
+                .stored
+                .iter()
+                .map(|&source| {
+                    (source_part(context, function, splat_block, vector_ty, vf, source, part as usize, wide, splats), vf)
+                })
+                .collect();
+            // `concatenateVectors`: halve the list by pairs until one vector.
+            while pieces.len() > 1 {
+                let mut next = Vec::new();
+                for pair in pieces.chunks(2) {
+                    let [(low, count), (high, _)] = pair else { unreachable!("a power of two of members") };
+                    let joined_ty = context.types.intern(Type::Vector { element: group.element, count: count * 2 });
+                    let mask = (0..count * 2).map(|lane| lane as i32).collect();
+                    let joined = function.create_instruction(
+                        Opcode::ShuffleVector(mask),
+                        joined_ty,
+                        vec![*low, *high],
+                        Flags::default(),
+                        None,
+                    );
+                    function.insert(joined, before).expect("the access's block");
+                    next.push((Operand::Value(function.instruction(joined).result.expect("a shufflevector")), count * 2));
+                }
+                pieces = next;
+            }
+            let mask = (0..vf).flat_map(|lane| (0..factor).map(move |member| (lane + member * vf) as i32)).collect();
+            let interleaved = function.create_instruction(
+                Opcode::ShuffleVector(mask),
+                wide_ty,
+                vec![pieces[0].0, poison],
+                Flags::default(),
+                Some("interleaved.vec"),
+            );
+            function.insert(interleaved, before).expect("the access's block");
+            let value = Operand::Value(function.instruction(interleaved).result.expect("a shufflevector"));
+            let store = function.create_instruction(
+                Opcode::Store { align: Some(group.align), volatile: false },
+                void_ty,
+                vec![value, address],
+                Flags::default(),
+                None,
+            );
+            function.insert(store, before).expect("the access's block");
+        }
+    }
+    if group.is_load {
+        for (member, parts) in group.members.iter().zip(lanes) {
+            wide.push((*member, parts));
+        }
+    }
+}
+
 /// `VPWidenIntOrFpInductionRecipe::execute`: a `vec.ind` phi in the header that
 /// starts at `start + step * <0, 1, .., VF-1>` and steps by `step * VF` per
 /// part (`step.add`, `vec.ind.next`); part `k` is the phi plus `k * step * VF`.
@@ -1633,16 +1833,21 @@ fn execute(
         .iter()
         .find_map(|one| match one {
             Step::Access(access) if !access.is_load => Some(function.instruction(access.inst).ty),
+            Step::Interleave(group) if !group.is_load => Some(function.instruction(group.insert).ty),
             _ => None,
         })
         .unwrap_or_else(|| context.types.intern(Type::Void));
     for step in &widening.steps {
-        match *step {
-            Step::Access(access) => {
+        match step {
+            &Step::Access(access) => {
                 widen_access(context, function, widening, plan, splat_block, void_ty, access, &mut wide, &mut splats);
                 erased.push(access.inst);
             }
-            Step::Induction(induction) => {
+            Step::Interleave(group) => {
+                widen_interleave(context, function, widening, plan, splat_block, void_ty, group, &mut wide, &mut splats);
+                erased.extend(group.members.iter().copied());
+            }
+            &Step::Induction(induction) => {
                 widen_induction(context, function, widening, plan, splat_block, induction, &mut wide);
                 if induction.truncated_from.is_some() {
                     erased.push(induction.inst);
@@ -1650,7 +1855,7 @@ fn execute(
             }
             // `VPReductionPHIRecipe`: one vector phi per part, closed below
             // once the updates exist.
-            Step::Reduction(reduction) => {
+            &Step::Reduction(reduction) => {
                 let at = widening.reductions.iter().position(|one| one.phi == reduction.phi);
                 let vector_ty = match at.and_then(|at| narrowed[at]) {
                     Some(lanes) => context.types.intern(Type::Vector { element: reduction.ty, count: lanes }),
@@ -1679,7 +1884,7 @@ fn execute(
                 reduction_phis.push(phis);
                 erased.push(reduction.phi);
             }
-            Step::Operation(operation)
+            &Step::Operation(operation)
                 if widening
                     .reductions
                     .iter()
@@ -1716,7 +1921,7 @@ fn execute(
                 wide.push((operation.inst, parts));
                 erased.push(operation.inst);
             }
-            Step::Operation(operation) => {
+            &Step::Operation(operation) => {
                 let before = Position::Before(operation.inst);
                 let vector_ty = vector_of(context, operation.element);
                 let operand_ty = vector_of(context, operation.operand_element);
@@ -1923,7 +2128,15 @@ impl FunctionPass for LoopVectorize {
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
                 let dep = lai.dep_checker();
                 let widen_compares = self.compares || tti.selects_vector_compares();
-                let vector = match extract(&cx, se, found, &legality, widen_compares) {
+                // The groups; a gapped load group needs a scalar epilogue, which
+                // the skeleton does not keep (DEVIATE LV-I3, owner
+                // llrm-arm64-vec, exit 2026-11-24): released.
+                let groups = (self.interleaves || tti.selects_interleaved_accesses()).then(|| {
+                    let mut groups = InterleavedAccessInfo::analyze(se, &cx, header, &lai, false);
+                    groups.invalidate_groups_requiring_scalar_epilogue();
+                    groups
+                });
+                let vector = match extract(&cx, se, found, &legality, widen_compares, groups.as_ref()) {
                     Ok((recipes, widening)) => {
                         let facts = LoopFacts {
                             recipes,

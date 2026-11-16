@@ -85,6 +85,11 @@ pub enum Recipe {
     /// step of the address, which the target prices the address by
     /// (`getAddressComputationCost`).
     Scalarized { op: MemoryOp, lane: Ty, stride_bytes: Option<i64> },
+    /// A full interleave group of `factor` members (`CM_Interleave`): one wide
+    /// access of `factor * VF` lanes and a shuffle per member, priced once, at
+    /// the group's insert position (`setWideningDecision`); the other members
+    /// have no recipe.
+    Interleave { op: MemoryOp, lane: Ty, factor: u32 },
     /// A cast; `folded`: the scalar one is part of the load it extends (LVI1);
     /// `users`: what reads an extension, which may absorb it
     /// (`GetUserAbsorbedCastCost`).
@@ -224,6 +229,7 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
         | Recipe::Binary { lane, .. }
         | Recipe::FMulAdd { lane }
         | Recipe::Scalarized { lane, .. }
+        | Recipe::Interleave { lane, .. }
         | Recipe::Compare { lane, .. }
         | Recipe::Select { lane, .. }
         | Recipe::Induction { lane, .. } => Some(lane),
@@ -246,7 +252,7 @@ fn smallest_and_widest(
     for recipe in recipes {
         if matches!(
             recipe,
-            Recipe::Load { .. } | Recipe::Store { .. } | Recipe::Scalarized { .. }
+            Recipe::Load { .. } | Recipe::Store { .. } | Recipe::Scalarized { .. } | Recipe::Interleave { .. }
         ) {
             let bits = lane_bits(recipe_lane(recipe).expect("an access has a lane"));
             smallest = smallest.min(bits);
@@ -381,6 +387,16 @@ fn iteration_cost(
                     // pin's scalarized one (a multiply of
                     // `<2 x i64>`).
                     tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
+                }
+            }
+            // `getInterleaveGroupCost`: the target's price of the group; at VF 1
+            // a group is its scalar accesses (the members' recipes are one).
+            Recipe::Interleave { op, lane, factor } => {
+                if vf == 1 {
+                    let access = tti.memory_op_cost(op, lane, kind, false);
+                    Cost { value: i64::from(factor) * (access.value + address), valid: access.valid }
+                } else {
+                    tti.interleaved_memory_op_cost(op, vector(lane), factor, kind).ok_or(NotTaken)?
                 }
             }
             Recipe::Scalarized { op, lane, stride_bytes } => {

@@ -109,6 +109,15 @@ impl Gpr {
 pub struct Vreg(pub u32);
 
 impl Vreg {
+    /// The `at`th register of a run of consecutive ones from `self`, wrapping
+    /// past v31 as `ld2`..`ld4` lists do. A virtual register has no run.
+    pub fn in_run(
+        self,
+        at: u32,
+    ) -> Vreg {
+        if self.is_virtual() { Vreg(self.0 + at) } else { Vreg((self.0 + at) % 32) }
+    }
+
     pub fn is_virtual(self) -> bool {
         self.0 >= Gpr::FIRST_VIRTUAL
     }
@@ -1737,6 +1746,23 @@ pub enum Inst {
         lanes: Arrangement,
         rt: Vreg,
         index: u8,
+        base: Gpr,
+    },
+    /// `ld2 { v.4s, v.4s }, [base]` to `ld4`: `count` consecutive registers
+    /// from `rt` (wrapping past v31) loaded de-interleaved from `[base]`
+    /// (`LD2Twov4s`, `LD3Threev4s`, `LD4Fourv4s`). Not `D1`.
+    VectorLoadStructure {
+        count: u8,
+        lanes: Arrangement,
+        rt: Vreg,
+        base: Gpr,
+    },
+    /// `st2 { v.4s, v.4s }, [base]` to `st4`: the registers of
+    /// `VectorLoadStructure` stored interleaved (`ST2Twov4s`).
+    VectorStoreStructure {
+        count: u8,
+        lanes: Arrangement,
+        rt: Vreg,
         base: Gpr,
     },
     /// `fneg v.4s, v.4s`, `fabs`, `fsqrt` and the conversions; `lanes` is `S4`

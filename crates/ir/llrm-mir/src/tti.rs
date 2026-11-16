@@ -758,6 +758,28 @@ pub trait Tti {
         false
     }
 
+    /// Whether the backend selects the wide access and shuffles of an
+    /// interleave group (`ld2`/`st2` and their zip/uzp fallbacks): the loop
+    /// vectorizer widens a strided access only where it does. DEVIATE LV-I0
+    /// (owner llrm-arm64-vec, exit 2026-11-24): the pin's targets all do; here
+    /// each backend says when its selector has them.
+    fn selects_interleaved_accesses(&self) -> bool {
+        false
+    }
+
+    /// `getInterleavedMemoryOpCost` of a full group of `factor` members, each
+    /// a `ty` vector (the wide access is `factor * ty.count` lanes). `None`:
+    /// not priced (the BasicTTI fallback is not translated, LV-I1).
+    fn interleaved_memory_op_cost(
+        &self,
+        _op: MemoryOp,
+        _ty: VectorTy,
+        _factor: u32,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
     /// `getMemoryOpCost` of a vector access of `align` bytes. `None`: the
     /// target does not price (so does not take) vector accesses of this type.
     fn vector_memory_op_cost(
