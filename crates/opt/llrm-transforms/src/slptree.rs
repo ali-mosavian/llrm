@@ -7,21 +7,24 @@
 //! `BoUpSLP::buildTree` (l.12052 `buildTreeRec`) starts from the stores' values
 //! and goes up the operands, one entry for each bundle of one lane per store:
 //! the bundle of loads of consecutive cells, of one binary operation, one cast,
-//! one compare, one select or one `llvm.fmuladd`; a bundle that is none of
-//! these (constants, one value in every lane, anything else) is a gather, the
-//! vector built from its scalars. The operands of a commutative operation are
-//! put in the order that makes the bundles alike (`VLOperands::reorder`,
-//! `getShallowScore` l.1119). `getTreeCost` (l.19795) adds each entry's vector
-//! cost less its scalar ones (`getEntryCost` l.16168) and, for each scalar the
-//! tree does not use, the extract of its lane; the tree is taken below the
-//! `slp-threshold` of 0. `vectorizeTree` makes each bundle's vector after its
-//! last scalar, and the vector store at the last store.
+//! one compare, one select, one `fneg`, one `llvm.fmuladd`, or of extracts of
+//! the lanes of one vector (that vector is the bundle); a bundle that is none
+//! of these (constants, one value in every lane, anything else) is a gather,
+//! the vector built from its scalars. A bundle that repeats a lane is made once
+//! over the distinct lanes and read through a shuffle (`slpgather`). The
+//! operands of a commutative operation are put in the order that makes the
+//! bundles alike (`VLOperands::reorder`, `getShallowScore` l.1119).
+//! `getTreeCost` (l.19795) adds each entry's vector cost less its scalar ones
+//! (`getEntryCost` l.16168) and, for each scalar the tree does not use, the
+//! extract of its lane; the tree is taken below the `slp-threshold` of 0.
+//! `vectorizeTree` makes each bundle's vector after its last scalar, and the
+//! vector store at the last store.
 //!
 //! DEVIATE SLP1 (owner arm64, exit 2026-11-24): the tree has no reordered or
-//! reversed loads, no alternate-opcode, extract or gather-of-loads entries, no
-//! lane reused within a bundle and no operand look-ahead past the shallow
-//! score; the scale by the loop's trip count is left out (it multiplies every
-//! entry alike, so the sign of the total is the same). A scalar the tree uses
+//! reversed loads, no alternate-opcode or gather-of-loads entries and
+//! no operand look-ahead past the shallow score; the scale by the loop's trip
+//! count is left out (it multiplies every entry alike, so the sign of the
+//! total is the same). A scalar the tree uses
 //! as a gather lane, or an external user placed before its bundle's last
 //! scalar, makes the tree not form (the pin's scheduler may order it).
 //!
@@ -50,10 +53,11 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::Declared;
 use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, Predicate, ShuffleKind, Tti, Ty, VectorInstrContext,
-    VectorTy,
+    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, Predicate, Tti, Ty, VectorInstrContext, VectorTy,
 };
 use llrm_mir::types::{FloatKind, Type, TypeId};
+
+use crate::slpgather::{self, constant_of};
 
 /// `MaxTreeRecursionDepth`.
 const MAX_DEPTH: usize = 12;
@@ -82,6 +86,10 @@ enum Kind {
     Select,
     /// The phis of one block, an operand column for each incoming block.
     Phi,
+    FNeg,
+    /// `extractelement` of every lane of one vector, in order: the vector
+    /// itself is the bundle.
+    Extract(Operand),
     /// A vector built from its scalars.
     Gather,
 }
@@ -99,6 +107,16 @@ struct Entry {
     lane_ty: TypeId,
     /// A phi bundle's incoming blocks, one for each operand column.
     incoming: Vec<BlockId>,
+    /// `ReuseShuffleIndices`: `lanes` are the distinct scalars and the entry's
+    /// vector reads lane `reuse[i]` of them at `i`. Empty: none repeats.
+    reuse: Vec<i32>,
+}
+
+impl Entry {
+    /// `getVectorFactor`: the lanes the entry's value has, repeats counted.
+    fn width(&self) -> usize {
+        if self.reuse.is_empty() { self.lanes.len() } else { self.reuse.len() }
+    }
 }
 
 /// A tree that is worth making, ready for [`emit`].
@@ -108,6 +126,7 @@ pub(crate) struct Tree {
 }
 
 struct Builder<'a, 'u> {
+    tti: &'a dyn Tti,
     unit: &'a MemUnit<'u>,
     function: &'a Function,
     block: BlockId,
@@ -177,10 +196,6 @@ fn commutative(op: BinaryOp) -> bool {
     )
 }
 
-fn constant_of(operand: Operand) -> bool {
-    matches!(operand, Operand::Constant(_))
-}
-
 impl Builder<'_, '_> {
     fn context(&self) -> &Context {
         self.unit.context
@@ -215,15 +230,99 @@ impl Builder<'_, '_> {
         if lanes.iter().any(|lane| self.inst_of(*lane).is_some_and(|inst| self.made.contains_key(&inst))) {
             self.failed = true;
         }
-        self.entries.push(Entry {
-            kind: Kind::Gather,
-            lanes,
-            insts: Vec::new(),
-            operands: Vec::new(),
-            lane_ty,
-            incoming: Vec::new(),
-        });
+        // `tryToFindDuplicates` for a gather: the distinct lanes and a shuffle
+        // that repeats them, where that costs less than inserting every lane.
+        let (unique, reuse) = slpgather::unique_lanes(&lanes);
+        let (lanes, reuse) = match self.pack_repeats(&lanes, &unique, &reuse, lane_ty, true) {
+            Some(true) => (unique, reuse),
+            _ => (lanes, Vec::new()),
+        };
+        self.entries.push(Entry { kind: Kind::Gather, lanes, insts: Vec::new(), operands: Vec::new(), lane_ty, reuse, incoming: Vec::new() });
         self.entries.len() - 1
+    }
+
+    /// `EstimatePackPlusShuffleVsInserts` of the bundle `lanes`, which repeats
+    /// a lane: whether to pack it. `None`: not priced.
+    fn pack_repeats(
+        &self,
+        lanes: &[Operand],
+        unique: &[Operand],
+        reuse: &[i32],
+        lane_ty: TypeId,
+        gather_only: bool,
+    ) -> Option<bool> {
+        if reuse.is_empty() || !unique.len().is_power_of_two() || unique.len() < 2 {
+            return Some(false);
+        }
+        let lane = lane_ty_of(self.context(), lane_ty)?;
+        let instructions: Vec<InstId> = unique.iter().filter_map(|lane| self.inst_of(*lane)).collect();
+        let same = instructions.len() == unique.len()
+            && instructions.iter().all(|inst| {
+                let (one, first) = (self.function.instruction(*inst), self.function.instruction(instructions[0]));
+                std::mem::discriminant(&one.opcode) == std::mem::discriminant(&first.opcode) && one.ty == first.ty
+            });
+        let first = same.then(|| self.function.instruction(instructions[0]));
+        let state = first.map(|first| matches!(first.opcode, Opcode::Load { .. }));
+        // `doesNotNeedToSchedule`: every lane is used outside its block or has
+        // no instruction operand.
+        let home = same.then(|| self.function.parent(instructions[0])).flatten();
+        let outside = |inst: InstId| {
+            self.function
+                .instruction(inst)
+                .result
+                .is_some_and(
+                    |result| self.function.users(result).iter().all(|used| self.function.parent(used.user) != home),
+                )
+        };
+        let scalar_operands = |inst: InstId| {
+            self.function.instruction(inst).operands.iter().all(|operand| self.inst_of(*operand).is_none())
+        };
+        let require_scheduling = same
+            && !(instructions.iter().all(|inst| outside(*inst))
+                || instructions.iter().all(|inst| scalar_operands(*inst)));
+        let arity = first.map_or(0, |first| match first.opcode {
+            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::FCmp(_) => 2,
+            Opcode::Select => 3,
+            Opcode::Cast(_) | Opcode::Load { .. } | Opcode::FNeg => 1,
+            Opcode::Call(_) => 3,
+            _ => 0,
+        });
+        // `HasExtraReshuffle`: the columns, past the first, whose operands
+        // repeat; the callee of a call is no constant (`isConstant` leaves out
+        // globals), so its column always does.
+        let columns_with_repeats = (0..arity)
+            .filter(|column| {
+                let mut seen: Vec<Operand> = Vec::new();
+                lanes
+                    .iter()
+                    .filter_map(|lane| self.inst_of(*lane))
+                    .any(
+                        |inst| {
+                            let operand = self.function.instruction(inst).operands[*column];
+                            let repeats = !constant_of(operand) && seen.contains(&operand);
+                            seen.push(operand);
+                            repeats
+                        },
+                    )
+            })
+            .count()
+            + usize::from(first.is_some_and(|first| matches!(first.opcode, Opcode::Call(_))));
+        let half_unique_ok = first.is_some_and(|first| matches!(first.opcode, Opcode::Cast(_)));
+        let root_operand = !gather_only && self.entries.len() == 1;
+        let packing = slpgather::Packing {
+            lanes,
+            unique,
+            reuse,
+            state,
+            gather_only,
+            root_operand,
+            require_scheduling,
+            columns_with_repeats,
+            lane,
+            half_unique_ok,
+        };
+        let (pack, keep_originals) = slpgather::estimate_pack(self.tti, &packing)?;
+        Some(pack && !keep_originals)
     }
 
     /// `getShallowScore` of `a` in the lane before `b`'s.
@@ -313,10 +412,12 @@ impl Builder<'_, '_> {
         {
             return entry;
         }
-        let mut insts = Vec::with_capacity(lanes.len());
-        for lane in &lanes {
+        // A lane that repeats is made once and read through a shuffle.
+        let (unique, reuse) = slpgather::unique_lanes(&lanes);
+        let mut insts = Vec::with_capacity(unique.len());
+        for lane in &unique {
             match self.inst_of(*lane) {
-                Some(inst) if !self.made.contains_key(&inst) && !insts.contains(&inst) => insts.push(inst),
+                Some(inst) if !self.made.contains_key(&inst) => insts.push(inst),
                 _ => return self.gather(lanes, lane_ty),
             }
         }
@@ -350,6 +451,11 @@ impl Builder<'_, '_> {
             Opcode::ICmp(predicate) => (Kind::ICmp(*predicate), 2, false, 0),
             Opcode::FCmp(predicate) => (Kind::FCmp(*predicate), 2, false, 0),
             Opcode::Select => (Kind::Select, 3, false, 0),
+            Opcode::FNeg => (Kind::FNeg, 1, false, 0),
+            Opcode::ExtractElement => match self.extracted_vector(&insts, &reuse) {
+                Some(source) => (Kind::Extract(source), 0, false, 0),
+                None => return self.gather(lanes, lane_ty),
+            },
             Opcode::Call(_) if self.intrinsic(insts[0]) == Some(Intrinsic::FMulAdd) => (Kind::FMulAdd, 3, true, 0),
             _ => return self.gather(lanes, lane_ty),
         };
@@ -384,15 +490,11 @@ impl Builder<'_, '_> {
         if kind == Kind::Load && !self.consecutive(&insts) {
             return self.gather(lanes, lane_ty);
         }
+        if !reuse.is_empty() && self.pack_repeats(&lanes, &unique, &reuse, lane_ty, false) != Some(true) {
+            return self.gather(lanes, lane_ty);
+        }
         let entry = self.entries.len();
-        self.entries.push(Entry {
-            kind,
-            lanes: lanes.clone(),
-            insts: insts.clone(),
-            operands: Vec::new(),
-            lane_ty,
-            incoming: Vec::new(),
-        });
+        self.entries.push(Entry { kind, lanes: unique, insts: insts.clone(), operands: Vec::new(), lane_ty, reuse, incoming: Vec::new() });
         for inst in &insts {
             self.made.insert(*inst, entry);
         }
@@ -468,6 +570,7 @@ impl Builder<'_, '_> {
             operands: Vec::new(),
             lane_ty,
             incoming,
+            reuse: Vec::new(),
         });
         for inst in &insts {
             self.made.insert(*inst, entry);
@@ -475,6 +578,40 @@ impl Builder<'_, '_> {
         let children: Vec<usize> = columns.into_iter().map(|column| self.build(column, depth + 1)).collect();
         self.entries[entry].operands = children;
         entry
+    }
+
+    /// `canReuseExtract`: the `extractelement`s read lane `i` of one vector of
+    /// their own count at `i`, in order (DEVIATE SLP5: no other order, no
+    /// resize, no vector the tree makes); the vector.
+    fn extracted_vector(
+        &self,
+        insts: &[InstId],
+        reuse: &[i32],
+    ) -> Option<Operand> {
+        if !reuse.is_empty() {
+            return None;
+        }
+        let source = self.function.instruction(insts[0]).operands[0];
+        let Operand::Value(_) = source else { return None };
+        let in_tree = self.inst_of(source).is_some_and(|inst| self.made.contains_key(&inst));
+        let count = match self.context().types.get(self.function.operand_type(self.context(), source)?) {
+            Type::Vector { count, .. } => *count as usize,
+            _ => return None,
+        };
+        let in_order = insts
+            .iter()
+            .enumerate()
+            .all(
+                |(at, inst)| {
+                    let operands = &self.function.instruction(*inst).operands;
+                    operands[0] == source
+                        && matches!(
+                            operands[1],
+                            Operand::Constant(index) if matches!(self.context().get(index).kind, ConstantKind::Int(lane) if lane == at as u128)
+                        )
+                },
+            );
+        (!in_tree && count == insts.len() && in_order).then_some(source)
     }
 
     /// The loads read ascending, adjacent cells of one object.
@@ -522,7 +659,7 @@ pub(crate) fn try_window(
     let position = positions(function);
     let values: Vec<Operand> = stores.iter().map(|store| function.instruction(*store).operands[0]).collect();
     let mut builder =
-        Builder { unit, function, block, entries: Vec::new(), made: IdMap::new(), position, failed: false };
+        Builder { tti, unit, function, block, entries: Vec::new(), made: IdMap::new(), position, failed: false };
     // The root: the stores.
     builder
         .entries
@@ -534,6 +671,7 @@ pub(crate) fn try_window(
                 operands: Vec::new(),
                 lane_ty: store_ty,
                 incoming: Vec::new(),
+                reuse: Vec::new(),
             },
         );
     for store in stores {
@@ -577,7 +715,7 @@ pub(crate) fn try_phis(
     let position = positions(function);
     let lanes: Vec<Operand> = phis.iter().map(|phi| result_of(function, *phi)).collect();
     let mut builder =
-        Builder { unit, function, block, entries: Vec::new(), made: IdMap::new(), position, failed: false };
+        Builder { tti, unit, function, block, entries: Vec::new(), made: IdMap::new(), position, failed: false };
     builder.build(lanes, 0);
     if builder.failed || builder.entries.first().is_none_or(|root| root.kind != Kind::Phi) {
         llrm_support::debug!("slp", "phi tree x{}: no phi bundle{}", phis.len(), if builder.failed { ", a lane used as a gather" } else { "" });
@@ -925,16 +1063,24 @@ fn cost_of(
         // The lanes some user outside the tree reads are extracted.
         if !matches!(entry.kind, Kind::Gather | Kind::Store) {
             let lane = lane_ty_of(context, entry.lane_ty)?;
-            let vector = VectorTy { lane, count: entry.lanes.len() as u32 };
+            let vector = VectorTy { lane, count: entry.width() as u32 };
             for (index, inst) in entry.insts.iter().enumerate() {
                 let Some(result) = function.instruction(*inst).result else { continue };
                 // The first user outside fixes the scale
                 // (`ExtractCostCalculated`).
                 if let Some(used) = function.users(result).iter().find(|used| !made.contains_key(&used.user)) {
+                    // DEVIATE SLP5: the extract of an extract (the pin keeps
+                    // the scalar when it costs less) is not
+                    // made.
+                    if matches!(entry.kind, Kind::Extract(_)) {
+                        return None;
+                    }
+                    // `findLaneForValue`: the first place the lane is read.
+                    let at = entry.reuse.iter().position(|&lane| lane == index as i32).unwrap_or(index);
                     let extract = tti.vector_instr_cost(
                         LaneOp::Extract,
                         vector,
-                        Some(index as u32),
+                        Some(at as u32),
                         false,
                         VectorInstrContext::None,
                         kind,
@@ -1025,8 +1171,40 @@ fn entry_cost(
             }
             // The phis cost nothing, scalar or vector (`getEntryCost`, l.16449).
             Kind::Phi => 0,
-            Kind::Gather => gather_cost(context, tti, entry, vector, kind)?,
+            Kind::FNeg => {
+                let wide = valid(tti.vector_arithmetic_cost(ArithOp::FNeg, vector, kind)?)?;
+                wide - n * valid(tti.arithmetic_cost(
+                    ArithOp::FNeg,
+                    lane,
+                    kind,
+                    Default::default(),
+                    Default::default(),
+                ))?
+            }
+            // The vector is the source's: what the scalar extracts cost is
+            // saved.
+            Kind::Extract(_) => {
+                let mut extracts = 0;
+                for index in 0..count {
+                    extracts += valid(tti.vector_instr_cost(
+                        LaneOp::Extract,
+                        vector,
+                        Some(index),
+                        false,
+                        VectorInstrContext::None,
+                        kind,
+                    )?)?;
+                }
+                -extracts
+            }
+            Kind::Gather => slpgather::gather_cost(tti, lane, &entry.lanes, &entry.reuse)?,
         };
+        // The lanes that repeat are read through a shuffle of the bundle.
+        let reuse_cost = match entry.kind {
+            Kind::Gather | Kind::Store => 0,
+            _ => slpgather::shuffle_cost(tti, VectorTy { lane, count: entry.width() as u32 }, &entry.reuse)?,
+        };
+        let entry_cost = entry_cost + reuse_cost;
         llrm_support::debug!("slp", "entry {:?} x{}: {}", entry.kind, count, entry_cost);
         Some(entry_cost)
     }
@@ -1047,37 +1225,6 @@ fn predicate_of(
             None
         }
     }
-}
-
-/// `getGatherCost`: a vector of constants is free; one value in every lane is
-/// one insert and a broadcast; any other lane is one insert.
-fn gather_cost(
-    context: &Context,
-    tti: &dyn Tti,
-    entry: &Entry,
-    vector: VectorTy,
-    kind: CostKind,
-) -> Option<i64> {
-    let _ = context;
-    let valid = |cost: llrm_mir::tti::Cost| cost.valid.then_some(cost.value);
-    if entry.lanes.iter().all(|lane| constant_of(*lane)) {
-        return Some(0);
-    }
-    let insert = |index: u32| {
-        valid(tti.vector_instr_cost(LaneOp::Insert, vector, Some(index), index == 0, VectorInstrContext::None, kind)?)
-    };
-    if entry.lanes.iter().all(|lane| *lane == entry.lanes[0]) {
-        let shuffle =
-            valid(tti.shuffle_cost(ShuffleKind::Broadcast, vector, &vec![0; vector.count as usize], kind)?)?;
-        return Some(insert(0)? + shuffle);
-    }
-    let mut total = 0;
-    for (index, lane) in entry.lanes.iter().enumerate() {
-        if !constant_of(*lane) {
-            total += insert(index as u32)?;
-        }
-    }
-    Some(total)
 }
 
 /// Where a made instruction goes: right after an instruction, or right before
@@ -1208,6 +1355,7 @@ pub(crate) fn emit(
         let operands: Vec<Operand> =
             entry.operands.iter().map(|child| vectors[*child].expect("an operand made first")).collect();
         let made = match &entry.kind {
+            Kind::Extract(source) => Some(reused(context, function, &mut placer, last_of(entry), entry, *source)),
             Kind::Gather => {
                 // Built right before the bundle that reads it.
                 let user = tree.entries.iter().position(|one| one.operands.contains(&at)).expect("a user");
@@ -1222,7 +1370,7 @@ pub(crate) fn emit(
                     // stands there too, before the user, after every lane it reads.
                     Anchor::After(last_of(user))
                 };
-                Some(build_vector(context, function, &mut placer, anchor, entry, vector_ty))
+                Some(build_vector(context, function, &mut placer, anchor, entry))
             }
             Kind::Store | Kind::Phi => None,
             kind => {
@@ -1244,6 +1392,7 @@ pub(crate) fn emit(
                     Kind::ICmp(predicate) => Opcode::ICmp(*predicate),
                     Kind::FCmp(predicate) => Opcode::FCmp(*predicate),
                     Kind::Select => Opcode::Select,
+                    Kind::FNeg => Opcode::FNeg,
                     Kind::FMulAdd => {
                         let function_type = context
                             .types
@@ -1276,10 +1425,11 @@ pub(crate) fn emit(
                             None,
                         );
                         placer.after(function, last_of(entry), made);
-                        vectors[at] = Some(result_of(function, made));
+                        let value = result_of(function, made);
+                        vectors[at] = Some(reused(context, function, &mut placer, last_of(entry), entry, value));
                         continue;
                     }
-                    Kind::Store | Kind::Gather | Kind::Phi => unreachable!(),
+                    Kind::Store | Kind::Gather | Kind::Extract(_) | Kind::Phi => unreachable!(),
                 };
                 let ops = if matches!(kind, Kind::Load) {
                     vec![function.instruction(entry.insts[0]).operands[0]]
@@ -1288,7 +1438,8 @@ pub(crate) fn emit(
                 };
                 let made = function.create_instruction(opcode, vector_ty, ops, flags, None);
                 placer.after(function, last_of(entry), made);
-                Some(result_of(function, made))
+                let value = result_of(function, made);
+                Some(reused(context, function, &mut placer, last_of(entry), entry, value))
             }
         };
         vectors[at] = made;
@@ -1313,7 +1464,7 @@ pub(crate) fn emit(
     let tree_insts: Vec<InstId> = tree.entries.iter().flat_map(|entry| entry.insts.iter().copied()).collect();
     let i32_ty = context.types.int(64);
     for (at, entry) in tree.entries.iter().enumerate() {
-        if matches!(entry.kind, Kind::Gather | Kind::Store) {
+        if matches!(entry.kind, Kind::Gather | Kind::Store | Kind::Extract(_)) {
             continue;
         }
         let vector = vectors[at].expect("a vector");
@@ -1328,8 +1479,10 @@ pub(crate) fn emit(
             if outside.is_empty() {
                 continue;
             }
+            // `findLaneForValue`: the first place the lane is read.
+            let place = entry.reuse.iter().position(|&one| one == lane as i32).unwrap_or(lane);
             let index =
-                Operand::Constant(context.constant(Constant { ty: i32_ty, kind: ConstantKind::Int(lane as u128) }));
+                Operand::Constant(context.constant(Constant { ty: i32_ty, kind: ConstantKind::Int(place as u128) }));
             let Operand::Value(vector_value) = vector else { continue };
             let ValueDef::Instruction(defined) = function.value(vector_value).def else { continue };
             let extract = function.create_instruction(
@@ -1400,16 +1553,44 @@ fn last_phi_of(
         .expect("a phi")
 }
 
-/// The vector of a gather: constants as a constant, one value as a splat, any
-/// other as inserts.
+/// The entry's vector read through its reuse mask (`FinalShuffle`).
+fn reused(
+    context: &mut Context,
+    function: &mut Function,
+    placer: &mut Placer,
+    anchor: InstId,
+    entry: &Entry,
+    vector: Operand,
+) -> Operand {
+    if entry.reuse.is_empty() || (slpgather::identity(&entry.reuse) && entry.reuse.len() == entry.lanes.len()) {
+        return vector;
+    }
+    let from = vector_of(context, entry.lane_ty, entry.lanes.len());
+    let to = vector_of(context, entry.lane_ty, entry.width());
+    let poison = Operand::Constant(context.constant(Constant { ty: from, kind: ConstantKind::Poison }));
+    let made = function.create_instruction(
+        Opcode::ShuffleVector(entry.reuse.clone()),
+        to,
+        vec![vector, poison],
+        Flags::default(),
+        None,
+    );
+    placer.after(function, anchor, made);
+    result_of(function, made)
+}
+
+/// The vector of a gather: constants as a constant, any other as inserts of
+/// the scalars `TryPackScalars` leaves and the shuffle that reads them (a value
+/// in every lane is one insert and a broadcast).
 fn build_vector(
     context: &mut Context,
     function: &mut Function,
     placer: &mut Placer,
     anchor: Anchor,
     entry: &Entry,
-    vector_ty: TypeId,
 ) -> Operand {
+    let width = entry.width();
+    let vector_ty = vector_of(context, entry.lane_ty, width);
     if entry.lanes.iter().all(|lane| constant_of(*lane)) {
         let lanes: Vec<_> = entry
             .lanes
@@ -1427,24 +1608,23 @@ fn build_vector(
         return Operand::Constant(context.constant(Constant { ty: vector_ty, kind }));
     }
     let i32_ty = context.types.int(64);
-    let count = entry.lanes.len();
     let mut insert = |function: &mut Function, opcode: Opcode, operands: Vec<Operand>| {
         let made = function.create_instruction(opcode, vector_ty, operands, Flags::default(), None);
         placer.place(function, anchor, made);
         result_of(function, made)
     };
     let poison = Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Poison }));
-    if entry.lanes.iter().all(|lane| *lane == entry.lanes[0]) {
-        let zero = Operand::Constant(context.constant(Constant { ty: i32_ty, kind: ConstantKind::Int(0) }));
-        let one = insert(function, Opcode::InsertElement, vec![poison, entry.lanes[0], zero]);
-        return insert(function, Opcode::ShuffleVector(vec![0; count]), vec![one, poison]);
-    }
+    let (packed, mask) = slpgather::gather_plan(&entry.lanes, &entry.reuse, width);
     let mut vector = poison;
-    for (lane, value) in entry.lanes.iter().enumerate() {
+    for (lane, value) in packed.iter().enumerate() {
+        let Some(value) = value else { continue };
         let index = Operand::Constant(context.constant(Constant { ty: i32_ty, kind: ConstantKind::Int(lane as u128) }));
         vector = insert(function, Opcode::InsertElement, vec![vector, *value, index]);
     }
-    vector
+    if slpgather::identity(&mask) {
+        return vector;
+    }
+    insert(function, Opcode::ShuffleVector(mask), vec![vector, poison])
 }
 
 fn is_zero(

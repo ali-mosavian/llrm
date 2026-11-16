@@ -156,3 +156,16 @@ fn two_phis_of_consecutive_loads_become_a_vector_phi() {
     assert!(text.contains("fadd <2 x double>"), "{text}");
     assert_eq!(text.matches("fadd double").count(), 1, "{text}");
 }
+
+const PHI_CHAIN: &str = include_str!("../tests/slp/phi_chain_loop.ll");
+
+/// Two phis whose latch values depend on each other (`b.next = b + a.next`)
+/// cannot be one vector phi: the `fadd` bundle would read its own lane. The
+/// pin keeps both scalar; a tree that ignored the chain made a `<2 x double>`
+/// phi and an `fadd` that reads `a.next` before it exists.
+#[test]
+fn phis_whose_latch_values_chain_stay_scalar() {
+    let text = run(PHI_CHAIN);
+    assert!(!text.contains("<2 x double>"), "{text}");
+    assert_eq!(text.matches("phi double").count(), 2, "{text}");
+}

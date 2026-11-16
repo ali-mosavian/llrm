@@ -434,6 +434,7 @@ pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
 pub mod slpcompares;
+pub mod slpgather;
 pub mod slpreduction;
 pub mod slptree;
 pub mod slpvectorize;
