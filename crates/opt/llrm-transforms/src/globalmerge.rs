@@ -104,8 +104,10 @@ pub fn merged(
     }
     let wanted: HashSet<u32> = groups.iter().flat_map(|(_, globals)| globals.iter().map(|g| g.0)).collect();
     let sites = uses(module, &wanted);
+    let kept = if options.keep_data_indexed { data_indexed_in_loops(module, layout, &wanted, &sites) } else { HashSet::new() };
     let mut plans = Vec::new();
     for (_, mut globals) in groups {
+        globals.retain(|id| !kept.contains(&id.0));
         if globals.len() > 1 {
             plans.extend(plan_group(module, layout, options, &sites, &mut globals));
         }
@@ -115,6 +117,54 @@ pub fn merged(
     }
     apply(module, plans, &sites, options)?;
     Ok(true)
+}
+
+/// The globals of `wanted` that a loop indexes by a value that is neither
+/// invariant nor an affine recurrence of the loop (`isLoopInvariant`,
+/// `hasComputableLoopEvolution`): a merged base has no addressing mode for
+/// `base + offset + index`, and strength reduction cannot rewrite a
+/// data-dependent index into a pointer that steps. DEVIATE
+/// ARM64-GM-INDEXED: the pin merges them all.
+fn data_indexed_in_loops(
+    module: &Module,
+    layout: &DataLayout,
+    wanted: &HashSet<u32>,
+    sites: &HashMap<u32, Vec<Site>>,
+) -> HashSet<u32> {
+    let mut hit = HashSet::new();
+    let functions: BTreeSet<usize> =
+        wanted.iter().flat_map(|global| sites.get(global).into_iter().flatten().map(|site| site.function)).collect();
+    for at in functions {
+        let GlobalKind::Function(function) = &module.globals[at].kind else { continue };
+        let mut session =
+            llrm_analysis::scev::analysis::ScevSession::within(&module.context, &module.globals, &module.metadata, function);
+        session.ask_within(&module.context, layout, &module.globals, &module.metadata, function, |scev, cx| {
+            for (block, inst) in function.walk() {
+                let Some(found) = cx.loops.get_loop_for(block) else { continue };
+                let header = found.get_header();
+                let data = function.instruction(inst);
+                if !matches!(data.opcode, Opcode::GetElementPtr { .. }) {
+                    continue;
+                }
+                let Some(&Operand::Constant(base)) = data.operands.first() else { continue };
+                let ConstantKind::Global(global) = &module.context.get(base).kind else { continue };
+                if !wanted.contains(&global.0) || hit.contains(&global.0) {
+                    continue;
+                }
+                let data_dependent = data.operands[1..].iter().any(|&index| {
+                    matches!(index, Operand::Value(_)) && {
+                        let expr = scev.get_scev(cx, index);
+                        !scev.is_loop_invariant(cx, expr, Some(header))
+                            && !scev.has_computable_loop_evolution(cx, expr, Some(header))
+                    }
+                });
+                if data_dependent {
+                    hit.insert(global.0);
+                }
+            }
+        });
+    }
+    hit
 }
 
 /// Globals that something other than an instruction names, which stay: the

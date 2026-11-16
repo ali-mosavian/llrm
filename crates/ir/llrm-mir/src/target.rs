@@ -931,6 +931,13 @@ pub struct GlobalMerge {
     /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
     /// 15 `adrp` against gcc's 5). False: the pin.
     pub optsize_counts: bool,
+    /// DEVIATE ARM64-GM-INDEXED (owner llrm-arm64-vec, exit 2026-11-30): a
+    /// global stays unmerged when a loop indexes it by a value that is neither
+    /// invariant nor an affine recurrence: `base + offset + index` has no
+    /// addressing mode, so each access pays an `add` that an unmerged global's
+    /// register-offset form does not (`grep` -O3: 20 instructions per
+    /// iteration against 19 at -O2; gcc keeps them apart). False: the pin.
+    pub keep_data_indexed: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,

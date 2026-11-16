@@ -225,7 +225,7 @@ impl Machine for Arm64Machine {
         &self,
         aggressive: bool,
     ) -> Option<GlobalMerge> {
-        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, optsize_counts: true, mach_o: self.platform == Platform::Darwin })
+        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, optsize_counts: true, keep_data_indexed: true, mach_o: self.platform == Platform::Darwin })
     }
 }
 
