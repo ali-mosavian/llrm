@@ -337,6 +337,23 @@ impl UseLists {
         }
     }
 
+    /// The list of `of` made `order`, newest first: the same uses in another
+    /// order (LLVM's `Value::sortUseList`, which relinks in place).
+    pub fn reorder(
+        &mut self,
+        of: Held,
+        order: &[Use],
+    ) {
+        debug_assert_eq!(self.users(of).iter().count(), order.len());
+        let nodes: Vec<u32> = order.iter().map(|at| self.node(*at)).collect();
+        for (place, &node) in nodes.iter().enumerate() {
+            let prev = if place == 0 { NIL } else { nodes[place - 1] };
+            let next = nodes.get(place + 1).copied().unwrap_or(NIL);
+            self.nodes[node as usize] = Node { at: order[place], prev, next };
+        }
+        *self.head_mut(of) = nodes.first().copied().unwrap_or(NIL);
+    }
+
     /// The newest use of `of`, if any.
     pub fn head(
         &self,

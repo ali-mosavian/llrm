@@ -49,6 +49,50 @@ impl Function {
         }
     }
 
+    /// The order `LLParser` leaves a value's uses in. A use read before the
+    /// definition names a placeholder, and `RAUW` at the definition moves the
+    /// placeholder's uses, one by one at the head, so they end up behind every
+    /// use read after it and in the order read: for a value defined at 4,
+    /// `7 6 5 1 2 3` (`predictValueUseListOrderImpl`). `index` links every use
+    /// at the head in the order read, which is `7 6 5 3 2 1`.
+    pub(crate) fn order_forward_uses(&mut self) {
+        for value in 0..self.values.len() {
+            let ValueDef::Instruction(def) = self.values[value].def else { continue };
+            let held = Held::Value(value as u32);
+            let uses = self.uses.users(held).snapshot();
+            let forward = |one: &Use| one.user.0 <= def.0;
+            if !uses.iter().any(|one| forward(one)) {
+                continue;
+            }
+            let after = uses.iter().copied().filter(|one| !forward(one));
+            let mut before: Vec<Use> = uses.iter().copied().filter(forward).collect();
+            before.reverse();
+            let order: Vec<Use> = after.chain(before).collect();
+            self.uses.reorder(held, &order);
+        }
+    }
+
+    /// `LLParser::sortUseListOrder`: the `i`th use of `held` goes to place
+    /// `indexes[i]`.
+    pub(crate) fn sort_use_list(
+        &mut self,
+        held: Held,
+        indexes: &[u32],
+    ) -> Result<(), String> {
+        let uses = self.uses.users(held).snapshot();
+        if uses.len() < 2 {
+            return Err(if uses.is_empty() { "value has no uses" } else { "value only has one use" }.into());
+        }
+        if uses.len() != indexes.len() {
+            return Err(format!("wrong number of indexes, expected {}", uses.len()));
+        }
+        let mut order: Vec<(u32, Use)> = indexes.iter().copied().zip(uses).collect();
+        order.sort_by_key(|(place, _)| *place);
+        let order: Vec<Use> = order.into_iter().map(|(_, one)| one).collect();
+        self.uses.reorder(held, &order);
+        Ok(())
+    }
+
     fn add_use(
         &mut self,
         operand: Operand,
