@@ -80,58 +80,60 @@ pub fn cells_named(name: &str) -> Option<std::collections::BTreeSet<u8>> {
     answers.get_or_insert_default().entry(name.to_owned()).or_insert_with(|| scan_cells(name)).clone()
 }
 
-fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
-    use std::collections::{BTreeSet, HashMap, HashSet};
-    struct Runtime {
-        routines: HashMap<&'static str, &'static str>,
-        macros: HashMap<&'static str, Option<Vec<u8>>>,
-    }
-    static RUNTIME: std::sync::OnceLock<Runtime> = std::sync::OnceLock::new();
-    /// The cells a line names, or `None` for one reached by index.
-    fn cells_of(text: &str) -> Option<Vec<u8>> {
-        let mut found = Vec::new();
-        for line in text.lines() {
-            let (code, comment) = line.split_once(';').unwrap_or((line, ""));
-            // an index into cells names its span in the line's comment:
-            // `[rc4..rc7]`
-            let span = comment
-                .split_once('[')
-                .and_then(
-                    |(_, rest)| {
-                        let (from, rest) = rest.strip_prefix("rc")?.split_once("..rc")?;
-                        let (to, _) = rest.split_once(']')?;
-                        Some(from.parse::<u8>().ok()?..=to.parse::<u8>().ok()?)
-                    },
-                );
-            if code.match_indices("rs").any(|(at, _)| {
-                !code[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_')
-                    && code[at + 2..].starts_with(|c: char| c.is_ascii_digit())
-            }) {
-                return None;
-            }
-            for (at, _) in code.match_indices("rc") {
-                let before = code[..at].chars().next_back();
-                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
-                    continue;
-                }
-                let digits: String = code[at + 2..].chars().take_while(char::is_ascii_digit).collect();
-                if digits.is_empty() {
-                    continue;
-                }
-                let after = &code[at + 2 + digits.len()..];
-                if after
-                    .strip_prefix(',')
-                    .is_some_and(|index| matches!(index.trim().to_ascii_lowercase().as_str(), "x" | "y"))
-                {
-                    found.extend(span.clone()?);
-                    continue;
-                }
-                found.push(digits.parse().ok()?);
-            }
+use std::collections::HashMap;
+
+/// The runtime's routines (top-level labels) and macros, by name.
+pub(crate) struct Runtime {
+    pub(crate) routines: HashMap<&'static str, &'static str>,
+    pub(crate) macros: HashMap<&'static str, Option<Vec<u8>>>,
+}
+/// The cells a line names, or `None` for one reached by index.
+pub(crate) fn cells_of(text: &str) -> Option<Vec<u8>> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let (code, comment) = line.split_once(';').unwrap_or((line, ""));
+        // an index into cells names its span in the line's comment:
+        // `[rc4..rc7]`
+        let span = comment
+            .split_once('[')
+            .and_then(
+                |(_, rest)| {
+                    let (from, rest) = rest.strip_prefix("rc")?.split_once("..rc")?;
+                    let (to, _) = rest.split_once(']')?;
+                    Some(from.parse::<u8>().ok()?..=to.parse::<u8>().ok()?)
+                },
+            );
+        if code.match_indices("rs").any(|(at, _)| {
+            !code[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_')
+                && code[at + 2..].starts_with(|c: char| c.is_ascii_digit())
+        }) {
+            return None;
         }
-        Some(found)
+        for (at, _) in code.match_indices("rc") {
+            let before = code[..at].chars().next_back();
+            if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
+            let digits: String = code[at + 2..].chars().take_while(char::is_ascii_digit).collect();
+            if digits.is_empty() {
+                continue;
+            }
+            let after = &code[at + 2 + digits.len()..];
+            if after
+                .strip_prefix(',')
+                .is_some_and(|index| matches!(index.trim().to_ascii_lowercase().as_str(), "x" | "y"))
+            {
+                found.extend(span.clone()?);
+                continue;
+            }
+            found.push(digits.parse().ok()?);
+        }
     }
-    let runtime = RUNTIME.get_or_init(|| {
+    Some(found)
+}
+pub(crate) fn runtime() -> &'static Runtime {
+    static RUNTIME: std::sync::OnceLock<Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
         let source: &'static str = crate::RUNTIME;
         let (mut routines, mut macros) = (HashMap::new(), HashMap::new());
         let mut start: Option<(&'static str, usize)> = None;
@@ -162,7 +164,12 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
             routines.insert(label, &source[from..]);
         }
         Runtime { routines, macros }
-    });
+    })
+}
+
+fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
+    use std::collections::{BTreeSet, HashSet};
+    let runtime = runtime();
     let mut cells = BTreeSet::new();
     let mut seen = HashSet::new();
     let mut pending = vec![name];
