@@ -7,8 +7,8 @@
 # A failed cell is a row, not a gap: `unmeasured:<reason>` (table.py lists it); never rerun silently.
 H=$(cd "$(dirname "$0")" && pwd); P=$1; L=$2; C=$3
 O=${OUT:-${TMPDIR:-/tmp}/arm64-bench-out}; mkdir -p "$O"; export OUT=$O
-# the program's output on the part of the corpus the harness feeds it: NAME.ci.out where it has one (tools/bench/mkci.py), else NAME.out
-expected_file() { local d="${B:-$H/../..}/bench/$P"; [ -f "$d/$P.ci.out" ] && echo "$d/$P.ci.out" || echo "$d/$P.out"; }
+# the program's reference output: expect.py expected_path (NAME.arm64.out, NAME.ci.out, NAME.out)
+expected_file() { python3 "$H/expect.py" --path "${B:-$H/../..}/bench" "$P"; }
 unmeasured() { printf '%s\t%s\t%s\t\t\tkernel\tunmeasured:%s\t\n' "$P" "$L" "$C" "$1"; exit 0; }
 bash "$H/build2.sh" "$P" "$L" "$C" >/dev/null 2>"$O/err.$P.$L.$C" || unmeasured "build failed, see $O/err.$P.$L.$C"
 X=$O/$P.$L.$C
