@@ -405,12 +405,14 @@ fn ext_users(
                 Opcode::Binary(BinaryOp::Mul) => Some(ArithOp::Mul),
                 _ => None,
             };
-            let operands =
-                if op.is_some() {
-                    [extended_operand(context, function, user.operands[0]), extended_operand(context, function, user.operands[1])]
-                } else {
-                    [None, None]
-                };
+            let operands = if op.is_some() {
+                [
+                    extended_operand(context, function, user.operands[0]),
+                    extended_operand(context, function, user.operands[1]),
+                ]
+            } else {
+                [None, None]
+            };
             ExtUser { op, operands, index: one.index as usize }
         })
         .collect()
@@ -500,7 +502,8 @@ pub fn instruction_cost_known(
             // (`getArithmeticReductionCost`, `getMinMaxReductionCost`); a float
             // add or multiply without `reassoc` is the ordered one.
             if let Some(Intrinsic::VectorReduce(reduce)) = callee.intrinsic() {
-                let vector = operands.get(usize::from(reduce.is_float()))
+                let vector = operands
+                    .get(usize::from(reduce.is_float()))
                     .and_then(|&one| operand_type(context, function, one))
                     .and_then(|ty| vector_of(context, ty));
                 let ordered = reduce.is_float() && !operation.flags.contains(Flags::REASSOC);
@@ -573,7 +576,10 @@ pub fn instruction_cost_known(
             // are.
             None => vector_of(context, operation.ty)
                 .and_then(|vector| {
-                    let args = [extended_operand(context, function, operands[0]), extended_operand(context, function, operands[1])];
+                    let args = [
+                        extended_operand(context, function, operands[0]),
+                        extended_operand(context, function, operands[1]),
+                    ];
                     if args.iter().any(Option::is_some) {
                         tti.vector_arithmetic_cost_ext(arith_of(*op), vector, args, kind).ok().flatten()
                     } else {

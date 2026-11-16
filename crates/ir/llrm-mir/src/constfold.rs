@@ -402,6 +402,21 @@ pub fn cast(
         return Some(null_value(context, to));
     }
     let dest = context.types.get(to).clone();
+    // A fixed vector casts lane by lane (`ConstantFoldCastInstruction`, L116);
+    // a bitcast regroups the lanes and is not one.
+    if let (Type::Vector { element: to_element, count }, Type::Vector { element, .. }) =
+        (&dest, context.types.get(context.get(c).ty).clone())
+        && op != CastOp::BitCast
+    {
+        let lanes = lanes_of(context, c, element, *count as usize)?;
+        let folded = lanes.into_iter().map(|lane| cast(context, op, lane, *to_element)).collect::<Option<Vec<_>>>()?;
+        let zero = |lane: &ConstantId| matches!(
+            context.get(*lane).kind,
+            ConstantKind::Int(0) | ConstantKind::Zero
+        );
+        let kind = if folded.iter().all(zero) { ConstantKind::Zero } else { ConstantKind::Aggregate(folded) };
+        return Some(context.constant(Constant { ty: to, kind }));
+    }
     match (op, dest) {
         // The bits of a number are those of the float of the same width.
         (CastOp::BitCast, Type::Float(kind @ (FloatKind::Float | FloatKind::Double))) => {
@@ -1042,6 +1057,28 @@ mod tests {
             context.constant(Constant { ty: vector, kind: ConstantKind::Aggregate(lanes) })
         };
         assert_eq!(binary(&context, BinaryOp::Mul, lanes([1, 2, 3, 4]), splat(2)), Some(lanes([2, 4, 6, 8])));
+    }
+
+    /// `sext <8 x i16> <-66, ...> to <8 x i64>` stayed an instruction (`cast`
+    /// knew numbers, not vectors), so the products of constant vectors were
+    /// computed at run time: arm64 `dot` -O2 loaded sixteen constant vectors
+    /// and widened and multiplied them per call (838 instructions against
+    /// clang's 739). A cast of a vector is that of each lane.
+    #[test]
+    fn a_vector_of_numbers_casts_lane_by_lane() {
+        let context = Context::new();
+        let (i16, i64) = (context.types.int(16), context.types.int(64));
+        let narrow = context.types.intern(Type::Vector { element: i16, count: 4 });
+        let wide = context.types.intern(Type::Vector { element: i64, count: 4 });
+        let lanes = |ty, element, values: [i128; 4]| {
+            let lanes = values.iter().map(|value| context.int(element, *value)).collect();
+            context.constant(Constant { ty, kind: ConstantKind::Aggregate(lanes) })
+        };
+        let source = lanes(narrow, i16, [-66, 54, 0, -1]);
+        assert_eq!(cast(&context, CastOp::SExt, source, wide), Some(lanes(wide, i64, [-66, 54, 0, -1])));
+        let unsigned = lanes(wide, i64, [0xFFBE, 54, 0, 0xFFFF]);
+        assert_eq!(cast(&context, CastOp::ZExt, source, wide), Some(unsigned));
+        assert_eq!(cast(&context, CastOp::SExt, context.int(narrow, 0), wide), Some(context.int(wide, 0)));
     }
 
     /// `<0, 0, 0, 0>` was an aggregate that `m_Zero` did not see, so `0 - x`
