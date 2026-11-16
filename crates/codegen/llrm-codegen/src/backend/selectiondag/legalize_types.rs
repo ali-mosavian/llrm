@@ -1923,6 +1923,17 @@ impl<'a> TypeLegalizer<'a> {
 
     // --- expansion -------------------------------------------------------
 
+    /// The two-lane vector of an expanded integer's halves, if it is legal
+    /// (`ExpandOp_BITCAST`'s `NVT`).
+    fn legal_pair_vector(
+        &self,
+        integer: EVT,
+    ) -> Option<EVT> {
+        let EVT::Simple(half) = self.tli.types.type_conversion(integer).1 else { return None };
+        let pair = EVT::Simple(MVT::vector(half, 2)?);
+        self.tli.types.is_type_legal(pair).then_some(pair)
+    }
+
     /// `GetExpandedInteger`: low and high halves.
     fn expanded_integer(
         &self,
@@ -3470,6 +3481,21 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue) {
         let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+        if let Some(ext) = info.ext
+            && info.mem_vt.size_in_bits() > half.size_in_bits()
+            && !self.dag.config().big_endian
+        {
+            // `ExpandIntRes_LOAD`, an extending load from memory wider than the half: the low half
+            // is a plain load, the high an extending load of the bits left over at +half.
+            let lo = self.dag.get_load(half, chain, ptr, super::dag::MemInfo { ext: None, mem_vt: half, ..info });
+            let excess = EVT::integer(info.mem_vt.size_in_bits() - half.size_in_bits());
+            let high_ptr = self.address_plus(ptr, u128::from(half.size_in_bits() / 8));
+            let hi = self.dag.get_ext_load(ext, half, chain, high_ptr, super::dag::MemInfo { mem_vt: excess, ..info });
+            let chains =
+                self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
+            self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
+            return (lo, hi);
+        }
         if let Some(ext) = info.ext {
             // `ExpandIntRes_LOAD`, an extending load from memory no wider than
             // the half: the low half is the (extending) load of
@@ -4065,9 +4091,22 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Store if at == 2 => self.expand_far_address(node, at),
             op if at == 1 && Some(op) == self.dag.config().nodes.call => self.expand_far_call(node),
             op if Some(op) == self.dag.config().nodes.ptrdiff => self.expand_ptrdiff(node)?,
-            ISD::BitCast if self.dag.value_type(node).is_floating_point() => {
-                // `ExpandOp_BITCAST` to a float: the halves stored to a stack
-                // slot, the float loaded from it.
+            ISD::BitCast
+                if self.dag.value_type(node).is_vector()
+                    && self.legal_pair_vector(self.dag.value_type(self.dag.operand(node, 0))).is_some() =>
+            {
+                // `ExpandOp_BITCAST` to a vector: the halves as the two lanes
+                // of a legal vector, bitcast to the result.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
+                let pair = self.legal_pair_vector(self.dag.value_type(self.dag.operand(node, 0))).expect("checked");
+                let lanes = self.dag.get_build_vector(pair, &[lo, hi]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::BitCast, vt, &[lanes])
+            }
+            ISD::BitCast if self.dag.value_type(node).is_floating_point() || self.dag.value_type(node).is_vector() => {
+                // `ExpandOp_BITCAST` to a float, or to a vector with no legal
+                // two-lane form: the halves stored to a stack slot, the value
+                // loaded from it.
                 let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
                 let vt = self.dag.value_type(node);
                 let size = vt.size_in_bits().div_ceil(8);
