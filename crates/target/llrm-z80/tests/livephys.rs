@@ -120,8 +120,9 @@ fn an_acyclic_function_is_stepped_over_once_when_its_live_outs_are_solved() {
     assert!(before.is_live(&REGISTER_INFO, reg::D) && !before.is_live(&REGISTER_INFO, reg::B));
 }
 
-/// The worklist must reach the sweeps' answer where blocks loop, branch out of order and fall through: 400
-/// functions of 2 to 12 blocks, a third of the branches backward.
+/// The worklist must reach the sweeps' answer where blocks loop, branch out of
+/// order and fall through: 400 functions of 2 to 12 blocks, a third of the
+/// branches backward.
 #[test]
 fn the_worklist_solves_the_same_live_outs_as_sweeps_on_functions_with_loops() {
     let registers = [reg::A, reg::B, reg::C, reg::D, reg::E, reg::H, reg::L, reg::BC, reg::DE, reg::HL];

@@ -214,11 +214,17 @@ impl PhysLiveness {
                 }
             }
         }
-        let solved = PhysLiveness { live_out, checkpoints: std::cell::RefCell::new((0..blocks).map(|_| None).collect()) };
-        // `LLRM_VERIFY=1`: the answer of the sweeps, which the worklist must equal
+        let solved =
+            PhysLiveness { live_out, checkpoints: std::cell::RefCell::new((0..blocks).map(|_| None).collect()) };
+        // `LLRM_VERIFY=1`: the answer of the sweeps, which the worklist must
+        // equal
         if llrm_support::env_flag!("LLRM_VERIFY") {
             let swept = Self::of_by_sweeps::<T>(function, assignment, info);
-            assert!(solved.live_out == swept.live_out, "livephys: the worklist's live-outs differ from the sweeps' in @{}", function.name);
+            assert!(
+                solved.live_out == swept.live_out,
+                "livephys: the worklist's live-outs differ from the sweeps' in @{}",
+                function.name
+            );
         }
         solved
     }
