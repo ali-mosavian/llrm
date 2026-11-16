@@ -421,6 +421,7 @@ pub mod runtimechecks;
 pub mod splitpaths;
 pub mod sccp;
 pub mod sccpsolver;
+pub mod interleavedaccess_pass;
 pub mod selectoptimize;
 pub mod settled;
 pub mod simpleloopunswitch;

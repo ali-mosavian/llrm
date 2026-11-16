@@ -921,6 +921,15 @@ impl Tti for AArch64 {
         false
     }
 
+    fn interleaved_access_legal(
+        &self,
+        element_bits: u32,
+        count: u32,
+    ) -> bool {
+        let bits = element_bits * count;
+        matches!(element_bits, 8 | 16 | 32 | 64) && count >= 2 && (bits == 64 || bits % 128 == 0)
+    }
+
     fn interleaved_memory_op_cost(
         &self,
         _op: MemoryOp,
