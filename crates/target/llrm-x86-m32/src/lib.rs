@@ -436,6 +436,14 @@ impl llrm_target::Target for M32 {
         true
     }
 
+    // DEVIATE SPLIT-PARAMS (owner x86-m32-b, exit 2026-11-24): the pin has no
+    // such split; its entry copy of an argument into a kept register (RA
+    // placement) blocks ShrinkWrap. gcc's IRA splits it
+    // (`split_live_ranges_for_shrink_wrap`).
+    fn splits_params_for_shrink_wrap(&self) -> bool {
+        true
+    }
+
     // DEVIATE UNCHEAP-IMM-M16 (owner x86-m32, exit 2026-11-24): m16 is also
     // `Not64BitMode` and the pin makes +1/-1 there the same way; it keeps the
     // default until the m16 owner prices it.
