@@ -156,7 +156,18 @@ impl OpcodeMap {
         // A move between a general and an SSE register: the pin's names for
         // the direction, the form is the one with that encoding.
         if let Some(iced) = gpr_xmm_move(name) {
-            return self.forms.iter().position(|f| f.iced.as_deref() == Some(iced)).ok_or(Unmapped::NoForm);
+            // `MOVPDI2DImr`/`MOVPDI2DIrr` and `MOVDI2PDIrm`/`MOVDI2PDIrr` share an iced form; the name says
+            // whether the general operand is memory.
+            let memory = name.ends_with("mr") || name.ends_with("rm");
+            let takes = |f: &Form| {
+                let general = if iced.starts_with("Movd_rm32") { f.dests.first() } else { f.sources.first() };
+                general.is_some_and(|operand| operand.allows('m')) == memory
+            };
+            return self
+                .forms
+                .iter()
+                .position(|f| f.iced.as_deref() == Some(iced) && (!iced.starts_with("Movd_") || takes(f)))
+                .ok_or(Unmapped::NoForm);
         }
         if let Some((mnemonic, width, result, letters)) =
             sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m))
@@ -224,13 +235,13 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         "MOV64toSDrr" => "Movq_xmm_rm64",
         "MOVSS2DIrr" => "Movd_rm32_xmm",
         "MOVDI2SSrr" => "Movd_xmm_rm32",
-        "MOVDI2PDIrr" => "Movd_xmm_rm32",
+        "MOVDI2PDIrr" | "MOVDI2PDIrm" => "Movd_xmm_rm32",
         "MOV64toPQIrr" => "Movq_xmm_rm64",
         "MOVPQIto64rr" => "Movq_rm64_xmm",
         // `movq xmm, m64` (the upper lane zeroed) and `movq m64, xmm`.
         "MOVQI2PQIrm" => "Movq_xmm_xmmm64",
         "MOVPQI2QImr" => "Movq_xmmm64_xmm",
-        "MOVPDI2DIrr" => "Movd_rm32_xmm",
+        "MOVPDI2DIrr" | "MOVPDI2DImr" => "Movd_rm32_xmm",
         _ => return None,
     })
 }
@@ -310,6 +321,9 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
     let name = name.strip_suffix("_NOREX").unwrap_or(name);
     if matches!(name, "MOVQI2PQIrm" | "MOVPQI2QImr") {
         return Some(8);
+    }
+    if matches!(name, "MOVPDI2DImr" | "MOVDI2PDIrm") {
+        return Some(4);
     }
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {

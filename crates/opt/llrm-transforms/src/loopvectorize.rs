@@ -131,6 +131,10 @@ struct Access {
     /// The loop counts down and the access moves with it: the lanes are the
     /// elements below the address, in memory order.
     reverse: bool,
+    /// The address moves by a loop-invariant amount that is no constant
+    /// (`a[j * stride]`): each lane's address is the address computation run
+    /// again at that lane's index (`VPReplicateRecipe`), and `stride` is 0.
+    replicate: bool,
 }
 
 /// A full interleave group (`InterleaveGroup`): the accesses `factor` elements
@@ -225,6 +229,8 @@ struct Widening {
     step: InstId,
     step_operand: usize,
     index_ty: TypeId,
+    /// The primary induction's phi: the index a replicated address is run at.
+    primary_phi: Operand,
     /// Where the control flow around the vector loop is made.
     shape: Shape,
     /// The induction counts down.
@@ -677,11 +683,19 @@ fn extract(
                 // llrm-arm64-lv, exit 2026-11-24): any other access of such a
                 // loop would keep a reverse `shufflevector`, which the arm64
                 // selector declines (VEC1).
+                // `CM_Scalarize` of an access whose stride is no constant: the
+                // address is replicated per lane, so it must be arithmetic
+                // of the induction and of loop-invariant values only.
+                let mut replicate = false;
                 let stride = match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {
                     Some(1) if !reverse => 1,
                     Some(-1) if reverse => 1,
                     Some(stride) if !reverse && !(-4..=4).contains(&stride) => stride,
                     _ if reverse => return Err(Skipped("An access of a loop that counts down is not a reverse one")),
+                    None if address_slice(function, header, primary_phi, ptr).is_some() => {
+                        replicate = true;
+                        0
+                    }
                     _ => return Err(Skipped("An access that is not consecutive")),
                 };
                 let size = cx.layout.size_bits(&cx.context.types, value_ty) / 8;
@@ -697,20 +711,22 @@ fn extract(
                     recipes.push(if stride == 1 {
                         Recipe::Load { lane, align }
                     } else {
-                        Recipe::Scalarized { op: MemoryOp::Load, lane, stride_bytes: Some(stride * size as i64) }
+                        let stride_bytes = (!replicate).then_some(stride * size as i64);
+                        Recipe::Scalarized { op: MemoryOp::Load, lane, stride_bytes }
                     });
                 } else {
                     stored = Some(source_of(data.operands[0], &widened)?);
                     recipes.push(if stride == 1 {
                         Recipe::Store { lane, align }
                     } else {
-                        Recipe::Scalarized { op: MemoryOp::Store, lane, stride_bytes: Some(stride * size as i64) }
+                        let stride_bytes = (!replicate).then_some(stride * size as i64);
+                        Recipe::Scalarized { op: MemoryOp::Store, lane, stride_bytes }
                     });
                 }
                 if is_load {
                     widened.push(inst);
                 }
-                steps.push(Step::Access(Access { inst, is_load, element: value_ty, align, stride, stored, reverse }));
+                steps.push(Step::Access(Access { inst, is_load, element: value_ty, align, stride, stored, reverse, replicate }));
             }
             Opcode::Binary(op) if inst != step => {
                 let value = data.result.expect("a binary operation");
@@ -1167,13 +1183,115 @@ fn extract(
         let lane = element_ty(cx, index_ty).ok_or(Skipped("An element type the target has no vector of"))?;
         recipes.push(Recipe::DerivedIv { lane });
     }
-    Ok((recipes, Widening { steps, step, step_operand, index_ty, shape, reverse, reductions }))
+    Ok((recipes, Widening { steps, step, step_operand, index_ty, primary_phi, shape, reverse, reductions }))
 }
 
 /// Whether every use of `value` is the index of an address (a `gep`) of the
 /// loop, or an integer operation that is itself one: the scalar `shl`, `or`
 /// and `add` that make `&a[i * 8 + 3]` are not widened; each lane of a
 /// scalarized access has its own.
+/// The in-loop instructions `ptr` is computed by, operands first, when they
+/// are address arithmetic (`gep`, integer `add`/`sub`/`mul`/`shl`/`or`,
+/// `sext`/`zext`/`trunc`) of loop-invariant values and the primary induction
+/// `primary_phi` alone: what a replicated address is made of.
+fn address_slice(
+    function: &Function,
+    header: BlockId,
+    primary_phi: Operand,
+    ptr: Operand,
+) -> Option<Vec<InstId>> {
+    fn walk(
+        function: &Function,
+        header: BlockId,
+        primary_phi: Operand,
+        operand: Operand,
+        seen: &mut Vec<InstId>,
+        depth: u32,
+    ) -> bool {
+        let Operand::Value(value) = operand else { return true };
+        let llrm_mir::module::ValueDef::Instruction(def) = function.value(value).def else { return true };
+        if function.parent(def) != Some(header) {
+            return true;
+        }
+        if operand == primary_phi || seen.contains(&def) {
+            return true;
+        }
+        let inst = function.instruction(def);
+        let arithmetic = matches!(
+            inst.opcode,
+            Opcode::GetElementPtr { .. }
+                | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or)
+                | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc)
+        );
+        if !arithmetic || depth > 8 {
+            return false;
+        }
+        if !inst.operands.iter().all(|&one| walk(function, header, primary_phi, one, seen, depth + 1)) {
+            return false;
+        }
+        seen.push(def);
+        true
+    }
+    let mut seen = Vec::new();
+    walk(function, header, primary_phi, ptr, &mut seen, 0).then_some(seen)
+}
+
+/// `ptr`'s address at the `index`-th iteration after this one: the slice of
+/// [`address_slice`] copied before `before`, with the induction read as
+/// `phi + index`.
+fn replicated_address(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    widening: &Widening,
+    before_inst: InstId,
+    pointer: Operand,
+    index: i128,
+) -> Operand {
+    let before = Position::Before(before_inst);
+    let header = function.parent(before_inst).expect("the access's block");
+    let slice = address_slice(function, header, widening.primary_phi, pointer).expect("a slice made the recipe");
+    if index == 0 {
+        return pointer;
+    }
+    let phi_ty = function.instruction(match widening.primary_phi {
+        Operand::Value(value) => match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(def) => def,
+            _ => unreachable!("the induction is a phi"),
+        },
+        _ => unreachable!("the induction is a phi"),
+    })
+    .ty;
+    let shifted = function.create_instruction(
+        Opcode::Binary(BinaryOp::Add),
+        phi_ty,
+        vec![widening.primary_phi, Operand::Constant(context.int(phi_ty, index))],
+        Flags::default(),
+        Some("lane.index"),
+    );
+    function.insert(shifted, before).expect("the access's block");
+    let mut moved: Vec<(Operand, Operand)> = vec![(
+        widening.primary_phi,
+        Operand::Value(function.instruction(shifted).result.expect("an add")),
+    )];
+    let mut result = pointer;
+    for def in slice {
+        let original = function.instruction(def);
+        let (opcode, ty, flags) = (original.opcode.clone(), original.ty, original.flags);
+        let original_result = original.result.expect("address arithmetic has a result");
+        let operands: Vec<Operand> = original
+            .operands
+            .iter()
+            .map(|one| moved.iter().find(|(from, _)| from == one).map_or(*one, |(_, to)| *to))
+            .collect();
+        let copy = function.create_instruction(opcode, ty, operands, flags, Some("lane.address"));
+        function.insert(copy, before).expect("the access's block");
+        let made = Operand::Value(function.instruction(copy).result.expect("address arithmetic has a result"));
+        moved.push((Operand::Value(original_result), made));
+        result = made;
+    }
+    result
+}
+
 fn address_arithmetic(
     function: &Function,
     header: BlockId,
@@ -1320,7 +1438,10 @@ fn scalarize_access(
         let mut gathered = Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Poison }));
         for lane in 0..plan.vf {
             let moved = (i128::from(part) * i128::from(plan.vf) + i128::from(lane)) * i128::from(access.stride);
-            let address = if moved == 0 {
+            let address = if access.replicate {
+                let index = i128::from(part) * i128::from(plan.vf) + i128::from(lane);
+                replicated_address(context, function, widening, access.inst, pointer, index)
+            } else if moved == 0 {
                 pointer
             } else {
                 let offset = Operand::Constant(context.int(widening.index_ty, moved));

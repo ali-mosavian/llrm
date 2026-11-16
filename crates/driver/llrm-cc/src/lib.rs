@@ -1075,8 +1075,18 @@ fn build(
                 args.extend(resource.iter().cloned());
                 args.extend(clang_flags(target, build));
                 args.extend(
-                    ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
-                        .map(String::from),
+                    [
+                        "-S",
+                        "-emit-llvm",
+                        "-Xclang",
+                        "-emit-llvm-uselists",
+                        "-Xclang",
+                        "-disable-llvm-passes",
+                        "-Xclang",
+                        "-disable-O0-optnone",
+                        "-o",
+                    ]
+                    .map(String::from),
                 );
                 args.extend([ir.display().to_string(), path.clone()]);
                 run(&clang, &args)?;

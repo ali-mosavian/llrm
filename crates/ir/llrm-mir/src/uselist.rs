@@ -337,6 +337,37 @@ impl UseLists {
         }
     }
 
+    /// LLVM's `Value::sortUseList`: the list of `of` stably sorted by `key`,
+    /// which is given each use and the place it is at now.
+    pub fn sort_by_key<K: Ord>(
+        &mut self,
+        of: Held,
+        mut key: impl FnMut(usize, &Use) -> K,
+    ) {
+        let mut keyed: Vec<(K, Use)> =
+            self.users(of).iter().enumerate().map(|(at, one)| (key(at, one), *one)).collect();
+        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+        let order: Vec<Use> = keyed.into_iter().map(|(_, one)| one).collect();
+        self.reorder(of, &order);
+    }
+
+    /// The list of `of` made `order`, newest first: the same uses in another
+    /// order (LLVM's `Value::sortUseList`, which relinks in place).
+    pub fn reorder(
+        &mut self,
+        of: Held,
+        order: &[Use],
+    ) {
+        debug_assert_eq!(self.users(of).iter().count(), order.len());
+        let nodes: Vec<u32> = order.iter().map(|at| self.node(*at)).collect();
+        for (place, &node) in nodes.iter().enumerate() {
+            let prev = if place == 0 { NIL } else { nodes[place - 1] };
+            let next = nodes.get(place + 1).copied().unwrap_or(NIL);
+            self.nodes[node as usize] = Node { at: order[place], prev, next };
+        }
+        *self.head_mut(of) = nodes.first().copied().unwrap_or(NIL);
+    }
+
     /// The newest use of `of`, if any.
     pub fn head(
         &self,

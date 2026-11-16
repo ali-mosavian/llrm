@@ -343,7 +343,7 @@ pub struct Tuning {
     /// 2026-11-30); none: the pin's.
     pub div_by_constant_size_cost: Option<u32>,
     /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
-    /// (`llrm-gpl-gcc`, feature `gcc-gpl`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// (`splitpaths.rs`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
     /// target takes it once measured; false: the pin's, none.
     pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
@@ -421,7 +421,7 @@ pub struct Tuning {
     /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
     /// 16601539e87f.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): a loop whose
     /// loop-carried latency exceeds its issue-bound time is not unrolled at
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.
@@ -931,6 +931,13 @@ pub struct GlobalMerge {
     /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
     /// 15 `adrp` against gcc's 5). False: the pin.
     pub optsize_counts: bool,
+    /// DEVIATE ARM64-GM-INDEXED (owner llrm-arm64-vec, exit 2026-11-30): a
+    /// global stays unmerged when a loop indexes it by a value that is neither
+    /// invariant nor an affine recurrence: `base + offset + index` has no
+    /// addressing mode, so each access pays an `add` that an unmerged global's
+    /// register-offset form does not (`grep` -O3: 20 instructions per
+    /// iteration against 19 at -O2; gcc keeps them apart). False: the pin.
+    pub keep_data_indexed: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,

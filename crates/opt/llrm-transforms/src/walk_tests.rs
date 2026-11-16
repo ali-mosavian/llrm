@@ -1638,7 +1638,7 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default(), speed_rate: false };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2324,7 +2324,7 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default(), speed_rate: false };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2365,7 +2365,7 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default(), speed_rate: false };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2412,7 +2412,7 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default(), speed_rate: false };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -3751,4 +3751,50 @@ fn test_a_file_that_links_gcc_source_is_marked_gpl() {
     let mut found = Vec::new();
     scan(&root, &mut found);
     assert!(found.is_empty(), "gcc-derived file without the SPDX GPL header: {found:?}");
+}
+
+/// `ModuleIpo` dropped the unread parameter of a function that calls itself
+/// whatever the target: the pin's `deadargelim` follows the walk, so
+/// shrink_wrapped_saves wasm32 -O1 came out 257 B against the pin's 246
+/// (the use lists of `g`'s parameters ordered otherwise). Only the recursion
+/// copier asks for it.
+#[test]
+fn test_module_ipo_drops_a_recursive_functions_unread_parameter_only_for_the_copier() {
+    use llrm_mir::program::ProgramPass;
+    let source = "define internal i16 @f(i16 %a, i16 %unused) {
+b0:
+  %done = icmp sle i16 %a, 0
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %a, 1
+  %r = call i16 @f(i16 %m, i16 %unused)
+  ret i16 %r
+out:
+  ret i16 %a
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 %x)
+  %s = call i16 @f(i16 %r, i16 5)
+  ret i16 %s
+}
+";
+    let after = |recursive: bool| {
+        let mut module = parsed(source);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+            |program: &mut llrm_mir::program::Program| {
+                let inline = crate::inline::Threshold { recursive: Some(recursive), limit: 100, ..Default::default() };
+                let mut ipo = crate::walk::ModuleIpo { inline, cloning: Default::default(), speed_rate: true };
+                ipo.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("ModuleIpo runs");
+        crate::testing::printed(&module)
+    };
+    let (on, off) = (after(true), after(false));
+    assert!(on.contains("call i16 @f(i16 %m)"), "the copier prices the body without it:\n{on}");
+    assert!(off.contains("call i16 @f(i16 %m, i16 %unused)"), "the pin drops it after the walk:\n{off}");
 }

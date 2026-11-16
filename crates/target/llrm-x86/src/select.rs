@@ -2489,10 +2489,20 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_IMM8")?;
             _assemble(&raised(create_reg_i32(code, into.register, count.value)), at, false)
         }
+        // `movd xmm, m32`: the encoding names the source `RM32`.
+        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && name.trim_end_matches("_x") == "movd" => {
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_reg_mem(Code::Movd_xmm_rm32, into.register, built)), at, relocated)
+        }
         (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && !name.starts_with("cvtsi2") => {
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+        }
+        // `movd m32, xmm`: the encoding names the destination `RM32`.
+        (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) && name.trim_end_matches("_x") == "movd" => {
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_mem_reg(Code::Movd_rm32_xmm, built, outof.register)), at, relocated)
         }
         (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) => {
             let code = code_of!(upper, "_XMMM", bits(first), "_XMM")?;
