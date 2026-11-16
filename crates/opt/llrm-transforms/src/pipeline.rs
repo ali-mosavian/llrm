@@ -494,7 +494,7 @@ impl Options {
         self.limits.target_percent >= 200
     }
 
-    /// -Oz: -Os with the headers not copied; the unroller keeps the size bounds.
+    /// -Oz: -Os without header copies.
     pub fn min_size() -> Self {
         Self { has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
     }
