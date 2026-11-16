@@ -179,6 +179,9 @@ pub struct Live {
     pub lane: Ty,
     pub start: usize,
     pub end: usize,
+    /// A reduction's phi that keeps one register of lanes at any VF
+    /// (`Tuning::narrow_reduction_accumulators`).
+    pub accumulator: bool,
 }
 
 /// The loop's values by interval, and its loop-invariant vector operands
@@ -572,8 +575,18 @@ fn best_vf(
         eprintln!("LV: recipes {counts:?}");
     }
     let mut best = (scalar, 1u64, scalar);
+    // DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit 2026-11-30): a VF
+    // above `MaxPermissibleVFWithoutMaxBW` takes the bandwidth of the smallest
+    // type only where it divides the trip count, as gcc's very-cheap cost
+    // model takes a vector loop only where no scalar epilogue is left
+    // (`vect_analyze_loop_costing`).
+    let needs_no_epilogue = tti.should_maximize_vector_bandwidth() && tti.bandwidth_vf_without_epilogue();
     let mut vf = 2u64;
     while vf <= max_vf {
+        if needs_no_epilogue && vf > without_max_bandwidth && (facts.trip_count == 0 || facts.trip_count % vf != 0) {
+            vf *= 2;
+            continue;
+        }
         let priced = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic)
             .map(|cost| cost + spill_cost(tti, facts, vf, without_max_bandwidth));
         if debug {
@@ -636,7 +649,7 @@ fn register_usage(
             .live
             .iter()
             .filter(|one| one.start < at && one.end > at)
-            .map(|one| registers_of(tti, one.lane, vf))
+            .map(|one| if one.accumulator { 1 } else { registers_of(tti, one.lane, vf) })
             .sum();
         most = most.max(open);
     }
@@ -902,7 +915,8 @@ fn choose_with(
     if vf == 1 {
         return Err(NotPlanned("Vectorization is possible but not beneficial"));
     }
-    Ok(Plan { vf, ic: select_interleave_count(tti, facts, vf, cost) })
+    let ic = select_interleave_count(tti, facts, vf, cost);
+    Ok(Plan { vf, ic })
 }
 
 /// `AArch64Subtarget::EpilogueVectorizationMinVF` (every target's default): the

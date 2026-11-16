@@ -549,6 +549,25 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
+    /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: `LoopVectorize`
+    /// sizes the widest VF by the smallest type of the loop. false: the pin's
+    /// x86 (the widest type, so a byte sum into an `i64` stays at VF 2).
+    /// DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin's
+    /// own `-vectorizer-maximize-bandwidth`, a tuning limit, not a new rule.
+    pub maximize_vector_bandwidth: bool,
+    /// gcc's single accumulator (`vectorizable_reduction`, `single_defuse_cycle`):
+    /// a reduction wider than a register keeps one register's lanes and folds
+    /// the pieces of each trip into it, not one accumulator per register. The
+    /// pin keeps the whole vector (a byte sum into an `i64` at VF 16 holds eight
+    /// registers and spills). DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30).
+    pub narrow_reduction_accumulators: bool,
+    /// gcc's very-cheap cost model (`vect_analyze_loop_costing`): a vector
+    /// factor above the widest type's, taken for the bandwidth of the smallest
+    /// type, is a candidate only where it divides the trip count (no scalar
+    /// epilogue is left). DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30).
+    pub bandwidth_vf_without_epilogue: bool,
     /// `Tti::shift_loop_counts`: the shift-loop count idioms form (`ctlz`/`cttz`
     /// are one instruction). Wasm and x86-64 say true (LI-18).
     pub shift_loop_counts: bool,
@@ -851,6 +870,9 @@ impl Tuning {
         lsr_size_order: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
+        maximize_vector_bandwidth: false,
+        narrow_reduction_accumulators: false,
+        bandwidth_vf_without_epilogue: false,
         shift_loop_counts: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
