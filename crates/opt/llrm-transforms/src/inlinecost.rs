@@ -1327,11 +1327,15 @@ impl<'a> Analyzer<'a> {
     }
 
     /// `getFPOpCost(ty) == TCC_Expensive` (D2): an FP type the target has no
-    /// legal `FADD` on (`Tti::fp_op_expensive`); none: generic, legal.
+    /// legal `FADD` on (`Tti::fp_op_expensive`); none: generic, legal. `fp128`
+    /// has none on any target here.
     fn fp_expensive(
         &self,
         ty: llrm_mir::types::TypeId,
     ) -> bool {
+        if matches!(self.context.types.get(ty), Type::Float(llrm_mir::types::FloatKind::F128)) {
+            return true;
+        }
         let Some(tti) = self.site.tti else { return false };
         Ty::of(&self.context.types, ty).is_some_and(|ty| tti.fp_op_expensive(ty))
     }

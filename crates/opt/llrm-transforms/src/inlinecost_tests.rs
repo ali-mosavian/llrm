@@ -1536,6 +1536,36 @@ entry:
     assert!(at(&x86, 29_791.0), "a target with no guard: the pin's verdict");
 }
 
+/// long_double_arguments wasm32 -Oz was 647 B against the pin's 476: an `fp128`
+/// operation is a library call on every target (no legal `FADD`), but its cost
+/// was a plain instruction's, so `mix` (a multiply, an add and three int
+/// conversions on `long double`) was inlined at a threshold of 5 where the pin
+/// refuses it (cost 10).
+#[test]
+fn test_an_fp128_operation_costs_a_call_on_every_target() {
+    let text = format!(
+        "{GLOBAL}define internal fp128 @callee(fp128 %x, fp128 %y, i32 %n) {{
+b0:
+  %c = sitofp i32 %n to fp128
+  %a = fmul fp128 %x, %y
+  %b = fadd fp128 %a, %c
+  ret fp128 %b
+}}
+
+define fp128 @f(fp128 %p, fp128 %q, i32 %n) {{
+b0:
+  %r = call fp128 @callee(fp128 %p, fp128 %q, i32 %n)
+  ret fp128 %r
+}}
+"
+    );
+    let hard = crate::testing::Flagged::default();
+    let (cost, _) = priced_with(&text, 0, false, CallerSize::Speed, Some(&hard));
+    let (plain, _) = priced_with(&text.replace("fp128", "double"), 0, false, CallerSize::Speed, Some(&hard));
+    // the multiply, the add and the conversion
+    assert_eq!(cost - plain, 3 * crate::inlinecost::CALL_PENALTY, "fp128 {cost}, double {plain}");
+}
+
 /// A float operation or cast on a target with no legal `FADD` is a library
 /// call: `visitBinaryOperator` and `visitCastInst` add `CALL_PENALTY` where
 /// `getFPOpCost` is `TCC_Expensive` (InlineCost.cpp:1959, :2317). Before, the
