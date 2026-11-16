@@ -1175,6 +1175,10 @@ impl Tti for X86 {
         self.tuning.unroll_threshold_at_o3
     }
 
+    fn split_paths_at_o3(&self) -> bool {
+        self.tuning.split_paths_at_o3
+    }
+
     /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
     /// `getUnrollingPreferences` then enables partial and runtime unrolling
     /// (`Tti::get_unrolling_preferences`):

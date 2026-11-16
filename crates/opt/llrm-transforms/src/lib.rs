@@ -415,6 +415,8 @@ pub mod reassociate_rank;
 pub mod reassociate_tree;
 #[cfg(all(test, feature = "gcc-gpl"))]
 mod ree_tests;
+#[cfg(all(test, feature = "gcc-gpl"))]
+mod splitpaths_tests;
 pub mod remidiom;
 pub mod rpoattrs;
 pub mod runtimechecks;

@@ -2151,6 +2151,11 @@ pub trait Tti {
         (None, None)
     }
 
+    /// Whether the target takes gcc's path splitting at `-O3` (`Tuning::split_paths_at_o3`).
+    fn split_paths_at_o3(&self) -> bool {
+        false
+    }
+
     /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
     /// own (`Tuning::unroll_threshold_at_o3`).
     fn unroll_threshold_at_o3(&self) -> Option<u32> {

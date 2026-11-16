@@ -7,6 +7,7 @@
 //! gcc-derived code.
 
 pub mod ree;
+pub mod splitpaths;
 
 use llrm_mir::module::{Function, InstId};
 use llrm_mir::opcode::Opcode;

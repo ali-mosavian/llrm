@@ -1939,6 +1939,11 @@ pub fn recorded(
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
+    // gcc's `-fsplit-paths`, -O3 and a target that asks (`Tti::split_paths_at_o3`).
+    #[cfg(feature = "gcc-gpl")]
+    if applied.options.wanted("splitpaths") && unroll_level(&applied.options) >= 3 {
+        manager.add(llrm_gpl_gcc::splitpaths::SplitPaths);
+    }
     #[cfg(feature = "gcc-gpl")]
     if applied.options.wanted("ree") {
         manager.add(llrm_gpl_gcc::ree::Ree);

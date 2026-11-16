@@ -8,3 +8,4 @@ description = "gcc-derived estimates (GPL-3.0-or-later), optional: llrm-transfor
 
 [dependencies]
 llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
