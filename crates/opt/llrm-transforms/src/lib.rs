@@ -238,7 +238,8 @@ pub mod divrempairs;
 pub mod dropunnecessaryassumes;
 pub mod earlycse;
 pub use llrm_analysis::edges;
-#[cfg(all(test, feature = "gcc-gpl"))]
+pub mod backwardthreading;
+#[cfg(test)]
 mod backwardthreading_tests;
 pub mod emptyblocks;
 pub mod exitne;
@@ -419,6 +420,7 @@ pub mod ree;
 pub mod remidiom;
 pub mod rpoattrs;
 pub mod runtimechecks;
+pub mod splitpaths;
 pub mod sccp;
 pub mod sccpsolver;
 pub mod selectoptimize;

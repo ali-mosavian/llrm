@@ -1,8 +1,9 @@
-//! Backward jump threading (GPL-3.0-or-later, as gcc's; feature `gcc-gpl`): a
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Backward jump threading: a
 //! branch whose outcome one path into its block decides is threaded for that
 //! path, though the block's other paths leave it unknown.
 //!
-//! GCC's `tree-ssa-threadbackward` walks back from a conditional branch along
+//! GCC's [`tree-ssa-threadbackward.cc`](https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/tree-ssa-threadbackward.cc) walks back from a conditional branch along
 //! a path until the branch's inputs are pinned down, then copies the path's
 //! blocks so that path jumps straight to the arm. LLVM's `JumpThreading` asks
 //! LVI about each edge into the branch's block, which merges all paths into

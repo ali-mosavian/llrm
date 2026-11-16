@@ -2533,7 +2533,7 @@ fn drop_reloaded_accumulator(lines: Vec<Line>) -> Vec<Line> {
         let Some(Line::Inst(text)) = line else { return None };
         let (to, from) = text.strip_prefix("ld ")?.split_once(", ")?;
         let (r, a) = if into_a { (from, to) } else { (to, from) };
-        (a == "a" && r.len() == 1 && "bcdehl".contains(r)).then(|| r.to_owned())
+        (a == "a" && is_byte_register(r)).then(|| r.to_owned())
     };
     let mut out: Vec<Line> = Vec::with_capacity(lines.len());
     for line in lines {
@@ -2552,6 +2552,11 @@ fn drop_reloaded_accumulator(lines: Vec<Line>) -> Vec<Line> {
     out
 }
 
+/// `b`, `c`, `d`, `e`, `h` or `l`: a one-byte test, not a substring search.
+fn is_byte_register(name: &str) -> bool {
+    matches!(name, "b" | "c" | "d" | "e" | "h" | "l")
+}
+
 /// The symbol of a `jp SYMBOL` that leaves the function: not a condition, an
 /// indirect jump or a block of ours.
 fn tail_symbol(jump: &str) -> Option<&str> {
@@ -2565,11 +2570,18 @@ fn tail_symbol(jump: &str) -> Option<&str> {
 /// makes one through `replaceBranchWithTailCall`). Wherever the block lies; the
 /// layout cannot lose it.
 fn conditional_tail_jumps(mut lines: Vec<Line>) -> Vec<Line> {
-    let mut names: llrm_support::hash::HashMap<String, usize> = llrm_support::hash::HashMap::default();
+    // how often each label is named by an instruction (only labels are
+    // counted: a word that is no label is never asked for)
+    let mut names: llrm_support::hash::HashMap<&str, usize> = lines
+        .iter()
+        .filter_map(|line| if let Line::Label(label) = line { Some((label.as_str(), 0)) } else { None })
+        .collect();
     for line in &lines {
         if let Line::Inst(text) = line {
             for word in text.split([' ', ',']).filter(|word| !word.is_empty()) {
-                *names.entry(word.trim_start_matches('#').to_owned()).or_default() += 1;
+                if let Some(count) = names.get_mut(word.trim_start_matches('#')) {
+                    *count += 1;
+                }
             }
         }
     }
@@ -2590,7 +2602,7 @@ fn conditional_tail_jumps(mut lines: Vec<Line>) -> Vec<Line> {
         if let (Some(Line::Inst(jump)), Some(before)) = (after, before)
             && let Some(symbol) = tail_symbol(jump)
             && ends_flow(before)
-            && names.get(label).copied() == Some(1)
+            && names.get(label.as_str()).copied() == Some(1)
         {
             jumps.insert(label.clone(), symbol.to_owned());
         }
@@ -2765,7 +2777,7 @@ fn mentions(
 /// `drop_overwritten_byte_stores` finds (a byte shifted through `a` right after
 /// a copy of its source).
 fn forward_byte_copies(mut lines: Vec<Line>) -> Vec<Line> {
-    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
+    let is_byte = |register: &str| is_byte_register(register);
     for at in 1..lines.len() {
         let (Line::Inst(copy), Line::Inst(read)) = (&lines[at - 1], &lines[at]) else { continue };
         let Some((to, from)) = copy.strip_prefix("ld ").and_then(|text| text.split_once(", ")) else { continue };
@@ -2862,7 +2874,7 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
 /// against a constant whose low byte is 0, which keeps only the high byte of
 /// the biased copy). The load leaves the flags alone.
 fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
-    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
+    let is_byte = |register: &str| is_byte_register(register);
     let byte = |text: &str| {
         let (register, source) = text.strip_prefix("ld ")?.split_once(", ")?;
         (is_byte(register) && (is_byte(source) || source == "a" || source.starts_with('#')))
@@ -3708,6 +3720,52 @@ fn tail_calls(function: &MFunction) -> MFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Substring search for one register name built a searcher per call (74k in
+    /// switch_jump_table -O2): the byte registers are the six one-letter names,
+    /// as `len() == 1 && "bcdehl".contains(name)` had it.
+    #[test]
+    fn a_byte_register_is_one_of_six_letters() {
+        let letters: Vec<char> = ('a'..='z').collect();
+        let mut names = vec![String::new()];
+        for &one in &letters {
+            names.push(one.to_string());
+            for &two in &letters {
+                names.push(format!("{one}{two}"));
+            }
+        }
+        for name in names {
+            let old = name.len() == 1 && "bcdehl".contains(name.as_str());
+            assert_eq!(is_byte_register(&name), old, "{name:?}");
+        }
+    }
+
+    fn lines_of(text: &[&str]) -> Vec<Line> {
+        text.iter()
+            .map(|one| match one.strip_suffix(':') {
+                Some(label) => Line::Label(label.to_owned()),
+                None => Line::Inst((*one).to_owned()),
+            })
+            .collect()
+    }
+
+    /// A `jp cc, L` to a block that is only a tail `jp SYMBOL` becomes `jp cc,
+    /// SYMBOL` only where nothing else names `L`: the count of names is per
+    /// label, counted through a `#` prefix and over operands.
+    #[test]
+    fn a_conditional_jump_to_a_lone_tail_jump_is_a_tail_jump_only_if_the_label_is_named_once() {
+        let text = |named_twice: bool| {
+            let mut lines = vec!["ret", "T:", "jp _far", "ld a, 1", "jp z, T"];
+            if named_twice {
+                lines.push("ld hl, #T");
+            }
+            lines
+        };
+        let once = conditional_tail_jumps(lines_of(&text(false)));
+        assert!(once.contains(&Line::Inst("jp z, _far".into())), "named once: {once:?}");
+        let twice = conditional_tail_jumps(lines_of(&text(true)));
+        assert!(twice.contains(&Line::Inst("jp z, T".into())), "named twice: {twice:?}");
+    }
 
     fn op(
         name: &'static str,

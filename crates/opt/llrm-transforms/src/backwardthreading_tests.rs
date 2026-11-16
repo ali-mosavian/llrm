@@ -1,7 +1,7 @@
 //! Backward threading on the shape of `queens`' column loop: a guard of the
 //! inner loop that every trip through the loop already passed.
 
-use llrm_gpl_gcc::backwardthreading::{BackwardThreading, MAX_THREADS};
+use crate::backwardthreading::{BackwardThreading, MAX_THREADS};
 use llrm_mir::passes::PassManager;
 use llrm_mir::target::Neutral;
 

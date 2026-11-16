@@ -7,6 +7,4 @@ license = "GPL-3.0-or-later"
 description = "gcc-derived estimates (GPL-3.0-or-later), optional: llrm-transforms feature gcc-gpl"
 
 [dependencies]
-llrm-analysis = { workspace = true }
 llrm-mir = { workspace = true }
-llrm-support = { workspace = true }

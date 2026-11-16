@@ -334,6 +334,18 @@ pub struct Tuning {
     /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
     /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
     pub unroll_threshold_at_o3: Option<u32>,
+    /// The code-size cost of a scalar divide or remainder by a constant
+    /// (`X86TTIImpl::getArithmeticInstrCost`: 5 or 6, and 2 more for size, in
+    /// the pin). LLVM 20 priced it 4: a 32-trip loop with a `srem` by a
+    /// constant (loop_interchange's `checksum`) was 259 units against the
+    /// threshold 300 there and 386 in the pin, so clang 20 unrolls it and the
+    /// pin does not. DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30); none: the pin's.
+    pub div_by_constant_size_cost: Option<u32>,
+    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
+    /// (`splitpaths.rs`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// target takes it once measured; false: the pin's, none.
+    pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -793,6 +805,8 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_threshold_at_o3: None,
+        div_by_constant_size_cost: None,
+        split_paths_at_o3: false,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
@@ -1825,6 +1839,8 @@ mod tests {
             (None, None, None)
         );
         assert_eq!(pin.unroll_threshold_at_o3, None);
+        assert_eq!(pin.div_by_constant_size_cost, None);
+        assert!(!pin.split_paths_at_o3);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);
