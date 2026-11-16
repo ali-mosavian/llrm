@@ -936,16 +936,37 @@ mod tests {
         assert!(!same_function(&base, &other), "one immediate differs");
     }
 
-    /// A SipHash call per small field cost more than the bytes it hashed (a
+    /// The key bytes are hashed by `wyhash`, no longer SipHash and Fx per
+    /// write: a flipped bit anywhere, a longer key that only adds zero
+    /// bytes, and the two seeds must all change what the memo sees.
+    #[test]
+    fn the_key_hash_changes_with_every_bit_and_with_the_length() {
+        let base: Vec<u8> = (0..70u8).map(|at| at.wrapping_mul(37)).collect();
+        let (first, second) = (wyhash(&base, 1), wyhash(&base, 2));
+        assert_ne!(first, second, "the seeds");
+        let mut seen = std::collections::HashSet::from([first]);
+        for at in 0..base.len() {
+            for bit in 0..8 {
+                let mut flipped = base.clone();
+                flipped[at] ^= 1 << bit;
+                assert!(seen.insert(wyhash(&flipped, 1)), "bit {bit} of byte {at}");
+            }
+        }
+        for length in 0..40 {
+            assert!(seen.insert(wyhash(&vec![0u8; length], 1)), "{length} zero bytes");
+        }
+    }
+
+    /// A hasher call per small field cost more than the bytes it hashed (a
     /// tenth of switch_jump_table -O2): the key is hashed in one run.
     #[test]
-    fn a_key_is_siphashed_in_one_run_not_one_per_field() {
+    fn a_key_is_hashed_in_one_run_not_one_per_field() {
         let request = Request::new(Level::O2);
         let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
         let function = machine_function_with(&selected, "lz4", true).expect("builds");
-        let before = SIPS.with(|count| count.get());
+        let before = RUNS.with(|count| count.get());
         let one = allocation_key(&function, "lz4", false, Level::O2, false);
-        assert_eq!(SIPS.with(|count| count.get()) - before, 1, "one SipHash run for the whole key");
+        assert_eq!(RUNS.with(|count| count.get()) - before, 1, "one hash run for the whole key");
         assert_eq!(one, allocation_key(&function, "lz4", false, Level::O2, false));
     }
 
@@ -1535,31 +1556,57 @@ fn write_ambient_state(both: &mut Both) {
 
 #[cfg(test)]
 thread_local! {
-    /// SipHash runs made, for the test that keeps them to one per key.
-    static SIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Key hash runs made, for the test that keeps them to one per key.
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Both hashes of a key at once: Fx on every write, SipHash over the whole
-/// buffered key in one call (a SipHash call per small field costs more than
-/// the bytes it hashes).
+/// The bytes of a key, hashed twice (two seeds) in one run when the key is
+/// complete: a hasher call per small field cost more than the bytes it hashes
+/// (SipHash, then Fx per write, were 4% of int64_divmod_edges -O2).
 struct Both {
-    fx: <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher,
     bytes: Vec<u8>,
 }
 
 impl Both {
     fn new() -> Self {
-        Both { fx: Default::default(), bytes: Vec::with_capacity(4096) }
+        Both { bytes: Vec::with_capacity(4096) }
     }
 
     fn finish_pair(&self) -> (u64, u64) {
-        use std::hash::Hasher;
         #[cfg(test)]
-        SIPS.with(|count| count.set(count.get() + 1));
-        let mut sip = std::collections::hash_map::DefaultHasher::new();
-        sip.write(&self.bytes);
-        (sip.finish(), self.fx.finish())
+        RUNS.with(|count| count.set(count.get() + 1));
+        (wyhash(&self.bytes, 0x243f_6a88_85a3_08d3), wyhash(&self.bytes, 0x1319_8a2e_0370_7344))
     }
+}
+
+/// wyhash (final version 4, one lane): 64 bits of `bytes`, folding two words
+/// at a time through a 64 x 64 -> 128 multiply.
+fn wyhash(
+    bytes: &[u8],
+    seed: u64,
+) -> u64 {
+    const P0: u64 = 0x2d35_8dcc_aa6c_78a5;
+    const P1: u64 = 0x8bb8_4b93_962e_acc9;
+    fn mix(
+        a: u64,
+        b: u64,
+    ) -> u64 {
+        let product = u128::from(a) * u128::from(b);
+        (product as u64) ^ ((product >> 64) as u64)
+    }
+    let word = |at: &[u8]| u64::from_le_bytes(at[..8].try_into().expect("eight bytes"));
+    let mut seed = seed ^ mix(seed ^ P0, P1);
+    let mut rest = bytes;
+    while rest.len() > 16 {
+        seed = mix(word(rest) ^ P1, word(&rest[8..]) ^ seed);
+        rest = &rest[16..];
+    }
+    // the last one to 16 bytes, read up to the end of the key (zero padded
+    // by the length that is mixed in below)
+    let mut tail = [0u8; 16];
+    tail[..rest.len()].copy_from_slice(rest);
+    let (a, b) = (word(&tail), word(&tail[8..]));
+    mix(P1 ^ bytes.len() as u64, mix(a ^ P1, b ^ seed))
 }
 
 impl std::fmt::Write for Both {
@@ -1567,8 +1614,7 @@ impl std::fmt::Write for Both {
         &mut self,
         text: &str,
     ) -> std::fmt::Result {
-        use std::hash::Hasher;
-        self.write(text.as_bytes());
+        self.bytes.extend_from_slice(text.as_bytes());
         Ok(())
     }
 }
@@ -1578,7 +1624,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         bytes: &[u8],
     ) {
-        self.fx.write(bytes);
         self.bytes.extend_from_slice(bytes);
     }
 
@@ -1586,7 +1631,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u8,
     ) {
-        self.fx.write_u8(value);
         self.bytes.push(value);
     }
 
@@ -1594,7 +1638,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u32,
     ) {
-        self.fx.write_u32(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1602,7 +1645,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u64,
     ) {
-        self.fx.write_u64(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1610,7 +1652,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: usize,
     ) {
-        self.fx.write_usize(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1642,7 +1683,7 @@ fn hash_form(
             .or_insert_with(|| {
                 let mut text = Both::new();
                 let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{form:?}"));
-                (form.clone(), std::hash::Hasher::finish(&text.fx))
+                (form.clone(), wyhash(&text.bytes, 0))
             })
             .1
     });
