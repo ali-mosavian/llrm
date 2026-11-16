@@ -344,3 +344,13 @@ fn a_packed_accumulator_is_added_in_place() {
     let copies = vector.lines().filter(|line| line.trim_start().starts_with("movaps")).count();
     assert!(copies <= 4, "the loop copies {copies} registers: {vector}");
 }
+
+/// `descent` carries a loaded `short` round its loop and indexes with it: the load was `movzx` and every trip
+/// extended it again (`movzx ecx, cx`). The extension is on the load now (gcc's `ree`).
+#[test]
+fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
+    let text = assembly_of("ree_loops.c", "x86_64-linux", "-O3");
+    let descent = body(&text, "descent");
+    let widened = descent.lines().filter(|line| (line.contains("movsx") || line.contains("movzx")) && !line.contains("ptr")).count();
+    assert_eq!(widened, 0, "a register-to-register extension stays in the loop: {descent}");
+}

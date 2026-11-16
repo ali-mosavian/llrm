@@ -118,3 +118,19 @@ def require_ancestor(found, commit, repo) -> dict[str, tuple[str, str]]:
         if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", sha, commit], capture_output=True).returncode != 0:
             raise SystemExit(f"{found}/{name} is built from {sha}, not an ancestor of {commit}: its numbers are not that commit's")
     return recorded
+
+
+def require_pair(base, new, head, tip, repo) -> None:
+    """An A/B pair measures a PR only when `new` was built from `head`'s code and `base` from the merge-base of `head` and `tip`; SystemExit naming
+    the side that was not. A pair built before the PR's last merge of tip measured a base several commits older than the one the PR lands on
+    (d99, 11-16: +740 B on one cell that no tip build shows)."""
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+
+    new_sha, base_sha = flags(Path(new) / "llrm-llc")[0], flags(Path(base) / "llrm-llc")[0]
+    if git("diff", "--quiet", new_sha, head, "--", "crates").returncode != 0:
+        raise SystemExit(f"{new} is built from {new_sha}, whose crates/ differ from the PR head {head}: it measured another tree")
+    want = git("merge-base", head, tip).stdout.strip()
+    if not want or not (base_sha.startswith(want) or want.startswith(base_sha)):
+        raise SystemExit(f"{base} is built from {base_sha}, not {want}, the merge-base of {head} and {tip}: its base is stale")
