@@ -4340,6 +4340,8 @@ impl Builder<'_> {
         let result = self.type_of(instruction.ty)?;
         let input = self.dag.value_type(first);
         let (mut sources, lanes) = (input.lanes() as usize, mask.len());
+        let mut remapped: Vec<i32> = Vec::new();
+        let mut mask = mask;
         let node = 'shuffled: {
             if sources == lanes {
                 break 'shuffled self.dag.get_vector_shuffle(result, first, second, mask);
@@ -4398,6 +4400,14 @@ impl Builder<'_> {
                             *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
                         }
                     }
+                    // Readjust the mask for the padded inputs: the second
+                    // input's lanes follow the first's padded length.
+                    let padded_lanes = (count * sources) as i32;
+                    remapped = mask
+                        .iter()
+                        .map(|&lane| if lane >= sources as i32 { lane - sources as i32 + padded_lanes } else { lane })
+                        .collect();
+                    mask = &remapped;
                     sources = count * sources;
                 }
             }
