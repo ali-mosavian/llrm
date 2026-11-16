@@ -1282,8 +1282,8 @@ impl Tti for X86 {
         self.tuning.sinks_invariants_keeping_pressure
     }
 
-    fn jump_threading_optsize_dup_threshold(&self) -> Option<u32> {
-        self.tuning.jump_threading_optsize_dup_threshold
+    fn jump_threading_skips_latches_at_optsize(&self) -> bool {
+        self.tuning.jump_threading_skips_latches_at_optsize
     }
 
     fn ipa_cp_clones_at_speed(&self) -> bool {

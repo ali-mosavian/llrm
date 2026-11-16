@@ -1,7 +1,7 @@
-//! A size build on x86-m32 copies no block to thread a jump (gcc's size build
-//! threads only a path that copies at most one insn). The pin's JumpThreading
-//! copied the outer loop's latch of x_prefix for its `n <= 0` guard: a second
-//! `inc; cmp 4; jne` and a second exit, 163 B against gcc's 157 B.
+//! A size build on x86-m32 copies no loop latch to thread a jump. The pin's
+//! JumpThreading copied the outer loop's latch of x_prefix for its `n <= 0`
+//! guard: a second `inc; cmp 4; jne` and a second exit, 163 B against gcc's
+//! 157 B (gcc Os never rotates these loops).
 
 use std::path::Path;
 use std::process::Command;

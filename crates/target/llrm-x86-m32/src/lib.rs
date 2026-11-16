@@ -334,10 +334,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // -Os +231 B otherwise).
         sinks_unused_invariants: true,
         sinks_invariants_keeping_pressure: true,
-        // DEVIATE JT-OS (owner x86-m32-b, exit 2026-11-24): a size build
-        // copies a block of at most one insn to thread a jump, where the pin
-        // copies six (x_prefix -Os 163 -> 149 B, gcc 157; x_bubble +7 B).
-        jump_threading_optsize_dup_threshold: Some(1),
+        // DEVIATE JT-OS (owner x86-m32-b, exit 2026-11-24): a size build copies
+        // no loop latch to thread a jump (x_prefix -Os 163 -> 149 B, gcc 157).
+        jump_threading_skips_latches_at_optsize: true,
         // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
         // threshold alone refuses, at a site 16x the caller's entry or hotter,
         // is tried inlined at -O2 and kept where the rate pays, the trial

@@ -2139,10 +2139,11 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE JT-OS: the size gate of a block JumpThreading copies in an
-    /// `optsize` function; none: the pin's (`minsize` only).
-    fn jump_threading_optsize_dup_threshold(&self) -> Option<u32> {
-        None
+    /// DEVIATE JT-OS (owner x86-m32-b, exit 2026-11-24): JumpThreading copies
+    /// no loop latch in an `optsize` function (gcc's threader treats a thread
+    /// through the latch apart, `threaded_through_latch`). false: the pin's.
+    fn jump_threading_skips_latches_at_optsize(&self) -> bool {
+        false
     }
 
     /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are

@@ -250,6 +250,7 @@ impl FunctionPass for JumpThreading {
             unreachable: IdSet::new(),
             options: self.options,
             bb_dup_threshold: self.options.bb_dup_threshold,
+            skip_latch_copies: false,
         };
         if pass.run_impl() { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -302,6 +303,8 @@ struct State<'a, 'u> {
     unreachable: IdSet<BlockId>,
     options: JumpThreadingOptions,
     bb_dup_threshold: u32,
+    /// DEVIATE JT-OS: no copy of a loop latch (`Tti::jump_threading_skips_latches_at_optsize`).
+    skip_latch_copies: bool,
 }
 
 impl State<'_, '_> {
@@ -631,13 +634,10 @@ impl State<'_, '_> {
     fn run_impl(&mut self) -> bool {
         let has =
             |name: &str| self.function().attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name));
-        self.bb_dup_threshold = if has("minsize") {
-            self.options.min_size_bb_dup_threshold
-        } else if let Some(limit) = self.tti.jump_threading_optsize_dup_threshold().filter(|_| has("optsize")) {
-            limit
-        } else {
-            self.options.bb_dup_threshold
-        };
+        let (min_size, opt_size) = (has("minsize"), has("optsize"));
+        self.skip_latch_copies = opt_size && !min_size && self.tti.jump_threading_skips_latches_at_optsize();
+        self.bb_dup_threshold =
+            if min_size { self.options.min_size_bb_dup_threshold } else { self.options.bb_dup_threshold };
         let Some(entry) = self.function().entry() else { return false };
 
         self.unreachable.clear();
@@ -849,6 +849,9 @@ impl State<'_, '_> {
             }
         }
         let Some(first) = first_non_phi else { return 0 };
+        if self.skip_latch_copies && self.is_loop_latch(bb) {
+            return u32::MAX;
+        }
 
         let mut bonus = 0;
         if function.terminator(bb) == Some(stop_at) {
@@ -905,6 +908,17 @@ impl State<'_, '_> {
             }
         }
         size.saturating_sub(bonus)
+    }
+
+    /// DEVIATE JT-OS: whether `bb` branches back to a loop header that reaches it.
+    fn is_loop_latch(
+        &self,
+        bb: BlockId,
+    ) -> bool {
+        self.function()
+            .successors(bb)
+            .into_iter()
+            .any(|succ| self.loop_headers.contains(&succ) && self.reachable_from(succ).contains(&bb))
     }
 
     /// `isa<IntrinsicInst>(call)`.

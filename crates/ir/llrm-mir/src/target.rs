@@ -641,11 +641,8 @@ pub struct Tuning {
     pub sinks_unused_invariants: bool,
     /// See `Tti::sinks_invariants_keeping_pressure`.
     pub sinks_invariants_keeping_pressure: bool,
-    /// DEVIATE JT-OS (owner x86-m32-b, exit 2026-11-24): `BBDuplicateThreshold`
-    /// of an `optsize` function in JumpThreading, where the pin keeps it for
-    /// `minsize` alone (gcc: a size build threads only a path that copies at
-    /// most one net insn, `back_threader_profitability`); none: the pin's.
-    pub jump_threading_optsize_dup_threshold: Option<u32>,
+    /// See `Tti::jump_threading_skips_latches_at_optsize`.
+    pub jump_threading_skips_latches_at_optsize: bool,
     /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are
     /// eliminated before it is copied into itself (gcc:
     /// `pass_tail_recursion` runs early, `passes.def` before
@@ -877,7 +874,7 @@ impl Tuning {
         recursive_inlining_depth: None,
         sinks_unused_invariants: false,
         sinks_invariants_keeping_pressure: false,
-        jump_threading_optsize_dup_threshold: None,
+        jump_threading_skips_latches_at_optsize: false,
         recursive_tre_first: (false, false),
         ipa_cp_clones_at_speed: false,
         ipa_cp_max_clones: 4,
