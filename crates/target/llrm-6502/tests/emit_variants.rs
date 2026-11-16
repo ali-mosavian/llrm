@@ -16,6 +16,13 @@ use llrm_6502::driver::{Level, Request, assembly};
 /// module is 15 B smaller and the inline text is the one kept. It began with
 /// #9933 (the allocator prices a byte as at size at every level), which made
 /// `main` a user of the helpers; the count was 6 until then.
+///
+/// The 32-bit remainders pass their results in registers (#10070), so the wide
+/// accumulator commute takes a choice in each of the three compiles
+/// (`select::function_text`), and each is also emitted without it, once, at
+/// the layout and sink already kept: 3 more, 12 in all. That one is paid for:
+/// without it `bench_recmany` is 547 B against 549 B. It ran every variant
+/// again, 18 in all, until it was priced at the kept ones.
 #[test]
 fn a_function_with_spills_and_calls_pays_for_no_variant_that_changes_nothing() {
     let before = emit_runs();
@@ -23,5 +30,5 @@ fn a_function_with_spills_and_calls_pays_for_no_variant_that_changes_nothing() {
     assert!(text.contains("bench_recmany:"), "{text}");
     let runs = emit_runs() - before;
     assert!(!text.contains("__csave"), "the variant was run and not kept:\n{text}");
-    assert_eq!(runs, 9, "emissions of the functions of the file");
+    assert_eq!(runs, 12, "emissions of the functions of the file");
 }
