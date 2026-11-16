@@ -1580,9 +1580,11 @@ fn finding_predecessors_does_not_read_the_whole_function() {
     assert!(short > 0 && long < short * 2, "{short} instructions looked at with 2 calls in each arm, {long} with 24");
 }
 
-/// At -O1 a self-recursive callee was still recursive when the inliner priced it (the pin's -O1 function pipeline
-/// has no TailCallElim before it), so it stayed a call in the loop that used it: idiv_loop_os -O1 was 301 B where
-/// -Os gave 257 B. Bytes first at every level: the recursion is a loop before the inliner looks.
+/// At -O1 a self-recursive callee was still recursive when the inliner priced
+/// it (the pin's -O1 function pipeline has no TailCallElim before it), so it
+/// stayed a call in the loop that used it: idiv_loop_os -O1 was 301 B where -Os
+/// gave 257 B. Bytes first at every level: the recursion is a loop before the
+/// inliner looks.
 #[test]
 fn a_self_recursive_callee_is_inlined_at_o1_as_at_os() {
     let ir = format!(
@@ -1621,7 +1623,10 @@ out:
 "
     );
     let asm = text(&ir, "total", 0, &Request::new(Level::O1)).expect("compiles");
-    assert!(!asm.contains("call\t_gcd") && !asm.contains("call _gcd"), "the recursive callee is still a call at -O1:\n{asm}");
+    assert!(
+        !asm.contains("call\t_gcd") && !asm.contains("call _gcd"),
+        "the recursive callee is still a call at -O1:\n{asm}"
+    );
 }
 
 /// The same allocation was priced again (finished into text and priced)

@@ -187,12 +187,15 @@ pub struct Options {
     /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
     /// (bsearch -O1: a re-test and a loop-carried copy of the result).
     pub thread_jumps: bool,
-    /// `TailCallElimPass` (`tailrec@688`) in the function pipeline before the inliner at -O1, where the pin's
-    /// `buildO1FunctionSimplificationPipeline` has none: a self-recursive callee is still recursive when the
-    /// inliner prices it, so it is never inlined and a caller loop keeps the call and its argument frames.
+    /// `TailCallElimPass` (`tailrec@688`) in the function pipeline before the
+    /// inliner at -O1, where the pin's
+    /// `buildO1FunctionSimplificationPipeline` has none: a self-recursive
+    /// callee is still recursive when the inliner prices it, so it is never
+    /// inlined and a caller loop keeps the call and its argument frames.
     ///
-    /// DEVIATE TRE-O1 (owner z80, exit 2026-12-15, or when the pin's -O1 gains it): a target that ranks bytes first
-    /// turns it on at -O1. idiv_loop_os -O1: 301 B, where the -Os pipeline's own order gives 257 B.
+    /// DEVIATE TRE-O1 (owner z80, exit 2026-12-15, or when the pin's -O1 gains
+    /// it): a target that ranks bytes first turns it on at -O1.
+    /// idiv_loop_os -O1: 301 B, where the -Os pipeline's own order gives 257 B.
     pub tail_recursion_early: bool,
     /// GCC's backward threader (`backthread@809`): a path into a join that
     /// decides a guard is copied. It grows code, so a target that ranks bytes

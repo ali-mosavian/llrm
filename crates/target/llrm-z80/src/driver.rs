@@ -321,8 +321,9 @@ fn program_of(
         // compound_assignment_types Os/Oz +2 B. Layout and allocation
         // noise after the pin's own plan; no pass is wrong.
         options.lower_switches = false;
-        // Bytes first at every level: a recursive callee is a loop before the inliner prices it, as at -Os
-        // (DEVIATE TRE-O1, owner z80, exit 2026-12-15).
+        // Bytes first at every level: a recursive callee is a loop before the
+        // inliner prices it, as at -Os (DEVIATE TRE-O1, owner z80, exit
+        // 2026-12-15).
         options.tail_recursion_early = true;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
         // and `memcmp` (SDCC's libc has no `bcmp`).
