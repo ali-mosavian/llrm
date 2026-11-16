@@ -2,6 +2,9 @@
 //! [`ree.cc`](https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ree.cc)
 //! (`pass_ree`), as the rewrite of MIR before isel.
 //!
+//! Licence: GPL-3.0-or-later, as gcc's; part of the optional `llrm-gpl-gcc` crate (feature `gcc-gpl` of
+//! `llrm-transforms`, off by default).
+//!
 //! # How it works
 //! `E = sext/zext P` where `P = phi [c, L, ..]` and every arm is a constant or
 //! a load: the extension is made on each arm instead (`ext c` folds; `ext L`
@@ -54,7 +57,7 @@
 //! Blocks, dominators and loops.
 //!
 //! # See also
-//! Tests: `ree_tests.rs`. Levels: `docs/reference/levels.md`.
+//! Tests: `llrm-transforms/src/ree_tests.rs` (feature `gcc-gpl`). Levels: `docs/reference/levels.md`.
 
 use llrm_mir::context::{ConstantKind, Context, signed};
 use llrm_mir::edit::Position;
@@ -127,7 +130,7 @@ fn plan(
     }
     let (kind, wide) = shape?;
     let mut arms = Vec::new();
-    for (value, from) in crate::pageindex::arms(function, phi) {
+    for (value, from) in phi_arms(function, phi) {
         match value {
             Operand::Constant(id) => {
                 let ConstantKind::Int(bits) = context.get(id).kind else { return None };
@@ -209,7 +212,7 @@ fn extended_across_phis(
         }
         let wide_phi = function.create_instruction(Opcode::Phi, plan.wide, Vec::new(), Flags::default(), None);
         function.insert(wide_phi, Position::Before(phi)).expect("a placed block");
-        crate::pageindex::set_arms(function, wide_phi, &wide_arms);
+        set_arms(function, wide_phi, &wide_arms);
         let wide_value = Operand::Value(function.instruction(wide_phi).result.expect("a value"));
         for extension in &plan.extensions {
             let value = function.instruction(*extension).result.expect("a value");
@@ -222,6 +225,25 @@ fn extended_across_phis(
     changed
 }
 
-#[cfg(test)]
-#[path = "ree_tests.rs"]
-mod tests;
+fn phi_arms(
+    function: &Function,
+    phi: InstId,
+) -> Vec<(Operand, BlockId)> {
+    function
+        .instruction(phi)
+        .operands
+        .chunks(2)
+        .map(|pair| match pair {
+            [value, Operand::Block(from)] => (*value, *from),
+            _ => unreachable!("a phi's arms are value and block"),
+        })
+        .collect()
+}
+
+fn set_arms(
+    function: &mut Function,
+    phi: InstId,
+    arms: &[(Operand, BlockId)],
+) {
+    function.set_operands(phi, arms.iter().flat_map(|(value, from)| [*value, Operand::Block(*from)]).collect());
+}

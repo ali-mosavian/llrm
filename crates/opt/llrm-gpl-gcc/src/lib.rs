@@ -6,6 +6,8 @@
 //! `gcc-gpl` of `llrm-transforms`, off by default): a default build carries no
 //! gcc-derived code.
 
+pub mod ree;
+
 use llrm_mir::module::{Function, InstId};
 use llrm_mir::opcode::Opcode;
 

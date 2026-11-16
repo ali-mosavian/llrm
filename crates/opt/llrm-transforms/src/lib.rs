@@ -413,7 +413,8 @@ pub mod reassociate_optimize;
 pub mod reassociate_pairs;
 pub mod reassociate_rank;
 pub mod reassociate_tree;
-pub mod ree;
+#[cfg(all(test, feature = "gcc-gpl"))]
+mod ree_tests;
 pub mod remidiom;
 pub mod rpoattrs;
 pub mod runtimechecks;

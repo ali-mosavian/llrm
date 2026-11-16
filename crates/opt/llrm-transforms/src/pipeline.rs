@@ -143,7 +143,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
     inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
@@ -1939,8 +1939,9 @@ pub fn recorded(
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     // gcc's `ree` first: the extension it moves onto a load is the pair `extload` makes one extending load of.
+    #[cfg(feature = "gcc-gpl")]
     if applied.options.wanted("ree") {
-        manager.add(ree::Ree);
+        manager.add(llrm_gpl_gcc::ree::Ree);
     }
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);

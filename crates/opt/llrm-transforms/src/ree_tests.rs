@@ -3,7 +3,7 @@
 
 use llrm_analysis::testing::DOS;
 
-use super::Ree;
+use llrm_gpl_gcc::ree::Ree;
 use crate::testing::{Tuned, managed_on, parsed};
 
 fn run(body: &str) -> String {

@@ -3137,6 +3137,30 @@ fn test_the_default_build_links_no_gcc_derived_crate() {
     }
 }
 
+/// A translated gcc pass names its gcc source file by a link to gcc's git tree. #10096 merged `ree.rs` with that link
+/// into the default build; only `llrm-gpl-gcc` may carry one.
+#[test]
+fn test_no_source_outside_the_gpl_crate_links_gcc_source() {
+    fn scan(dir: &std::path::Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if entry.file_name() != "llrm-gpl-gcc" && entry.file_name() != "target" {
+                    scan(&path, found);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && std::fs::read_to_string(&path).is_ok_and(|text| text.contains(concat!("gcc.gnu.", "org/git")))
+            {
+                found.push(path.display().to_string());
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut found = Vec::new();
+    scan(&root, &mut found);
+    assert!(found.is_empty(), "gcc-derived source outside llrm-gpl-gcc: {found:?}");
+}
+
 /// The bar of the recursive edge (DEVIATE REC-2) as the 10 self-recursive
 /// functions of the corpus meet it. gcc copies fib, hanoi, recpow and rectwo
 /// at -O2 (edge growth <= 15) and recchop `chop` (its dump: size 21), and at

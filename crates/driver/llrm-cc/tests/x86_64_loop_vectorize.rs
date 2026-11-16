@@ -346,8 +346,10 @@ fn a_packed_accumulator_is_added_in_place() {
 }
 
 /// `descent` carries a loaded `short` round its loop and indexes with it: the load was `movzx` and every trip
-/// extended it again (`movzx ecx, cx`). The extension is on the load now (gcc's `ree`).
+/// extended it again (`movzx ecx, cx`). The extension is on the load now (gcc's `ree`, in `llrm-gpl-gcc`: run with
+/// `--ignored` against an llc built with `--features gcc-gpl`).
 #[test]
+#[ignore = "needs LLRM_LLC built with --features gcc-gpl"]
 fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
     let text = assembly_of("ree_loops.c", "x86_64-linux", "-O3");
     let descent = body(&text, "descent");
