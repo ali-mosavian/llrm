@@ -151,15 +151,18 @@ fn is_scalar_constant(
     )
 }
 
-/// Nothing between the window's first and last store reads or writes memory
-/// but the window's own stores: the vector store may stand at the last.
+/// Nothing between the window's first and last store reads or writes the bytes
+/// the window's own stores write (`BlockScheduling`, as `slptree`'s
+/// `StoreSeparation`): the vector store may stand at the last.
 fn movable(
+    unit: &MemUnit,
     function: &Function,
     block: BlockId,
     window: &[Seed],
 ) -> bool {
     let first = window.iter().map(|seed| seed.order).min().expect("a window");
     let last = window.iter().map(|seed| seed.order).max().expect("a window");
+    let mut separation = crate::slptree::StoreSeparation::new(unit, window.iter().map(|seed| seed.store));
     function
         .iter_block(block)
         .enumerate()
@@ -177,6 +180,7 @@ fn movable(
                         | Opcode::Atomic(_)
                         | Opcode::VaArg
                 )
+                    || separation.clear(function, inst)
             },
         )
 }
@@ -252,7 +256,7 @@ fn run_function(
                         let align = window[0].align.unwrap_or(bytes);
                         if free
                             && worthwhile(tti, lane, align, window, unit.context)
-                            && movable(function, block, window)
+                            && movable(&unit, function, block, window)
                         {
                             taken[at..at + vf as usize].fill(true);
                             plan.push((ty, window.to_vec()));
