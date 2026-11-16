@@ -755,6 +755,16 @@ pub trait Tti {
         false
     }
 
+    /// `isLegalInterleavedAccessType` of a `count`-lane vector of
+    /// `element_bits`-bit lanes: one `ldN`/`stN` takes it.
+    fn interleaved_access_legal(
+        &self,
+        _element_bits: u32,
+        _count: u32,
+    ) -> bool {
+        false
+    }
+
     /// `getInterleavedMemoryOpCost` of a full group of `factor` members, each
     /// a `ty` vector (the wide access is `factor * ty.count` lanes). `None`:
     /// not priced (the BasicTTI fallback is not translated, LV-I1).
