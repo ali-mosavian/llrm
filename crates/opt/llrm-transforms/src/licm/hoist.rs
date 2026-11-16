@@ -1062,7 +1062,8 @@ fn speculatable(
         }
         Opcode::Binary(op @ (BinaryOp::SDiv | BinaryOp::SRem)) => {
             let _ = op;
-            let width = context.types.int_bits(instruction.ty).expect("an integer division");
+            // A vector divide is not asked about: no panic, no hoist.
+            let Some(width) = context.types.int_bits(instruction.ty) else { return false };
             let Some(denominator) = constant_int(instruction.operands[1]) else { return false };
             if denominator == 0 {
                 return false;

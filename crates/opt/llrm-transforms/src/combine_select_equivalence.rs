@@ -13,9 +13,6 @@
 //! DEVIATE 1: integers only; `canReplacePointersIfEqual` is not translated
 //! (`simplify_select.rs` DEVIATE).
 //!
-//! DEVIATE 2: `replaceInInstruction` (the direct replacement of a use of the
-//! left side by a constant) is not made: see `combine_visit_select` DEVIATE 3.
-//!
 //! # Example
 //! ```text
 //! %c = icmp eq i32 %x, 2147483647
@@ -53,7 +50,7 @@ pub(crate) fn select_value_equivalence(
         _ => return None,
     };
     for (old, new) in [(lhs, rhs), (rhs, lhs)] {
-        if let Some(found) = replace_old_op_with_new_op(c, inst, true_val, swapped, old, new) {
+        if let Some(found) = replace_old_op_with_new_op(c, inst, true_val, swapped, (lhs, old, new)) {
             return Some(found);
         }
     }
@@ -113,8 +110,7 @@ fn replace_old_op_with_new_op(
     inst: InstId,
     true_val: Operand,
     swapped: bool,
-    old: Operand,
-    new: Operand,
+    (cmp_lhs, old, new): (Operand, Operand, Operand),
 ) -> Option<Visit> {
     let (old_is_constant, new_is_constant) = {
         let q = query(c, None);
@@ -127,27 +123,50 @@ fn replace_old_op_with_new_op(
     }
     let simplified = {
         let env = c.env;
-        simplify_with_op_replaced_at(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst, true_val, old, new)
-    }?;
+        simplify_with_op_replaced_at(
+            c.context,
+            env.globals,
+            env.layout,
+            Some(&env.analyses),
+            c.function,
+            inst,
+            true_val,
+            old,
+            new,
+        )
+    };
     let slot = if swapped { 2 } else { 1 };
     let not_undef = |c: &Combiner, value: Operand| is_guaranteed_not_to_be_undef(&query(c, Some(inst)), value, 0);
-    // If we simplify to a constant, replace if we aren't creating new undef.
-    if pattern::imm_constant(&query(c, None), simplified) && not_undef(c, simplified) {
-        replace_operand(c, inst, slot, simplified);
-        return Some(Visit::Changed);
-    }
-    // If NewOp is a constant and OldOp is not replace iff NewOp doesn't contain
-    // undef elements. Make sure that V is always simpler than TrueVal,
-    // otherwise we might end up in an infinite loop.
-    let operand_of_true = c
-        .definition_of(true_val)
-        .is_some_and(|def| c.function.instruction(def).operands.contains(&simplified));
-    if new_is_constant || operand_of_true {
-        if not_undef(c, new) {
+    if let Some(simplified) = simplified {
+        // If we simplify to a constant, replace if we aren't creating new
+        // undef.
+        if pattern::imm_constant(&query(c, None), simplified) && not_undef(c, simplified) {
             replace_operand(c, inst, slot, simplified);
             return Some(Visit::Changed);
         }
-        return None;
+        // If NewOp is a constant and OldOp is not replace iff NewOp doesn't
+        // contain undef elements. Make sure that V is always simpler
+        // than TrueVal, otherwise we might end up in an infinite loop.
+        let operand_of_true =
+            c.definition_of(true_val).is_some_and(|def| c.function.instruction(def).operands.contains(&simplified));
+        if new_is_constant || operand_of_true {
+            if not_undef(c, new) {
+                replace_operand(c, inst, slot, simplified);
+                return Some(Visit::Changed);
+            }
+            return None;
+        }
+    }
+    // Even if TrueVal does not simplify, a use of CmpLHS directly becomes
+    // CmpRHS, as long as the instruction is used nowhere else and is safe to
+    // execute with other operands. Only for a constant CmpRHS.
+    if old == cmp_lhs
+        && new_is_constant
+        && !matches!(old, Operand::Constant(_))
+        && not_undef(c, new)
+        && c.replace_in_instruction(true_val, old, new, 0)
+    {
+        return Some(Visit::Changed);
     }
     None
 }

@@ -169,6 +169,10 @@ struct Sequence {
     addresses: Vec<(usize, Vec<usize>, llrm_lir::registers::RegId, i64)>,
     kept: (usize, u32),
     pushed: (usize, u32),
+    /// The stores can become pushes. A sequence that cannot (the pushes would
+    /// reorder volatile loads, or need a register the next load overwrites)
+    /// stays a plan only for its `fusions`.
+    pushable: bool,
     /// The cleanup `pushed` includes: owed calls merge theirs.
     cleanup: (usize, u32),
 }
@@ -398,7 +402,10 @@ fn foldable(
     let inst = insts[load];
     let Kind::Op(name) = inst.kind else { return None };
     memory_push(name)?;
-    if !inst.may_load || inst.may_store || inst.side_effects {
+    // A volatile load folds too: the access stays, once, and the loop below
+    // refuses to move it past another side effect, as `canFoldIntoRegPush`
+    // asks of the instructions between (`isLoadFoldBarrier`), not of the load.
+    if !inst.may_load || inst.may_store {
         return None;
     }
     let address = reads(inst, assignment);
@@ -584,8 +591,7 @@ fn cost(
     inst: &mc::Inst,
     cpu: Cpu,
 ) -> Result<(usize, u32), String> {
-    let size = crate::encode::encode(inst)?.bytes.len();
-    Ok((size, crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks))
+    crate::instprice::price_of(cpu, inst)
 }
 
 fn add(
@@ -876,7 +882,8 @@ fn sequences(
             priced.0 = add(priced.0, kept);
             priced.1 = add(priced.1, pushed);
         }
-        if !convertible || sorted != wanted || !keeps_values {
+        let pushable = convertible && sorted == wanted && keeps_values;
+        if !pushable && fusions.is_empty() {
             others.push(bytes);
             continue;
         }
@@ -893,6 +900,7 @@ fn sequences(
             fusions,
             addresses,
             kept: priced.0,
+            pushable,
             pushed: add(priced.1, cost(&cleanup, cpu)?),
             cleanup: cost(&cleanup, cpu)?,
         });
@@ -1001,8 +1009,8 @@ pub fn plan(
         Ok(sum)
     };
     let none = vec![false; found.len()];
-    let all = vec![true; found.len()];
-    let alone: Vec<bool> = found.iter().map(|one| cheaper(one.pushed, one.kept, price, cpu)).collect();
+    let all: Vec<bool> = found.iter().map(|one| one.pushable).collect();
+    let alone: Vec<bool> = found.iter().map(|one| one.pushable && cheaper(one.pushed, one.kept, price, cpu)).collect();
     let mut best = (none.clone(), total(&none)?);
     for choice in [all, alone] {
         let sum = total(&choice)?;

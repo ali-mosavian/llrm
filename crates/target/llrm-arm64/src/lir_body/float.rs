@@ -4,11 +4,11 @@
 
 use super::*;
 use crate::mc::inst::Cond;
-use crate::vector_forms::VectorForm;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, NarrowLane, Rounding, VectorFma,
-    VectorFpOp, VectorFpUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Rounding, SMOV_FORMS,
+    VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
+use crate::vector_forms::VectorForm;
 
 const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Mov, "FMOV"),
@@ -216,6 +216,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::VectorMulAcc { op, lanes, rd, rn, rm } => semantics(
+            Operation::MultiplyAdd,
+            format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(*lanes)),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
         Inst::VectorFma { op, lanes, rd, rn, rm } => semantics(
             Operation::FloatMultiplyAdd,
             vector_fp_name(op.mnemonic(), *lanes),
@@ -251,13 +258,24 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
             None,
         ),
-        Inst::VectorNarrow { high, wide, rd, rn } => semantics(
-            if *high { Operation::Binary } else { Operation::Unary },
-            format!("XTN{}", narrow_name(*wide, *high)),
-            vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
-            if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] },
-            None,
-        ),
+        Inst::VectorNarrow { high, shift, wide, rd, rn } => {
+            let mut sources =
+                if *high { vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128)] } else { vec![vreg_loc(*rn, 128)] };
+            let name = match shift {
+                Some(amount) => {
+                    sources.push(imm(i64::from(*amount)));
+                    format!("SHRN{}_shift", narrow_name(*wide, *high))
+                }
+                None => format!("XTN{}", narrow_name(*wide, *high)),
+            };
+            semantics(
+                if *high || shift.is_some() { Operation::Binary } else { Operation::Unary },
+                name,
+                vec![vreg_loc(*rd, if *high { 128 } else { 64 })],
+                sources,
+                None,
+            )
+        }
         Inst::VectorFmulLane { lanes, rd, rn, rm, index } => semantics(
             Operation::Binary,
             format!("FMULv{}_indexed", if *lanes == Arrangement::D2 { "2i64" } else { "4i32" }),
@@ -272,6 +290,17 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::VectorSmov { lanes, wide, rd, rn, index } => {
+            let name = SMOV_FORMS.iter().find(|form| form.1 == *lanes && form.2 == *wide).expect("an SMOV row").0;
+            let width = if *wide { Width::X } else { Width::W };
+            semantics(
+                Operation::Move,
+                name.to_string(),
+                vec![gpr_loc(*rd, width)],
+                vec![vreg_loc(*rn, 128), imm(i64::from(*index))],
+                None,
+            )
+        }
         Inst::VectorUmov { lanes, rd, rn, index } => {
             let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
             semantics(
@@ -315,6 +344,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vector_fp_name(op.mnemonic(), *lanes),
             vec![vreg_loc(*rd, 128)],
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
+        Inst::VectorIntUnary { op, lanes, rd, rn } => semantics(
+            Operation::Unary,
+            vector_int_unary_name(*op, *lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128)],
             None,
         ),
         Inst::VectorFpUnary { op, lanes, rd, rn } => semantics(
@@ -404,6 +440,7 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             let (name, sources) = match fill {
                 Fill::Zero => ("MOVIv2d".to_string(), vec![]),
                 Fill::Byte(byte) => ("MOVIv16b".to_string(), vec![imm(i64::from(*byte))]),
+                Fill::Byte8(byte) => ("MOVIv8b_ns".to_string(), vec![imm(i64::from(*byte))]),
                 Fill::Dup(arrangement, register) => {
                     let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
                     (dup_name(*arrangement).to_string(), vec![gpr_loc(*register, width)])
@@ -413,6 +450,7 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                         ImmShape::H8(shift) => ("8i16", shift),
                         ImmShape::S4(shift) => ("4i32", shift),
                         ImmShape::S2(shift) => ("2i32", shift),
+                        ImmShape::H4(shift) => ("4i16", shift),
                         ImmShape::S4Msl(shift) => ("4s_msl", shift),
                     };
                     let stem = if *invert { "MVNI" } else { "MOVI" };
@@ -423,7 +461,7 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             };
             let narrow = matches!(
                 fill,
-                Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
+                Fill::MaskD(_) | Fill::Byte8(_) | Fill::Imm { shape: ImmShape::S2(_) | ImmShape::H4(_), .. }
             );
             let width = if narrow { 64 } else { 128 };
             semantics(Operation::Move, name, vec![vreg_loc(*rd, width)], sources, None)
@@ -503,9 +541,11 @@ fn long_name(
     format!("{stem}v{narrow}_v{wide}")
 }
 
-const LONG_OPS: [VectorLongOp; 8] = [
+const LONG_OPS: [VectorLongOp; 10] = [
     VectorLongOp::Ushll,
     VectorLongOp::Sshll,
+    VectorLongOp::Uaddl,
+    VectorLongOp::Saddl,
     VectorLongOp::Uaddw,
     VectorLongOp::Saddw,
     VectorLongOp::Umull,
@@ -524,7 +564,11 @@ fn vector_fp_name(
     mnemonic: &str,
     lanes: Arrangement,
 ) -> String {
-    let lanes = if lanes == Arrangement::D2 { "2f64" } else { "4f32" };
+    let lanes = match lanes {
+        Arrangement::D2 => "2f64",
+        Arrangement::S2 => "2f32",
+        _ => "4f32",
+    };
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
@@ -596,13 +640,14 @@ const VECTOR_REDUCES: [VectorReduce; 6] = [
 ];
 
 const VECTOR_FP_OPS: [VectorFpOp; 4] = [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div];
-const VECTOR_FP_UNARY: [VectorFpUnary; 6] = [
+const VECTOR_FP_UNARY: [VectorFpUnary; 7] = [
     VectorFpUnary::Neg,
     VectorFpUnary::Abs,
     VectorFpUnary::Scvtf,
     VectorFpUnary::Ucvtf,
     VectorFpUnary::Fcvtzs,
     VectorFpUnary::Fcvtzu,
+    VectorFpUnary::Sqrt,
 ];
 
 /// `ADDv8i16`, `ANDv16i8`, `USHLv4i32`.
@@ -614,7 +659,17 @@ fn vector_op_name(
     format!("{stem}v{}", lane_name(lanes))
 }
 
-const VECTOR_OPS: [VectorOp; 14] = [
+fn vector_int_unary_name(
+    op: VectorIntUnary,
+    lanes: Arrangement,
+) -> String {
+    format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes))
+}
+
+const VECTOR_INT_UNARY: [VectorIntUnary; 5] =
+    [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit];
+
+const VECTOR_OPS: [VectorOp; 18] = [
     VectorOp::Add,
     VectorOp::Sub,
     VectorOp::Mul,
@@ -629,6 +684,10 @@ const VECTOR_OPS: [VectorOp; 14] = [
     VectorOp::Smin,
     VectorOp::Umax,
     VectorOp::Umin,
+    VectorOp::Sqadd,
+    VectorOp::Uqadd,
+    VectorOp::Sqsub,
+    VectorOp::Uqsub,
 ];
 const ARRANGEMENTS: [Arrangement; 4] = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2];
 /// The arrangements of the integer operations (three-same, shifts), which
@@ -666,7 +725,20 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             }
         });
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in OP_ARRANGEMENTS.into_iter().filter(|lanes| *lanes != Arrangement::D2) {
+        for op in [MulAcc::Add, MulAcc::Sub] {
+            if name == format!("{}v{}", op.mnemonic().to_uppercase(), lane_name(lanes)) {
+                return Some(Inst::VectorMulAcc {
+                    op,
+                    lanes,
+                    rd: vreg_of(dest?),
+                    rn: vreg_of(&s[1]),
+                    rm: vreg_of(&s[2]),
+                });
+            }
+        }
+    }
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in [VectorFma::Add, VectorFma::Sub] {
             if name == vector_fp_name(op.mnemonic(), lanes) {
                 return Some(Inst::VectorFma { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[1]), rm: vreg_of(&s[2]) });
@@ -699,10 +771,20 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     ] {
         let narrow = narrow_name(wide, high);
         if name == format!("XTN{narrow}") {
-            return Some(Inst::VectorNarrow { high, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+            return Some(Inst::VectorNarrow { high, shift: None, wide, rd: vreg_of(dest?), rn: vreg_of(s.last()?) });
+        }
+        if name == format!("SHRN{narrow}_shift") {
+            let at = usize::from(high);
+            return Some(Inst::VectorNarrow {
+                high,
+                shift: Some(value_of(&s[at + 1]) as u8),
+                wide,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[at]),
+            });
         }
     }
-    for (second, lanes) in ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
+    for (second, lanes) in OP_ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
         if name == unzip_name(second, lanes) {
             return Some(Inst::VectorUnzip {
                 second,
@@ -719,6 +801,15 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             rn: vreg_of(&s[0]),
             rm: vreg_of(&s[1]),
             index: value_of(&s[2]) as u8,
+        });
+    }
+    if let Some(&(_, lanes, wide)) = SMOV_FORMS.iter().find(|form| form.0 == name) {
+        return Some(Inst::VectorSmov {
+            lanes,
+            wide,
+            rd: gpr_of(dest?),
+            rn: vreg_of(&s[0]),
+            index: value_of(&s[1]) as u8,
         });
     }
     for lanes in [Arrangement::S4, Arrangement::D2] {
@@ -781,7 +872,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for lanes in [Arrangement::S4, Arrangement::D2] {
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
         for op in VECTOR_FP_OPS {
             if name == vector_fp_name(op.mnemonic(), lanes) {
                 return Some(Inst::VectorFpBinary {
@@ -809,6 +900,13 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                     rn: vreg_of(&s[0]),
                     rm: vreg_of(&s[1]),
                 });
+            }
+        }
+    }
+    for op in VECTOR_INT_UNARY {
+        for lanes in OP_ARRANGEMENTS {
+            if name == vector_int_unary_name(op, lanes) && op.has_lanes(lanes) {
+                return Some(Inst::VectorIntUnary { op, lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]) });
             }
         }
     }
@@ -865,6 +963,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     match name {
         "ORRv16b" => return Some(Inst::VectorMov { rd: vreg_of(dest?), rn: vreg_of(&s[0]) }),
         "MOVIv2d" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Zero }),
+        "MOVIv8b_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte8(value_of(&s[0]) as u8) }),
         "MOVIv16b" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte(value_of(&s[0]) as u8) }),
         "MOVIv2d_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Mask(value_of(&s[0]) as u8) }),
         "MOVID" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::MaskD(value_of(&s[0]) as u8) }),
@@ -879,9 +978,17 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
         }
         _ => {}
     }
-    if let Some(arrangement) = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
-        .into_iter()
-        .find(|one| name == dup_name(*one))
+    if let Some(arrangement) = [
+        Arrangement::B16,
+        Arrangement::H8,
+        Arrangement::S4,
+        Arrangement::D2,
+        Arrangement::B8,
+        Arrangement::H4,
+        Arrangement::S2,
+    ]
+    .into_iter()
+    .find(|one| name == dup_name(*one))
     {
         return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Dup(arrangement, gpr_of(&s[0])) });
     }
@@ -892,6 +999,7 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             "8i16" => ImmShape::H8(shift),
             "4i32" => ImmShape::S4(shift),
             "2i32" => ImmShape::S2(shift),
+            "4i16" => ImmShape::H4(shift),
             "4s_msl" => ImmShape::S4Msl(shift),
             _ => continue,
         };

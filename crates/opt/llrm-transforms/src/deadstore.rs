@@ -102,7 +102,7 @@ use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_support::hash::{HashMap, HashSet};
 
@@ -135,6 +135,14 @@ thread_local! {
     static LOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Instructions `is_read_clobber` has put to the alias analysis.
     static CLOBBERS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Objects `object_of` has made for a location.
+    static OBJECTS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The objects this thread's walks have made for locations, for a test that
+/// `is_overwrite` makes one only where the two writes share a root.
+pub fn objects_made() -> usize {
+    OBJECTS_MADE.with(std::cell::Cell::get)
 }
 
 /// The locations this thread's walks have worked out, for a test that an
@@ -765,6 +773,7 @@ impl<'a> Dse<'a> {
         &self,
         loc: &Location,
     ) -> Option<llrm_analysis::memory::ObjectRef> {
+        OBJECTS_MADE.with(|count| count.set(count.get() + 1));
         llrm_analysis::memory::object_of(self.aa.unit(), loc.reference.root?)
     }
 
@@ -911,11 +920,10 @@ impl<'a> Dse<'a> {
         if !self.loop_independent(dead_inst, killing_inst, dead) {
             return Overwrite::Unknown;
         }
-        let (dead_object, killing_object) = (self.object_of(dead), self.object_of(killing));
         let same_object = self.same_object(dead, killing);
         // The killing store overwrites the whole object.
         if same_object {
-            if let Some(object) = killing_object.filter(Self::is_identified) {
+            if let Some(object) = self.object_of(killing).filter(Self::is_identified) {
                 if object.extent == Some(i64::from(killing.reference.width)) {
                     return Overwrite::Complete;
                 }
@@ -938,7 +946,6 @@ impl<'a> Dse<'a> {
                 Overwrite::Unknown
             };
         }
-        let _ = (dead_object, killing_object);
         // A base plus constant offset on both sides.
         let (d, k) = (&dead.reference, &killing.reference);
         if d.root != k.root || d.base.is_some() || k.base.is_some() || d.segment != k.segment {
@@ -1562,8 +1569,11 @@ impl<'a> Dse<'a> {
     }
 
     /// `tryToShorten`: `dead` (a memset) loses the bytes the killing intervals
-    /// cover at its end or its start. (A memset has no destination alignment
-    /// in MIR: the alignment of the remaining part is 1.)
+    /// cover at its end or its start, only as far as the destination's `align`
+    /// stays true for what is left: the removal starts at the next multiple of
+    /// the alignment (the end), or ends at one (the start), and a removal that
+    /// is less than one alignment is not made. The memset's own alignment was
+    /// ignored, so `memset(@a + 2) align 16` was stored with `movaps`.
     fn try_to_shorten(
         &mut self,
         dead: InstId,
@@ -1573,14 +1583,40 @@ impl<'a> Dse<'a> {
         killing_size: u64,
         overwrite_end: bool,
     ) -> bool {
+        let align = match &self.function.instruction(dead).opcode {
+            Opcode::Call(info) => info
+                .argument_attrs
+                .first()
+                .and_then(|attrs| {
+                    attrs
+                        .iter()
+                        .find_map(
+                            |attr| match attr {
+                                Attribute::Int(name, value) if name == "align" => Some(*value),
+                                _ => None,
+                            },
+                        )
+                })
+                .unwrap_or(1),
+            _ => 1,
+        };
+        let to_alignment = |offset: u64| (align - offset % align) % align;
         let (remove_size, begin) = if overwrite_end {
-            let remove_start = killing_start;
+            let remove_start = killing_start + to_alignment((killing_start - *dead_start) as u64) as i64;
             if *dead_size <= (remove_start - *dead_start) as u64 {
                 return false;
             }
             (*dead_size - (remove_start - *dead_start) as u64, false)
         } else {
-            (killing_size - (*dead_start - killing_start) as u64, true)
+            let mut remove_size = killing_size - (*dead_start - killing_start) as u64;
+            let off = to_alignment(remove_size);
+            if off != 0 {
+                if remove_size <= align - off {
+                    return false;
+                }
+                remove_size -= align - off;
+            }
+            (remove_size, true)
         };
         let new_size = *dead_size - remove_size;
         self.written.borrow_mut().remove(&dead);

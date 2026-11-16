@@ -313,18 +313,17 @@ fn test_an_optsize_caller_keeps_a_callee_with_one_site_when_the_target_guards_si
     assert!(cost >= threshold, "{cost} against {threshold}");
 }
 
-/// D11 at speed on arm64: a callee with two sites that stays is not copied
-/// into a speed caller when its growth, at a byte's price in clocks, outweighs
-/// the call it saves (the pin's cost 45 against 50 inlined the compare loop;
-/// jpeg_fixed -O2 grew 7.9 KB -> 11 KB). x86 has no price: the pin's.
+/// arm64 is a large platform: at speed it prices a callee as the pin does, so
+/// the compare loop with two sites is inlined as on x86 (it was kept while arm64
+/// priced a byte in clocks; pattern_fill's `fillw` stayed a call at cost -5).
 #[test]
-fn a_speed_caller_keeps_a_compare_loop_with_two_sites_when_the_target_prices_bytes() {
+fn a_speed_caller_inlines_a_compare_loop_with_two_sites_as_the_pin_on_arm64() {
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
     let x86 = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
-    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&x86));
-    assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
-    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&arm));
-    assert!(cost >= threshold, "{cost} against {threshold}");
+    for tti in [&x86 as &dyn llrm_mir::tti::Tti, &arm] {
+        let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(tti));
+        assert!(cost < threshold, "{cost} against {threshold}");
+    }
 }
 
 /// The speed guard leaves a dying callee whose growth is under one call's
@@ -1164,7 +1163,8 @@ fn the_inliner_reads_the_inline_policy_of_the_target() {
     use llrm_mir::tti::{InlinePolicy, Tti};
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
     let pin = PolicyOnly(InlinePolicy::PIN, Some(true), false);
-    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, Some(true), false);
+    assert_eq!(arm.inline_policy().by_rate, 0, "AArch64 inlines as the pin does");
+    let priced = PolicyOnly(InlinePolicy { by_rate: 62_500, ..InlinePolicy::PIN }, Some(true), false);
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&pin));
     assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced));
@@ -1283,7 +1283,7 @@ fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
         arm.inline_policy(),
         InlinePolicy { by_size: Some(by_size), by_rate: arm.speed_inline_milliclocks_per_byte() }
     );
-    assert!(arm.inline_policy().by_rate > 0);
+    assert_eq!(arm.inline_policy().by_rate, 0, "arm64 is a large platform: the pin's threshold alone");
     let x86 = |guard: bool| {
         llrm_x86::tti::X86::of_cpu("x86-64")
             .unwrap()

@@ -81,8 +81,10 @@ pub enum Recipe {
     /// An access whose addresses are not consecutive and not a pattern the
     /// pin widens (an interleave group, a reversal, a uniform address): one
     /// scalar access per lane (`CM_Scalarize`), a load's lanes put together
-    /// by inserts, a store's taken apart by extracts.
-    Scalarized { op: MemoryOp, lane: Ty },
+    /// by inserts, a store's taken apart by extracts. `stride_bytes`: the
+    /// step of the address, which the target prices the address by
+    /// (`getAddressComputationCost`).
+    Scalarized { op: MemoryOp, lane: Ty, stride_bytes: Option<i64> },
     /// A cast; `folded`: the scalar one is part of the load it extends (LVI1);
     /// `users`: what reads an extension, which may absorb it
     /// (`GetUserAbsorbedCastCost`).
@@ -160,6 +162,26 @@ pub struct LoopFacts {
     /// (`collectElementTypesForWidening`: a loop without loads or stores has
     /// only these to take the widest type from).
     pub reduction_bits: Vec<u32>,
+    /// The values live across the loop's widened instructions, for the
+    /// register pressure; none: one register per value (the old count).
+    pub pressure: Option<Pressure>,
+}
+
+/// One value of the widened loop and where it lives: from the step that
+/// makes it to its last read (`calculateRegisterUsage`'s interval).
+#[derive(Clone, Copy, Debug)]
+pub struct Live {
+    pub lane: Ty,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The loop's values by interval, and its loop-invariant vector operands
+/// (the `LoopInvariants` of `calculateRegisterUsage`).
+#[derive(Clone, Debug, Default)]
+pub struct Pressure {
+    pub live: Vec<Live>,
+    pub invariants: Vec<Ty>,
 }
 
 /// The chosen factors.
@@ -303,6 +325,10 @@ fn iteration_cost(
     // (`SplitVectorResult`). Owner llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
     let taken = |lane: Ty| {
+        // A mask: `<VF x i1>` is held as the lanes of the compare that made it.
+        if lane == Ty::Int(1) {
+            return true;
+        }
         let bits = u64::from(lane_bits(lane)) * u64::from(vf);
         [register_bits, 2 * register_bits].contains(&bits)
             || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
@@ -353,18 +379,27 @@ fn iteration_cost(
                     tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
                 }
             }
-            Recipe::Scalarized { op, lane } => {
+            Recipe::Scalarized { op, lane, stride_bytes } => {
                 let access = tti.memory_op_cost(op, lane, kind, false);
                 if vf == 1 {
                     Cost { value: access.value + address, valid: access.valid }
                 } else {
-                    let overhead = unknown(tti.scalarization_overhead(
+                    // `getMemInstScalarizationCost`: the lanes' address and
+                    // access, the value's inserts (a load) or extracts (a
+                    // store), and the pointers' extracts where the target
+                    // takes addresses from a vector.
+                    let mut overhead = unknown(tti.scalarization_overhead(
                         vector(lane),
                         op == MemoryOp::Load,
                         op == MemoryOp::Store,
                         kind,
                     ))?;
-                    Cost { value: i64::from(vf) * (access.value + address) + overhead.value, valid: access.valid }
+                    if op == MemoryOp::Store || tti.prefers_vectorized_addressing() {
+                        let pointers = unknown(tti.scalarization_overhead(vector(Ty::Pointer), false, true, kind))?;
+                        overhead.value += pointers.value;
+                    }
+                    let lane_address = tti.scalarized_address_cost(stride_bytes, kind).value;
+                    Cost { value: i64::from(vf) * (access.value + lane_address) + overhead.value, valid: access.valid }
                 }
             }
             Recipe::Cast { kind: cast, dst, src, folded, ref users } => {
@@ -416,6 +451,9 @@ fn iteration_cost(
         };
         if !cost.valid {
             return Err(NotTaken);
+        }
+        if vf > 1 && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("Cost of {} for VF {vf}: {:?}", cost.value, recipe);
         }
         total += cost.value;
     }
@@ -481,10 +519,31 @@ fn best_vf(
     optimistic: bool,
 ) -> (u32, i64) {
     let scalar = iteration_cost(tti, &facts.recipes, 1, backend_limits, false).expect("the scalar loop is priced");
+    let debug = llrm_support::debug::enabled("loop-vectorize-cost");
+    if debug {
+        eprintln!("LV: Scalar loop costs: {scalar}.");
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for recipe in &facts.recipes {
+            let text = format!("{recipe:?}");
+            let name = text.split([' ', '{', '(']).next().unwrap_or("?").to_string();
+            match counts.iter_mut().find(|(one, _)| *one == name) {
+                Some(entry) => entry.1 += 1,
+                None => counts.push((name, 1)),
+            }
+        }
+        eprintln!("LV: recipes {counts:?}");
+    }
     let mut best = (scalar, 1u64, scalar);
     let mut vf = 2u64;
     while vf <= max_vf {
-        if let Ok(cost) = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic) {
+        let priced = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic);
+        if debug {
+            match &priced {
+                Ok(cost) => eprintln!("Cost for VF {vf}: {cost}"),
+                Err(_) => eprintln!("Cost for VF {vf}: not priced"),
+            }
+        }
+        if let Ok(cost) = priced {
             let candidate = (cost, vf, scalar);
             if is_more_profitable(candidate, best, facts.trip_count, true) {
                 best = candidate;
@@ -501,6 +560,49 @@ fn best_vf(
 fn max_local_users(recipes: &[Recipe]) -> u32 {
     let values = recipes.iter().filter(|recipe| !matches!(recipe, Recipe::Store { .. })).count() as u32;
     values.max(1)
+}
+
+/// `getRegUsageForType` of a `lane` vector of `vf` lanes: the registers it
+/// legalizes to (a mask is held as bytes: one).
+fn registers_of(
+    tti: &dyn Tti,
+    lane: Ty,
+    vf: u32,
+) -> u32 {
+    if vf == 1 || lane == Ty::Int(1) {
+        return 1;
+    }
+    let register_bits = u64::from(tti.vector_register_bits()).max(1);
+    (u64::from(lane_bits(lane)) * u64::from(vf)).div_ceil(register_bits).max(1) as u32
+}
+
+/// `calculateRegisterUsage` (L5138): at each instruction that makes a value
+/// read later, the registers of the values open across it (those made before
+/// and read after), the largest such sum, and the registers of the
+/// loop-invariant values. A value the loop makes and does not read again is
+/// not open. DEVIATE VP5 (owner llrm-arm64-vec, exit 2026-11-24): the values
+/// are those the widening makes, not the VPlan's recipes.
+fn register_usage(
+    tti: &dyn Tti,
+    pressure: &Pressure,
+    vf: u32,
+) -> (u32, u32) {
+    let mut most = 0;
+    for at in 0..=pressure.live.iter().map(|one| one.end).max().unwrap_or(0) {
+        // Only an instruction whose value is read later is a point.
+        if !pressure.live.iter().any(|one| one.start == at && one.end > at) {
+            continue;
+        }
+        let open: u32 = pressure
+            .live
+            .iter()
+            .filter(|one| one.start < at && one.end > at)
+            .map(|one| registers_of(tti, one.lane, vf))
+            .sum();
+        most = most.max(open);
+    }
+    let invariants = pressure.invariants.iter().map(|lane| registers_of(tti, *lane, vf)).sum();
+    (most.max(1), invariants)
 }
 
 /// What `selectInterleaveCount` reads of the loop and its plan.
@@ -528,13 +630,16 @@ fn select_interleave_count(
     vf: u32,
     loop_cost: i64,
 ) -> u32 {
-    let values = max_local_users(&facts.recipes);
+    let (users, invariants) = match &facts.pressure {
+        Some(pressure) => register_usage(tti, pressure, vf),
+        None => (max_local_users(&facts.recipes), 0),
+    };
     let inputs = IcInputs {
         epilogue_allowed: epilogue_allowed(facts),
         safe_for_any_vector_width: facts.safe_for_any_vector_width,
         trip_count: facts.trip_count,
-        users: values,
-        invariants: 0,
+        users,
+        invariants,
         loads: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Load { .. })).count() as u32,
         stores: facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Store { .. })).count() as u32,
         has_reductions: facts.has_reductions,
@@ -762,8 +867,10 @@ const EPILOGUE_MIN_VF: u64 = 16;
 /// The main loop must cover at least `EPILOGUE_MIN_VF` lanes
 /// (`isEpilogueVectorizationProfitable`); the epilogue's factor is no wider
 /// than the main loop's, and where the trip count is known no wider than the
-/// iterations left over (`SkipVF`: such a loop would never run); the cheapest
-/// per lane of those wins.
+/// iterations left over (`SkipVF`: such a loop would never run); of those that
+/// beat the scalar loop the cheapest over `MaxTripCount` iterations wins
+/// (`isMoreProfitable`, `IsEpilogue`): the remainder is under `VF x IC`, so
+/// a narrower factor with fewer scalar iterations left can beat a wider one.
 pub fn epilogue_vf(
     tti: &dyn Tti,
     facts: &LoopFacts,
@@ -777,15 +884,40 @@ pub fn epilogue_vf(
         return None;
     }
     let mut cap = u64::from(main.vf);
+    // `MaxTripCount` of the epilogue: the lanes the main loop leaves at most,
+    // or, where the trip count is known, exactly the remainder.
+    let mut max_trip_count = lanes - 1;
     if facts.trip_count != 0 {
         let remaining = facts.trip_count % lanes;
         if remaining == 0 {
             return None;
         }
         cap = cap.min(bit_floor(remaining));
+        max_trip_count = remaining;
+    } else {
+        // `SkipVF` against `SE.getURemExpr(TC, VF x IC)`: whatever the trip
+        // count, fewer than `VF x IC` iterations are left, so a factor of that
+        // many lanes or more would never run.
+        cap = cap.min(bit_floor(lanes - 1));
     }
-    let (vf, _) = best_vf(tti, facts, cap, true, false);
-    (vf > 1).then_some(vf)
+    // The factors that beat the scalar loop (`ProfitableVFs`) in ascending
+    // order; the first is taken, a later one replaces it when cheaper over
+    // `max_trip_count` iterations (`isMoreProfitable`, `IsEpilogue`).
+    let scalar = iteration_cost(tti, &facts.recipes, 1, true, false).expect("the scalar loop is priced");
+    let mut best: Option<(i64, u64, i64)> = None;
+    let mut vf = 2u64;
+    while vf <= cap {
+        if let Ok(cost) = iteration_cost(tti, &facts.recipes, vf as u32, true, false) {
+            let candidate = (cost, vf, scalar);
+            if is_more_profitable(candidate, (scalar, 1, scalar), facts.trip_count, true)
+                && best.is_none_or(|best| is_more_profitable(candidate, best, max_trip_count, true))
+            {
+                best = Some(candidate);
+            }
+        }
+        vf *= 2;
+    }
+    best.map(|(_, vf, _)| vf as u32)
 }
 
 /// The constant trip count under which the pin allows no epilogue

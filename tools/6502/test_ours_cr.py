@@ -269,7 +269,7 @@ class Archive(unittest.TestCase):
         text = mkrt.MOS_RT.read_text()
         ours_cr.RT = re.sub(r";.*", "", text)
         labels = {n: [x.strip() for x in re.search(r"^\.export (.*)$", t, re.M).group(1).split(",")] for n, t in mkrt.split_rt(text).items()}
-        cells = {"__sa", "__ra", "__sb", "__st", "__sr", "__sg"}
+        cells = {"__sa", "__ra", "__st", "__sr", "__sg"}
         Path(self.tmp, "start.s").write_text(mkrt.startup())
         for routine in re.findall(r"^\.export (__\w+)", text, re.M):
             wanted = set(re.findall(r"^([A-Za-z_]\w*):", ours_cr.reachable_runtime(f"  jsr {routine}\n"), re.M)) - cells

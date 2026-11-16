@@ -7,7 +7,9 @@
 
 use llrm_mir::intrinsics::ReduceKind;
 use llrm_mir::opcode::FloatPredicate;
-use llrm_mir::tti::{ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, Predicate, Ty, VectorTy};
+use llrm_mir::tti::{
+    ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, LaneOp, Predicate, Ty, VectorInstrContext, VectorTy,
+};
 
 use crate::tti::{vector_arithmetic_cost, vector_pieces};
 
@@ -124,6 +126,56 @@ const CONVERSIONS: &[(CastKind, VectorTy, VectorTy, i64)] = &[
     (CastKind::FPToUI, v(Ty::Int(8), 2), v(Ty::Double, 2), 2),
 ];
 
+/// `AArch64TTIImpl::getExtendedReductionCost`
+/// ([L6682](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6682)):
+/// an add reduction of an extension the target does natively (`uaddlv` of 8,
+/// 16 or 32 bits to at most 32; `uaddlp` of 32 to 64) costs 2 for each register
+/// but the first and 2 more. The rest is `BaseT`'s: `None`.
+pub(crate) fn extended_reduction_cost(
+    kind: ReduceKind,
+    _unsigned: bool,
+    result: Ty,
+    vec: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    if cost_kind != CostKind::RecipThroughput || kind != ReduceKind::Add {
+        return None;
+    }
+    let (first, lane) = vector_pieces(vec)?;
+    let result_bits = lane_bits(result)?;
+    // `VecVT.getSizeInBits() >= 64`; the legal type is one register's lanes.
+    if u64::from(lane) * u64::from(vec.count) < 64 {
+        return None;
+    }
+    let native = match lane {
+        8 | 16 => result_bits <= 32,
+        32 => result_bits <= 64,
+        _ => false,
+    };
+    native.then(|| Cost::of((first - 1) * 2 + 2))
+}
+
+/// `BasicTTIImplBase::getCastInstrCost`, a cast between vectors a legalization
+/// splits (wider than a register): the cast of the halves twice, and the split
+/// itself (1) unless both types split.
+fn split_cast_cost(
+    kind: CastKind,
+    dst: VectorTy,
+    src: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let (dst_pieces, _) = vector_pieces(dst)?;
+    let (src_pieces, _) = vector_pieces(src)?;
+    let (split_dst, split_src) = (dst_pieces > 1, src_pieces > 1);
+    if (!split_dst && !split_src) || dst.count != src.count || dst.count < 2 {
+        return None;
+    }
+    let half = |ty: VectorTy| VectorTy { lane: ty.lane, count: ty.count / 2 };
+    let piece = cast_cost(kind, half(dst), half(src), cost_kind)?;
+    let split = if split_dst && split_src { 0 } else { 1 };
+    Some(Cost::of(split + 2 * piece.value))
+}
+
 /// `getCastInstrCost` for fixed vectors, throughput: a row of the conversion
 /// table, or a bitcast between types of the same registers
 /// (`BasicTTIImpl::getCastInstrCost`: free).
@@ -154,10 +206,18 @@ pub(crate) fn cast_cost(
     // `BasicTTIImplBase::getCastInstrCost`: a conversion between integer and
     // float lanes of one width, wider than the table's rows, is its halves'
     // (both types split, so the split is free).
-    if matches!(kind, CastKind::SIToFP | CastKind::UIToFP | CastKind::FPToSI | CastKind::FPToUI)
+    if matches!(
+        kind,
+        CastKind::SIToFP | CastKind::UIToFP | CastKind::FPToSI | CastKind::FPToUI
+    )
         && vector_pieces(dst).zip(vector_pieces(src)).is_some_and(|((_, to), (_, from))| to == from)
     {
         return ext_cast_cost(kind, dst, src);
+    }
+    if matches!(kind, CastKind::SExt | CastKind::ZExt | CastKind::Trunc) {
+        if let Some(cost) = split_cast_cost(kind, dst, src, cost_kind) {
+            return Some(cost);
+        }
     }
     if kind == CastKind::BitCast {
         let (to, from) = (vector_pieces(dst)?, vector_pieces(src)?);
@@ -262,7 +322,14 @@ fn ext_cast_cost(
     if let Some(&(.., cost)) = CONVERSIONS.iter().find(|&&(one, to, from, _)| one == kind && to == dst && from == src) {
         return Some(Cost::of(cost));
     }
-    let ((dst_registers, _), (src_registers, _)) = (vector_pieces(dst)?, vector_pieces(src)?);
+    // A vector of `i1` (a mask) is promoted to bytes: one register to sixteen
+    // lanes, a register more per sixteen after.
+    let src_pieces = if src.lane == Ty::Int(1) {
+        (i64::from((src.count / 16).max(1)), 1)
+    } else {
+        vector_pieces(src)?
+    };
+    let ((dst_registers, _), (src_registers, _)) = (vector_pieces(dst)?, src_pieces);
     if dst_registers == src_registers {
         return Some(Cost::of(src_registers));
     }
@@ -440,6 +507,10 @@ pub(crate) fn scalarization_overhead(
     if cost_kind != CostKind::RecipThroughput {
         return None;
     }
+    // A vector of pointers (the address of a scalarized store): every lane is
+    // priced, lane 0 too (`getMemInstScalarizationCost` of the pin's opt:
+    // 44 for 8 floats, 48 for 8 bytes at stride 8).
+    let ty = if ty.lane == Ty::Pointer { VectorTy { lane: Ty::Int(64), ..ty } } else { ty };
     let (_, lane) = vector_pieces(ty)?;
     let moves = i64::from(insert) + i64::from(extract);
     let register_lanes = (128 / lane).min(ty.count);
@@ -516,4 +587,87 @@ pub(crate) fn reduction_cost(
         }
         ReduceKind::Mul | ReduceKind::FMul => None,
     }
+}
+
+/// `AArch64TTIImpl::getVectorInstrCost`
+/// ([L4842](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L4842))
+/// over `getVectorInstrCostHelper` (L4646), NEON only. A lane of a register
+/// other than the first costs the base cost (1 for code size); lane 0 of a
+/// floating-point vector is already in the register, an integer one needs a
+/// move; an insert of a one-use load is a `ld1` lane, free where the cpu has a
+/// fast one (`fast_ld1_single`).
+///
+/// DEVIATE VI1 (owner w12, exit 2026-11-30): an extract that fuses with a
+/// scalar `fmul` (`ExtractCanFuseWithFmul`, L4772) is priced as any other
+/// extract, since the hook is not given its users. Types the port does not
+/// price (`vector_pieces`) are `None`.
+pub(crate) fn vector_instr_cost(
+    op: LaneOp,
+    ty: VectorTy,
+    index: Option<u32>,
+    into_poison: bool,
+    context: VectorInstrContext,
+    cost_kind: CostKind,
+    fast_ld1_single: bool,
+) -> Option<Cost> {
+    // A vector inserted into a poison one at lane 0 is a `dup`: free.
+    if op == LaneOp::Insert && index == Some(0) && into_poison {
+        return Some(Cost::of(0));
+    }
+    let (_, lane) = vector_pieces(ty)?;
+    let base = if cost_kind == CostKind::CodeSize { 1 } else { INSERT_EXTRACT_BASE_COST };
+    if ty.count == 1 {
+        return Some(Cost::of(0));
+    }
+    if let Some(index) = index {
+        // The type may be split: the lane is taken within its register.
+        let index = index % (128 / lane).min(ty.count);
+        if index == 0 && ty.lane.is_float() {
+            return Some(Cost::of(0));
+        }
+        if context == VectorInstrContext::Load {
+            let cost = if fast_ld1_single || cost_kind == CostKind::CodeSize { 0 } else { base + 1 };
+            return Some(Cost::of(cost));
+        }
+    }
+    Some(Cost::of(base))
+}
+
+/// The `SK_Broadcast` rows of `ShuffleTbl` (L7196): `dup` of a 64- or 128-bit
+/// vector of 8, 16 or 32-bit lanes, or of two 64-bit ones; `LT.first` of them
+/// for a vector that splits.
+pub(crate) fn shuffle_cost(
+    kind: llrm_mir::tti::ShuffleKind,
+    ty: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    if kind != llrm_mir::tti::ShuffleKind::Broadcast || cost_kind != CostKind::RecipThroughput {
+        return None;
+    }
+    let (pieces, lane) = vector_pieces(ty)?;
+    let bits = u64::from(lane) * u64::from(ty.count);
+    let legal = (bits == 64 && lane != 64) || bits % 128 == 0;
+    legal.then(|| Cost::of(pieces))
+}
+
+/// `AArch64TTIImpl::getStoreMinimumVF`
+/// ([L537](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.h#L537)):
+/// a chain of 4 or more `i8` stores in a power-of-two count is cut to 4;
+/// else `BasicTTIImpl::getStoreMinimumVF` halves the VF while a store of half
+/// the lanes is a legal one (at most one register). DEVIATE VI2 (owner w12,
+/// exit 2026-11-30): the pin's truncating-store test for an illegal half is
+/// not made (no vector truncating store is priced).
+pub(crate) fn store_minimum_vf(
+    vf: u32,
+    mem: Ty,
+) -> u32 {
+    if mem == Ty::Int(8) && vf.is_power_of_two() && vf >= 4 {
+        return 4;
+    }
+    let legal = |lanes: u32| matches!(vector_pieces(v(mem, lanes)), Some((1, _)));
+    let mut vf = vf;
+    while vf > 2 && legal(vf / 2) {
+        vf /= 2;
+    }
+    vf
 }

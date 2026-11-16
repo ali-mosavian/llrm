@@ -21,7 +21,13 @@
 //! loops unrotated (gcc's `-Os` shape) and `keeps_at_size` keeps it only if the
 //! object is smaller. What rotating costs or frees is in the passes after it
 //! (x_prefix -12 B unrotated, x_transpose +34 B), so the finished code decides.
-
+//!
+//! A rotation is priced with the heuristic's trips in both shapes
+//! (`executed_unproven`): the copied guard gives a rotated nest two exits,
+//! which neither SCEV nor the induction proof counts, so priced with its proven
+//! trips the rotated shape weighed 3.9x the unrotated one (x_prefix -Os, 12,810
+//! against 3,297) while it ran 14% faster, and ROTATION-HOT never kept it. An
+//! unroll takes the loop away and keeps its proven counts.
 
 use std::collections::BTreeSet;
 
@@ -118,6 +124,15 @@ impl Dimension {
         }
     }
 
+    /// Whether the two compiles are priced with the loops' proven trip counts.
+    /// An unroll takes the loop away, and the count it was unrolled for is
+    /// what pays. A rotation leaves the loop and may hide its count
+    /// (the copied guard gives it two exits), so a rotation is priced with the
+    /// heuristic's trips in both shapes.
+    fn prices_proven_trips(self) -> bool {
+        matches!(self, Dimension::Unroll { .. })
+    }
+
     /// Whether the reversed compile is kept over the base, `bytes` and `work` being the finished modules'.
     fn keeps(
         self,
@@ -165,20 +180,23 @@ fn compiled_with<T>(
 }
 
 /// What a finished module is expected to execute: instructions and memory operands as `executed::work`, the
-/// branches and jumps at their clocks on the CPU (a rotation trades a taken `jmp` for a copied guard, which the
-/// work alone does not see). `None` where the model has no answer.
+/// branches, jumps and x87 exchanges at their clocks on the CPU (a rotation
+/// trades a taken `jmp` for a copied guard, and can add `fxch`es to the loop,
+/// which the work alone does not see). `None` where the model has no answer.
 fn rotation_work(
     built: &masm::Module,
     options: &Options,
+    proven: bool,
 ) -> Option<f64> {
     let cpu = options.cpu().ok()?;
     built
         .procedures
         .iter()
         .map(|one| {
-            let done = executed::executed(&one.body)?;
+            let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
             let jumps = done.jump_cycles(cpu).ok()?;
-            Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
+            let exchanges = done.exchange_cycles(cpu).ok()?;
+            Some(done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges)
         })
         .sum::<Option<f64>>()
 }
@@ -298,7 +316,8 @@ fn compiled_module_at_o1(
     let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
     let added = other_price.0 - kept_price.0;
     let saved = (kept_price.1 - other_price.1).round() as i64;
-    let pays = trial::keeps_at_o1(saved, added);
+    let rate = options.cpu().ok().and_then(|cpu| cpu.target().tti()).map_or(0, |tti| tti.unroll_milliclocks_per_byte());
+    let pays = trial::keeps_at_o1(saved, added, rate);
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll: {added:+} bytes, {saved:+} work saved: {}", if pays { "kept" } else { "put back" });
     }
@@ -352,7 +371,8 @@ fn compiled_module_at_size(
                 .map(|(_, function)| function.instruction_count())
                 .sum()
         };
-        let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options)));
+        let price =
+            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
         if 2 * size(&base.program.modules[0], Some(&cut)) >= size(&base.program.modules[0], None) {
             let variant = built(program, name, &again)?;
             let pays = matches!((price(&base.built), price(&variant.built)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
@@ -383,9 +403,12 @@ fn compiled_module_at_size(
         let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
         let _ = Noted::take();
         let together = built(program, name, &again)?;
-        let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options)));
-        let pays =
-            matches!((price(&chosen.built), price(&together.built)), (Some(a), Some(b)) if dimension.keeps(&noted, a, b));
+        let price =
+            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
+        let pays = matches!(
+            (price(&chosen.built), price(&together.built)),
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+        );
         if pays {
             chosen = together;
         } else {

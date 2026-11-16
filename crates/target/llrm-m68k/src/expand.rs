@@ -152,9 +152,9 @@ pub fn frame_cost_with(
     ops.iter().for_each(|op| frame_op(op, &mut insts, short));
     let (mut bytes, mut clocks) = (0, 0);
     for inst in &insts {
-        let size = crate::encode::encode(inst)?.bytes.len();
+        let (size, time) = crate::instprice::price_of(cpu, inst)?;
         bytes += size;
-        clocks += crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks;
+        clocks += time;
     }
     Ok((bytes, clocks))
 }
@@ -414,6 +414,16 @@ pub(crate) fn call_area(
         .unwrap_or(0)
 }
 
+thread_local! {
+    static EXPANSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many functions [`finish_with`] expanded on this thread: a candidate
+/// the call-target choice prices is one more (`choose` was 23% of grep -O2).
+pub fn expansions() -> usize {
+    EXPANSIONS.with(std::cell::Cell::get)
+}
+
 /// [`finish`], with the outgoing arguments pushed where [`crate::callpush`]
 /// finds that cheaper: `pushes` is `Some(price)` to allow it.
 pub fn finish_with(
@@ -426,6 +436,7 @@ pub fn finish_with(
     short: bool,
     pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
+    EXPANSIONS.with(|count| count.set(count.get() + 1));
     if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short) {
         // the fold proved its range for the stack depth it could foresee; call
         // cleanups left owed grow the depth, which only emission knows:
@@ -507,7 +518,10 @@ pub fn finish_with(
                 Operand::Imm(value) => {
                     // a frame index follows the displacement it adds to
                     if let Some((_, Operand::Frame(index))) = it.peek() {
-                        let at = frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
+                        let at = frame_indices
+                            .iter()
+                            .position(|one| one == index)
+                            .ok_or_else(|| format!("an unknown frame index {index}"))?;
                         let (base, disp) = layout.address(at);
                         it.next();
                         let shown = value + disp + if base == Base::Sp { pushed } else { 0 };
@@ -525,7 +539,8 @@ pub fn finish_with(
                 // The table and blocks of a table jump are for the passes and
                 // the emitted table; the instruction is `jmp (An)`.
                 Operand::Symbol(..) | Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
-                // a word table's jump names its table; the blocks are the table's
+                // a word table's jump names its table; the blocks are the
+                // table's
                 Operand::Block(_) if inst.kind == Kind::Op(crate::dagisel::wordjump::NAME) => continue,
                 Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
                 Operand::Block(id) => {

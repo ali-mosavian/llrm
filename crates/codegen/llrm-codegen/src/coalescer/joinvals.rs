@@ -135,7 +135,8 @@ impl<'a> JoinVals<'a> {
         rhs: LiveRange,
     ) -> Self {
         let sides = [Side::new(cp.dst_reg(), lhs), Side::new(cp.src_reg(), rhs)];
-        Self { sides, new_vn_info: Vec::new(), cp, lis }
+        let values = sides.iter().map(|side| side.vals.len()).sum();
+        Self { sides, new_vn_info: Vec::with_capacity(values), cp, lis }
     }
 
     pub fn resolution(
@@ -210,19 +211,19 @@ impl<'a> JoinVals<'a> {
         if vni.is_unused() {
             return Resolution::Keep;
         }
-        // Get the instruction defining this value.
+        // Get the instruction defining this value: its key stands for the
+        // pin's `MachineInstr *`, read where it is needed.
         let def_mi = if vni.is_phi_def() {
             // Conservatively assume that all lanes in a PHI are valid.
             None
         } else {
-            let key = self.lis.defining_instr(&vni.def(), self.sides[me].reg);
-            Some(Rc::new(self.lis.instr(key).clone()))
+            Some(self.lis.defining_instr(&vni.def(), self.sides[me].reg))
         };
         // An IMPLICIT_DEF writes undef values. It is normally live only until
         // the end of its block; if it is really live longer and gets pruned in
         // another block, this flag is cleared again.
         let is_implicit_def =
-            def_mi.as_ref().is_some_and(|insn| crate::processimpdefs::implicit_def_of(insn).is_some());
+            def_mi.is_some_and(|key| crate::processimpdefs::implicit_def_of(self.lis.instr(key)).is_some());
         if is_implicit_def {
             self.sides[me].vals[val_no].erasable_implicit_def = true;
         }
@@ -285,14 +286,10 @@ impl<'a> JoinVals<'a> {
             // value of.
             let other_def = other_vni.def();
             let other_block = self.lis.indexes.get_mbb_from_index(&other_def);
-            let extends = def_mi
-                .as_ref()
-                .is_some_and(
-                    |_| {
-                        let at = self.lis.indexes.get_mbb_from_index(&vni.def());
-                        at != other_block || self.sides[me].lr.live_at(&self.lis.indexes.get_mbb_start_idx(other_block))
-                    },
-                );
+            let extends = def_mi.is_some_and(|_| {
+                let at = self.lis.indexes.get_mbb_from_index(&vni.def());
+                at != other_block || self.sides[me].lr.live_at(&self.lis.indexes.get_mbb_start_idx(other_block))
+            });
             if extends {
                 self.sides[other].vals[other_id].must_keep_implicit_def();
             } else {
@@ -310,7 +307,7 @@ impl<'a> JoinVals<'a> {
         }
         // Include the non-conflict where DefMI is a coalescable copy that kills
         // OtherVNI. We still want the copy erased and value numbers merged.
-        if self.cp.is_coalescable(&def_mi) {
+        if self.cp.is_coalescable(self.lis.instr(def_mi)) {
             return Resolution::Erase;
         }
         // This may not be a real conflict if DefMI simply kills Other and
@@ -320,7 +317,8 @@ impl<'a> JoinVals<'a> {
         }
         // Handle the case where VNI and OtherVNI can be proven to be
         // identical: `%other = COPY %ext; %this = COPY %ext` erases the second.
-        if full_copy(&def_mi).is_some() && self.values_identical(me, &vni, &other_vni) {
+        let is_copy = full_copy(self.lis.instr(def_mi)).is_some();
+        if is_copy && self.values_identical(me, &vni, &other_vni) {
             self.sides[me].vals[val_no].identical = true;
             return Resolution::Erase;
         }

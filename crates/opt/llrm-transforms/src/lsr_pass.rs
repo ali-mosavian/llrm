@@ -72,7 +72,8 @@ fn computed_by_priced_multiply(
             let size = layout.alloc_size(&context.types, source);
             let scaled = size > 1
                 && matches!(inst.operands.get(1), Some(Operand::Value(_)))
-                && tti.reduces_outer_multiply(Some(u128::from(size)));
+                && (tti.reduces_outer_multiply(Some(u128::from(size)))
+                    || tti.reduces_outer_address_scale(u128::from(size)));
             scaled
                 || depth > 0
                     && inst
@@ -98,7 +99,8 @@ const MAX_IV_USERS: usize = 200;
 
 /// LLVM's loop strength reduction. `size`: the compile is for size, which the
 /// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
-/// `bytes_strict`: code bytes outrank clocks (-O1, -Os), which DEVIATE LG3's
+/// `bytes_strict`: code bytes outrank clocks (-Os, and -O1 where the target's
+/// byte price at speed does not count), which DEVIATE LG3's
 /// keep rule reads: a base added outside the loop counts against the
 /// instructions it saves once, not once a trip.
 pub struct LoopStrengthReduce {
@@ -411,8 +413,9 @@ fn plan_loop(
         // loop must not outweigh the instructions it saves in it (nbody -O1:
         // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
-        let spent = cost.c.insns + cost.c.setup_cost;
-        let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
+        // A loser's metrics sit at their greatest (`Lose`): the sums saturate.
+        let spent = cost.c.insns.saturating_add(cost.c.setup_cost);
+        let saved = pin_cost.c.insns.saturating_add(pin_cost.c.setup_cost);
         // DEVIATE LG3: the `spent` against `saved` test above, over the trips
         // the loop is known to run, with the symbol bases the end-biased
         // solution adds to the pin's priced as the target's setup says

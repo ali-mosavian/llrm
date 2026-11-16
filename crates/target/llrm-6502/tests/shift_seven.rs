@@ -28,12 +28,11 @@ fn instructions(
 #[test]
 fn a_word_shifted_right_by_seven_shifts_its_bytes_in_place() {
     let lines = instructions("define i16 @k_shr7(i16 %x) {\n  %r = lshr i16 %x, 7\n  ret i16 %r\n}\n", "k_shr7");
-    // 6502-AX-WORD-OPS: the word arrives in A:X and is stored to its cells to
-    // rotate in place (+4 B on the 11 B the cells gave); by hand through A
+    // the low byte arrives in `a` and shifts there; by hand through A and X
     // it is `asl a; txa; rol a; tay; lda #0; rol a; tax; tya` (9 B)
     assert_eq!(
         lines,
-        ["sta rc2", "stx rc3", "asl rc2", "rol rc3", "lda #0", "rol a", "tax", "lda rc3", "rts"],
+        ["stx rc3", "asl a", "rol rc3", "lda #0", "rol a", "tax", "lda rc3", "rts"],
         "the shift is two rotates in place and the carry is the top bit, not made again from X"
     );
 }

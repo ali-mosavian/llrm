@@ -324,8 +324,13 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         if !self.mul.allows_beyond_pin() {
             return None;
         }
-        let price = if dag.config().block_frequency > 1.0 || !self.cpu.at_least(Cpu::M68020) { self.price } else { Price::Size };
-        let plan = super::synth::plan(self.cpu, price, vt.size_in_bits(), c)?;
+        let price = if dag.config().block_frequency > 1.0 || !self.cpu.at_least(Cpu::M68020) {
+            self.price
+        } else {
+            Price::Size
+        };
+        let plan = super::synth::plan(self.cpu, price, vt.size_in_bits(), c)
+            .or_else(|| super::synth::plan_unless_linked(self.cpu, price, vt.size_in_bits(), c))?;
         let taken = self.mul.allows(true).then_some(plan);
         if taken.is_some() {
             self.mul.note_synthesized();
@@ -972,27 +977,23 @@ fn bit_test(
 /// against 1; 4 B against 6).
 pub fn btst_beats_and_immediate(cpu: Cpu) -> bool {
     use crate::timing::cost;
-    static BEATS: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
-        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
-            let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
-            clocks("btst #23, %d0", 4) <= clocks("and.l #8388608, %d0", 6)
-        })
-    });
-    BEATS[cpu as usize]
+    static BEATS: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
+    *BEATS.get(cpu, |cpu| {
+        let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
+        clocks("btst #23, %d0", 4) <= clocks("and.l #8388608, %d0", 6)
+    })
 }
 
 /// Whether `tst.w`/`tst.b Dn` takes no more bytes and no more clocks than
 /// `btst #k,Dn` on `cpu`, read from the timing tables (2 B against 4).
 fn tst_beats_btst(cpu: Cpu) -> bool {
     use crate::timing::cost;
-    static BEATS: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
-        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
-            let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
-            let btst = clocks("btst #15, %d0", 4);
-            clocks("tst.w %d0", 2) <= btst && clocks("tst.b %d0", 2) <= btst
-        })
-    });
-    BEATS[cpu as usize]
+    static BEATS: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
+    *BEATS.get(cpu, |cpu| {
+        let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
+        let btst = clocks("btst #15, %d0", 4);
+        clocks("tst.w %d0", 2) <= btst && clocks("tst.b %d0", 2) <= btst
+    })
 }
 
 /// DEVIATE M68K-BTST-SIGN (owner m68k-lsr-addressing, exit 2026-11-30): the

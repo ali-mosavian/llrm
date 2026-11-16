@@ -99,7 +99,9 @@ pub(crate) fn divisor_info(
     divisor: Operand,
     ty: Ty,
 ) -> llrm_mir::tti::OperandInfo {
-    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem) = (divisor, ty, op) else {
+    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) =
+        (divisor, ty, op)
+    else {
         return Default::default();
     };
     match context.get(id).kind {
@@ -377,7 +379,9 @@ pub(crate) fn extract(
                 // interleave group) have costs of their own, which this port
                 // does not price; any other pattern is
                 // scalarized (NEON has no gather or scatter).
-                priced.push(match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {
+                let step = get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true);
+                let bytes = (cx.layout.size_bits(&cx.context.types, value_ty) / 8) as i64;
+                priced.push(match step {
                     Some(1) => {
                         if is_load {
                             Recipe::Load { lane, align }
@@ -386,7 +390,7 @@ pub(crate) fn extract(
                         }
                     }
                     Some(-4..=4) => Recipe::Unpriced { scalar_cost: scalar },
-                    _ => Recipe::Scalarized { op, lane },
+                    _ => Recipe::Scalarized { op, lane, stride_bytes: step.map(|stride| stride * bytes) },
                 });
                 if is_load {
                     loads += 1;

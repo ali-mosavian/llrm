@@ -3726,3 +3726,29 @@ fn test_arm64_makes_no_ipa_cp_clones_unless_asked() {
     assert_eq!(run(None), asked_not);
     assert_ne!(run(Some(true)), asked_not, "the premise: the clones change this module");
 }
+
+/// A pass translated from gcc names its gcc source by a link to gcc's git tree, and its file carries the licence gcc's
+/// source has. #10096 merged `ree.rs` with the link and no header.
+#[test]
+fn test_a_file_that_links_gcc_source_is_marked_gpl() {
+    fn scan(dir: &std::path::Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if entry.file_name() != "target" {
+                    scan(&path, found);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && let Ok(text) = std::fs::read_to_string(&path)
+                && text.contains(concat!("gcc.gnu.", "org/git"))
+                && !text.starts_with("// SPDX-License-Identifier: GPL-3.0-or-later\n")
+            {
+                found.push(path.display().to_string());
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut found = Vec::new();
+    scan(&root, &mut found);
+    assert!(found.is_empty(), "gcc-derived file without the SPDX GPL header: {found:?}");
+}

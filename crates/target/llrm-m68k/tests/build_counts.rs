@@ -76,7 +76,28 @@ fn a_speed_level_multiply_chain_adds_no_trial_builds() {
     let report = String::from_utf8_lossy(&out.stderr);
     assert!(report.contains("mul_trial true"), "the multiply was not a chain:\n{report}");
     let builds = report.lines().filter(|line| line.trim_end() == "[builds] f").count();
-    // the first build, the relaxed-class build, and both again without the
-    // shared CSE
-    assert!(builds <= 4, "{builds} builds:\n{report}");
+    // the one build: no relaxed-class, shared-CSE or slot-register build
+    assert!(builds <= 1, "{builds} builds:\n{report}");
+}
+
+/// A -Os function whose constants were rematerialised was built a third time
+/// to try them off (`bs_high`: 2 builds); over 165 programs that build was
+/// never smaller, and it cost 11% of the corpus's compile instructions.
+#[test]
+fn a_size_build_does_not_try_rematerialisation_off() {
+    let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data_rt/bswap_forms.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"))
+        .args(["-S", "-Os", "-mcpu=68020", "-o", "/dev/null", ir])
+        .env("LLRM_DEBUG", "builds")
+        .env("LLRM_VERIFY", "0")
+        .output()
+        .expect("runs");
+    assert!(out.status.success());
+    let report = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        report.contains("[builds] bs_high trials:") && report.contains("remat_constants true"),
+        "premise: {report}"
+    );
+    let builds = report.lines().filter(|line| *line == "[builds] bs_high").count();
+    assert!(builds <= 1, "bs_high built {builds} times:\n{report}");
 }

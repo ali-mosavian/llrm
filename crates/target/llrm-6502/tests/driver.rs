@@ -954,13 +954,13 @@ fn a_word_shifted_right_by_seven_is_one_shift_left() {
     assert!(!text.contains("lsr rc") && text.matches("ror").count() == 0, "seven right shifts:\n{text}");
 }
 
-/// A run of shifts of a word keeps the byte that shifts alone in `a`: `asl a;
-/// rol hi` is 7 clocks a step, `asl lo; rol hi` is 10.
+/// A run of shifts of a word keeps one byte in `a` (`asl a; rol hi` is 7
+/// clocks a step, `asl lo; rol hi` is 10): the low byte, which arrives there.
 #[test]
 fn a_run_of_word_shifts_carries_one_byte_in_the_accumulator() {
     let ir = module("define i16 @shr3(i16 %x) {\n  %r = lshr i16 %x, 3\n  ret i16 %r\n}");
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("lsr a\n  ror rc2"), "the shifts go through memory:\n{text}");
+    assert!(text.contains("lsr rc3\n  ror a") && !text.contains("ror rc"), "the shifts go through memory:\n{text}");
 }
 
 /// gcd's `if (a > b) a -= b; else b -= a;` was folded into two selects
@@ -2654,15 +2654,19 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
 /// adds (`a_module_takes_the_speed_multiply_...`).
 #[test]
 fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
+    // three multiplies: the call sites shrank (tail calls, no `__sa` copies),
+    // so one multiply's clocks are a smaller share than the 15 B they add
+    // at -Os
     let looped = module(
         "define i32 @f(i32 %a, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
-         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = mul i32 %s, 1664525\n  %j = add i32 %i, 1\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %m = mul i32 %s, %a\n  %q = mul i32 %m, %n\n  \
+         %r = mul i32 %q, %s\n  %j = add i32 %i, 1\n  \
          %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
     );
     let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("jsr __mulsi3_fast\n"), "a loop at -O2:\n{text}");
+    assert!(text.contains("__mulsi3_fast\n"), "a loop at -O2:\n{text}");
     let small = assembly(&looped, &Request::new(Level::Os)).unwrap();
-    assert!(small.contains("jsr __mulsi3_fast\n"), "a loop that is the whole module at -Os:\n{small}");
+    assert!(small.contains("__mulsi3_fast\n"), "a loop that is the whole module at -Os:\n{small}");
 }
 
 /// `__builtin_mul_overflow` in a loop is `llvm.umul.with.overflow.i32`, no
@@ -2678,7 +2682,7 @@ fn a_long_multiply_with_overflow_in_a_loop_calls_the_fast_routine_at_speed() {
          %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
     );
     let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("jsr __mulsi3_fast\n"), "{text}");
+    assert!(text.contains("__mulsi3_fast\n"), "{text}");
 }
 
 /// Two functions that call through a pointer both made the label `_ci1`:
@@ -2922,15 +2926,12 @@ fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
          %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
     );
     let text = assembly(&cold, &Request::new(Level::O2)).unwrap();
-    assert!(
-        text.contains("jsr __modsi3_fast_small\n") && !text.contains("jsr __modsi3_fast\n"),
-        "a cold site:\n{text}"
-    );
+    assert!(text.contains("__modsi3_fast_small\n") && !text.contains("__modsi3_fast\n"), "a cold site:\n{text}");
     for (ir, what) in [(&looped, "a loop"), (&from_a_loop, "a function called from a loop")] {
         let text = assembly(ir, &Request::new(Level::O2)).unwrap();
-        assert!(text.contains("jsr __modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
+        assert!(text.contains("__modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
         let small = assembly(ir, &Request::new(Level::Os)).unwrap();
-        assert!(small.contains("jsr __modsi3_fast_small\n"), "{what} at -Os:\n{small}");
+        assert!(small.contains("__modsi3_fast_small\n"), "{what} at -Os:\n{small}");
     }
 }
 
@@ -3181,7 +3182,7 @@ fn a_product_of_two_words_calls_the_widening_multiply() {
         ("sext", "zext", "__mulsi3"),
     ] {
         let text = assembly(&product(x, y), &Request::new(Level::O2)).unwrap();
-        assert!(text.contains(&format!("jsr {routine}")), "{x} * {y}:\n{text}");
+        assert!(text.contains(&routine), "{x} * {y}:\n{text}");
         if routine != "__mulsi3" {
             assert!(!text.contains("__mulsi3"), "{x} * {y}:\n{text}");
             // the two routines add bytes: -O1 keeps the long multiply (-Os
@@ -3203,7 +3204,7 @@ fn a_product_by_a_byte_calls_the_byte_entry() {
     };
     for (x, routine) in [("zext", "__umulhisi3_byte"), ("sext", "__mulhisi3_byte")] {
         let text = assembly(&product(x), &Request::new(Level::O2)).unwrap();
-        assert!(text.contains(&format!("jsr {routine}")), "{x}:\n{text}");
+        assert!(text.contains(&routine), "{x}:\n{text}");
     }
 }
 
@@ -3262,7 +3263,7 @@ fn a_module_takes_the_speed_multiply_where_the_clocks_it_saves_are_its_own() {
         "%p1 = mul i32 %t3, %b\n  %p2 = mul i32 %p1, %a\n  %p3 = mul i32 %p2, %b\n  %r3 = mul i32 %p3, %t3",
     );
     let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("jsr __mulsi3\n") && !text.contains("__mulsi3_fast"), "{text}");
+    assert!(text.contains("__mulsi3\n") && !text.contains("__mulsi3_fast"), "{text}");
 }
 
 /// At -Os a long divide is the compact 32-step walk (loop_interchange: 13.9M
@@ -3287,12 +3288,12 @@ fn a_module_takes_the_speed_divide_where_the_clocks_it_saves_are_its_own() {
     };
     let in_loop = divides("%r1 = urem i32 %x, %b\n  %r2 = urem i32 %r1, %a", "%r3 = add i32 %t3, 1");
     let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("jsr __umodsi3_fast_small"), "{text}");
+    assert!(text.contains("__umodsi3_fast_small"), "{text}");
     let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
     let beside = divides(
         &format!("{work}%r2 = shl i32 %x, 3"),
         "%p1 = urem i32 %t3, %b\n  %p2 = urem i32 %p1, %a\n  %p3 = urem i32 %p2, %b\n  %r3 = urem i32 %p3, %t3",
     );
     let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("jsr __umodsi3\n") && !text.contains("_fast"), "{text}");
+    assert!(text.contains("__umodsi3\n") && !text.contains("_fast"), "{text}");
 }
