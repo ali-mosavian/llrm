@@ -1336,6 +1336,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether a run of copies of adjacent cells is `llvm.memcpy` at every
+    /// level, where the bytes of the call are fewer (`mergestores`): the
+    /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.
+    /// False: only when tuned for size.
+    fn string_runs_at_speed(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
