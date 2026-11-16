@@ -1333,7 +1333,10 @@ impl<'a> Analyzer<'a> {
         &self,
         ty: llrm_mir::types::TypeId,
     ) -> bool {
-        if matches!(self.context.types.get(ty), Type::Float(llrm_mir::types::FloatKind::F128)) {
+        if matches!(
+            self.context.types.get(ty),
+            Type::Float(llrm_mir::types::FloatKind::F128)
+        ) {
             return true;
         }
         let Some(tti) = self.site.tti else { return false };
