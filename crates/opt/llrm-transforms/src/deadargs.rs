@@ -100,6 +100,8 @@ fn removed_among(
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let mut changed = BTreeSet::new();
+    // The functions the pin builds again (`removeDeadStuffFromFunction`).
+    let mut rebuilt = BTreeSet::new();
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };
         if recursive_only && !calls.iter().any(|&(caller, _)| caller == id) {
@@ -152,10 +154,19 @@ fn removed_among(
         // The function itself has other parameters now.
         unsound.insert(id);
         changed.insert(id);
+        rebuilt.insert(id);
     }
-    for id in remove_dead_returns(module) {
+    for id in remove_dead_returns(module, &mut rebuilt) {
         unsound.insert(id);
         changed.insert(id);
+    }
+    // The new function takes the uses of the old one's other parameters one at a
+    // time, so each list comes out reversed, once however much was removed.
+    for id in rebuilt {
+        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { unreachable!("a function") };
+        for parameter in function.parameters().to_vec() {
+            function.reverse_uses(parameter);
+        }
     }
     (changed.into_iter().collect(), unsound)
 }
@@ -164,7 +175,10 @@ fn removed_among(
 /// (LLVM's DeadArgumentElimination, `surveyFunction`'s return values and
 /// `removeDeadStuffFromFunction`): the function returns nothing and each call
 /// has no result. Returns the functions and callers it edited.
-fn remove_dead_returns(module: &mut Module) -> Vec<GlobalId> {
+fn remove_dead_returns(
+    module: &mut Module,
+    rebuilt: &mut BTreeSet<GlobalId>,
+) -> Vec<GlobalId> {
     let gone = dead_returns(module);
     if gone.is_empty() {
         return Vec::new();
@@ -176,6 +190,7 @@ fn remove_dead_returns(module: &mut Module) -> Vec<GlobalId> {
         let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
         function.drop_return_value(context);
         changed.insert(id);
+        rebuilt.insert(id);
     }
     for &id in &gone {
         let ty = module.global(id).function().expect("a function").ty;

@@ -162,7 +162,7 @@ pub(crate) fn widened_intrinsic(
     cx: &Cx,
     inst: InstId,
 ) -> Option<Intrinsic> {
-    get_vector_intrinsic_id_for_call(cx, inst).filter(|id| *id == Intrinsic::FMulAdd)
+    get_vector_intrinsic_id_for_call(cx, inst).filter(|id| matches!(id, Intrinsic::FMulAdd | Intrinsic::MinMax { .. }))
 }
 
 /// `canVectorizeInstr` (L840).

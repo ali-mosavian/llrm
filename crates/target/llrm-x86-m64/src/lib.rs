@@ -449,6 +449,12 @@ impl llrm_target::Target for M64 {
                             add_to_or_disjoint: true,
                             // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             vectorize_at_size: false,
+                            // DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): see Tuning.
+                            maximize_vector_bandwidth: true,
+                            // DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            narrow_reduction_accumulators: true,
+                            // DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            bandwidth_vf_without_epilogue: true,
                             // LI-18 (owner llrm-target-x86-m64-b): `bsr`/`bsf` are one instruction.
                             shift_loop_counts: true,
                             lsr_size_x86_64: true,
@@ -475,7 +481,7 @@ impl llrm_target::Target for M64 {
                             carry_slot_indexes: false,
                             // DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             lsr_constant_setup_is_one: true,
-                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,

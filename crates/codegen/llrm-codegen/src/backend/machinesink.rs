@@ -267,15 +267,25 @@ pub(crate) fn as_cheap_as_a_move(
     one.what
         .as_ref()
         .is_some_and(
-            |what| what.op == Operation::Move
-                && match (what.dests.as_slice(), what.sources.as_slice()) {
-                    ([Loc::Held(_)], [Loc::Held(_)]) => true,
-                    ([Loc::Held(dest)], [Loc::Imm(Imm { value, address: None, .. })]) => {
-                        cheap_immediate(dest.width as u8, *value)
-                    }
-                    _ => false,
-                },
+            |what| zero_idiom(what)
+                || what.op == Operation::Move
+                    && match (what.dests.as_slice(), what.sources.as_slice()) {
+                        ([Loc::Held(_)], [Loc::Held(_)]) => true,
+                        ([Loc::Held(dest)], [Loc::Imm(Imm { value, address: None, .. })]) => {
+                            cheap_immediate(dest.width as u8, *value)
+                        }
+                        _ => false,
+                    },
         )
+}
+
+/// `V_SET0`, `FsFLD0SS`, `FsFLD0SD` (`isAsCheapAsAMove`, `isReMaterializable`):
+/// `xorps v, v` of the register being defined, which reads nothing, so it is a
+/// constant like `mov v, imm`.
+pub(crate) fn zero_idiom(what: &crate::model::ir::Semantics) -> bool {
+    matches!(&what.dests[..], [Loc::Held(into)]
+        if !what.sources.is_empty()
+            && what.sources.iter().all(|source| matches!(source, Loc::Held(from) if from.value == into.value)))
 }
 
 thread_local! {

@@ -653,7 +653,7 @@ pub fn lower_vector_shuffle(
     // `SVN->isSplat()`: every defined lane picks the one lane.
     let lane = mask.iter().copied().find(|&lane| lane >= 0).unwrap_or(0);
     if !mask.iter().all(|&one| one < 0 || one == lane) {
-        return None;
+        return super::permute::lower(dag, op);
     }
     // "If this is undef splat, generate it via "just" vdup, if possible."
     if lane == 0 && dag.opcode(v1) == ISD::ScalarToVector {
@@ -950,23 +950,34 @@ fn emit_vector_comparison(
 /// `LowerVSETCC`: an integer compare is selected as it is, by the `CMEQ`,
 /// `CMGT`, ... fragments over `SETCC`; a float one is the `FCMEQ`, `FCMGE`,
 /// `FCMGT` masks of its condition, OR-ed and inverted as the condition needs.
-///
-/// DEVIATE VEC2 (owner llrm-arm64-vec, exit 2026-11-24): `isKnownNeverNaN` is
-/// not asked, so `isnan(x) | isnan(never-nan)` is `x != x` only for
-/// `LHS == RHS`.
 pub fn lower_vsetcc(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (mut lhs, mut rhs) = (dag.operand(node, 0), dag.operand(node, 1));
     if dag.value_type(lhs).element().is_integer() {
         return Some(node);
     }
     let mut code = super::lowering::cond_of(dag, dag.operand(node, 2));
     let vt = dag.value_type(node);
     let compare_vt = dag.value_type(lhs).change_vector_element_type_to_integer();
-    if matches!(code, CondCode::SetUo | CondCode::SetO) && lhs == rhs {
-        code = if code == CondCode::SetUo { CondCode::SetUNe } else { CondCode::SetOEq };
+    // "Lower isnan(x) | isnan(never-nan) to x != x. Lower !isnan(x) &
+    // !isnan(never-nan) to x == x."
+    if matches!(code, CondCode::SetUo | CondCode::SetO) {
+        let one_nan = if lhs == rhs {
+            true
+        } else if dag.is_known_never_nan(rhs, false) {
+            rhs = lhs;
+            true
+        } else if dag.is_known_never_nan(lhs, false) {
+            lhs = rhs;
+            true
+        } else {
+            false
+        };
+        if one_nan {
+            code = if code == CondCode::SetUo { CondCode::SetUNe } else { CondCode::SetOEq };
+        }
     }
     let (first, second, invert) = vector_fp_cc(code);
     let no_nans = dag.node(node).flags.has(SDNodeFlags::NO_NANS);

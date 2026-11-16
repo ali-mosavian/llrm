@@ -109,6 +109,15 @@ impl Gpr {
 pub struct Vreg(pub u32);
 
 impl Vreg {
+    /// The `at`th register of a run of consecutive ones from `self`, wrapping
+    /// past v31 as `ld2`..`ld4` lists do. A virtual register has no run.
+    pub fn in_run(
+        self,
+        at: u32,
+    ) -> Vreg {
+        if self.is_virtual() { Vreg(self.0 + at) } else { Vreg((self.0 + at) % 32) }
+    }
+
     pub fn is_virtual(self) -> bool {
         self.0 >= Gpr::FIRST_VIRTUAL
     }
@@ -360,6 +369,58 @@ pub enum Barrier {
     Ish,
     IshLd,
     IshSt,
+}
+
+/// What a vector permute does (`UZP1`, `UZP2`, `ZIP1`, `ZIP2`, `TRN1`, `TRN2`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Permute {
+    Uzp1,
+    Uzp2,
+    Zip1,
+    Zip2,
+    Trn1,
+    Trn2,
+}
+
+impl Permute {
+    pub const ALL: [Permute; 6] =
+        [Permute::Uzp1, Permute::Uzp2, Permute::Zip1, Permute::Zip2, Permute::Trn1, Permute::Trn2];
+
+    /// The assembler mnemonic.
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            Permute::Uzp1 => "uzp1",
+            Permute::Uzp2 => "uzp2",
+            Permute::Zip1 => "zip1",
+            Permute::Zip2 => "zip2",
+            Permute::Trn1 => "trn1",
+            Permute::Trn2 => "trn2",
+        }
+    }
+
+    /// The pin's opcode stem, as in `UZP1v8i16`.
+    pub fn stem(self) -> &'static str {
+        match self {
+            Permute::Uzp1 => "UZP1",
+            Permute::Uzp2 => "UZP2",
+            Permute::Zip1 => "ZIP1",
+            Permute::Zip2 => "ZIP2",
+            Permute::Trn1 => "TRN1",
+            Permute::Trn2 => "TRN2",
+        }
+    }
+
+    /// Bits 14:12 of the encoding.
+    pub fn opcode(self) -> u32 {
+        match self {
+            Permute::Uzp1 => 0b001,
+            Permute::Trn1 => 0b010,
+            Permute::Zip1 => 0b011,
+            Permute::Uzp2 => 0b101,
+            Permute::Trn2 => 0b110,
+            Permute::Zip2 => 0b111,
+        }
+    }
 }
 
 /// The lane layout of a vector: `16b`, `8h`, `4s`, `2d` of 128 bits and `8b`,
@@ -1646,10 +1707,10 @@ pub enum Inst {
         rn: Vreg,
         index: u8,
     },
-    /// `uzp1 v.8h, v.8h, v.8h` (`UZP1v8i16`; `uzp2`): the even (`second`: the
-    /// odd) lanes of `rn`, then of `rm`.
-    VectorUnzip {
-        second: bool,
+    /// `uzp1 v.8h, v.8h, v.8h` (`UZP1v8i16`; `uzp2`, `zip1`, `zip2`, `trn1`,
+    /// `trn2`): `rn` and `rm` permuted by `kind`.
+    VectorPermute {
+        kind: Permute,
         lanes: Arrangement,
         rd: Vreg,
         rn: Vreg,
@@ -1739,6 +1800,23 @@ pub enum Inst {
         index: u8,
         base: Gpr,
     },
+    /// `ld2 { v.4s, v.4s }, [base]` to `ld4`: `count` consecutive registers
+    /// from `rt` (wrapping past v31) loaded de-interleaved from `[base]`
+    /// (`LD2Twov4s`, `LD3Threev4s`, `LD4Fourv4s`). Not `D1`.
+    VectorLoadStructure {
+        count: u8,
+        lanes: Arrangement,
+        rt: Vreg,
+        base: Gpr,
+    },
+    /// `st2 { v.4s, v.4s }, [base]` to `st4`: the registers of
+    /// `VectorLoadStructure` stored interleaved (`ST2Twov4s`).
+    VectorStoreStructure {
+        count: u8,
+        lanes: Arrangement,
+        rt: Vreg,
+        base: Gpr,
+    },
     /// `fneg v.4s, v.4s`, `fabs`, `fsqrt` and the conversions; `lanes` is `S4`
     /// or `D2`.
     VectorFpUnary {
@@ -1800,7 +1878,8 @@ impl fmt::Display for Cond {
     }
 }
 
-/// The pin's `SMOV` rows: name, lane arrangement, and whether the register is an `x` one.
+/// The pin's `SMOV` rows: name, lane arrangement, and whether the register is
+/// an `x` one.
 pub const SMOV_FORMS: [(&str, Arrangement, bool); 5] = [
     ("SMOVvi8to32", Arrangement::B16, false),
     ("SMOVvi8to64", Arrangement::B16, true),

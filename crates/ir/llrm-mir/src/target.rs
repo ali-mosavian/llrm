@@ -343,7 +343,7 @@ pub struct Tuning {
     /// 2026-11-30); none: the pin's.
     pub div_by_constant_size_cost: Option<u32>,
     /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
-    /// (`llrm-gpl-gcc`, feature `gcc-gpl`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// (`splitpaths.rs`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
     /// target takes it once measured; false: the pin's, none.
     pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
@@ -421,7 +421,7 @@ pub struct Tuning {
     /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
     /// 16601539e87f.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): a loop whose
     /// loop-carried latency exceeds its issue-bound time is not unrolled at
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.
@@ -549,6 +549,25 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
+    /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: `LoopVectorize`
+    /// sizes the widest VF by the smallest type of the loop. false: the pin's
+    /// x86 (the widest type, so a byte sum into an `i64` stays at VF 2).
+    /// DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin's
+    /// own `-vectorizer-maximize-bandwidth`, a tuning limit, not a new rule.
+    pub maximize_vector_bandwidth: bool,
+    /// gcc's single accumulator (`vectorizable_reduction`, `single_defuse_cycle`):
+    /// a reduction wider than a register keeps one register's lanes and folds
+    /// the pieces of each trip into it, not one accumulator per register. The
+    /// pin keeps the whole vector (a byte sum into an `i64` at VF 16 holds eight
+    /// registers and spills). DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30).
+    pub narrow_reduction_accumulators: bool,
+    /// gcc's very-cheap cost model (`vect_analyze_loop_costing`): a vector
+    /// factor above the widest type's, taken for the bandwidth of the smallest
+    /// type, is a candidate only where it divides the trip count (no scalar
+    /// epilogue is left). DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit
+    /// 2026-11-30).
+    pub bandwidth_vf_without_epilogue: bool,
     /// `Tti::shift_loop_counts`: the shift-loop count idioms form (`ctlz`/`cttz`
     /// are one instruction). Wasm and x86-64 say true (LI-18).
     pub shift_loop_counts: bool,
@@ -851,6 +870,9 @@ impl Tuning {
         lsr_size_order: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
+        maximize_vector_bandwidth: false,
+        narrow_reduction_accumulators: false,
+        bandwidth_vf_without_epilogue: false,
         shift_loop_counts: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
@@ -909,6 +931,13 @@ pub struct GlobalMerge {
     /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
     /// 15 `adrp` against gcc's 5). False: the pin.
     pub optsize_counts: bool,
+    /// DEVIATE ARM64-GM-INDEXED (owner llrm-arm64-vec, exit 2026-11-30): a
+    /// global stays unmerged when a loop indexes it by a value that is neither
+    /// invariant nor an affine recurrence: `base + offset + index` has no
+    /// addressing mode, so each access pays an `add` that an unmerged global's
+    /// register-offset form does not (`grep` -O3: 20 instructions per
+    /// iteration against 19 at -O2; gcc keeps them apart). False: the pin.
+    pub keep_data_indexed: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,

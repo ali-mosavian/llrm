@@ -5,8 +5,9 @@
 use super::*;
 use crate::mc::inst::Cond;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Rounding, SMOV_FORMS,
-    VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Permute, Rounding,
+    SMOV_FORMS, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce,
+    VectorShift,
 };
 use crate::vector_forms::VectorForm;
 
@@ -251,9 +252,9 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
-        Inst::VectorUnzip { second, lanes, rd, rn, rm } => semantics(
+        Inst::VectorPermute { kind, lanes, rd, rn, rm } => semantics(
             Operation::Binary,
-            unzip_name(*second, *lanes),
+            permute_name(*kind, *lanes),
             vec![vreg_loc(*rd, 128)],
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
             None,
@@ -572,9 +573,9 @@ fn vector_fp_name(
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
-/// `UZP1v8i16`: the pin's name of an unzip.
-fn unzip_name(
-    second: bool,
+/// `UZP1v8i16`: the pin's name of a permute.
+fn permute_name(
+    kind: Permute,
     lanes: Arrangement,
 ) -> String {
     let lanes = match lanes {
@@ -586,7 +587,7 @@ fn unzip_name(
         Arrangement::H4 => "v4i16",
         Arrangement::S2 => "v2i32",
     };
-    format!("UZP{}{lanes}", if second { 2 } else { 1 })
+    format!("{}{lanes}", kind.stem())
 }
 
 /// `v8i8`, `v16i8`, `v4i16`, ...: the narrow arrangement of an `xtn` or
@@ -784,10 +785,12 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for (second, lanes) in OP_ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
-        if name == unzip_name(second, lanes) {
-            return Some(Inst::VectorUnzip {
-                second,
+    for (kind, lanes) in
+        Permute::ALL.into_iter().flat_map(|kind| OP_ARRANGEMENTS.into_iter().map(move |lanes| (kind, lanes)))
+    {
+        if name == permute_name(kind, lanes) {
+            return Some(Inst::VectorPermute {
+                kind,
                 lanes,
                 rd: vreg_of(dest?),
                 rn: vreg_of(&s[0]),
