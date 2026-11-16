@@ -74,6 +74,9 @@ pub fn peephole_opt(f: &mut Function) -> bool {
             if let Some(&(b, i)) = defs.get(&src)
                 && !erased[b][i]
                 && let Some((_, next)) = copy_regs(&f.blocks[b][i])
+                // `findNextSource` aborts on a physical register: `SP32`
+                // changes after the copy that read it.
+                && Some(next) != f.sp
             {
                 f.blocks[block][at].operands[1] = Operand::Use(next);
                 changed = true;
