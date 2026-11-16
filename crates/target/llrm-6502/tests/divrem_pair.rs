@@ -244,7 +244,11 @@ fn a_compiled_pair_gives_the_quotient_and_the_remainder_in_either_order() {
                     datalayout(),
                     probe(bits, signed, remainder_first, cases)
                 );
-                let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+                // the calls are counted in what the backend wrote: outlining
+                // moves some into a body
+                let mut request = Request::new(level);
+                request.passes.push("-fno-outline".to_owned());
+                let text = assembly(&ir, &request).unwrap_or_else(|e| panic!("{e}"));
                 let code: String = text
                     .lines()
                     .filter(|l| !l.starts_with("rc") || !l.contains(" = $"))
