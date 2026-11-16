@@ -2302,6 +2302,12 @@ impl FunctionPass for LoopVectorize {
                         continue;
                     }
                 };
+                // DEVIATE VP1-EE (owner x87-cordic-2, exit 2026-12-10): legality takes a loop
+                // of several blocks (LV-D2/D3); the planner has no multi-block plan (VP1) yet.
+                if legality.early_exit.is_some() || found.get_num_blocks() != 1 {
+                    why(unit, &outer, header, "plan: a loop of several blocks needs the VPlan CFG (VP1)");
+                    continue;
+                }
                 // Hard cutoff on the checks one loop may need
                 // (`VectorizeMemoryCheckThreshold`,
                 // `GeneratedRTChecks::create`).
