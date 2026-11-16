@@ -1561,6 +1561,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if in_size >= width {
             return None;
         }
+        // `zext (trunc nuw x)` is `x` (`isTruncateOf`): the pin has folded the
+        // extension by the time its compare is looked at.
+        if self.dag.opcode(source) == ISD::Truncate
+            && self.dag.node(source).flags.has(SDNodeFlags::NO_UNSIGNED_WRAP)
+            && self.dag.value_type(self.dag.operand(source, 0)) == self.dag.value_type(n0)
+        {
+            return None;
+        }
         let wide_mask = super::fold::mask(width);
         let c1 = c1 & wide_mask;
         if c1 >> in_size != 0 {
