@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -217,6 +217,7 @@ pub struct Flags {
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
+    far_bss_init: Option<bool>,
     bss_begin: Option<bool>,
     /// `-mcode-segment=NAME`: every module's code goes in the segment NAME, not
     /// in `<MODULE>_TEXT`: the near calls and jumps between modules reach.
@@ -296,6 +297,7 @@ impl Default for Flags {
             code_model: None,
             stack_is_data: None,
             far_bss: None,
+            far_bss_init: None,
             bss_begin: None,
             code_segment: None,
             milliclocks_per_byte: None,
@@ -386,6 +388,8 @@ impl Flags {
             "-mc-library" => self.c_library = true,
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
+            "-mfar-bss-init" => self.far_bss_init = Some(true),
+            "-mno-far-bss-init" => self.far_bss_init = Some(false),
             _ if flag.starts_with("-mcode-segment=") => {
                 self.code_segment = Some(flag["-mcode-segment=".len()..].to_owned())
             }
@@ -576,6 +580,9 @@ impl Flags {
         }
         if let Some(far_bss) = self.far_bss {
             machine.far_bss = far_bss;
+        }
+        if let Some(far_bss_init) = self.far_bss_init {
+            machine.far_bss_init = far_bss_init;
         }
         if let Some(bss_begin) = self.bss_begin {
             machine.bss_begin = bss_begin;

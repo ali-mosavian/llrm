@@ -740,10 +740,54 @@ pub trait Tti {
         false
     }
 
+    /// A reduction wider than a vector register keeps one register of lanes
+    /// (see `Tuning::narrow_reduction_accumulators`).
+    fn narrows_reduction_accumulators(&self) -> bool {
+        false
+    }
+
+    /// A VF above the widest type's, taken for the bandwidth, needs a trip
+    /// count it divides (see `Tuning::bandwidth_vf_without_epilogue`).
+    fn bandwidth_vf_without_epilogue(&self) -> bool {
+        false
+    }
+
     /// `enableAggressiveInterleaving(HasReductions)`: interleave a loop that is
     /// not small.
     fn enable_aggressive_interleaving(&self) -> bool {
         false
+    }
+
+    /// Whether the backend selects the wide access and shuffles of an
+    /// interleave group (`ld2`/`st2` and their zip/uzp fallbacks): the loop
+    /// vectorizer widens a strided access only where it does. DEVIATE LV-I0
+    /// (owner llrm-arm64-vec, exit 2026-11-24): the pin's targets all do; here
+    /// each backend says when its selector has them.
+    fn selects_interleaved_accesses(&self) -> bool {
+        false
+    }
+
+    /// `isLegalInterleavedAccessType` of a `count`-lane vector of
+    /// `element_bits`-bit lanes: one `ldN`/`stN` takes it.
+    fn interleaved_access_legal(
+        &self,
+        _element_bits: u32,
+        _count: u32,
+    ) -> bool {
+        false
+    }
+
+    /// `getInterleavedMemoryOpCost` of a full group of `factor` members, each
+    /// a `ty` vector (the wide access is `factor * ty.count` lanes). `None`:
+    /// not priced (the BasicTTI fallback is not translated, LV-I1).
+    fn interleaved_memory_op_cost(
+        &self,
+        _op: MemoryOp,
+        _ty: VectorTy,
+        _factor: u32,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        None
     }
 
     /// `getMemoryOpCost` of a vector access of `align` bytes. `None`: the
@@ -805,6 +849,18 @@ pub trait Tti {
         _kind: crate::intrinsics::ReduceKind,
         _ty: VectorTy,
         _ordered: bool,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` of the fixed vector
+    /// `ty`. `None`: not priced.
+    fn vector_min_max_cost(
+        &self,
+        _signed: bool,
+        _max: bool,
+        _ty: VectorTy,
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
@@ -892,9 +948,10 @@ pub trait Tti {
     }
 
     /// Whether the SLP vectorizer's tree and store chains run: only where the
-    /// target's vector costs are priced against the pin (arm64). DEVIATE SLP2
-    /// (owner arm64, exit 2026-11-24): a target with vector registers and no
-    /// priced hooks keeps its scalar code.
+    /// target's vector costs are priced against the pin (arm64, and x86-64
+    /// where it holds vector values). DEVIATE SLP2 (owner arm64, exit
+    /// 2026-11-24): a target with vector registers and no priced hooks keeps
+    /// its scalar code.
     fn slp_priced(&self) -> bool {
         false
     }
@@ -1602,6 +1659,12 @@ pub trait Tti {
     /// it for post-indexed targets only): where registers are scarcer than
     /// the winner-register heuristic assumes (x86-m16: six).
     fn lsr_address_fewest_registers(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup costs one, whatever
+    /// `int_imm_cost` says (LLVM 20.1.8's `getSetupCost`; the pin's is free for a free constant).
+    fn lsr_constant_setup_is_one(&self) -> bool {
         false
     }
 

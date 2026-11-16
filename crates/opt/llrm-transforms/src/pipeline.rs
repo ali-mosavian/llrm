@@ -1932,6 +1932,10 @@ pub fn recorded(
     if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
         manager.add(crate::selectoptimize::SelectOptimizePass);
     }
+    // The pin's `addIRPasses` slot for InterleavedAccess, after SelectOptimize.
+    if applied.options.wanted("interleavedaccess") {
+        manager.add(crate::interleavedaccess_pass::InterleavedAccess);
+    }
     // The pin's `addCodeGenPrepare` runs TypePromotion, then CodeGenPrepare.
     if applied.options.wanted("typepromotion") {
         manager.add(typepromotion_pass::TypePromotion);
