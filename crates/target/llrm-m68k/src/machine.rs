@@ -624,6 +624,24 @@ impl Tti for M68k {
         }
     }
 
+    /// DEVIATE M68K-LSR-DROP (owner llrm-w12-m16-nib-twins, exit 2026-11-24):
+    /// a loop keeps its code where LSR's own model rates the rewrite worse
+    /// (`shouldDropLSRSolutionIfLessProfitable`, which the pin's M68k leaves
+    /// off). tail_calls `countdown`: the pin logs "Baseline is more
+    /// profitable than chosen solution" and still counts up to -1
+    /// (`addq; cmpi.l #-1; bne`, +22 clk a trip) where the loop as written
+    /// ends on the flags of its own `subq`.
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        true
+    }
+
+    /// A loop with an address keeps LSR's rewrite: the baseline rates every
+    /// address as one pointer register, so a pointer walk beside a count
+    /// always looks worse (as z80).
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+        true
+    }
+
     /// The per-target value of `SCEVCheapExpansionBudget`: one operation. A
     /// limit that costs a single operation (`n - 1`) is repaid by the counter
     /// that goes (`subq`+`bne` for `addq`+`cmp`+`blt`); one that costs more
