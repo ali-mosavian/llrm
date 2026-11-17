@@ -1336,6 +1336,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether a run of copies of adjacent cells is `llvm.memcpy` at every
+    /// level, where the bytes of the call are fewer (`mergestores`): the
+    /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.
+    /// False: only when tuned for size.
+    fn string_runs_at_speed(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
@@ -2949,8 +2957,28 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LSR-LIVE-IV (beyond the pin; a target opts in): an induction
+    /// variable that an instruction of the loop reads, and LSR does not
+    /// rewrite, is live in every solution. The pin credits a formula that
+    /// replaces it with the register it frees, so a count-up counter beside
+    /// the live one wins on a tie of registers (m68k `countdown`: `addq;
+    /// cmpi.l #-1; bne` where the loop ends on its own `subq` flags).
+    fn lsr_unmanaged_iv_reads_stay_live(&self) -> bool {
+        false
+    }
+
     /// `shouldDropLSRSolutionIfLessProfitable`.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30;
+    /// gcc's ivopts keeps the original candidates when its set costs more,
+    /// `find_optimal_iv_set` against `origset`, tree-ssa-loop-ivopts.cc): in a
+    /// function built for size, a solution that needs more registers or more
+    /// instructions than the loop as written is dropped. queens -Os: three
+    /// counters for 24 B more than the one the loop had.
+    fn lsr_drops_worse_solution_at_size(&self) -> bool {
         false
     }
 
