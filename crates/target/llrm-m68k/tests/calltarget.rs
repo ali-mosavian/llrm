@@ -34,8 +34,9 @@ fn a_callee_called_six_times_is_called_through_a_register() {
     assert_eq!(through, 6, "calls stay absolute:\n{}", out.join("\n"));
 }
 
-/// `-O1` is judged by clocks (user ruling 2026-11-14): the `lea` and the saved register are ~12 static
-/// clk in straight-line code, so six `jsr g` stay absolute; -Os, above, takes the register for its bytes.
+/// `-O1` is judged by clocks (user ruling 2026-11-14): the `lea` and the saved
+/// register are ~12 static clk in straight-line code, so six `jsr g` stay
+/// absolute; -Os, above, takes the register for its bytes.
 #[test]
 fn a_callee_called_six_times_stays_absolute_at_o1() {
     let plain = calls(6, "g").replace(" optsize", "");

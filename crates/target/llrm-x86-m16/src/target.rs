@@ -275,138 +275,156 @@ impl Machine for Dos {
 
     fn tuning(&self) -> llrm_mir::target::Tuning {
         let table = (|| {
-        if self.pin_tuning {
-            return llrm_mir::target::Tuning::PIN;
-        }
-        llrm_mir::target::Tuning {
-            // Trial: arm64's -Os unrotate rule (header priced against the
-            // branches removed).
-            rotation_header_priced_at_size: true,
-            max_stores_per_memset: 4,
-            max_stores_per_memcpy: 2,
-            max_stores_per_memmove: 2,
-            // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
-            // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea di`,
-            // `mov es,ss`, `mov cx`, `rep stos`, the zero) that also takes ax,
-            // cx and di from the code around it, so four; a dword load and
-            // store pair is 8 bytes against about 16 for `rep movs`, so two.
-            max_stores_per_memset_opt_size: 4,
-            max_stores_per_memcpy_opt_size: 2,
-            max_stores_per_memmove_opt_size: 2,
-            // Tuning constant fitted to sc.c, weapons, mdl and lru, not
-            // derived.
-            size_milliclocks_per_byte: 10_000,
-            // The user's rate for m16 at speed (one clock is two bytes): the
-            // `timings.times` row the judge reads too.
-            speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
-            price_fills: true,
-            // DEVIATE LSR-SIZE (owner m16, exit 2026-11-24): at -Os LSR orders formulae by
-            // x86 bytes, as m32 does (`Tuning::lsr_size_order`). A global's base with the
-            // field offset in the displacement (`[bx+4]`) over a biased base (`_V+4`)
-            // saved 3 to 6 B in 11 -Os objects, none larger.
-            lsr_size_order: true,
-            // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a constant weighs
-            // its bytes at the rate against the multiply-high sequence; the pin's
-            // `isIntDivCheap` is `minsize` alone
-            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L593).
-            divide_by_bytes: true,
-            // DEVIATE DIV-LIVE-M16 (owner m16, exit 2026-12-01; no pin hook, as DIV-LIVE): at
-            // -O1 and -Os a divide by a constant keeps its `div` only while at most three
-            // 16-bit words are live across it (six registers less the three it pins); `div` pins eax, edx and a divisor register, the
-            // reciprocal's `mul` only eax and edx. huge `% 251` at -O1: +9 B and +21% clk
-            // with the divide kept (2026-11-11).
-            narrow_divide_live_limit: 3,
-            narrow_divide_live_max_bits: 32,
-            // -Os keeps every divide by measurement (2026-11-11, limits 3..6: frames +11 B,
-            // matmul~init +8 B, huge +13% clk over the kept divide).
-            narrow_divide_live_at_size: false,
-            // DEVIATE: real mode weighs code bytes over clocks at every level,
-            // so the full unroll takes the pin's size threshold
-            // (`OptSizeThreshold`,
-            // 0) and no boost: the 8-trip loops of matmul and fpbench were 2045
-            // and 1350 bytes unrolled, 306 and 418 not.
-            unroll_threshold: Some(0),
-            unroll_max_percent_threshold_boost: Some(100),
-            x87_stack_slots: Some(8),
-            x87_share_negated_products: true,
-            unroll_promotion_fits_x87_stack: true,
-            x87_zero_fill_at_size: true,
-            // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20):
-            // the pin's ColorSlot shares any two slots whose ranges do not
-            // overlap. Here a word shares no slot a double word holds through a
-            // loop: stft_fixed -O2 -523266 clk and -3 B, jpeg_fixed -Os -2 B;
-            // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk),
-            // jpeg_fixed and jpeg_single nib -O2 +1 B each (-1 clk).
-            slots_loop_width_rule: true,
-            // DEVIATE CARRY-SI (owner x86-m16, exit 2026-11-21): see Tuning.
-            carry_slot_indexes: false,
-            // DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29): see Tuning.
-            address_reference_milliweight: 3000,
-            // DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): see Tuning.
-            spill_fold: Some(llrm_mir::target::SpillFoldClocks {
-                read: self.costs.load,
-                update: (self.costs.memory_update - self.costs.add).max(0),
-                store: self.costs.store,
-                copy: self.costs.load.max(self.costs.store),
-                wide_copy: self.costs.prefix,
-            }),
-            // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
-            // (partial and runtime on) copied matmul's outer body, 455 code
-            // bytes against 297, past Borland C's 298.
-            unroll_partial_threshold: Some(0),
-            // DEVIATE: the -O3 non-trivial unswitch copies the loop; the byte
-            // bar holds at every level, so no candidate is cheap enough (queens
-            // 178 -> 229 bytes, Borland C 172).
-            unswitch_threshold: Some(0),
-            // DEVIATE: bytes over clocks at every level: the inliner's bar is
-            // the pin's `OptSizeThreshold`, 50, not 225. jpeg_single.nib: 3178
-            // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
-            // 1703).
-            inline_threshold: Some(50),
-            // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
-            // not copied into a speed caller where it grows the code (D11).
-            // qlight c: `ls_scale_byte` x4, 376 -> 185 B. Open rows, clocks
-            // above 854bb7efc4 (numbered, owner w10): parity/qlight c +19,
-            // branch c +16, qmove c +41, qbsp c +36, sum_three c +2. Cause: a
-            // constant `imul` where main has a shift chain (the pin keeps
-            // imul; a priced chain measured 2 to 3 B per clock, not worth
-            // it), and frame reloads in sum_three. Exit 2026-11-30: the
-            // bytes those rows hold above main recovered by the register
-            // allocator, then re-price the chain.
-            // DEVIATE M16-JT-DENSITY (owner llrm-m16-c, exit 2026-11-23): a
-            // jump table pays from 40% of its range filled at every level,
-            // as the pin asks only tuned for size (10% otherwise): an entry is
-            // 2 B and a compare-and-branch about as many, so a table 14% full
-            // is bytes lost for no clock won. jpeg_fixed and jpeg_single -O1:
-            // four cases over 28 values, a 56 B table, data +58 B and +60 B
-            // over bcc.
-            min_jump_table_density: Some(40),
-            // M16-KEEPDISP-1 (closed: the blanket refusal is gone): a constant
-            // offset is a displacement of the access at m16; behind a sunk phi
-            // it costs an add and a register (qbsp `r_point_leaf`: two
-            // `[bx+si+2|4]` loads became an index select, +6 B, +36 clk). The
-            // flag tells SimplifyCFG's sink the offsets fold; the sink prices
-            // it (`displacement_sink_pays`), so a long common tail still sinks
-            // (`r_recursive_world_node` 194 -> 176).
-            keep_constant_displacements: true,
-            frame_slot_is_free_base: true,
-            // DEVIATE EXT-LOAD-COST (owner llrm-target-x86-m16, exit 2026-11-27): see `Tuning::ext_load_extra_clocks`.
-            ext_load_extra_clocks: (self.costs.extend - self.costs.load).max(0),
-            lsr_address_fewest_registers: true,
-            // DEVIATE: byte registers are scarce at every level, not only at
-            // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
-            // `setcc` pair and an `or` that took `bp` addressing out of the
-            // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
-            split_merged_conditions: true,
-            // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
-            lftr_any_stride: true,
-            // D13: the units undercount a 16-bit copy (inlinecost.rs).
-            inline_dying_credit_at_os: false,
-            // DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): see `Tuning::cold_site_ignores_sinks`.
-            cold_site_ignores_sinks: true,
-            read_only_in_code: true,
-            ..llrm_mir::target::Tuning::PIN
-        }
+            if self.pin_tuning {
+                return llrm_mir::target::Tuning::PIN;
+            }
+            llrm_mir::target::Tuning {
+                // Trial: arm64's -Os unrotate rule (header priced against the
+                // branches removed).
+                rotation_header_priced_at_size: true,
+                max_stores_per_memset: 4,
+                max_stores_per_memcpy: 2,
+                max_stores_per_memmove: 2,
+                // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
+                // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea
+                // di`,
+                // `mov es,ss`, `mov cx`, `rep stos`, the zero) that also takes
+                // ax, cx and di from the code around it, so four; a dword load
+                // and store pair is 8 bytes against about 16 for `rep movs`, so
+                // two.
+                max_stores_per_memset_opt_size: 4,
+                max_stores_per_memcpy_opt_size: 2,
+                max_stores_per_memmove_opt_size: 2,
+                // Tuning constant fitted to sc.c, weapons, mdl and lru, not
+                // derived.
+                size_milliclocks_per_byte: 10_000,
+                // The user's rate for m16 at speed (one clock is two bytes):
+                // the
+                // `timings.times` row the judge reads too.
+                speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
+                price_fills: true,
+                // DEVIATE LSR-SIZE (owner m16, exit 2026-11-24): at -Os LSR
+                // orders formulae by x86 bytes, as m32 does
+                // (`Tuning::lsr_size_order`). A global's base with the field
+                // offset in the displacement (`[bx+4]`) over a biased base
+                // (`_V+4`) saved 3 to 6 B in 11 -Os objects, none larger.
+                lsr_size_order: true,
+                // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a
+                // constant weighs its bytes at the rate against the
+                // multiply-high sequence; the pin's
+                // `isIntDivCheap` is `minsize` alone
+                // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L593).
+                divide_by_bytes: true,
+                // DEVIATE DIV-LIVE-M16 (owner m16, exit 2026-12-01; no pin
+                // hook, as DIV-LIVE): at
+                // -O1 and -Os a divide by a constant keeps its `div` only while
+                // at most three 16-bit words are live across it (six registers
+                // less the three it pins); `div` pins eax, edx and a divisor
+                // register, the reciprocal's `mul` only eax and edx. huge `%
+                // 251` at -O1: +9 B and +21% clk with the divide kept
+                // (2026-11-11).
+                narrow_divide_live_limit: 3,
+                narrow_divide_live_max_bits: 32,
+                // -Os keeps every divide by measurement (2026-11-11, limits
+                // 3..6: frames +11 B, matmul~init +8 B, huge +13% clk over the
+                // kept divide).
+                narrow_divide_live_at_size: false,
+                // DEVIATE: real mode weighs code bytes over clocks at every
+                // level, so the full unroll takes the pin's size threshold
+                // (`OptSizeThreshold`,
+                // 0) and no boost: the 8-trip loops of matmul and fpbench were
+                //    2045 and 1350 bytes unrolled, 306 and 418 not.
+                unroll_threshold: Some(0),
+                unroll_max_percent_threshold_boost: Some(100),
+                x87_stack_slots: Some(8),
+                x87_share_negated_products: true,
+                unroll_promotion_fits_x87_stack: true,
+                x87_zero_fill_at_size: true,
+                // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit
+                // 2026-11-20): the pin's ColorSlot shares any two slots whose
+                // ranges do not overlap. Here a word shares no slot a double
+                // word holds through a loop: stft_fixed -O2 -523266 clk and -3
+                // B, jpeg_fixed -Os -2 B; open rows (oversight rules):
+                // jpeg_single C -Os +1 B (-217 clk), jpeg_fixed and jpeg_single
+                // nib -O2 +1 B each (-1 clk).
+                slots_loop_width_rule: true,
+                // DEVIATE CARRY-SI (owner x86-m16, exit 2026-11-21): see
+                // Tuning.
+                carry_slot_indexes: false,
+                // DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29): see Tuning.
+                address_reference_milliweight: 3000,
+                // DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): see
+                // Tuning.
+                spill_fold: Some(llrm_mir::target::SpillFoldClocks {
+                    read: self.costs.load,
+                    update: (self.costs.memory_update - self.costs.add).max(0),
+                    store: self.costs.store,
+                    copy: self.costs.load.max(self.costs.store),
+                    wide_copy: self.costs.prefix,
+                }),
+                // DEVIATE: the same bar for a partial unroll: the O3
+                // unroll-and-jam (partial and runtime on) copied matmul's outer
+                // body, 455 code bytes against 297, past Borland C's 298.
+                unroll_partial_threshold: Some(0),
+                // DEVIATE: the -O3 non-trivial unswitch copies the loop; the
+                // byte bar holds at every level, so no candidate is cheap
+                // enough (queens 178 -> 229 bytes, Borland C 172).
+                unswitch_threshold: Some(0),
+                // DEVIATE: bytes over clocks at every level: the inliner's bar
+                // is the pin's `OptSizeThreshold`, 50, not 225.
+                // jpeg_single.nib: 3178 instructions in 6 procedures at 225,
+                // 1559 in 10 at 50 (main 1703).
+                inline_threshold: Some(50),
+                // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
+                // not copied into a speed caller where it grows the code (D11).
+                // qlight c: `ls_scale_byte` x4, 376 -> 185 B. Open rows, clocks
+                // above 854bb7efc4 (numbered, owner w10): parity/qlight c +19,
+                // branch c +16, qmove c +41, qbsp c +36, sum_three c +2. Cause:
+                // a constant `imul` where main has a shift chain (the pin keeps
+                // imul; a priced chain measured 2 to 3 B per clock, not worth
+                // it), and frame reloads in sum_three. Exit 2026-11-30: the
+                // bytes those rows hold above main recovered by the register
+                // allocator, then re-price the chain.
+                // DEVIATE M16-JT-DENSITY (owner llrm-m16-c, exit 2026-11-23): a
+                // jump table pays from 40% of its range filled at every level,
+                // as the pin asks only tuned for size (10% otherwise): an entry
+                // is 2 B and a compare-and-branch about as many, so a table 14%
+                // full is bytes lost for no clock won. jpeg_fixed and
+                // jpeg_single -O1: four cases over 28 values, a 56 B table,
+                // data +58 B and +60 B over bcc.
+                min_jump_table_density: Some(40),
+                // M16-KEEPDISP-1 (closed: the blanket refusal is gone): a
+                // constant offset is a displacement of the access at m16;
+                // behind a sunk phi it costs an add and a register
+                // (qbsp `r_point_leaf`: two
+                // `[bx+si+2|4]` loads became an index select, +6 B, +36 clk).
+                // The flag tells SimplifyCFG's sink the offsets fold; the sink
+                // prices it (`displacement_sink_pays`), so a long common tail
+                // still sinks (`r_recursive_world_node` 194 -> 176).
+                keep_constant_displacements: true,
+                frame_slot_is_free_base: true,
+                // DEVIATE EXT-LOAD-COST (owner llrm-target-x86-m16, exit
+                // 2026-11-27): see
+                // `Tuning::ext_load_extra_clocks`.
+                ext_load_extra_clocks: (self.costs.extend - self.costs.load).max(0),
+                lsr_address_fewest_registers: true,
+                // DEVIATE: byte registers are scarce at every level, not only
+                // at optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is
+                // a
+                // `setcc` pair and an `or` that took `bp` addressing out of the
+                // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
+                split_merged_conditions: true,
+                // DEVIATE LFTR1 (owner w12, review 2026-12-20):
+                // see `Tuning::lftr_any_stride`.
+                lftr_any_stride: true,
+                // D13: the units undercount a 16-bit copy (inlinecost.rs).
+                inline_dying_credit_at_os: false,
+                // DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25):
+                // see `Tuning::cold_site_ignores_sinks`.
+                cold_site_ignores_sinks: true,
+                read_only_in_code: true,
+                ..llrm_mir::target::Tuning::PIN
+            }
         })();
         llrm_mir::target::Tuning { constant_hoisting: self.constant_hoisting, ..table }
     }
