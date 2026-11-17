@@ -1950,6 +1950,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LIR-COPY-TRIAL: `Tuning::loop_idiom_copy_trial_at_size`.
+    fn loop_idiom_copy_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE JT-LATCH-TRIAL: `Tuning::jump_threading_latch_trial_at_size`.
     fn jump_threading_latch_trial_at_size(&self) -> bool {
         false
