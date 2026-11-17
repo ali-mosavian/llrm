@@ -86,6 +86,10 @@ fn chains(
         let reference = MemRef::at(unit, instruction.operands[1], bytes as u32);
         let Some(root) = reference.root.filter(|_| reference.segment.is_none()) else { continue };
         let key = (root, reference.base, reference.scale);
+        // `StoreInst::getAlign`: a store with no `align` has the ABI alignment
+        // of its value, which the vector store takes (not the vector's
+        // own).
+        let align = align.or_else(|| Some(unit.layout.align(&unit.context.types, ty)));
         let seed = Seed { store: inst, order, disp: reference.disp, align, value };
         match groups.iter_mut().find(|group| group.0 == key && group.1 == ty) {
             Some(group) => group.2.push(seed),
@@ -198,8 +202,17 @@ fn vectorize(
     let last = window.iter().max_by_key(|seed| seed.order).expect("a window");
     let pointer = function.instruction(first.store).operands[1];
     let Operand::Constant(lane) = first.value else { unreachable!("a window of constants") };
+    let zero = |seed: &Seed| match seed.value {
+        Operand::Constant(one) => {
+            matches!(
+                context.get(one).kind,
+                ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero
+            )
+        }
+        _ => false,
+    };
     let kind = match context.get(lane).kind.clone() {
-        ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero => ConstantKind::Zero,
+        _ if window.iter().all(zero) => ConstantKind::Zero,
         _ if window.iter().all(|seed| seed.value == first.value) => ConstantKind::Aggregate(vec![lane; vf]),
         _ => ConstantKind::Aggregate(
             window
@@ -276,7 +289,7 @@ fn run_function(
     let mut changed = !plan.is_empty();
     // One tree at a time, the function read again after each.
     while let Some((tree, align)) = next_tree(context, layout, function, outer, tti) {
-        crate::slptree::emit(context, declared, function, &tree, align);
+        crate::slptree::emit(context, layout, declared, function, &tree, align);
         changed = true;
     }
     changed

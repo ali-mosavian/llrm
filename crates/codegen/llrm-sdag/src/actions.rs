@@ -951,6 +951,11 @@ impl TargetLowering {
         // `LowerSELECT`: a scalar condition over a vector is a `CMOV` of the
         // register.
         t.set_ops(&[ISD::Select], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerVSETCC`: the integer compares SSE2 has (`pcmpeq*`, `pcmpgt*`), the others made from them.
+        t.set_ops(&[ISD::SetCC], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `LowerVSELECT` without SSE4.1's `pblendvb`: the arms masked by the lanes' sign masks, `pand`, `pandn`, `por`
+        // (`ExpandVSELECT`).
+        t.set_ops(&[ISD::VSelect], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
         // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
         // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack).
         // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24):

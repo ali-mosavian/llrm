@@ -91,6 +91,11 @@ pub struct TypeLegalizer<'a> {
     /// A float value and the integer of its width that stands for it
     /// (`SoftenedFloats`).
     softened: HashMap<SDValue, SDValue>,
+    /// The result of a compare routine already called on these operands: the
+    /// routines are pure (`const` in libgcc), so a second compare of the same
+    /// pair reads it instead of calling again. DEVIATE SOFT-CMP-CSE (the pin
+    /// calls one routine per predicate): owner w8, exit 2026-11-27.
+    compare_results: HashMap<(&'static str, SDValue, SDValue), SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -148,6 +153,7 @@ impl<'a> TypeLegalizer<'a> {
             split: HashMap::default(),
             widened: HashMap::default(),
             softened: HashMap::default(),
+            compare_results: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -768,14 +774,31 @@ impl<'a> TypeLegalizer<'a> {
         let (a, b) = (self.softened_float(lhs), self.softened_float(rhs));
         let vt = self.dag.value_type(node);
         let EVT::Simple(float_mvt) = float_vt else { return Err(unsupported("soften a compare of this float")) };
-        let pick = |cmp: Cmp3| libcalls::name(Libcall::Fcmp3(cmp, float_mvt));
+        // DEVIATE SOFT-CMP-CSE: by class, where the target's runtime has them.
+        let classes = self.tli.types.soft_compare_classes();
+        let pick = |cmp: Cmp3| {
+            let cmp = match cmp {
+                Cmp3::Oeq | Cmp3::Une | Cmp3::Olt if classes => Cmp3::Ole,
+                Cmp3::Ogt if classes => Cmp3::Oge,
+                other => other,
+            };
+            libcalls::name(Libcall::Fcmp3(cmp, float_mvt))
+        };
         let compare = |this: &mut Self, cmp: Cmp3, cc: CondCode| -> Result<SDValue, LegalizeError> {
             // The routines return a C `int`: the pointer's width up to a long
             // (16 at m16, 32 above).
             let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
-            let result = pick(cmp)
-                .and_then(|name| this.soft_call(name, &[a, b], int))
-                .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let name = pick(cmp).ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let result = match this.compare_results.get(&(name, a, b)) {
+                Some(&done) => done,
+                None => {
+                    let call = this
+                        .soft_call(name, &[a, b], int)
+                        .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+                    this.compare_results.insert((name, a, b), call);
+                    call
+                }
+            };
             let zero = this.dag.get_constant(0, int);
             Ok(this.dag.get_setcc(vt, result, zero, cc))
         };
@@ -1588,6 +1611,15 @@ impl<'a> TypeLegalizer<'a> {
                 let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
                 let operand = self.promoted_integer(self.dag.operand(node, 1));
                 self.dag.get_atomic_store(chain, ptr, operand, info)
+            }
+            // `PromoteIntOp_VECREDUCE` (`PromoteIntOpVectorReduction`): `add`, `mul`, `and`, `or`, `xor` of the
+            // promoted lanes, whose extra bits the truncate of the result drops.
+            ISD::VecReduceAdd | ISD::VecReduceMul | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
+                let operand = self.promoted_integer(self.dag.operand(node, at));
+                let lane = self.dag.value_type(operand).element();
+                let reduced = self.dag.get_node(self.dag.opcode(node), lane, &[operand]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::Truncate, vt, &[reduced])
             }
             ISD::Truncate => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));

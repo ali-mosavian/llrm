@@ -163,6 +163,9 @@ pub struct LoopFacts {
     pub widest_induction_bits: u32,
     /// The function is `optsize` or `minsize` (VP6).
     pub opt_size: bool,
+    /// `optsize` and the target prices a vector loop by size, outside work
+    /// included (`Tti::vectorizes_size_priced`).
+    pub size_priced: bool,
     /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
     pub has_reductions: bool,
     /// The recurrence types' widths of the reductions
@@ -554,6 +557,30 @@ fn is_more_profitable(
     for_trip_count(vf_a, cost_a, scalar_a) < for_trip_count(vf_b, cost_b, scalar_b)
 }
 
+/// DEVIATE LV-SIZE (owner arm64, exit 2026-11-30): the work outside the vector
+/// loop at `vf`, which `VPlan::cost` leaves out (VPlan.cpp L1024: the loop
+/// region only). Each reduction starts one accumulator (an insert) and ends in
+/// a horizontal step in the middle block (`ComputeReductionResult`), priced as
+/// an `add` reduction of its width: the plan keeps a reduction's width, not
+/// its kind.
+fn outside_loop_cost(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    vf: u64,
+) -> i64 {
+    facts
+        .reduction_bits
+        .iter()
+        .map(|&bits| {
+            let vector = VectorTy { lane: Ty::Int(bits), count: vf as u32 };
+            let step = tti
+                .vector_reduction_cost(llrm_mir::intrinsics::ReduceKind::Add, vector, false, CostKind::RecipThroughput)
+                .map_or_else(|| i64::from(vf.ilog2()) + 1, |cost| cost.value);
+            step + 1
+        })
+        .sum()
+}
+
 /// `VPRegisterUsage::spillCost` added by `LoopVectorizationPlanner::cost`
 /// (L5612) where `shouldConsiderRegPressureForVF`: the target maximizes the
 /// vector bandwidth and `vf` is past `MaxPermissibleVFWithoutMaxBW`. Each
@@ -619,6 +646,12 @@ fn best_vf(
                 Err(_) => eprintln!("Cost for VF {vf}: not priced"),
             }
         }
+        // DEVIATE LV-SIZE: at `optsize` the vector loop and its outside work
+        // must cost less than the scalar loop, whatever the cost per lane.
+        let priced = priced.and_then(|cost| {
+            let outside = outside_loop_cost(tti, facts, vf);
+            if facts.size_priced && cost + outside >= scalar { Err(NotTaken) } else { Ok(cost) }
+        });
         if let Ok(cost) = priced {
             let candidate = (cost, vf, scalar);
             if is_more_profitable(candidate, best, facts.trip_count, true) {

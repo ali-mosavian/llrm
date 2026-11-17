@@ -959,6 +959,10 @@ impl Tti for AArch64 {
         vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| vector_arithmetic_cost(op, ty, kind))
     }
 
+    fn vectorizes_size_priced(&self) -> bool {
+        true
+    }
+
     fn vector_reduction_cost(
         &self,
         kind: llrm_mir::intrinsics::ReduceKind,

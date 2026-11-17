@@ -339,6 +339,7 @@ pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopvectorize;
 pub mod loopvectorizeaccumulator;
+pub mod loopvectorizeearlyexit;
 pub mod loopvectorizeinterleave;
 pub mod loopvectorizelegality;
 pub mod loopvectorizeplan;
