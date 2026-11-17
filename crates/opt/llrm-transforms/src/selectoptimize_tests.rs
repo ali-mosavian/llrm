@@ -17,6 +17,7 @@ fn x86() -> llrm_x86::tti::X86 {
         issue_width: 0,
         position_independent: std::cell::Cell::new(true),
         size_bytes: false,
+        word_vectors: false,
         tuning: llrm_mir::target::Tuning::PIN,
     }
 }
