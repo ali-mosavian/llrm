@@ -2835,7 +2835,7 @@ fn priced_depth(
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let module = &program.modules[0];
+            let module = &mut program.modules[0];
             let id = module
                 .functions()
                 .find(|(_, global, _)| global.name.as_deref() == Some(name))
@@ -3279,7 +3279,7 @@ fn is_tree(
         &mut module,
         crate::indvars::tests::m32(),
         |program: &mut llrm_mir::program::Program| {
-            let module = &program.modules[0];
+            let module = &mut program.modules[0];
             let id = module
                 .functions()
                 .find(|(_, global, _)| global.name.as_deref() == Some(name))

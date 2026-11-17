@@ -415,3 +415,15 @@ fn an_early_exit_compare_of_each_lane_width_is_gathered_by_a_sign_mask() {
     let bytes = body(&text, "first_greater");
     assert!(bytes.contains("pcmpgtb") && bytes.contains("pmovmskb"), "{bytes}");
 }
+
+/// A loop that returns the index of the first difference as an `int`: the induction is cast inside the loop
+/// (`trunc`) and only the exit phi reads it. Before, the loop stayed scalar (`recipes: An instruction the vectorizer
+/// does not widen yet`): no `pmovmskb` in `first_index32`.
+#[test]
+fn an_early_exit_that_returns_the_cast_index_is_a_vector_loop() {
+    let text = assembly_of("lv_early_exit_index.c", "x86_64-linux", "-O3");
+    for name in ["first_index32", "first_index16"] {
+        let words = body(&text, name);
+        assert!(words.contains("pmovmskb"), "{name}: {words}");
+    }
+}

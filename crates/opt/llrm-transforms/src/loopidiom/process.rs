@@ -37,6 +37,7 @@ use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 use super::build::{self, Copy};
 use super::{LoopIdiomRecognize, equals, get_mem_set_pattern_value, get_num_bytes, get_start_for_neg_stride};
 use crate::profit::OperationCosts;
+use crate::trial;
 
 /// Alias analysis over a function as it stands. It is made for one version of
 /// a body and the pass edits the body between queries, so the pass asks for
@@ -642,6 +643,9 @@ impl LoopIdiomRecognize {
         if self.is_memcpy_inline(run, args.the_store) {
             return false;
         }
+        if self.keeps_copy_loop_for_trial(run, args) {
+            return false;
+        }
 
         let preheader = run.cur_loop.get_loop_preheader(run.function).expect("a preheader");
         let insert_at = run.function.terminator(preheader).expect("a preheader ends");
@@ -654,6 +658,31 @@ impl LoopIdiomRecognize {
         }
         cleaner.cleanup(&mut expander, run.function);
         changed
+    }
+
+    /// DEVIATE LIR-COPY-TRIAL (`Tti::loop_idiom_copy_trial_at_size`): at -Os,
+    /// whether the copy loop of a count the compiler does not know stays a
+    /// loop: the trial compile that keeps such loops is running. The base
+    /// compile notes the `memcpy` it makes instead. x_radix's `a[i] = b[i]`
+    /// over n words was a call of 3 pushes, call, `add esp` and a spill of
+    /// the byte count against a 19-byte loop; where the call is fewer bytes
+    /// (x_idioms) the object decides.
+    fn keeps_copy_loop_for_trial(
+        &self,
+        run: &Run,
+        args: &StoreOfLoad,
+    ) -> bool {
+        if !run.tti.is_some_and(|tti| tti.loop_idiom_copy_trial_at_size())
+            || !self.apply_code_size_heuristics
+            || run.se.match_apint(args.be_count).is_some()
+        {
+            return false;
+        }
+        if trial::keeping_copy_loops() {
+            return true;
+        }
+        trial::note_copy_call(run.name);
+        false
     }
 
     /// Whether every constant store of the loop over `blocks` is to an object
