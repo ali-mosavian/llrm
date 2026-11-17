@@ -1132,6 +1132,11 @@ impl TargetLowering {
         // for the 128-bit types (the 64-bit ones are not types here); `v2i64`
         // has no min or max across lanes.
         t.set_ops(&[VecReduceAdd, VecReduceAnd, VecReduceOr, VecReduceXor], &vectors, Custom);
+        // The 64-bit types too (`addTypeForNEON`'s list of six), the bitwise
+        // kinds only: DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-12-01),
+        // `LowerVECREDUCE` of a sum or an extremum of a 64-bit vector is not
+        // translated.
+        t.set_ops(&[VecReduceAnd, VecReduceOr, VecReduceXor], &[MVT::V8I8, MVT::V4I16, MVT::V2I32], Custom);
         t.set_ops(&[VecReduceSMax, VecReduceSMin, VecReduceUMax, VecReduceUMin], &vectors[..3], Custom);
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the

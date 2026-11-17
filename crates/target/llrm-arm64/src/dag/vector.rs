@@ -835,16 +835,21 @@ fn bitwise_reduce(
     let vector_vt = dag.value_type(vector);
     let element = vector_vt.element();
     let lanes = vector_vt.lanes();
-    let wide = EVT::Simple(MVT::V2I64);
-    let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
-    let lane = |dag: &mut SelectionDAG, at: u128| {
-        let index = dag.get_constant(at, EVT::I64);
-        dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+    // A 64-bit vector is the scalar already; a 128-bit one is its two
+    // halves combined.
+    let (mut scalar, mut shift) = if vector_vt.size_in_bits() == 64 {
+        (dag.get_node(ISD::BitCast, EVT::I64, &[vector]), lanes / 2)
+    } else {
+        let wide = EVT::Simple(MVT::V2I64);
+        let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
+        let lane = |dag: &mut SelectionDAG, at: u128| {
+            let index = dag.get_constant(at, EVT::I64);
+            dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+        };
+        let (low, high) = (lane(dag, 0), lane(dag, 1));
+        // `NumElems / 2` of the 64-bit half.
+        (dag.get_node(base, EVT::I64, &[low, high]), lanes / 4)
     };
-    let (low, high) = (lane(dag, 0), lane(dag, 1));
-    let mut scalar = dag.get_node(base, EVT::I64, &[low, high]);
-    // `NumElems / 2` of the 64-bit half.
-    let mut shift = lanes / 4;
     while shift > 0 {
         let amount = dag.get_constant(u128::from(shift * element.size_in_bits()), EVT::I64);
         let shifted = dag.get_node(ISD::Srl, EVT::I64, &[scalar, amount]);
@@ -852,6 +857,65 @@ fn bitwise_reduce(
         shift /= 2;
     }
     let result = dag.get_any_ext_or_trunc(scalar, element);
+    Some(dag.get_any_ext_or_trunc(result, dag.value_type(node)))
+}
+
+/// `performVecReduceBitwiseCombine`
+/// ([L29534](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L29534)),
+/// `getVectorBitwiseReduce`'s boolean case: a reduction of a power-of-two
+/// vector of `i1` is the sign extension of the mask (any extension for
+/// `xor`) to lanes of `max(width / lanes, 8)` bits, and `umin` (and), `umax`
+/// (or) or `add` (xor) across them: `cmhi`, `umaxv` for an any-of.
+///
+/// DEVIATE VEC8 (owner llrm-arm64-vec, exit 2026-12-01): only where the
+/// extended vector is 128 bits; the 64-bit extended types have no `umaxv`
+/// selection here.
+pub fn bitwise_reduce_of_a_mask(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let op = dag.opcode(node);
+    let vec = dag.operand(node, 0);
+    let vec_vt = dag.value_type(vec);
+    if !vec_vt.is_vector() || vec_vt.element() != EVT::Simple(MVT::I1) || !vec_vt.lanes().is_power_of_two() {
+        return None;
+    }
+    let lanes = vec_vt.lanes();
+    if lanes > 16 {
+        return None;
+    }
+    // "Results of setcc operations get widened to 128 bits if their input
+    // operands are 128 bits wide, otherwise ... 64".
+    let extended_width = if dag.opcode(vec) == ISD::SetCC && dag.value_type(dag.operand(vec, 0)).size_in_bits() >= 128 {
+        128
+    } else {
+        64
+    };
+    let width = (extended_width / lanes).max(8);
+    if width * lanes != 128 {
+        return None;
+    }
+    let lane = match width {
+        8 => MVT::I8,
+        16 => MVT::I16,
+        32 => MVT::I32,
+        _ => MVT::I64,
+    };
+    let extend = if op == ISD::VecReduceXor { ISD::AnyExtend } else { ISD::SignExtend };
+    let mut extended = dag.get_node(extend, EVT::vector(lane, lanes), &[vec]);
+    let mut element = EVT::Simple(lane);
+    // `uminv`/`umaxv` have no `.2d` form: the two lanes as four.
+    if lanes == 2 && op != ISD::VecReduceXor {
+        extended = dag.get_node(ISD::BitCast, EVT::Simple(MVT::V4I32), &[extended]);
+        element = EVT::I32;
+    }
+    let reduce = match op {
+        ISD::VecReduceAnd => ISD::VecReduceUMin,
+        ISD::VecReduceOr => ISD::VecReduceUMax,
+        _ => ISD::VecReduceAdd,
+    };
+    let result = dag.get_node(reduce, element, &[extended]);
+    let result = dag.get_any_ext_or_trunc(result, EVT::I1);
     Some(dag.get_any_ext_or_trunc(result, dag.value_type(node)))
 }
 

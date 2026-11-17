@@ -304,7 +304,17 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress | ISD::Truncate
+            ISD::Mul
+                | ISD::Add
+                | ISD::Sub
+                | ISD::And
+                | ISD::Or
+                | ISD::SetCC
+                | ISD::GlobalAddress
+                | ISD::Truncate
+                | ISD::VecReduceAnd
+                | ISD::VecReduceOr
+                | ISD::VecReduceXor
         )
     }
 
@@ -345,6 +355,9 @@ impl CombineHooks for Aarch64Lowering {
             ISD::Sub => super::vector::perform_vector_ext_combine(dag, node)
                 .or_else(|| super::combine::conditional_sub(dag, node)),
             ISD::SetCC => super::combine::or_xor_chain(dag, node),
+            ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor if level == CombineLevel::BeforeLegalizeTypes => {
+                super::vector::bitwise_reduce_of_a_mask(dag, node)
+            }
             ISD::And | ISD::Or if level == CombineLevel::AfterLegalizeDag => {
                 super::ccmp::combine_and_or_csel(dag, node)
             }

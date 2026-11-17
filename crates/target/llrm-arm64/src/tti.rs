@@ -871,6 +871,12 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE VPEE6: NEON has `CMxx` and `UMAXV`/`UMINV` for the vector
+    /// loop's any-of and first-lane reductions.
+    fn vectorizes_early_exit(&self) -> bool {
+        true
+    }
+
     /// `AArch64TTIImpl::getNumberOfRegisters`: 32 NEON registers, 31 general.
     fn number_of_registers(
         &self,
