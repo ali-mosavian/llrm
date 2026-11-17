@@ -569,12 +569,22 @@ impl Tti for AArch64 {
         }
     }
 
-    /// No default ipa-cp clones (IPACP-O2 is x86's): arm64 queens -O2 252 ->
-    /// 2,260 B, cells at or below both bars 18/20 with clones against 19/19
-    /// without (-O3 26/16 against 27/16), frames worse on both axes.
-    /// `-fipa-cp-clone` still clones.
+    /// gcc's `-fipa-cp-clone`, on at -O3 only: arm64 queens -O3 113,742 ->
+    /// 59,543 instructions (gcc 71,673), jpeg_fixed -1.2%, the other 49
+    /// programs identical. At -O2 it cost queens 252 -> 2,260 B and frames
+    /// on both axes (IPACP-O2 is x86's). Pin: none.
     fn ipa_cp_clones_at_speed(&self) -> bool {
+        true
+    }
+
+    fn ipa_cp_clones_at_o2(&self) -> bool {
         false
+    }
+
+    /// DEVIATE IPACP-DEPTH (exit 2026-11-30): gcc's depth. queens -O3 at 4:
+    /// 106,088; 6: 82,148; 8: 59,543 (2 s to compile).
+    fn ipa_cp_max_clones(&self) -> usize {
+        8
     }
 
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
