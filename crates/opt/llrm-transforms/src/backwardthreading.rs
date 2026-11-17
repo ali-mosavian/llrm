@@ -179,6 +179,16 @@ fn stable(
     }
 }
 
+/// Whether `value` is an instruction of `block`.
+fn defined_in(
+    function: &Function,
+    value: Operand,
+    block: BlockId,
+) -> bool {
+    matches!(value, Operand::Value(id)
+        if matches!(function.value(id).def, ValueDef::Instruction(inst) if function.parent(inst) == Some(block)))
+}
+
 /// `range`, narrowed by the edge `from -> to` when `from` branches on a
 /// compare of `value` against a constant.
 fn narrowed(
@@ -296,9 +306,16 @@ fn find(
 ) -> Option<Path> {
     for &bb in function.layout() {
         let Some(branch) = branch_of(function, bb) else { continue };
-        // The compare's inputs must read the same wherever the facts hold.
-        let inputs_stable =
-            |at: BlockId| stable(function, dt, branch.lhs, at) && stable(function, dt, branch.rhs, at) && at != bb;
+        // The compare's inputs must read the same wherever the facts hold: a
+        // value defined in `bb` itself (a header phi) is the next trip's when
+        // the path comes back to `bb`.
+        let inputs_stable = |at: BlockId| {
+            stable(function, dt, branch.lhs, at)
+                && stable(function, dt, branch.rhs, at)
+                && !defined_in(function, branch.lhs, bb)
+                && !defined_in(function, branch.rhs, bb)
+                && at != bb
+        };
         for p in function.predecessors(bb) {
             if p == bb || !inputs_stable(p) || starts_with_landing_pad(function, p) {
                 continue;

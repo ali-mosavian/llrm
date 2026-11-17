@@ -130,3 +130,50 @@ s_in:
     let out = printed(&module);
     assert_ne!(out, printed(&before), "the guard was not threaded:\n{out}");
 }
+
+/// `head` tests its own phi `%x == 2`; the path through `exact` knows `%x == 4`
+/// of the trip that took it, but `head` reads the next trip's `%x` (2). Read as
+/// the same value, the copy of `head` for that path skipped its test:
+/// x_fib -O3 with depth-8 copies returned 5954 for fib(20), 6765 expected.
+#[test]
+fn a_fact_about_a_header_phi_is_not_the_next_trips_value() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  br label %head
+
+head:
+  %x = phi i32 [ %n, %entry ], [ %y, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc2, %latch ]
+  %two = icmp eq i32 %x, 2
+  br i1 %two, label %done, label %test
+
+test:
+  %four = icmp eq i32 %x, 4
+  br i1 %four, label %exact, label %other
+
+exact:
+  br label %latch
+
+other:
+  %bumped = add i32 %acc, 100
+  br label %latch
+
+latch:
+  %acc2 = phi i32 [ %acc, %exact ], [ %bumped, %other ]
+  %y = add i32 %x, -2
+  %go = icmp sgt i32 %y, 0
+  br i1 %go, label %head, label %done
+
+done:
+  %r = phi i32 [ %acc, %head ], [ %acc2, %latch ]
+  ret i32 %r
+}
+";
+    let before = parsed(text);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS });
+    manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
+    let inputs: &[&[i128]] = &[&[4], &[6], &[5], &[3], &[8], &[2], &[1]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{}", printed(&module));
+}
