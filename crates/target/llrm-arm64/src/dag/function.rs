@@ -278,7 +278,10 @@ pub fn select_function_in(
                 let part = updates[..at].iter().filter(|(one, _)| *one == phi).count();
                 let dst = if part == 0 { reg } else { info.part_regs(reg, part + 1)[part] };
                 let ty = function.value(phi).ty;
-                let vector = matches!(module.context.types.get(ty), llrm_mir::types::Type::Vector { .. });
+                let vector = matches!(
+                    module.context.types.get(ty),
+                    llrm_mir::types::Type::Vector { .. }
+                );
                 let float = vector || matches!(module.context.types.get(ty), llrm_mir::types::Type::Float(_));
                 let quad = vector && layout.size_bits(&module.context.types, ty) == 128;
                 Ok(PhiCopy { to, dst, src, float, quad })

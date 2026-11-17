@@ -57,7 +57,13 @@ pub fn of(op: &Op) -> Facts {
         ),
         may_store: matches!(
             op,
-            Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. } | Inst::VectorStoreLane { .. } | Inst::VectorStoreStructure { .. })
+            Op::I(
+                Inst::Store { .. }
+                    | Inst::StorePair { .. }
+                    | Inst::Atomic { .. }
+                    | Inst::VectorStoreLane { .. }
+                    | Inst::VectorStoreStructure { .. }
+            )
         ),
         side_effects: matches!(
             op,

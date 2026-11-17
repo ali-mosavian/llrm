@@ -3,15 +3,21 @@
 
 use std::process::Command;
 
-/// `store_merge_interleaved.ll` saved one register at O1 with `str x30, [sp, #-272]!`, which
-/// does not encode: the object failed with "a pre-index offset -272 does not fit 9 bits".
+/// `store_merge_interleaved.ll` saved one register at O1 with `str x30, [sp,
+/// #-272]!`, which does not encode: the object failed with "a pre-index offset
+/// -272 does not fit 9 bits".
 #[test]
 fn a_single_register_first_push_does_not_take_the_pairs_range() {
     for level in ["-O1", "-O2", "-Os"] {
         let scratch = tempfile::tempdir().unwrap();
         let out = scratch.path().join("f.o");
         let done = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-            .args([level, "-o", out.to_str().unwrap(), concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/store_merge_interleaved.ll")])
+            .args([
+                level,
+                "-o",
+                out.to_str().unwrap(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/store_merge_interleaved.ll"),
+            ])
             .output()
             .expect("the driver runs");
         assert!(done.status.success(), "{level}: {}", String::from_utf8_lossy(&done.stderr));
@@ -19,8 +25,8 @@ fn a_single_register_first_push_does_not_take_the_pairs_range() {
     }
 }
 
-/// A 232-byte local and a call: the frame folds to 256 bytes, and `ldr x30, [sp], #256` (post-index
-/// stops at 255) failed to encode.
+/// A 232-byte local and a call: the frame folds to 256 bytes, and `ldr x30,
+/// [sp], #256` (post-index stops at 255) failed to encode.
 #[test]
 fn a_frame_of_256_bytes_is_not_folded_into_a_single_load() {
     let scratch = tempfile::tempdir().unwrap();

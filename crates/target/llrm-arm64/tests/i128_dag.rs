@@ -1,8 +1,11 @@
-//! `i128` on the DAG path alone: every operation the type legalizer splits into `i64` halves.
+//! `i128` on the DAG path alone: every operation the type legalizer splits into
+//! `i64` halves.
 //!
-//! Each of these was refused ("custom lowering of Load/Store/ShlParts/SrlParts/UAddOCarry/SetCCCarry", "expand a
-//! division without a target") and the function fell back to the hand selector: 20 compiler-rt programs, `int128`,
-//! `gen_div64`, `host_int128` and `gen_vectors64_edge` at the levels they build at.
+//! Each of these was refused ("custom lowering of
+//! Load/Store/ShlParts/SrlParts/UAddOCarry/SetCCCarry", "expand a
+//! division without a target") and the function fell back to the hand selector:
+//! 20 compiler-rt programs, `int128`, `gen_div64`, `host_int128` and
+//! `gen_vectors64_edge` at the levels they build at.
 
 use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
@@ -15,7 +18,8 @@ fn selects(body: &str) -> String {
 
 #[test]
 fn an_i128_load_and_store_are_two_i64_accesses() {
-    let asm = selects("define void @f(ptr %p, ptr %q) {\n  %v = load i128, ptr %p\n  store i128 %v, ptr %q\n  ret void\n}\n");
+    let asm =
+        selects("define void @f(ptr %p, ptr %q) {\n  %v = load i128, ptr %p\n  store i128 %v, ptr %q\n  ret void\n}\n");
     assert!(asm.contains("ldp") && asm.contains("stp"), "{asm}");
 }
 
@@ -26,10 +30,12 @@ fn i128_shifts_are_expanded_into_i64_parts() {
     }
 }
 
-/// `tryShiftAmountMod` ran inside the last DAG combine, so the known-bits fold saw `(~zext n) & 63` as `~zext n`, a
-/// shift by 2^32 or more, and made the funnel term of the high half 0: `(u128)v << n` for an unsigned `n` lost the
-/// low half's top bits (n = 7 of `0x0123456789abcdeffedcba9876543210` gave `...f780`, not `...f7ff`, under qemu).
-/// The pin does it when it selects the shift, after every combine.
+/// `tryShiftAmountMod` ran inside the last DAG combine, so the known-bits fold
+/// saw `(~zext n) & 63` as `~zext n`, a shift by 2^32 or more, and made the
+/// funnel term of the high half 0: `(u128)v << n` for an unsigned `n` lost the
+/// low half's top bits (n = 7 of `0x0123456789abcdeffedcba9876543210` gave
+/// `...f780`, not `...f7ff`, under qemu). The pin does it when it selects the
+/// shift, after every combine.
 #[test]
 fn an_i128_shift_by_a_zero_extended_amount_keeps_the_bits_carried_from_the_low_half() {
     let asm = selects(
@@ -54,8 +60,9 @@ fn an_i128_division_is_a_call_of_the_runtime() {
     assert!(asm.contains("__udivti3"), "{asm}");
 }
 
-/// The carry out of an `i128` add was the constant false (see the m64 test of the same name in llrm-codegen): the
-/// overflow of `llvm.uadd.with.overflow.i128` compiled to `mov w0, #0`.
+/// The carry out of an `i128` add was the constant false (see the m64 test of
+/// the same name in llrm-codegen): the overflow of
+/// `llvm.uadd.with.overflow.i128` compiled to `mov w0, #0`.
 #[test]
 fn a_128_bit_unsigned_add_keeps_its_carry_out() {
     let asm = selects(
@@ -65,8 +72,9 @@ define i1 @f(i128 %a, i128 %b) {\n  %r = call {i128, i1} @llvm.uadd.with.overflo
     assert!(asm.contains("adcs") && asm.matches("csinc").count() == 2, "{asm}");
 }
 
-/// A `select` on an `i128` compare was refused ("Unsupported SelectCC i128: expand operand"): the pin expands the
-/// compare to a boolean and selects on it (`ExpandIntOp_SELECT_CC`), so the min and max of two wide values did not
+/// A `select` on an `i128` compare was refused ("Unsupported SelectCC i128:
+/// expand operand"): the pin expands the compare to a boolean and selects on it
+/// (`ExpandIntOp_SELECT_CC`), so the min and max of two wide values did not
 /// build (f128 compare and conversion routines of compiler-rt).
 #[test]
 fn a_select_on_an_i128_compare_is_expanded_to_a_boolean() {

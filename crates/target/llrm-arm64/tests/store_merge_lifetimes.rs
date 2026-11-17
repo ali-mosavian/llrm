@@ -25,7 +25,8 @@ fn zeroed_arrays_with_lifetimes_merge_in_pairs_from_the_first_element() {
     }
     for element in 0..6 {
         for (name, value) in [("a", "1.0"), ("b", "2.0"), ("c", "0.0"), ("d", "0.0")] {
-            writeln!(ir, "  %{name}{element} = getelementptr inbounds nuw i8, ptr %{name}, i64 {}", element * 4).unwrap();
+            writeln!(ir, "  %{name}{element} = getelementptr inbounds nuw i8, ptr %{name}, i64 {}", element * 4)
+                .unwrap();
             writeln!(ir, "  store float {value}, ptr %{name}{element}, align 4").unwrap();
         }
     }

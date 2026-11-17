@@ -1,11 +1,14 @@
-//! `nbody_single` -O3 as the mid-end leaves it (`data/nbody_single_o3.ll`): a 108-node region of float
-//! arithmetic that the pin's scheduler keeps below the register file by picking from the bottom, and a
-//! scheduler that picked from the top for pressure spilled 247 float values to the stack against 200.
+//! `nbody_single` -O3 as the mid-end leaves it (`data/nbody_single_o3.ll`): a
+//! 108-node region of float arithmetic that the pin's scheduler keeps below the
+//! register file by picking from the bottom, and a scheduler that picked from
+//! the top for pressure spilled 247 float values to the stack against 200.
 //!
-//! Counts are stack loads and stores in `bench_nbody_single` (`-S -O3`). Measured with each translation
-//! left out of the same binary: both in place 200; without the ExitSU edge (`buildSchedGraph`'s latency to the
-//! region end, a def nothing reads) 215; with `tryPressure` comparing the size of a rise between a top and a
-//! bottom candidate 247. The limit sits between 200 and 215.
+//! Counts are stack loads and stores in `bench_nbody_single` (`-S -O3`).
+//! Measured with each translation left out of the same binary: both in place
+//! 200; without the ExitSU edge (`buildSchedGraph`'s latency to the region end,
+//! a def nothing reads) 215; with `tryPressure` comparing the size of a rise
+//! between a top and a bottom candidate 247. The limit sits between 200 and
+//! 215.
 
 use std::process::Command;
 

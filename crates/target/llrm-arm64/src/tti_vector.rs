@@ -324,11 +324,7 @@ fn ext_cast_cost(
     }
     // A vector of `i1` (a mask) is promoted to bytes: one register to sixteen
     // lanes, a register more per sixteen after.
-    let src_pieces = if src.lane == Ty::Int(1) {
-        (i64::from((src.count / 16).max(1)), 1)
-    } else {
-        vector_pieces(src)?
-    };
+    let src_pieces = if src.lane == Ty::Int(1) { (i64::from((src.count / 16).max(1)), 1) } else { vector_pieces(src)? };
     let ((dst_registers, _), (src_registers, _)) = (vector_pieces(dst)?, src_pieces);
     if dst_registers == src_registers {
         return Some(Cost::of(src_registers));

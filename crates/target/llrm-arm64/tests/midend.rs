@@ -726,7 +726,8 @@ fn an_extension_is_free_only_for_the_users_the_bfm_family_folds() {
 /// `-g` on arm64 wrote no debug information at all (`Object::debug` was always
 /// none): a debugger could not name a function or print a variable. At -O0 each
 /// variable lives in its frame object, `a` at `sp+0` and the frame 32 bytes, so
-/// 16 bytes below the canonical frame address (the frame record is lowest, #8139).
+/// 16 bytes below the canonical frame address (the frame record is lowest,
+/// #8139).
 #[test]
 fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
     use llrm_debug::Location;

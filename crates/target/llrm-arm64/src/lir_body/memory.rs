@@ -283,7 +283,8 @@ pub(super) fn to(
                 None,
             )
         }
-        Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+        Inst::VectorLoadStructure { count, lanes, rt, base }
+        | Inst::VectorStoreStructure { count, lanes, rt, base } => {
             let load = matches!(inst, Inst::VectorLoadStructure { .. });
             let bits = u32::from(*count) * if lanes.full() == *lanes { 128 } else { 64 };
             let mut at = Mem::new(None, bits);

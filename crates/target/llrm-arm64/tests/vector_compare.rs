@@ -90,8 +90,8 @@ fn shapes(text: &str) -> BTreeMap<String, usize> {
     counts
 }
 
-/// Ours selects what the pin's `opt -O2 | llc` selects (ours runs the middle end too:
-/// a compare against zero that is always true is a constant there).
+/// Ours selects what the pin's `opt -O2 | llc` selects (ours runs the middle
+/// end too: a compare against zero that is always true is a constant there).
 fn matches_the_pin(source: &str) -> String {
     let text = ours(source).unwrap_or_else(|why| panic!("refused: {why}\n{source}"));
     if let Some(pinned) = pin_optimized(source) {
@@ -102,10 +102,11 @@ fn matches_the_pin(source: &str) -> String {
 
 /// DEVIATE VEC3 (owner llrm-arm64-vec, exit 2026-11-24): compares against zero
 /// that the pin folds are not compared against zero.
-/// - `ule` is rewritten to `eq` (`cmeq #0`) by the pin's instcombine; ours stays `cmhs`.
+/// - `ule` is rewritten to `eq` (`cmeq #0`) by the pin's instcombine; ours
+///   stays `cmhs`.
 /// - `uge`/`ult` are constants: ours does not fold `sext` of a constant
-///   `build_vector` (`movi` + `sshll`) and does not turn a 64-bit zero store into
-///   `str xzr` (`replaceZeroVectorStore`).
+///   `build_vector` (`movi` + `sshll`) and does not turn a 64-bit zero store
+///   into `str xzr` (`replaceZeroVectorStore`).
 const FOLDED_BY_PIN_AGAINST_ZERO: [&str; 3] = ["ule", "uge", "ult"];
 
 const PREDICATES: [&str; 10] = ["eq", "ne", "sgt", "sge", "slt", "sle", "ugt", "uge", "ult", "ule"];
