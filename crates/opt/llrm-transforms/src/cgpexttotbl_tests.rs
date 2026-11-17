@@ -68,3 +68,32 @@ fn a_zext_in_an_optsize_function_stays() {
     let text = run(&LOOP.replace("{\nentry:", "optsize {\nentry:"));
     assert!(text.contains("zext <8 x i8>"), "{text}");
 }
+
+/// `rep_count`'s accumulation: `zext <4 x i8> to <4 x i64>` added to a running
+/// sum. The pin widens to the next power of two (`uaddw` takes the rest), so the
+/// shuffle is to `i32` lanes and a `zext` to `i64` stays.
+#[test]
+fn a_zext_added_to_a_sum_is_shuffled_to_the_next_power_of_two_and_widened() {
+    let text = run(
+        "define <4 x i64> @f(ptr noalias %a, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %acc = phi <4 x i64> [ zeroinitializer, %entry ], [ %sum, %loop ]
+  %s = getelementptr inbounds i32, ptr %a, i64 %i
+  %v = load <4 x i8>, ptr %s, align 4
+  %w = zext <4 x i8> %v to <4 x i64>
+  %sum = add <4 x i64> %acc, %w
+  %next = add nuw nsw i64 %i, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret <4 x i64> %sum
+}
+",
+    );
+    assert!(text.contains("shufflevector <4 x i8>"), "{text}");
+    assert!(text.contains("bitcast <16 x i8>") && text.contains("to <4 x i32>"), "{text}");
+    assert!(text.contains("zext <4 x i32>") && text.contains("to <4 x i64>"), "{text}");
+}
