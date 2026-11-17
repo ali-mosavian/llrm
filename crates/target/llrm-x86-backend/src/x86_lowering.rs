@@ -3684,7 +3684,9 @@ fn lower_build_vector_splat(
     if matches!(vt, EVT::Simple(MVT::V4F32 | MVT::V2F64)) {
         return lower_build_float_vector(dag, vt, &lanes);
     }
-    if lanes.iter().any(|lane| *lane != first) || dag.constant(first).is_some() || dag.is_undef(first) {
+    // `BuildVectorSDNode::getSplatValue`: undefined lanes (a widened `v2i32`'s upper half) match any value.
+    let first = lanes.iter().copied().find(|lane| !dag.is_undef(*lane))?;
+    if lanes.iter().any(|lane| *lane != first && !dag.is_undef(*lane)) || dag.constant(first).is_some() {
         return None;
     }
     let lane_vt = match vt {
