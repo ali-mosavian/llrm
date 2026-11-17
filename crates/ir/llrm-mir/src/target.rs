@@ -476,9 +476,9 @@ pub struct Tuning {
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
     /// DEVIATE LP1-FP (owner x86-m32, exit 2026-11-30): the float registers
-    /// LICM may fill with hoisted float loads
-    /// (`Tti::licm_float_register_limit`); none: it hoists every invariant
-    /// load, as the pin.
+    /// LICM may fill with hoisted float loads and GVN with float loads it
+    /// carries around a loop (`Tti::licm_float_register_limit`); none: both
+    /// do every one, as the pin.
     pub licm_float_register_limit: Option<u32>,
     /// DEVIATE SWITCH-SIZE-RATIO (owner x86-m32, exit 2026-11-30): GCC's
     /// `jump-table-max-growth-ratio-for-size`, in percent: tuned for size, a

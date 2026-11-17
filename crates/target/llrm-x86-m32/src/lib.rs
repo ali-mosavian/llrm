@@ -242,9 +242,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         jump_threading_latch_trial_at_size: true,
         switch_lookup_trial_at_size: true,
         jump_table_size_growth_ratio: Some(300),
-        // The x87 stack: the pin's RFP80 class has FP0..FP6, the eighth slot is
-        // the stackifier's.
-        licm_float_register_limit: Some(7),
+        // The x87 stack's seven allocatable slots less one for the stackifier's
+        // exchange: 7 loses x_matmul_f's O3 clocks bar (64,485 against gcc's
+        // 61,005), 6 and under keep it (61,150).
+        licm_float_register_limit: Some(6),
         loop_idiom_copy_trial_at_size: true,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
         // completely peels a loop whose trips the object it indexes bounds

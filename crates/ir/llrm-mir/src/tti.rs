@@ -3172,9 +3172,10 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
-    /// DEVIATE LP1-FP: the values LICM may hold in the float file across a
-    /// loop before it stops hoisting float loads (`licm/pressure.rs`); `None`:
-    /// no limit, as the pin.
+    /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN
+    /// (`float_carry_fits`) may hold in the float file across a loop before
+    /// they stop hoisting or carrying float loads; `None`: no limit, as the
+    /// pin.
     fn licm_float_register_limit(&self) -> Option<u32> {
         None
     }

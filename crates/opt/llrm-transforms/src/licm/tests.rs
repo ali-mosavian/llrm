@@ -2829,49 +2829,6 @@ exit:\n  ret void\n}\n";
     let _ = decided(text);
 }
 
-/// An i486 whose float file LICM may fill with `float_limit` hoisted loads.
-struct FloatFile {
-    inner: llrm_mir::target::Neutral,
-    float_limit: Option<u32>,
-}
-
-impl llrm_mir::target::Machine for FloatFile {
-    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        let tuning =
-            llrm_mir::target::Tuning { licm_float_register_limit: self.float_limit, ..llrm_mir::target::Tuning::PIN };
-        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(tuning)))
-    }
-
-    fn foreign_span(
-        &self,
-        selectors: (i64, i64),
-        offsets: (i64, i64),
-        width: i64,
-    ) -> Option<(i64, i64)> {
-        self.inner.foreign_span(selectors, offsets, width)
-    }
-
-    fn spaces(&self) -> llrm_mir::spaces::Spaces {
-        self.inner.spaces()
-    }
-
-    fn costs(&self) -> llrm_mir::target::OperationCosts {
-        self.inner.costs()
-    }
-
-    fn registers(&self) -> i64 {
-        self.inner.registers()
-    }
-
-    fn call_registers(&self) -> i64 {
-        self.inner.call_registers()
-    }
-
-    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
-        self.inner.address_forms()
-    }
-}
-
 /// x_ld_matmul -O3 m32: twelve `A[i][k]` long doubles, invariant in the `j`
 /// loop, were all hoisted across it onto the eight-slot x87 stack: ten `fstp`
 /// and ten `fxch` an iteration, 96,600 clk against gcc's 84,571 (which reads
@@ -2912,10 +2869,12 @@ b2:
 "
     );
     let hoisted = |float_limit| {
-        named_on(&text, FloatFile { inner: llrm_mir::target::Neutral, float_limit }, |all| all.hoisted.clone())
-            .iter()
-            .filter(|name| name.starts_with('a'))
-            .count()
+        named_on(&text, crate::testing::FloatFile { inner: llrm_mir::target::Neutral, float_limit }, |all| {
+            all.hoisted.clone()
+        })
+        .iter()
+        .filter(|name| name.starts_with('a'))
+        .count()
     };
     assert_eq!(hoisted(None), 12, "premise: with no float limit every invariant load goes");
     let held = hoisted(Some(8));
