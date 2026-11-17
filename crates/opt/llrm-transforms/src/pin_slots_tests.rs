@@ -481,6 +481,14 @@ const ROWS: &[Disposition] = &[
 
 /// The built slot groups no pin slot is matched to, with why.
 const OURS_ONLY: &[(&str, &str)] = &[
+    (
+        "1243: backthread@1243",
+        "DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): gcc's relation-oracle backward threading before the first select-forming SimplifyCFG, on x86-64; the pin has no such pass",
+    ),
+    (
+        "early: loop-unroll-and-jam@early",
+        "-O3, DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): gcc's `pass_unroll_jam` runs before its vectorizer; the pin's is after the vectorizer (l.1474)",
+    ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
     (
         "764: loopsimplify@764 + lcssa@764",
