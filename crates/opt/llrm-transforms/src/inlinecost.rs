@@ -944,15 +944,14 @@ impl<'a> Analyzer<'a> {
                 match (self.site.tti, kind, from.and_then(|ty| Ty::of(types, ty)), Ty::of(types, operation.ty)) {
                     (Some(tti), Some(kind), Some(src), Some(dst)) => {
                         let cost = tti.cast_cost(kind, dst, src, CostKind::SizeAndLatency);
-                        // BasicTTIImpl.h:1298-1311: the extension of a simple
-                        // load.
+                        // BasicTTIImpl.h:1298-1311: the extension of a load
+                        // (a volatile one too: the pin's `opt` prices the
+                        // `sext` of `load volatile i16` at none, 50 for
+                        // parity/algebra's `bench_algebra` where ours read 70).
                         let of_load = match operation.operands[0] {
                             Operand::Value(value) => match self.callee.value(value).def {
                                 llrm_mir::module::ValueDef::Instruction(def) => {
-                                    matches!(
-                                        self.callee.instruction(def).opcode,
-                                        Opcode::Load { volatile: false, .. }
-                                    )
+                                    matches!(self.callee.instruction(def).opcode, Opcode::Load { .. })
                                 }
                                 llrm_mir::module::ValueDef::Argument(_) => false,
                             },
