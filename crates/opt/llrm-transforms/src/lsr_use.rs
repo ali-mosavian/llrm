@@ -517,6 +517,9 @@ pub struct Cost {
     scaled: Vec<(Scev, i64)>,
     /// The registers rated so far as part of an address (DEVIATE LU8).
     pub(crate) addressed: Vec<Scev>,
+    /// The base registers, offset and access size of each address rated so
+    /// far, for the pairs of DEVIATE LSR-POSTINC-PAIR.
+    walked: Vec<(Vec<Scev>, i64, i64)>,
     /// Rated for size (set by `rate_formula`).
     pub(crate) size: bool,
     /// DEVIATE LG3: the bytes of the setup and exit-test code, for a target
@@ -754,7 +757,29 @@ impl Cost {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
             } else if offset.is_non_zero() {
-                self.c.imm_cost += 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                self.c.imm_cost += bits;
+            }
+            // DEVIATE LSR-POSTINC-PAIR (owner arm64, exit 2026-11-30): a
+            // walked pointer's writeback folds into the first access of an
+            // adjacent pair (`ldp [p], #n`), so the walk starts there: the
+            // lower access of a pair before the pointer (a negative offset)
+            // costs two more. The pin's two's complement width rates `-4`
+            // cheaper than `4` and starts the walk at the second access.
+            if lu.kind == Kind::Address && r.amk.has_post_indexed() && !f.has_global() && f.scaled_reg.is_none() {
+                let size = lu.access_ty.bytes as i64;
+                if size > 0 {
+                    let at = offset.0;
+                    let pair = self.walked.iter().any(|(regs, other, bytes)| {
+                        *regs == f.base_regs
+                            && *bytes == size
+                            && ((*other + size == at && *other < 0) || (at + size == *other && at < 0))
+                    });
+                    if pair {
+                        self.c.imm_cost += 2;
+                    }
+                    self.walked.push((f.base_regs.clone(), at, size));
+                }
             }
             // The target may not support this offset for this instruction.
             if lu.kind == Kind::Address
