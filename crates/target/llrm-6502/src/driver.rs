@@ -292,7 +292,7 @@ fn trial_inlined(
         .map_or(0, |(_, instructions)| instructions);
     let at_speed = matches!(request.level, Level::O2 | Level::O3)
         && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
-    if !(request.level == Level::Os || at_speed) || sites.is_empty() {
+    if !(matches!(request.level, Level::O1 | Level::Os) || at_speed) || sites.is_empty() {
         return Ok((built, Vec::new(), None, false));
     }
     if instructions(&built) > limit {
@@ -322,7 +322,7 @@ fn trial_inlined(
     let other_unroll = trial::take();
     // The loops the inlined copies hold that the threshold refused: the unroll
     // trial may take them with the pin's inlines made (`trial_unrolled`).
-    let joint = at_speed && !other_unroll.0.is_empty();
+    let joint = (at_speed || request.level == Level::Os) && !other_unroll.0.is_empty();
     let cut = trial::differing(&built.modules[0], &other.modules[0]);
     // The kept side is priced from its own assembly, which the result carries
     // to the unroll trial and the output; only the second compile's chain
@@ -764,7 +764,17 @@ fn trial_unrolled(
             None => tail(built.take().expect("the program"), request, true, false)?,
         },
     };
-    let Ok(both) = llrm_transforms::trial::with_pin_inlines(|| trial::with(limit, || program(text, request))) else {
+    // -Os prices the -O2 pair too: its size rule refuses the callees whose
+    // bodies the unrolled loops fold away, and the backend prices the result.
+    let pair_request = Request {
+        platform: request.platform.clone(),
+        cpu: request.cpu,
+        level: if request.level == Level::Os { Level::O2 } else { request.level },
+        passes: request.passes.clone(),
+        debug: request.debug,
+    };
+    let Ok(both) = llrm_transforms::trial::with_pin_inlines(|| trial::with(limit, || program(text, &pair_request)))
+    else {
         return Ok(priced.text);
     };
     // Priced by the backend only where the byte model finds it smaller: the
