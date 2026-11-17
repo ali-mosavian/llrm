@@ -829,6 +829,7 @@ impl<'a> Builder<'a> {
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_pointers: Vec::new(),
+            call_convention: 0,
             call_result_assert: None,
             call_result_range_bits: None,
             fixed_args: 0,
@@ -897,6 +898,8 @@ struct Builder<'a> {
     /// The arguments of the call being lowered that are pointers
     /// (`ArgFlags.isPointer()`); none listed means none are.
     call_pointers: Vec<bool>,
+    /// The LLVM calling convention of the call `visit_call` is lowering.
+    call_convention: u32,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -1586,7 +1589,14 @@ impl Builder<'_> {
             objects.push((size, immutable));
             -(offsets.len() as i32)
         };
-        let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
+        let mut parts = calling.lower_formal_arguments_in(
+            self.function.calling_convention,
+            &mut self.dag,
+            entry,
+            &ins,
+            &mut make_object,
+            &mut live_in,
+        );
         // `SaveVarArgRegisters`: the save areas are stack objects made after
         // the allocas', numbered from the next frame index.
         let mut requests: Vec<(u32, u32)> = Vec::new();
@@ -2322,6 +2332,7 @@ impl Builder<'_> {
             .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
             .collect();
         self.call_pointers = owner.iter().map(|argument| self.is_pointer_type(arg_types[*argument])).collect();
+        self.call_convention = info.calling_convention;
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -2591,6 +2602,7 @@ impl Builder<'_> {
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
         let pointer_args = std::mem::take(&mut self.call_pointers);
+        let call_convention = std::mem::take(&mut self.call_convention);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2727,7 +2739,8 @@ impl Builder<'_> {
             return Ok(None);
         }
         let info = &mut *self.info;
-        let (chain, parts) = calling.lower_call_with_frame(
+        let (chain, parts) = calling.lower_call_in(
+            call_convention,
             &mut self.dag,
             root,
             callee_node,

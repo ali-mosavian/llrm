@@ -1222,6 +1222,10 @@ impl Tti for X86 {
         self.tuning.unroll_recurrence_veto
     }
 
+    fn threads_by_relation(&self) -> bool {
+        self.tuning.threads_by_relation
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
@@ -1269,6 +1273,10 @@ impl Tti for X86 {
 
     fn unswitch_threshold_override(&self) -> Option<i64> {
         self.tuning.unswitch_threshold
+    }
+
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        self.tuning.licm_float_register_limit
     }
 
     fn min_jump_table_density(&self) -> Option<u64> {

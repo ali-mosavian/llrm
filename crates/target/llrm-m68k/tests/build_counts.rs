@@ -99,5 +99,7 @@ fn a_size_build_does_not_try_rematerialisation_off() {
         "premise: {report}"
     );
     let builds = report.lines().filter(|line| *line == "[builds] bs_high").count();
-    assert!(builds <= 1, "bs_high built {builds} times:\n{report}");
+    // the held-constants build of #10069 is the one second build; a
+    // rematerialisation-off build would be a third
+    assert!(builds <= 2, "bs_high built {builds} times:\n{report}");
 }

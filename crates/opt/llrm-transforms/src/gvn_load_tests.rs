@@ -553,3 +553,72 @@ x:
     );
     assert!(changed && text.matches("load i16, ptr @sum").count() == 1, "{text}");
 }
+
+/// x_matmul_f -O3 m32: GVN made the loads of the row `A[i][0..11]` that the
+/// `j` loop re-reads into values carried around its back edge, on the
+/// eight-slot x87 stack: 64,485 clk against gcc's 61,005 (gcc reads them in
+/// the loop). A float load is carried only while the float file has room.
+#[test]
+fn test_float_loads_are_carried_around_a_loop_only_while_the_float_file_has_room() {
+    let cells = 10;
+    let mut globals = String::new();
+    let mut before = String::new();
+    let mut header = String::new();
+    let mut sum = String::from("%s");
+    for k in 0..cells {
+        globals += &format!("@c{k} = global double 0.0\n");
+        before += &format!("  %a{k} = load double, ptr @c{k}\n");
+        header += &format!("  %r{k} = load double, ptr @c{k}\n  %t{k} = fadd double {sum}, %r{k}\n");
+        sum = format!("%t{k}");
+    }
+    let text = format!(
+        "{globals}
+define double @w() {{
+b0:
+  store double 1.0, ptr @c0
+  ret double 0.0
+}}
+
+define double @f(i32 %n, i1 %c) {{
+b0:
+{before}  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %j, %b3 ]
+  %s = phi double [ 0.0, %b0 ], [ %e, %b3 ]
+{header}  %skip = icmp eq i32 %i, 1
+  br i1 %skip, label %b2, label %b3
+
+b2:
+  %w = call double @w()
+  br label %b3
+
+b3:
+  %e = fadd double {sum}, 0.0
+  %j = add i32 %i, 1
+  %more = icmp slt i32 %j, %n
+  br i1 %more, label %b1, label %b4
+
+b4:
+  ret double %e
+}}
+"
+    );
+    let loads_left = |float_limit| {
+        let mut module = parsed(&text);
+        let layout = llrm_analysis::testing::layout(&module);
+        let machine = crate::testing::FloatFile { inner: llrm_mir::target::Neutral, float_limit };
+        let outer = Outer::of(&module, Some(std::rc::Rc::new(machine)));
+        let (context, function) = module.function_mut("f").expect("@f");
+        run_impl_cfg(context, &layout, function, &outer, true, None);
+        let text = printed(&module);
+        let header = &text[text.find("\nb1:\n").expect("b1")..text.find("\nb2:\n").expect("b2")];
+        header.matches("load double").count()
+    };
+    let free = loads_left(None);
+    let priced = loads_left(Some(5));
+    assert!(
+        priced > free,
+        "{priced} loads stay in the loop with five float values allowed across the loop, {free} with none"
+    );
+}

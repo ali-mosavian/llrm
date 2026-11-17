@@ -1777,6 +1777,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::threads_by_relation`.
+    fn threads_by_relation(&self) -> bool {
+        false
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -2192,6 +2197,12 @@ pub trait Tti {
     /// `-f[no-]ipa-cp-clone` decides when given.
     fn ipa_cp_clones_at_speed(&self) -> bool {
         false
+    }
+
+    /// DEVIATE IPACP-O2: whether the clones are also made at -O2, where gcc
+    /// has none; default: as at -O3.
+    fn ipa_cp_clones_at_o2(&self) -> bool {
+        self.ipa_cp_clones_at_speed()
     }
 
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
@@ -3174,6 +3185,14 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN
+    /// (`float_carry_fits`) may hold in the float file across a loop before
+    /// they stop hoisting or carrying float loads; `None`: no limit, as the
+    /// pin.
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-24): whether `indvars`
