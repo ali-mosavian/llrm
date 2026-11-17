@@ -8,7 +8,7 @@ use llrm_dagisel::instr::InstrDesc;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
-use super::{adda, bfffo, cmpa, divrem, indexed, pea, scaled, short, widemul, wordjump};
+use super::{adda, bfextu, bfffo, cmpa, divrem, indexed, pea, scaled, short, widemul, wordjump};
 
 /// The machine code of the instruction named `name`, the pin's or a local one.
 pub fn code_of(name: &str) -> Option<u16> {
@@ -20,6 +20,7 @@ pub fn code_of(name: &str) -> Option<u16> {
         .or_else(|| cmpa::code_of(name))
         .or_else(|| adda::code_of(name))
         .or_else(|| bfffo::code_of(name))
+        .or_else(|| bfextu::code_of(name))
         .or_else(|| wordjump::code_of(name))
 }
 
@@ -33,6 +34,7 @@ pub fn name_of(code: u32) -> Option<&'static str> {
         .or_else(|| cmpa::name_of(code))
         .or_else(|| adda::name_of(code))
         .or_else(|| bfffo::name_of(code))
+        .or_else(|| bfextu::name_of(code))
         .or_else(|| wordjump::name_of(code))
 }
 
@@ -46,6 +48,7 @@ pub fn desc(code: u16) -> Option<&'static InstrDesc> {
         .or_else(|| cmpa::desc(code))
         .or_else(|| adda::desc(code))
         .or_else(|| bfffo::desc(code))
+        .or_else(|| bfextu::desc(code))
         .or_else(|| wordjump::desc(code))
 }
 
@@ -62,6 +65,7 @@ pub fn text(name: &str) -> Option<&'static (&'static str, &'static str, &'static
         .or_else(|| cmpa::cmpa_asm(name))
         .or_else(|| adda::adda_asm(name))
         .or_else(|| bfffo::bfffo_asm(name))
+        .or_else(|| bfextu::bfextu_asm(name))
         .or_else(|| wordjump::wordjump_asm(name))
 }
 
@@ -89,5 +93,6 @@ pub fn bits(name: &str) -> Option<(u16, &'static [Piece])> {
         .or_else(|| cmpa::cmpa_encoding(name))
         .or_else(|| adda::adda_encoding(name))
         .or_else(|| bfffo::bfffo_encoding(name))
+        .or_else(|| bfextu::bfextu_encoding(name))
         .or_else(|| wordjump::wordjump_encoding(name))
 }
