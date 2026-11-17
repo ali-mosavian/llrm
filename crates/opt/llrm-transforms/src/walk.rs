@@ -19,9 +19,9 @@
 //! # Deviations
 //! - W1: `deadargelim` runs after the walk (`ipa-deadargs.`), as LLVM's
 //!   (`PassBuilderPipelines.cpp` l.1335), except for a function that calls
-//!   itself and, with the recursion copier on, loses its unread parameters
-//!   before the walk: the copier works on the body gcc's IPA-SRA leaves. Exit: the copier prices a
-//!   body with its unread parameters dropped.
+//!   itself and, with the recursion copier on or at -Os, loses its unread
+//!   parameters before the walk: the copier works on the body gcc's IPA-SRA
+//!   leaves. Exit: the copier prices a body with its unread parameters dropped.
 //! - W2a: the walk is per function in callee-first order, not per SCC with the
 //!   inliner's own updates; the clocks inliner still runs afterwards;
 //!   `inlinecost::sites` stands for `decide` until it lands. Exit: W2.
@@ -83,6 +83,9 @@ pub struct ModuleIpo {
     pub cloning: crate::ipacp::Shared,
     /// As `Walk::speed_rate`: whether the recursion copier can run.
     pub speed_rate: bool,
+    /// -Os and -Oz: the bar is gcc's, whose IPA-SRA drops the unread parameters
+    /// first.
+    pub for_size: bool,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -174,10 +177,13 @@ impl ProgramPass for ModuleIpo {
         // DEVIATE W1 (narrowed, owner w10, exit 2026-11-24): the pin's
         // `deadargelim` follows the CGSCC walk, so the inliner prices a call
         // with the arguments nothing reads (x_idioms -Os `sumlong`, cost -10).
-        // With the copier on, a function that calls itself loses them first: the recursion copier
-        // (gcc's `-finline-recursive`) works on the body gcc's IPA-SRA leaves,
-        // and with them in place the copies merge no calls (hanoi: a switch of
+        // With the copier on, or at -Os, a function that calls itself loses
+        // them first: the recursion copier (gcc's `-finline-recursive`)
+        // works on the body gcc's IPA-SRA leaves, and with them in
+        // place the copies merge no calls (hanoi: a switch of
         // nine copies and a closed form, against 23..2358 B more without).
+        // At -Os the recursion then calls itself once (arm64 hanoi 60 B,
+        // against 136 B after the walk).
         let copier = Recursion::of(
             self.inline.recursive,
             self.inline.single,
@@ -186,7 +192,7 @@ impl ProgramPass for ModuleIpo {
             program.target.tti().as_deref(),
         )
         .is_some();
-        for at in (0..count).filter(|_| copier) {
+        for at in (0..count).filter(|_| copier || self.for_size) {
             let ((removed, unsound), before) =
                 reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_from_recursions);
             vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
