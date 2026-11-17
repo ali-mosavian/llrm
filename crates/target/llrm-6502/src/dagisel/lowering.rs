@@ -67,7 +67,7 @@ pub mod cond {
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
     let mut tl = TargetLowering::empty(
-        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_soft_compare_classes().with_int_size(16),
     );
     tl.init_actions();
     // SD241: the shift routine stays for a variable amount known small until an

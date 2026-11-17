@@ -28,7 +28,7 @@ const CASES: &[(&str, &str, &str)] = &[
     (
         "define i32 @f(double %a, double %b) { %c = fcmp olt double %a, %b %r = zext i1 %c to i32 ret i32 %r }",
         "f",
-        "__ltdf2",
+        "__ledf2",
     ),
     (
         "define i32 @f(float %a, float %b) { %c = fcmp ugt float %a, %b %r = zext i1 %c to i32 ret i32 %r }",
