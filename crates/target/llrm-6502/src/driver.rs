@@ -292,7 +292,7 @@ fn trial_inlined(
         .map_or(0, |(_, instructions)| instructions);
     let at_speed = matches!(request.level, Level::O2 | Level::O3)
         && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
-    if !(request.level == Level::Os || at_speed) || sites.is_empty() {
+    if !(matches!(request.level, Level::O1 | Level::Os) || at_speed) || sites.is_empty() {
         return Ok((built, Vec::new(), None, false));
     }
     if instructions(&built) > limit {

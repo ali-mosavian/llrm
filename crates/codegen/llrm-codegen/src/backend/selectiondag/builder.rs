@@ -611,6 +611,11 @@ pub fn build_block(
     );
     if Some(block) == function.entry() {
         builder.lower_arguments()?;
+    } else if builder.target.dag.fixed_args_in_every_block
+        && let Some((offsets, objects)) = builder.info.fixed_args.clone()
+    {
+        builder.dag.fixed_offsets.extend(offsets);
+        builder.dag.fixed_objects.extend(objects);
     }
     // selection starts at the first non-phi (`getFirstNonPHIIt`)
     for inst in
@@ -1595,10 +1600,15 @@ impl Builder<'_> {
             let copy = self.dag.get_copy_to_reg(self.dag.entry_node(), reg, hidden);
             self.dag.set_root(copy);
         }
+        let (mut slot_offsets, mut slot_objects) =
+            (std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
             self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
+            slot_offsets.insert(-(at as i32 + 1), *offset);
+            slot_objects.insert(-(at as i32 + 1), objects[at]);
         }
+        self.info.fixed_args = Some((slot_offsets, slot_objects));
         let mut next = 0;
         for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
@@ -4351,6 +4361,8 @@ impl Builder<'_> {
         let result = self.type_of(instruction.ty)?;
         let input = self.dag.value_type(first);
         let (mut sources, lanes) = (input.lanes() as usize, mask.len());
+        let mut remapped: Vec<i32> = Vec::new();
+        let mut mask = mask;
         let node = 'shuffled: {
             if sources == lanes {
                 break 'shuffled self.dag.get_vector_shuffle(result, first, second, mask);
@@ -4409,6 +4421,14 @@ impl Builder<'_> {
                             *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
                         }
                     }
+                    // Readjust the mask for the padded inputs: the second
+                    // input's lanes follow the first's padded length.
+                    let padded_lanes = (count * sources) as i32;
+                    remapped = mask
+                        .iter()
+                        .map(|&lane| if lane >= sources as i32 { lane - sources as i32 + padded_lanes } else { lane })
+                        .collect();
+                    mask = &remapped;
                     sources = count * sources;
                 }
             }

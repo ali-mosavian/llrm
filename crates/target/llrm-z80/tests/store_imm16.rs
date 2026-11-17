@@ -153,12 +153,13 @@ done:
 }
 "#;
 
-/// fill_nest -O2: the constant was stored from two `ld (hl), n` on every trip,
-/// 6 T a trip more than from a pair held across the loop: +22144 T.
+/// Bytes decide at -O2 too since #9872: fill -O2 is 13 B with the immediates in the loop against 15 B with the pair held
+/// across it (-2 B); the loop runs 58 T a trip against 52 T (+6 T; fill_nest +22144 T). The held pair was the
+/// speed-first premise.
 #[test]
-fn at_speed_a_constant_stored_in_a_loop_is_held_across_it() {
+fn at_speed_a_constant_stored_in_a_loop_stays_an_immediate_too() {
     let asm = text(FILL, "fill", 0, &Request::new(Level::O2)).expect("compiles");
-    assert!(!asm.contains("ld (hl), #52"), "the constant is stored from immediates in the loop:\n{asm}");
+    assert!(asm.contains("ld (hl), #52") && !asm.contains("ld bc, #4660"), "the constant was held for clocks:\n{asm}");
 }
 
 /// At -Os bytes decide: the two immediates are 4 B, the pair held 5 B.

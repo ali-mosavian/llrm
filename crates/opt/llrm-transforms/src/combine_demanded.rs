@@ -174,7 +174,10 @@ impl Combiner<'_> {
         &self,
         v: Operand,
     ) -> Option<u128> {
-        query(self, None).int_constant(v).map(|(bits, _)| bits)
+        match v {
+            Operand::Constant(id) => self.context.splat_int(id).map(|(bits, _)| bits),
+            _ => None,
+        }
     }
 
     /// `v` is `op a, b` with the flags it carries.
@@ -255,7 +258,8 @@ impl Combiner<'_> {
         inst: InstId,
     ) -> Visit {
         let ty = self.function.instruction(inst).ty;
-        let Some(bits) = self.context.types.int_bits(ty) else { return Visit::None };
+        // `getScalarSizeInBits`: a vector's lanes are demanded alike.
+        let Some(bits) = self.context.types.scalar_int_bits(ty) else { return Visit::None };
         let mut known = KnownBits::unknown(bits);
         match self.simplify_demanded_use_bits(inst, inst, mask(bits), &mut known, 0) {
             Simplified::Nothing => Visit::None,
@@ -644,7 +648,7 @@ impl Combiner<'_> {
         }
 
         let src = self.operand_of(inst, 0);
-        let src_w = self.context.types.int_bits(self.type_of(src)).expect("an integer cast");
+        let src_w = self.context.types.scalar_int_bits(self.type_of(src)).expect("an integer cast");
         let input_demanded = if src_w >= w { demanded } else { demanded & mask::<u128>(src_w) };
         let mut input_known = KnownBits::unknown(src_w);
         if self.simplify_demanded_bits(cxt, inst, 0, input_demanded, &mut input_known, d1) {
@@ -670,7 +674,7 @@ impl Combiner<'_> {
         // Compute the bits in the result that are not present in
         // the input.
         let src = self.operand_of(inst, 0);
-        let src_w = self.context.types.int_bits(self.type_of(src)).expect("an integer cast");
+        let src_w = self.context.types.scalar_int_bits(self.type_of(src)).expect("an integer cast");
         let mut input_demanded = demanded & mask::<u128>(src_w);
 
         // If any of the sign extended bits are demanded, we know
@@ -1579,7 +1583,7 @@ impl Combiner<'_> {
 
         let var_x = self.operand_of(shr, 0);
         let ty = self.type_of(var_x);
-        let w = self.context.types.int_bits(ty).expect("an integer shift");
+        let w = self.context.types.scalar_int_bits(ty).expect("an integer shift");
         if shl_op1 >= u128::from(w) || shr_op1 >= u128::from(w) {
             return None; // Undef.
         }
@@ -1638,7 +1642,7 @@ impl Combiner<'_> {
         demanded: u128,
         depth: u32,
     ) -> Option<Operand> {
-        let w = self.context.types.int_bits(self.function.instruction(inst).ty)?;
+        let w = self.context.types.scalar_int_bits(self.function.instruction(inst).ty)?;
         let (or_value, shr_amt) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
         let (_, or_flags, a, b) = self.binary_of(or_value, BinaryOp::Or)?;
         if !self.has_one_use(or_value) || !or_flags.contains(Flags::DISJOINT) {
@@ -1665,7 +1669,7 @@ impl Combiner<'_> {
         }
 
         // Check that upper demanded bits are not lost from lshift.
-        let upper_w = self.context.types.int_bits(self.type_of(upper))?;
+        let upper_w = self.context.types.scalar_int_bits(self.type_of(upper))?;
         if u128::from(upper_w) < shl_amt + demanded_width {
             return None;
         }
