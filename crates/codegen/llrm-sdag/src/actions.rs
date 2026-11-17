@@ -1077,6 +1077,9 @@ impl TargetLowering {
             &[MVT::V8I8, MVT::V4I16, MVT::V2I32],
             Custom,
         );
+        // `LowerEXTRACT_VECTOR_ELT`: a lane of a 64-bit vector is read from the
+        // vector widened to 128 bits. The 128-bit vectors are legal.
+        t.set_ops(&[ExtractElement], &[MVT::V8I8, MVT::V4I16, MVT::V2I32, MVT::V2F32], Custom);
         // `LowerMUL`: the widening multiplies (`SMULL`, `UMULL`); `v2i64` has
         // no multiply of its own.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);
