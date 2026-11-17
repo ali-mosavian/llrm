@@ -2009,9 +2009,10 @@ pub fn sink_save_bracket(asm: &mut Asm) {
                     | Sec
             )
     };
-    // an indirect operand reads a pair of cells, so any may be `cell`
+    // an indirect or zero-page indexed operand reaches cells it does not name
     let reads_cell = |inst: &Inst, cell: &str| match &inst.operand {
-        Operand::Direct(name) | Operand::Indexed(name, _) => name == cell,
+        Operand::Direct(name) => name == cell,
+        Operand::Indexed(name, _) => name == cell || name.starts_with("rc"),
         Operand::IndirectY(_) | Operand::IndirectX(_) | Operand::Indirect(_) => true,
         _ => false,
     };
@@ -2049,7 +2050,8 @@ pub fn sink_save_bracket(asm: &mut Asm) {
             for look in (at.saturating_sub(12)..at).rev() {
                 let Line::Inst(inst) = &asm.lines[look] else { break };
                 if overwrites(inst) {
-                    // the bracket goes above this load, which must not read the cell it sets
+                    // the bracket goes above this load, which must not read the
+                    // cell it sets
                     if !reads_cell(inst, &cell) {
                         target = Some((look, false));
                     }

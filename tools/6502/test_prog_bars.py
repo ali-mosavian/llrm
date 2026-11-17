@@ -30,6 +30,39 @@ class Counted(unittest.TestCase):
         self.assertIsNone(pb.counted(100, [None, None]))
 
 
+class NoBarLayout(unittest.TestCase):
+    """volatile_bitfield: `struct S` is 4 B here (clang's msp430 layout packs f at bit 3) and 5 B for llvm-mos and sdcc (f at bit 8), so
+    their 502 B and 426 B were bars of another program: the cell counted +147 B / +223 B that no code change could close."""
+    DUMPS = ("*** Dumping AST Record Layout\n         0 | struct S\n     0:0-2 |   unsigned int a\n    0:3-17 |   unsigned int f\n"
+             "           | [sizeof=4, align=1]\n", "*** Dumping AST Record Layout\n         0 | struct S\n     0:0-2 |   unsigned int a\n"
+             "    1:0-14 |   unsigned int f\n           | [sizeof=5, align=1]\n")
+
+    def test_a_record_that_lays_out_differently_is_named_with_both_sizes(self):
+        ours, theirs = (pb.record_layouts(d) for d in self.DUMPS)
+        self.assertEqual(pb.layout_reasons(ours, theirs), ["struct S 4 B here against 5 B"])
+        self.assertEqual(pb.layout_reasons(ours, ours), [])
+
+    def test_a_bar_of_another_struct_layout_is_not_a_bar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bars = Path(tmp, "bars.tsv")
+            bars.write_text("# header\n" + "".join(f"volatile_bitfield\t{c}\tO2\t-O2\t502\t946\t-\t\n" for c in ("llvm-mos", pb.LTO)) +
+                            "other\tllvm-mos\tO2\t-O2\t90\t800\t-\t\nvolatile_bitfield\tsdcc\tO2\t-\tn/a\tn/a\t-\tn/a: i64: x\n")
+            rows = pb.load_bars(bars, no_bar={("volatile_bitfield", "llvm-mos"): "struct S 4 B here against 5 B",
+                                              ("volatile_bitfield", "sdcc"): "struct S is not 4 B there"})
+        self.assertEqual(rows[("volatile_bitfield", "llvm-mos", "O2")][1], "n/a")
+        self.assertEqual(rows[("volatile_bitfield", pb.LTO, "O2")][1], "n/a", "the LTO bar is llvm-mos's program too")
+        self.assertIn("layout", rows[("volatile_bitfield", "llvm-mos", "O2")][4])
+        self.assertEqual(rows[("other", "llvm-mos", "O2")][1], "90")
+        self.assertIn("i64", rows[("volatile_bitfield", "sdcc", "O2")][4], "a cell that did not build keeps its own reason")
+
+    def test_the_committed_list_takes_the_bars_of_volatile_bitfield(self):
+        rows = pb.load_bars(pb.BARS)
+        for level in pb.LEVELS:
+            for compiler in pb.ALL:
+                row = rows.get(("volatile_bitfield", compiler, level))
+                self.assertTrue(row is None or row[1] == "n/a", f"{compiler} {level}: {row}")
+
+
 class Images(unittest.TestCase):
     def test_mos_image_leaves_the_vectors_out(self):
         seg = lambda at, n: bytes([at & 255, at >> 8, n, 0]) + bytes(n)

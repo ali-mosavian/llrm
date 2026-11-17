@@ -513,6 +513,9 @@ pub struct Collection<'a, 'b> {
     /// Interesting use types, to reuse by truncation.
     pub types: IndexSet<Ty>,
     pub baseline_cost: Cost,
+    /// `AMK`: the indexed addressing this loop favors
+    /// (`getPreferredAddressingMode(L, SE)`).
+    pub amk: AddressingMode,
     /// DEVIATE LSR-LIVE-IV: the induction variables live in every solution
     /// (`live_induction_variables`); empty unless the target opts in.
     pub live_ivs: Vec<Scev>,
@@ -565,6 +568,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: self.factors.clone(),
             types: self.types.clone(),
             baseline_cost: self.baseline_cost.clone(),
+            amk: self.amk,
             live_ivs: self.live_ivs.clone(),
             changed: self.changed,
             swapped_compares: self.swapped_compares.clone(),
@@ -607,6 +611,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: IndexSet::default(),
             types: IndexSet::default(),
             baseline_cost: Cost::new(),
+            amk: tti.preferred_addressing_mode(),
             live_ivs: Vec::new(),
             changed: false,
             swapped_compares: Vec::new(),
@@ -998,6 +1003,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     size: self.size,
                     bytes_counted: self.bytes_counted,
                     across_call: self.across_call,
+                    amk: self.amk,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -1020,7 +1026,7 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) {
         // Outside uses are not collected when post-indexed addressing is
         // favored: the instructions in the loop matter more.
-        if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed {
+        if self.amk == AddressingMode::PostIndexed {
             return;
         }
         let cx = self.cx;
