@@ -1,6 +1,6 @@
 //! clang marks every loop `unroll.disable` at -O1, so a two-trip loop of float
 //! updates that the first trips fold away stayed rolled: float_in_place_update
-//! was 170 B at the 68000 (a `__muldf3`, `__divdf3` and `__nedf2` call per trip)
+//! was 170 B at the 68000 (a `__muldf3`, `__divdf3` and `__ledf2` (the compare) call per trip)
 //! where gcc's complete unroll leaves one `report` call (16 B). The m68k rows
 //! take `-funroll-loops` at -O1; with the pin's threshold alone that unrolled
 //! every small loop (net +3376 B over the corpus: 70 cells larger), so -O1
@@ -49,7 +49,7 @@ fn a_two_trip_float_loop_that_folds_is_unrolled_at_o1() {
         let mut policy = Policy::default();
         assert!(policy.take("-funroll-loops"));
         let text = assembly_flagged(IR, cpu, Level::O1, false, None, CodeModel::Small, &policy).expect("compiles");
-        for routine in ["__muldf3", "__divdf3", "__nedf2"] {
+        for routine in ["__muldf3", "__divdf3", "__ledf2"] {
             assert!(!text.contains(routine), "{cpu:?}: {routine} left in the loop\n{text}");
         }
     }

@@ -1580,9 +1580,60 @@ fn finding_predecessors_does_not_read_the_whole_function() {
     assert!(short > 0 && long < short * 2, "{short} instructions looked at with 2 calls in each arm, {long} with 24");
 }
 
-/// A callee whose loop bound the call's constant fixes was exempt from the byte rate, as a copy that unrolls and folds.
-/// Only an innermost loop is copied out whole: `total(300)` holds two gcd loops of unknown trip count inside the
-/// counted one, so the inlined copy kept `total` beside it (idiv_loop_os -O2: 385 B, -Os 257 B).
+/// At -O1 a self-recursive callee was still recursive when the inliner priced
+/// it (the pin's -O1 function pipeline has no TailCallElim before it), so it
+/// stayed a call in the loop that used it: idiv_loop_os -O1 was 301 B where -Os
+/// gave 257 B. Bytes first at every level: the recursion is a loop before the
+/// inliner looks.
+#[test]
+fn a_self_recursive_callee_is_inlined_at_o1_as_at_os() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"
+define internal i16 @gcd(i16 %a, i16 %b) {{
+  %z = icmp eq i16 %b, 0
+  br i1 %z, label %done, label %rec
+rec:
+  %m = srem i16 %a, %b
+  %r = call i16 @gcd(i16 %b, i16 %m)
+  ret i16 %r
+done:
+  ret i16 %a
+}}
+define i16 @total(i16 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 1, %entry ], [ %next, %loop ]
+  %sum = phi i16 [ 0, %entry ], [ %more, %loop ]
+  %x = mul i16 %i, 7
+  %y = add i16 %x, 3
+  %p = mul i16 %i, 5
+  %q = add i16 %p, 2
+  %g1 = call i16 @gcd(i16 %y, i16 %q)
+  %w = add i16 %i, 90
+  %g2 = call i16 @gcd(i16 %w, i16 360)
+  %both = add i16 %g1, %g2
+  %more = add i16 %sum, %both
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %i, %n
+  br i1 %done, label %out, label %loop
+out:
+  ret i16 %more
+}}
+"
+    );
+    let asm = text(&ir, "total", 0, &Request::new(Level::O1)).expect("compiles");
+    assert!(
+        !asm.contains("call\t_gcd") && !asm.contains("call _gcd"),
+        "the recursive callee is still a call at -O1:\n{asm}"
+    );
+}
+
+/// A callee whose loop bound the call's constant fixes was exempt from the byte
+/// rate, as a copy that unrolls and folds. Only an innermost loop is copied out
+/// whole: `total(300)` holds two gcd loops of unknown trip count inside the
+/// counted one, so the inlined copy kept `total` beside it (idiv_loop_os -O2:
+/// 385 B, -Os 257 B).
 #[test]
 fn a_counted_outer_loop_over_inner_loops_does_not_earn_a_copy_at_o2() {
     let ir = format!(
