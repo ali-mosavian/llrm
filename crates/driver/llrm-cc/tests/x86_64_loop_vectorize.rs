@@ -389,3 +389,29 @@ fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
     let widened = descent.lines().filter(|line| (line.contains("movsx") || line.contains("movzx")) && !line.contains("ptr")).count();
     assert_eq!(widened, 0, "a register-to-register extension stays in the loop: {descent}");
 }
+
+/// `differ` of memory_expansion (a byte compare that leaves at the first difference) stayed a scalar loop, 1.69 M
+/// instructions against clang's 0.93 M: no loop of two blocks was planned and x86 priced no vector compare. The
+/// pin's vector loop compares 16 bytes (`pcmpeqb`) and leaves on any set lane (`pmovmskb`).
+#[test]
+fn an_early_exit_byte_compare_is_sixteen_lanes_wide() {
+    let text = assembly_of("lv_early_exit.c", "x86_64-linux", "-O3");
+    let differ = body(&text, "differ_arrays");
+    assert!(differ.contains("pcmpeqb"), "{differ}");
+    assert!(differ.contains("pmovmskb"), "{differ}");
+}
+
+/// The any-of of a vector compare is its sign-bit mask (`combineBitcastvxi1`): bytes `pmovmskb` as they are,
+/// words packed to bytes first, doublewords `movmskps`; an unsigned order flips the sign bits and a missing
+/// order (`<`) swaps the operands. Before, the vectorized loop refused to select (`CannotSelect(SetCC)`).
+#[test]
+fn an_early_exit_compare_of_each_lane_width_is_gathered_by_a_sign_mask() {
+    let text = assembly_of("lv_early_exit_widths.c", "x86_64-linux", "-O3");
+    let words = body(&text, "first_below");
+    assert!(words.contains("pcmpgtw") && words.contains("packsswb") && words.contains("pmovmskb"), "{words}");
+    assert!(words.contains("pxor"), "an unsigned `<` flips the sign bits: {words}");
+    let dwords = body(&text, "first_differs");
+    assert!(dwords.contains("pcmpeqd") && dwords.contains("movmskps"), "{dwords}");
+    let bytes = body(&text, "first_greater");
+    assert!(bytes.contains("pcmpgtb") && bytes.contains("pmovmskb"), "{bytes}");
+}

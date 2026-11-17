@@ -30,6 +30,7 @@ fn facts(
         widest_induction_bits: 64,
         opt_size: false,
         has_reductions: false,
+        size_priced: false,
         reduction_bits: Vec::new(),
         pressure: None,
     }
