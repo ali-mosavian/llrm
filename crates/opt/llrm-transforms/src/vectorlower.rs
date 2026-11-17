@@ -227,6 +227,18 @@ pub fn lowered(
         let one = function.instruction(inst).clone();
         let operands = one.operands.clone();
         let result = one.result;
+        // An extract reads its lane width from its own result: where an earlier
+        // shuffle or insert already made its vector an `i32`, no operand says it
+        // is a vector any more, and the extract stayed (an `extractelement` of an
+        // `i32` that selection refuses).
+        let word = match (&one.opcode, word) {
+            (Opcode::ExtractElement, None) => context
+                .types
+                .int_bits(one.ty)
+                .filter(|&bits| bits > 0 && bits < 32)
+                .map(|bits| Word { bits, count: 32 / bits }),
+            (_, word) => word,
+        };
         let Some(word) = word else { continue };
         match &one.opcode {
             Opcode::Load { .. } | Opcode::Freeze | Opcode::Binary(_) | Opcode::Phi | Opcode::Select => {

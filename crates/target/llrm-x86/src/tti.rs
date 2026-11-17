@@ -1474,6 +1474,12 @@ impl Tti for X86 {
         self.word_vectors
     }
 
+    /// A word vector has no horizontal step: `vectorlower` takes no `llvm.vector.reduce.*`,
+    /// so a loop with a reduction stays scalar (the pin's `ExpandReductions` has no word-mode form).
+    fn lowers_vector_reductions(&self) -> bool {
+        self.vector_values() || !self.word_vectors
+    }
+
     /// `X86TTIImpl::getNumberOfRegisters`: 16 in long mode, for the general
     /// and the vector class.
     fn number_of_registers(
