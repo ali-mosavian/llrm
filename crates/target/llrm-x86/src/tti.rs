@@ -1503,6 +1503,40 @@ impl Tti for X86 {
         }
     }
 
+    /// `X86TTIImpl::getVectorInstrCost` at a constant lane: the pin's row (`tti_vector_oracle.txt`), for the gathers
+    /// the SLP vectorizer builds. DEVIATE X86V3.
+    fn vector_instr_cost(
+        &self,
+        op: LaneOp,
+        ty: VectorTy,
+        index: Option<u32>,
+        into_poison: bool,
+        _context: VectorInstrContext,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !self.tuning.vector_float_costs {
+            return None;
+        }
+        crate::tti_vector::lane_cost(op, ty, index, into_poison, cost_kind)
+    }
+
+    /// `X86TTIImpl::getShuffleCost` of a broadcast of lane 0; any other shuffle is not priced. DEVIATE X86V3.
+    fn shuffle_cost(
+        &self,
+        kind: ShuffleKind,
+        ty: VectorTy,
+        mask: &[i32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !self.tuning.vector_float_costs || kind != ShuffleKind::Broadcast {
+            return None;
+        }
+        if mask.iter().any(|lane| *lane != 0) {
+            return None;
+        }
+        crate::tti_vector::broadcast_cost(ty, cost_kind)
+    }
+
     /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
     /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
     /// legalized, is free. Anything else (a mask, a scalarized cast) is not priced; a float is `tti_vector`'s.

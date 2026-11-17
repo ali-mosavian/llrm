@@ -19,13 +19,14 @@
 //!
 //! # Runs
 //! Read by the loop vectorizer's cost model through `Tti::vector_cast_cost`,
-//! `vector_arithmetic_cost` and `vector_memory_op_cost`, where the target takes
+//! `vector_arithmetic_cost` and `vector_memory_op_cost`, and by the SLP vectorizer's gathers
+//! (`vector_instr_cost`, `shuffle_cost`), where the target takes
 //! vector values (x86-64).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use llrm_mir::tti::{ArithOp, CastKind, Cost, CostKind, MemoryOp, Ty, VectorTy};
+use llrm_mir::tti::{ArithOp, CastKind, Cost, CostKind, LaneOp, MemoryOp, Ty, VectorTy};
 
 const ORACLE: &str = include_str!("tti_vector_oracle.txt");
 
@@ -117,4 +118,29 @@ pub(crate) fn float_memory_op_cost(
     }
     let op = if op == MemoryOp::Load { "load" } else { "store" };
     lookup(format!("{} {op} {}", kind_name(cost_kind), type_name(ty)?))
+}
+
+/// `getVectorInstrCost` of an `insertelement` or `extractelement` at a constant lane. An insert into poison is a
+/// different row (`insertp`): the pin prices the first lane of a build as the cheaper `movd`.
+pub(crate) fn lane_cost(
+    op: LaneOp,
+    ty: VectorTy,
+    index: Option<u32>,
+    into_poison: bool,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let name = match (op, into_poison) {
+        (LaneOp::Extract, _) => "extract",
+        (LaneOp::Insert, true) => "insertp",
+        (LaneOp::Insert, false) => "insert",
+    };
+    lookup(format!("{} {name}{} {}", kind_name(cost_kind), index?, type_name(ty)?))
+}
+
+/// `getShuffleCost` of a broadcast of lane 0.
+pub(crate) fn broadcast_cost(
+    ty: VectorTy,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    lookup(format!("{} broadcast {}", kind_name(cost_kind), type_name(ty)?))
 }

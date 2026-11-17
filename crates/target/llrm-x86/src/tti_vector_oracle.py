@@ -42,10 +42,22 @@ for n in LANES:
         others.append((f"fneg {ty} %a{{i}}", ty, ("fneg", f"{n}x{tn}"), ty))
         others.append((f"load {ty}, ptr %p, align {tb // 8}", ty, ("load", f"{n}x{tn}"), ty))
         others.append((f"store {ty} %a{{i}}, ptr %p, align {tb // 8}", ty, ("store", f"{n}x{tn}"), ty))
+# Lane inserts, extracts and the broadcast of the 128-bit vectors a gather is built from (the SLP vectorizer's `getGatherCost`).
+for n in LANES:
+    for tn, tb in {**INTS, **FLTS}.items():
+        if tb * n > 128:
+            continue
+        ty = f"<{n} x {tn}>"
+        tag = {"i8": "8", "i16": "16", "i32": "32", "i64": "64", "float": "f", "double": "d"}[tn]
+        for k in range(n):
+            others.append((f"insertelement {ty} %a{{i}}, {tn} %s{tag}, i32 {k}", ty, (f"insert{k}", f"{n}x{tn}"), ty))
+            others.append((f"insertelement {ty} poison, {tn} %s{tag}, i32 {k}", ty, (f"insertp{k}", f"{n}x{tn}"), ty))
+            others.append((f"extractelement {ty} %a{{i}}, i32 {k}", ty, (f"extract{k}", f"{n}x{tn}"), tn))
+        others.append((f"shufflevector {ty} %a{{i}}, {ty} poison, <{n} x i32> zeroinitializer", ty, ("broadcast", f"{n}x{tn}"), ty))
 lines, names = [], []
 for i, (o, n, dn, sn) in enumerate(casts):
     lines.append(f"  %c{i} = {o} <{n} x {sn}> %a{i} to <{n} x {dn}>")
-args = ", ".join([f"<{n} x {sn}> %a{i}" for i, (o, n, dn, sn) in enumerate(casts)] + [f"{t} %a{len(casts) + j}" for j, (_, t, _, _) in enumerate(others)] + ["ptr %p"])
+args = ", ".join([f"<{n} x {sn}> %a{i}" for i, (o, n, dn, sn) in enumerate(casts)] + [f"{t} %a{len(casts) + j}" for j, (_, t, _, _) in enumerate(others)] + ["ptr %p", "i8 %s8", "i16 %s16", "i32 %s32", "i64 %s64", "float %sf", "double %sd"])
 for j, (text, t, key, _) in enumerate(others):
     k = len(casts) + j
     body = text.format(i=k)
