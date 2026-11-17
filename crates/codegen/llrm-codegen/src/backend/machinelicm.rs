@@ -1079,7 +1079,25 @@ pub fn hoisted_sized(
             let insns: Vec<Arc<Insn>> = after.insns.into_iter().map(|one| one.0).collect();
             let same = insns.len() == block.insns.len()
                 && insns.iter().zip(block.insns.iter()).all(|(a, b)| Arc::ptr_eq(a, b));
-            if same { block.clone() } else { block.with_insns(insns) }
+            let mut block_after = if same { block.clone() } else { block.with_insns(insns) };
+            // `EliminateCSE` renames a duplicate's readers, a phi's incoming values among them: a duplicate whose
+            // definition went left a phi reading a value nothing made.
+            let renamed = block.phis.iter().zip(&after.phis).any(|(phi, now)| {
+                phi.incoming.iter().map(|(_, value)| *value).ne(now.incoming.iter().copied())
+            });
+            if renamed {
+                block_after.phis = block
+                    .phis
+                    .iter()
+                    .zip(after.phis)
+                    .map(|(phi, now)| crate::model::lir::Phi {
+                        result: phi.result,
+                        incoming: phi.incoming.iter().zip(now.incoming).map(|((from, _), value)| (*from, value)).collect(),
+                    })
+                    .collect::<Vec<_>>()
+                    .into();
+            }
+            block_after
         })
         .collect();
     body.with_blocks(blocks)
