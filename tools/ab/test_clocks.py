@@ -114,3 +114,13 @@ def test_a_program_for_another_target_is_not_an_x86_64_cell():
 def test_a_program_gcc_cannot_take_has_no_gcc_column():
     clang_only = "// flags: -fsanitize=stack\nint main(void) { return 0; }\n"
     assert clocks.compile_lines("/dist", clang_only, "O2")["gcc"] is None
+
+
+def test_every_column_has_the_same_unwind_tables():
+    """The size matrix's bars drop `.eh_frame` (`-fno-asynchronous-unwind-tables`; it is not code bytes). Ours emits it, and a
+    program with `.eh_frame` runs 560 more instructions of runtime start-up and exit than one without, on identical code
+    (value_of_valueless: same 10-instruction main, 137,834 against 137,260): the bars read 25-34% under ours on that alone,
+    127 cells of the first v2 census flipped from counted to not."""
+    lines = clocks.compile_lines("/dist", FLAGGED, "O2")
+    for column in ("gcc", "clang"):
+        assert "-fno-asynchronous-unwind-tables" not in lines[column], column

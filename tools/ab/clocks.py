@@ -29,6 +29,7 @@ import vs_external  # noqa: E402
 
 SCRATCH = Path(tempfile.gettempdir()) / "llrm-clocks"
 TARGET = "x86_64-linux"
+UNWIND = "-fno-asynchronous-unwind-tables"
 REPEATS = 3
 MOVED = 0.01
 
@@ -42,9 +43,15 @@ def compile_lines(dist: str, source: str, level: str) -> dict[str, list[str] | N
     """The compile line (without `-c SRC -o OUT`) of each column, as the size matrix builds them (`vs_external`): the
     programs' own `// flags:` words on every column, gcc's in its spelling, no distro defaults (endbr64, canary) on the
     bars. None where the column cannot be built (gcc: a program that splits on the compiler, a flag gcc lacks)."""
+    external = vs_external.external_commands(source, f"-{level}")
+    # Ours emits `.eh_frame`; the matrix bars drop it (not code bytes), but a program that has it runs 560 more instructions
+    # of start-up and exit, so an instruction count keeps it on every column.
+    for line in external.values():
+        if line is not None and UNWIND in line:
+            line.remove(UNWIND)
     return {
         "ours": [f"{dist}/llrm-cc", "-m64", f"-{level}", "-w", *cell_flags.cell_flags(source), *vs_external.INCLUDE],
-        **vs_external.external_commands(source, f"-{level}"),
+        **external,
     }
 
 
