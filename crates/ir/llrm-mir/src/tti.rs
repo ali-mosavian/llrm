@@ -1773,6 +1773,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::threads_by_relation`.
+    fn threads_by_relation(&self) -> bool {
+        false
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -2756,6 +2761,18 @@ pub trait Tti {
     /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::None
+    }
+
+    /// DEVIATE LSR-POSTINC-TRIPS (owner arm64, exit 2026-11-30; gcc's ivopts
+    /// divides what an invariant costs by the loop's average trip count, no
+    /// pin pass): a loop that makes few trips keeps no post-indexed
+    /// preference, since each of its pointers is started again on every entry
+    /// to it (a copy and an add) and the walk saves one add a trip; a size
+    /// build keeps none, as ARM's `getPreferredAddressingMode` (the walk's
+    /// setup is code). `false`: the preference holds in every loop, as the
+    /// pin's.
+    fn lsr_post_indexed_amortized(&self) -> bool {
+        false
     }
 
     /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by

@@ -442,6 +442,13 @@ pub struct Tuning {
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
+    /// DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15):
+    /// backward threading also reads the compares of one pair of values as
+    /// relations (`a < b` taken: `a <= b` taken), and runs before the first
+    /// SimplifyCFG that makes selects of the branches
+    /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
+    /// `vrp1` do both. false: the pin's pipeline.
+    pub threads_by_relation: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -877,6 +884,7 @@ impl Tuning {
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
+        threads_by_relation: false,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
