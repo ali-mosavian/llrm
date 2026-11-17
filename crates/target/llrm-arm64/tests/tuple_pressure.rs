@@ -70,7 +70,6 @@ fn more_live_tuples_than_the_file_holds_are_spilled_and_stay_consecutive() {
 /// A tuple that reaches a `phi` from two paths: the copies between tuple
 /// registers move whole tuples, and the `st4` still lists a consecutive run.
 #[test]
-#[ignore = "red: an aggregate phi on a critical edge dies in LiveRangeCalc (\"a unique value\"); a diamond and a phi of the extracted members pass"]
 fn a_tuple_joined_from_two_paths_is_stored_from_a_consecutive_run() {
     let ir = format!(
         "{HEAD}define void @f(ptr %p, ptr %q, ptr %o, i1 %c) {{

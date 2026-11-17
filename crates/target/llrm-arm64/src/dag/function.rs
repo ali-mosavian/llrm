@@ -154,6 +154,26 @@ pub struct PhiCopy {
     pub quad: bool,
 }
 
+/// The scalar and vector types `ty` is made of, in order: those of a struct's
+/// fields and an array's elements, flattened.
+fn leaf_types(
+    module: &Module,
+    ty: llrm_mir::types::TypeId,
+) -> Vec<llrm_mir::types::TypeId> {
+    use llrm_mir::types::Type;
+    let types = &module.context.types;
+    if let Some(fields) = types.fields(ty) {
+        return fields.iter().flat_map(|&field| leaf_types(module, field)).collect();
+    }
+    match types.get(ty) {
+        Type::Array { element, count } => {
+            let one = leaf_types(module, *element);
+            (0..*count).flat_map(|_| one.iter().copied()).collect()
+        }
+        _ => vec![ty],
+    }
+}
+
 /// Function `name` of `module`, block by block in layout order.
 pub fn select_function(
     module: &Module,
@@ -277,7 +297,11 @@ pub fn select_function_in(
                 // k-th register.
                 let part = updates[..at].iter().filter(|(one, _)| *one == phi).count();
                 let dst = if part == 0 { reg } else { info.part_regs(reg, part + 1)[part] };
-                let ty = function.value(phi).ty;
+                let all = updates.iter().filter(|(one, _)| *one == phi).count();
+                // An aggregate's parts are of their leaf types, one register
+                // each where the leaves and the updates agree in number.
+                let leaves = leaf_types(module, function.value(phi).ty);
+                let ty = if leaves.len() == all { leaves[part] } else { function.value(phi).ty };
                 let vector = matches!(module.context.types.get(ty), llrm_mir::types::Type::Vector { .. });
                 let float = vector || matches!(module.context.types.get(ty), llrm_mir::types::Type::Float(_));
                 let quad = vector && layout.size_bits(&module.context.types, ty) == 128;
