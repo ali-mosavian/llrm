@@ -4399,12 +4399,12 @@ impl Builder<'_> {
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                // DEVIATE: no padding past a register (the pin widens `v18i8`
-                // to `v32i8` and splits it); the
-                // lanes are built one at a time instead. Exit: splitting an
-                // extended vector type; owner x87-cordic-2;
-                // review 2026-11-27.
-                if padded.size_in_bits() <= 128 {
+                // DEVIATE: a padded vector of a lane count that is not a power
+                // of two and is past a register is not made (the pin widens
+                // `v18i8` to `v32i8` and splits it); the lanes are built one at
+                // a time instead. Exit: splitting an extended vector type;
+                // owner x87-cordic-2; review 2026-11-27. A power of two splits.
+                if padded.size_in_bits() <= 128 || padded.lanes().is_power_of_two() {
                     for operand in [&mut first, &mut second] {
                         if self.dag.is_undef(*operand) {
                             *operand = self.dag.get_undef(padded);
