@@ -34,7 +34,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
-use llrm_mir::tti::Tti;
+use llrm_mir::tti::{AddressingMode, Tti};
 
 use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::Collection;
@@ -356,6 +356,12 @@ fn plan_loop(
                 counted
             }
         };
+        if lsr.amk.has_post_indexed()
+            && tti.lsr_post_indexed_amortized()
+            && (size || !post_indexed_repays(se, &cx, header))
+        {
+            lsr.amk = AddressingMode::None;
+        }
         lsr.size = size;
         lsr.bytes_counted = size || bytes_strict;
         lsr.across_call = across_call;
@@ -831,4 +837,29 @@ fn remainders_kept_as_divides(
         })
         .filter_map(|one| one.result)
         .collect()
+}
+
+/// DEVIATE LSR-POSTINC-TRIPS: whether the loop makes more trips than twice the
+/// accesses it holds, the copy and add that start each access's pointer on an
+/// entry to the loop. A loop of unknown trips makes `AVG_LOOP_NITER` of them,
+/// as in gcc's ivopts (`avg_loop_niter`, param `avg-loop-niter`).
+fn post_indexed_repays(
+    se: &mut ScalarEvolution,
+    cx: &llrm_analysis::scev::Cx,
+    header: BlockId,
+) -> bool {
+    const AVG_LOOP_NITER: u64 = 10;
+    let known = u64::from(se.get_small_constant_max_trip_count(cx, header));
+    let trips = if known == 0 { AVG_LOOP_NITER } else { known };
+    let accesses = cx.loops.get_loop_for(header).map_or(0, |one| {
+        one.get_blocks()
+            .iter()
+            .flat_map(|&block| cx.function.iter_block(block))
+            .filter(|&inst| matches!(
+                cx.function.instruction(inst).opcode,
+                Opcode::Load { .. } | Opcode::Store { .. }
+            ))
+            .count()
+    }) as u64;
+    trips > 2 * accesses
 }
