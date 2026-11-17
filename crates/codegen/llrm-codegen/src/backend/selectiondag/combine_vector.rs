@@ -142,6 +142,18 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let kept: Vec<i32> = mask.iter().map(|&at| if at >= lanes { -1 } else { at }).collect();
             return Some(self.dag.get_vector_shuffle(vt, n0, n1, &kept));
         }
+        self.fold_splat_shuffle(node).or_else(|| self.combine_shuffle_to_zero_extend_vector_inreg(node))
+    }
+
+    /// The splat folds of `visitVECTOR_SHUFFLE`.
+    fn fold_splat_shuffle(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let lanes = vt.lanes() as i32;
+        let n0 = self.dag.operand(node, 0);
+        let mask = self.dag.shuffle_mask(node).to_vec();
         // "If it is a splat, check if the argument vector is another splat or
         // a build_vector."
         let lane = mask.iter().copied().find(|&at| at >= 0)?;

@@ -1052,11 +1052,12 @@ pub fn lower_small_vector_ext_load(
     let _ = ext;
     let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
     let f32_vt = EVT::Simple(MVT::F32);
-    let scalar = dag.get_load(f32_vt, chain, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo {
-        mem_vt: f32_vt,
-        ext: None,
-        ..info
-    });
+    let scalar = dag.get_load(
+        f32_vt,
+        chain,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: f32_vt, ext: None, ..info },
+    );
     let to_vector = dag.get_node(ISD::ScalarToVector, EVT::Simple(MVT::V4F32), &[scalar]);
     let source_bits = mem.element().size_in_bits();
     let mut current_bits = source_bits;
@@ -1105,5 +1106,32 @@ pub fn lower_truncate_vector_store(
     let words = dag.get_node(ISD::BitCast, EVT::Simple(MVT::V2I32), &[narrow]);
     let zero = dag.get_constant(0, EVT::I64);
     let word = dag.get_node(ISD::ExtractElement, EVT::I32, &[words, zero]);
-    Some(dag.get_store(chain, word, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info }))
+    Some(dag.get_store(
+        chain,
+        word,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info },
+    ))
+}
+
+/// `LowerZERO_EXTEND_VECTOR_INREG`
+/// ([AArch64ISelLowering.cpp#L16103](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L16103)):
+/// "custom-lower it as ZIP1-with-zeros"; a wider step is declined for the
+/// legalizer's expansion ("FIXME: support multi-step zipping?").
+pub fn lower_zero_extend_vector_inreg(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let source = dag.operand(node, 0);
+    let source_vt = dag.value_type(source);
+    if source_vt.size_in_bits() != vt.size_in_bits()
+        || vt.element().size_in_bits() != 2 * source_vt.element().size_in_bits()
+    {
+        return None;
+    }
+    let zero = dag.get_constant(0, source_vt.element());
+    let zeros = dag.get_splat_build_vector(source_vt, zero);
+    let zipped = dag.get_node(ISD::Target(aarch64_isd::ZIP1), source_vt, &[source, zeros]);
+    Some(dag.get_node(ISD::BitCast, vt, &[zipped]))
 }

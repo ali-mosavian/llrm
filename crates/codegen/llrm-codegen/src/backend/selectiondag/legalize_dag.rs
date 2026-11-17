@@ -486,7 +486,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let NodeData::Mem(info) = self.dag.node(node).data else { return false };
         let custom = match self.dag.opcode(node) {
             ISD::Load => match (info.ext, self.dag.value_type(node), info.mem_vt) {
-                (Some(ext), EVT::Simple(wide), EVT::Simple(mem)) => self.tli.load_ext_action(ext, wide, mem) == Action::Custom,
+                (Some(ext), EVT::Simple(wide), EVT::Simple(mem)) => {
+                    self.tli.load_ext_action(ext, wide, mem) == Action::Custom
+                }
                 _ => false,
             },
             ISD::Store => match (self.dag.value_type(self.dag.operand(node, 1)), info.mem_vt) {
@@ -557,7 +559,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         {
             action = Action::Expand;
         }
-        // `EXTRACT_VECTOR_ELT` is asked of its vector's type: a target that lowers it by hand says so there.
+        // `EXTRACT_VECTOR_ELT` is asked of its vector's type: a target that
+        // lowers it by hand says so there.
         if self.dag.opcode(node) == ISD::ExtractElement
             && let source @ EVT::Simple(_) = self.dag.value_type(self.dag.operand(node, 0))
             && source.is_vector()
@@ -703,7 +706,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let mask_vt = self.dag.value_type(mask);
         let then_vt = self.dag.value_type(then);
         let tli = self.tli;
-        let expands = |op: ISD| matches!(mask_vt, EVT::Simple(mvt) if tli.operation_action(op, EVT::Simple(mvt)) == Action::Expand);
+        let expands = |op: ISD| {
+            matches!(
+                mask_vt,
+                EVT::Simple(mvt) if tli.operation_action(op, EVT::Simple(mvt)) == Action::Expand
+            )
+        };
         if expands(ISD::And) || expands(ISD::Xor) || expands(ISD::Or) {
             return None;
         }
@@ -719,7 +727,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             return None;
         }
         let as_mask = |this: &mut Self, value: SDValue| {
-            if this.dag.value_type(value) == mask_vt { value } else { this.dag.get_node(ISD::BitCast, mask_vt, &[value]) }
+            if this.dag.value_type(value) == mask_vt {
+                value
+            } else {
+                this.dag.get_node(ISD::BitCast, mask_vt, &[value])
+            }
         };
         let (then, other) = (as_mask(self, then), as_mask(self, other));
         let not_mask = self.dag.get_not(mask, mask_vt);
@@ -754,7 +766,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let lane = self.dag.get_select(bit_vt, cond, ones, zero);
         let mask = self.dag.get_splat_build_vector(mask_vt, lane);
         let as_mask = |this: &mut Self, value: SDValue| {
-            if this.dag.value_type(value) == mask_vt { value } else { this.dag.get_node(ISD::BitCast, mask_vt, &[value]) }
+            if this.dag.value_type(value) == mask_vt {
+                value
+            } else {
+                this.dag.get_node(ISD::BitCast, mask_vt, &[value])
+            }
         };
         let (then, other) = (as_mask(self, then), as_mask(self, other));
         let not_mask = self.dag.get_not(mask, mask_vt);
@@ -1121,8 +1137,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
     }
 
-    /// `ExpandVectorBuildThroughStack`: each defined lane stored to its place in
-    /// a 16-byte stack slot, the slot loaded as the vector. The pin's
+    /// `ExpandVectorBuildThroughStack`: each defined lane stored to its place
+    /// in a 16-byte stack slot, the slot loaded as the vector. The pin's
     /// `LowerBUILD_VECTOR` of an x86 splat is a `movd` and a `pshufd`; this is
     /// the target-independent fallback every lane shape takes.
     fn expand_build_vector_through_stack(
@@ -1250,8 +1266,37 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(lanes[0])
     }
 
-    /// `LegalizeDAG::ExpandNode`, `VECTOR_SHUFFLE`: a `build_vector` of the lanes the mask picks, each an
-    /// `extract_vector_elt` of the input it names; an undefined lane stays undefined.
+    /// `VectorLegalizer::ExpandZERO_EXTEND_VECTOR_INREG`
+    /// ([LegalizeVectorOps.cpp#L1508](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeVectorOps.cpp#L1508)):
+    /// "a shuffle of the relevant lanes into the appropriate locations, a
+    /// blend of zero into the high bits, and a bitcast to the wider element
+    /// type". DEVIATE ZXI2 (owner w11, exit 2026-11-27): a source smaller than
+    /// the result (the pin inserts it into an undef vector) is not expanded.
+    fn expand_zero_extend_vector_inreg(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let source = self.dag.operand(node, 0);
+        let source_vt = self.dag.value_type(source);
+        if source_vt.size_in_bits() < vt.size_in_bits() || self.dag.config().big_endian {
+            return None;
+        }
+        let lanes = source_vt.lanes() as i32;
+        let scale = lanes / vt.lanes() as i32;
+        let zero = self.dag.get_constant(0, source_vt.element());
+        let zeros = self.dag.get_splat_build_vector(source_vt, zero);
+        let mut mask: Vec<i32> = (0..lanes).collect();
+        for lane in 0..vt.lanes() as i32 {
+            mask[(lane * scale) as usize] = lanes + lane;
+        }
+        let shuffled = self.dag.get_vector_shuffle(source_vt, zeros, source, &mask);
+        Some(self.dag.get_node(ISD::BitCast, vt, &[shuffled]))
+    }
+
+    /// `LegalizeDAG::ExpandNode`, `VECTOR_SHUFFLE`: a `build_vector` of the
+    /// lanes the mask picks, each an `extract_vector_elt` of the input it
+    /// names; an undefined lane stays undefined.
     fn expand_vector_shuffle(
         &mut self,
         node: SDValue,
@@ -1274,9 +1319,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
 
     /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
     /// constants or undefined is loaded from the constant pool, its lanes laid
-    /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
-    /// is left to the target (`ExpandVectorBuildThroughStack` is not
-    /// translated).
+    /// out in memory order (an undefined lane is zero). Any other
+    /// `BUILD_VECTOR` is left to the target
+    /// (`ExpandVectorBuildThroughStack` is not translated).
     fn expand_build_vector(
         &mut self,
         node: SDValue,
@@ -1363,6 +1408,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::Select if vt.is_vector() => self.expand_vector_select(node).map(|selected| vec![selected]),
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
             ISD::VectorShuffle => Some(vec![self.expand_vector_shuffle(node)]),
+            ISD::ZeroExtendVectorInreg => self.expand_zero_extend_vector_inreg(node).map(|shuffled| vec![shuffled]),
             ISD::InsertVectorElt => self.expand_insert_vector_elt(node).map(|loaded| vec![loaded]),
             reduction if reduction.vec_reduce_base_opcode().is_some() => {
                 self.expand_vec_reduce(node).map(|total| vec![total])

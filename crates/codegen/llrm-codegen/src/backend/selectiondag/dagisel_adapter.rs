@@ -125,6 +125,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SignExtend => pin::SIGN_EXTEND,
         AnyExtend => pin::ANY_EXTEND,
         SignExtendInReg => pin::SIGN_EXTEND_INREG,
+        ZeroExtendVectorInreg => pin::ZERO_EXTEND_VECTOR_INREG,
         BitCast => pin::BITCAST,
         BuildPair => pin::BUILD_PAIR,
         ExtractElement => pin::EXTRACT_VECTOR_ELT,
