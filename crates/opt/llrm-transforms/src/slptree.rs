@@ -460,8 +460,18 @@ pub(crate) fn try_window(
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
     }
-    let cost = cost_of(unit, function, &tree, &made, align, tti, scaler)?;
+    let costs = costs_of(unit, function, &tree, &made, align, tti, scaler)?;
+    let cost = costs.total();
     llrm_support::debug!("slp", "tree of {} entries x{}: cost {cost}", tree.entries.len(), stores.len());
+    // `getTreeCost`: the tree with its unprofitable subtrees gathered, if that costs less.
+    if let Some((trimmed, trimmed_made)) = trim(unit, function, &tree, &costs, tti, scaler) {
+        let trimmed_cost = costs_of(unit, function, &trimmed, &trimmed_made, align, tti, scaler)?.total();
+        llrm_support::debug!("slp", "Trimmed tree cost = {trimmed_cost}, restored tree cost = {cost}");
+        if trimmed_cost < cost && schedulable(unit, function, &trimmed, &trimmed_made, &position) {
+            llrm_support::debug!("slp", "tree of {} entries x{}: cost {trimmed_cost}", trimmed.entries.len(), stores.len());
+            return (trimmed_cost < -COST_THRESHOLD).then_some(trimmed);
+        }
+    }
     (cost < -COST_THRESHOLD).then_some(tree)
 }
 
@@ -648,9 +658,22 @@ fn entry_scale(
     }
 }
 
+/// Each entry's cost, and of the extracts of its lanes some user outside the
+/// tree reads (`ExtractCosts`), by the block they stand in.
+struct Costs {
+    entry: Vec<i64>,
+    extract: Vec<i64>,
+}
+
+impl Costs {
+    fn total(&self) -> i64 {
+        self.entry.iter().chain(&self.extract).sum()
+    }
+}
+
 /// `getTreeCost`: the entries' vector costs less their scalars', and the
 /// extracts of the lanes used outside. `None`: a price the target lacks.
-fn cost_of(
+fn costs_of(
     unit: &MemUnit,
     function: &Function,
     tree: &Tree,
@@ -658,16 +681,17 @@ fn cost_of(
     store_align: u64,
     tti: &dyn Tti,
     scaler: &Scaler,
-) -> Option<i64> {
+) -> Option<Costs> {
     let kind = CostKind::RecipThroughput;
     let context = unit.context;
-    let mut total = 0i64;
+    let mut costs = Costs { entry: Vec::new(), extract: Vec::new() };
     for (at, entry) in tree.entries.iter().enumerate() {
         let Some(priced) = entry_cost(unit, function, tree, entry, store_align, tti) else {
             llrm_support::debug!("slp", "entry {:?} x{}: not priced", entry.kind, entry.lanes.len());
             return None;
         };
-        total += priced * entry_scale(function, tree, at, scaler) as i64;
+        costs.entry.push(priced * entry_scale(function, tree, at, scaler) as i64);
+        let mut extracts = 0i64;
         // The lanes some user outside the tree reads are extracted.
         if !matches!(entry.kind, Kind::Gather | Kind::Store) {
             let lane = lane_ty_of(context, entry.lane_ty)?;
@@ -687,12 +711,177 @@ fn cost_of(
                     )?;
                     let block = function.parent(used.user)?;
                     let scale = scaler.scale_at(function, block, &[Operand::Value(result)]);
-                    total += extract.valid.then_some(extract.value)? * scale as i64;
+                    extracts += extract.valid.then_some(extract.value)? * scale as i64;
                 }
             }
         }
+        costs.extract.push(extracts);
     }
-    Some(total)
+    Some(costs)
+}
+
+/// What the trimming has made of an entry.
+#[derive(Clone, Copy, PartialEq)]
+enum Fate {
+    Kept,
+    /// Gathered, at this cost (`TransformedToGatherNodes`).
+    Gathered(i64),
+    /// Under a gathered entry (`DeletedNodes`).
+    Deleted,
+}
+
+/// The entries only the subtree of `root` reads: its descendants, less any
+/// that a user outside the subtree also reads.
+fn subtree_of(
+    tree: &Tree,
+    root: usize,
+) -> Vec<usize> {
+    let mut inside = vec![false; tree.entries.len()];
+    let mut stack = vec![root];
+    while let Some(at) = stack.pop() {
+        for child in &tree.entries[at].operands {
+            if !inside[*child] {
+                inside[*child] = true;
+                stack.push(*child);
+            }
+        }
+    }
+    inside[root] = false;
+    loop {
+        let mut dropped = false;
+        for at in 0..inside.len() {
+            let shared = tree
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(user, one)| one.operands.contains(&at) && user != root && !inside[user]);
+            if inside[at] && shared {
+                inside[at] = false;
+                dropped = true;
+            }
+        }
+        if !dropped {
+            break;
+        }
+    }
+    (0..inside.len()).filter(|at| inside[*at]).collect()
+}
+
+/// `getTreeCost`, "Trimming unprofitable subtree": a subtree that costs more
+/// than gathering the scalars of its root is replaced by that gather. The
+/// tree so trimmed, and the entries it makes; `None`: nothing was trimmed.
+/// There is no alternate-shuffle entry (`IsEqualCostAltShuffleToTrim`,
+/// `PreferTrimmedTree`), no split, combined or gathered-load entry.
+fn trim(
+    unit: &MemUnit,
+    function: &Function,
+    tree: &Tree,
+    costs: &Costs,
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<(Tree, IdMap<InstId, usize>)> {
+    let count = tree.entries.len();
+    let subtrees: Vec<Vec<usize>> = (0..count).map(|at| subtree_of(tree, at)).collect();
+    let cost_at = |at: usize| costs.entry[at] + costs.extract[at];
+    // `SubtreeCosts`, the worklist's keys: by the cost, the later entry first.
+    let mut worklist: Vec<(i64, usize)> =
+        (0..count).map(|at| (cost_at(at) + subtrees[at].iter().map(|one| cost_at(*one)).sum::<i64>(), at)).collect();
+    worklist.sort_by(|a, b| b.cmp(a));
+    let mut fate = vec![Fate::Kept; count];
+    let mut changed = false;
+    let context = unit.context;
+    for (key, at) in worklist {
+        if key <= 0 {
+            break;
+        }
+        let entry = &tree.entries[at];
+        if entry.kind == Kind::Gather || at == 0 || fate[at] == Fate::Deleted {
+            continue;
+        }
+        let size = entry.lanes.len() as i64;
+        let priced = |one: usize| match fate[one] {
+            Fate::Kept => cost_at(one),
+            Fate::Gathered(cost) => cost,
+            Fate::Deleted => 0,
+        };
+        let total = priced(at) + subtrees[at].iter().map(|one| priced(*one)).sum::<i64>();
+        if total < size {
+            continue;
+        }
+        // `getScalarizationOverhead`: an insert of each lane that is no constant.
+        let lane = lane_ty_of(context, entry.lane_ty)?;
+        let vector = VectorTy { lane, count: size as u32 };
+        let mut gather = 0i64;
+        for (index, value) in entry.lanes.iter().enumerate() {
+            if !constant_of(*value) {
+                let insert = tti.vector_instr_cost(
+                    LaneOp::Insert,
+                    vector,
+                    Some(index as u32),
+                    index == 0,
+                    VectorInstrContext::None,
+                    CostKind::RecipThroughput,
+                )?;
+                gather += insert.valid.then_some(insert.value)?;
+            }
+        }
+        let gathered_elsewhere = |value: &Operand| {
+            constant_of(*value)
+                || tree.entries.iter().any(|one| one.kind == Kind::Gather && one.lanes.contains(value))
+        };
+        if entry.lanes.iter().all(gathered_elsewhere) {
+            gather *= 2;
+        }
+        gather *= entry_scale(function, tree, at, scaler) as i64;
+        // A size that is no power of two may have an inflated cost.
+        let margin = i64::from(subtrees[at].iter().any(|one| !tree.entries[*one].lanes.len().is_power_of_two()));
+        if total > gather + margin {
+            llrm_support::debug!(
+                "slp",
+                "Trimming unprofitable subtree at node {at} with cost {total} and gather cost {gather}"
+            );
+            fate[at] = Fate::Gathered(gather);
+            for one in &subtrees[at] {
+                fate[*one] = Fate::Deleted;
+            }
+            changed = true;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let mut renamed = vec![usize::MAX; count];
+    let mut entries = Vec::new();
+    for (at, entry) in tree.entries.iter().enumerate() {
+        if fate[at] == Fate::Deleted {
+            continue;
+        }
+        renamed[at] = entries.len();
+        let gathered = matches!(fate[at], Fate::Gathered(_));
+        entries.push(Entry {
+            kind: if gathered { Kind::Gather } else { entry.kind.clone() },
+            lanes: entry.lanes.clone(),
+            insts: if gathered { Vec::new() } else { entry.insts.clone() },
+            operands: if gathered { Vec::new() } else { entry.operands.clone() },
+            lane_ty: entry.lane_ty,
+        });
+    }
+    for entry in &mut entries {
+        for operand in &mut entry.operands {
+            *operand = renamed[*operand];
+        }
+    }
+    // A store of a gather is no tree.
+    if entries.len() < 2 || entries[entries[0].operands[0]].kind == Kind::Gather {
+        return None;
+    }
+    let mut made = IdMap::new();
+    for entry_at in 0..entries.len() {
+        for inst in &entries[entry_at].insts {
+            made.insert(*inst, entry_at);
+        }
+    }
+    Some((Tree { entries, block: tree.block }, made))
 }
 
 /// `getEntryCost`: the vector of `entry` less its scalars.
