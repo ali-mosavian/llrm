@@ -63,3 +63,15 @@ fn the_pass_list_applies_it() {
     run(&mut asm);
     assert!(!asm.text().contains("pha"), "{}", asm.text());
 }
+
+/// A byte kept in `a` while a literal is made in the cell the load that made it
+/// read: the bracket moved above that load, and `a` was loaded from the literal
+/// (`lda rc2; pha; lda #0; sta rc2; pla; adc #0` made 0 where the old `rc2`
+/// was wanted; `keeps` -O1 printed 85598 for 872030).
+#[test]
+fn the_bracket_stays_below_a_load_of_its_own_cell() {
+    for load in ["lda rc2", "lda (rc2),y", "lda rc2,x", "lda rc0,x"] {
+        let text = format!("  {load}\n  pha\n  lda #0\n  sta rc2\n  pla\n  adc #0\n  sta rc2\n  rts\n");
+        assert_eq!(sunk(&text), text, "{load}");
+    }
+}
