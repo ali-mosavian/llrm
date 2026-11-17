@@ -1118,6 +1118,24 @@ pub(crate) fn llvm_order(
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): GCC's
+            // `pass_unroll_jam` runs before its vectorizer, where a nest is
+            // one inner loop; after the vectorizer (l.1474) the inner loop is
+            // a vector loop and its remainder, and the jam refuses it.
+            slot(
+                "loop-unroll-and-jam@early",
+                Box::new(loopunrollandjam::LoopUnrollAndJam {
+                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_size: size,
+                    options: loopunrollandjam::JamOptions {
+                        on: true,
+                        clean: true,
+                        pre: applied.options.pre,
+                        ..Default::default()
+                    },
+                    needs_vectors: true,
+                }),
+            ),
             // LoopVectorizePass (l.1354): a no-op where the target takes no
             // vector values.
             slot(
@@ -1164,6 +1182,7 @@ pub(crate) fn llvm_order(
                         pre: applied.options.pre,
                         ..Default::default()
                     },
+                    needs_vectors: false,
                 }),
             ),
             // LoopUnrollPass (l.1476) with the full unroll the target allows

@@ -1009,6 +1009,10 @@ impl Tti for X86 {
         self.tuning.switch_lookup_trial_at_size
     }
 
+    fn loop_idiom_copy_trial_at_size(&self) -> bool {
+        self.tuning.loop_idiom_copy_trial_at_size
+    }
+
     fn jump_threading_latch_trial_at_size(&self) -> bool {
         self.tuning.jump_threading_latch_trial_at_size
     }
