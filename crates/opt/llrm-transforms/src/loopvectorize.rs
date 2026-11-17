@@ -1747,10 +1747,7 @@ fn widen_interleave(
                         None,
                     );
                     function.insert(joined, before).expect("the access's block");
-                    next.push((
-                        Operand::Value(function.instruction(joined).result.expect("a shufflevector")),
-                        count,
-                    ));
+                    next.push((Operand::Value(function.instruction(joined).result.expect("a shufflevector")), count));
                 }
                 pieces = next;
             }

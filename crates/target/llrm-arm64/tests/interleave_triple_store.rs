@@ -10,8 +10,8 @@ use llrm_arm64::machine::Platform;
 /// concatenated vectors and `st3` stores them as they are.
 #[test]
 fn a_store_of_three_interleaved_members_is_one_st3_of_the_members() {
-    let asm = driver::assembly(include_str!("data/interleave_triple_store.ll"), Platform::Linux, Level::O3)
-        .expect("lowers");
+    let asm =
+        driver::assembly(include_str!("data/interleave_triple_store.ll"), Platform::Linux, Level::O3).expect("lowers");
     assert!(asm.contains("st3 {"), "{asm}");
     assert!(!asm.contains("\tins ") && !asm.contains("\tumov "), "{asm}");
 }
