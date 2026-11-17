@@ -616,9 +616,8 @@ mod tests {
         body.push(back);
         function.blocks = vec![block(0, vec![page(0, "g")]), block(1, body), block(2, vec![])];
         assert!(hoist(&mut function));
-        let lows = |at: usize| {
-            function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Op("AddPageOffset")).count()
-        };
+        let lows =
+            |at: usize| function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Op("AddPageOffset")).count();
         assert_eq!((lows(0), lows(1)), (1, 0), "{function:?}");
     }
 
