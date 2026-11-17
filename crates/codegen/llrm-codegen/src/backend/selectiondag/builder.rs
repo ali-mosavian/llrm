@@ -4404,7 +4404,8 @@ impl Builder<'_> {
                 pieces.push(self.dag.get_undef(piece_vt));
                 continue;
             };
-            let start = base as usize - chunk.iter().position(|&at| at >= 0)?;
+            // A defined lane before its own index puts the chunk's start below the input.
+            let start = (base as usize).checked_sub(chunk.iter().position(|&at| at >= 0)?)?;
             if start % piece != 0
                 || !chunk.iter().enumerate().all(|(at, &lane)| lane < 0 || lane as usize == start + at)
             {
