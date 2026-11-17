@@ -40,9 +40,19 @@ pub const FASTCC: u32 = 8;
 /// module calls), the default row for the rest.
 pub fn convention_of(cc: u32) -> Convention {
     match (cc, &calling().private) {
-        (FASTCC, Some(private)) => convention_named(private),
+        (FASTCC, Some(private)) if PRIVATE_ROW.get() => convention_named(private),
         _ => mos(),
     }
+}
+
+thread_local! {
+    static PRIVATE_ROW: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Whether the platform has the zero-page cells the `private` row names (`rc16`..`rc25`): without them
+/// a private function keeps the `mos` row. The driver sets it for each compile.
+pub fn allow_private_row(yes: bool) {
+    PRIVATE_ROW.set(yes);
 }
 
 /// A register `calling.toml` names.

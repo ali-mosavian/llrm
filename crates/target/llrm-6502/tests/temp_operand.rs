@@ -40,6 +40,8 @@ fn a_temporary_that_is_read_again_stays() {
 fn after_a_byte(code: &str) -> String {
     let mut asm = Asm::parse(code);
     (asm.no_a_result, asm.no_x_result, asm.no_y_result) = (true, true, true);
+    // `f` is a function of the program that is passed no scratch cell
+    std::sync::Arc::make_mut(&mut asm.cell_callees).insert("f".to_owned(), Default::default());
     run(&mut asm);
     asm.text()
 }

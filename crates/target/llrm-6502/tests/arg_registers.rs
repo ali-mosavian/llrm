@@ -161,15 +161,17 @@ fn a_copy_into_an_argument_cell_stays_before_the_call_that_reads_it() {
     assert_eq!(spill_copies(copy, &[("f", &[16])]), copy);
 }
 
-/// A platform with fewer than 26 zero-page cells has no rc16..rc25 for the arguments: refused, not a call into other memory.
+/// A platform with fewer than 26 zero-page cells has no rc16..rc25: a private function keeps the `mos` row there
+/// (`LLRM_6502_ZERO_PAGE=16`, the sweep instrument, was refused by a guard that read the cells off every platform).
 #[test]
-fn a_platform_without_the_argument_cells_is_refused() {
+fn a_platform_without_the_argument_cells_keeps_the_stack_convention() {
     let mut request = Request::new(Level::O1);
     request.cpu = Cpu::Mos6502;
     request.platform.zero_page = 16;
-    let text = format!("target datalayout = \"{}\"\ndefine i16 @main() {{ ret i16 0 }}\n", Mos.layout().datalayout);
-    let why = driver::assembly(&text, &request).expect_err("refused");
-    assert!(why.contains("zero_page = 16"), "{why}");
+    let text = format!("target datalayout = \"{}\"\n{PRIVATE}", Mos.layout().datalayout);
+    let code = driver::assembly(&text, &request).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!code.contains("rc16"), "{code}");
+    assert!(function(&code, "call4").contains("),y"), "{code}");
 }
 
 /// Every call and every argument parsed `calling.toml` again: 12.5 M instructions a run
