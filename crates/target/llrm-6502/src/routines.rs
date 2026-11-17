@@ -73,11 +73,28 @@ pub fn leaves_cells_alone(name: &str) -> bool {
 /// The pin's analogue is the call's register mask from the callee's own use
 /// (`RegUsageInfo`, `-enable-ipra`; gcc's `-fipa-ra`).
 pub fn cells_named(name: &str) -> Option<std::collections::BTreeSet<u8>> {
+    named(name, |cells| cells.clone())
+}
+
+/// Whether `name` reaches a cell by index (`cells_named` is `None`), without a copy of the set:
+/// the dead-store scans ask it of every call they pass.
+pub fn reaches_cells_by_index(name: &str) -> bool {
+    named(name, |cells| cells.is_none())
+}
+
+fn named<T>(
+    name: &str,
+    answer: impl Fn(&Option<std::collections::BTreeSet<u8>>) -> T,
+) -> T {
     use std::collections::{BTreeSet, HashMap};
     type Answers = HashMap<String, Option<BTreeSet<u8>>>;
     static ANSWERS: std::sync::Mutex<Option<Answers>> = std::sync::Mutex::new(None);
     let mut answers = ANSWERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    answers.get_or_insert_default().entry(name.to_owned()).or_insert_with(|| scan_cells(name)).clone()
+    let answers = answers.get_or_insert_default();
+    if let Some(known) = answers.get(name) {
+        return answer(known);
+    }
+    answer(answers.entry(name.to_owned()).or_insert_with(|| scan_cells(name)))
 }
 
 use std::collections::HashMap;

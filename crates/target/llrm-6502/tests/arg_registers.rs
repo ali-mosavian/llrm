@@ -117,7 +117,7 @@ fn parsed(
 ) -> llrm_6502::asm::Asm {
     let mut asm = llrm_6502::asm::Asm::parse(text);
     for (callee, cells) in callees {
-        asm.cell_callees.insert((*callee).to_owned(), cells.iter().copied().collect());
+        std::sync::Arc::make_mut(&mut asm.cell_callees).insert((*callee).to_owned(), cells.iter().copied().collect());
     }
     asm
 }
@@ -171,3 +171,16 @@ fn a_platform_without_the_argument_cells_is_refused() {
     let why = driver::assembly(&text, &request).expect_err("refused");
     assert!(why.contains("zero_page = 16"), "{why}");
 }
+
+/// Every call and every argument parsed `calling.toml` again: 12.5 M instructions a run
+/// (+8% of `llrm-6502-llc` on `uint64_to_float` -Os) once the file held two rows.
+#[test]
+fn calling_toml_is_parsed_once_for_all_conventions() {
+    for _ in 0..50 {
+        llrm_6502::abi::convention_of(llrm_6502::abi::FASTCC);
+        llrm_6502::abi::convention_of(0);
+        llrm_6502::abi::mos();
+    }
+    assert_eq!(llrm_6502::abi::parses(), 1);
+}
+

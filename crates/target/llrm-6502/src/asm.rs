@@ -405,7 +405,7 @@ pub struct Asm {
     /// argument in: a call of a function of the program reads them
     /// (`calling.toml` `[mos_private]`), where a runtime routine's text names
     /// what it reads. A callee with none maps to an empty set.
-    pub cell_callees: std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>,
+    pub cell_callees: std::sync::Arc<std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>>,
     /// The cells a `rts` returns (`rc2`, `rc3` for a long): every other
     /// caller-saved cell is dead there.
     pub result_cells: std::collections::BTreeSet<String>,

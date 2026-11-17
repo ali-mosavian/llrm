@@ -9,8 +9,27 @@ use crate::REGISTER_INFO;
 /// word takes the first free pair of `wide_pairs`, A:X first; a pointer the
 /// first free of `pointer_pairs`, which has no A:X.
 pub fn mos() -> Convention {
-    let calling = Calling::parse(crate::CALLING).expect("calling.toml");
-    calling.conventions.into_iter().find(|one| one.name == "mos").expect("convention mos")
+    convention_named("mos")
+}
+
+/// `calling.toml`, parsed once.
+fn calling() -> &'static Calling {
+    static PARSED: std::sync::OnceLock<Calling> = std::sync::OnceLock::new();
+    PARSED.get_or_init(|| {
+        PARSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Calling::parse(crate::CALLING).expect("calling.toml")
+    })
+}
+
+static PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many times `calling.toml` was parsed in this process (a test asks for one).
+pub fn parses() -> usize {
+    PARSES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn convention_named(name: &str) -> Convention {
+    calling().conventions.iter().find(|one| one.name == name).unwrap_or_else(|| panic!("convention {name}")).clone()
 }
 
 /// LLVM's `fastcc`: the calling convention of a function private to its module.
@@ -20,12 +39,10 @@ pub const FASTCC: u32 = 8;
 /// `calling.toml`'s `private` row for `fastcc` (a function nothing outside the
 /// module calls), the default row for the rest.
 pub fn convention_of(cc: u32) -> Convention {
-    let calling = Calling::parse(crate::CALLING).expect("calling.toml");
-    let name = match (cc, &calling.private) {
-        (FASTCC, Some(private)) => private.as_str(),
-        _ => "mos",
-    };
-    calling.conventions.into_iter().find(|one| one.name == name).unwrap_or_else(|| panic!("convention {name}"))
+    match (cc, &calling().private) {
+        (FASTCC, Some(private)) => convention_named(private),
+        _ => mos(),
+    }
 }
 
 /// A register `calling.toml` names.
@@ -39,7 +56,10 @@ pub fn register(name: &str) -> RegId {
 /// The pair register that holds a zero-page byte (`rc4` is half of `rs2`): the
 /// 16-bit view a word argument is copied through.
 pub fn pair_of(byte: &str) -> RegId {
-    let file = llrm_target::registers::parse(crate::REGISTERS).expect("registers.regs");
-    let root = file.iter().find(|one| one.name == byte).map(|one| one.root.clone()).expect("a register of the file");
-    register(&root)
+    static ROOTS: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
+    let roots = ROOTS.get_or_init(|| {
+        let file = llrm_target::registers::parse(crate::REGISTERS).expect("registers.regs");
+        file.iter().map(|one| (one.name.clone(), one.root.clone())).collect()
+    });
+    register(roots.get(byte).expect("a register of the file"))
 }

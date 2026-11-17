@@ -80,7 +80,7 @@ fn call_may_read_scratch(
             &inst.operand,
             Operand::Direct(callee) if match reads.callees.get(callee) {
                 Some(cells) => cells.contains(&n),
-                None => crate::routines::cells_named(callee).is_none(),
+                None => crate::routines::reaches_cells_by_index(callee),
             }
         )
 }

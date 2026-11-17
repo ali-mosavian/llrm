@@ -5040,6 +5040,7 @@ fn emit_with<const STACK: bool>(
             }
         }
     }
+    let cell_callees = std::sync::Arc::new(cell_callees);
     // the cells a return reads: the bytes of a long result
     let mut result_cells = std::collections::BTreeSet::new();
     for operand in function
@@ -5154,7 +5155,7 @@ fn finish_pair(
         (bool, std::collections::BTreeSet<String>),
         (bool, std::collections::BTreeSet<String>),
         std::collections::BTreeSet<String>,
-        std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>,
+        std::sync::Arc<std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>>,
     ),
 ) -> (String, String, String) {
     code.no_a_result = no_a_result;
