@@ -1603,6 +1603,25 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &ops);
                 SDValue { node: updated, res: 0 }
             }
+            ISD::ConcatVectors => {
+                // `PromoteIntOp_CONCAT_VECTORS`: each part promoted, its lanes
+                // taken out and cut to the result's lane type, then built
+                // into the result.
+                let vt = self.dag.value_type(node);
+                let lane = vt.element();
+                let index = self.dag.config().pointer;
+                let mut lanes: Vec<SDValue> = Vec::new();
+                for part in self.dag.node(node).ops.clone() {
+                    let incoming = self.promoted_integer(part);
+                    let incoming_vt = self.dag.value_type(incoming);
+                    for at in 0..incoming_vt.lanes() {
+                        let at = self.dag.get_constant(u128::from(at), index);
+                        let taken = self.dag.get_node(ISD::ExtractElement, incoming_vt.element(), &[incoming, at]);
+                        lanes.push(self.dag.get_node(ISD::Truncate, lane, &[taken]));
+                    }
+                }
+                self.dag.get_build_vector(vt, &lanes)
+            }
             ISD::InsertVectorElt if at == 1 => {
                 // `PromoteIntOp_INSERT_VECTOR_ELT`: the inserted element, wider
                 // than the lane.
