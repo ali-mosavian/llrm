@@ -1961,6 +1961,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE JT-LATCH-TRIAL: `Tuning::jump_threading_latch_trial_at_size`.
+    fn jump_threading_latch_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
         false
