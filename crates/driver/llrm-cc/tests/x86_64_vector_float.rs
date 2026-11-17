@@ -23,14 +23,24 @@ fn compile(source: &str) -> String {
     std::fs::read_to_string(&asm).unwrap()
 }
 
-/// `BoUpSLP::getTreeCost` trims a subtree dearer than a gather of its root's scalars. Pairs of `(i + j) * 0.5` kept
-/// every lane scalar (`mulsd`, one per element: object_extent_loop's init, +5.6% over clang at -O2) as the pair's
-/// conversions and truncates made the whole tree cost +12 and nothing cut them.
+/// `BoUpSLP::getTreeCost` trims a subtree dearer than a gather of its root's scalars. A pair of `(i + k) * 0.5` kept
+/// every lane scalar (`mulsd`): the pair's conversions made the tree cost +2 and nothing cut them.
 #[test]
 fn a_pair_of_converted_counters_is_one_packed_multiply_at_x86_64() {
-    let text = compile("vector_float_pairs.c");
+    let text = compile("vector_float_trim.c");
     assert!(text.contains("mulpd"), "no packed multiply:\n{text}");
     assert!(!text.contains("mulsd"), "a scalar multiply is left:\n{text}");
+}
+
+/// object_extent_loop's init, +5.6% over clang 20 at -O2: the pin's InstCombine splits the 2-D address, so the 12-trip
+/// loop fits the unroll threshold and SLP pairs its copies; clang 20 vectorizes the loop (VF 2, six trips unrolled).
+/// The loop's `trunc <2 x i64>` is narrowed onto the splat: `paddd`, not `paddq` and a `pshufd` each.
+#[test]
+fn a_two_dimensional_fill_is_a_vector_loop_with_narrow_counters_at_x86_64() {
+    let text = compile("vector_float_pairs.c");
+    assert!(text.contains("cvtdq2pd"), "no packed conversion:\n{text}");
+    assert!(!text.contains("cvtsi2sd"), "a scalar conversion is left:\n{text}");
+    assert!(text.contains("paddd") && !text.contains("paddq"), "the counters are not narrow:\n{text}");
 }
 
 #[test]

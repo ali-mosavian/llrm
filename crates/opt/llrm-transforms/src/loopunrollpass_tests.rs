@@ -1941,3 +1941,70 @@ fn a_target_with_a_higher_o3_threshold_unrolls_a_32_trip_fold_the_pin_keeps() {
     assert!(unrolls_table_fold(raised, 3));
     assert!(!unrolls_table_fold(raised, 2), "-O2 keeps its 150");
 }
+
+/// One row of a 12 x 12 table of doubles filled from the counters, as the pin's InstCombine splits the address
+/// (`gep [96 x i8], @A, %row` out of the loop, `gep [8 x i8], %base, %j` in it).
+const SPLIT_GEP_ROW: &str = "
+@A = global [12 x [12 x double]] zeroinitializer
+@B = global [12 x [12 x double]] zeroinitializer
+declare double @llvm.fmuladd.f64(double, double, double)
+define void @f(i32 %row) {
+entry:
+  %r = zext nneg i32 %row to i64
+  %a = getelementptr inbounds nuw [96 x i8], ptr @A, i64 %r
+  %b = getelementptr inbounds nuw [96 x i8], ptr @B, i64 %r
+  br label %loop
+loop:
+  %j = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %s = add nuw nsw i64 %j, %r
+  %t = trunc nuw nsw i64 %s to i32
+  %u = uitofp nneg i32 %t to double
+  %m = fmul double %u, 5.000000e-01
+  %pa = getelementptr inbounds nuw [8 x i8], ptr %a, i64 %j
+  store double %m, ptr %pa, align 8
+  %d = sub nsw i64 %r, %j
+  %dt = trunc nsw i64 %d to i32
+  %sf = sitofp i32 %dt to double
+  %fm = call double @llvm.fmuladd.f64(double %sf, double 2.500000e-01, double 1.000000e+00)
+  %pb = getelementptr inbounds nuw [8 x i8], ptr %b, i64 %j
+  store double %fm, ptr %pb, align 8
+  %next = add nuw nsw i64 %j, 1
+  %done = icmp ne i64 %next, 12
+  br i1 %done, label %loop, label %exit
+exit:
+  ret void
+}
+";
+
+/// Whether the 12-trip loop of `SPLIT_GEP_ROW` is gone after the -O2 unroll.
+fn unrolls_split_gep_row(tuning: llrm_mir::target::Tuning) -> bool {
+    let mut module = parsed(SPLIT_GEP_ROW);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+        inliner_follows: true,
+        speed_rate: false,
+    };
+    unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    !printed(&module).contains("br i1")
+}
+
+/// object_extent_loop -O2 (x86_64): the pin sizes the init loop at 14 (146 < 150) and unrolls it whole for the SLP
+/// vectorizer, as it splits the 2-D address; clang 20 leaves the 3-index address in the loop, 16 (170), and its loop
+/// vectorizer takes the loop instead: +5.6% executed instructions here. A row of 96 bytes is no x86 scale, so the
+/// split address counts one more.
+#[test]
+fn a_split_address_with_a_row_that_is_no_scale_counts_in_the_unroll_size() {
+    let pin = llrm_mir::target::Tuning::PIN;
+    let counted = llrm_mir::target::Tuning { unroll_prices_split_gep_base: true, ..pin };
+    assert!(unrolls_split_gep_row(pin), "the pin's size 14 fits");
+    assert!(!unrolls_split_gep_row(counted), "size 16 does not");
+}
