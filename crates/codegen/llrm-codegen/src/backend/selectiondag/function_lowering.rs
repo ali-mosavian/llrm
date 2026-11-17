@@ -40,6 +40,10 @@ pub struct FunctionLoweringInfo {
     pub elided_stores: llrm_mir::dense::IdSet<InstId>,
     /// The arguments whose copy is elided: their slot is no longer immutable.
     pub elided_args: llrm_mir::dense::IdSet<ValueId>,
+    /// The incoming argument slots the entry block's lowering made (offsets and
+    /// `(size, immutable)` by fixed object), for the blocks after it
+    /// (`DagConfig::fixed_args_in_every_block`).
+    pub fixed_args: Option<(std::collections::BTreeMap<i32, i64>, std::collections::BTreeMap<i32, (u32, bool)>)>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
     /// The register holding the hidden result pointer of a function whose
@@ -181,6 +185,7 @@ impl FunctionLoweringInfo {
             prezeroed: Default::default(),
             elided_stores: Default::default(),
             elided_args: Default::default(),
+            fixed_args: None,
             sret_reg: None,
             demote_reg: None,
             variadic_buffer: None,
