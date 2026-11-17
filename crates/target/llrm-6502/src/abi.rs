@@ -13,6 +13,21 @@ pub fn mos() -> Convention {
     calling.conventions.into_iter().find(|one| one.name == "mos").expect("convention mos")
 }
 
+/// LLVM's `fastcc`: the calling convention of a function private to its module.
+pub const FASTCC: u32 = 8;
+
+/// The convention of a call or a definition in LLVM calling convention `cc`:
+/// `calling.toml`'s `private` row for `fastcc` (a function nothing outside the
+/// module calls), the default row for the rest.
+pub fn convention_of(cc: u32) -> Convention {
+    let calling = Calling::parse(crate::CALLING).expect("calling.toml");
+    let name = match (cc, &calling.private) {
+        (FASTCC, Some(private)) => private.as_str(),
+        _ => "mos",
+    };
+    calling.conventions.into_iter().find(|one| one.name == name).unwrap_or_else(|| panic!("convention {name}"))
+}
+
 /// A register `calling.toml` names.
 pub fn register(name: &str) -> RegId {
     REGISTER_INFO

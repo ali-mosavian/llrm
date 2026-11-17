@@ -265,6 +265,23 @@ pub trait TargetCalling: Debug + Sync {
         ins: &[In],
     ) -> (SDValue, Vec<SDValue>);
 
+    /// `LowerCall` of a call in LLVM calling convention `cc` (0 `ccc`, 8
+    /// `fastcc`): a target with a placement for each says it here; the others
+    /// place every call alike.
+    fn lower_call_in(
+        &self,
+        _cc: u32,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+        ins: &[In],
+        variadic: bool,
+        frame: &mut dyn FnMut(u32, u32) -> i32,
+    ) -> (SDValue, Vec<SDValue>) {
+        self.lower_call_with_frame(dag, chain, callee, outs, ins, variadic, frame)
+    }
+
     /// `LowerCall` of a call in tail position (`IsTailCall`): the `TC_RETURN`
     /// node that ends the block, or none where the target does not take the
     /// call as a tail call (`isEligibleForTailCallOptimization`), which is
@@ -305,6 +322,20 @@ pub trait TargetCalling: Debug + Sync {
         fixed: FixedObject,
         live_in: LiveIn,
     ) -> Vec<SDValue>;
+
+    /// `LowerFormalArguments` of a function in LLVM calling convention `cc`
+    /// (see [`Self::lower_call_in`]).
+    fn lower_formal_arguments_in(
+        &self,
+        _cc: u32,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        ins: &[In],
+        fixed: FixedObject,
+        live_in: LiveIn,
+    ) -> Vec<SDValue> {
+        self.lower_formal_arguments(dag, chain, ins, fixed, live_in)
+    }
 
     /// `LowerFormalArguments` of a variadic function whose `va_list` holds
     /// words over register save areas or the stack arguments: the stores that

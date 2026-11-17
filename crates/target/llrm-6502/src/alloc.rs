@@ -847,7 +847,7 @@ impl Builder {
             "a" => Some(reg::A),
             "x" => Some(reg::X),
             "y" => Some(reg::Y),
-            _ => n.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < 16).map(rc),
+            _ => n.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < MOST_CELLS).map(rc),
         };
         if let Some(r) = named(name) {
             return Ok(Reg::Phys(r));
@@ -994,10 +994,8 @@ impl Builder {
     ) -> Result<Reg, Unsupported> {
         if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()) {
             return match n {
-                0 => Ok(Reg::Phys(reg::RS0)),
-                1 => Ok(Reg::Phys(reg::RS1)),
-                2 => Ok(Reg::Phys(reg::RS2)),
-                3 => Ok(Reg::Phys(reg::RS3)),
+                // the pairs an argument arrives in (`calling.toml`): rs1..rs3 and rs8..rs12
+                0..=3 | 8..=12 => Ok(Reg::Phys(RegId::from_raw(reg::RS0.index() as u8 + n))),
                 _ => Err(Unsupported(format!("pair {name}"))),
             };
         }
@@ -1018,14 +1016,14 @@ impl Builder {
         &self,
         name: &str,
     ) -> bool {
-        self.pointers.contains(name) || matches!(name, "rs0" | "rs1" | "rs2" | "rs3")
+        self.pointers.contains(name) || matches!(name, "rs0" | "rs1" | "rs2" | "rs3" | "rs8" | "rs9" | "rs10" | "rs11" | "rs12")
     }
 
     fn word(
         &mut self,
         name: &str,
     ) -> Result<(Reg, Reg), Unsupported> {
-        if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < 8) {
+        if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < MOST_CELLS / 2) {
             return Ok((Reg::Phys(rc(2 * n)), Reg::Phys(rc(2 * n + 1))));
         }
         let name = name.strip_suffix("+1").unwrap_or(name);
