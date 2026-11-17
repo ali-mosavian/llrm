@@ -241,7 +241,10 @@ impl Policy<Wrapped> for Arm64<'_> {
         if !pure {
             return false;
         }
-        if inst.rematerializable || (inst.may_load && inst.invariant_load) {
+        // The `add :lo12:` of a page another address shares is the half of a
+        // `MOVaddr` the pin keeps whole: it moves like one, where the pressure
+        // would keep a lone `add` in the loop.
+        if inst.rematerializable || inst.kind == Kind::Op("AddPageOffset") || (inst.may_load && inst.invariant_load) {
             // `CheapInstr && CreatesCopy`: a constant a phi takes would need a
             // copy.
             return !(inst.cheap_as_move && one.defs.iter().any(|value| facts.copied.contains(value)));
@@ -589,6 +592,34 @@ mod tests {
         function.blocks = vec![block(0, vec![]), block(1, body), block(2, vec![])];
         hoist(&mut function);
         assert_eq!((dups(&function, 0), dups(&function, 1)), (1, 0), "{function:?}");
+    }
+
+    /// stft_single -O2: the page of a global's address was shared with another
+    /// block, so its `add :lo12:` was a lone invariant op, and a loop holding
+    /// every general register kept it: 2 more instructions a trip, 462k in all.
+    /// The pin's `MOVaddr` is one instruction that always moves.
+    #[test]
+    fn the_low_half_of_an_address_moves_out_of_a_loop_that_names_every_register() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let mut function = MFunction::<Class>::new("f");
+        let held = GPR_LIMIT as u32;
+        function.classes = vec![Class::Gpr; held as usize + 2];
+        let low = Inst::new(
+            Kind::Op("AddPageOffset"),
+            vec![Operand::Def(Reg::Virt(held + 1)), Operand::Use(Reg::Virt(0)), Operand::Symbol("g".into(), 0)],
+        );
+        let mut body = vec![low];
+        for value in 1..=held {
+            body.push(Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(value))]));
+        }
+        body.push(back);
+        function.blocks = vec![block(0, vec![page(0, "g")]), block(1, body), block(2, vec![])];
+        assert!(hoist(&mut function));
+        let lows = |at: usize| {
+            function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Op("AddPageOffset")).count()
+        };
+        assert_eq!((lows(0), lows(1)), (1, 0), "{function:?}");
     }
 
     /// An op that is as cheap as a move stays (`HoistCheapInsts` is off).
