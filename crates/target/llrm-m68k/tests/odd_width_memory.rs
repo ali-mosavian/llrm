@@ -66,14 +66,16 @@ define i32 @main2() {
 fn a_24_bit_access_keeps_the_high_bits_at_the_address() {
     let Some(qemu) = support::qemu() else { return };
     let module = llrm_mir::parse::module(IR).expect("parses");
-    for cpu in [Cpu::M68000, Cpu::M68020] {
+    for (cpu, name) in [(Cpu::M68000, "m68000"), (Cpu::M68020, "m68020")] {
         let mut all = start("main2", &[]);
         for name in ["main2", "ld", "ld2", "st", "st2"] {
             all.extend(items_with(&module, name, cpu, Options::default()).expect("compiles"));
         }
         let path = support::unique_path("odd_width");
         write_executable(&path, &executable(&all).unwrap()).unwrap();
-        let code = support::run(&qemu, &[], &path);
+        // The 68000 saves the flags with `move from SR`, a privilege fault on
+        // qemu's default (68020+) CPU: it must run as the CPU it is built for.
+        let code = support::run(&qemu, &["-cpu", name], &path);
         std::fs::remove_file(&path).ok();
         assert_eq!(code, Some(15), "{cpu:?}");
     }

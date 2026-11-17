@@ -2195,6 +2195,12 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPACP-O2: whether the clones are also made at -O2, where gcc
+    /// has none; default: as at -O3.
+    fn ipa_cp_clones_at_o2(&self) -> bool {
+        self.ipa_cp_clones_at_speed()
+    }
+
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
     /// (gcc's `ipa-cp-max-recursive-depth` is 8).
     fn ipa_cp_max_clones(&self) -> usize {
@@ -3175,6 +3181,14 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN
+    /// (`float_carry_fits`) may hold in the float file across a loop before
+    /// they stop hoisting or carrying float loads; `None`: no limit, as the
+    /// pin.
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-24): whether `indvars`

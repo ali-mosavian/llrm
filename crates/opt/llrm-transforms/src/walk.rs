@@ -21,7 +21,8 @@
 //!   (`PassBuilderPipelines.cpp` l.1335), except for a function that calls
 //!   itself and, with the recursion copier on or at -Os, loses its unread
 //!   parameters before the walk: the copier works on the body gcc's IPA-SRA
-//!   leaves. Exit: the copier prices a body with its unread parameters dropped.
+//!   leaves; at any level a tree recursion (two or more self-calls) does too.
+//!   Exit: the walk prices a body with its unread parameters dropped.
 //! - W2a: the walk is per function in callee-first order, not per SCC with the
 //!   inliner's own updates; the clocks inliner still runs afterwards;
 //!   `inlinecost::sites` stands for `decide` until it lands. Exit: W2.
@@ -187,7 +188,10 @@ impl ProgramPass for ModuleIpo {
         // place the copies merge no calls (hanoi: a switch of
         // nine copies and a closed form, against 23..2358 B more without).
         // At -Os the recursion then calls itself once (arm64 hanoi 60 B,
-        // against 136 B after the walk).
+        // against 136 B after the walk). At every other level a tree
+        // recursion (two or more self-calls) loses them too, as under
+        // IPA-SRA: tail-call elimination would carry them as loop phis and
+        // the calls never merge (m16 hanoi -O2 405,508 clk against 199).
         let copier = Recursion::of(
             self.inline.recursive,
             self.inline.single,
@@ -196,9 +200,13 @@ impl ProgramPass for ModuleIpo {
             program.target.tti().as_deref(),
         )
         .is_some();
-        for at in (0..count).filter(|_| copier || self.for_size) {
-            let ((removed, unsound), before) =
-                reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_from_recursions);
+        // Any other function that calls itself at two or more sites too: the
+        // pin's order is kept for a single self-call (it merges nothing).
+        let tree_only = !(copier || self.for_size);
+        for at in 0..count {
+            let ((removed, unsound), before) = reporting_marked(&mut program.modules[at], &mut modules[at], |module| {
+                crate::deadargs::removed_from_recursions(module, tree_only)
+            });
             vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
             changed |= !removed.is_empty();
         }

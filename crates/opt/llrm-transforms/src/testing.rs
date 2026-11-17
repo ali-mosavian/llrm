@@ -628,3 +628,47 @@ pub fn mssa_misses_over(
     let after = llrm_mir::counts::analysed("mssa");
     (after.0 - before.0, after.1 - before.1)
 }
+
+/// An i486 whose float file LICM and GVN may fill with `float_limit` values
+/// (`Tuning::licm_float_register_limit`).
+pub struct FloatFile {
+    pub inner: llrm_mir::target::Neutral,
+    pub float_limit: Option<u32>,
+}
+
+impl llrm_mir::target::Machine for FloatFile {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        let tuning =
+            llrm_mir::target::Tuning { licm_float_register_limit: self.float_limit, ..llrm_mir::target::Tuning::PIN };
+        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(tuning)))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.inner.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.inner.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.inner.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.inner.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.inner.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.inner.address_forms()
+    }
+}

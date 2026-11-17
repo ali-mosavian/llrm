@@ -416,7 +416,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "deadargelim",
         Why::Deviate,
-        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list for a function that calls itself, and only with the recursion copier on; the pin's runs after the CGSCC block. Measured 2026-10-27 (early run removed, the later one kept): QCport -18 B at -Os (2 of 65), 0 at -O2; bench/hanoi +51..+64 B (m16/m32, O2/Os) toward the pin's 62 instructions from our 30. Kept: ours is the smaller",
+        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list for a function that calls itself with the recursion copier on or at -Os, and at any level for one that calls itself at two or more sites (a tree recursion: gcc's IPA-SRA order); the pin's runs after the CGSCC block. Measured 2026-10-27 (early run removed, the later one kept): QCport -18 B at -Os (2 of 65), 0 at -O2; bench/hanoi +51..+64 B (m16/m32, O2/Os) toward the pin's 62 instructions from our 30. Kept: ours is the smaller",
         "",
     ),
     row(

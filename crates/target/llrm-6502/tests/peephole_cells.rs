@@ -124,6 +124,8 @@ fn a_shift_run_whose_low_byte_is_loaded_next_shifts_in_a() {
 #[test]
 fn a_store_to_a_scratch_cell_before_a_call_is_dropped() {
     let mut a = asm("  sta rc16\n  lda rc3\n  jsr f\n  rts\n", &[]);
+    // `f` is a function of the program that is passed no scratch cell
+    std::sync::Arc::make_mut(&mut a.cell_callees).insert("f".to_owned(), Default::default());
     drop_dead_stores(&mut a);
     assert_eq!(a.text(), "  lda rc3\n  jsr f\n  rts\n");
 }
