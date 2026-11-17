@@ -116,7 +116,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
     header = [
         f"# x86-m16 owner table {now:%Y-%m-%dT%H:%MZ} (date -u)",
         f"# dist {dist}; md5: {md5_lines(dist)}",
-        f"# harness commit {harness}; bench.py --opt O1 O2 O3 Os --no-judge; no -march: the default CPU ({OURS_ISA})",
+        f"# harness commit {harness}; bench.py --opt O1 O2 O3 Os --references --no-judge; no -march: the default CPU ({OURS_ISA})",
         "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
         "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
