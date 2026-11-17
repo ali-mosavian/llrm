@@ -354,6 +354,16 @@ pub trait Target {
         0
     }
 
+    /// The registers `virt` takes from the related values of `one` that
+    /// already hold one: `getRegAllocationHints` through a sub-register index.
+    fn related_registers(
+        _one: &llrm_codegen::model::lir::Insn,
+        _virt: u32,
+        _assigned: &dyn Fn(u32) -> Option<RegId>,
+    ) -> Vec<RegId> {
+        Vec::new()
+    }
+
     /// What the instruction `inst` costs with its operand `operand` in
     /// `register` (clocks or bytes by the target's goal, from its instruction
     /// tables): the 6502's `dec` is one instruction on a zero-page cell and

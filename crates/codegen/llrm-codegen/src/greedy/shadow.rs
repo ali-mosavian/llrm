@@ -362,6 +362,15 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tii.preferred_registers(insn)
     }
 
+    fn related_registers(
+        &self,
+        insn: &crate::model::lir::Insn,
+        virt: u32,
+        assigned: &dyn Fn(u32) -> Option<RegId>,
+    ) -> Vec<RegId> {
+        self.tii.related_registers(insn, virt, assigned)
+    }
+
     fn copy_register_cost(
         &self,
         to: RegId,

@@ -217,6 +217,16 @@ pub trait TargetInstrInfo {
         Vec::new()
     }
 
+    /// See `GreedyEnv::related_registers`.
+    fn related_registers(
+        &self,
+        _one: &Insn,
+        _virt: u32,
+        _assigned: &dyn Fn(u32) -> Option<RegId>,
+    ) -> Vec<RegId> {
+        Vec::new()
+    }
+
     /// `getInstrCost(COPY, {to, from})`: see `GreedyEnv::copy_register_cost`.
     fn copy_register_cost(
         &self,

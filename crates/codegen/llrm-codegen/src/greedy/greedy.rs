@@ -405,6 +405,18 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> Vec<(u32, RegId)> {
         Vec::new()
     }
+    /// The registers `virt` takes from the values `insn` relates it to that
+    /// already hold one (`assigned`): a member of a tuple, the tuple of its
+    /// members. The pin's `getRegAllocationHints` translates a copy's partner
+    /// through the sub-register index it names.
+    fn related_registers(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+        _assigned: &dyn Fn(u32) -> Option<RegId>,
+    ) -> Vec<RegId> {
+        Vec::new()
+    }
     /// `TII.getInstrCost(COPY, {to, from})` (llvm-mos `MOSInstrCost`): what
     /// the copy of `from` into `to` costs, in one unit for every pair; all 0
     /// is the pin's order (no copy scores a register).
@@ -1055,6 +1067,23 @@ impl<'a> RAGreedy<'a> {
                 match wanted.iter_mut().find(|(one, _)| *one == reg) {
                     Some((_, weight)) => *weight += freq,
                     None => wanted.push((reg, freq)),
+                }
+            }
+        }
+        let mut seen = Vec::new();
+        for operand in self.lis.operands(virt) {
+            if seen.contains(&operand.instr) {
+                continue;
+            }
+            seen.push(operand.instr);
+            let at = self.lis.indexes.get_instruction_index(operand.instr);
+            let freq = self.env.block_freq_relative_to_entry(self.lis.indexes.get_mbb_from_index(&at));
+            let assigned = |value: u32| self.matrix.vrm.get_phys(value);
+            for reg in self.env.related_registers(self.lis.instr(operand.instr), virt, &assigned) {
+                // A register that makes the whole relation free outweighs the ones that save a move.
+                match wanted.iter_mut().find(|(one, _)| *one == reg) {
+                    Some((_, weight)) => *weight += 8.0 * freq,
+                    None => wanted.push((reg, 8.0 * freq)),
                 }
             }
         }

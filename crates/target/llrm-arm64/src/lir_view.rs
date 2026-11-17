@@ -941,6 +941,52 @@ impl AllocTarget for Arm64 {
         candidate_order(class)
     }
 
+    /// `getRegAllocationHints` through a sub-register index: a member of a
+    /// tuple takes the register of that member of the tuple's, and a tuple
+    /// the one that makes a member already placed its own, so the moves
+    /// between them go (`TupleExtract`, `TupleBuild`).
+    fn related_registers(
+        one: &llrm_codegen::model::lir::Insn,
+        virt: u32,
+        assigned: &dyn Fn(u32) -> Option<RegId>,
+    ) -> Vec<RegId> {
+        use llrm_lir::Loc;
+        let Some(what) = one.what.as_ref() else { return Vec::new() };
+        let value = |loc: &Loc| match loc {
+            Loc::Held(held) => Some(held.value),
+            _ => None,
+        };
+        // (tuple, [(member, index)]) of the instruction.
+        let (tuple, members): (u32, Vec<(u32, usize)>) = match what.name.as_deref() {
+            Some("TupleExtract") => {
+                let (Some(rd), Some(tuple), Some(Loc::Imm(index))) =
+                    (what.dests.first().and_then(value), what.sources.first().and_then(value), what.sources.get(1))
+                else {
+                    return Vec::new();
+                };
+                (tuple, vec![(rd, index.value as usize)])
+            }
+            Some(name) if name.starts_with("TupleBuild") => {
+                let Some(tuple) = what.dests.first().and_then(value) else { return Vec::new() };
+                (tuple, what.sources.iter().filter_map(value).enumerate().map(|(at, member)| (member, at)).collect())
+            }
+            _ => return Vec::new(),
+        };
+        let info = &crate::REGISTER_INFO;
+        let first_of = |register: RegId| register.index().checked_sub(crate::reg::V0.index()).map(|n| n as u32);
+        if virt == tuple {
+            // The first member already placed decides where the tuple starts.
+            let placed = members.iter().find_map(|&(member, at)| Some((assigned(member)?, at)));
+            return placed
+                .and_then(|(register, at)| first_of(register).map(|n| (n, at)))
+                .filter(|(n, _)| *n < 32)
+                .map(|(n, at)| (2..=4).map(|count| tuple_id(count, (n + 32 - at as u32 % 32) % 32)).collect())
+                .unwrap_or_default();
+        }
+        let Some(&(_, at)) = members.iter().find(|&&(member, _)| member == virt) else { return Vec::new() };
+        assigned(tuple).and_then(|tuple| info.subreg(tuple, at)).into_iter().collect()
+    }
+
     fn view(
         root: RegId,
         _class: Class,
