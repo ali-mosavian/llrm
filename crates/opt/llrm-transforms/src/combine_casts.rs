@@ -54,8 +54,8 @@ use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::{Type, TypeId};
-use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
 use llrm_mir::valuetracking::guarantee::SmallSet;
+use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
 use llrm_mir::valuetracking::signbits::{compute_max_significant_bits, compute_num_sign_bits};
 use llrm_mir::valuetracking::{Query, known, nonzero};
 
@@ -271,6 +271,22 @@ fn should_change_type(
     to: u32,
 ) -> bool {
     shared::should_change_type(c.env.layout, from, to)
+}
+
+/// Whether the truncate `inst` is of an integer vector to a narrower one.
+fn is_vector_trunc(
+    c: &Combiner,
+    inst: InstId,
+) -> bool {
+    let instruction = c.function.instruction(inst);
+    let types = &c.context.types;
+    let (from, to) = (c.type_of(instruction.operands[0]), instruction.ty);
+    matches!(types.get(from), Type::Vector { .. })
+        && matches!(types.get(to), Type::Vector { .. })
+        && matches!(
+            (types.scalar_int_bits(from), types.scalar_int_bits(to)),
+            (Some(f), Some(t)) if t < f && f <= 128
+        )
 }
 
 /// Whether the cast `inst` has a type wider than `u128` holds (DEVIATE 5), or
@@ -524,7 +540,8 @@ fn can_evaluate_truncated(
     ty: TypeId,
     cxt: InstId,
 ) -> bool {
-    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator =
+        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     // Whether all users of the many-use values were visited is asked last,
     // outside the recursion.
     evaluator.can_evaluate(v, ty, Pred::Truncated) && evaluator.all_pending_visited()
@@ -539,7 +556,8 @@ fn can_evaluate_sextd(
 ) -> bool {
     // The context instruction is read by the truncating predicates only.
     let Some(cxt) = def_of(c, v) else { return can_always_evaluate_in_type(c, v, ty) };
-    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator =
+        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     evaluator.can_evaluate(v, ty, Pred::SExtd) && evaluator.all_pending_visited()
 }
 
@@ -874,8 +892,10 @@ fn narrow_bin_op(
 ) -> Option<Visit> {
     let src = c.function.instruction(inst).operands[0];
     let dest_ty = c.function.instruction(inst).ty;
-    let (src_w, dest_w) = (width(c, src), bits_of(c, dest_ty));
-    if !should_change_type(c, src_w, dest_w) {
+    let vector = matches!(c.context.types.get(dest_ty), Type::Vector { .. });
+    let scalar_bits = |ty| c.context.types.scalar_int_bits(ty).expect("an integer or an integer vector");
+    let (src_w, dest_w) = (scalar_bits(c.type_of(src)), scalar_bits(dest_ty));
+    if !vector && !should_change_type(c, src_w, dest_w) {
         return None;
     }
     if !shared::has_one_use(c, src) {
@@ -944,6 +964,9 @@ fn narrow_bin_op(
             }
         }
         _ => {}
+    }
+    if vector {
+        return None;
     }
     narrow_funnel_shift(c, inst)
 }
@@ -1180,6 +1203,10 @@ pub fn visit_trunc(
     c: &mut Combiner,
     inst: InstId,
 ) -> Visit {
+    if is_vector_trunc(c, inst) {
+        // DEVIATE 1: of `visitTrunc` a vector gets `narrowBinOp` only.
+        return narrow_bin_op(c, inst).unwrap_or(Visit::None);
+    }
     if too_wide(c, inst) {
         return Visit::None;
     }

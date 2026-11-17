@@ -842,6 +842,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::InsertVectorElt => lower_insert_vector_elt(dag, node),
             ISD::ExtractElement => lower_extract_vector_elt(dag, node),
+            ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V2I64) => Some(lower_mul_v2i64(dag, node)),
             ISD::ScalarToVector => lower_scalar_to_vector(dag, node),
             ISD::ZeroExtend | ISD::SignExtend if dag.value_type(node).is_vector() => lower_vector_extend(dag, node),
             ISD::Truncate if dag.value_type(node).is_vector() => lower_vector_truncate(dag, node),
@@ -4074,6 +4075,42 @@ fn lower_mul_v16i8(
 }
 
 /// `getPack` of two `v8i16` into a `v16i8` (SSE2: `UsePackUS` for bytes):
+/// `LowerMUL` for `v2i64` (the tail of [`LowerMUL`][pin], no `pmullq`): with
+/// `Ahi`, `Bhi` the high halves, `AloBlo + ((AloBhi + AhiBlo) << 32)` of three
+/// `pmuludq`. A product with a half known to be zero is left out.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30470
+fn lower_mul_v2i64(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = EVT::Simple(MVT::V2I64);
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (a_known, b_known) = (known_bits(dag, a), known_bits(dag, b));
+    let (low, high) = (0xFFFF_FFFFu128, 0xFFFF_FFFFu128 << 32);
+    let (a_lo_zero, b_lo_zero) = (a_known.zero & low == low, b_known.zero & low == low);
+    let (a_hi_zero, b_hi_zero) = (a_known.zero & high == high, b_known.zero & high == high);
+    let zero = dag.get_constant(0, vt);
+    let by = dag.get_constant_with(32, EVT::I8, true, false);
+    let a_lo_b_lo = if !a_lo_zero && !b_lo_zero { dag.get_node(x86isd::PMULUDQ, vt, &[a, b]) } else { zero };
+    let a_lo_b_hi = if !a_lo_zero && !b_hi_zero {
+        let b_hi = dag.get_node(x86isd::VSRLI, vt, &[b, by]);
+        dag.get_node(x86isd::PMULUDQ, vt, &[a, b_hi])
+    } else {
+        zero
+    };
+    let a_hi_b_lo = if !a_hi_zero && !b_lo_zero {
+        let a_hi = dag.get_node(x86isd::VSRLI, vt, &[a, by]);
+        dag.get_node(x86isd::PMULUDQ, vt, &[a_hi, b])
+    } else {
+        zero
+    };
+    let cross = dag.get_node(ISD::Add, vt, &[a_lo_b_hi, a_hi_b_lo]);
+    let hi = dag.get_node(x86isd::VSHLI, vt, &[cross, by]);
+    dag.get_node(ISD::Add, vt, &[a_lo_b_lo, hi])
+}
+
 /// packed as is when both halves already fit a byte, else masked to their low
 /// bytes first.
 fn get_pack_bytes(
