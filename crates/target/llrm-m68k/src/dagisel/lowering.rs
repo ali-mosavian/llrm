@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `M68kTargetLowering`: the action table and the custom lowering of
 //! conditions.
 //!
@@ -151,8 +152,8 @@ pub fn target_lowering_with(
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
     // DEVIATE M68K-WIDE-SHIFT (see `lower_wide_shift`): the 68000's constant
     // shifts of 16 or more. Custom, not a combine: the combiner folds the swap
-    // form back into the shift (`SimplifyDemandedBits` of a rotate), and does so
-    // only for an operation that is `Legal`. Owner w8, exit 2026-11-24.
+    // form back into the shift (`SimplifyDemandedBits` of a rotate), and does
+    // so only for an operation that is `Legal`. Owner w8, exit 2026-11-24.
     if !m68020 {
         set(&[Shl, Srl, Sra], &[MVT::I32], Action::Custom);
     }
