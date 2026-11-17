@@ -1275,6 +1275,10 @@ impl Tti for X86 {
         self.tuning.unswitch_threshold
     }
 
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        self.tuning.licm_float_register_limit
+    }
+
     fn min_jump_table_density(&self) -> Option<u64> {
         self.tuning.min_jump_table_density
     }
