@@ -180,6 +180,8 @@ fn leaf_of(
     };
     let Opcode::Load { align, volatile: false } = function.instruction(load).opcode else { return None };
     let loaded = function.instruction(load).ty;
+    // `LoadInst::getAlign`: no `align` is the ABI alignment of the loaded type.
+    let align = align.or_else(|| Some(unit.layout.align(&unit.context.types, loaded)));
     let bits = int_ty(unit.context, loaded)?;
     let reference = MemRef::at(unit, function.instruction(load).operands[0], bits / 8);
     let root = reference.root.filter(|_| reference.segment.is_none())?;
