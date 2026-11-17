@@ -68,6 +68,19 @@ def test_the_header_names_the_dist_its_md5_the_harness_and_the_time(tmp_path):
     assert head[2].startswith("# harness commit abc123;")
 
 
+def test_the_table_labels_the_default_486_and_no_march_flag(tmp_path):
+    """The 2026-11-16 census ran with no -march (the m16 default CPU, the 486: the gate's) and its table said `flags -march=i386` and `ours_isa i386`:
+    an instrument that mislabels its own run (-march=i386 prices the 386 table and voided a census)."""
+    for name in ("llrm-llc", "llrm-cc", "llrm-nib"):
+        (tmp_path / name).write_bytes(name.encode())
+    text = table.render(matmul(), tmp_path, "abc123", datetime.datetime(2026, 11, 17, 9, 30, tzinfo=datetime.UTC))
+    lines = text.splitlines()
+    assert "-march=i386" not in lines[2] and "default CPU" in lines[2], lines[2]
+    columns = lines[next(at for at, line in enumerate(lines) if line.startswith("prog\t"))].split("\t")
+    rows = [line.split("\t") for line in lines if line and not line.startswith(("#", "prog\t"))]
+    assert {row[columns.index("ours_isa")] for row in rows} == {"i486"}, rows
+
+
 def stft(level="O1", skeleton=None):
     """stft_fixed at -O1 on the pair d7f7c5758f (2026-11-13): Nib 1592 B gross, bcc plain C 1224, the twin's own bar higher."""
     nib = cell(1592, 149_000_000) | ({"io_skeleton_bytes": skeleton} if skeleton else {})

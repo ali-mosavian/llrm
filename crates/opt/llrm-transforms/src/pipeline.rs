@@ -187,6 +187,16 @@ pub struct Options {
     /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
     /// (bsearch -O1: a re-test and a loop-carried copy of the result).
     pub thread_jumps: bool,
+    /// `TailCallElimPass` (`tailrec@688`) in the function pipeline before the
+    /// inliner at -O1, where the pin's
+    /// `buildO1FunctionSimplificationPipeline` has none: a self-recursive
+    /// callee is still recursive when the inliner prices it, so it is never
+    /// inlined and a caller loop keeps the call and its argument frames.
+    ///
+    /// DEVIATE TRE-O1 (owner z80, exit 2026-12-15, or when the pin's -O1 gains
+    /// it): a target that ranks bytes first turns it on at -O1.
+    /// idiv_loop_os -O1: 301 B, where the -Os pipeline's own order gives 257 B.
+    pub tail_recursion_early: bool,
     /// GCC's backward threader (`backthread@809`): a path into a join that
     /// decides a guard is copied. It grows code, so a target that ranks bytes
     /// first turns it off (6502, z80: `idioms` +188 and +619 bytes).
@@ -345,6 +355,7 @@ impl Default for Options {
             drop_loads: true,
             pre: true,
             thread_jumps: false,
+            tail_recursion_early: false,
             backward_threading: true,
             drop_stores: true,
             sink: true,
@@ -1072,6 +1083,16 @@ pub(crate) fn llvm_order(
             }),
             combine("combine@1242"),
             dead("dead@1242"),
+            // DEVIATE BACKTHREAD-REL: before `decide@1244` makes selects of the
+            // branches.
+            slot(
+                "backthread@1243",
+                Box::new(
+                    crate::backwardthreading::BackwardThreading::from_env()
+                        .when(applied.options.backward_threading)
+                        .early(),
+                ),
+            ),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
             // (PassBuilderPipelines.cpp#L1245): the option is read by
             // `simplifySwitch`, not translated yet, so these are the defaults.
@@ -1107,6 +1128,24 @@ pub(crate) fn llvm_order(
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): GCC's
+            // `pass_unroll_jam` runs before its vectorizer, where a nest is
+            // one inner loop; after the vectorizer (l.1474) the inner loop is
+            // a vector loop and its remainder, and the jam refuses it.
+            slot(
+                "loop-unroll-and-jam@early",
+                Box::new(loopunrollandjam::LoopUnrollAndJam {
+                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_size: size,
+                    options: loopunrollandjam::JamOptions {
+                        on: true,
+                        clean: true,
+                        pre: applied.options.pre,
+                        ..Default::default()
+                    },
+                    needs_vectors: true,
+                }),
+            ),
             // LoopVectorizePass (l.1354): a no-op where the target takes no
             // vector values.
             slot(
@@ -1153,6 +1192,7 @@ pub(crate) fn llvm_order(
                         pre: applied.options.pre,
                         ..Default::default()
                     },
+                    needs_vectors: false,
                 }),
             ),
             // LoopUnrollPass (l.1476) with the full unroll the target allows
@@ -1409,6 +1449,7 @@ pub(crate) fn llvm_order(
         .filter(|one| {
             applied.options.pre
                 || (applied.options.thread_jumps && is_jump_threading(one.name()))
+                || (applied.options.tail_recursion_early && one.name() == "tailrec@688")
                 || !crate::parity::ABSENT_AT_O1.contains(&one.name())
         })
         .collect()
@@ -1747,6 +1788,7 @@ pub fn recorded(
                 inline: applied.options.inline,
                 cloning: cloning.clone(),
                 speed_rate: applied.options.prices_bytes(),
+                for_size: applied.options.prefers_size(),
             });
         }
     }

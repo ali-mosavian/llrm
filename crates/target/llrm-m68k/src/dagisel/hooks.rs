@@ -55,6 +55,18 @@ impl Cpu {
         })
     }
 
+    /// Whether `bfextu` is a hardware instruction (DEVIATE M68K-BFEXTU, see
+    /// [`super::bfextu`]).
+    pub fn has_bit_field_extract(self) -> bool {
+        static FOUND: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
+        *FOUND.get(self, |cpu| {
+            let model = crate::isa::Cpu::ALL[cpu as usize];
+            crate::isa::forms_of("bfextu")
+                .iter()
+                .any(|form| form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model))
+        })
+    }
+
     /// `Subtarget->atLeastM68020()` and its siblings.
     pub fn at_least(
         self,
@@ -104,6 +116,11 @@ pub struct M68kHooks {
 }
 
 impl M68kHooks {
+    /// Whether this CPU has `bfextu` (DEVIATE M68K-BFEXTU).
+    pub fn has_bit_field_extract(&self) -> bool {
+        self.cpu.has_bit_field_extract()
+    }
+
     pub fn new(
         cpu: Cpu,
         opt_none: bool,

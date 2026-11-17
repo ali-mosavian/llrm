@@ -621,9 +621,9 @@ define i16 @f() {{
 
 const V4: &str = "<4 x i32> <i32 10, i32 20, i32 30, i32 40>";
 
-/// MIR had no `extractelement`/`insertelement`/`shufflevector`, so no loop could
-/// say a vector value (VECTORS-1). Each reads and writes the lane the pin's
-/// semantics name; an index past the end is poison.
+/// MIR had no `extractelement`/`insertelement`/`shufflevector`, so no loop
+/// could say a vector value (VECTORS-1). Each reads and writes the lane the
+/// pin's semantics name; an index past the end is poison.
 #[test]
 fn lane_operations_read_and_write_the_named_lane() {
     let extract = |index: u32| {
@@ -654,11 +654,17 @@ fn a_shuffle_picks_lanes_across_both_inputs_and_poisons_negative_lanes() {
 #[test]
 fn the_verifier_rejects_a_shuffle_lane_past_both_inputs_and_mismatched_inputs() {
     let verify = |text: &str| crate::verify::verify(&parse::module(text).expect("parses"));
-    let bad_lane = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 8, i32 0, i32 0, i32 0>\n  ret <4 x i32> %s\n}}\n");
+    let bad_lane = format!(
+        "define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 8, i32 0, i32 0, i32 0>\n  ret <4 x i32> %s\n}}\n"
+    );
     assert!(!verify(&bad_lane).is_empty());
-    let mixed = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, <2 x i32> <i32 1, i32 2>, <4 x i32> zeroinitializer\n  ret <4 x i32> %s\n}}\n");
+    let mixed = format!(
+        "define <4 x i32> @f() {{\n  %s = shufflevector {V4}, <2 x i32> <i32 1, i32 2>, <4 x i32> zeroinitializer\n  ret <4 x i32> %s\n}}\n"
+    );
     assert!(parse::module(&mixed).is_err(), "the parser already refuses inputs of two types");
-    let fine = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 7, i32 0, i32 poison, i32 0>\n  ret <4 x i32> %s\n}}\n");
+    let fine = format!(
+        "define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 7, i32 0, i32 poison, i32 0>\n  ret <4 x i32> %s\n}}\n"
+    );
     assert_eq!(verify(&fine), Vec::<String>::new());
 }
 
@@ -722,9 +728,7 @@ fn a_vector_binary_operation_works_on_each_lane() {
 #[test]
 fn vector_casts_and_compares_work_on_each_lane() {
     let text = |body: &str| {
-        result(&format!(
-            "define i32 @f() {{\n{body}\n  %l = extractelement <4 x i32> %r, i64 2\n  ret i32 %l\n}}\n"
-        ))
+        result(&format!("define i32 @f() {{\n{body}\n  %l = extractelement <4 x i32> %r, i64 2\n  ret i32 %l\n}}\n"))
     };
     assert_eq!(
         text("  %z = zext <4 x i8> <i8 1, i8 2, i8 200, i8 4> to <4 x i32>\n  %r = add <4 x i32> %z, %z"),
@@ -740,4 +744,14 @@ fn vector_casts_and_compares_work_on_each_lane() {
         ),
         int(1, 32)
     );
+}
+
+/// A `select` by a vector of `i1` hit `unreachable!("a condition Aggregate")`:
+/// the loop vectorizer's early exit finds the first set lane with one.
+#[test]
+fn a_select_by_a_vector_condition_picks_each_lane() {
+    let text = "define i8 @f() {\n  %c = icmp ne <4 x i8> <i8 0, i8 1, i8 0, i8 1>, zeroinitializer\n  \
+        %s = select <4 x i1> %c, <4 x i8> <i8 10, i8 11, i8 12, i8 13>, <4 x i8> <i8 20, i8 21, i8 22, i8 23>\n  \
+        %r = extractelement <4 x i8> %s, i64 2\n  %q = extractelement <4 x i8> %s, i64 3\n  %t = add i8 %r, %q\n  ret i8 %t\n}\n";
+    assert_eq!(result(text), int(22 + 13, 8));
 }

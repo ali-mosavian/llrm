@@ -324,6 +324,18 @@ fn run_suffix(
     jump_to_return(asm);
 }
 
+/// The passes that follow the outliner: a byte made in `a` only to be stored
+/// and moved to `x` is made in `x` (`make_the_byte_in_x`), and a transfer left
+/// beside its reverse goes. After it, not before: a site the first rewrites and
+/// the outliner finds in another shape is a body of its own
+/// (constant_int_float_compare -O2: a second routine, +2 B).
+pub fn after_outlining(text: &str) -> String {
+    let mut asm = Asm::parse(text);
+    make_the_byte_in_x(&mut asm);
+    drop_cancelling_transfers(&mut asm);
+    asm.text()
+}
+
 /// How many lines name `label`: a branch or jump to it, or a directive.
 pub(crate) fn references(
     lines: &[Line],
@@ -1689,6 +1701,58 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
     asm.lines = out;
 }
 
+/// `lda v; sta m; ...; tax` with `a` dead after the transfer: `ldx v; stx m;
+/// ...`. The byte is made in `x`, the register the stores and the transfer
+/// both end in, and the transfer goes: one byte and two clocks fewer a site
+/// (`f` of sibling_call_callees: `lda #0; sta rc2; sta rc3; tax; lda #1` is
+/// `ldx #0; stx rc2; stx rc3; lda #1`). The flags `ldx` sets are those of `lda`
+/// and `tax`. The pin's analogue is the register allocator's choice of the
+/// cheaper class for a constant used in two (`MachineCopyPropagation` would
+/// forward the copy; rematerialization puts the constant where it is needed).
+pub fn make_the_byte_in_x(asm: &mut Asm) {
+    let runs = {
+        // it runs on parsed text, which lost what the callees take: every
+        // call and return reads `a`
+        let exits = Exits::default();
+        let lines = &asm.lines;
+        let inst = |n: usize| lines.get(n).and_then(Line::inst);
+        let mut runs = Vec::new();
+        let mut at = 0;
+        while at < lines.len() {
+            let loads =
+                inst(at).is_some_and(|i| i.op == Op::Lda && matches!(i.operand, Operand::Imm(_) | Operand::Direct(_)));
+            if !loads {
+                at += 1;
+                continue;
+            }
+            let mut end = at + 1;
+            while inst(end).is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_))) {
+                end += 1;
+            }
+            if end > at + 1
+                && inst(end).is_some_and(|i| i.op == Op::Tax)
+                && dead_from(lines, end + 1, Registers::A, &mut HashSet::default(), exits)
+            {
+                runs.push((at, end));
+            }
+            at = end.max(at + 1);
+        }
+        runs
+    };
+    for (at, end) in runs.into_iter().rev() {
+        let stores: Vec<Line> = asm.lines[at + 1..end]
+            .iter()
+            .filter_map(Line::inst)
+            .map(|i| Line::Inst(Inst { op: Op::Stx, operand: i.operand.clone(), place: i.place }))
+            .collect();
+        let load = asm.lines[at].inst().expect("a load");
+        let load = Line::Inst(Inst { op: Op::Ldx, operand: load.operand.clone(), place: load.place });
+        let mut made = vec![load];
+        made.extend(stores);
+        asm.lines.splice(at..=end, made);
+    }
+}
+
 /// Both paths of a branch start with `lda b; sta c`, and the straight-line code
 /// before the branch stored `b` from a register (`stx b`): the store of `c`
 /// goes beside it (`stx b; stx c`) and the two loads and stores go. A pair
@@ -1945,6 +2009,13 @@ pub fn sink_save_bracket(asm: &mut Asm) {
                     | Sec
             )
     };
+    // an indirect or zero-page indexed operand reaches cells it does not name
+    let reads_cell = |inst: &Inst, cell: &str| match &inst.operand {
+        Operand::Direct(name) => name == cell,
+        Operand::Indexed(name, _) => name == cell || name.starts_with("rc"),
+        Operand::IndirectY(_) | Operand::IndirectX(_) | Operand::Indirect(_) => true,
+        _ => false,
+    };
     let mut at = 0;
     while at + 3 < asm.lines.len() {
         let [Line::Inst(push), Line::Inst(load), Line::Inst(store), Line::Inst(pull)] = &asm.lines[at..at + 4] else {
@@ -1979,7 +2050,11 @@ pub fn sink_save_bracket(asm: &mut Asm) {
             for look in (at.saturating_sub(12)..at).rev() {
                 let Line::Inst(inst) = &asm.lines[look] else { break };
                 if overwrites(inst) {
-                    target = Some((look, false));
+                    // the bracket goes above this load, which must not read the
+                    // cell it sets
+                    if !reads_cell(inst, &cell) {
+                        target = Some((look, false));
+                    }
                     break;
                 }
                 if !passable(inst, &cell) {
