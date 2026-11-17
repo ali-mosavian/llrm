@@ -445,6 +445,8 @@ impl llrm_target::Target for M64 {
                             // `Tti::lsr_phi_users_first`.
                             lsr_phi_users_first: true,
                             lsr_size_order: true,
+                            // DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            lsr_drop_worse_at_size: true,
                             // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
                             // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.

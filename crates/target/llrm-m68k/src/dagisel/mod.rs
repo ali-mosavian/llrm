@@ -7,6 +7,7 @@ pub mod addr;
 #[path = "generated/asm.rs"]
 pub mod asm;
 pub mod anyext;
+pub mod bfextu;
 pub mod bfffo;
 pub mod wordjump;
 pub mod btst;
