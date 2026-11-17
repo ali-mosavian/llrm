@@ -134,6 +134,12 @@ impl Tti for Mos6502 {
         "mos6502"
     }
 
+    /// Bytes first at every level (6502-UNROLL-RATE): a run of copies is a
+    /// `memcpy` where the call and its routine are fewer bytes.
+    fn string_runs_at_speed(&self) -> bool {
+        true
+    }
+
     fn cmp_sel_cost(
         &self,
         op: CmpSel,
